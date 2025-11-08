@@ -1,0 +1,185 @@
+#!/usr/bin/env python3
+"""
+Helper script to get ClickUp user IDs for assignees
+
+This script queries the ClickUp API to find user IDs for team members.
+Run this once to get the user IDs, then add them to .env file.
+
+Usage:
+    python scripts/get_clickup_user_ids.py
+"""
+
+import os
+import sys
+from pathlib import Path
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+try:
+    import requests
+except ImportError:
+    print("❌ Error: requests library not found. Install with: pip install requests")
+    sys.exit(1)
+
+
+def get_clickup_user_ids():
+    """Get user IDs from ClickUp API"""
+    # Get API token from .env.clickup (check service-specific first, then root)
+    service_env_file = Path(__file__).parent.parent / ".env.clickup"
+    root_env_file = Path(__file__).parent.parent.parent / ".env"
+    
+    api_token = None
+    
+    # Check service-specific .env.clickup first, then root .env (for backwards compatibility)
+    for env_file in [service_env_file, root_env_file]:
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                if line.startswith("clickup_api_token="):
+                    api_token = line.split("=", 1)[1].strip()
+                    break
+            if api_token:
+                break
+    
+    if not api_token:
+        api_token = os.getenv("CLICKUP_API_TOKEN")
+    
+    if not api_token:
+        print("❌ API token not found. Set CLICKUP_API_TOKEN env var or add clickup_api_token=... to .env.clickup")
+        print(f"   Checked: {service_env_file}")
+        print(f"   Checked: {root_env_file}")
+        return 1
+    
+    print(f"✅ Using API token: {api_token[:20]}...")
+    print()
+    
+    # Get teams (workspaces)
+    headers = {
+        "Authorization": api_token,
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        response = requests.get("https://api.clickup.com/api/v2/team", headers=headers)
+        response.raise_for_status()
+        teams_data = response.json()
+        
+        print("👥 Found teams/workspaces:")
+        print()
+        
+        all_users = {}
+        
+        for team in teams_data.get("teams", []):
+            team_id = team.get("id")
+            team_name = team.get("name", "Unknown")
+            
+            print(f"📋 Team: {team_name} (ID: {team_id})")
+            
+            # Get team members from team object directly
+            members = team.get("members", [])
+            
+            if members:
+                for member in members:
+                    user = member.get("user", {})
+                    user_id = user.get("id")
+                    username = user.get("username", "Unknown")
+                    email = user.get("email", "N/A")
+                    full_name = user.get("name", "N/A")  # Full name field
+                    
+                    # Use user_id as key to avoid duplicates
+                    if user_id:
+                        all_users[str(user_id)] = {
+                            "id": user_id,
+                            "username": username,
+                            "email": email,
+                            "name": full_name
+                        }
+                        
+                        print(f"   👤 {username} ({full_name}) - ID: {user_id}, Email: {email}")
+            
+            print()
+        
+        # Find Ikenna and Harsh
+        print("=" * 60)
+        print("🎯 User IDs for .env.clickup file:")
+        print("=" * 60)
+        print()
+        
+        ikenna_id = None
+        harsh_id = None
+        
+        for user_id_key, user_info in all_users.items():
+            username = (user_info.get("username") or "").lower()
+            email = (user_info.get("email") or "").lower()
+            full_name = (user_info.get("name") or "").lower()
+            
+            # Check username, email, and full name for "ikenna" or "igboaka"
+            if ("ikenna" in username or "igboaka" in username or 
+                "ikenna" in email or "igboaka" in email or
+                "ikenna" in full_name or "igboaka" in full_name):
+                ikenna_id = user_info["id"]
+                print(f"✅ Found Ikenna:")
+                print(f"   Username: {user_info.get('username', 'N/A')}")
+                if full_name and full_name != "n/a":
+                    print(f"   Full Name: {user_info.get('name', 'N/A')}")
+                print(f"   Email: {user_info['email']}")
+                print(f"   User ID: {ikenna_id}")
+                print()
+            elif "harsh" in username or "harsh" in email:
+                harsh_id = user_info["id"]
+                print(f"✅ Found Harsh:")
+                print(f"   Username: {user_info.get('username', 'N/A')}")
+                if full_name and full_name != "n/a":
+                    print(f"   Full Name: {user_info.get('name', 'N/A')}")
+                print(f"   Email: {user_info['email']}")
+                print(f"   User ID: {harsh_id}")
+                print()
+        
+        if not ikenna_id or not harsh_id:
+            print("=" * 60)
+            print("📋 All Users Found (for reference):")
+            print("=" * 60)
+            print()
+            print("If Ikenna or Harsh weren't found above, check the list below:")
+            print("Look for your email address or name in the list.")
+            print()
+            for username_lower, user_info in sorted(all_users.items(), key=lambda x: x[1].get("username", "") or ""):
+                print(f"   👤 Username: '{user_info.get('username', 'N/A')}'")
+                if user_info.get('name') and user_info['name'] != "N/A":
+                    print(f"      Full Name: '{user_info['name']}'")
+                print(f"      Email: '{user_info['email']}'")
+                print(f"      User ID: {user_info['id']}")
+                print()
+        
+        print("=" * 60)
+        print("📝 Add these to your instruments-service/.env.clickup file:")
+        print("=" * 60)
+        print()
+        
+        if ikenna_id:
+            print(f"clickup_user_id_ikenna={ikenna_id}")
+        else:
+            print("⚠️  Ikenna not found - check username spelling (looking for 'ikenna' or 'igboaka')")
+            print("clickup_user_id_ikenna=")
+        
+        if harsh_id:
+            print(f"clickup_user_id_harsh={harsh_id}")
+        else:
+            print("⚠️  Harsh not found - check username spelling")
+            print("clickup_user_id_harsh=")
+        
+        print()
+        print("💡 Copy the lines above and add them to instruments-service/.env.clickup file")
+        
+        return 0
+        
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Error calling ClickUp API: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"   Response: {e.response.text}")
+        return 1
+
+
+if __name__ == "__main__":
+    exit(get_clickup_user_ids())
+
