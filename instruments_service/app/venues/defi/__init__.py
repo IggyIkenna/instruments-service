@@ -16,11 +16,10 @@ from .aave_adapter import AaveV3Adapter
 from .lst_adapters import EtherFiAdapter, LidoAdapter
 
 __all__ = [
-    'TheGraphClient',
-    'UniswapV3Adapter',
-    'CurveAdapter',
-    'AaveV3Adapter',
-    'EtherFiAdapter',
-    'LidoAdapter',
+    "TheGraphClient",
+    "UniswapV3Adapter",
+    "CurveAdapter",
+    "AaveV3Adapter",
+    "EtherFiAdapter",
+    "LidoAdapter",
 ]
-
