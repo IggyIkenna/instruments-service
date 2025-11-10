@@ -402,15 +402,19 @@ class DatabentoAdapter:
         # Don't use exchange_raw_symbol for options as it contains the full OCC symbol
         underlying_asset = asset_raw
         
-        # For options, if asset is empty, try to extract underlying from raw_symbol
-        if instrument_type == "OPTION" and not underlying_asset:
-            # Try to extract underlying from OCC format: SPY230519C00440000 -> SPY
-            if exchange_raw_symbol:
-                # OCC format: underlying + YYMMDD + C/P + strike
-                # Extract first part (underlying) before digits
-                match = re.match(r'^([A-Z]+)', exchange_raw_symbol.upper())
-                if match:
-                    underlying_asset = match.group(1)
+        # For options, if asset is empty, parse OCC format from raw_symbol
+        # OCC format: SPY   230523C00480000 (21 chars: 6-char padded underlying + YYMMDD + C/P + 8-digit strike)
+        if instrument_type == "OPTION" and not underlying_asset and exchange_raw_symbol:
+            # OCC format breakdown:
+            # - First 6 chars: underlying (space-padded, e.g., "SPY   ")
+            # - Next 6 chars: YYMMDD expiry
+            # - Next 1 char: C (Call) or P (Put)
+            # - Last 8 chars: zero-padded strike price (with 3 decimal places)
+            symbol_str = str(exchange_raw_symbol).strip().upper()
+            # Extract underlying (first part before digits, remove spaces)
+            match = re.match(r'^([A-Z]+)\s*', symbol_str)
+            if match:
+                underlying_asset = match.group(1).strip()
 
         # Convert to human-readable names using unified config
         # For equities/ETFs, asset is already human-readable (AAPL, SPY, etc.), only convert futures codes
@@ -450,7 +454,7 @@ class DatabentoAdapter:
         strike_price = ""
         option_type = ""
         if instrument_type == "OPTION":
-            # Extract strike price from Databento response
+            # Extract strike price from Databento response first
             if "strike_price" in row and pd.notna(row["strike_price"]):
                 strike_price_val = row["strike_price"]
                 if isinstance(strike_price_val, (int, float)):
@@ -458,29 +462,58 @@ class DatabentoAdapter:
                 else:
                     strike_price = str(strike_price_val)
             
-            # Extract option type (CALL/PUT) from Databento raw_symbol or field
-            # Databento options symbols typically have format like "SPY 251219C500" or OCC format
-            databento_symbol_raw = row.get("raw_symbol", "")
+            # Parse OCC format from raw_symbol if strike/option_type not found
+            # OCC format: SPY   230523C00480000 (21 chars)
+            # Format: [6-char padded underlying][YYMMDD][C/P][8-digit strike]
+            databento_symbol_raw = row.get("raw_symbol", "") or exchange_raw_symbol
             if pd.notna(databento_symbol_raw) and databento_symbol_raw:
-                symbol_str = str(databento_symbol_raw).upper()
-                # OCC format: SPY231219C00500000 (SPY + YYMMDD + C/P + strike padded to 8 digits)
-                # Or: SPY 251219C500 (with spaces)
-                # Look for C/CALL or P/PUT in symbol
-                # Check last 10 chars for C/P indicator
-                if len(symbol_str) >= 2:
-                    # OCC format: last char before strike is C or P
-                    # Try to find C or P followed by digits (strike)
-                    # Pattern: C or P followed by digits (strike price)
-                    match = re.search(r'([CP])\d+', symbol_str)
+                symbol_str = str(databento_symbol_raw).strip().upper()
+                
+                # OCC format parsing: extract expiry, option type, and strike
+                # Pattern: [UNDERLYING][YYMMDD][C/P][8_DIGIT_STRIKE]
+                # Example: SPY   230523C00480000
+                # - Underlying: SPY (first part, space-padded to 6 chars)
+                # - Expiry: 230523 (YYMMDD, 6 digits)
+                # - Option type: C (1 char)
+                # - Strike: 00480000 (8 digits, represents 480.000)
+                
+                # Try OCC format: find YYMMDD pattern followed by C/P followed by 8 digits
+                occ_match = re.search(r'(\d{6})([CP])(\d{8})$', symbol_str)
+                if occ_match:
+                    expiry_occ = occ_match.group(1)  # YYMMDD
+                    opt_char = occ_match.group(2)  # C or P
+                    strike_occ = occ_match.group(3)  # 8-digit strike
+                    
+                    # Parse strike: 8 digits with 3 decimal places (e.g., 00480000 = 480.000)
+                    # Only parse if strike_price not already extracted from Databento response
+                    if not strike_price:
+                        strike_int = int(strike_occ)
+                        strike_decimal = strike_int / 1000.0  # 3 decimal places
+                        strike_price = str(int(strike_decimal)) if strike_decimal.is_integer() else str(strike_decimal)
+                    
+                    # Parse option type (always parse from OCC if not set)
+                    if not option_type:
+                        option_type = "CALL" if opt_char == "C" else "PUT"
+                    
+                    # If expiry_str not set yet, use OCC expiry
+                    if not expiry_str:
+                        expiry_str = expiry_occ
+                else:
+                    # Fallback: try to find C/P followed by digits
+                    match = re.search(r'([CP])(\d+)', symbol_str)
                     if match:
                         opt_char = match.group(1)
+                        strike_digits = match.group(2)
                         option_type = "CALL" if opt_char == "C" else "PUT"
-                    elif "C" in symbol_str[-10:] or "CALL" in symbol_str:
-                        option_type = "CALL"
-                    elif "P" in symbol_str[-10:] or "PUT" in symbol_str:
-                        option_type = "PUT"
+                        # Try to parse strike from digits
+                        if not strike_price and len(strike_digits) >= 6:
+                            # Assume 8-digit format with 3 decimals
+                            if len(strike_digits) == 8:
+                                strike_int = int(strike_digits)
+                                strike_decimal = strike_int / 1000.0
+                                strike_price = str(int(strike_decimal)) if strike_decimal.is_integer() else str(strike_decimal)
             
-            # If still not found, check for explicit field
+            # If still not found, check for explicit fields
             if not option_type:
                 if "option_type" in row and pd.notna(row["option_type"]):
                     opt_type_raw = str(row["option_type"]).upper()
