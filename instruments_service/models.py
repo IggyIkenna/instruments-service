@@ -361,6 +361,8 @@ class InstrumentDefinition(BaseModel):
                 "derivative_ticker",
                 "options_chain",
                 "liquidations",
+                "quotes",  # TradFi quotes (Databento) - note: actual fetching uses OHLCV for cost efficiency
+                "ohlcv_1m",  # 1-minute OHLCV candles (Databento TradFi)
             ]
             types = [t.strip() for t in self.data_types.split(",")]
             for data_type in types:
