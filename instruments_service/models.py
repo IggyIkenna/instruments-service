@@ -5,7 +5,6 @@ This module defines all data models following the INSTRUMENT_KEY_SPEC.md format
 with proper expiry, call/put, and margin currency support.
 """
 
-from enum import Enum
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Union
 from datetime import datetime, timezone
@@ -14,103 +13,17 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 import logging
 import pandas as pd
 
+# Import shared models from unified-cloud-services
+from unified_cloud_services.models.instrument import (
+    Venue,
+    InstrumentType,
+    InstrumentKey as SharedInstrumentKey,
+)
+
 logger = logging.getLogger(__name__)
 
-
-class Venue(str, Enum):
-    """Supported venues for instruments"""
-
-    # Crypto exchanges (Tardis)
-    BINANCE_SPOT = "BINANCE-SPOT"
-    BINANCE_FUTURES = "BINANCE-FUTURES"
-    BYBIT = "BYBIT"
-    OKX = "OKX"
-    DERIBIT = "DERIBIT"
-
-    # TradFi exchanges (Databento)
-    CME = "CME"
-    NASDAQ = "NASDAQ"
-    NYSE = "NYSE"
-    ICE = "ICE"
-
-    # DeFi protocols
-    AAVE_V3 = "AAVE_V3"
-    AAVE_V3_ETH = "AAVE_V3_ETH"  # Chain-specific
-    ETHERFI = "ETHERFI"
-    LIDO = "LIDO"
-    WALLET = "WALLET"
-
-    # DeFi DEX (The Graph)
-    UNISWAPV3_ETH = "UNISWAPV3-ETH"
-    CURVE_ETH = "CURVE-ETH"
-    AERODROME_BASE = "AERODROME-BASE"
-    BALANCER_ETH = "BALANCER-ETH"
-
-
-class InstrumentType(str, Enum):
-    """Supported instrument types"""
-
-    # Spot instruments
-    SPOT_ASSET = "SPOT_ASSET"
-    SPOT_PAIR = "SPOT_PAIR"
-
-    # Derivatives (crypto)
-    PERPETUAL = "PERPETUAL"
-    FUTURE = "FUTURE"
-    OPTION = "OPTION"
-
-    # TradFi instruments
-    EQUITY = "EQUITY"
-    INDEX = "INDEX"
-    COMMODITY = "COMMODITY"
-    CURRENCY = "CURRENCY"
-
-    # DeFi instruments
-    LST = "LST"
-    A_TOKEN = "A_TOKEN"
-    DEBT_TOKEN = "DEBT_TOKEN"
-    POOL = "POOL"  # DEX liquidity pools
-
-
-@dataclass
-class InstrumentKey:
-    """Instrument key following venue:instrument_type:symbol format"""
-
-    venue: Venue
-    instrument_type: InstrumentType
-    symbol: str
-    expiry: Optional[str] = None  # For futures/options
-    option_type: Optional[str] = None  # C or P for options
-
-    def __str__(self) -> str:
-        """Format: venue:type:symbol:expiry:option_type"""
-        parts = [self.venue.value, self.instrument_type.value, self.symbol]
-        if self.expiry:
-            parts.append(self.expiry)
-        if self.option_type:
-            parts.append(self.option_type)
-        return ":".join(parts)
-
-    @classmethod
-    def from_string(cls, instrument_key_str: str) -> "InstrumentKey":
-        """Parse instrument key from string"""
-        parts = instrument_key_str.split(":")
-        if len(parts) < 3:
-            raise ValueError(f"Invalid instrument key format: {instrument_key_str}")
-
-        venue = Venue(parts[0])
-        instrument_type = InstrumentType(parts[1])
-        symbol = parts[2]
-        expiry = parts[3] if len(parts) > 3 else None
-        option_type = parts[4] if len(parts) > 4 else None
-
-        return cls(
-            venue=venue,
-            instrument_type=instrument_type,
-            symbol=symbol,
-            expiry=expiry,
-            option_type=option_type,
-        )
+# Re-export for backward compatibility
+InstrumentKey = SharedInstrumentKey
 
 
 class InstrumentDefinition(BaseModel):
