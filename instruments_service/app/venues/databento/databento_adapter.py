@@ -385,15 +385,39 @@ class DatabentoAdapter:
         if not asset_raw and exchange_raw_symbol and security_type in ["STK", "ETF"]:
             asset_raw = exchange_raw_symbol
 
+        # For options, extract underlying from asset field
+        # Options asset field contains the underlying (e.g., "SPY" for SPY options)
+        # Don't use exchange_raw_symbol for options as it contains the full OCC symbol
+        underlying_asset = asset_raw
+        
+        # For options, if asset is empty, try to extract underlying from raw_symbol
+        if instrument_type == "OPTION" and not underlying_asset:
+            # Try to extract underlying from OCC format: SPY230519C00440000 -> SPY
+            if exchange_raw_symbol:
+                # OCC format: underlying + YYMMDD + C/P + strike
+                # Extract first part (underlying) before digits
+                match = re.match(r'^([A-Z]+)', exchange_raw_symbol.upper())
+                if match:
+                    underlying_asset = match.group(1)
+
         # Convert to human-readable names using unified config
         # For equities/ETFs, asset is already human-readable (AAPL, SPY, etc.), only convert futures codes
-        if security_type in ["STK", "ETF"] or (not security_type and asset_raw and len(asset_raw) <= 5):
+        if security_type in ["STK", "ETF"] or (not security_type and underlying_asset and len(underlying_asset) <= 5):
             # Equities/ETFs are already human-readable, don't convert
-            base_asset = asset_raw if asset_raw else exchange_raw_symbol
+            base_asset = underlying_asset if underlying_asset else exchange_raw_symbol
+        elif instrument_type == "OPTION":
+            # Options: use underlying asset (already human-readable like SPY)
+            base_asset = underlying_asset if underlying_asset else ""
         else:
-            # Futures/options: convert exchange codes to human-readable names
-            base_asset = unified_config.get_human_readable_name(asset_raw) if asset_raw else ""
-        quote_asset = currency_raw  # Currency codes are already human-readable (USD, EUR, etc.)
+            # Futures: convert exchange codes to human-readable names
+            base_asset = unified_config.get_human_readable_name(underlying_asset) if underlying_asset else ""
+        
+        # For TradFi (equities, options, futures), quote currency is always USD
+        # Per INSTRUMENT_KEY.md: stocks/equities use USD as quote currency
+        if security_type in ["STK", "ETF", "OPT", "FUT"] or instrument_type in ["EQUITY", "OPTION", "FUTURE"]:
+            quote_asset = "USD"
+        else:
+            quote_asset = currency_raw  # Currency codes are already human-readable (USD, EUR, etc.)
         
         # Parse expiry if available
         expiry_time = None
@@ -410,7 +434,7 @@ class DatabentoAdapter:
             except Exception as e:
                 logger.warning(f"Failed to parse expiry {expiry_time}: {e}")
 
-        # Determine instrument type
+        # Determine instrument type FIRST (needed for quote_asset logic)
         if security_type == "FUT":
             instrument_type = "FUTURE"
         elif security_type == "OPT":
@@ -466,11 +490,14 @@ class DatabentoAdapter:
                         option_type = "PUT"
 
         # Build symbol with human-readable base_asset
+        # Per INSTRUMENT_KEY.md canonical format
         symbol = f"{base_asset}-{quote_asset}"
         if instrument_type == "OPTION":
-            # Build symbol with strike and option type for options
-            if strike_price and option_type and expiry_str:
-                symbol = f"{base_asset}-{quote_asset}-{expiry_str}-{strike_price}-{option_type}"
+            # Build canonical option symbol: BASE-QUOTE-YYMMDD-STRIKE-OPTION_TYPE
+            # Remove decimal points from strike for canonical format (e.g., "440.0" -> "440")
+            strike_clean = strike_price.replace(".0", "").rstrip("0").rstrip(".") if strike_price else ""
+            if strike_clean and option_type and expiry_str:
+                symbol = f"{base_asset}-{quote_asset}-{expiry_str}-{strike_clean}-{option_type}"
             elif expiry_str:
                 symbol = f"{base_asset}-{quote_asset}-{expiry_str}"
         elif expiry_str:
