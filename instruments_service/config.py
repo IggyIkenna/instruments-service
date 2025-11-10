@@ -324,6 +324,25 @@ class ExchangeInstrumentConfig:
         ]
     )
 
+    # Excluded base currencies per exchange (e.g., deprecated tokens, leveraged products)
+    excluded_base_currencies: Dict[str, List[str]] = field(
+        default_factory=lambda: {
+            "OKX": ["USTC"],  # USTC (Terra Classic) deprecated, no longer needed
+            "BYBIT": [],  # No base currency exclusions for BYBIT (handled by symbol patterns)
+        }
+    )
+
+    # Excluded symbol patterns per exchange (e.g., leveraged products, deprecated instruments)
+    excluded_symbol_patterns: Dict[str, List[str]] = field(
+        default_factory=lambda: {
+            "BYBIT": [
+                "3L",  # 3x leveraged products (no longer exist)
+                "2L",  # 2x leveraged products (no longer exist)
+            ],
+            "OKX": [],  # No symbol pattern exclusions for OKX
+        }
+    )
+
 
 @dataclass
 class DatabentoInstrumentConfig:

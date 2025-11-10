@@ -523,6 +523,14 @@ class InstrumentProcessingService:
             f"🔍 Pre-filtering by exchange config: {canonical_venue} accepts types={valid_types}, quotes={valid_quotes}"
         )
 
+        # Get excluded base currencies and symbol patterns for this exchange
+        excluded_bases = self.exchange_config.excluded_base_currencies.get(
+            canonical_venue, []
+        )
+        excluded_patterns = self.exchange_config.excluded_symbol_patterns.get(
+            canonical_venue, []
+        )
+
         # Pre-filter by exchange config before expensive processing
         pre_filtered = {}
         for symbol_id, symbol_info in instruments_data.items():
@@ -533,12 +541,38 @@ class InstrumentProcessingService:
             if normalized_type not in valid_types:
                 continue
 
-            # Quick parse quote currency to check validity (before full processing)
+            # Check excluded symbol patterns early (e.g., leveraged products like 3L, 2L)
+            if excluded_patterns:
+                symbol_upper = symbol_id.upper()
+                excluded_by_pattern = False
+                for pattern in excluded_patterns:
+                    if pattern.upper() in symbol_upper:
+                        logger.debug(
+                            f"🚫 Pre-filtered out {symbol_id}: symbol pattern '{pattern}' excluded for {canonical_venue}"
+                        )
+                        excluded_by_pattern = True
+                        break
+                if excluded_by_pattern:
+                    continue
+
+            # Quick parse base and quote currency to check validity (before full processing)
             parsed_components = self._parse_symbol_components(symbol_id, exchange)
             if isinstance(parsed_components, dict):
+                base_asset = parsed_components.get("base_asset", "").upper()
                 quote_asset = parsed_components.get("quote_asset", "").upper()
             else:
-                _, quote_asset = parsed_components if parsed_components else ("", "")
+                base_asset, quote_asset = (
+                    parsed_components if parsed_components else ("", "")
+                )
+                base_asset = base_asset.upper() if base_asset else ""
+                quote_asset = quote_asset.upper() if quote_asset else ""
+
+            # Filter by excluded base currencies
+            if base_asset and base_asset in excluded_bases:
+                logger.debug(
+                    f"🚫 Pre-filtered out {symbol_id}: base currency '{base_asset}' excluded for {canonical_venue}"
+                )
+                continue
 
             # Filter by valid quote currencies for this exchange
             if quote_asset and quote_asset not in valid_quotes:
@@ -825,13 +859,22 @@ class InstrumentProcessingService:
     def filter_instruments_by_exchange_config(self, instruments, exchange):
         """Filter instruments by exchange-specific capabilities using centralized config (DRY)."""
         # Use centralized configs (already loaded)
+        canonical_venue = self.normalize_venue(exchange)
         valid_types = self.exchange_config.exchange_instrument_types.get(
-            exchange, ["SPOT_PAIR"]
+            canonical_venue, ["SPOT_PAIR"]
         )
         valid_quotes = self.exchange_config.valid_quote_currencies.get(
-            exchange, ["USDT"]
+            canonical_venue, ["USDT"]
         )
-        is_derivative = exchange in self.exchange_config.derivative_exchanges
+        is_derivative = canonical_venue in self.exchange_config.derivative_exchanges
+        
+        # Get excluded base currencies and symbol patterns for this exchange
+        excluded_bases = self.exchange_config.excluded_base_currencies.get(
+            canonical_venue, []
+        )
+        excluded_patterns = self.exchange_config.excluded_symbol_patterns.get(
+            canonical_venue, []
+        )
 
         filtered = {}
 
@@ -841,7 +884,7 @@ class InstrumentProcessingService:
                 inst_type = inst_data.get("instrument_type", "")
                 if inst_type not in valid_types:
                     logger.debug(
-                        f"❌ Filtered out {inst_key}: {inst_type} not valid for {exchange}"
+                        f"❌ Filtered out {inst_key}: {inst_type} not valid for {canonical_venue}"
                     )
                     continue
 
@@ -849,9 +892,31 @@ class InstrumentProcessingService:
                 quote_asset = inst_data.get("quote_asset", "").upper()
                 if quote_asset not in valid_quotes:
                     logger.debug(
-                        f"🚫 Filtered out {inst_key}: quote '{quote_asset}' not in valid quotes {valid_quotes} for {exchange}"
+                        f"🚫 Filtered out {inst_key}: quote '{quote_asset}' not in valid quotes {valid_quotes} for {canonical_venue}"
                     )
                     continue
+
+                # Check excluded base currencies
+                base_asset = inst_data.get("base_asset", "").upper()
+                if base_asset in excluded_bases:
+                    logger.debug(
+                        f"🚫 Filtered out {inst_key}: base currency '{base_asset}' excluded for {canonical_venue}"
+                    )
+                    continue
+
+                # Check excluded symbol patterns (e.g., leveraged products like 3L, 2L)
+                symbol = inst_data.get("symbol", "").upper()
+                if excluded_patterns:
+                    excluded_by_pattern = False
+                    for pattern in excluded_patterns:
+                        if pattern.upper() in symbol:
+                            logger.debug(
+                                f"🚫 Filtered out {inst_key}: symbol pattern '{pattern}' excluded for {canonical_venue}"
+                            )
+                            excluded_by_pattern = True
+                            break
+                    if excluded_by_pattern:
+                        continue
 
                 # Populate complete InstrumentDefinition fields
                 inst_data = self._populate_complete_instrument_data(
