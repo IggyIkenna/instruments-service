@@ -82,21 +82,21 @@ def parse_arguments() -> argparse.Namespace:
         help="Exchanges to process (binance, binance-futures, deribit, bybit, okx, etc.)",
     )
     
-    # Market type filters (mutually exclusive)
+    # Market type filters (can be combined, default is ALL if none specified)
     parser.add_argument(
         "--CEFI",
         action="store_true",
-        help="Process only CEFI (Centralized Finance) exchanges via Tardis (binance, deribit, bybit, okx, etc.)",
+        help="Include CEFI (Centralized Finance) exchanges via Tardis (binance, deribit, bybit, okx, etc.). Default: Process all market types if no flags specified.",
     )
     parser.add_argument(
         "--TRADFI",
         action="store_true",
-        help="Process only TradFi (Traditional Finance) exchanges via Databento (CME, NASDAQ, NYSE, etc.)",
+        help="Include TradFi (Traditional Finance) exchanges via Databento (CME, NASDAQ, NYSE, etc.). Default: Process all market types if no flags specified.",
     )
     parser.add_argument(
         "--DEFI",
         action="store_true",
-        help="Process only DeFi (Decentralized Finance) protocols via The Graph (uniswap_v3, curve, aave_v3, etc.)",
+        help="Include DeFi (Decentralized Finance) protocols via The Graph (uniswap_v3, curve, aave_v3, etc.). Default: Process all market types if no flags specified.",
     )
 
     # Instruments query specific arguments
@@ -198,12 +198,9 @@ def validate_arguments(args: argparse.Namespace) -> None:
             # Default to same as start_date if not provided
             args.end_date = args.start_date
 
-    # Validate market type filters (mutually exclusive)
-    market_type_flags = [args.CEFI, args.TRADFI, args.DEFI]
-    if sum(market_type_flags) > 1:
-        raise ValueError(
-            "--CEFI, --TRADFI, and --DEFI are mutually exclusive. Use only one."
-        )
+    # Market type filters can be combined (e.g., --CEFI --TRADFI)
+    # If none specified, all will be processed by default
+    # No validation needed - flags are additive
     
     # Validate query-specific arguments
     if args.mode == "instruments-query":
@@ -220,7 +217,7 @@ def _get_examples_text() -> str:
     return """
 Examples:
 
-  # Generate instruments for a date range (default: CEFI/Tardis exchanges)
+  # Generate instruments for a date range (default: ALL market types - CEFI, TRADFI, DEFI)
   python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-24
 
   # Generate CEFI instruments only (Tardis: binance, deribit, bybit, okx, etc.)
@@ -231,6 +228,9 @@ Examples:
 
   # Generate DEFI instruments only (The Graph: uniswap_v3, curve, aave_v3, etc.)
   python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --DEFI --force
+
+  # Generate CEFI and TRADFI (combine flags)
+  python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --CEFI --TRADFI --force
 
   # Generate instruments with force flag
   python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --force
