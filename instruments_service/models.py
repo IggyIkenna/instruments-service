@@ -465,16 +465,22 @@ class InstrumentDefinition(BaseModel):
             if len(symbol_parts) < 4:
                 return "", ""
 
-            # For options, expect: BASE-QUOTE-EXPIRY-STRIKE-TYPE
+            # For options, expect: BASE-QUOTE-EXPIRY-STRIKE-TYPE@LIN or BASE-QUOTE-EXPIRY-STRIKE-TYPE@INV
             # Handle various formats:
-            # - TRX-USDC-251026-0.304-PUT
-            # - BTC-USD-240329-120000-CALL
-            # - ETH-25DEC25-3500-C (Deribit short format)
+            # - TRX-USDC-251026-0.304-PUT@LIN
+            # - BTC-USD-240329-120000-CALL@INV
+            # - ETH-25DEC25-3500-C@LIN (Deribit short format)
             option_type = ""
             strike_price = ""
 
-            if symbol_parts[-1] in ["CALL", "PUT", "C", "P"]:
-                option_type = "CALL" if symbol_parts[-1] in ["CALL", "C"] else "PUT"
+            # Check last part for option type (may have @LIN/@INV suffix)
+            last_part = symbol_parts[-1].upper()
+            # Remove @LIN or @INV suffix if present
+            if "@" in last_part:
+                last_part = last_part.split("@")[0]
+
+            if last_part in ["CALL", "PUT", "C", "P"]:
+                option_type = "CALL" if last_part in ["CALL", "C"] else "PUT"
 
                 # Find strike price - look backwards from option type for numeric value
                 # Enhanced logic to handle different strike price formats use context7
@@ -562,20 +568,27 @@ class InstrumentDefinition(BaseModel):
             expiry_date = ""
 
             if self.instrument_type == "FUTURE":
-                # For futures: BASE-QUOTE-YYMMDD (e.g., BTC-USDT-260327)
+                # For futures: BASE-QUOTE-YYMMDD@LIN or BASE-QUOTE-YYMMDD@INV (e.g., BTC-USDT-260327@LIN)
+                # Check if last part has @LIN or @INV suffix
                 if len(symbol_parts) >= 3:
-                    potential_date = symbol_parts[-1]  # Last part should be YYMMDD
+                    potential_date = symbol_parts[-1]  # Could be YYMMDD or YYMMDD@LIN/YYMMDD@INV
+                    # Remove @LIN or @INV suffix if present
+                    if "@" in potential_date:
+                        potential_date = potential_date.split("@")[0]
                     expiry_date = self._parse_yymmdd_to_iso(potential_date)
 
             elif self.instrument_type == "OPTION":
-                # For options: BASE-QUOTE-YYMMDD-STRIKE-TYPE
-                # Handle decimal strikes: TRX-USDC-251026-0.304-PUT (strike has decimal)
+                # For options: BASE-QUOTE-YYMMDD-STRIKE-TYPE@LIN or BASE-QUOTE-YYMMDD-STRIKE-TYPE@INV
+                # Handle decimal strikes: TRX-USDC-251026-0.304-PUT@LIN (strike has decimal)
                 if len(symbol_parts) >= 4:
                     # Find the YYMMDD part - it should be the first 6-digit numeric part after base-quote
                     for i in range(
                         2, len(symbol_parts)
                     ):  # Start from index 2 (after BASE-QUOTE)
                         part = symbol_parts[i]
+                        # Remove @LIN or @INV suffix if present
+                        if "@" in part:
+                            part = part.split("@")[0]
                         if len(part) == 6 and part.isdigit():
                             potential_date = part
                             expiry_date = self._parse_yymmdd_to_iso(potential_date)
