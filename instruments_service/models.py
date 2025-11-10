@@ -24,6 +24,7 @@ class Venue(str, Enum):
     BYBIT = "BYBIT"
     OKX = "OKX"
     DERIBIT = "DERIBIT"
+    COSMICTRADER = "COSMICTRADER"
     
     # TradFi exchanges (Databento)
     CME = "CME"
