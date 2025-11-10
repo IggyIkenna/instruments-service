@@ -97,8 +97,8 @@ class UnifiedInstrumentConfig:
             InstrumentDefinition("BRK.B", "NYSE", "EQUITY", "DBEQ.BASIC", "raw_symbol", "BRK.B", "USD"),
             
             # Options (CBOE) - use .OPT suffix for parent symbology
+            # Only SPY options (SPY.OPT) - most liquid, skip SPX options
             InstrumentDefinition("SPY.OPT", "CBOE", "OPTION", "OPRA.PILLAR", "parent", "SPY", "USD"),
-            InstrumentDefinition("SPX.OPT", "CBOE", "OPTION", "OPRA.PILLAR", "parent", "SPX", "USD"),  # S&P 500 Index options
         ]
     )
     
