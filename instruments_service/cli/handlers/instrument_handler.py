@@ -351,7 +351,7 @@ class InstrumentHandler(ModeHandler):
 
     def _get_symbols_for_databento_exchange(self, exchange: str) -> List[str]:
         """
-        Get symbols for a Databento exchange from config.
+        Get symbols for a Databento exchange from unified config.
         
         Args:
             exchange: Exchange name (e.g., 'CME', 'NASDAQ', 'NYSE', 'ICE')
@@ -359,28 +359,12 @@ class InstrumentHandler(ModeHandler):
         Returns:
             List of symbols to fetch for this exchange
         """
-        # Map exchange to Databento dataset (matching config.py dataset_routing)
-        exchange_to_dataset = {
-            "CME": "GLBX.MDP3",
-            "NASDAQ": "DBEQ.BASIC",
-            "NYSE": "DBEQ.BASIC",
-            "ICE": "IFEU.IMPACT",  # ICE Europe Commodities (matches config.py)
-        }
+        # Use unified config to get symbols for venue
+        symbols = self.databento_config.get_symbols_for_venue(exchange.upper())
         
-        target_dataset = exchange_to_dataset.get(exchange.upper())
-        if not target_dataset:
-            logger.warning(f"⚠️ Unknown Databento exchange: {exchange}")
+        if not symbols:
+            logger.warning(f"⚠️ No symbols configured for {exchange}")
             return []
-        
-        # Filter symbols from extended_symbols based on dataset_routing
-        symbols = []
-        for symbol in self.databento_config.extended_symbols:
-            dataset, _ = self.databento_config.get_dataset_and_stype(symbol)
-            if dataset == target_dataset:
-                # Remove .FUT, .OPT suffixes for Databento API (uses parent symbols)
-                # Databento API with stype_in="parent" expects symbols like "ES", "BRN", not "ES.FUT"
-                clean_symbol = symbol.replace(".FUT", "").replace(".OPT", "")
-                symbols.append(clean_symbol)
         
         logger.debug(f"📋 Found {len(symbols)} symbols for {exchange}: {symbols[:5]}..." if len(symbols) > 5 else f"📋 Found {len(symbols)} symbols for {exchange}: {symbols}")
         return symbols
