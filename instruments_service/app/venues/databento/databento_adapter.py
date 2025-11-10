@@ -398,23 +398,27 @@ class DatabentoAdapter:
             asset_raw = exchange_raw_symbol
 
         # For options, extract underlying from asset field
-        # Options asset field contains the underlying (e.g., "SPY" for SPY options)
-        # Don't use exchange_raw_symbol for options as it contains the full OCC symbol
+        # Options asset field should contain just the underlying (e.g., "SPY" for SPY options)
+        # But sometimes Databento returns the full OCC symbol in the asset field
+        # OCC format: SPY   230523C00480000 (21 chars: 6-char padded underlying + YYMMDD + C/P + 8-digit strike)
         underlying_asset = asset_raw
         
-        # For options, if asset is empty, parse OCC format from raw_symbol
-        # OCC format: SPY   230523C00480000 (21 chars: 6-char padded underlying + YYMMDD + C/P + 8-digit strike)
-        if instrument_type == "OPTION" and not underlying_asset and exchange_raw_symbol:
-            # OCC format breakdown:
-            # - First 6 chars: underlying (space-padded, e.g., "SPY   ")
-            # - Next 6 chars: YYMMDD expiry
-            # - Next 1 char: C (Call) or P (Put)
-            # - Last 8 chars: zero-padded strike price (with 3 decimal places)
-            symbol_str = str(exchange_raw_symbol).strip().upper()
-            # Extract underlying (first part before digits, remove spaces)
-            match = re.match(r'^([A-Z]+)\s*', symbol_str)
-            if match:
-                underlying_asset = match.group(1).strip()
+        # For options, check if asset_raw looks like an OCC symbol (contains digits and C/P)
+        # If so, parse it. Otherwise, if asset is empty, parse from exchange_raw_symbol
+        if instrument_type == "OPTION":
+            # Check if asset_raw looks like OCC format (has digits and C/P character)
+            if underlying_asset and re.search(r'\d{6}[CP]\d{8}', str(underlying_asset).strip().upper()):
+                # asset_raw contains full OCC symbol, parse underlying from it
+                symbol_str = str(underlying_asset).strip().upper()
+                match = re.match(r'^([A-Z]+)\s*', symbol_str)
+                if match:
+                    underlying_asset = match.group(1).strip()
+            elif not underlying_asset and exchange_raw_symbol:
+                # asset_raw is empty, parse from exchange_raw_symbol
+                symbol_str = str(exchange_raw_symbol).strip().upper()
+                match = re.match(r'^([A-Z]+)\s*', symbol_str)
+                if match:
+                    underlying_asset = match.group(1).strip()
 
         # Convert to human-readable names using unified config
         # For equities/ETFs, asset is already human-readable (AAPL, SPY, etc.), only convert futures codes
