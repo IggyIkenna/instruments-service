@@ -103,7 +103,7 @@ class DatabentoAdapter:
 
         Args:
             exchange: Exchange name (e.g., 'CME', 'NASDAQ')
-            symbols: List of symbols to fetch (e.g., ['ES', 'NQ', 'QQQ'])
+            symbols: List of symbols in Databento format (e.g., ['ES.FUT', 'SPY', 'SPY.OPT'])
             date: Target date for instrument definitions
             dataset: Databento dataset ID (e.g., 'GLBX.MDP3', 'DBEQ.BASIC')
                     If None, uses default mapping based on exchange
@@ -111,6 +111,11 @@ class DatabentoAdapter:
         Returns:
             Dictionary mapping symbol to instrument definition data
         """
+        # Import unified config to get stype_in for each symbol
+        from instruments_service.config import UnifiedInstrumentConfig
+        
+        unified_config = UnifiedInstrumentConfig()
+        
         # Map exchange to Databento dataset
         if dataset is None:
             dataset = self._get_dataset_for_exchange(exchange)
@@ -121,44 +126,68 @@ class DatabentoAdapter:
         start_date_str = (adjusted_date - timedelta(days=1)).strftime("%Y-%m-%d")
         end_date_str = adjusted_date.strftime("%Y-%m-%d")
 
-        # Filter symbols (if needed - can add symbol filtering logic here)
-        filtered_symbols = self._filter_symbols(dataset, symbols)
+        # Group symbols by stype_in (parent vs raw_symbol)
+        # Databento API requires separate calls for different stype_in values
+        symbols_by_stype = {}
+        for symbol in symbols:
+            inst = unified_config.get_instrument(symbol, venue=exchange)
+            if inst:
+                stype = inst.stype_in
+                if stype not in symbols_by_stype:
+                    symbols_by_stype[stype] = []
+                symbols_by_stype[stype].append(symbol)
+            else:
+                # Fallback: try to infer stype_in from symbol format
+                if symbol.endswith(".FUT") or symbol.endswith(".OPT"):
+                    stype = "parent"
+                else:
+                    stype = "raw_symbol"
+                if stype not in symbols_by_stype:
+                    symbols_by_stype[stype] = []
+                symbols_by_stype[stype].append(symbol)
+                logger.warning(f"Symbol {symbol} not found in unified config, inferring stype_in={stype}")
 
-        if not filtered_symbols:
+        if not symbols_by_stype:
             logger.warning(f"No valid symbols found for {exchange} on {start_date_str}")
             return {}
 
-        try:
-            # Fetch instrument definitions
-            zipped_data = self.client.timeseries.get_range(
-                dataset=dataset,
-                schema=db.Schema.DEFINITION,
-                symbols=filtered_symbols,
-                stype_in="parent",  # Use parent symbols for futures
-                stype_out="instrument_id",
-                start=start_date_str,
-                end=end_date_str,
-            )
-
-            # Convert to DataFrame
-            df = zipped_data.to_df()
-
-            if df.empty:
-                logger.warning(
-                    f"No instrument definitions found for {exchange} {filtered_symbols} on {start_date_str}"
+        # Fetch instruments for each stype_in group
+        all_instruments = {}
+        for stype_in, symbol_group in symbols_by_stype.items():
+            try:
+                # Fetch instrument definitions for this stype_in group
+                zipped_data = self.client.timeseries.get_range(
+                    dataset=dataset,
+                    schema=db.Schema.DEFINITION,
+                    symbols=symbol_group,
+                    stype_in=stype_in,
+                    stype_out="instrument_id",
+                    start=start_date_str,
+                    end=end_date_str,
                 )
-                return {}
 
-            # Filter out non-trading instruments
-            if "instrument_class" in df.columns:
-                df = df[df["instrument_class"] != "S"]  # Exclude settlement-only
+                # Convert to DataFrame
+                df = zipped_data.to_df()
 
-            # Process and return as dictionary
-            return self._process_databento_dataframe(df, exchange, dataset)
+                if df.empty:
+                    logger.warning(
+                        f"No instrument definitions found for {exchange} {symbol_group} (stype_in={stype_in}) on {start_date_str}"
+                    )
+                    continue
 
-        except Exception as e:
-            logger.error(f"Failed to fetch Databento instruments for {exchange}: {e}")
-            return {}
+                # Filter out non-trading instruments
+                if "instrument_class" in df.columns:
+                    df = df[df["instrument_class"] != "S"]  # Exclude settlement-only
+
+                # Process and merge into all_instruments
+                group_instruments = self._process_databento_dataframe(df, exchange, dataset)
+                all_instruments.update(group_instruments)
+
+            except Exception as e:
+                logger.error(f"Failed to fetch Databento instruments for {exchange} (stype_in={stype_in}): {e}")
+                continue
+
+        return all_instruments
 
     def _get_dataset_for_exchange(self, exchange: str) -> str:
         """
@@ -174,7 +203,7 @@ class DatabentoAdapter:
             "CME": "GLBX.MDP3",
             "NASDAQ": "DBEQ.BASIC",
             "NYSE": "DBEQ.BASIC",
-            "ICE": "ICE.NYBOT",
+            "ICE": "IFEU.IMPACT",  # Fixed: ICE Europe Commodities uses IFEU.IMPACT, not ICE.NYBOT
         }
 
         exchange_upper = exchange.upper()

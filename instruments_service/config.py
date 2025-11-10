@@ -24,11 +24,11 @@ except ImportError:
 @dataclass
 class InstrumentDefinition:
     """Single instrument definition with all metadata"""
-    symbol: str  # Databento symbol (e.g., "ES", "SPY", "BRN")
+    symbol: str  # Databento symbol (e.g., "ES.FUT", "SPY", "BRN.FUT", "SPY.OPT")
     venue: str  # Canonical venue (e.g., "CME", "NASDAQ", "ICE")
     instrument_type: str  # "FUTURE", "EQUITY", "OPTION", "ETF"
     dataset: str  # Databento dataset (e.g., "GLBX.MDP3", "DBEQ.BASIC")
-    stype_in: str  # "parent" or "raw_symbol"
+    stype_in: str  # "parent" for futures/options, "raw_symbol" for equities/ETFs
     base_asset: Optional[str] = None  # Human-readable base asset name
     quote_asset: str = "USD"  # Quote currency (default USD for TradFi)
     exchange_code: Optional[str] = None  # Databento exchange code (e.g., "ES", "CL")
@@ -44,46 +44,47 @@ class UnifiedInstrumentConfig:
     """
     
     # Single unified list of all TradFi instruments
+    # Symbols are in Databento API format: [ROOT].FUT for futures, [ROOT].OPT for options, raw symbols for equities
     instruments: List[InstrumentDefinition] = field(
         default_factory=lambda: [
-            # Equity Index Futures (CME)
-            InstrumentDefinition("ES", "CME", "FUTURE", "GLBX.MDP3", "parent", "SP500", "USD", "ES"),
-            InstrumentDefinition("NQ", "CME", "FUTURE", "GLBX.MDP3", "parent", "NASDAQ100", "USD", "NQ"),
+            # Equity Index Futures (CME) - use .FUT suffix for parent symbology
+            InstrumentDefinition("ES.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SP500", "USD", "ES"),
+            InstrumentDefinition("NQ.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "NASDAQ100", "USD", "NQ"),
             
-            # Commodities (CME)
-            InstrumentDefinition("GC", "CME", "FUTURE", "GLBX.MDP3", "parent", "GOLD", "USD", "GC"),
-            InstrumentDefinition("CL", "CME", "FUTURE", "GLBX.MDP3", "parent", "CRUDE", "USD", "CL"),
-            InstrumentDefinition("NG", "CME", "FUTURE", "GLBX.MDP3", "parent", "NATGAS", "USD", "NG"),
-            InstrumentDefinition("SI", "CME", "FUTURE", "GLBX.MDP3", "parent", "SILVER", "USD", "SI"),
-            InstrumentDefinition("HG", "CME", "FUTURE", "GLBX.MDP3", "parent", "COPPER", "USD", "HG"),
-            InstrumentDefinition("SB", "CME", "FUTURE", "GLBX.MDP3", "parent", "SUGAR", "USD", "SB"),
-            InstrumentDefinition("KC", "CME", "FUTURE", "GLBX.MDP3", "parent", "COFFEE", "USD", "KC"),
-            InstrumentDefinition("CT", "CME", "FUTURE", "GLBX.MDP3", "parent", "COTTON", "USD", "CT"),
-            InstrumentDefinition("CC", "CME", "FUTURE", "GLBX.MDP3", "parent", "COCOA", "USD", "CC"),
-            InstrumentDefinition("OJ", "CME", "FUTURE", "GLBX.MDP3", "parent", "OJ", "USD", "OJ"),
-            InstrumentDefinition("ZS", "CME", "FUTURE", "GLBX.MDP3", "parent", "SOYBEANS", "USD", "ZS"),
-            InstrumentDefinition("ZC", "CME", "FUTURE", "GLBX.MDP3", "parent", "CORN", "USD", "ZC"),
-            InstrumentDefinition("ZW", "CME", "FUTURE", "GLBX.MDP3", "parent", "WHEAT", "USD", "ZW"),
-            InstrumentDefinition("ZL", "CME", "FUTURE", "GLBX.MDP3", "parent", "SOYBEAN_OIL", "USD", "ZL"),
-            InstrumentDefinition("ZM", "CME", "FUTURE", "GLBX.MDP3", "parent", "SOYBEAN_MEAL", "USD", "ZM"),
+            # Commodities (CME) - use .FUT suffix
+            InstrumentDefinition("GC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "GOLD", "USD", "GC"),
+            InstrumentDefinition("CL.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CRUDE", "USD", "CL"),
+            InstrumentDefinition("NG.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "NATGAS", "USD", "NG"),
+            InstrumentDefinition("SI.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SILVER", "USD", "SI"),
+            InstrumentDefinition("HG.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "COPPER", "USD", "HG"),
+            InstrumentDefinition("SB.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SUGAR", "USD", "SB"),
+            InstrumentDefinition("KC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "COFFEE", "USD", "KC"),
+            InstrumentDefinition("CT.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "COTTON", "USD", "CT"),
+            InstrumentDefinition("CC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "COCOA", "USD", "CC"),
+            InstrumentDefinition("OJ.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "OJ", "USD", "OJ"),
+            InstrumentDefinition("ZS.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SOYBEANS", "USD", "ZS"),
+            InstrumentDefinition("ZC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CORN", "USD", "ZC"),
+            InstrumentDefinition("ZW.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "WHEAT", "USD", "ZW"),
+            InstrumentDefinition("ZL.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SOYBEAN_OIL", "USD", "ZL"),
+            InstrumentDefinition("ZM.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SOYBEAN_MEAL", "USD", "ZM"),
             
-            # FX Futures (CME)
-            InstrumentDefinition("6E", "CME", "FUTURE", "GLBX.MDP3", "parent", "EUR", "USD", "6E"),
-            InstrumentDefinition("6B", "CME", "FUTURE", "GLBX.MDP3", "parent", "GBP", "USD", "6B"),
-            InstrumentDefinition("6J", "CME", "FUTURE", "GLBX.MDP3", "parent", "JPY", "USD", "6J"),
-            InstrumentDefinition("6A", "CME", "FUTURE", "GLBX.MDP3", "parent", "AUD", "USD", "6A"),
-            InstrumentDefinition("6C", "CME", "FUTURE", "GLBX.MDP3", "parent", "CAD", "USD", "6C"),
-            InstrumentDefinition("6N", "CME", "FUTURE", "GLBX.MDP3", "parent", "NZD", "USD", "6N"),
-            InstrumentDefinition("6S", "CME", "FUTURE", "GLBX.MDP3", "parent", "CHF", "USD", "6S"),
-            InstrumentDefinition("6M", "CME", "FUTURE", "GLBX.MDP3", "parent", "MXN", "USD", "6M"),
-            InstrumentDefinition("6Z", "CME", "FUTURE", "GLBX.MDP3", "parent", "ZAR", "USD", "6Z"),
-            InstrumentDefinition("6L", "CME", "FUTURE", "GLBX.MDP3", "parent", "BRL", "USD", "6L"),
+            # FX Futures (CME) - use .FUT suffix
+            InstrumentDefinition("6E.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "EUR", "USD", "6E"),
+            InstrumentDefinition("6B.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "GBP", "USD", "6B"),
+            InstrumentDefinition("6J.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "JPY", "USD", "6J"),
+            InstrumentDefinition("6A.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "AUD", "USD", "6A"),
+            InstrumentDefinition("6C.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CAD", "USD", "6C"),
+            InstrumentDefinition("6N.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "NZD", "USD", "6N"),
+            InstrumentDefinition("6S.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CHF", "USD", "6S"),
+            InstrumentDefinition("6M.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "MXN", "USD", "6M"),
+            InstrumentDefinition("6Z.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "ZAR", "USD", "6Z"),
+            InstrumentDefinition("6L.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "BRL", "USD", "6L"),
             
-            # ICE Commodities
-            InstrumentDefinition("BRN", "ICE", "FUTURE", "IFEU.IMPACT", "parent", "BRENT", "USD", "BRN"),
-            InstrumentDefinition("G", "ICE", "FUTURE", "IFEU.IMPACT", "parent", "GASOIL", "USD", "G"),
+            # ICE Commodities - use .FUT suffix, dataset is IFEU.IMPACT
+            InstrumentDefinition("BRN.FUT", "ICE", "FUTURE", "IFEU.IMPACT", "parent", "BRENT", "USD", "BRN"),
+            InstrumentDefinition("G.FUT", "ICE", "FUTURE", "IFEU.IMPACT", "parent", "GASOIL", "USD", "G"),
             
-            # Equities/ETFs (NASDAQ/NYSE)
+            # Equities/ETFs (NASDAQ/NYSE) - use raw_symbol stype_in (no .FUT/.OPT suffix)
             InstrumentDefinition("SPY", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "SPY", "USD"),
             InstrumentDefinition("QQQ", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "QQQ", "USD"),
             InstrumentDefinition("AAPL", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "AAPL", "USD"),
@@ -95,8 +96,8 @@ class UnifiedInstrumentConfig:
             InstrumentDefinition("META", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "META", "USD"),
             InstrumentDefinition("BRK.B", "NYSE", "EQUITY", "DBEQ.BASIC", "raw_symbol", "BRK.B", "USD"),
             
-            # Options (CBOE)
-            InstrumentDefinition("SPY", "CBOE", "OPTION", "OPRA.PILLAR", "parent", "SPY", "USD"),
+            # Options (CBOE) - use .OPT suffix for parent symbology
+            InstrumentDefinition("SPY.OPT", "CBOE", "OPTION", "OPRA.PILLAR", "parent", "SPY", "USD"),
         ]
     )
     
