@@ -13,17 +13,54 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 import logging
 import pandas as pd
 
-# Import shared models from unified-cloud-services
+# Import shared enums from unified-cloud-services
 from unified_cloud_services.models.instrument import (
     Venue,
     InstrumentType,
-    InstrumentKey as SharedInstrumentKey,
 )
 
 logger = logging.getLogger(__name__)
 
-# Re-export for backward compatibility
-InstrumentKey = SharedInstrumentKey
+
+@dataclass
+class InstrumentKey:
+    """Instrument key following venue:instrument_type:symbol format"""
+
+    venue: Venue
+    instrument_type: InstrumentType
+    symbol: str
+    expiry: Optional[str] = None  # For futures/options
+    option_type: Optional[str] = None  # C or P for options
+
+    def __str__(self) -> str:
+        """Format: venue:type:symbol:expiry:option_type"""
+        parts = [self.venue.value, self.instrument_type.value, self.symbol]
+        if self.expiry:
+            parts.append(self.expiry)
+        if self.option_type:
+            parts.append(self.option_type)
+        return ":".join(parts)
+
+    @classmethod
+    def from_string(cls, instrument_key_str: str) -> "InstrumentKey":
+        """Parse instrument key from string"""
+        parts = instrument_key_str.split(":")
+        if len(parts) < 3:
+            raise ValueError(f"Invalid instrument key format: {instrument_key_str}")
+
+        venue = Venue(parts[0])
+        instrument_type = InstrumentType(parts[1])
+        symbol = parts[2]
+        expiry = parts[3] if len(parts) > 3 else None
+        option_type = parts[4] if len(parts) > 4 else None
+
+        return cls(
+            venue=venue,
+            instrument_type=instrument_type,
+            symbol=symbol,
+            expiry=expiry,
+            option_type=option_type,
+        )
 
 
 class InstrumentDefinition(BaseModel):
