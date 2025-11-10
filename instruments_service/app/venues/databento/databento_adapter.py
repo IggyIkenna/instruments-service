@@ -130,7 +130,13 @@ class DatabentoAdapter:
         # Databento API requires separate calls for different stype_in values
         symbols_by_stype = {}
         for symbol in symbols:
-            inst = unified_config.get_instrument(symbol, venue=exchange)
+            # For DBEQ.BASIC (NASDAQ/NYSE), don't filter by venue since both exchanges use same dataset
+            # For other datasets, filter by venue
+            if dataset == "DBEQ.BASIC":
+                inst = unified_config.get_instrument(symbol, venue=None)  # Search across all venues
+            else:
+                inst = unified_config.get_instrument(symbol, venue=exchange)
+            
             if inst:
                 stype = inst.stype_in
                 if stype not in symbols_by_stype:
