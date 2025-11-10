@@ -11,7 +11,13 @@ from .app.core.instrument_processing_service import InstrumentProcessingService
 from .app.core.cloud_instrument_storage import CloudInstrumentStorage
 from .app.core.batch_processor import InstrumentBatchProcessor
 from .models import InstrumentDefinition, InstrumentKey, Venue, InstrumentType
-from .config import VenueMapping, ExchangeInstrumentConfig, DataTypeConfig
+from .config import (
+    VenueMapping,
+    ExchangeInstrumentConfig,
+    DataTypeConfig,
+    DatabentoInstrumentConfig,
+    UnifiedInstrumentConfig,
+)
 
 __all__ = [
     "InstrumentProcessingService",
@@ -24,4 +30,6 @@ __all__ = [
     "VenueMapping",
     "ExchangeInstrumentConfig",
     "DataTypeConfig",
+    "DatabentoInstrumentConfig",
+    "UnifiedInstrumentConfig",
 ]
