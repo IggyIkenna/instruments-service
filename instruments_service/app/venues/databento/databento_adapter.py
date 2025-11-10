@@ -356,7 +356,7 @@ class DatabentoAdapter:
                 if expiry_time and hasattr(expiry_time, "isoformat")
                 else None
             ),
-            "data_types": "quotes,trades",  # Databento provides quotes and trades
+            "data_types": "quotes",  # Databento provides quotes (we fetch OHLCV for cost efficiency)
             "inverse": False,
             "contract_size": row.get("contract_size", None),
             "underlying": asset,
