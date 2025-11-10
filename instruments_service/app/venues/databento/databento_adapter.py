@@ -352,6 +352,12 @@ class DatabentoAdapter:
         asset_raw = row.get("asset", "")
         asset_raw = "" if pd.isna(asset_raw) else str(asset_raw)
         
+        # For equities/ETFs, if asset is empty, use the symbol (ticker) from Databento
+        # The symbol field is the actual ticker (AAPL, SPY, etc.) for equities
+        if not asset_raw and exchange_raw_symbol:
+            # Use exchange_raw_symbol (which is the Databento symbol) as fallback for equities
+            asset_raw = exchange_raw_symbol
+        
         currency_raw = row.get("currency", "USD")
         currency_raw = "USD" if pd.isna(currency_raw) else str(currency_raw)
         
@@ -369,12 +375,17 @@ class DatabentoAdapter:
         # If not provided, fall back to asset (base symbol)
         if not exchange_raw_symbol:
             exchange_raw_symbol = asset_raw
+        
+        # For equities/ETFs, if asset is still empty, use exchange_raw_symbol (the Databento symbol)
+        # This handles cases where Databento doesn't populate the asset field for equities
+        if not asset_raw and exchange_raw_symbol and security_type in ["STK", "ETF"]:
+            asset_raw = exchange_raw_symbol
 
         # Convert to human-readable names using unified config
         # For equities/ETFs, asset is already human-readable (AAPL, SPY, etc.), only convert futures codes
         if security_type in ["STK", "ETF"] or (not security_type and asset_raw and len(asset_raw) <= 5):
             # Equities/ETFs are already human-readable, don't convert
-            base_asset = asset_raw
+            base_asset = asset_raw if asset_raw else exchange_raw_symbol
         else:
             # Futures/options: convert exchange codes to human-readable names
             base_asset = unified_config.get_human_readable_name(asset_raw) if asset_raw else ""
