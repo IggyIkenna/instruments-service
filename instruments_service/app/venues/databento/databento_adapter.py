@@ -10,7 +10,7 @@ Reference: archive/genConfig/instrumentDefinitionConfig/dataBentoInstrumentSelec
 import logging
 import os
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 
 try:
@@ -281,6 +281,7 @@ class DatabentoAdapter:
     ) -> Dict[str, Any]:
         """
         Convert Databento row to instrument definition format.
+        Uses human-readable names from unified config for base_asset, quote_asset, and symbol.
 
         Args:
             row: Databento DataFrame row
@@ -290,76 +291,120 @@ class DatabentoAdapter:
         Returns:
             Instrument definition dictionary
         """
-        # Extract fields from Databento schema
-        asset = row.get("asset", "")
-        currency = row.get("currency", "USD")
+        from instruments_service.config import UnifiedInstrumentConfig
+        
+        unified_config = UnifiedInstrumentConfig()
+        
+        # Extract fields from Databento schema (handle NaNs)
+        asset_raw = row.get("asset", "")
+        asset_raw = "" if pd.isna(asset_raw) else str(asset_raw)
+        
+        currency_raw = row.get("currency", "USD")
+        currency_raw = "USD" if pd.isna(currency_raw) else str(currency_raw)
+        
         security_type = row.get("security_type", "")
+        security_type = "" if pd.isna(security_type) else str(security_type)
+        
         min_price_increment = row.get("min_price_increment", 0.01)
+        min_price_increment = 0.01 if pd.isna(min_price_increment) else float(min_price_increment)
 
+        # Convert to human-readable names using unified config
+        # For equities/ETFs, asset is already human-readable (AAPL, SPY, etc.), only convert futures codes
+        if security_type in ["STK", "ETF"] or (not security_type and asset_raw and len(asset_raw) <= 5):
+            # Equities/ETFs are already human-readable, don't convert
+            base_asset = asset_raw
+        else:
+            # Futures/options: convert exchange codes to human-readable names
+            base_asset = unified_config.get_human_readable_name(asset_raw) if asset_raw else ""
+        quote_asset = currency_raw  # Currency codes are already human-readable (USD, EUR, etc.)
+        
         # Parse expiry if available
         expiry_time = None
         if "expiration" in row and pd.notna(row["expiration"]):
             expiry_time = row["expiration"]
 
         # Determine instrument type
-        instrument_type = "FUTURE" if security_type == "FUT" else "EQUITY"
+        if security_type == "FUT":
+            instrument_type = "FUTURE"
+        elif security_type == "OPT":
+            instrument_type = "OPTION"
+        elif security_type == "ETF":
+            instrument_type = "ETF"
+        elif security_type == "STK":
+            instrument_type = "EQUITY"
+        else:
+            instrument_type = "EQUITY"  # Default
 
-        # Build symbol
-        symbol = f"{asset}-{currency}"
+        # Build symbol with human-readable base_asset
+        symbol = f"{base_asset}-{quote_asset}"
         if expiry_time:
             # Format expiry as YYMMDD
-            if isinstance(expiry_time, str):
-                # Parse and format
+            if isinstance(expiry_time, (str, pd.Timestamp)):
                 try:
-                    expiry_dt = pd.to_datetime(expiry_time)
+                    if isinstance(expiry_time, str):
+                        expiry_dt = pd.to_datetime(expiry_time)
+                    else:
+                        expiry_dt = expiry_time
                     expiry_str = expiry_dt.strftime("%y%m%d")
-                    symbol = f"{asset}-{currency}-{expiry_str}"
-                except:
-                    pass
+                    symbol = f"{base_asset}-{quote_asset}-{expiry_str}"
+                except Exception as e:
+                    logger.warning(f"Failed to parse expiry {expiry_time}: {e}")
 
         # Build canonical instrument key
         venue = self._normalize_venue(exchange)
         instrument_key = f"{venue}:{instrument_type}:{symbol}"
 
+        # Handle expiry datetime conversion
+        expiry_iso = None
+        if expiry_time:
+            try:
+                if isinstance(expiry_time, str):
+                    expiry_dt = pd.to_datetime(expiry_time)
+                elif isinstance(expiry_time, pd.Timestamp):
+                    expiry_dt = expiry_time
+                else:
+                    expiry_dt = pd.to_datetime(expiry_time)
+                expiry_iso = expiry_dt.isoformat()
+            except Exception as e:
+                logger.warning(f"Failed to convert expiry to ISO: {e}")
+
+        # Handle available_from_datetime
+        available_from = datetime.now(timezone.utc).isoformat()
+        if "ts_event" in row and pd.notna(row["ts_event"]):
+            try:
+                ts_event = row["ts_event"]
+                if isinstance(ts_event, pd.Timestamp):
+                    available_from = ts_event.isoformat()
+                elif isinstance(ts_event, str):
+                    available_from = pd.to_datetime(ts_event).isoformat()
+            except Exception as e:
+                logger.warning(f"Failed to parse ts_event: {e}")
+
         return {
             "instrument_key": instrument_key,
             "venue": venue,
             "instrument_type": instrument_type,
-            "symbol": symbol,
-            "base_asset": asset,
-            "quote_asset": currency,
-            "settle_asset": currency,
-            "expiry": (
-                expiry_time.isoformat()
-                if expiry_time and hasattr(expiry_time, "isoformat")
-                else None
-            ),
+            "symbol": symbol,  # Human-readable symbol
+            "base_asset": base_asset,  # Human-readable base asset
+            "quote_asset": quote_asset,  # Human-readable quote asset
+            "settle_asset": quote_asset,
+            "expiry": expiry_iso,
             "tick_size": str(min_price_increment),
-            "min_size": str(
-                min_price_increment
-            ),  # Databento doesn't provide min_size separately
+            "min_size": str(min_price_increment),
             "asset_class": "traditional",
             "venue_type": "exchange",
             "data_provider": "databento",
-            "tardis_exchange": "",  # Not applicable for Databento
-            "tardis_symbol": "",  # Not applicable for Databento
-            "exchange_raw_symbol": row.get("symbol", ""),
-            "ccxt_symbol": "",  # Not applicable for TradFi
-            "ccxt_exchange": "",  # Not applicable for TradFi
-            "available_from_datetime": (
-                row.get("ts_event", datetime.now()).isoformat()
-                if pd.notna(row.get("ts_event"))
-                else datetime.now().isoformat()
-            ),
-            "available_to_datetime": (
-                expiry_time.isoformat()
-                if expiry_time and hasattr(expiry_time, "isoformat")
-                else None
-            ),
-            "data_types": "quotes",  # Databento provides quotes (we fetch OHLCV for cost efficiency)
+            "tardis_exchange": "",
+            "tardis_symbol": "",
+            "exchange_raw_symbol": row.get("symbol", ""),  # Keep raw Databento symbol
+            "ccxt_symbol": "",
+            "ccxt_exchange": "",
+            "available_from_datetime": available_from,
+            "available_to_datetime": expiry_iso,
+            "data_types": "ohlcv_1m",  # We fetch OHLCV 1m candles from Databento
             "inverse": False,
-            "contract_size": row.get("contract_size", None),
-            "underlying": asset,
+            "contract_size": row.get("contract_size", None) if pd.notna(row.get("contract_size")) else None,
+            "underlying": base_asset,  # Human-readable underlying
         }
 
     def _normalize_venue(self, exchange: str) -> str:
