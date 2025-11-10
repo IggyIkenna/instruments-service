@@ -9,6 +9,7 @@ Reference: archive/genConfig/instrumentDefinitionConfig/dataBentoInstrumentSelec
 
 import logging
 import os
+import re
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta, timezone
 import pandas as pd
@@ -453,7 +454,6 @@ class DatabentoAdapter:
                 if len(symbol_str) >= 2:
                     # OCC format: last char before strike is C or P
                     # Try to find C or P followed by digits (strike)
-                    import re
                     # Pattern: C or P followed by digits (strike price)
                     match = re.search(r'([CP])\d+', symbol_str)
                     if match:
