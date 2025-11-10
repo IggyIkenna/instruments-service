@@ -11,7 +11,7 @@ from instruments_service.app.core.cloud_instrument_storage import CloudInstrumen
 
 class TestCloudInstrumentStorage:
     """Tests for CloudInstrumentStorage."""
-    
+
     @pytest.fixture
     def mock_cloud_service(self):
         """Create mock cloud service."""
@@ -19,260 +19,315 @@ class TestCloudInstrumentStorage:
         service.upload_dataframe = Mock(return_value=True)
         service.query_dataframe = Mock(return_value=pd.DataFrame())
         return service
-    
+
     @pytest.fixture
     def mock_cloud_target(self):
         """Create mock cloud target."""
         target = Mock()
-        target.project_id = 'test-project'
-        target.gcs_bucket = 'test-bucket'
-        target.bigquery_dataset = 'test-dataset'
-        target.bigquery_location = 'asia-northeast1'
+        target.project_id = "test-project"
+        target.gcs_bucket = "test-bucket"
+        target.bigquery_dataset = "test-dataset"
+        target.bigquery_location = "asia-northeast1"
         return target
-    
+
     @pytest.fixture
     def storage(self, mock_cloud_service, mock_cloud_target):
         """Create storage with mocked dependencies."""
-        with patch('instruments_service.app.core.cloud_instrument_storage.create_market_data_service', return_value=mock_cloud_service), \
-             patch('instruments_service.app.core.cloud_instrument_storage.CloudTarget', return_value=mock_cloud_target):
+        with patch(
+            "instruments_service.app.core.cloud_instrument_storage.create_market_data_service",
+            return_value=mock_cloud_service,
+        ), patch(
+            "instruments_service.app.core.cloud_instrument_storage.CloudTarget",
+            return_value=mock_cloud_target,
+        ):
             storage = CloudInstrumentStorage(cloud_target=mock_cloud_target)
             storage.cloud_service = mock_cloud_service
             return storage
-    
+
     def test_init_with_cloud_target(self, mock_cloud_service, mock_cloud_target):
         """Test initialization with cloud target."""
-        with patch('instruments_service.app.core.cloud_instrument_storage.create_market_data_service', return_value=mock_cloud_service):
+        with patch(
+            "instruments_service.app.core.cloud_instrument_storage.create_market_data_service",
+            return_value=mock_cloud_service,
+        ):
             storage = CloudInstrumentStorage(cloud_target=mock_cloud_target)
             assert storage.cloud_service is not None
             assert storage.cloud_target == mock_cloud_target
-    
+
     def test_init_without_cloud_target(self, mock_cloud_service):
         """Test initialization without cloud target (uses defaults)."""
-        with patch('instruments_service.app.core.cloud_instrument_storage.create_market_data_service', return_value=mock_cloud_service), \
-             patch('instruments_service.app.core.cloud_instrument_storage.CloudTarget') as mock_target_class:
+        with patch(
+            "instruments_service.app.core.cloud_instrument_storage.create_market_data_service",
+            return_value=mock_cloud_service,
+        ), patch(
+            "instruments_service.app.core.cloud_instrument_storage.CloudTarget"
+        ) as mock_target_class:
             mock_target = Mock()
-            mock_target.project_id = 'test-project'
-            mock_target.gcs_bucket = 'test-bucket'
-            mock_target.bigquery_dataset = 'test-dataset'
-            mock_target.bigquery_location = 'asia-northeast1'
+            mock_target.project_id = "test-project"
+            mock_target.gcs_bucket = "test-bucket"
+            mock_target.bigquery_dataset = "test-dataset"
+            mock_target.bigquery_location = "asia-northeast1"
             mock_target_class.return_value = mock_target
-            
+
             storage = CloudInstrumentStorage()
             assert storage.cloud_service is not None
-    
+
     def test_init_test_mode(self, mock_cloud_service):
         """Test initialization in test mode."""
-        with patch('instruments_service.app.core.cloud_instrument_storage.create_market_data_service', return_value=mock_cloud_service), \
-             patch('instruments_service.app.core.cloud_instrument_storage.CloudTarget') as mock_target_class, \
-             patch.dict('os.environ', {'ENVIRONMENT': 'test', 'INSTRUMENTS_GCS_BUCKET_TEST': 'test-bucket'}):
+        with patch(
+            "instruments_service.app.core.cloud_instrument_storage.create_market_data_service",
+            return_value=mock_cloud_service,
+        ), patch(
+            "instruments_service.app.core.cloud_instrument_storage.CloudTarget"
+        ) as mock_target_class, patch.dict(
+            "os.environ",
+            {"ENVIRONMENT": "test", "INSTRUMENTS_GCS_BUCKET_TEST": "test-bucket"},
+        ):
             mock_target = Mock()
             mock_target_class.return_value = mock_target
-            
+
             storage = CloudInstrumentStorage()
             # Should use test bucket
             assert storage.cloud_service is not None
-    
+
     def test_store_instruments_success(self, storage, mock_cloud_service):
         """Test storing instruments successfully."""
-        df = pd.DataFrame({
-            'instrument_key': ['TEST:SPOT_PAIR:BTC-USDT'],
-            'venue': ['TEST'],
-            'instrument_type': ['SPOT_PAIR'],
-            'available_from_datetime': ['2024-01-01T00:00:00Z']
-        })
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                "venue": ["TEST"],
+                "instrument_type": ["SPOT_PAIR"],
+                "available_from_datetime": ["2024-01-01T00:00:00Z"],
+            }
+        )
         date = datetime(2024, 1, 1, tzinfo=timezone.utc)
-        
+
         # Mock upload_to_gcs instead of upload_dataframe
         mock_cloud_service.upload_to_gcs = Mock(return_value=True)
-        
-        result = storage.store_instruments(df, table_name='instruments', date=date)
-        
-        assert result is True
-        mock_cloud_service.upload_to_gcs.assert_called()
-    
-    def test_store_instruments_no_date(self, storage, mock_cloud_service):
-        """Test storing instruments without date."""
-        df = pd.DataFrame({
-            'instrument_key': ['TEST:SPOT_PAIR:BTC-USDT'],
-            'venue': ['TEST'],
-            'instrument_type': ['SPOT_PAIR'],
-            'available_from_datetime': ['2024-01-01T00:00:00Z']
-        })
-        
-        mock_cloud_service.upload_to_gcs = Mock(return_value=True)
-        
-        result = storage.store_instruments(df, table_name='instruments')
-        
-        assert result is True
-        mock_cloud_service.upload_to_gcs.assert_called()
-    
-    def test_store_instruments_failure(self, storage, mock_cloud_service):
-        """Test storing instruments with failure."""
-        df = pd.DataFrame({
-            'instrument_key': ['TEST:SPOT_PAIR:BTC-USDT'],
-            'venue': ['TEST'],
-            'instrument_type': ['SPOT_PAIR'],
-            'available_from_datetime': ['2024-01-01T00:00:00Z']
-        })
-        mock_cloud_service.upload_to_gcs = Mock(side_effect=Exception("Upload failed"))
-        
-        result = storage.store_instruments(df, table_name='instruments')
-        
-        assert result is False
-    
-    def test_query_instruments(self, storage, mock_cloud_service):
-        """Test querying instruments."""
-        # query_instruments now returns empty DataFrame (BigQuery removed)
-        result = storage.query_instruments(
-            venue='TEST',
-            instrument_type='SPOT_PAIR'
-        )
-        
-        assert isinstance(result, pd.DataFrame)
-        # Should return empty DataFrame (GCS query not implemented)
-        assert len(result) == 0
-    
-    def test_query_instruments_empty(self, storage, mock_cloud_service):
-        """Test querying instruments with empty result."""
-        result = storage.query_instruments()
-        
-        assert isinstance(result, pd.DataFrame)
-        assert len(result) == 0
-    
-    def test_store_instruments_missing_columns(self, storage):
-        """Test storing instruments with missing required columns."""
-        df = pd.DataFrame({
-            'instrument_key': ['TEST:SPOT_PAIR:BTC-USDT']
-            # Missing required columns
-        })
-        
-        with pytest.raises(ValueError, match="Missing required columns"):
-            storage.store_instruments(df, table_name='instruments')
-    
-    def test_store_instruments_exception_handling(self, storage, mock_cloud_service):
-        """Test exception handling during storage."""
-        df = pd.DataFrame({
-            'instrument_key': ['TEST:SPOT_PAIR:BTC-USDT'],
-            'venue': ['TEST'],
-            'instrument_type': ['SPOT_PAIR'],
-            'available_from_datetime': ['2024-01-01T00:00:00Z']
-        })
-        
-        mock_cloud_service.upload_to_gcs = Mock(side_effect=Exception("Storage error"))
-        
-        result = storage.store_instruments(df, table_name='instruments')
-        
-        assert result is False
-    
-    def test_store_instruments_extract_date_from_available_from(self, storage, mock_cloud_service):
-        """Test storing instruments extracting date from available_from_datetime."""
-        df = pd.DataFrame({
-            'instrument_key': ['TEST:SPOT_PAIR:BTC-USDT'],
-            'venue': ['TEST'],
-            'instrument_type': ['SPOT_PAIR'],
-            'available_from_datetime': [pd.Timestamp('2024-01-15T00:00:00Z')]
-        })
-        
-        mock_cloud_service.upload_to_gcs = Mock(return_value=True)
-        
-        result = storage.store_instruments(df, table_name='instruments', date=None)
-        
-        assert result is True
-        # Should extract date from available_from_datetime
-        mock_cloud_service.upload_to_gcs.assert_called()
-    
-    def test_store_instruments_timestamp_conversion(self, storage, mock_cloud_service):
-        """Test timestamp column conversion."""
-        df = pd.DataFrame({
-            'instrument_key': ['TEST:SPOT_PAIR:BTC-USDT'],
-            'venue': ['TEST'],
-            'instrument_type': ['SPOT_PAIR'],
-            'available_from_datetime': [pd.Timestamp('2024-01-01T00:00:00Z', tz='UTC')],
-            'available_to_datetime': [pd.Timestamp('2024-12-31T00:00:00Z', tz='UTC')],
-            'expiry': [pd.Timestamp('2024-12-31T00:00:00Z', tz='UTC')]
-        })
-        
-        mock_cloud_service.upload_to_gcs = Mock(return_value=True)
-        
-        result = storage.store_instruments(df, table_name='instruments')
-        
-        assert result is True
-        mock_cloud_service.upload_to_gcs.assert_called()
-    
-    def test_store_instruments_string_timestamp(self, storage, mock_cloud_service):
-        """Test storing instruments with string timestamps."""
-        df = pd.DataFrame({
-            'instrument_key': ['TEST:SPOT_PAIR:BTC-USDT'],
-            'venue': ['TEST'],
-            'instrument_type': ['SPOT_PAIR'],
-            'available_from_datetime': ['2024-01-01T00:00:00Z'],
-            'timestamp': ['2024-01-01T00:00:00Z']
-        })
-        
-        mock_cloud_service.upload_to_gcs = Mock(return_value=True)
-        
-        result = storage.store_instruments(df, table_name='instruments')
-        
-        assert result is True
-        mock_cloud_service.upload_to_gcs.assert_called()
-    
-    def test_init_import_error(self):
-        """Test initialization when unified-cloud-services not available."""
-        with patch('instruments_service.app.core.cloud_instrument_storage.UNIFIED_CLOUD_SERVICES_AVAILABLE', False):
-            with pytest.raises(ImportError, match="unified-cloud-services not available"):
-                CloudInstrumentStorage()
-    
-    def test_store_instruments_date_extraction_fallback(self, storage, mock_cloud_service):
-        """Test storing instruments with date extraction fallback."""
-        df = pd.DataFrame({
-            'instrument_key': ['TEST:SPOT_PAIR:BTC-USDT'],
-            'venue': ['TEST'],
-            'instrument_type': ['SPOT_PAIR'],
-            'available_from_datetime': ['invalid-date']  # Invalid date, should fallback
-        })
-        
-        mock_cloud_service.upload_to_gcs = Mock(return_value=True)
-        
-        result = storage.store_instruments(df, table_name='instruments', date=None)
-        
-        # Should still succeed with fallback to current date
-        assert result is True
-        mock_cloud_service.upload_to_gcs.assert_called()
-    
-    def test_store_instruments_no_available_from_datetime_column(self, storage, mock_cloud_service):
-        """Test storing instruments when available_from_datetime extraction fails."""
-        # Create df without available_from_datetime for date extraction
-        df = pd.DataFrame({
-            'instrument_key': ['TEST:SPOT_PAIR:BTC-USDT'],
-            'venue': ['TEST'],
-            'instrument_type': ['SPOT_PAIR'],
-            'available_from_datetime': ['2024-01-01T00:00:00Z']  # Required column
-        })
-        
-        # Simulate case where date extraction from available_from_datetime fails
-        # by using a date that will fallback to current date
-        mock_cloud_service.upload_to_gcs = Mock(return_value=True)
-        
-        result = storage.store_instruments(df, table_name='instruments', date=None)
-        
-        assert result is True
-        mock_cloud_service.upload_to_gcs.assert_called()
-    
-    def test_store_instruments_timestamp_parsing_error(self, storage, mock_cloud_service):
-        """Test storing instruments with timestamp parsing error."""
-        df = pd.DataFrame({
-            'instrument_key': ['TEST:SPOT_PAIR:BTC-USDT'],
-            'venue': ['TEST'],
-            'instrument_type': ['SPOT_PAIR'],
-            'available_from_datetime': ['2024-01-01T00:00:00Z'],
-            'timestamp': ['invalid-timestamp']  # Invalid timestamp
-        })
-        
-        mock_cloud_service.upload_to_gcs = Mock(return_value=True)
-        
-        # Should handle parsing error gracefully
-        result = storage.store_instruments(df, table_name='instruments')
-        
+
+        result = storage.store_instruments(df, table_name="instruments", date=date)
+
         assert result is True
         mock_cloud_service.upload_to_gcs.assert_called()
 
+    def test_store_instruments_no_date(self, storage, mock_cloud_service):
+        """Test storing instruments without date."""
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                "venue": ["TEST"],
+                "instrument_type": ["SPOT_PAIR"],
+                "available_from_datetime": ["2024-01-01T00:00:00Z"],
+            }
+        )
+
+        mock_cloud_service.upload_to_gcs = Mock(return_value=True)
+
+        result = storage.store_instruments(df, table_name="instruments")
+
+        assert result is True
+        mock_cloud_service.upload_to_gcs.assert_called()
+
+    def test_store_instruments_failure(self, storage, mock_cloud_service):
+        """Test storing instruments with failure."""
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                "venue": ["TEST"],
+                "instrument_type": ["SPOT_PAIR"],
+                "available_from_datetime": ["2024-01-01T00:00:00Z"],
+            }
+        )
+        mock_cloud_service.upload_to_gcs = Mock(side_effect=Exception("Upload failed"))
+
+        result = storage.store_instruments(df, table_name="instruments")
+
+        assert result is False
+
+    def test_query_instruments(self, storage, mock_cloud_service):
+        """Test querying instruments."""
+        # query_instruments now returns empty DataFrame (BigQuery removed)
+        result = storage.query_instruments(venue="TEST", instrument_type="SPOT_PAIR")
+
+        assert isinstance(result, pd.DataFrame)
+        # Should return empty DataFrame (GCS query not implemented)
+        assert len(result) == 0
+
+    def test_query_instruments_empty(self, storage, mock_cloud_service):
+        """Test querying instruments with empty result."""
+        result = storage.query_instruments()
+
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 0
+
+    def test_store_instruments_missing_columns(self, storage):
+        """Test storing instruments with missing required columns."""
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"]
+                # Missing required columns
+            }
+        )
+
+        with pytest.raises(ValueError, match="Missing required columns"):
+            storage.store_instruments(df, table_name="instruments")
+
+    def test_store_instruments_exception_handling(self, storage, mock_cloud_service):
+        """Test exception handling during storage."""
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                "venue": ["TEST"],
+                "instrument_type": ["SPOT_PAIR"],
+                "available_from_datetime": ["2024-01-01T00:00:00Z"],
+            }
+        )
+
+        mock_cloud_service.upload_to_gcs = Mock(side_effect=Exception("Storage error"))
+
+        result = storage.store_instruments(df, table_name="instruments")
+
+        assert result is False
+
+    def test_store_instruments_extract_date_from_available_from(
+        self, storage, mock_cloud_service
+    ):
+        """Test storing instruments extracting date from available_from_datetime."""
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                "venue": ["TEST"],
+                "instrument_type": ["SPOT_PAIR"],
+                "available_from_datetime": [pd.Timestamp("2024-01-15T00:00:00Z")],
+            }
+        )
+
+        mock_cloud_service.upload_to_gcs = Mock(return_value=True)
+
+        result = storage.store_instruments(df, table_name="instruments", date=None)
+
+        assert result is True
+        # Should extract date from available_from_datetime
+        mock_cloud_service.upload_to_gcs.assert_called()
+
+    def test_store_instruments_timestamp_conversion(self, storage, mock_cloud_service):
+        """Test timestamp column conversion."""
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                "venue": ["TEST"],
+                "instrument_type": ["SPOT_PAIR"],
+                "available_from_datetime": [
+                    pd.Timestamp("2024-01-01T00:00:00Z", tz="UTC")
+                ],
+                "available_to_datetime": [
+                    pd.Timestamp("2024-12-31T00:00:00Z", tz="UTC")
+                ],
+                "expiry": [pd.Timestamp("2024-12-31T00:00:00Z", tz="UTC")],
+            }
+        )
+
+        mock_cloud_service.upload_to_gcs = Mock(return_value=True)
+
+        result = storage.store_instruments(df, table_name="instruments")
+
+        assert result is True
+        mock_cloud_service.upload_to_gcs.assert_called()
+
+    def test_store_instruments_string_timestamp(self, storage, mock_cloud_service):
+        """Test storing instruments with string timestamps."""
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                "venue": ["TEST"],
+                "instrument_type": ["SPOT_PAIR"],
+                "available_from_datetime": ["2024-01-01T00:00:00Z"],
+                "timestamp": ["2024-01-01T00:00:00Z"],
+            }
+        )
+
+        mock_cloud_service.upload_to_gcs = Mock(return_value=True)
+
+        result = storage.store_instruments(df, table_name="instruments")
+
+        assert result is True
+        mock_cloud_service.upload_to_gcs.assert_called()
+
+    def test_init_import_error(self):
+        """Test initialization when unified-cloud-services not available."""
+        with patch(
+            "instruments_service.app.core.cloud_instrument_storage.UNIFIED_CLOUD_SERVICES_AVAILABLE",
+            False,
+        ):
+            with pytest.raises(
+                ImportError, match="unified-cloud-services not available"
+            ):
+                CloudInstrumentStorage()
+
+    def test_store_instruments_date_extraction_fallback(
+        self, storage, mock_cloud_service
+    ):
+        """Test storing instruments with date extraction fallback."""
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                "venue": ["TEST"],
+                "instrument_type": ["SPOT_PAIR"],
+                "available_from_datetime": [
+                    "invalid-date"
+                ],  # Invalid date, should fallback
+            }
+        )
+
+        mock_cloud_service.upload_to_gcs = Mock(return_value=True)
+
+        result = storage.store_instruments(df, table_name="instruments", date=None)
+
+        # Should still succeed with fallback to current date
+        assert result is True
+        mock_cloud_service.upload_to_gcs.assert_called()
+
+    def test_store_instruments_no_available_from_datetime_column(
+        self, storage, mock_cloud_service
+    ):
+        """Test storing instruments when available_from_datetime extraction fails."""
+        # Create df without available_from_datetime for date extraction
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                "venue": ["TEST"],
+                "instrument_type": ["SPOT_PAIR"],
+                "available_from_datetime": ["2024-01-01T00:00:00Z"],  # Required column
+            }
+        )
+
+        # Simulate case where date extraction from available_from_datetime fails
+        # by using a date that will fallback to current date
+        mock_cloud_service.upload_to_gcs = Mock(return_value=True)
+
+        result = storage.store_instruments(df, table_name="instruments", date=None)
+
+        assert result is True
+        mock_cloud_service.upload_to_gcs.assert_called()
+
+    def test_store_instruments_timestamp_parsing_error(
+        self, storage, mock_cloud_service
+    ):
+        """Test storing instruments with timestamp parsing error."""
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                "venue": ["TEST"],
+                "instrument_type": ["SPOT_PAIR"],
+                "available_from_datetime": ["2024-01-01T00:00:00Z"],
+                "timestamp": ["invalid-timestamp"],  # Invalid timestamp
+            }
+        )
+
+        mock_cloud_service.upload_to_gcs = Mock(return_value=True)
+
+        # Should handle parsing error gracefully
+        result = storage.store_instruments(df, table_name="instruments")
+
+        assert result is True
+        mock_cloud_service.upload_to_gcs.assert_called()
