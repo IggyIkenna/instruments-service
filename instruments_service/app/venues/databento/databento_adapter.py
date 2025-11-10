@@ -434,18 +434,6 @@ class DatabentoAdapter:
             except Exception as e:
                 logger.warning(f"Failed to parse expiry {expiry_time}: {e}")
 
-        # Determine instrument type FIRST (needed for quote_asset logic)
-        if security_type == "FUT":
-            instrument_type = "FUTURE"
-        elif security_type == "OPT":
-            instrument_type = "OPTION"
-        elif security_type == "ETF":
-            instrument_type = "ETF"
-        elif security_type == "STK":
-            instrument_type = "EQUITY"
-        else:
-            instrument_type = "EQUITY"  # Default
-
         # Extract option-specific fields
         strike_price = ""
         option_type = ""
