@@ -313,8 +313,13 @@ class DatabentoAdapter:
                     # For raw_symbol, the asset IS the query symbol
                     databento_symbol = asset_to_query_symbol.get(asset, asset)
                 
+                # exchange_raw_symbol should be the actual Databento symbol (contract symbol)
+                # This is what the exchange uses internally, not the asset/base
+                # For futures: "ESZ24" (specific contract), for options: "SPY 251219C500", for equities: "AAPL"
+                exchange_raw_symbol = str(symbol) if symbol else asset
+                
                 inst_def = self._convert_to_instrument_definition(
-                    row, exchange, dataset, databento_symbol
+                    row, exchange, dataset, databento_symbol, exchange_raw_symbol
                 )
                 instruments[symbol] = inst_def
             except Exception as e:
@@ -324,7 +329,7 @@ class DatabentoAdapter:
         return instruments
 
     def _convert_to_instrument_definition(
-        self, row: pd.Series, exchange: str, dataset: str, databento_symbol: str
+        self, row: pd.Series, exchange: str, dataset: str, databento_symbol: str, exchange_raw_symbol: str = ""
     ) -> Dict[str, Any]:
         """
         Convert Databento row to instrument definition format.
@@ -356,8 +361,14 @@ class DatabentoAdapter:
         min_price_increment = row.get("min_price_increment", 0.01)
         min_price_increment = 0.01 if pd.isna(min_price_increment) else float(min_price_increment)
 
-        # exchange_raw_symbol = raw exchange code (e.g., "6A", "6E", "ES", "AAPL")
-        exchange_raw_symbol = asset_raw
+        # exchange_raw_symbol is the actual Databento symbol (contract symbol) passed in
+        # This is what the exchange uses internally:
+        # - For futures: "ESZ24" (specific contract), "CLZ24", etc.
+        # - For options: "SPY 251219C500" (specific option contract)
+        # - For equities: "AAPL", "SPY" (ticker symbol)
+        # If not provided, fall back to asset (base symbol)
+        if not exchange_raw_symbol:
+            exchange_raw_symbol = asset_raw
 
         # Convert to human-readable names using unified config
         # For equities/ETFs, asset is already human-readable (AAPL, SPY, etc.), only convert futures codes
