@@ -21,13 +21,12 @@ from .defi import (
 )
 
 __all__ = [
-    'TardisAdapter',
-    'DatabentoAdapter',
-    'TheGraphClient',
-    'UniswapV3Adapter',
-    'CurveAdapter',
-    'AaveV3Adapter',
-    'EtherFiAdapter',
-    'LidoAdapter',
+    "TardisAdapter",
+    "DatabentoAdapter",
+    "TheGraphClient",
+    "UniswapV3Adapter",
+    "CurveAdapter",
+    "AaveV3Adapter",
+    "EtherFiAdapter",
+    "LidoAdapter",
 ]
-
