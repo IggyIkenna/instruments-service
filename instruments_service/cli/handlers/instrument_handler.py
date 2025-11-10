@@ -165,8 +165,10 @@ class InstrumentHandler(ModeHandler):
                 logger.info(f"📅 Processing {date.strftime('%Y-%m-%d')}")
 
                 # Generate instruments using service
+                # Remove cefi/tradfi/defi from kwargs to avoid duplicate keyword arguments
+                filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ['cefi', 'tradfi', 'defi']}
                 instruments = self._generate_instruments_for_date(
-                    date, force, exchanges_to_process, cefi=cefi, tradfi=tradfi, defi=defi, **kwargs
+                    date, force, exchanges_to_process, cefi=cefi, tradfi=tradfi, defi=defi, **filtered_kwargs
                 )
 
                 if instruments:
