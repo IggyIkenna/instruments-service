@@ -359,7 +359,7 @@ class InstrumentProcessingService:
                     )
                     return None
 
-                # Per INSTRUMENT_KEY.md: FUTURE format is BASE_ASSET-QUOTE_ASSET-YYMMDD
+                # Per INSTRUMENT_KEY.md: FUTURE format is BASE_ASSET-QUOTE_ASSET-YYMMDD@LIN or @INV
                 # Clean up expiry_str (remove any duplication)
                 if expiry_str and len(expiry_str) > 6:
                     # Extract just the YYMMDD part if there's extra data
@@ -368,7 +368,36 @@ class InstrumentProcessingService:
                     if match:
                         expiry_str = match.group(1)
 
-                return f"{venue}:FUTURE:{clean_base}-{clean_quote}-{expiry_str}"
+                # Determine future flavor: @LIN (linear) or @INV (inverse)
+                # Use same logic as perpetuals
+                settle_asset = "USDT"  # Default
+                if venue == "DERIBIT":
+                    deribit_quotes = self.exchange_config.valid_quote_currencies.get(
+                        "DERIBIT", []
+                    )
+                    if clean_quote == "USD":
+                        settle_asset = clean_base  # Coin margin - settle in base asset (inverse)
+                    elif clean_quote in deribit_quotes and clean_quote != "USD":
+                        settle_asset = clean_quote  # Cash settled (USDC, etc.) - linear
+                else:
+                    # For most exchanges, quote asset is the margin currency (linear)
+                    settle_asset = clean_quote
+
+                # Determine if linear or inverse based on settle_asset
+                if settle_asset == clean_quote:
+                    # Quote asset == margin currency → Linear
+                    future_flavor = "LIN"
+                elif settle_asset == clean_base:
+                    # Margin currency == base asset → Inverse
+                    future_flavor = "INV"
+                else:
+                    # Default to linear if unclear (most common case)
+                    future_flavor = "LIN"
+                    logger.debug(
+                        f"⚠️ Could not determine future flavor for {symbol_id}, defaulting to @LIN (settle_asset={settle_asset}, quote={clean_quote}, base={clean_base})"
+                    )
+
+                return f"{venue}:FUTURE:{clean_base}-{clean_quote}-{expiry_str}@{future_flavor}"
             else:
                 logger.warning(
                     f"Missing expiry date for future {symbol_id} exchange: {exchange}"
@@ -415,7 +444,38 @@ class InstrumentProcessingService:
             else:
                 expiry_str = str(expiry_date)
 
-            return f"{venue}:OPTION:{base_asset}-{quote_asset}-{expiry_str}-{strike_price}-{option_type}"
+            # Determine option flavor: @LIN (linear) or @INV (inverse)
+            # Use same logic as perpetuals and futures
+            clean_base = base_asset.upper()
+            clean_quote = quote_asset.upper()
+            settle_asset = "USDT"  # Default
+            if venue == "DERIBIT":
+                deribit_quotes = self.exchange_config.valid_quote_currencies.get(
+                    "DERIBIT", []
+                )
+                if clean_quote == "USD":
+                    settle_asset = clean_base  # Coin margin - settle in base asset (inverse)
+                elif clean_quote in deribit_quotes and clean_quote != "USD":
+                    settle_asset = clean_quote  # Cash settled (USDC, etc.) - linear
+            else:
+                # For most exchanges, quote asset is the margin currency (linear)
+                settle_asset = clean_quote
+
+            # Determine if linear or inverse based on settle_asset
+            if settle_asset == clean_quote:
+                # Quote asset == margin currency → Linear
+                option_flavor = "LIN"
+            elif settle_asset == clean_base:
+                # Margin currency == base asset → Inverse
+                option_flavor = "INV"
+            else:
+                # Default to linear if unclear (most common case)
+                option_flavor = "LIN"
+                logger.debug(
+                    f"⚠️ Could not determine option flavor for {symbol_id}, defaulting to @LIN (settle_asset={settle_asset}, quote={clean_quote}, base={clean_base})"
+                )
+
+            return f"{venue}:OPTION:{base_asset}-{quote_asset}-{expiry_str}-{strike_price}-{option_type}@{option_flavor}"
 
         else:
             logger.warning(f"Unhandled instrument type: {instrument_type}")

@@ -76,8 +76,12 @@ Exchange API 'option' → Canonical 'OPTION'
 - **PERPETUAL**: `BASE-QUOTE@LIN` or `BASE-QUOTE@INV` (e.g., `ETH-USDT@LIN`, `BTC-USD@INV`)
   - `@LIN` (linear): Quote asset == margin currency (settle_asset)
   - `@INV` (inverse): Margin currency == base asset
-- **FUTURE**: `BASE-QUOTE:YYMMDD` (e.g., `BTC-USD-241225`)
-- **OPTION**: `BASE-QUOTE:YYMMDD:STRIKE:OPTION_TYPE` (e.g., `BTC-USD-241225-50000-CALL`)
+- **FUTURE**: `BASE-QUOTE-YYMMDD@LIN` or `BASE-QUOTE-YYMMDD@INV` (e.g., `BTC-USD-241225@LIN`, `BTC-USD-241225@INV`)
+  - `@LIN` (linear): Quote asset == margin currency (settle_asset)
+  - `@INV` (inverse): Margin currency == base asset
+- **OPTION**: `BASE-QUOTE-YYMMDD-STRIKE-OPTION_TYPE@LIN` or `BASE-QUOTE-YYMMDD-STRIKE-OPTION_TYPE@INV` (e.g., `BTC-USD-241225-50000-CALL@LIN`, `BTC-USD-241225-50000-CALL@INV`)
+  - `@LIN` (linear): Quote asset == margin currency (settle_asset)
+  - `@INV` (inverse): Margin currency == base asset
 - **LST**: Asset code (e.g., `WEETH`, `STETH`, `WSTETH`)
 - **A_TOKEN**: Token code (e.g., `AUSDT`, `AWETH`)
 - **DEBT_TOKEN**: Token code (e.g., `DEBTWETH`)
@@ -149,8 +153,12 @@ For DeFi instruments (DEX pairs, protocol tokens), additional attributes provide
 - **PERPETUAL**: Symbol is `BASE-QUOTE@LIN` or `BASE-QUOTE@INV`; QUOTE ∈ {USD, USDT, USDC, ...}
   - `@LIN` (linear): Quote asset == margin currency (settle_asset)
   - `@INV` (inverse): Margin currency == base asset
-- **FUTURE**: `attrs.expiry` required; `attrs.contract_size` required; symbol may include expiry code
-- **OPTION**: `attrs.expiry`, `attrs.strike`, `attrs.option_type` required
+- **FUTURE**: Symbol is `BASE-QUOTE-YYMMDD@LIN` or `BASE-QUOTE-YYMMDD@INV`; `attrs.expiry` required; `attrs.contract_size` required
+  - `@LIN` (linear): Quote asset == margin currency (settle_asset)
+  - `@INV` (inverse): Margin currency == base asset
+- **OPTION**: Symbol is `BASE-QUOTE-YYMMDD-STRIKE-OPTION_TYPE@LIN` or `BASE-QUOTE-YYMMDD-STRIKE-OPTION_TYPE@INV`; `attrs.expiry`, `attrs.strike`, `attrs.option_type` required
+  - `@LIN` (linear): Quote asset == margin currency (settle_asset)
+  - `@INV` (inverse): Margin currency == base asset
 
 ---
 
@@ -230,7 +238,8 @@ details = client.get_instrument_details(
 
 ### Crypto Futures
 
-- `DERIBIT:FUTURE:BTC-USD-241225` with `attrs.expiry="2024-12-25T08:00:00Z"`
+- `DERIBIT:FUTURE:BTC-USD-241225@INV` (inverse - BTC margin) with `attrs.expiry="2024-12-25T08:00:00Z"`
+- `BINANCE-FUTURES:FUTURE:BTC-USDT-241225@LIN` (linear - USDT margin) with `attrs.expiry="2024-12-25T08:00:00Z"`
 
 ### TradFi Futures
 
@@ -238,7 +247,8 @@ details = client.get_instrument_details(
 
 ### Options
 
-- `DERIBIT:OPTION:BTC-USD-241225-50000-CALL` with normalized expiry
+- `DERIBIT:OPTION:BTC-USD-241225-50000-CALL@INV` (inverse - BTC margin) with normalized expiry
+- `DERIBIT:OPTION:BTC-USD-241225-50000-CALL@LIN` (linear - USD margin) with normalized expiry
 - `CME:OPTION:ES-202412-4500-CALL` with month-code preserved in `attrs.exchange_raw_symbol`
 
 ### DeFi Lending/Staking
