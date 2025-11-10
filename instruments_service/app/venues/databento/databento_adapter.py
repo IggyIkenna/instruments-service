@@ -371,8 +371,18 @@ class DatabentoAdapter:
         
         # Parse expiry if available
         expiry_time = None
+        expiry_str = ""
         if "expiration" in row and pd.notna(row["expiration"]):
             expiry_time = row["expiration"]
+            # Format expiry as YYMMDD
+            try:
+                if isinstance(expiry_time, str):
+                    expiry_dt = pd.to_datetime(expiry_time)
+                else:
+                    expiry_dt = expiry_time
+                expiry_str = expiry_dt.strftime("%y%m%d")
+            except Exception as e:
+                logger.warning(f"Failed to parse expiry {expiry_time}: {e}")
 
         # Determine instrument type
         if security_type == "FUT":
@@ -386,20 +396,49 @@ class DatabentoAdapter:
         else:
             instrument_type = "EQUITY"  # Default
 
+        # Extract option-specific fields
+        strike_price = ""
+        option_type = ""
+        if instrument_type == "OPTION":
+            # Extract strike price from Databento response
+            if "strike_price" in row and pd.notna(row["strike_price"]):
+                strike_price_val = row["strike_price"]
+                if isinstance(strike_price_val, (int, float)):
+                    strike_price = str(strike_price_val)
+                else:
+                    strike_price = str(strike_price_val)
+            
+            # Extract option type (CALL/PUT) from Databento symbol or field
+            # Databento options symbols typically have format like "SPY 251219C500" or similar
+            # Check if there's an explicit option_type field, otherwise parse from symbol
+            databento_symbol_raw = row.get("symbol", "")
+            if pd.notna(databento_symbol_raw):
+                symbol_str = str(databento_symbol_raw).upper()
+                # Look for C/CALL or P/PUT in symbol
+                if "C" in symbol_str[-10:] or "CALL" in symbol_str:
+                    option_type = "CALL"
+                elif "P" in symbol_str[-10:] or "PUT" in symbol_str:
+                    option_type = "PUT"
+            
+            # If still not found, check for explicit field
+            if not option_type:
+                if "option_type" in row and pd.notna(row["option_type"]):
+                    opt_type_raw = str(row["option_type"]).upper()
+                    if "C" in opt_type_raw or "CALL" in opt_type_raw:
+                        option_type = "CALL"
+                    elif "P" in opt_type_raw or "PUT" in opt_type_raw:
+                        option_type = "PUT"
+
         # Build symbol with human-readable base_asset
         symbol = f"{base_asset}-{quote_asset}"
-        if expiry_time:
-            # Format expiry as YYMMDD
-            if isinstance(expiry_time, (str, pd.Timestamp)):
-                try:
-                    if isinstance(expiry_time, str):
-                        expiry_dt = pd.to_datetime(expiry_time)
-                    else:
-                        expiry_dt = expiry_time
-                    expiry_str = expiry_dt.strftime("%y%m%d")
-                    symbol = f"{base_asset}-{quote_asset}-{expiry_str}"
-                except Exception as e:
-                    logger.warning(f"Failed to parse expiry {expiry_time}: {e}")
+        if instrument_type == "OPTION":
+            # Build symbol with strike and option type for options
+            if strike_price and option_type and expiry_str:
+                symbol = f"{base_asset}-{quote_asset}-{expiry_str}-{strike_price}-{option_type}"
+            elif expiry_str:
+                symbol = f"{base_asset}-{quote_asset}-{expiry_str}"
+        elif expiry_str:
+            symbol = f"{base_asset}-{quote_asset}-{expiry_str}"
 
         # Build canonical instrument key
         venue = self._normalize_venue(exchange)
@@ -457,6 +496,8 @@ class DatabentoAdapter:
             "inverse": False,
             "contract_size": row.get("contract_size", None) if pd.notna(row.get("contract_size")) else None,
             "underlying": base_asset,  # Human-readable underlying
+            "strike": strike_price if instrument_type == "OPTION" else "",  # Strike price for options
+            "option_type": option_type if instrument_type == "OPTION" else "",  # CALL or PUT for options
         }
 
     def _normalize_venue(self, exchange: str) -> str:
@@ -474,6 +515,7 @@ class DatabentoAdapter:
             "NASDAQ": "NASDAQ",
             "NYSE": "NYSE",
             "ICE": "ICE",
+            "CBOE": "CBOE",
         }
 
         exchange_upper = exchange.upper()
