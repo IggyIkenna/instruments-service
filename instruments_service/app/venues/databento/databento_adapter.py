@@ -180,7 +180,7 @@ class DatabentoAdapter:
                     df = df[df["instrument_class"] != "S"]  # Exclude settlement-only
 
                 # Process and merge into all_instruments
-                group_instruments = self._process_databento_dataframe(df, exchange, dataset)
+                group_instruments = self._process_databento_dataframe(df, exchange, dataset, symbol_group, stype_in)
                 all_instruments.update(group_instruments)
 
             except Exception as e:
@@ -243,7 +243,7 @@ class DatabentoAdapter:
         return symbols
 
     def _process_databento_dataframe(
-        self, df: pd.DataFrame, exchange: str, dataset: str
+        self, df: pd.DataFrame, exchange: str, dataset: str, query_symbols: List[str], stype_in: str
     ) -> Dict[str, Dict[str, Any]]:
         """
         Process Databento DataFrame into instrument definition format.
@@ -252,11 +252,28 @@ class DatabentoAdapter:
             df: Databento instrument definitions DataFrame
             exchange: Exchange name
             dataset: Databento dataset ID
+            query_symbols: List of query symbols used to fetch this data (e.g., ['ES.FUT', 'SPY'])
+            stype_in: The stype_in used for the query (e.g., 'parent', 'raw_symbol')
 
         Returns:
             Dictionary mapping symbol to instrument definition
         """
         instruments = {}
+        
+        # Create mapping from asset to query symbol for futures/options
+        # For parent symbology, we need to map asset (e.g., 'ES') back to query symbol (e.g., 'ES.FUT')
+        asset_to_query_symbol = {}
+        for query_sym in query_symbols:
+            # Extract base asset from query symbol
+            if query_sym.endswith('.FUT'):
+                base_asset = query_sym[:-4]  # Remove '.FUT'
+                asset_to_query_symbol[base_asset] = query_sym
+            elif query_sym.endswith('.OPT'):
+                base_asset = query_sym[:-4]  # Remove '.OPT'
+                asset_to_query_symbol[base_asset] = query_sym
+            else:
+                # For raw_symbol (equities), the query symbol IS the asset
+                asset_to_query_symbol[query_sym] = query_sym
 
         # Group by symbol and aggregate
         if "symbol" in df.columns:
@@ -266,8 +283,20 @@ class DatabentoAdapter:
 
         for symbol, row in df_grouped.iterrows():
             try:
+                # Get the query symbol used for this instrument
+                asset = row.get("asset", "")
+                asset = "" if pd.isna(asset) else str(asset)
+                
+                # Determine databento_symbol (the query symbol we used)
+                if stype_in == "parent":
+                    # For parent symbology, map asset back to query symbol
+                    databento_symbol = asset_to_query_symbol.get(asset, query_symbols[0] if query_symbols else "")
+                else:
+                    # For raw_symbol, the asset IS the query symbol
+                    databento_symbol = asset_to_query_symbol.get(asset, asset)
+                
                 inst_def = self._convert_to_instrument_definition(
-                    row, exchange, dataset
+                    row, exchange, dataset, databento_symbol
                 )
                 instruments[symbol] = inst_def
             except Exception as e:
@@ -277,7 +306,7 @@ class DatabentoAdapter:
         return instruments
 
     def _convert_to_instrument_definition(
-        self, row: pd.Series, exchange: str, dataset: str
+        self, row: pd.Series, exchange: str, dataset: str, databento_symbol: str
     ) -> Dict[str, Any]:
         """
         Convert Databento row to instrument definition format.
@@ -287,6 +316,7 @@ class DatabentoAdapter:
             row: Databento DataFrame row
             exchange: Exchange name
             dataset: Databento dataset ID
+            databento_symbol: The Databento query symbol used to fetch this instrument (e.g., 'ES.FUT', 'SPY')
 
         Returns:
             Instrument definition dictionary
@@ -307,6 +337,9 @@ class DatabentoAdapter:
         
         min_price_increment = row.get("min_price_increment", 0.01)
         min_price_increment = 0.01 if pd.isna(min_price_increment) else float(min_price_increment)
+
+        # exchange_raw_symbol = raw exchange code (e.g., "6A", "6E", "ES", "AAPL")
+        exchange_raw_symbol = asset_raw
 
         # Convert to human-readable names using unified config
         # For equities/ETFs, asset is already human-readable (AAPL, SPY, etc.), only convert futures codes
@@ -396,7 +429,8 @@ class DatabentoAdapter:
             "data_provider": "databento",
             "tardis_exchange": "",
             "tardis_symbol": "",
-            "exchange_raw_symbol": row.get("symbol", ""),  # Keep raw Databento symbol
+            "exchange_raw_symbol": exchange_raw_symbol,  # Raw exchange code (e.g., "6A", "6E", "ES", "AAPL")
+            "databento_symbol": databento_symbol,  # Databento query symbol (e.g., "6A.FUT", "ES.FUT", "SPY", "SPY.OPT")
             "ccxt_symbol": "",
             "ccxt_exchange": "",
             "available_from_datetime": available_from,

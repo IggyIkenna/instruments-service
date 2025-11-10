@@ -143,7 +143,14 @@ INSTRUMENTS_PARQUET_SCHEMA: List[Dict[str, str]] = [
         "type": "string",
         "required": False,
         "default": "",
-        "description": "Raw symbol from exchange API (e.g., 'BTCUSDT', 'BTC/USDT:USDT')",
+        "description": "Raw exchange code from exchange API (e.g., '6A', '6E', 'ES', 'AAPL')",
+    },
+    {
+        "name": "databento_symbol",
+        "type": "string",
+        "required": False,
+        "default": "",
+        "description": "Databento query symbol format (e.g., '6A.FUT', 'ES.FUT', 'SPY', 'SPY.OPT')",
     },
     {
         "name": "tardis_symbol",

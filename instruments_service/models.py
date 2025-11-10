@@ -119,7 +119,10 @@ class InstrumentDefinition(BaseModel):
 
     # Exchange-specific identifiers
     exchange_raw_symbol: str = Field(
-        default="", description="Raw symbol from exchange API"
+        default="", description="Raw exchange code from exchange API (e.g., '6A', '6E', 'ES', 'AAPL')"
+    )
+    databento_symbol: str = Field(
+        default="", description="Databento query symbol format (e.g., '6A.FUT', 'ES.FUT', 'SPY', 'SPY.OPT')"
     )
     tardis_symbol: str = Field(
         default="", description="Symbol format used by Tardis API"
@@ -681,6 +684,7 @@ class InstrumentDefinition(BaseModel):
             "quote_asset",
             "settle_asset",
             "exchange_raw_symbol",
+            "databento_symbol",
             "tardis_symbol",
             "tardis_exchange",
             "data_provider",
