@@ -14,19 +14,14 @@ from .models import InstrumentDefinition, InstrumentKey, Venue, InstrumentType
 from .config import VenueMapping, ExchangeInstrumentConfig, DataTypeConfig
 
 __all__ = [
-    'InstrumentProcessingService',
-    'CloudInstrumentStorage',
-    'InstrumentBatchProcessor',
-    'InstrumentDefinition',
-    'InstrumentKey',
-    'Venue',
-    'InstrumentType',
-    'VenueMapping',
-    'ExchangeInstrumentConfig',
-    'DataTypeConfig',
+    "InstrumentProcessingService",
+    "CloudInstrumentStorage",
+    "InstrumentBatchProcessor",
+    "InstrumentDefinition",
+    "InstrumentKey",
+    "Venue",
+    "InstrumentType",
+    "VenueMapping",
+    "ExchangeInstrumentConfig",
+    "DataTypeConfig",
 ]
-
-
-
-
-

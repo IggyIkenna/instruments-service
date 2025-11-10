@@ -15,10 +15,13 @@ import pandas as pd
 
 try:
     import databento as db
+
     DATABENTO_AVAILABLE = True
 except ImportError:
     DATABENTO_AVAILABLE = False
-    logging.warning("databento package not available. Install with: pip install databento")
+    logging.warning(
+        "databento package not available. Install with: pip install databento"
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -26,18 +29,18 @@ logger = logging.getLogger(__name__)
 class DatabentoAdapter:
     """
     Adapter for fetching TradFi instrument definitions from Databento.
-    
+
     Supports:
     - CME (futures, commodities)
     - NASDAQ (equities)
     - NYSE (equities)
     - Other TradFi exchanges
     """
-    
+
     def __init__(self, api_key: Optional[str] = None, project_id: Optional[str] = None):
         """
         Initialize Databento adapter.
-        
+
         Args:
             api_key: Databento API key (optional, uses Secret Manager if not provided)
             project_id: GCP project ID for Secret Manager (defaults to GCP_PROJECT_ID env var)
@@ -46,79 +49,85 @@ class DatabentoAdapter:
             raise ImportError(
                 "databento package not available. Install with: pip install databento"
             )
-        
+
         # Try provided API key first
         self.api_key = api_key
-        
+
         # If not provided, try Secret Manager
         if not self.api_key:
             try:
                 from unified_cloud_services import get_secret_with_fallback
-                
-                secret_name = os.getenv('DATABENTO_SECRET_NAME', 'databento-api-key')
-                project_id = project_id or os.getenv('GCP_PROJECT_ID', 'central-element-323112')
-                
+
+                secret_name = os.getenv("DATABENTO_SECRET_NAME", "databento-api-key")
+                project_id = project_id or os.getenv(
+                    "GCP_PROJECT_ID", "central-element-323112"
+                )
+
                 self.api_key = get_secret_with_fallback(
                     project_id=project_id,
                     secret_name=secret_name,
-                    fallback_env_var='DATABENTO_API_KEY'
+                    fallback_env_var="DATABENTO_API_KEY",
                 )
-                
+
                 if self.api_key:
-                    logger.info(f"✅ Retrieved Databento API key from Secret Manager (secret: {secret_name})")
+                    logger.info(
+                        f"✅ Retrieved Databento API key from Secret Manager (secret: {secret_name})"
+                    )
             except ImportError:
-                logger.warning("unified-cloud-services not available, falling back to env var")
-                self.api_key = os.getenv('DATABENTO_API_KEY')
+                logger.warning(
+                    "unified-cloud-services not available, falling back to env var"
+                )
+                self.api_key = os.getenv("DATABENTO_API_KEY")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                self.api_key = os.getenv('DATABENTO_API_KEY')
-        
+                self.api_key = os.getenv("DATABENTO_API_KEY")
+
         if not self.api_key:
             raise ValueError(
                 "Databento API key required. Set DATABENTO_SECRET_NAME env var (for Secret Manager), "
                 "DATABENTO_API_KEY env var (fallback), or pass api_key parameter."
             )
-        
+
         self.client = db.Historical(self.api_key)
         logger.info("✅ DatabentoAdapter initialized")
-    
+
     def fetch_instrument_definitions(
         self,
         exchange: str,
         symbols: List[str],
         date: datetime,
-        dataset: Optional[str] = None
+        dataset: Optional[str] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch instrument definitions from Databento.
-        
+
         Args:
             exchange: Exchange name (e.g., 'CME', 'NASDAQ')
             symbols: List of symbols to fetch (e.g., ['ES', 'NQ', 'QQQ'])
             date: Target date for instrument definitions
             dataset: Databento dataset ID (e.g., 'GLBX.MDP3', 'DBEQ.BASIC')
                     If None, uses default mapping based on exchange
-        
+
         Returns:
             Dictionary mapping symbol to instrument definition data
         """
         # Map exchange to Databento dataset
         if dataset is None:
             dataset = self._get_dataset_for_exchange(exchange)
-        
+
         # Adjust date for weekend handling (Databento requires previous trading day)
         adjusted_date = self._adjust_date_for_weekend(date)
-        
-        start_date_str = (adjusted_date - timedelta(days=1)).strftime('%Y-%m-%d')
-        end_date_str = adjusted_date.strftime('%Y-%m-%d')
-        
+
+        start_date_str = (adjusted_date - timedelta(days=1)).strftime("%Y-%m-%d")
+        end_date_str = adjusted_date.strftime("%Y-%m-%d")
+
         # Filter symbols (if needed - can add symbol filtering logic here)
         filtered_symbols = self._filter_symbols(dataset, symbols)
-        
+
         if not filtered_symbols:
             logger.warning(f"No valid symbols found for {exchange} on {start_date_str}")
             return {}
-        
+
         try:
             # Fetch instrument definitions
             zipped_data = self.client.timeseries.get_range(
@@ -130,54 +139,56 @@ class DatabentoAdapter:
                 start=start_date_str,
                 end=end_date_str,
             )
-            
+
             # Convert to DataFrame
             df = zipped_data.to_df()
-            
+
             if df.empty:
-                logger.warning(f"No instrument definitions found for {exchange} {filtered_symbols} on {start_date_str}")
+                logger.warning(
+                    f"No instrument definitions found for {exchange} {filtered_symbols} on {start_date_str}"
+                )
                 return {}
-            
+
             # Filter out non-trading instruments
-            if 'instrument_class' in df.columns:
-                df = df[df['instrument_class'] != 'S']  # Exclude settlement-only
-            
+            if "instrument_class" in df.columns:
+                df = df[df["instrument_class"] != "S"]  # Exclude settlement-only
+
             # Process and return as dictionary
             return self._process_databento_dataframe(df, exchange, dataset)
-            
+
         except Exception as e:
             logger.error(f"Failed to fetch Databento instruments for {exchange}: {e}")
             return {}
-    
+
     def _get_dataset_for_exchange(self, exchange: str) -> str:
         """
         Map exchange name to Databento dataset ID.
-        
+
         Args:
             exchange: Exchange name
-            
+
         Returns:
             Databento dataset ID
         """
         dataset_mapping = {
-            'CME': 'GLBX.MDP3',
-            'NASDAQ': 'DBEQ.BASIC',
-            'NYSE': 'DBEQ.BASIC',
-            'ICE': 'ICE.NYBOT',
+            "CME": "GLBX.MDP3",
+            "NASDAQ": "DBEQ.BASIC",
+            "NYSE": "DBEQ.BASIC",
+            "ICE": "ICE.NYBOT",
         }
-        
+
         exchange_upper = exchange.upper()
-        return dataset_mapping.get(exchange_upper, 'GLBX.MDP3')  # Default to CME
-    
+        return dataset_mapping.get(exchange_upper, "GLBX.MDP3")  # Default to CME
+
     def _adjust_date_for_weekend(self, date: datetime) -> datetime:
         """
         Adjust date to previous Friday if weekend.
-        
+
         Databento requires previous trading day for instrument definitions.
-        
+
         Args:
             date: Input date
-            
+
         Returns:
             Adjusted date
         """
@@ -186,88 +197,84 @@ class DatabentoAdapter:
         elif date.weekday() == 0:  # Monday
             return date - timedelta(days=3)  # Go back to Friday
         return date
-    
+
     def _filter_symbols(self, dataset: str, symbols: List[str]) -> List[str]:
         """
         Filter symbols based on dataset requirements.
-        
+
         Args:
             dataset: Databento dataset ID
             symbols: List of symbols to filter
-            
+
         Returns:
             Filtered list of symbols
         """
         # For now, return all symbols
         # Can add symbol filtering logic here based on allowed_databento_symbols.csv
         return symbols
-    
+
     def _process_databento_dataframe(
-        self,
-        df: pd.DataFrame,
-        exchange: str,
-        dataset: str
+        self, df: pd.DataFrame, exchange: str, dataset: str
     ) -> Dict[str, Dict[str, Any]]:
         """
         Process Databento DataFrame into instrument definition format.
-        
+
         Args:
             df: Databento instrument definitions DataFrame
             exchange: Exchange name
             dataset: Databento dataset ID
-            
+
         Returns:
             Dictionary mapping symbol to instrument definition
         """
         instruments = {}
-        
+
         # Group by symbol and aggregate
-        if 'symbol' in df.columns:
-            df_grouped = df.groupby('symbol').first()
+        if "symbol" in df.columns:
+            df_grouped = df.groupby("symbol").first()
         else:
             df_grouped = df
-        
+
         for symbol, row in df_grouped.iterrows():
             try:
-                inst_def = self._convert_to_instrument_definition(row, exchange, dataset)
+                inst_def = self._convert_to_instrument_definition(
+                    row, exchange, dataset
+                )
                 instruments[symbol] = inst_def
             except Exception as e:
                 logger.warning(f"Failed to process symbol {symbol}: {e}")
                 continue
-        
+
         return instruments
-    
+
     def _convert_to_instrument_definition(
-        self,
-        row: pd.Series,
-        exchange: str,
-        dataset: str
+        self, row: pd.Series, exchange: str, dataset: str
     ) -> Dict[str, Any]:
         """
         Convert Databento row to instrument definition format.
-        
+
         Args:
             row: Databento DataFrame row
             exchange: Exchange name
             dataset: Databento dataset ID
-            
+
         Returns:
             Instrument definition dictionary
         """
         # Extract fields from Databento schema
-        asset = row.get('asset', '')
-        currency = row.get('currency', 'USD')
-        security_type = row.get('security_type', '')
-        min_price_increment = row.get('min_price_increment', 0.01)
-        
+        asset = row.get("asset", "")
+        currency = row.get("currency", "USD")
+        security_type = row.get("security_type", "")
+        min_price_increment = row.get("min_price_increment", 0.01)
+
         # Parse expiry if available
         expiry_time = None
-        if 'expiration' in row and pd.notna(row['expiration']):
-            expiry_time = row['expiration']
-        
+        if "expiration" in row and pd.notna(row["expiration"]):
+            expiry_time = row["expiration"]
+
         # Determine instrument type
-        instrument_type = 'FUTURE' if security_type == 'FUT' else 'EQUITY'
-        
+        instrument_type = "FUTURE" if security_type == "FUT" else "EQUITY"
+
         # Build symbol
         symbol = f"{asset}-{currency}"
         if expiry_time:
@@ -276,59 +283,72 @@ class DatabentoAdapter:
                 # Parse and format
                 try:
                     expiry_dt = pd.to_datetime(expiry_time)
-                    expiry_str = expiry_dt.strftime('%y%m%d')
+                    expiry_str = expiry_dt.strftime("%y%m%d")
                     symbol = f"{asset}-{currency}-{expiry_str}"
                 except:
                     pass
-        
+
         # Build canonical instrument key
         venue = self._normalize_venue(exchange)
         instrument_key = f"{venue}:{instrument_type}:{symbol}"
-        
+
         return {
-            'instrument_key': instrument_key,
-            'venue': venue,
-            'instrument_type': instrument_type,
-            'symbol': symbol,
-            'base_asset': asset,
-            'quote_asset': currency,
-            'settle_asset': currency,
-            'expiry': expiry_time.isoformat() if expiry_time and hasattr(expiry_time, 'isoformat') else None,
-            'tick_size': str(min_price_increment),
-            'min_size': str(min_price_increment),  # Databento doesn't provide min_size separately
-            'asset_class': 'traditional',
-            'venue_type': 'exchange',
-            'data_provider': 'databento',
-            'tardis_exchange': '',  # Not applicable for Databento
-            'tardis_symbol': '',  # Not applicable for Databento
-            'exchange_raw_symbol': row.get('symbol', ''),
-            'ccxt_symbol': '',  # Not applicable for TradFi
-            'ccxt_exchange': '',  # Not applicable for TradFi
-            'available_from_datetime': row.get('ts_event', datetime.now()).isoformat() if pd.notna(row.get('ts_event')) else datetime.now().isoformat(),
-            'available_to_datetime': expiry_time.isoformat() if expiry_time and hasattr(expiry_time, 'isoformat') else None,
-            'data_types': 'quotes,trades',  # Databento provides quotes and trades
-            'inverse': False,
-            'contract_size': row.get('contract_size', None),
-            'underlying': asset,
+            "instrument_key": instrument_key,
+            "venue": venue,
+            "instrument_type": instrument_type,
+            "symbol": symbol,
+            "base_asset": asset,
+            "quote_asset": currency,
+            "settle_asset": currency,
+            "expiry": (
+                expiry_time.isoformat()
+                if expiry_time and hasattr(expiry_time, "isoformat")
+                else None
+            ),
+            "tick_size": str(min_price_increment),
+            "min_size": str(
+                min_price_increment
+            ),  # Databento doesn't provide min_size separately
+            "asset_class": "traditional",
+            "venue_type": "exchange",
+            "data_provider": "databento",
+            "tardis_exchange": "",  # Not applicable for Databento
+            "tardis_symbol": "",  # Not applicable for Databento
+            "exchange_raw_symbol": row.get("symbol", ""),
+            "ccxt_symbol": "",  # Not applicable for TradFi
+            "ccxt_exchange": "",  # Not applicable for TradFi
+            "available_from_datetime": (
+                row.get("ts_event", datetime.now()).isoformat()
+                if pd.notna(row.get("ts_event"))
+                else datetime.now().isoformat()
+            ),
+            "available_to_datetime": (
+                expiry_time.isoformat()
+                if expiry_time and hasattr(expiry_time, "isoformat")
+                else None
+            ),
+            "data_types": "quotes,trades",  # Databento provides quotes and trades
+            "inverse": False,
+            "contract_size": row.get("contract_size", None),
+            "underlying": asset,
         }
-    
+
     def _normalize_venue(self, exchange: str) -> str:
         """
         Normalize exchange name to canonical venue format.
-        
+
         Args:
             exchange: Exchange name
-            
+
         Returns:
             Canonical venue name
         """
         venue_mapping = {
-            'CME': 'CME',
-            'NASDAQ': 'NASDAQ',
-            'NYSE': 'NYSE',
-            'ICE': 'ICE',
+            "CME": "CME",
+            "NASDAQ": "NASDAQ",
+            "NYSE": "NYSE",
+            "ICE": "ICE",
         }
-        
+
         exchange_upper = exchange.upper()
         return venue_mapping.get(exchange_upper, exchange_upper)
-
