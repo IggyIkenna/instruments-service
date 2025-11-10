@@ -98,6 +98,7 @@ class UnifiedInstrumentConfig:
             
             # Options (CBOE) - use .OPT suffix for parent symbology
             InstrumentDefinition("SPY.OPT", "CBOE", "OPTION", "OPRA.PILLAR", "parent", "SPY", "USD"),
+            InstrumentDefinition("SPX.OPT", "CBOE", "OPTION", "OPRA.PILLAR", "parent", "SPX", "USD"),  # S&P 500 Index options
         ]
     )
     
@@ -120,31 +121,38 @@ class UnifiedInstrumentConfig:
             "BRN": "BRENT", "B": "BRENT", "G": "GASOIL",
             # Equity Index Futures
             "ES": "SP500", "MES": "SP500", "NQ": "NASDAQ100", "MNQ": "NASDAQ100",
+            # S&P 500 Index
+            "SPX": "SP500",
         }
     )
     
     def get_symbols_for_venue(self, venue: str) -> List[str]:
         """Get all symbols for a venue (e.g., 'CME', 'NASDAQ', 'ICE')"""
-        return [inst.symbol for inst in self.instruments if inst.venue == venue.upper()]
+        all_insts = self.get_all_instruments()
+        return [inst.symbol for inst in all_insts if inst.venue == venue.upper()]
     
     def get_symbols_for_dataset(self, dataset: str) -> List[str]:
         """Get all symbols for a dataset (e.g., 'GLBX.MDP3', 'DBEQ.BASIC')"""
-        return [inst.symbol for inst in self.instruments if inst.dataset == dataset]
+        all_insts = self.get_all_instruments()
+        return [inst.symbol for inst in all_insts if inst.dataset == dataset]
     
     def get_symbols_by_type(self, instrument_type: str) -> List[str]:
         """Get all symbols for an instrument type (e.g., 'FUTURE', 'EQUITY', 'OPTION')"""
-        return [inst.symbol for inst in self.instruments if inst.instrument_type == instrument_type.upper()]
+        all_insts = self.get_all_instruments()
+        return [inst.symbol for inst in all_insts if inst.instrument_type == instrument_type.upper()]
     
     def get_dataset_and_stype(self, symbol: str) -> Optional[Tuple[str, str]]:
         """Get dataset and stype_in for a symbol"""
-        for inst in self.instruments:
+        all_insts = self.get_all_instruments()
+        for inst in all_insts:
             if inst.symbol == symbol:
                 return (inst.dataset, inst.stype_in)
         return None
     
     def get_instrument(self, symbol: str, venue: Optional[str] = None) -> Optional[InstrumentDefinition]:
         """Get instrument definition by symbol (optionally filtered by venue)"""
-        for inst in self.instruments:
+        all_insts = self.get_all_instruments()
+        for inst in all_insts:
             if inst.symbol == symbol:
                 if venue is None or inst.venue == venue.upper():
                     return inst
@@ -160,6 +168,61 @@ class UnifiedInstrumentConfig:
             if base_code in self.exchange_code_to_name:
                 return self.exchange_code_to_name[base_code]
         return exchange_code
+    
+    def _get_sp500_equities(self) -> List[InstrumentDefinition]:
+        """Generate S&P 500 equity instrument definitions dynamically"""
+        # Top S&P 500 stocks by market cap (most liquid)
+        # Full list can be loaded from external source or API
+        sp500_tickers = [
+            # Top 50 by market cap
+            "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B", "UNH", "JNJ",
+            "V", "XOM", "JPM", "WMT", "MA", "PG", "LLY", "AVGO", "HD", "MRK",
+            "COST", "ABBV", "CVX", "PEP", "ADBE", "TMO", "CSCO", "ACN", "NFLX", "DHR",
+            "MCD", "ABT", "VZ", "WFC", "NKE", "LIN", "PM", "DIS", "TXN", "NEE",
+            "HON", "QCOM", "UPS", "BMY", "RTX", "AMGN", "LOW", "INTU", "SPGI", "DE",
+            # Additional S&P 500 stocks (51-200)
+            "AMT", "BKNG", "T", "AXP", "SYK", "ADP", "TJX", "GE", "C", "ISRG",
+            "BLK", "MO", "MDT", "ZTS", "GILD", "VRTX", "CI", "CMCSA", "LMT", "CB",
+            "SO", "DUK", "ITW", "SHW", "EQIX", "CL", "ICE", "FI", "SLB", "HCA",
+            "PSA", "APH", "AON", "ETN", "WM", "FIS", "KLAC", "AFL", "CME", "CDNS",
+            "MCK", "ORCL", "ADI", "NXPI", "SNPS", "MCHP", "CRWD", "PANW", "FTNT", "ZS",
+            "PLTR", "RBLX", "COIN", "HOOD", "SOFI", "AFRM", "UPST", "LC", "OPEN", "Z",
+            # Note: Full S&P 500 list (all 500 stocks) should be loaded from external source
+            # Options:
+            # 1. Load from CSV file (e.g., sp500_constituents.csv)
+            # 2. Fetch from API (e.g., Alpha Vantage, IEX Cloud, or S&P Global)
+            # 3. Use Context7 to get S&P 500 list
+            # This is a representative sample of ~100 stocks - expand to full 500
+        ]
+        
+        # Remove duplicates
+        sp500_tickers = list(dict.fromkeys(sp500_tickers))
+        
+        equities = []
+        for ticker in sp500_tickers:
+            # Determine venue (most S&P 500 are on NYSE, some on NASDAQ)
+            # For now, default to NASDAQ for most tech stocks, NYSE for others
+            venue = "NASDAQ" if ticker in ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "NFLX", "ADBE"] else "NYSE"
+            equities.append(
+                InstrumentDefinition(
+                    ticker, venue, "EQUITY", "DBEQ.BASIC", "raw_symbol", ticker, "USD"
+                )
+            )
+        return equities
+    
+    def get_all_instruments(self) -> List[InstrumentDefinition]:
+        """Get all instruments including dynamically generated S&P 500 equities"""
+        all_insts = list(self.instruments)
+        
+        # Add S&P 500 equities dynamically
+        sp500_equities = self._get_sp500_equities()
+        # Only add if not already in base list
+        existing_symbols = {inst.symbol for inst in all_insts}
+        for eq in sp500_equities:
+            if eq.symbol not in existing_symbols:
+                all_insts.append(eq)
+        
+        return all_insts
 
 
 # Legacy compatibility: Keep DatabentoInstrumentConfig as a wrapper
