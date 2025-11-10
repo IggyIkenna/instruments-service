@@ -371,6 +371,18 @@ class DatabentoAdapter:
         min_price_increment = row.get("min_price_increment", 0.01)
         min_price_increment = 0.01 if pd.isna(min_price_increment) else float(min_price_increment)
 
+        # Determine instrument type FIRST (needed for underlying extraction and quote_asset logic)
+        if security_type == "FUT":
+            instrument_type = "FUTURE"
+        elif security_type == "OPT":
+            instrument_type = "OPTION"
+        elif security_type == "ETF":
+            instrument_type = "ETF"
+        elif security_type == "STK":
+            instrument_type = "EQUITY"
+        else:
+            instrument_type = "EQUITY"  # Default
+
         # exchange_raw_symbol is the actual Databento symbol (contract symbol) passed in
         # This is what the exchange uses internally:
         # - For futures: "ESZ24" (specific contract), "CLZ24", etc.
