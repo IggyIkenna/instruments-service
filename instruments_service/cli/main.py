@@ -67,6 +67,14 @@ def main() -> Dict[str, Any]:
             handler_kwargs["force"] = args.force
         if args.exchanges:
             handler_kwargs["exchanges"] = args.exchanges
+        
+        # Market type filters
+        if args.CEFI:
+            handler_kwargs["cefi"] = True
+        if args.TRADFI:
+            handler_kwargs["tradfi"] = True
+        if args.DEFI:
+            handler_kwargs["defi"] = True
 
         # Query-specific arguments
         if args.mode == "instruments-query":
