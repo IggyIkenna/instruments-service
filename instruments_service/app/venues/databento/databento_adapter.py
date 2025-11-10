@@ -293,22 +293,15 @@ class DatabentoAdapter:
                 # For raw_symbol (equities), the query symbol IS the asset
                 asset_to_query_symbol[query_sym] = query_sym
 
-        # Group by symbol/raw_symbol and aggregate
-        # Databento renamed 'symbol' to 'raw_symbol' in definition schema (v0.13.1+)
-        # Check for both to handle old and new formats
-        symbol_col = None
+        # Group by raw_symbol and aggregate
+        # Databento uses 'raw_symbol' in definition schema (v0.13.1+)
         if "raw_symbol" in df.columns:
-            symbol_col = "raw_symbol"
-        elif "symbol" in df.columns:
-            symbol_col = "symbol"
-        
-        if symbol_col:
-            df_grouped = df.groupby(symbol_col).first()
+            df_grouped = df.groupby("raw_symbol").first()
             logger.info(f"📊 Processing {len(df_grouped)} unique instruments from Databento response (query: {query_symbols[:5]}...)")
         else:
-            # No symbol column, use index
+            # No raw_symbol column, use index
             df_grouped = df
-            logger.warning("⚠️ No 'symbol' or 'raw_symbol' column found in Databento response")
+            logger.warning("⚠️ No 'raw_symbol' column found in Databento response")
 
         for symbol, row in df_grouped.iterrows():
             try:
@@ -441,10 +434,9 @@ class DatabentoAdapter:
                 else:
                     strike_price = str(strike_price_val)
             
-            # Extract option type (CALL/PUT) from Databento symbol or field
+            # Extract option type (CALL/PUT) from Databento raw_symbol or field
             # Databento options symbols typically have format like "SPY 251219C500" or OCC format
-            # Check for raw_symbol first (new format), then symbol (old format)
-            databento_symbol_raw = row.get("raw_symbol", "") or row.get("symbol", "")
+            databento_symbol_raw = row.get("raw_symbol", "")
             if pd.notna(databento_symbol_raw) and databento_symbol_raw:
                 symbol_str = str(databento_symbol_raw).upper()
                 # OCC format: SPY231219C00500000 (SPY + YYMMDD + C/P + strike padded to 8 digits)
