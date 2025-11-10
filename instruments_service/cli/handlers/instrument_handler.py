@@ -108,26 +108,32 @@ class InstrumentHandler(ModeHandler):
         tradfi = kwargs.get("tradfi", False)
         defi = kwargs.get("defi", False)
         
-        # Filter exchanges based on market type flags
-        if cefi:
-            # CEFI: Only Tardis exchanges (exclude Databento and DeFi)
-            exchanges_to_process = kwargs.get(
-                "exchanges", self.venue_mapping.all_tardis_exchanges
-            )
-            logger.info(f"🔵 Processing CEFI exchanges only: {exchanges_to_process}")
-        elif tradfi:
-            # TRADFI: Only Databento exchanges (exclude Tardis and DeFi)
-            exchanges_to_process = []
-            logger.info("📊 Processing TRADFI exchanges only (Databento)")
-        elif defi:
-            # DEFI: Only DeFi protocols (exclude Tardis and Databento)
-            exchanges_to_process = []
-            logger.info("🌐 Processing DEFI protocols only")
+        # Default behavior: If no flags specified, process ALL market types
+        # If flags are specified, only process those market types
+        if not cefi and not tradfi and not defi:
+            # Default: Process ALL market types (CEFI, TRADFI, DEFI)
+            cefi = True
+            tradfi = True
+            defi = True
+            logger.info("🌍 Processing ALL market types: CEFI, TRADFI, and DEFI")
         else:
-            # Default: Use specified exchanges or all Tardis exchanges
+            # Log which market types will be processed based on flags
+            market_types = []
+            if cefi:
+                market_types.append("CEFI")
+            if tradfi:
+                market_types.append("TRADFI")
+            if defi:
+                market_types.append("DEFI")
+            logger.info(f"🔍 Processing market types: {', '.join(market_types)}")
+        
+        # Set exchanges for CEFI processing
+        if cefi:
             exchanges_to_process = kwargs.get(
                 "exchanges", self.venue_mapping.all_tardis_exchanges
             )
+        else:
+            exchanges_to_process = []
 
         for date in date_range:
             # Skip future dates
@@ -258,7 +264,7 @@ class InstrumentHandler(ModeHandler):
         instruments = {}
 
         # Process CEFI (Tardis) exchanges
-        if cefi or (not tradfi and not defi):
+        if cefi:
             # Use specified exchanges or all Tardis exchanges
             if exchanges is None:
                 exchanges = self.venue_mapping.all_tardis_exchanges
