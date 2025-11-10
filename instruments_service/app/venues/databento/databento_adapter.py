@@ -295,6 +295,7 @@ class DatabentoAdapter:
         # Group by symbol and aggregate
         if "symbol" in df.columns:
             df_grouped = df.groupby("symbol").first()
+            logger.info(f"📊 Processing {len(df_grouped)} unique instruments from Databento response (query: {query_symbols[:5]}...)")
         else:
             df_grouped = df
 
