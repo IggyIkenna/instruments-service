@@ -171,32 +171,46 @@ class UnifiedInstrumentConfig:
     
     def _get_sp500_equities(self) -> List[InstrumentDefinition]:
         """Generate S&P 500 equity instrument definitions dynamically"""
-        # Top S&P 500 stocks by market cap (most liquid)
-        # Full list can be loaded from external source or API
+        # Complete S&P 500 list (503 stocks as of 2024)
+        # Source: Standard & Poor's S&P 500 Index constituents (via GitHub datasets)
+        # Fetched from: https://github.com/datasets/s-and-p-500-companies
         sp500_tickers = [
-            # Top 50 by market cap
-            "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B", "UNH", "JNJ",
-            "V", "XOM", "JPM", "WMT", "MA", "PG", "LLY", "AVGO", "HD", "MRK",
-            "COST", "ABBV", "CVX", "PEP", "ADBE", "TMO", "CSCO", "ACN", "NFLX", "DHR",
-            "MCD", "ABT", "VZ", "WFC", "NKE", "LIN", "PM", "DIS", "TXN", "NEE",
-            "HON", "QCOM", "UPS", "BMY", "RTX", "AMGN", "LOW", "INTU", "SPGI", "DE",
-            # Additional S&P 500 stocks (51-200)
-            "AMT", "BKNG", "T", "AXP", "SYK", "ADP", "TJX", "GE", "C", "ISRG",
-            "BLK", "MO", "MDT", "ZTS", "GILD", "VRTX", "CI", "CMCSA", "LMT", "CB",
-            "SO", "DUK", "ITW", "SHW", "EQIX", "CL", "ICE", "FI", "SLB", "HCA",
-            "PSA", "APH", "AON", "ETN", "WM", "FIS", "KLAC", "AFL", "CME", "CDNS",
-            "MCK", "ORCL", "ADI", "NXPI", "SNPS", "MCHP", "CRWD", "PANW", "FTNT", "ZS",
-            "PLTR", "RBLX", "COIN", "HOOD", "SOFI", "AFRM", "UPST", "LC", "OPEN", "Z",
-            # Note: Full S&P 500 list (all 500 stocks) should be loaded from external source
-            # Options:
-            # 1. Load from CSV file (e.g., sp500_constituents.csv)
-            # 2. Fetch from API (e.g., Alpha Vantage, IEX Cloud, or S&P Global)
-            # 3. Use Context7 to get S&P 500 list
-            # This is a representative sample of ~100 stocks - expand to full 500
+            "MMM", "AOS", "ABT", "ABBV", "ACN", "ADBE", "AMD", "AES", "AFL", "A", "APD", "ABNB", "AKAM", "ALB", "ARE",
+            "ALGN", "ALLE", "LNT", "ALL", "GOOGL", "GOOG", "MO", "AMZN", "AMCR", "AEE", "AEP", "AXP", "AIG", "AMT",
+            "AWK", "AMP", "AME", "AMGN", "APH", "ADI", "AON", "APA", "APO", "AAPL", "AMAT", "APTV", "ACGL", "ADM",
+            "ANET", "AJG", "AIZ", "T", "ATO", "ADSK", "ADP", "AZO", "AVB", "AVY", "AXON", "BKR", "BALL", "BAC",
+            "BAX", "BDX", "BRK.B", "BBY", "TECH", "BIIB", "BLK", "BX", "XYZ", "BK", "BA", "BKNG", "BSX", "BMY",
+            "AVGO", "BR", "BRO", "BF.B", "BLDR", "BG", "BXP", "CHRW", "CDNS", "CZR", "CPT", "CPB", "COF", "CAH",
+            "KMX", "CCL", "CARR", "CAT", "CBOE", "CBRE", "CDW", "COR", "CNC", "CNP", "CF", "CRL", "SCHW", "CHTR",
+            "CVX", "CMG", "CB", "CHD", "CI", "CINF", "CTAS", "CSCO", "C", "CFG", "CLX", "CME", "CMS", "KO", "CTSH",
+            "COIN", "CL", "CMCSA", "CAG", "COP", "ED", "STZ", "CEG", "COO", "CPRT", "GLW", "CPAY", "CTVA", "CSGP",
+            "COST", "CTRA", "CRWD", "CCI", "CSX", "CMI", "CVS", "DHR", "DRI", "DDOG", "DVA", "DAY", "DECK", "DE",
+            "DELL", "DAL", "DVN", "DXCM", "FANG", "DLR", "DG", "DLTR", "D", "DPZ", "DASH", "DOV", "DOW", "DHI",
+            "DTE", "DUK", "DD", "EMN", "ETN", "EBAY", "ECL", "EIX", "EW", "EA", "ELV", "EMR", "ENPH", "ETR", "EOG",
+            "EPAM", "EQT", "EFX", "EQIX", "EQR", "ERIE", "ESS", "EL", "EG", "EVRG", "ES", "EXC", "EXE", "EXPE",
+            "EXPD", "EXR", "XOM", "FFIV", "FDS", "FICO", "FAST", "FRT", "FDX", "FIS", "FITB", "FSLR", "FE", "FI",
+            "F", "FTNT", "FTV", "FOXA", "FOX", "BEN", "FCX", "GRMN", "IT", "GE", "GEHC", "GEV", "GEN", "GNRC", "GD",
+            "GIS", "GM", "GPC", "GILD", "GPN", "GL", "GDDY", "GS", "HAL", "HIG", "HAS", "HCA", "DOC", "HSIC", "HSY",
+            "HPE", "HLT", "HOLX", "HD", "HON", "HRL", "HST", "HWM", "HPQ", "HUBB", "HUM", "HBAN", "HII", "IBM",
+            "IEX", "IDXX", "ITW", "INCY", "IR", "PODD", "INTC", "ICE", "IFF", "IP", "IPG", "INTU", "ISRG", "IVZ",
+            "INVH", "IQV", "IRM", "JBHT", "JBL", "JKHY", "J", "JNJ", "JCI", "JPM", "K", "KVUE", "KDP", "KEY", "KEYS",
+            "KMB", "KIM", "KMI", "KKR", "KLAC", "KHC", "KR", "LHX", "LH", "LRCX", "LW", "LVS", "LDOS", "LEN", "LII",
+            "LLY", "LIN", "LYV", "LKQ", "LMT", "L", "LOW", "LULU", "LYB", "MTB", "MPC", "MKTX", "MAR", "MMC", "MLM",
+            "MAS", "MA", "MTCH", "MKC", "MCD", "MCK", "MDT", "MRK", "META", "MET", "MTD", "MGM", "MCHP", "MU", "MSFT",
+            "MAA", "MRNA", "MHK", "MOH", "TAP", "MDLZ", "MPWR", "MNST", "MCO", "MS", "MOS", "MSI", "MSCI", "NDAQ",
+            "NTAP", "NFLX", "NEM", "NWSA", "NWS", "NEE", "NKE", "NI", "NDSN", "NSC", "NTRS", "NOC", "NCLH", "NRG",
+            "NUE", "NVDA", "NVR", "NXPI", "ORLY", "OXY", "ODFL", "OMC", "ON", "OKE", "ORCL", "OTIS", "PCAR", "PKG",
+            "PLTR", "PANW", "PSKY", "PH", "PAYX", "PAYC", "PYPL", "PNR", "PEP", "PFE", "PCG", "PM", "PSX", "PNW",
+            "PNC", "POOL", "PPG", "PPL", "PFG", "PG", "PGR", "PLD", "PRU", "PEG", "PTC", "PSA", "PHM", "PWR", "QCOM",
+            "DGX", "RL", "RJF", "RTX", "O", "REG", "REGN", "RF", "RSG", "RMD", "RVTY", "ROK", "ROL", "ROP", "ROST",
+            "RCL", "SPGI", "CRM", "SBAC", "SLB", "STX", "SRE", "NOW", "SHW", "SPG", "SWKS", "SJM", "SW", "SNA",
+            "SOLV", "SO", "LUV", "SWK", "SBUX", "STT", "STLD", "STE", "SYK", "SMCI", "SYF", "SNPS", "SYY", "TMUS",
+            "TROW", "TTWO", "TPR", "TRGP", "TGT", "TEL", "TDY", "TER", "TSLA", "TXN", "TPL", "TXT", "TMO", "TJX",
+            "TKO", "TTD", "TSCO", "TT", "TDG", "TRV", "TRMB", "TFC", "TYL", "TSN", "USB", "UBER", "UDR", "ULTA",
+            "UNP", "UAL", "UPS", "URI", "UNH", "UHS", "VLO", "VTR", "VLTO", "VRSN", "VRSK", "VZ", "VRTX", "VTRS",
+            "VICI", "V", "VST", "VMC", "WRB", "GWW", "WAB", "WBA", "WMT", "DIS", "WBD", "WM", "WAT", "WEC", "WFC",
+            "WELL", "WST", "WDC", "WY", "WSM", "WMB", "WTW", "WDAY", "WYNN", "XEL", "XYL", "YUM", "ZBRA", "ZBH", "ZTS"
         ]
-        
-        # Remove duplicates
-        sp500_tickers = list(dict.fromkeys(sp500_tickers))
         
         equities = []
         for ticker in sp500_tickers:
