@@ -81,6 +81,23 @@ def parse_arguments() -> argparse.Namespace:
         nargs="+",
         help="Exchanges to process (binance, binance-futures, deribit, bybit, okx, etc.)",
     )
+    
+    # Market type filters (mutually exclusive)
+    parser.add_argument(
+        "--CEFI",
+        action="store_true",
+        help="Process only CEFI (Centralized Finance) exchanges via Tardis (binance, deribit, bybit, okx, etc.)",
+    )
+    parser.add_argument(
+        "--TRADFI",
+        action="store_true",
+        help="Process only TradFi (Traditional Finance) exchanges via Databento (CME, NASDAQ, NYSE, etc.)",
+    )
+    parser.add_argument(
+        "--DEFI",
+        action="store_true",
+        help="Process only DeFi (Decentralized Finance) protocols via The Graph (uniswap_v3, curve, aave_v3, etc.)",
+    )
 
     # Instruments query specific arguments
     parser.add_argument(
@@ -181,6 +198,13 @@ def validate_arguments(args: argparse.Namespace) -> None:
             # Default to same as start_date if not provided
             args.end_date = args.start_date
 
+    # Validate market type filters (mutually exclusive)
+    market_type_flags = [args.CEFI, args.TRADFI, args.DEFI]
+    if sum(market_type_flags) > 1:
+        raise ValueError(
+            "--CEFI, --TRADFI, and --DEFI are mutually exclusive. Use only one."
+        )
+    
     # Validate query-specific arguments
     if args.mode == "instruments-query":
         if args.query_type in ["details", "trading-params"] and not args.instrument_id:
@@ -196,8 +220,17 @@ def _get_examples_text() -> str:
     return """
 Examples:
 
-  # Generate instruments for a date range
+  # Generate instruments for a date range (default: CEFI/Tardis exchanges)
   python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-24
+
+  # Generate CEFI instruments only (Tardis: binance, deribit, bybit, okx, etc.)
+  python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --CEFI --force
+
+  # Generate TRADFI instruments only (Databento: CME, NASDAQ, NYSE, etc.)
+  python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --TRADFI --force
+
+  # Generate DEFI instruments only (The Graph: uniswap_v3, curve, aave_v3, etc.)
+  python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --DEFI --force
 
   # Generate instruments with force flag
   python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --force
