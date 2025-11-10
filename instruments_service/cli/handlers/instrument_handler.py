@@ -293,7 +293,7 @@ class InstrumentHandler(ModeHandler):
         if tradfi:
             try:
                 # Common TradFi exchanges via Databento
-                databento_exchanges = ["CME", "NASDAQ", "NYSE", "ICE"]
+                databento_exchanges = ["CME", "NASDAQ", "NYSE", "ICE", "CBOE"]
                 
                 # Track DBEQ.BASIC symbols to avoid duplicate fetches
                 dbeq_symbols_fetched = False
@@ -310,6 +310,10 @@ class InstrumentHandler(ModeHandler):
                             symbols = self.databento_config._unified.get_symbols_for_dataset("DBEQ.BASIC")
                             dbeq_symbols_fetched = True
                             logger.info(f"📋 Fetching all DBEQ.BASIC symbols ({len(symbols)} symbols) for {exchange}")
+                        elif exchange == "CBOE":
+                            # Get options symbols for CBOE
+                            symbols = self.databento_config._unified.get_symbols_for_dataset("OPRA.PILLAR")
+                            logger.info(f"📋 Fetching CBOE options symbols ({len(symbols)} symbols)")
                         else:
                             # Get symbols for this exchange from config
                             symbols = self._get_symbols_for_databento_exchange(exchange)

@@ -130,9 +130,9 @@ class DatabentoAdapter:
         # Databento API requires separate calls for different stype_in values
         symbols_by_stype = {}
         for symbol in symbols:
-            # For DBEQ.BASIC (NASDAQ/NYSE), don't filter by venue since both exchanges use same dataset
+            # For DBEQ.BASIC (NASDAQ/NYSE) and OPRA.PILLAR (CBOE), don't filter by venue since datasets cover multiple venues
             # For other datasets, filter by venue
-            if dataset == "DBEQ.BASIC":
+            if dataset in ["DBEQ.BASIC", "OPRA.PILLAR"]:
                 inst = unified_config.get_instrument(symbol, venue=None)  # Search across all venues
             else:
                 inst = unified_config.get_instrument(symbol, venue=exchange)
@@ -184,6 +184,16 @@ class DatabentoAdapter:
                 # Filter out non-trading instruments
                 if "instrument_class" in df.columns:
                     df = df[df["instrument_class"] != "S"]  # Exclude settlement-only
+                
+                # Filter by publisher_id == 39 for DBEQ.BASIC (NASDAQ/NYSE equities)
+                # Per DATABENTO_TRANSLATION_PLAN.md: Filter DBEQ.BASIC by publisher_id == 39
+                if dataset == "DBEQ.BASIC" and "publisher_id" in df.columns:
+                    df = df[df["publisher_id"] == 39]
+                    if df.empty:
+                        logger.warning(
+                            f"No instruments found after publisher_id filtering for {exchange} on {start_date_str}"
+                        )
+                        continue
 
                 # Process and merge into all_instruments
                 group_instruments = self._process_databento_dataframe(df, exchange, dataset, symbol_group, stype_in)
@@ -210,6 +220,7 @@ class DatabentoAdapter:
             "NASDAQ": "DBEQ.BASIC",
             "NYSE": "DBEQ.BASIC",
             "ICE": "IFEU.IMPACT",  # Fixed: ICE Europe Commodities uses IFEU.IMPACT, not ICE.NYBOT
+            "CBOE": "OPRA.PILLAR",  # CBOE options (SPX, SPY options)
         }
 
         exchange_upper = exchange.upper()
