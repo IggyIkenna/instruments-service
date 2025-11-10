@@ -36,7 +36,6 @@ class VenueMapping:
             "okex",
             "okex-futures",
             "okex-swap",  # OKX needs all endpoints for complete data
-            "cosmictrader",  # COSMICTRADER unified
         ]
     )
 
@@ -48,7 +47,6 @@ class VenueMapping:
             "DERIBIT": "deribit",
             "BYBIT": "bybit",  # Unified
             "OKX": "okx",  # Unified
-            "COSMICTRADER": "cosmictrader",  # Unified
         }
     )
 
@@ -63,7 +61,6 @@ class VenueMapping:
             "okex": "OKX",
             "okex-futures": "OKX",
             "okex-swap": "OKX",
-            "cosmictrader": "COSMICTRADER",
         }
     )
 
@@ -88,10 +85,6 @@ class VenueMapping:
             ("DERIBIT", "PERPETUAL"): "deribit",
             ("DERIBIT", "FUTURE"): "deribit",
             ("DERIBIT", "OPTION"): "deribit",
-            # CosmicTrader (unified endpoint)
-            ("COSMICTRADER", "SPOT_PAIR"): "cosmictrader",
-            ("COSMICTRADER", "PERPETUAL"): "cosmictrader",
-            ("COSMICTRADER", "FUTURE"): "cosmictrader",
         }
     )
 
@@ -106,7 +99,6 @@ class VenueMapping:
             "bybit": ["PERPETUAL", "FUTURE"],
             "bybit-spot": ["SPOT_PAIR"],
             "deribit": ["SPOT_PAIR", "PERPETUAL", "FUTURE", "OPTION"],
-            "cosmictrader": ["SPOT_PAIR", "PERPETUAL", "FUTURE"],
         }
     )
 
@@ -183,11 +175,6 @@ class ExchangeInstrumentConfig:
             "DERIBIT": ["PERPETUAL", "FUTURE", "OPTION"],  # Full derivatives exchange
             "BYBIT": ["SPOT_PAIR", "PERPETUAL"],  # Combined (no split per user)
             "OKX": ["SPOT_PAIR", "PERPETUAL", "FUTURE"],  # Combined (no split per user)
-            "COSMICTRADER": [
-                "SPOT_PAIR",
-                "PERPETUAL",
-                "FUTURE",
-            ],  # Combined (no split per user)
         }
     )
 
@@ -200,7 +187,6 @@ class ExchangeInstrumentConfig:
             "DERIBIT": ["USD", "USDC"],  # Options exchange (verified real data)
             "BYBIT": ["USDT"],  # STRICT: Only USDT
             "OKX": ["USDT"],  # STRICT: Only USDT (filter out USD quotes)
-            "COSMICTRADER": ["USDT"],  # STRICT: Only USDT
         }
     )
 
@@ -210,7 +196,6 @@ class ExchangeInstrumentConfig:
             "BINANCE-FUTURES",
             "OKX",
             "BYBIT",
-            "COSMICTRADER",  # SIMPLIFIED venue names
         ]
     )
 
