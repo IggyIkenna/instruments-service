@@ -16,7 +16,7 @@ from pathlib import Path
 from ..base_handler import ModeHandler
 from ...app.core.instrument_processing_service import InstrumentProcessingService
 from ...app.core.cloud_instrument_storage import CloudInstrumentStorage
-from ...config import VenueMapping
+from ...config import VenueMapping, DatabentoInstrumentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,9 @@ class InstrumentHandler(ModeHandler):
 
         # Venue mapping
         self.venue_mapping = VenueMapping()
+        
+        # Databento instrument config
+        self.databento_config = DatabentoInstrumentConfig()
 
         logger.debug("✅ InstrumentHandler initialized")
 
@@ -293,10 +296,17 @@ class InstrumentHandler(ModeHandler):
                 databento_exchanges = ["CME", "NASDAQ", "NYSE", "ICE"]
                 for exchange in databento_exchanges:
                     try:
+                        # Get symbols for this exchange from config
+                        symbols = self._get_symbols_for_databento_exchange(exchange)
+                        
+                        if not symbols:
+                            logger.warning(f"⚠️ No symbols configured for {exchange}, skipping")
+                            continue
+                        
                         # Fetch Databento instruments
                         databento_instruments = self.instrument_service.fetch_databento_instruments(
                             exchange=exchange,
-                            symbols=[],  # Empty list means fetch all available symbols
+                            symbols=symbols,
                             target_date=date,
                         )
                         if databento_instruments:
@@ -338,6 +348,42 @@ class InstrumentHandler(ModeHandler):
                 logger.error(f"❌ Failed to initialize DeFi processing: {e}", exc_info=True)
 
         return instruments
+
+    def _get_symbols_for_databento_exchange(self, exchange: str) -> List[str]:
+        """
+        Get symbols for a Databento exchange from config.
+        
+        Args:
+            exchange: Exchange name (e.g., 'CME', 'NASDAQ', 'NYSE', 'ICE')
+            
+        Returns:
+            List of symbols to fetch for this exchange
+        """
+        # Map exchange to Databento dataset (matching config.py dataset_routing)
+        exchange_to_dataset = {
+            "CME": "GLBX.MDP3",
+            "NASDAQ": "DBEQ.BASIC",
+            "NYSE": "DBEQ.BASIC",
+            "ICE": "IFEU.IMPACT",  # ICE Europe Commodities (matches config.py)
+        }
+        
+        target_dataset = exchange_to_dataset.get(exchange.upper())
+        if not target_dataset:
+            logger.warning(f"⚠️ Unknown Databento exchange: {exchange}")
+            return []
+        
+        # Filter symbols from extended_symbols based on dataset_routing
+        symbols = []
+        for symbol in self.databento_config.extended_symbols:
+            dataset, _ = self.databento_config.get_dataset_and_stype(symbol)
+            if dataset == target_dataset:
+                # Remove .FUT, .OPT suffixes for Databento API (uses parent symbols)
+                # Databento API with stype_in="parent" expects symbols like "ES", "BRN", not "ES.FUT"
+                clean_symbol = symbol.replace(".FUT", "").replace(".OPT", "")
+                symbols.append(clean_symbol)
+        
+        logger.debug(f"📋 Found {len(symbols)} symbols for {exchange}: {symbols[:5]}..." if len(symbols) > 5 else f"📋 Found {len(symbols)} symbols for {exchange}: {symbols}")
+        return symbols
 
     def cleanup(self):
         """Cleanup resources."""
