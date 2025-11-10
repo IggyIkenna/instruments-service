@@ -294,10 +294,25 @@ class InstrumentHandler(ModeHandler):
             try:
                 # Common TradFi exchanges via Databento
                 databento_exchanges = ["CME", "NASDAQ", "NYSE", "ICE"]
+                
+                # Track DBEQ.BASIC symbols to avoid duplicate fetches
+                dbeq_symbols_fetched = False
+                
                 for exchange in databento_exchanges:
                     try:
-                        # Get symbols for this exchange from config
-                        symbols = self._get_symbols_for_databento_exchange(exchange)
+                        # For NASDAQ/NYSE, fetch all DBEQ.BASIC symbols once
+                        if exchange in ["NASDAQ", "NYSE"]:
+                            if dbeq_symbols_fetched:
+                                logger.info(f"⏭️ Skipping {exchange} (already fetched DBEQ.BASIC symbols via NASDAQ)")
+                                continue
+                            
+                            # Get all equities from DBEQ.BASIC dataset (includes both NASDAQ and NYSE stocks)
+                            symbols = self.databento_config._unified.get_symbols_for_dataset("DBEQ.BASIC")
+                            dbeq_symbols_fetched = True
+                            logger.info(f"📋 Fetching all DBEQ.BASIC symbols ({len(symbols)} symbols) for {exchange}")
+                        else:
+                            # Get symbols for this exchange from config
+                            symbols = self._get_symbols_for_databento_exchange(exchange)
                         
                         if not symbols:
                             logger.warning(f"⚠️ No symbols configured for {exchange}, skipping")
@@ -359,7 +374,7 @@ class InstrumentHandler(ModeHandler):
         Returns:
             List of symbols to fetch for this exchange
         """
-        # Use unified config to get symbols for venue
+        # For CME, ICE, etc., use venue-based lookup
         symbols = self.databento_config.get_symbols_for_venue(exchange.upper())
         
         if not symbols:
