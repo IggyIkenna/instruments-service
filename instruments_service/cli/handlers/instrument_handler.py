@@ -103,10 +103,31 @@ class InstrumentHandler(ModeHandler):
         total_errors = 0
         today = datetime.now(timezone.utc).date()
 
-        # Filter exchanges if specified
-        exchanges_to_process = kwargs.get(
-            "exchanges", self.venue_mapping.all_tardis_exchanges
-        )
+        # Determine which market types to process based on flags
+        cefi = kwargs.get("cefi", False)
+        tradfi = kwargs.get("tradfi", False)
+        defi = kwargs.get("defi", False)
+        
+        # Filter exchanges based on market type flags
+        if cefi:
+            # CEFI: Only Tardis exchanges (exclude Databento and DeFi)
+            exchanges_to_process = kwargs.get(
+                "exchanges", self.venue_mapping.all_tardis_exchanges
+            )
+            logger.info(f"🔵 Processing CEFI exchanges only: {exchanges_to_process}")
+        elif tradfi:
+            # TRADFI: Only Databento exchanges (exclude Tardis and DeFi)
+            exchanges_to_process = []
+            logger.info("📊 Processing TRADFI exchanges only (Databento)")
+        elif defi:
+            # DEFI: Only DeFi protocols (exclude Tardis and Databento)
+            exchanges_to_process = []
+            logger.info("🌐 Processing DEFI protocols only")
+        else:
+            # Default: Use specified exchanges or all Tardis exchanges
+            exchanges_to_process = kwargs.get(
+                "exchanges", self.venue_mapping.all_tardis_exchanges
+            )
 
         for date in date_range:
             # Skip future dates
@@ -139,7 +160,7 @@ class InstrumentHandler(ModeHandler):
 
                 # Generate instruments using service
                 instruments = self._generate_instruments_for_date(
-                    date, force, exchanges_to_process
+                    date, force, exchanges_to_process, cefi=cefi, tradfi=tradfi, defi=defi, **kwargs
                 )
 
                 if instruments:
@@ -230,28 +251,83 @@ class InstrumentHandler(ModeHandler):
             },
         }
 
-    def _generate_instruments_for_date(self, date, force=False, exchanges=None):
+    def _generate_instruments_for_date(
+        self, date, force=False, exchanges=None, cefi=False, tradfi=False, defi=False, **kwargs
+    ):
         """Generate instruments using instrument processing service."""
         instruments = {}
 
-        # Use specified exchanges or all
-        if exchanges is None:
-            exchanges = self.venue_mapping.all_tardis_exchanges
+        # Process CEFI (Tardis) exchanges
+        if cefi or (not tradfi and not defi):
+            # Use specified exchanges or all Tardis exchanges
+            if exchanges is None:
+                exchanges = self.venue_mapping.all_tardis_exchanges
 
-        for tardis_exchange in exchanges:
-            try:
-                # Process exchange instruments
-                exchange_instruments = asyncio.run(
-                    self.instrument_service.process_exchange_instruments(
-                        tardis_exchange, target_date=date, force=force
+            for tardis_exchange in exchanges:
+                try:
+                    # Process exchange instruments via Tardis
+                    exchange_instruments = asyncio.run(
+                        self.instrument_service.process_exchange_instruments(
+                            tardis_exchange, target_date=date, force=force
+                        )
                     )
-                )
-                if exchange_instruments:
-                    instruments.update(exchange_instruments)
+                    if exchange_instruments:
+                        instruments.update(exchange_instruments)
+                except Exception as e:
+                    logger.error(
+                        f"❌ Failed to process {tardis_exchange}: {e}", exc_info=True
+                    )
+
+        # Process TRADFI (Databento) exchanges
+        if tradfi:
+            try:
+                # Common TradFi exchanges via Databento
+                databento_exchanges = ["CME", "NASDAQ", "NYSE", "ICE"]
+                for exchange in databento_exchanges:
+                    try:
+                        # Fetch Databento instruments
+                        databento_instruments = self.instrument_service.fetch_databento_instruments(
+                            exchange=exchange,
+                            symbols=[],  # Empty list means fetch all available symbols
+                            target_date=date,
+                        )
+                        if databento_instruments:
+                            instruments.update(databento_instruments)
+                            logger.info(f"✅ Processed {len(databento_instruments)} instruments from {exchange}")
+                    except Exception as e:
+                        logger.error(
+                            f"❌ Failed to process Databento exchange {exchange}: {e}", exc_info=True
+                        )
             except Exception as e:
-                logger.error(
-                    f"❌ Failed to process {tardis_exchange}: {e}", exc_info=True
-                )
+                logger.error(f"❌ Failed to initialize Databento processing: {e}", exc_info=True)
+
+        # Process DEFI protocols
+        if defi:
+            try:
+                # Common DeFi protocols
+                defi_protocols = [
+                    ("uniswap_v3", "ETHEREUM"),
+                    ("curve", "ETHEREUM"),
+                    ("aave_v3", "ETHEREUM"),
+                    ("etherfi", "ETHEREUM"),
+                    ("lido", "ETHEREUM"),
+                ]
+                for protocol, chain in defi_protocols:
+                    try:
+                        # Fetch DeFi instruments
+                        defi_instruments = self.instrument_service.fetch_defi_instruments(
+                            protocol=protocol,
+                            chain=chain,
+                        )
+                        if defi_instruments:
+                            instruments.update(defi_instruments)
+                            logger.info(f"✅ Processed {len(defi_instruments)} instruments from {protocol}")
+                    except Exception as e:
+                        logger.error(
+                            f"❌ Failed to process DeFi protocol {protocol}: {e}", exc_info=True
+                        )
+            except Exception as e:
+                logger.error(f"❌ Failed to initialize DeFi processing: {e}", exc_info=True)
 
         return instruments
 
