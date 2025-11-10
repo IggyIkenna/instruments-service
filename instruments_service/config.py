@@ -27,7 +27,8 @@ class VenueMapping:
         'binance', 'binance-futures',  # BINANCE split
         'deribit',                     # DERIBIT unified  
         'bybit', 'bybit-spot',                       # BYBIT unified
-        'okex', 'okex-futures', 'okex-swap'  # OKX needs all endpoints for complete data
+        'okex', 'okex-futures', 'okex-swap',  # OKX needs all endpoints for complete data
+        'cosmictrader'                  # COSMICTRADER unified
     ])
     
     # Canonical venues to CCXT exchange IDs  
@@ -36,7 +37,8 @@ class VenueMapping:
         'BINANCE-FUTURES': 'binance',           # Same CCXT class, different market types
         'DERIBIT': 'deribit',
         'BYBIT': 'bybit',                       # Unified 
-        'OKX': 'okx'                            # Unified
+        'OKX': 'okx',                           # Unified
+        'COSMICTRADER': 'cosmictrader'          # Unified
     })
     
     # Reverse mapping for imports
@@ -48,7 +50,8 @@ class VenueMapping:
         'bybit-spot': 'BYBIT',
         'okex': 'OKX',
         'okex-futures': 'OKX',
-        'okex-swap': 'OKX'
+        'okex-swap': 'OKX',
+        'cosmictrader': 'COSMICTRADER'
     })
     
     # CRITICAL: Map venue+instrument_type → Tardis exchange endpoint
@@ -74,6 +77,11 @@ class VenueMapping:
         ('DERIBIT', 'PERPETUAL'): 'deribit',
         ('DERIBIT', 'FUTURE'): 'deribit',
         ('DERIBIT', 'OPTION'): 'deribit',
+        
+        # CosmicTrader (unified endpoint)
+        ('COSMICTRADER', 'SPOT_PAIR'): 'cosmictrader',
+        ('COSMICTRADER', 'PERPETUAL'): 'cosmictrader',
+        ('COSMICTRADER', 'FUTURE'): 'cosmictrader',
     })
     
     # Which Tardis exchanges map to which instrument types (for filtering)
@@ -86,6 +94,7 @@ class VenueMapping:
         'bybit': ['PERPETUAL', 'FUTURE'],
         'bybit-spot': ['SPOT_PAIR'],
         'deribit': ['SPOT_PAIR', 'PERPETUAL', 'FUTURE', 'OPTION'],
+        'cosmictrader': ['SPOT_PAIR', 'PERPETUAL', 'FUTURE'],
     })
 
 @dataclass
@@ -120,7 +129,8 @@ class ExchangeInstrumentConfig:
         'BINANCE-FUTURES': ['PERPETUAL', 'FUTURE'],         # Derivatives only (keep split)
         'DERIBIT': ['PERPETUAL', 'FUTURE', 'OPTION'],       # Full derivatives exchange
         'BYBIT': ['SPOT_PAIR', 'PERPETUAL'],                # Combined (no split per user)
-        'OKX': ['SPOT_PAIR', 'PERPETUAL', 'FUTURE']         # Combined (no split per user)
+        'OKX': ['SPOT_PAIR', 'PERPETUAL', 'FUTURE'],        # Combined (no split per user)
+        'COSMICTRADER': ['SPOT_PAIR', 'PERPETUAL', 'FUTURE']  # Combined (no split per user)
     })
     
     valid_quote_currencies: Dict[str, List[str]] = field(default_factory=lambda: {
@@ -128,11 +138,12 @@ class ExchangeInstrumentConfig:
         'BINANCE-FUTURES': ['USDT'],            # STRICT: Only USDT
         'DERIBIT': ['USD', 'USDC'],             # Options exchange (verified real data)
         'BYBIT': ['USDT'],                      # STRICT: Only USDT  
-        'OKX': ['USDT']                         # STRICT: Only USDT (filter out USD quotes)
+        'OKX': ['USDT'],                       # STRICT: Only USDT (filter out USD quotes)
+        'COSMICTRADER': ['USDT']                # STRICT: Only USDT
     })
     
     derivative_exchanges: List[str] = field(default_factory=lambda: [
-        'DERIBIT', 'BINANCE-FUTURES', 'OKX', 'BYBIT'  # SIMPLIFIED venue names
+        'DERIBIT', 'BINANCE-FUTURES', 'OKX', 'BYBIT', 'COSMICTRADER'  # SIMPLIFIED venue names
     ])
 
 
