@@ -526,16 +526,23 @@ class DatabentoAdapter:
         # Per INSTRUMENT_KEY.md canonical format
         symbol = f"{base_asset}-{quote_asset}"
         if instrument_type == "OPTION":
-            # Build canonical option symbol: BASE-QUOTE-YYMMDD-STRIKE-OPTION_TYPE
+            # Build canonical option symbol: BASE-QUOTE-YYMMDD-STRIKE-OPTION_TYPE@LIN
+            # TradFi options are always linear (@LIN) - they settle in USD (quote asset)
             # Clean strike price: remove trailing .0 but preserve integer zeros (e.g., "440.0" -> "440", "480" -> "480")
             strike_clean = ""
             if strike_price:
                 # Remove .0 suffix if present, but don't strip trailing zeros from integers
                 strike_clean = strike_price.replace(".0", "").rstrip(".") if "." in strike_price else strike_price
             if strike_clean and option_type and expiry_str:
-                symbol = f"{base_asset}-{quote_asset}-{expiry_str}-{strike_clean}-{option_type}"
+                symbol = f"{base_asset}-{quote_asset}-{expiry_str}-{strike_clean}-{option_type}@LIN"
             elif expiry_str:
-                symbol = f"{base_asset}-{quote_asset}-{expiry_str}"
+                symbol = f"{base_asset}-{quote_asset}-{expiry_str}@LIN"
+        elif instrument_type == "FUTURE":
+            # TradFi futures are always linear (@LIN) - they settle in USD (quote asset)
+            if expiry_str:
+                symbol = f"{base_asset}-{quote_asset}-{expiry_str}@LIN"
+            else:
+                symbol = f"{base_asset}-{quote_asset}@LIN"
         elif expiry_str:
             symbol = f"{base_asset}-{quote_asset}-{expiry_str}"
 
