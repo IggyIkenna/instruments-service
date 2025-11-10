@@ -527,8 +527,11 @@ class DatabentoAdapter:
         symbol = f"{base_asset}-{quote_asset}"
         if instrument_type == "OPTION":
             # Build canonical option symbol: BASE-QUOTE-YYMMDD-STRIKE-OPTION_TYPE
-            # Remove decimal points from strike for canonical format (e.g., "440.0" -> "440")
-            strike_clean = strike_price.replace(".0", "").rstrip("0").rstrip(".") if strike_price else ""
+            # Clean strike price: remove trailing .0 but preserve integer zeros (e.g., "440.0" -> "440", "480" -> "480")
+            strike_clean = ""
+            if strike_price:
+                # Remove .0 suffix if present, but don't strip trailing zeros from integers
+                strike_clean = strike_price.replace(".0", "").rstrip(".") if "." in strike_price else strike_price
             if strike_clean and option_type and expiry_str:
                 symbol = f"{base_asset}-{quote_asset}-{expiry_str}-{strike_clean}-{option_type}"
             elif expiry_str:
