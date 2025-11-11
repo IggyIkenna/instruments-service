@@ -60,8 +60,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--gcs-bucket",
         type=str,
-        default="market-data-tick",
-        help="GCS bucket name (default: market-data-tick)",
+        default="instruments-store-central-element-323112",
+        help="GCS bucket name (default: instruments-store-central-element-323112)",
     )
     parser.add_argument(
         "--bigquery-dataset",

@@ -288,3 +288,4 @@ class TardisAdapter:
             self.session.close()
         self.clear_cache()
         logger.info("🧹 TardisAdapter cleanup completed")
+

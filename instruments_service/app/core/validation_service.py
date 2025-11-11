@@ -223,3 +223,4 @@ class ValidationService:
             logger.warning(f"⚠️ Start date {start_date.date()} is in the future")
 
         return True, None
+

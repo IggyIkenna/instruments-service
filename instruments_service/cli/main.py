@@ -10,6 +10,7 @@ based on ENVIRONMENT variable (dev mode: auto-detects, production: VM service ac
 import sys
 import logging
 import os
+import json
 from pathlib import Path
 from typing import Dict, Any
 
@@ -136,6 +137,47 @@ def main() -> Dict[str, Any]:
             logger.info(f"✅ {args.mode} operation completed successfully")
         else:
             logger.error(f"❌ {args.mode} operation failed")
+
+        # Print query results to stdout for instruments-query mode
+        if args.mode == "instruments-query":
+            output_format = getattr(args, "output_format", "summary")
+            
+            if output_format == "json":
+                # Print JSON output to stdout
+                print(json.dumps(result, indent=2, default=str))
+            elif output_format == "csv":
+                # CSV is already saved to file, just print file location
+                if "results" in result and "csv_file" in result["results"]:
+                    print(f"\n📄 CSV file saved: {result['results']['csv_file']}")
+                    print(f"   Rows: {result['results'].get('rows', 0)}")
+            else:
+                # Summary format - print formatted summary
+                if "results" in result:
+                    results = result["results"]
+                    print("\n" + "=" * 70)
+                    print("QUERY RESULTS")
+                    print("=" * 70)
+                    
+                    if "instruments_found" in results:
+                        print(f"📊 Instruments Found: {results['instruments_found']}")
+                    
+                    if "venues" in results and results["venues"]:
+                        print(f"🏢 Venues ({len(results['venues'])}): {', '.join(results['venues'][:10])}")
+                        if len(results["venues"]) > 10:
+                            print(f"   ... and {len(results['venues']) - 10} more")
+                    
+                    if "instrument_types" in results and results["instrument_types"]:
+                        print(f"📈 Instrument Types ({len(results['instrument_types'])}): {', '.join(results['instrument_types'])}")
+                    
+                    if "sample_instruments" in results and results["sample_instruments"]:
+                        print(f"\n📋 Sample Instruments (first 10):")
+                        for inst in results["sample_instruments"][:10]:
+                            print(f"   - {inst}")
+                    
+                    if "total_instruments" in results:
+                        print(f"\n📊 Total Instruments: {results['total_instruments']}")
+                    
+                    print("=" * 70)
 
         return result
 

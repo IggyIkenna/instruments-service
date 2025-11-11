@@ -18,7 +18,7 @@ class ModeHandler(ABC):
 
     This class provides the common interface and shared functionality
     for all CLI handlers. Each handler represents a specific operation mode
-    (e.g., instruments, instruments-query).
+    (e.g., instruments, instruments).
 
     Attributes:
         config: Configuration dictionary containing all settings
@@ -119,3 +119,4 @@ class ModeHandler(ABC):
     def __repr__(self) -> str:
         """String representation of the handler."""
         return f"{self.__class__.__name__}()"
+
