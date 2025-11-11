@@ -1,2 +1,0 @@
-[console_scripts]
-instruments-service = instruments_service.cli.main:run_cli
