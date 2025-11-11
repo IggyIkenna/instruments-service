@@ -24,7 +24,16 @@ class InstrumentsQueryHandler(ModeHandler):
         # Use unified-cloud-services domain client instead of service client
         from unified_cloud_services import create_instruments_client
 
-        self.client = create_instruments_client()
+        # Pass config parameters to client (bucket, dataset, project_id)
+        client_kwargs = {}
+        if "gcs_bucket" in config:
+            client_kwargs["gcs_bucket"] = config["gcs_bucket"]
+        if "bigquery_dataset" in config:
+            client_kwargs["bigquery_dataset"] = config["bigquery_dataset"]
+        if "project_id" in config:
+            client_kwargs["project_id"] = config["project_id"]
+
+        self.client = create_instruments_client(**client_kwargs)
         logger.debug("✅ InstrumentsQueryHandler initialized")
 
     def run(self, start_date, end_date=None, **kwargs) -> Dict[str, Any]:

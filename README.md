@@ -110,13 +110,13 @@ python -m instruments_service --mode instruments \
     --end-date 2023-05-24
 
 # Query instruments
-python -m instruments_service --mode instruments-query \
+python -m instruments_service --mode instruments \
     --start-date 2023-05-23 \
     --venues BINANCE-FUTURES \
     --instrument-types PERPETUAL
 
 # Get instrument details
-python -m instruments_service --mode instruments-query \
+python -m instruments_service --mode instruments \
     --start-date 2023-05-23 \
     --query-type details \
     --instrument-id BINANCE-FUTURES:PERPETUAL:BTC-USDT

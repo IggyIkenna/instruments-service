@@ -445,3 +445,4 @@ A: Enrichment is done on-demand when needed for execution. Don't require enrichm
 - [`DEFI_GUIDE.md`](./DEFI_GUIDE.md) - DeFi protocols and integration details
 - [`USAGE_GUIDE.md`](./USAGE_GUIDE.md) - Usage examples and client patterns
 
+
