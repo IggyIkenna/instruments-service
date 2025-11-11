@@ -24,6 +24,7 @@ except ImportError:
 @dataclass
 class InstrumentDefinition:
     """Single instrument definition with all metadata"""
+
     symbol: str  # Databento symbol (e.g., "ES.FUT", "SPY", "BRN.FUT", "SPY.OPT")
     venue: str  # Canonical venue (e.g., "CME", "NASDAQ", "ICE")
     instrument_type: str  # "FUTURE", "EQUITY", "OPTION", "ETF"
@@ -38,111 +39,264 @@ class InstrumentDefinition:
 class UnifiedInstrumentConfig:
     """
     Unified instrument configuration - single source of truth for all instruments.
-    
+
     All TradFi instruments are defined here with their metadata. No duplication.
     Options are handled explicitly via instrument_type="OPTION".
     """
-    
+
     # Single unified list of all TradFi instruments
     # Symbols are in Databento API format: [ROOT].FUT for futures, [ROOT].OPT for options, raw symbols for equities
     instruments: List[InstrumentDefinition] = field(
         default_factory=lambda: [
             # Equity Index Futures (CME) - use .FUT suffix for parent symbology
-            InstrumentDefinition("ES.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SP500", "USD", "ES"),
-            InstrumentDefinition("NQ.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "NASDAQ100", "USD", "NQ"),
-            
+            InstrumentDefinition(
+                "ES.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SP500", "USD", "ES"
+            ),
+            InstrumentDefinition(
+                "NQ.FUT",
+                "CME",
+                "FUTURE",
+                "GLBX.MDP3",
+                "parent",
+                "NASDAQ100",
+                "USD",
+                "NQ",
+            ),
             # Commodities (CME) - use .FUT suffix
-            InstrumentDefinition("GC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "GOLD", "USD", "GC"),
-            InstrumentDefinition("CL.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CRUDE", "USD", "CL"),
-            InstrumentDefinition("NG.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "NATGAS", "USD", "NG"),
-            InstrumentDefinition("SI.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SILVER", "USD", "SI"),
-            InstrumentDefinition("HG.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "COPPER", "USD", "HG"),
-            InstrumentDefinition("CT.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "COTTON", "USD", "CT"),
-            InstrumentDefinition("ZS.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SOYBEANS", "USD", "ZS"),
-            InstrumentDefinition("ZC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CORN", "USD", "ZC"),
-            InstrumentDefinition("ZW.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "WHEAT", "USD", "ZW"),
-            InstrumentDefinition("ZL.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SOYBEAN_OIL", "USD", "ZL"),
-            InstrumentDefinition("ZM.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SOYBEAN_MEAL", "USD", "ZM"),
-            
+            InstrumentDefinition(
+                "GC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "GOLD", "USD", "GC"
+            ),
+            InstrumentDefinition(
+                "CL.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CRUDE", "USD", "CL"
+            ),
+            InstrumentDefinition(
+                "NG.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "NATGAS", "USD", "NG"
+            ),
+            InstrumentDefinition(
+                "SI.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SILVER", "USD", "SI"
+            ),
+            InstrumentDefinition(
+                "HG.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "COPPER", "USD", "HG"
+            ),
+            InstrumentDefinition(
+                "CT.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "COTTON", "USD", "CT"
+            ),
+            InstrumentDefinition(
+                "ZS.FUT",
+                "CME",
+                "FUTURE",
+                "GLBX.MDP3",
+                "parent",
+                "SOYBEANS",
+                "USD",
+                "ZS",
+            ),
+            InstrumentDefinition(
+                "ZC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CORN", "USD", "ZC"
+            ),
+            InstrumentDefinition(
+                "ZW.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "WHEAT", "USD", "ZW"
+            ),
+            InstrumentDefinition(
+                "ZL.FUT",
+                "CME",
+                "FUTURE",
+                "GLBX.MDP3",
+                "parent",
+                "SOYBEAN_OIL",
+                "USD",
+                "ZL",
+            ),
+            InstrumentDefinition(
+                "ZM.FUT",
+                "CME",
+                "FUTURE",
+                "GLBX.MDP3",
+                "parent",
+                "SOYBEAN_MEAL",
+                "USD",
+                "ZM",
+            ),
             # FX Futures (CME) - use .FUT suffix
-            InstrumentDefinition("6E.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "EUR", "USD", "6E"),
-            InstrumentDefinition("6B.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "GBP", "USD", "6B"),
-            InstrumentDefinition("6J.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "JPY", "USD", "6J"),
-            InstrumentDefinition("6A.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "AUD", "USD", "6A"),
-            InstrumentDefinition("6C.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CAD", "USD", "6C"),
-            InstrumentDefinition("6N.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "NZD", "USD", "6N"),
-            InstrumentDefinition("6S.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CHF", "USD", "6S"),
-            InstrumentDefinition("6M.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "MXN", "USD", "6M"),
-            InstrumentDefinition("6Z.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "ZAR", "USD", "6Z"),
-            InstrumentDefinition("6L.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "BRL", "USD", "6L"),
-            
+            InstrumentDefinition(
+                "6E.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "EUR", "USD", "6E"
+            ),
+            InstrumentDefinition(
+                "6B.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "GBP", "USD", "6B"
+            ),
+            InstrumentDefinition(
+                "6J.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "JPY", "USD", "6J"
+            ),
+            InstrumentDefinition(
+                "6A.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "AUD", "USD", "6A"
+            ),
+            InstrumentDefinition(
+                "6C.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CAD", "USD", "6C"
+            ),
+            InstrumentDefinition(
+                "6N.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "NZD", "USD", "6N"
+            ),
+            InstrumentDefinition(
+                "6S.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CHF", "USD", "6S"
+            ),
+            InstrumentDefinition(
+                "6M.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "MXN", "USD", "6M"
+            ),
+            InstrumentDefinition(
+                "6Z.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "ZAR", "USD", "6Z"
+            ),
+            InstrumentDefinition(
+                "6L.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "BRL", "USD", "6L"
+            ),
             # ICE Commodities - use .FUT suffix
             # ICE Europe Commodities (IFEU.IMPACT)
-            InstrumentDefinition("BRN.FUT", "ICE", "FUTURE", "IFEU.IMPACT", "parent", "BRENT", "USD", "BRN"),
-            InstrumentDefinition("G.FUT", "ICE", "FUTURE", "IFEU.IMPACT", "parent", "GASOIL", "USD", "G"),
+            InstrumentDefinition(
+                "BRN.FUT",
+                "ICE",
+                "FUTURE",
+                "IFEU.IMPACT",
+                "parent",
+                "BRENT",
+                "USD",
+                "BRN",
+            ),
+            InstrumentDefinition(
+                "G.FUT", "ICE", "FUTURE", "IFEU.IMPACT", "parent", "GASOIL", "USD", "G"
+            ),
             # ICE Futures US Softs (IFUS.IMPACT) - Coffee, Orange Juice, Cocoa, Sugar
-            InstrumentDefinition("KC.FUT", "ICE", "FUTURE", "IFUS.IMPACT", "parent", "COFFEE", "USD", "KC"),
-            InstrumentDefinition("OJ.FUT", "ICE", "FUTURE", "IFUS.IMPACT", "parent", "OJ", "USD", "OJ"),
-            InstrumentDefinition("CC.FUT", "ICE", "FUTURE", "IFUS.IMPACT", "parent", "COCOA", "USD", "CC"),
-            InstrumentDefinition("SB.FUT", "ICE", "FUTURE", "IFUS.IMPACT", "parent", "SUGAR", "USD", "SB"),
-            
+            InstrumentDefinition(
+                "KC.FUT",
+                "ICE",
+                "FUTURE",
+                "IFUS.IMPACT",
+                "parent",
+                "COFFEE",
+                "USD",
+                "KC",
+            ),
+            InstrumentDefinition(
+                "OJ.FUT", "ICE", "FUTURE", "IFUS.IMPACT", "parent", "OJ", "USD", "OJ"
+            ),
+            InstrumentDefinition(
+                "CC.FUT", "ICE", "FUTURE", "IFUS.IMPACT", "parent", "COCOA", "USD", "CC"
+            ),
+            InstrumentDefinition(
+                "SB.FUT", "ICE", "FUTURE", "IFUS.IMPACT", "parent", "SUGAR", "USD", "SB"
+            ),
             # Equities/ETFs (NASDAQ/NYSE) - use raw_symbol stype_in (no .FUT/.OPT suffix)
-            InstrumentDefinition("SPY", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "SPY", "USD"),
-            InstrumentDefinition("QQQ", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "QQQ", "USD"),
-            InstrumentDefinition("AAPL", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "AAPL", "USD"),
-            InstrumentDefinition("MSFT", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "MSFT", "USD"),
-            InstrumentDefinition("GOOGL", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "GOOGL", "USD"),
-            InstrumentDefinition("AMZN", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "AMZN", "USD"),
-            InstrumentDefinition("TSLA", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "TSLA", "USD"),
-            InstrumentDefinition("NVDA", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "NVDA", "USD"),
-            InstrumentDefinition("META", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "META", "USD"),
-            InstrumentDefinition("BRK.B", "NYSE", "EQUITY", "DBEQ.BASIC", "raw_symbol", "BRK.B", "USD"),
-            
+            InstrumentDefinition(
+                "SPY", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "SPY", "USD"
+            ),
+            InstrumentDefinition(
+                "QQQ", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "QQQ", "USD"
+            ),
+            InstrumentDefinition(
+                "AAPL", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "AAPL", "USD"
+            ),
+            InstrumentDefinition(
+                "MSFT", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "MSFT", "USD"
+            ),
+            InstrumentDefinition(
+                "GOOGL", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "GOOGL", "USD"
+            ),
+            InstrumentDefinition(
+                "AMZN", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "AMZN", "USD"
+            ),
+            InstrumentDefinition(
+                "TSLA", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "TSLA", "USD"
+            ),
+            InstrumentDefinition(
+                "NVDA", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "NVDA", "USD"
+            ),
+            InstrumentDefinition(
+                "META", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "META", "USD"
+            ),
+            InstrumentDefinition(
+                "BRK.B", "NYSE", "EQUITY", "DBEQ.BASIC", "raw_symbol", "BRK.B", "USD"
+            ),
             # Options (CBOE) - use .OPT suffix for parent symbology
             # Only SPY options (SPY.OPT) - most liquid, skip SPX options
-            InstrumentDefinition("SPY.OPT", "CBOE", "OPTION", "OPRA.PILLAR", "parent", "SPY", "USD"),
+            InstrumentDefinition(
+                "SPY.OPT", "CBOE", "OPTION", "OPRA.PILLAR", "parent", "SPY", "USD"
+            ),
         ]
     )
-    
+
     # Exchange code to human-readable name mapping (for canonical symbols)
     exchange_code_to_name: Dict[str, str] = field(
         default_factory=lambda: {
             # FX Futures
-            "6A": "AUD", "M6A": "AUD", "6B": "GBP", "M6B": "GBP",
-            "6E": "EUR", "M6E": "EUR", "6J": "JPY", "M6J": "JPY",
-            "6C": "CAD", "M6C": "CAD", "6N": "NZD", "M6N": "NZD",
-            "6S": "CHF", "M6S": "CHF", "6M": "MXN", "6Z": "ZAR", "6L": "BRL",
+            "6A": "AUD",
+            "M6A": "AUD",
+            "6B": "GBP",
+            "M6B": "GBP",
+            "6E": "EUR",
+            "M6E": "EUR",
+            "6J": "JPY",
+            "M6J": "JPY",
+            "6C": "CAD",
+            "M6C": "CAD",
+            "6N": "NZD",
+            "M6N": "NZD",
+            "6S": "CHF",
+            "M6S": "CHF",
+            "6M": "MXN",
+            "6Z": "ZAR",
+            "6L": "BRL",
             # Commodities
-            "CL": "CRUDE", "MCL": "CRUDE", "GC": "GOLD", "MGC": "GOLD",
-            "NG": "NATGAS", "MNG": "NATGAS", "SI": "SILVER", "MSI": "SILVER",
-            "HG": "COPPER", "MHG": "COPPER", "SB": "SUGAR", "KC": "COFFEE",
-            "CT": "COTTON", "CC": "COCOA", "OJ": "OJ",
-            "ZS": "SOYBEANS", "ZC": "CORN", "ZW": "WHEAT",
-            "ZL": "SOYBEAN_OIL", "ZM": "SOYBEAN_MEAL",
+            "CL": "CRUDE",
+            "MCL": "CRUDE",
+            "GC": "GOLD",
+            "MGC": "GOLD",
+            "NG": "NATGAS",
+            "MNG": "NATGAS",
+            "SI": "SILVER",
+            "MSI": "SILVER",
+            "HG": "COPPER",
+            "MHG": "COPPER",
+            "SB": "SUGAR",
+            "KC": "COFFEE",
+            "CT": "COTTON",
+            "CC": "COCOA",
+            "OJ": "OJ",
+            "ZS": "SOYBEANS",
+            "ZC": "CORN",
+            "ZW": "WHEAT",
+            "ZL": "SOYBEAN_OIL",
+            "ZM": "SOYBEAN_MEAL",
             # ICE
-            "BRN": "BRENT", "B": "BRENT", "G": "GASOIL",
+            "BRN": "BRENT",
+            "B": "BRENT",
+            "G": "GASOIL",
             # Equity Index Futures
-            "ES": "SP500", "MES": "SP500", "NQ": "NASDAQ100", "MNQ": "NASDAQ100",
+            "ES": "SP500",
+            "MES": "SP500",
+            "NQ": "NASDAQ100",
+            "MNQ": "NASDAQ100",
             # S&P 500 Index
             "SPX": "SP500",
         }
     )
-    
+
     def get_symbols_for_venue(self, venue: str) -> List[str]:
         """Get all symbols for a venue (e.g., 'CME', 'NASDAQ', 'ICE')"""
         all_insts = self.get_all_instruments()
         return [inst.symbol for inst in all_insts if inst.venue == venue.upper()]
-    
+
     def get_symbols_for_dataset(self, dataset: str) -> List[str]:
         """Get all symbols for a dataset (e.g., 'GLBX.MDP3', 'DBEQ.BASIC')"""
         all_insts = self.get_all_instruments()
         return [inst.symbol for inst in all_insts if inst.dataset == dataset]
-    
+
     def get_symbols_by_type(self, instrument_type: str) -> List[str]:
         """Get all symbols for an instrument type (e.g., 'FUTURE', 'EQUITY', 'OPTION')"""
         all_insts = self.get_all_instruments()
-        return [inst.symbol for inst in all_insts if inst.instrument_type == instrument_type.upper()]
-    
+        return [
+            inst.symbol
+            for inst in all_insts
+            if inst.instrument_type == instrument_type.upper()
+        ]
+
     def get_dataset_and_stype(self, symbol: str) -> Optional[Tuple[str, str]]:
         """Get dataset and stype_in for a symbol"""
         all_insts = self.get_all_instruments()
@@ -150,8 +304,10 @@ class UnifiedInstrumentConfig:
             if inst.symbol == symbol:
                 return (inst.dataset, inst.stype_in)
         return None
-    
-    def get_instrument(self, symbol: str, venue: Optional[str] = None) -> Optional[InstrumentDefinition]:
+
+    def get_instrument(
+        self, symbol: str, venue: Optional[str] = None
+    ) -> Optional[InstrumentDefinition]:
         """Get instrument definition by symbol (optionally filtered by venue)"""
         all_insts = self.get_all_instruments()
         for inst in all_insts:
@@ -159,7 +315,7 @@ class UnifiedInstrumentConfig:
                 if venue is None or inst.venue == venue.upper():
                     return inst
         return None
-    
+
     def get_human_readable_name(self, exchange_code: str) -> str:
         """Convert Databento exchange code to human-readable name"""
         if exchange_code in self.exchange_code_to_name:
@@ -170,66 +326,549 @@ class UnifiedInstrumentConfig:
             if base_code in self.exchange_code_to_name:
                 return self.exchange_code_to_name[base_code]
         return exchange_code
-    
+
     def _get_sp500_equities(self) -> List[InstrumentDefinition]:
         """Generate S&P 500 equity instrument definitions dynamically"""
         # Complete S&P 500 list (503 stocks as of 2024)
         # Source: Standard & Poor's S&P 500 Index constituents (via GitHub datasets)
         # Fetched from: https://github.com/datasets/s-and-p-500-companies
         sp500_tickers = [
-            "MMM", "AOS", "ABT", "ABBV", "ACN", "ADBE", "AMD", "AES", "AFL", "A", "APD", "ABNB", "AKAM", "ALB", "ARE",
-            "ALGN", "ALLE", "LNT", "ALL", "GOOGL", "GOOG", "MO", "AMZN", "AMCR", "AEE", "AEP", "AXP", "AIG", "AMT",
-            "AWK", "AMP", "AME", "AMGN", "APH", "ADI", "AON", "APA", "APO", "AAPL", "AMAT", "APTV", "ACGL", "ADM",
-            "ANET", "AJG", "AIZ", "T", "ATO", "ADSK", "ADP", "AZO", "AVB", "AVY", "AXON", "BKR", "BALL", "BAC",
-            "BAX", "BDX", "BRK.B", "BBY", "TECH", "BIIB", "BLK", "BX", "XYZ", "BK", "BA", "BKNG", "BSX", "BMY",
-            "AVGO", "BR", "BRO", "BF.B", "BLDR", "BG", "BXP", "CHRW", "CDNS", "CZR", "CPT", "CPB", "COF", "CAH",
-            "KMX", "CCL", "CARR", "CAT", "CBOE", "CBRE", "CDW", "COR", "CNC", "CNP", "CF", "CRL", "SCHW", "CHTR",
-            "CVX", "CMG", "CB", "CHD", "CI", "CINF", "CTAS", "CSCO", "C", "CFG", "CLX", "CME", "CMS", "KO", "CTSH",
-            "COIN", "CL", "CMCSA", "CAG", "COP", "ED", "STZ", "CEG", "COO", "CPRT", "GLW", "CPAY", "CTVA", "CSGP",
-            "COST", "CTRA", "CRWD", "CCI", "CSX", "CMI", "CVS", "DHR", "DRI", "DDOG", "DVA", "DAY", "DECK", "DE",
-            "DELL", "DAL", "DVN", "DXCM", "FANG", "DLR", "DG", "DLTR", "D", "DPZ", "DASH", "DOV", "DOW", "DHI",
-            "DTE", "DUK", "DD", "EMN", "ETN", "EBAY", "ECL", "EIX", "EW", "EA", "ELV", "EMR", "ENPH", "ETR", "EOG",
-            "EPAM", "EQT", "EFX", "EQIX", "EQR", "ERIE", "ESS", "EL", "EG", "EVRG", "ES", "EXC", "EXE", "EXPE",
-            "EXPD", "EXR", "XOM", "FFIV", "FDS", "FICO", "FAST", "FRT", "FDX", "FIS", "FITB", "FSLR", "FE", "FI",
-            "F", "FTNT", "FTV", "FOXA", "FOX", "BEN", "FCX", "GRMN", "IT", "GE", "GEHC", "GEV", "GEN", "GNRC", "GD",
-            "GIS", "GM", "GPC", "GILD", "GPN", "GL", "GDDY", "GS", "HAL", "HIG", "HAS", "HCA", "DOC", "HSIC", "HSY",
-            "HPE", "HLT", "HOLX", "HD", "HON", "HRL", "HST", "HWM", "HPQ", "HUBB", "HUM", "HBAN", "HII", "IBM",
-            "IEX", "IDXX", "ITW", "INCY", "IR", "PODD", "INTC", "ICE", "IFF", "IP", "IPG", "INTU", "ISRG", "IVZ",
-            "INVH", "IQV", "IRM", "JBHT", "JBL", "JKHY", "J", "JNJ", "JCI", "JPM", "K", "KVUE", "KDP", "KEY", "KEYS",
-            "KMB", "KIM", "KMI", "KKR", "KLAC", "KHC", "KR", "LHX", "LH", "LRCX", "LW", "LVS", "LDOS", "LEN", "LII",
-            "LLY", "LIN", "LYV", "LKQ", "LMT", "L", "LOW", "LULU", "LYB", "MTB", "MPC", "MKTX", "MAR", "MMC", "MLM",
-            "MAS", "MA", "MTCH", "MKC", "MCD", "MCK", "MDT", "MRK", "META", "MET", "MTD", "MGM", "MCHP", "MU", "MSFT",
-            "MAA", "MRNA", "MHK", "MOH", "TAP", "MDLZ", "MPWR", "MNST", "MCO", "MS", "MOS", "MSI", "MSCI", "NDAQ",
-            "NTAP", "NFLX", "NEM", "NWSA", "NWS", "NEE", "NKE", "NI", "NDSN", "NSC", "NTRS", "NOC", "NCLH", "NRG",
-            "NUE", "NVDA", "NVR", "NXPI", "ORLY", "OXY", "ODFL", "OMC", "ON", "OKE", "ORCL", "OTIS", "PCAR", "PKG",
-            "PLTR", "PANW", "PSKY", "PH", "PAYX", "PAYC", "PYPL", "PNR", "PEP", "PFE", "PCG", "PM", "PSX", "PNW",
-            "PNC", "POOL", "PPG", "PPL", "PFG", "PG", "PGR", "PLD", "PRU", "PEG", "PTC", "PSA", "PHM", "PWR", "QCOM",
-            "DGX", "RL", "RJF", "RTX", "O", "REG", "REGN", "RF", "RSG", "RMD", "RVTY", "ROK", "ROL", "ROP", "ROST",
-            "RCL", "SPGI", "CRM", "SBAC", "SLB", "STX", "SRE", "NOW", "SHW", "SPG", "SWKS", "SJM", "SW", "SNA",
-            "SOLV", "SO", "LUV", "SWK", "SBUX", "STT", "STLD", "STE", "SYK", "SMCI", "SYF", "SNPS", "SYY", "TMUS",
-            "TROW", "TTWO", "TPR", "TRGP", "TGT", "TEL", "TDY", "TER", "TSLA", "TXN", "TPL", "TXT", "TMO", "TJX",
-            "TKO", "TTD", "TSCO", "TT", "TDG", "TRV", "TRMB", "TFC", "TYL", "TSN", "USB", "UBER", "UDR", "ULTA",
-            "UNP", "UAL", "UPS", "URI", "UNH", "UHS", "VLO", "VTR", "VLTO", "VRSN", "VRSK", "VZ", "VRTX", "VTRS",
-            "VICI", "V", "VST", "VMC", "WRB", "GWW", "WAB", "WBA", "WMT", "DIS", "WBD", "WM", "WAT", "WEC", "WFC",
-            "WELL", "WST", "WDC", "WY", "WSM", "WMB", "WTW", "WDAY", "WYNN", "XEL", "XYL", "YUM", "ZBRA", "ZBH", "ZTS"
+            "MMM",
+            "AOS",
+            "ABT",
+            "ABBV",
+            "ACN",
+            "ADBE",
+            "AMD",
+            "AES",
+            "AFL",
+            "A",
+            "APD",
+            "ABNB",
+            "AKAM",
+            "ALB",
+            "ARE",
+            "ALGN",
+            "ALLE",
+            "LNT",
+            "ALL",
+            "GOOGL",
+            "GOOG",
+            "MO",
+            "AMZN",
+            "AMCR",
+            "AEE",
+            "AEP",
+            "AXP",
+            "AIG",
+            "AMT",
+            "AWK",
+            "AMP",
+            "AME",
+            "AMGN",
+            "APH",
+            "ADI",
+            "AON",
+            "APA",
+            "APO",
+            "AAPL",
+            "AMAT",
+            "APTV",
+            "ACGL",
+            "ADM",
+            "ANET",
+            "AJG",
+            "AIZ",
+            "T",
+            "ATO",
+            "ADSK",
+            "ADP",
+            "AZO",
+            "AVB",
+            "AVY",
+            "AXON",
+            "BKR",
+            "BALL",
+            "BAC",
+            "BAX",
+            "BDX",
+            "BRK.B",
+            "BBY",
+            "TECH",
+            "BIIB",
+            "BLK",
+            "BX",
+            "XYZ",
+            "BK",
+            "BA",
+            "BKNG",
+            "BSX",
+            "BMY",
+            "AVGO",
+            "BR",
+            "BRO",
+            "BF.B",
+            "BLDR",
+            "BG",
+            "BXP",
+            "CHRW",
+            "CDNS",
+            "CZR",
+            "CPT",
+            "CPB",
+            "COF",
+            "CAH",
+            "KMX",
+            "CCL",
+            "CARR",
+            "CAT",
+            "CBOE",
+            "CBRE",
+            "CDW",
+            "COR",
+            "CNC",
+            "CNP",
+            "CF",
+            "CRL",
+            "SCHW",
+            "CHTR",
+            "CVX",
+            "CMG",
+            "CB",
+            "CHD",
+            "CI",
+            "CINF",
+            "CTAS",
+            "CSCO",
+            "C",
+            "CFG",
+            "CLX",
+            "CME",
+            "CMS",
+            "KO",
+            "CTSH",
+            "COIN",
+            "CL",
+            "CMCSA",
+            "CAG",
+            "COP",
+            "ED",
+            "STZ",
+            "CEG",
+            "COO",
+            "CPRT",
+            "GLW",
+            "CPAY",
+            "CTVA",
+            "CSGP",
+            "COST",
+            "CTRA",
+            "CRWD",
+            "CCI",
+            "CSX",
+            "CMI",
+            "CVS",
+            "DHR",
+            "DRI",
+            "DDOG",
+            "DVA",
+            "DAY",
+            "DECK",
+            "DE",
+            "DELL",
+            "DAL",
+            "DVN",
+            "DXCM",
+            "FANG",
+            "DLR",
+            "DG",
+            "DLTR",
+            "D",
+            "DPZ",
+            "DASH",
+            "DOV",
+            "DOW",
+            "DHI",
+            "DTE",
+            "DUK",
+            "DD",
+            "EMN",
+            "ETN",
+            "EBAY",
+            "ECL",
+            "EIX",
+            "EW",
+            "EA",
+            "ELV",
+            "EMR",
+            "ENPH",
+            "ETR",
+            "EOG",
+            "EPAM",
+            "EQT",
+            "EFX",
+            "EQIX",
+            "EQR",
+            "ERIE",
+            "ESS",
+            "EL",
+            "EG",
+            "EVRG",
+            "ES",
+            "EXC",
+            "EXE",
+            "EXPE",
+            "EXPD",
+            "EXR",
+            "XOM",
+            "FFIV",
+            "FDS",
+            "FICO",
+            "FAST",
+            "FRT",
+            "FDX",
+            "FIS",
+            "FITB",
+            "FSLR",
+            "FE",
+            "FI",
+            "F",
+            "FTNT",
+            "FTV",
+            "FOXA",
+            "FOX",
+            "BEN",
+            "FCX",
+            "GRMN",
+            "IT",
+            "GE",
+            "GEHC",
+            "GEV",
+            "GEN",
+            "GNRC",
+            "GD",
+            "GIS",
+            "GM",
+            "GPC",
+            "GILD",
+            "GPN",
+            "GL",
+            "GDDY",
+            "GS",
+            "HAL",
+            "HIG",
+            "HAS",
+            "HCA",
+            "DOC",
+            "HSIC",
+            "HSY",
+            "HPE",
+            "HLT",
+            "HOLX",
+            "HD",
+            "HON",
+            "HRL",
+            "HST",
+            "HWM",
+            "HPQ",
+            "HUBB",
+            "HUM",
+            "HBAN",
+            "HII",
+            "IBM",
+            "IEX",
+            "IDXX",
+            "ITW",
+            "INCY",
+            "IR",
+            "PODD",
+            "INTC",
+            "ICE",
+            "IFF",
+            "IP",
+            "IPG",
+            "INTU",
+            "ISRG",
+            "IVZ",
+            "INVH",
+            "IQV",
+            "IRM",
+            "JBHT",
+            "JBL",
+            "JKHY",
+            "J",
+            "JNJ",
+            "JCI",
+            "JPM",
+            "K",
+            "KVUE",
+            "KDP",
+            "KEY",
+            "KEYS",
+            "KMB",
+            "KIM",
+            "KMI",
+            "KKR",
+            "KLAC",
+            "KHC",
+            "KR",
+            "LHX",
+            "LH",
+            "LRCX",
+            "LW",
+            "LVS",
+            "LDOS",
+            "LEN",
+            "LII",
+            "LLY",
+            "LIN",
+            "LYV",
+            "LKQ",
+            "LMT",
+            "L",
+            "LOW",
+            "LULU",
+            "LYB",
+            "MTB",
+            "MPC",
+            "MKTX",
+            "MAR",
+            "MMC",
+            "MLM",
+            "MAS",
+            "MA",
+            "MTCH",
+            "MKC",
+            "MCD",
+            "MCK",
+            "MDT",
+            "MRK",
+            "META",
+            "MET",
+            "MTD",
+            "MGM",
+            "MCHP",
+            "MU",
+            "MSFT",
+            "MAA",
+            "MRNA",
+            "MHK",
+            "MOH",
+            "TAP",
+            "MDLZ",
+            "MPWR",
+            "MNST",
+            "MCO",
+            "MS",
+            "MOS",
+            "MSI",
+            "MSCI",
+            "NDAQ",
+            "NTAP",
+            "NFLX",
+            "NEM",
+            "NWSA",
+            "NWS",
+            "NEE",
+            "NKE",
+            "NI",
+            "NDSN",
+            "NSC",
+            "NTRS",
+            "NOC",
+            "NCLH",
+            "NRG",
+            "NUE",
+            "NVDA",
+            "NVR",
+            "NXPI",
+            "ORLY",
+            "OXY",
+            "ODFL",
+            "OMC",
+            "ON",
+            "OKE",
+            "ORCL",
+            "OTIS",
+            "PCAR",
+            "PKG",
+            "PLTR",
+            "PANW",
+            "PSKY",
+            "PH",
+            "PAYX",
+            "PAYC",
+            "PYPL",
+            "PNR",
+            "PEP",
+            "PFE",
+            "PCG",
+            "PM",
+            "PSX",
+            "PNW",
+            "PNC",
+            "POOL",
+            "PPG",
+            "PPL",
+            "PFG",
+            "PG",
+            "PGR",
+            "PLD",
+            "PRU",
+            "PEG",
+            "PTC",
+            "PSA",
+            "PHM",
+            "PWR",
+            "QCOM",
+            "DGX",
+            "RL",
+            "RJF",
+            "RTX",
+            "O",
+            "REG",
+            "REGN",
+            "RF",
+            "RSG",
+            "RMD",
+            "RVTY",
+            "ROK",
+            "ROL",
+            "ROP",
+            "ROST",
+            "RCL",
+            "SPGI",
+            "CRM",
+            "SBAC",
+            "SLB",
+            "STX",
+            "SRE",
+            "NOW",
+            "SHW",
+            "SPG",
+            "SWKS",
+            "SJM",
+            "SW",
+            "SNA",
+            "SOLV",
+            "SO",
+            "LUV",
+            "SWK",
+            "SBUX",
+            "STT",
+            "STLD",
+            "STE",
+            "SYK",
+            "SMCI",
+            "SYF",
+            "SNPS",
+            "SYY",
+            "TMUS",
+            "TROW",
+            "TTWO",
+            "TPR",
+            "TRGP",
+            "TGT",
+            "TEL",
+            "TDY",
+            "TER",
+            "TSLA",
+            "TXN",
+            "TPL",
+            "TXT",
+            "TMO",
+            "TJX",
+            "TKO",
+            "TTD",
+            "TSCO",
+            "TT",
+            "TDG",
+            "TRV",
+            "TRMB",
+            "TFC",
+            "TYL",
+            "TSN",
+            "USB",
+            "UBER",
+            "UDR",
+            "ULTA",
+            "UNP",
+            "UAL",
+            "UPS",
+            "URI",
+            "UNH",
+            "UHS",
+            "VLO",
+            "VTR",
+            "VLTO",
+            "VRSN",
+            "VRSK",
+            "VZ",
+            "VRTX",
+            "VTRS",
+            "VICI",
+            "V",
+            "VST",
+            "VMC",
+            "WRB",
+            "GWW",
+            "WAB",
+            "WBA",
+            "WMT",
+            "DIS",
+            "WBD",
+            "WM",
+            "WAT",
+            "WEC",
+            "WFC",
+            "WELL",
+            "WST",
+            "WDC",
+            "WY",
+            "WSM",
+            "WMB",
+            "WTW",
+            "WDAY",
+            "WYNN",
+            "XEL",
+            "XYL",
+            "YUM",
+            "ZBRA",
+            "ZBH",
+            "ZTS",
         ]
-        
+
         equities = []
         for ticker in sp500_tickers:
             # Determine venue (most S&P 500 are on NYSE, some on NASDAQ)
             # For now, default to NASDAQ for most tech stocks, NYSE for others
-            venue = "NASDAQ" if ticker in ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "NFLX", "ADBE"] else "NYSE"
+            venue = (
+                "NASDAQ"
+                if ticker
+                in [
+                    "AAPL",
+                    "MSFT",
+                    "GOOGL",
+                    "AMZN",
+                    "NVDA",
+                    "META",
+                    "TSLA",
+                    "NFLX",
+                    "ADBE",
+                ]
+                else "NYSE"
+            )
             equities.append(
                 InstrumentDefinition(
                     ticker, venue, "EQUITY", "DBEQ.BASIC", "raw_symbol", ticker, "USD"
                 )
             )
         return equities
-    
+
     def get_all_instruments(self) -> List[InstrumentDefinition]:
         """Get all instruments including dynamically generated S&P 500 equities"""
         all_insts = list(self.instruments)
-        
+
         # Add S&P 500 equities dynamically
         sp500_equities = self._get_sp500_equities()
         # Only add if not already in base list
@@ -237,7 +876,7 @@ class UnifiedInstrumentConfig:
         for eq in sp500_equities:
             if eq.symbol not in existing_symbols:
                 all_insts.append(eq)
-        
+
         return all_insts
 
 
@@ -246,37 +885,41 @@ class UnifiedInstrumentConfig:
 class DatabentoInstrumentConfig:
     """
     Legacy wrapper for UnifiedInstrumentConfig.
-    
+
     Maintains backward compatibility while using unified config internally.
     """
-    
+
     def __init__(self):
         self._unified = UnifiedInstrumentConfig()
-    
+
     @property
     def extended_symbols(self) -> List[str]:
         """All symbols (for backward compatibility)"""
         return [inst.symbol for inst in self._unified.instruments]
-    
+
     @property
     def sp500_stocks(self) -> List[str]:
         """S&P 500 stocks (subset of equities)"""
         return self._unified.get_symbols_by_type("EQUITY")
-    
+
     def get_dataset_and_stype(self, symbol: str) -> Tuple[str, str]:
         """Get dataset and stype_in for a symbol"""
         result = self._unified.get_dataset_and_stype(symbol)
         if result:
             return result
         # Default fallback
-        if symbol.endswith(".FUT") or any(inst.symbol == symbol.replace(".FUT", "") for inst in self._unified.instruments if inst.instrument_type == "FUTURE"):
+        if symbol.endswith(".FUT") or any(
+            inst.symbol == symbol.replace(".FUT", "")
+            for inst in self._unified.instruments
+            if inst.instrument_type == "FUTURE"
+        ):
             return ("GLBX.MDP3", "parent")
         return ("DBEQ.BASIC", "raw_symbol")
-    
+
     def get_human_readable_name(self, exchange_code: str) -> str:
         """Convert exchange code to human-readable name"""
         return self._unified.get_human_readable_name(exchange_code)
-    
+
     def get_symbols_for_venue(self, venue: str) -> List[str]:
         """Get all symbols for a venue (e.g., 'CME', 'NASDAQ', 'ICE')"""
         return self._unified.get_symbols_for_venue(venue)
@@ -340,9 +983,7 @@ class VenueMapping:
     def all_exchanges(self) -> List[str]:
         """All exchanges (Tardis + Databento + DeFi)"""
         return (
-            self.all_tardis_exchanges
-            + self.all_databento_venues
-            + self.all_defi_venues
+            self.all_tardis_exchanges + self.all_databento_venues + self.all_defi_venues
         )
 
     # Map canonical venues to Databento dataset identifiers
@@ -382,7 +1023,7 @@ class VenueMapping:
             "okex-swap": "OKX",
         }
     )
-    
+
     # Map venues to their data providers (for non-Tardis venues)
     venue_to_data_provider: Dict[str, str] = field(
         default_factory=lambda: {
@@ -511,7 +1152,7 @@ class VenueMapping:
             "deribit": ["SPOT_PAIR", "PERPETUAL", "FUTURE", "OPTION"],
         }
     )
-    
+
     def get_data_provider(self, venue: str) -> Optional[str]:
         """Get data provider for a venue (tardis, databento, hyperliquid_api, aster_api, the_graph, protocol_sdk)."""
         # Check if it's a Tardis venue

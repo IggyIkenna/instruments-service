@@ -57,8 +57,14 @@ class UniswapV3Adapter:
             # Check if TheGraphClient has cached it (module-level cache)
             # Import here to avoid circular dependency
             try:
-                from instruments_service.app.venues.defi.the_graph_client import _API_KEY_CACHE, _API_KEY_PROJECT_ID
-                project_id_check = project_id or os.getenv("GCP_PROJECT_ID", "central-element-323112")
+                from instruments_service.app.venues.defi.the_graph_client import (
+                    _API_KEY_CACHE,
+                    _API_KEY_PROJECT_ID,
+                )
+
+                project_id_check = project_id or os.getenv(
+                    "GCP_PROJECT_ID", "central-element-323112"
+                )
                 if _API_KEY_CACHE and _API_KEY_PROJECT_ID == project_id_check:
                     api_key = _API_KEY_CACHE
                     logger.debug("✅ Using cached Graph API key in UniswapV3Adapter")
@@ -79,11 +85,11 @@ class UniswapV3Adapter:
                     "ETHEREUM": f"https://gateway.thegraph.com/api/{api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
                     "ARBITRUM": os.getenv(
                         "THE_GRAPH_UNISWAP_V3_ARB_URL",
-                        f"https://gateway-arbitrum.network.thegraph.com/api/{api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV"
+                        f"https://gateway-arbitrum.network.thegraph.com/api/{api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
                     ),
                     "BASE": os.getenv(
                         "THE_GRAPH_UNISWAP_V3_BASE_URL",
-                        f"https://gateway.thegraph.com/api/{api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV"
+                        f"https://gateway.thegraph.com/api/{api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
                     ),
                 }
             else:
@@ -94,15 +100,15 @@ class UniswapV3Adapter:
                 subgraph_urls = {
                     "ETHEREUM": os.getenv(
                         "THE_GRAPH_UNISWAP_V3_URL",
-                        "https://api.studio.thegraph.com/query/50688/uniswap-v3/version/latest"
+                        "https://api.studio.thegraph.com/query/50688/uniswap-v3/version/latest",
                     ),
                     "ARBITRUM": os.getenv(
                         "THE_GRAPH_UNISWAP_V3_ARB_URL",
-                        "https://api.studio.thegraph.com/query/50688/uniswap-v3-arbitrum/version/latest"
+                        "https://api.studio.thegraph.com/query/50688/uniswap-v3-arbitrum/version/latest",
                     ),
                     "BASE": os.getenv(
                         "THE_GRAPH_UNISWAP_V3_BASE_URL",
-                        "https://api.studio.thegraph.com/query/50688/uniswap-v3-base/version/latest"
+                        "https://api.studio.thegraph.com/query/50688/uniswap-v3-base/version/latest",
                     ),
                 }
             subgraph_url = subgraph_urls.get(self.chain, subgraph_urls["ETHEREUM"])
@@ -113,7 +119,11 @@ class UniswapV3Adapter:
         logger.info(f"✅ UniswapV3Adapter initialized for chain: {self.chain}")
 
     def fetch_pools(
-        self, base_currency: Optional[str] = None, base_currency_list: Optional[List[str]] = None, quote_currency_list: Optional[List[str]] = None, min_liquidity: Optional[float] = None
+        self,
+        base_currency: Optional[str] = None,
+        base_currency_list: Optional[List[str]] = None,
+        quote_currency_list: Optional[List[str]] = None,
+        min_liquidity: Optional[float] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch Uniswap V3 pools and convert to instrument definitions.
@@ -132,7 +142,7 @@ class UniswapV3Adapter:
             pools = self.graph_client.query_pools(min_liquidity=min_liquidity)
 
         instruments = {}
-        
+
         # Normalize base and quote currency lists for comparison
         allowed_bases = None
         allowed_quotes = None
@@ -140,7 +150,7 @@ class UniswapV3Adapter:
             allowed_bases = {b.upper() for b in base_currency_list}
         if quote_currency_list:
             allowed_quotes = {q.upper() for q in quote_currency_list}
-        
+
         # Wrapped/staked token mappings
         wrapped_mappings = {
             "WETH": "ETH",
@@ -151,22 +161,28 @@ class UniswapV3Adapter:
 
         for pool in pools:
             try:
-                token0_symbol = pool.get('token0', {}).get('symbol', '').upper()
-                token1_symbol = pool.get('token1', {}).get('symbol', '').upper()
-                
+                token0_symbol = pool.get("token0", {}).get("symbol", "").upper()
+                token1_symbol = pool.get("token1", {}).get("symbol", "").upper()
+
                 # Filter by base and quote currencies
                 if allowed_bases or allowed_quotes:
                     if base_currency:
                         # When querying by specific base_currency, ensure it's in MVP base list and quote is in MVP quote list
                         base_upper = base_currency.upper()
-                        
+
                         # Check if base currency is in MVP list (or wrapped version)
-                        base_in_mvp = base_upper in allowed_bases if allowed_bases else True
+                        base_in_mvp = (
+                            base_upper in allowed_bases if allowed_bases else True
+                        )
                         if not base_in_mvp and base_upper in wrapped_mappings:
-                            base_in_mvp = wrapped_mappings[base_upper] in allowed_bases if allowed_bases else True
+                            base_in_mvp = (
+                                wrapped_mappings[base_upper] in allowed_bases
+                                if allowed_bases
+                                else True
+                            )
                         if allowed_bases and not base_in_mvp:
                             continue
-                        
+
                         # Determine which token is base and which is quote
                         if token0_symbol == base_upper:
                             quote_symbol = token1_symbol
@@ -174,42 +190,74 @@ class UniswapV3Adapter:
                             quote_symbol = token0_symbol
                         else:
                             continue  # Base currency not in pool, skip
-                        
+
                         # CRITICAL: Quote MUST be in MVP list (or wrapped version)
-                        quote_in_mvp = quote_symbol in allowed_quotes if allowed_quotes else True
+                        quote_in_mvp = (
+                            quote_symbol in allowed_quotes if allowed_quotes else True
+                        )
                         if not quote_in_mvp and quote_symbol in wrapped_mappings:
-                            quote_in_mvp = wrapped_mappings[quote_symbol] in allowed_quotes if allowed_quotes else True
+                            quote_in_mvp = (
+                                wrapped_mappings[quote_symbol] in allowed_quotes
+                                if allowed_quotes
+                                else True
+                            )
                         if allowed_quotes and not quote_in_mvp:
                             continue
                     else:
                         # No specific base filter - require at least one token in base list AND one in quote list
-                        token0_in_bases = token0_symbol in allowed_bases if allowed_bases else True
-                        token1_in_bases = token1_symbol in allowed_bases if allowed_bases else True
-                        token0_in_quotes = token0_symbol in allowed_quotes if allowed_quotes else True
-                        token1_in_quotes = token1_symbol in allowed_quotes if allowed_quotes else True
-                        
+                        token0_in_bases = (
+                            token0_symbol in allowed_bases if allowed_bases else True
+                        )
+                        token1_in_bases = (
+                            token1_symbol in allowed_bases if allowed_bases else True
+                        )
+                        token0_in_quotes = (
+                            token0_symbol in allowed_quotes if allowed_quotes else True
+                        )
+                        token1_in_quotes = (
+                            token1_symbol in allowed_quotes if allowed_quotes else True
+                        )
+
                         # Check wrapped versions
                         if not token0_in_bases and token0_symbol in wrapped_mappings:
-                            token0_in_bases = wrapped_mappings[token0_symbol] in allowed_bases if allowed_bases else True
+                            token0_in_bases = (
+                                wrapped_mappings[token0_symbol] in allowed_bases
+                                if allowed_bases
+                                else True
+                            )
                         if not token1_in_bases and token1_symbol in wrapped_mappings:
-                            token1_in_bases = wrapped_mappings[token1_symbol] in allowed_bases if allowed_bases else True
+                            token1_in_bases = (
+                                wrapped_mappings[token1_symbol] in allowed_bases
+                                if allowed_bases
+                                else True
+                            )
                         if not token0_in_quotes and token0_symbol in wrapped_mappings:
-                            token0_in_quotes = wrapped_mappings[token0_symbol] in allowed_quotes if allowed_quotes else True
+                            token0_in_quotes = (
+                                wrapped_mappings[token0_symbol] in allowed_quotes
+                                if allowed_quotes
+                                else True
+                            )
                         if not token1_in_quotes and token1_symbol in wrapped_mappings:
-                            token1_in_quotes = wrapped_mappings[token1_symbol] in allowed_quotes if allowed_quotes else True
-                        
+                            token1_in_quotes = (
+                                wrapped_mappings[token1_symbol] in allowed_quotes
+                                if allowed_quotes
+                                else True
+                            )
+
                         # Require: (token0 in bases AND token1 in quotes) OR (token1 in bases AND token0 in quotes)
                         valid_pair = False
                         if allowed_bases and allowed_quotes:
-                            valid_pair = (token0_in_bases and token1_in_quotes) or (token1_in_bases and token0_in_quotes)
+                            valid_pair = (token0_in_bases and token1_in_quotes) or (
+                                token1_in_bases and token0_in_quotes
+                            )
                         elif allowed_bases:
                             valid_pair = token0_in_bases or token1_in_bases
                         elif allowed_quotes:
                             valid_pair = token0_in_quotes or token1_in_quotes
-                        
+
                         if not valid_pair:
                             continue  # Skip if pair doesn't meet base/quote requirements
-                
+
                 inst_def = self._convert_pool_to_instrument(pool)
                 if inst_def:
                     instruments[inst_def["instrument_key"]] = inst_def

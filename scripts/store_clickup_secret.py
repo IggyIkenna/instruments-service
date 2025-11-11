@@ -19,12 +19,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 try:
     from unified_cloud_services import create_secret_if_not_exists
 except ImportError:
-    print("❌ Error: unified-cloud-services not found. Install with: pip install -e ../unified-cloud-services")
+    print(
+        "❌ Error: unified-cloud-services not found. Install with: pip install -e ../unified-cloud-services"
+    )
     sys.exit(1)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Store ClickUp API key in Secret Manager")
+    parser = argparse.ArgumentParser(
+        description="Store ClickUp API key in Secret Manager"
+    )
     parser.add_argument(
         "--api-key",
         required=True,
@@ -67,7 +71,9 @@ def main():
             print(f"\n✅ Successfully stored ClickUp API key in Secret Manager!")
             print(f"\n📝 Next steps:")
             print(f"   1. The scripts will now automatically use this secret")
-            print(f"   2. You can remove clickup_api_token from .env.clickup if desired")
+            print(
+                f"   2. You can remove clickup_api_token from .env.clickup if desired"
+            )
             print(f"   3. Test with: python scripts/get_clickup_user_ids.py")
             return 0
         else:
@@ -85,4 +91,3 @@ def main():
 
 if __name__ == "__main__":
     exit(main())
-
