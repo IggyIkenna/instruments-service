@@ -64,7 +64,7 @@ class TestCLIMain:
                 main.__globals__["get_handler_for_mode"] = original_get_handler
 
     def test_main_with_query_mode(self, mock_handler, mocker):
-        """Test main with instruments-query mode."""
+        """Test main with instruments mode."""
         mock_parse = mocker.patch("instruments_service.cli.parser.parse_arguments")
         mock_get_handler = mocker.patch(
             "instruments_service.cli.handlers.get_handler_for_mode",
@@ -78,7 +78,7 @@ class TestCLIMain:
 
         try:
             mock_args = Mock()
-            mock_args.mode = "instruments-query"
+            mock_args.mode = "instruments"
             mock_args.log_level = "INFO"
             mock_args.start_date = "2024-01-01"
             mock_args.end_date = None
@@ -125,7 +125,7 @@ class TestCLIMain:
 
         try:
             mock_args = Mock()
-            mock_args.mode = "instruments-query"
+            mock_args.mode = "instruments"
             mock_args.log_level = "INFO"
             mock_args.start_date = "2024-01-01"
             mock_args.end_date = "2024-01-02"

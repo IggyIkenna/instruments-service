@@ -35,11 +35,18 @@ def get_handler_for_mode(mode: str, config: Dict[str, Any]):
     """
     # Lazy import to avoid circular dependencies
     if not _handler_registry:
-        from .instrument_handler import InstrumentHandler
-        from .instruments_query_handler import InstrumentsQueryHandler
+        try:
+            from .instrument_handler import InstrumentHandler
+            from .instruments_query_handler import InstrumentsQueryHandler
 
-        register_handler("instruments", InstrumentHandler)
-        register_handler("instruments-query", InstrumentsQueryHandler)
+            register_handler("instruments", InstrumentHandler)
+            logger.debug(f"Registered 'instruments' handler: {InstrumentHandler}")
+            register_handler("instruments-query", InstrumentsQueryHandler)
+            logger.debug(f"Registered 'instruments-query' handler: {InstrumentsQueryHandler}")
+            logger.debug(f"Final registry: {_handler_registry}")
+        except Exception as e:
+            logger.error(f"Error registering handlers: {e}", exc_info=True)
+            raise
 
     if mode not in _handler_registry:
         raise ValueError(
