@@ -30,21 +30,25 @@ class TestInstrumentProcessingService:
         mock_get_secret.return_value = "secret-api-key-67890"
         config = {
             "project_id": "test-project"
-            # No tardis_api_key provided
+            # No tardis_api_key provided - will be lazy-loaded when CeFi is requested
         }
+        # Tardis API key is now optional - service can be created without it
         service = InstrumentProcessingService(config)
-        assert service.api_key == "secret-api-key-67890"
-        mock_get_secret.assert_called_once()
+        # API key is lazy-loaded, so we can't assert it here
+        # But we can verify the service was created successfully
+        assert service is not None
 
     def test_service_creation_no_api_key(self):
-        """Test creating service without API key fails."""
+        """Test creating service without API key succeeds (lazy-loaded)."""
         config = {"project_id": "test-project"}
         with patch(
             "instruments_service.app.core.instrument_processing_service.SECRET_MANAGER_AVAILABLE",
             False,
         ):
-            with pytest.raises(ValueError, match="API key required"):
-                InstrumentProcessingService(config)
+            # Tardis API key is now optional - service can be created without it
+            # It will only fail when CeFi instruments are requested
+            service = InstrumentProcessingService(config)
+            assert service is not None
 
     def test_normalize_venue(self):
         """Test venue normalization."""
