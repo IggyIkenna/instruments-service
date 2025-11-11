@@ -89,9 +89,9 @@ asyncio.run(generate_batch('2023-05-23', '2023-05-24'))
 
 ## Related Documentation
 
-- **[usage/USAGE_GUIDE.md](./usage/USAGE_GUIDE.md)** - Comprehensive usage guide
-- **[reference/API_REFERENCE.md](./reference/API_REFERENCE.md)** - API reference
-- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Architecture documentation
+- **[USAGE_GUIDE.md](../USAGE_GUIDE.md)** - Comprehensive usage guide
+- **[API_REFERENCE.md](../API_REFERENCE.md)** - API reference
+- **[ARCHITECTURE.md](../ARCHITECTURE.md)** - Architecture documentation
 
 ---
 

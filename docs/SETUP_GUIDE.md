@@ -3,9 +3,9 @@
 > **Related Documentation**:
 > - [`QUICK_START.md`](./QUICK_START.md) - Quick start guide
 > - [`ARCHITECTURE.md`](./ARCHITECTURE.md) - Service overview and architecture
-> - [`usage/USAGE_GUIDE.md`](./usage/USAGE_GUIDE.md) - Usage examples after setup
-> - [`testing/TESTING.md`](./testing/TESTING.md) - Testing guide
-> - [`reference/API_REFERENCE.md`](./reference/API_REFERENCE.md) - Complete API documentation
+> - [`USAGE_GUIDE.md`](./USAGE_GUIDE.md) - Usage examples after setup
+> - [`TESTING.md`](./TESTING.md) - Testing guide
+> - [`API_REFERENCE.md`](./API_REFERENCE.md) - Complete API documentation
 
 ---
 

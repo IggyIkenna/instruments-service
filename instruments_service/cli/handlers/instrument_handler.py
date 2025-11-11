@@ -14,7 +14,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from ..base_handler import ModeHandler
-from ...app.core.instrument_processing_service import InstrumentProcessingService
+from ...app.core.instruments_service import InstrumentsService
 from ...app.core.cloud_instrument_storage import CloudInstrumentStorage
 from ...config import VenueMapping, DatabentoInstrumentConfig
 
@@ -59,21 +59,21 @@ class InstrumentHandler(ModeHandler):
         # Initialize services directly (no ServiceContainer)
         project_id = config.get("project_id", "central-element-323112")
 
-        # Initialize instrument processing service
-        processing_config = {
+        # Initialize InstrumentsService (orchestration wrapper)
+        service_config = {
             "project_id": project_id,
             "enable_ccxt_integration": True,
             "enable_metadata_caching": True,
         }
-        self.instrument_service = InstrumentProcessingService(processing_config)
+        self.instruments_service = InstrumentsService(service_config)
 
-        # Initialize cloud storage
+        # Initialize cloud storage (for CLI-specific operations)
         self.cloud_storage = CloudInstrumentStorage()
 
-        # Venue mapping
+        # Venue mapping (for CLI-specific operations)
         self.venue_mapping = VenueMapping()
         
-        # Databento instrument config
+        # Databento instrument config (kept for compatibility, but InstrumentsService handles TradFi)
         self.databento_config = DatabentoInstrumentConfig()
 
         logger.debug("✅ InstrumentHandler initialized")
@@ -167,60 +167,36 @@ class InstrumentHandler(ModeHandler):
 
                 logger.info(f"📅 Processing {date.strftime('%Y-%m-%d')}")
 
-                # Generate instruments using service
-                # Remove cefi/tradfi/defi from kwargs to avoid duplicate keyword arguments
-                filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ['cefi', 'tradfi', 'defi']}
-                instruments = self._generate_instruments_for_date(
-                    date, force, exchanges_to_process, cefi=cefi, tradfi=tradfi, defi=defi, **filtered_kwargs
+                # Delegate to InstrumentsService for orchestration
+                result = asyncio.run(
+                    self.instruments_service.generate_instruments_for_date(
+                        date=date,
+                        exchanges=exchanges_to_process if cefi else None,
+                        force=force,
+                        cefi=cefi,
+                        tradfi=tradfi,
+                        defi=defi,
+                        venues=kwargs.get("venues"),
+                    )
                 )
 
-                if instruments:
-                    # Convert to DataFrame with proper field handling
-                    instruments_list = []
-                    for inst_key, inst_obj in instruments.items():
-                        if hasattr(inst_obj, "model_dump"):
-                            # Pydantic model - use model_dump
-                            instruments_list.append(inst_obj.model_dump())
-                        else:
-                            # Fallback for other types
-                            instruments_list.append(inst_obj)
-
-                    instruments_df = pd.DataFrame(instruments_list)
-
-                    # Store using CloudInstrumentStorage
-                    logger.info(f"📤 Uploading {len(instruments_df)} instruments...")
-                    success = self.cloud_storage.store_instruments(
-                        instruments_df=instruments_df,
-                        table_name="instruments",
-                        date=date,
-                    )
-
-                    if success:
-                        logger.info(
-                            f"✅ Uploaded instruments for {date.strftime('%Y-%m-%d')}"
-                        )
-                        total_generated += len(instruments)
-                        total_dates_processed += 1
-                    else:
-                        logger.error(
-                            f"❌ Failed to upload instruments for {date.strftime('%Y-%m-%d')}"
-                        )
-                        total_errors += 1
-
-                    # CSV sampling using centralized service
-                    from unified_cloud_services import create_sampling_service
-
-                    sampling_service = create_sampling_service()
-                    sampling_service.generate_csv_sample(
-                        df=instruments_df,
-                        filename_prefix="instruments",
-                        metadata={"date": date},
-                    )
-                else:
+                if result.get("status") == "success":
+                    total_generated += result.get("instruments_generated", 0)
+                    total_dates_processed += 1
+                    
+                    # Note: CSV sampling is handled automatically by CloudInstrumentStorage
+                    # when storing to GCS (via unified-cloud-services SamplingService).
+                    # No need to download and sample again here - that would be wasteful.
+                elif result.get("status") == "warning":
                     logger.warning(
                         f"⚠️ No instruments generated for {date.strftime('%Y-%m-%d')}"
                     )
                     total_dates_processed += 1
+                else:
+                    logger.error(
+                        f"❌ Failed to generate instruments for {date.strftime('%Y-%m-%d')}: {result.get('message', 'Unknown error')}"
+                    )
+                    total_errors += 1
 
             except Exception as e:
                 logger.error(
@@ -262,134 +238,8 @@ class InstrumentHandler(ModeHandler):
             },
         }
 
-    def _generate_instruments_for_date(
-        self, date, force=False, exchanges=None, cefi=False, tradfi=False, defi=False, **kwargs
-    ):
-        """Generate instruments using instrument processing service."""
-        instruments = {}
-
-        # Process CEFI (Tardis) exchanges
-        if cefi:
-            # Use specified exchanges or all Tardis exchanges
-            if exchanges is None:
-                exchanges = self.venue_mapping.all_tardis_exchanges
-
-            for tardis_exchange in exchanges:
-                try:
-                    # Process exchange instruments via Tardis
-                    exchange_instruments = asyncio.run(
-                        self.instrument_service.process_exchange_instruments(
-                            tardis_exchange, target_date=date, force=force
-                        )
-                    )
-                    if exchange_instruments:
-                        instruments.update(exchange_instruments)
-                except Exception as e:
-                    logger.error(
-                        f"❌ Failed to process {tardis_exchange}: {e}", exc_info=True
-                    )
-
-        # Process TRADFI (Databento) exchanges
-        if tradfi:
-            try:
-                # Common TradFi exchanges via Databento
-                databento_exchanges = ["CME", "NASDAQ", "NYSE", "ICE", "CBOE"]
-                
-                # Track DBEQ.BASIC symbols to avoid duplicate fetches
-                dbeq_symbols_fetched = False
-                
-                for exchange in databento_exchanges:
-                    try:
-                        # For NASDAQ/NYSE, fetch all DBEQ.BASIC symbols once
-                        if exchange in ["NASDAQ", "NYSE"]:
-                            if dbeq_symbols_fetched:
-                                logger.info(f"⏭️ Skipping {exchange} (already fetched DBEQ.BASIC symbols via NASDAQ)")
-                                continue
-                            
-                            # Get all equities from DBEQ.BASIC dataset (includes both NASDAQ and NYSE stocks)
-                            symbols = self.databento_config._unified.get_symbols_for_dataset("DBEQ.BASIC")
-                            dbeq_symbols_fetched = True
-                            logger.info(f"📋 Fetching all DBEQ.BASIC symbols ({len(symbols)} symbols) for {exchange}")
-                        elif exchange == "CBOE":
-                            # Get options symbols for CBOE
-                            symbols = self.databento_config._unified.get_symbols_for_dataset("OPRA.PILLAR")
-                            logger.info(f"📋 Fetching CBOE options symbols ({len(symbols)} symbols)")
-                        else:
-                            # Get symbols for this exchange from config
-                            symbols = self._get_symbols_for_databento_exchange(exchange)
-                        
-                        if not symbols:
-                            logger.warning(f"⚠️ No symbols configured for {exchange}, skipping")
-                            continue
-                        
-                        # Fetch Databento instruments
-                        databento_instruments = self.instrument_service.fetch_databento_instruments(
-                            exchange=exchange,
-                            symbols=symbols,
-                            target_date=date,
-                        )
-                        if databento_instruments:
-                            instruments.update(databento_instruments)
-                            logger.info(f"✅ Processed {len(databento_instruments)} instruments from {exchange}")
-                    except Exception as e:
-                        logger.error(
-                            f"❌ Failed to process Databento exchange {exchange}: {e}", exc_info=True
-                        )
-            except Exception as e:
-                logger.error(f"❌ Failed to initialize Databento processing: {e}", exc_info=True)
-
-        # Process DEFI protocols
-        if defi:
-            try:
-                # Common DeFi protocols
-                defi_protocols = [
-                    ("uniswap_v3", "ETHEREUM"),
-                    ("curve", "ETHEREUM"),
-                    ("aave_v3", "ETHEREUM"),
-                    ("etherfi", "ETHEREUM"),
-                    ("lido", "ETHEREUM"),
-                ]
-                for protocol, chain in defi_protocols:
-                    try:
-                        # Fetch DeFi instruments
-                        defi_instruments = self.instrument_service.fetch_defi_instruments(
-                            protocol=protocol,
-                            chain=chain,
-                        )
-                        if defi_instruments:
-                            instruments.update(defi_instruments)
-                            logger.info(f"✅ Processed {len(defi_instruments)} instruments from {protocol}")
-                    except Exception as e:
-                        logger.error(
-                            f"❌ Failed to process DeFi protocol {protocol}: {e}", exc_info=True
-                        )
-            except Exception as e:
-                logger.error(f"❌ Failed to initialize DeFi processing: {e}", exc_info=True)
-
-        return instruments
-
-    def _get_symbols_for_databento_exchange(self, exchange: str) -> List[str]:
-        """
-        Get symbols for a Databento exchange from unified config.
-        
-        Args:
-            exchange: Exchange name (e.g., 'CME', 'NASDAQ', 'NYSE', 'ICE')
-            
-        Returns:
-            List of symbols to fetch for this exchange
-        """
-        # For CME, ICE, etc., use venue-based lookup
-        symbols = self.databento_config.get_symbols_for_venue(exchange.upper())
-        
-        if not symbols:
-            logger.warning(f"⚠️ No symbols configured for {exchange}")
-            return []
-        
-        logger.debug(f"📋 Found {len(symbols)} symbols for {exchange}: {symbols[:5]}..." if len(symbols) > 5 else f"📋 Found {len(symbols)} symbols for {exchange}: {symbols}")
-        return symbols
-
     def cleanup(self):
         """Cleanup resources."""
-        if hasattr(self, "instrument_service"):
-            self.instrument_service.cleanup()
+        if hasattr(self, "instruments_service"):
+            self.instruments_service.cleanup()
         super().cleanup()
