@@ -33,7 +33,7 @@ def test_parse_arguments_query_mode():
     """Test parsing arguments for query mode."""
     test_args = [
         "--mode",
-        "instruments-query",
+        "instruments",
         "--start-date",
         "2023-05-23",
         "--query-type",
@@ -44,7 +44,7 @@ def test_parse_arguments_query_mode():
 
     with patch.object(sys, "argv", ["parser"] + test_args):
         args = parse_arguments()
-        assert args.mode == "instruments-query"
+        assert args.mode == "instruments"
         assert args.start_date == "2023-05-23"
         assert args.query_type == "details"
         assert args.instrument_id == "TEST:SPOT_PAIR:BTC-USDT"
@@ -70,16 +70,17 @@ def test_validate_arguments_query_mode():
 
     # Valid arguments
     args = Namespace(
-        mode="instruments-query", start_date="2023-05-23", query_type="list"
+        mode="instruments", start_date="2023-05-23", query_type="list"
     )
     validate_arguments(args)  # Should not raise
 
     # Missing instrument_id for details query
     args = Namespace(
-        mode="instruments-query",
+        mode="instruments",
         start_date="2023-05-23",
         query_type="details",
         instrument_id=None,
     )
     with pytest.raises(ValueError, match="--instrument-id is required"):
         validate_arguments(args)
+

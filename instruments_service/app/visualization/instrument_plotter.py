@@ -197,3 +197,4 @@ class InstrumentPlotter:
         )
 
         return fig
+

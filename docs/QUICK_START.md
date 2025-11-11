@@ -81,7 +81,7 @@ python examples/batch_generation.py --start-date 2023-05-23 --end-date 2023-05-2
 ### Using CLI (Recommended)
 
 ```bash
-# List instruments for a date
+# List instruments for a date (default: summary format)
 python -m instruments_service --mode instruments-query --start-date 2023-05-23
 
 # Filter by venue and instrument type
@@ -91,6 +91,14 @@ python -m instruments_service --mode instruments-query --start-date 2023-05-23 \
 # Get instrument details
 python -m instruments_service --mode instruments-query --start-date 2023-05-23 \
     --query-type details --instrument-id BINANCE-FUTURES:PERPETUAL:BTC-USDT
+
+# Export to JSON (prints to stdout)
+python -m instruments_service --mode instruments-query --start-date 2023-05-23 \
+    --output-format json
+
+# Export to CSV file
+python -m instruments_service --mode instruments-query --start-date 2023-05-23 \
+    --output-format csv --output-file instruments.csv
 ```
 
 ### Using Example Script (Alternative)
@@ -116,9 +124,9 @@ instruments_df = client.get_instruments_for_date(
 ## Next Steps
 
 - **[SETUP_GUIDE.md](./SETUP_GUIDE.md)** - Detailed setup instructions
-- **[USAGE_GUIDE.md](./USAGE_GUIDE.md)** - Comprehensive usage guide
+- **[usage/USAGE_GUIDE.md](./usage/USAGE_GUIDE.md)** - Comprehensive usage guide
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Architecture documentation
-- **[API_REFERENCE.md](./API_REFERENCE.md)** - Complete API reference
+- **[reference/API_REFERENCE.md](./reference/API_REFERENCE.md)** - Complete API reference
 
 ---
 

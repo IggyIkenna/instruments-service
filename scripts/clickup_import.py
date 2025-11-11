@@ -114,10 +114,22 @@ class ClickUpClient:
             print(f"⚠️  Could not delete task {task_id}: {e}")
             return False
 
-    def get_tasks(self, list_id: str, archived: bool = False) -> List[Dict]:
-        """Get all tasks from a list"""
+    def get_tasks(self, list_id: str, archived: bool = False, include_subtasks: bool = False) -> List[Dict]:
+        """
+        Get all tasks from a list
+        
+        Args:
+            list_id: ClickUp list ID
+            archived: Whether to include archived tasks
+            include_subtasks: Whether to include subtasks in the response
+            
+        Returns:
+            List of task dictionaries
+        """
         try:
             params = {"archived": str(archived).lower()}
+            if include_subtasks:
+                params["subtasks"] = "true"
             result = self._request("GET", f"/list/{list_id}/task", params=params)
             if result is None:
                 return []
