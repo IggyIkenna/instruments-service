@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class DateFilterService:
     """
     Centralized date filtering service for instruments.
-    
+
     Provides:
     - Uniform date filtering by available_from_datetime and available_to_datetime
     - Protocol-specific default dates
@@ -78,7 +78,7 @@ class DateFilterService:
                 "available_to": None,
             },
         }
-        
+
         logger.info("✅ DateFilterService initialized")
 
     def filter_instruments_by_date(
@@ -89,25 +89,25 @@ class DateFilterService:
     ) -> Dict[str, Dict[str, Any]]:
         """
         Filter instruments by target date using available_from_datetime and available_to_datetime.
-        
+
         Args:
             instruments: Dictionary mapping instrument_key to instrument definition
             target_date: Target date to filter by (must be timezone-aware)
             protocol: Optional protocol name for default date handling
-            
+
         Returns:
             Filtered dictionary of instruments available on target_date
         """
         if not instruments:
             return {}
-        
+
         # Ensure target_date is timezone-aware
         if target_date.tzinfo is None:
             target_date = target_date.replace(tzinfo=timezone.utc)
-        
+
         filtered = {}
         filtered_count = 0
-        
+
         for inst_key, inst_data in instruments.items():
             try:
                 # Get available_from_datetime
@@ -115,11 +115,13 @@ class DateFilterService:
                 if not available_from_str:
                     # Use protocol default if available
                     if protocol and protocol.lower() in self._protocol_defaults:
-                        default_from = self._protocol_defaults[protocol.lower()].get("available_from")
+                        default_from = self._protocol_defaults[protocol.lower()].get(
+                            "available_from"
+                        )
                         if default_from:
                             available_from_str = default_from
                             inst_data["available_from_datetime"] = default_from
-                
+
                 # Parse available_from_datetime
                 available_from = None
                 if available_from_str:
@@ -129,24 +131,36 @@ class DateFilterService:
                             # Remove timezone info if present for parsing
                             if available_from_str.endswith("Z"):
                                 available_from_str = available_from_str[:-1] + "+00:00"
-                            available_from = datetime.fromisoformat(available_from_str.replace("Z", "+00:00"))
+                            available_from = datetime.fromisoformat(
+                                available_from_str.replace("Z", "+00:00")
+                            )
                             if available_from.tzinfo is None:
-                                available_from = available_from.replace(tzinfo=timezone.utc)
+                                available_from = available_from.replace(
+                                    tzinfo=timezone.utc
+                                )
                         else:
                             available_from = available_from_str
                     except (ValueError, AttributeError) as e:
-                        logger.debug(f"Failed to parse available_from_datetime '{available_from_str}': {e}")
+                        logger.debug(
+                            f"Failed to parse available_from_datetime '{available_from_str}': {e}"
+                        )
                         # Use protocol default or skip
                         if protocol and protocol.lower() in self._protocol_defaults:
-                            default_from = self._protocol_defaults[protocol.lower()].get("available_from")
+                            default_from = self._protocol_defaults[
+                                protocol.lower()
+                            ].get("available_from")
                             if default_from:
                                 try:
-                                    available_from = datetime.fromisoformat(default_from.replace("Z", "+00:00"))
+                                    available_from = datetime.fromisoformat(
+                                        default_from.replace("Z", "+00:00")
+                                    )
                                     if available_from.tzinfo is None:
-                                        available_from = available_from.replace(tzinfo=timezone.utc)
+                                        available_from = available_from.replace(
+                                            tzinfo=timezone.utc
+                                        )
                                 except ValueError:
                                     pass
-                
+
                 # Get available_to_datetime
                 available_to_str = inst_data.get("available_to_datetime")
                 available_to = None
@@ -155,51 +169,57 @@ class DateFilterService:
                         if isinstance(available_to_str, str):
                             if available_to_str.endswith("Z"):
                                 available_to_str = available_to_str[:-1] + "+00:00"
-                            available_to = datetime.fromisoformat(available_to_str.replace("Z", "+00:00"))
+                            available_to = datetime.fromisoformat(
+                                available_to_str.replace("Z", "+00:00")
+                            )
                             if available_to.tzinfo is None:
                                 available_to = available_to.replace(tzinfo=timezone.utc)
                         else:
                             available_to = available_to_str
                     except (ValueError, AttributeError) as e:
-                        logger.debug(f"Failed to parse available_to_datetime '{available_to_str}': {e}")
-                
+                        logger.debug(
+                            f"Failed to parse available_to_datetime '{available_to_str}': {e}"
+                        )
+
                 # Filter by date
                 # Instrument is available if:
                 # 1. available_from is None or target_date >= available_from
                 # 2. available_to is None or target_date <= available_to
                 is_available = True
-                
+
                 if available_from and target_date < available_from:
                     is_available = False
-                
+
                 if available_to and target_date > available_to:
                     is_available = False
-                
+
                 if is_available:
                     filtered[inst_key] = inst_data
                 else:
                     filtered_count += 1
-                    
+
             except Exception as e:
                 logger.debug(f"Error filtering instrument {inst_key} by date: {e}")
                 # Include instrument if filtering fails (safer to include than exclude)
                 filtered[inst_key] = inst_data
-        
+
         if filtered_count > 0:
             logger.debug(
                 f"📅 Date filter: {len(filtered)}/{len(instruments)} instruments available on {target_date.strftime('%Y-%m-%d')}"
             )
-        
+
         return filtered
 
-    def get_protocol_default_date(self, protocol: str, field: str = "available_from") -> Optional[str]:
+    def get_protocol_default_date(
+        self, protocol: str, field: str = "available_from"
+    ) -> Optional[str]:
         """
         Get default date for a protocol.
-        
+
         Args:
             protocol: Protocol name
             field: Field name ('available_from' or 'available_to')
-            
+
         Returns:
             Default date string or None
         """
@@ -211,7 +231,7 @@ class DateFilterService:
     def set_protocol_default_date(self, protocol: str, field: str, date_str: str):
         """
         Set default date for a protocol.
-        
+
         Args:
             protocol: Protocol name
             field: Field name ('available_from' or 'available_to')
@@ -222,4 +242,3 @@ class DateFilterService:
             self._protocol_defaults[protocol_lower] = {}
         self._protocol_defaults[protocol_lower][field] = date_str
         logger.info(f"Set default {field} for {protocol}: {date_str}")
-

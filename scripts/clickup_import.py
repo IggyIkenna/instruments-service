@@ -1500,6 +1500,7 @@ def main():
             # Try Secret Manager via unified-cloud-services
             try:
                 from unified_cloud_services import get_secret_with_fallback
+
                 project_id = os.getenv("GCP_PROJECT_ID", "central-element-323112")
                 secret_name = os.getenv("CLICKUP_SECRET_NAME", "clickup-api-key")
                 api_token = get_secret_with_fallback(
@@ -1509,12 +1510,14 @@ def main():
                 )
                 if api_token:
                     api_token = api_token.strip()
-                    print(f"✅ Retrieved ClickUp API key from Secret Manager (secret: {secret_name})")
+                    print(
+                        f"✅ Retrieved ClickUp API key from Secret Manager (secret: {secret_name})"
+                    )
             except ImportError:
                 pass  # unified-cloud-services not available, continue to .env files
             except Exception as e:
                 print(f"⚠️  Secret Manager lookup failed: {e}")
-            
+
             if not api_token:
                 # Try service-specific .env.clickup file first
                 for env_file in [service_env_file, root_env_file]:

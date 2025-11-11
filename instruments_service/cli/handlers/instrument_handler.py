@@ -72,7 +72,7 @@ class InstrumentHandler(ModeHandler):
 
         # Venue mapping (for CLI-specific operations)
         self.venue_mapping = VenueMapping()
-        
+
         # Databento instrument config (kept for compatibility, but InstrumentsService handles TradFi)
         self.databento_config = DatabentoInstrumentConfig()
 
@@ -110,7 +110,7 @@ class InstrumentHandler(ModeHandler):
         cefi = kwargs.get("cefi", False)
         tradfi = kwargs.get("tradfi", False)
         defi = kwargs.get("defi", False)
-        
+
         # Default behavior: If no flags specified, process ALL market types
         # If flags are specified, only process those market types
         if not cefi and not tradfi and not defi:
@@ -129,7 +129,7 @@ class InstrumentHandler(ModeHandler):
             if defi:
                 market_types.append("DEFI")
             logger.info(f"🔍 Processing market types: {', '.join(market_types)}")
-        
+
         # Set exchanges for CEFI processing
         if cefi:
             exchanges_to_process = kwargs.get(
@@ -183,7 +183,7 @@ class InstrumentHandler(ModeHandler):
                 if result.get("status") == "success":
                     total_generated += result.get("instruments_generated", 0)
                     total_dates_processed += 1
-                    
+
                     # Note: CSV sampling is handled automatically by CloudInstrumentStorage
                     # when storing to GCS (via unified-cloud-services SamplingService).
                     # No need to download and sample again here - that would be wasteful.

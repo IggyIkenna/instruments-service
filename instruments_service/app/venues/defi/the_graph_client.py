@@ -33,7 +33,7 @@ class TheGraphClient:
     - Uniswap V3 pools
     - Curve pools
     - Other DEX subgraphs
-    
+
     Uses The Graph Network endpoints (gateway.thegraph.com) with API keys.
     Falls back to Studio endpoints if no API key is provided (rate-limited).
     """
@@ -58,12 +58,12 @@ class TheGraphClient:
         # If not provided, try cached API key or Secret Manager
         if not self.api_key:
             global _API_KEY_CACHE, _API_KEY_PROJECT_ID
-            
+
             # Check if we have a cached API key for the same project
             project_id = project_id or os.getenv(
                 "GCP_PROJECT_ID", "central-element-323112"
             )
-            
+
             if _API_KEY_CACHE and _API_KEY_PROJECT_ID == project_id:
                 # Use cached API key
                 self.api_key = _API_KEY_CACHE
@@ -80,7 +80,7 @@ class TheGraphClient:
                         secret_name=secret_name,
                         fallback_env_var="THE_GRAPH_API_KEY",
                     )
-                    
+
                     # Strip whitespace/newlines from API key (common issue when piping to gcloud)
                     if self.api_key:
                         self.api_key = self.api_key.strip()
@@ -101,7 +101,9 @@ class TheGraphClient:
                         _API_KEY_CACHE = self.api_key
                         _API_KEY_PROJECT_ID = project_id
                 except Exception as e:
-                    logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
+                    logger.warning(
+                        f"⚠️ Failed to retrieve API key from Secret Manager: {e}"
+                    )
                     self.api_key = os.getenv("THE_GRAPH_API_KEY", "")
                     if self.api_key:
                         _API_KEY_CACHE = self.api_key
@@ -114,14 +116,16 @@ class TheGraphClient:
             self.subgraph_url = os.getenv(
                 "THE_GRAPH_UNISWAP_V3_URL",
                 # Fallback Studio endpoint (rate-limited, for testing only)
-                "https://api.studio.thegraph.com/query/50688/uniswap-v3/version/latest"
+                "https://api.studio.thegraph.com/query/50688/uniswap-v3/version/latest",
             )
 
         logger.info(f"✅ TheGraphClient initialized with URL: {self.subgraph_url}")
         if self.api_key:
             logger.info("✅ Using The Graph API key for authenticated requests")
         else:
-            logger.warning("⚠️ No API key provided - using Studio endpoint (rate-limited)")
+            logger.warning(
+                "⚠️ No API key provided - using Studio endpoint (rate-limited)"
+            )
 
     def query_pools(
         self,
@@ -182,10 +186,10 @@ class TheGraphClient:
 
         try:
             headers = {"Content-Type": "application/json"}
-            
+
             # Note: The Graph Network endpoints embed API key in URL, not headers
             # API key is already in the URL if using gateway.thegraph.com format
-            
+
             response = requests.post(
                 self.subgraph_url,
                 json={"query": query},
@@ -196,10 +200,13 @@ class TheGraphClient:
 
             data = response.json()
             if "errors" in data:
-                errors = data.get('errors', [])
+                errors = data.get("errors", [])
                 # Check if endpoint has been removed (deprecated endpoints)
-                error_messages = [str(e.get('message', '')).lower() for e in errors]
-                if any('removed' in msg or 'deprecated' in msg or 'endpoint' in msg for msg in error_messages):
+                error_messages = [str(e.get("message", "")).lower() for e in errors]
+                if any(
+                    "removed" in msg or "deprecated" in msg or "endpoint" in msg
+                    for msg in error_messages
+                ):
                     logger.debug(f"The Graph endpoint deprecated: {self.subgraph_url}")
                     return []
                 else:
@@ -262,10 +269,10 @@ class TheGraphClient:
 
         try:
             headers = {"Content-Type": "application/json"}
-            
+
             # Note: The Graph Network endpoints embed API key in URL, not headers
             # API key is already in the URL if using gateway.thegraph.com format
-            
+
             response = requests.post(
                 self.subgraph_url,
                 json={"query": query},
@@ -276,10 +283,13 @@ class TheGraphClient:
 
             data = response.json()
             if "errors" in data:
-                errors = data.get('errors', [])
+                errors = data.get("errors", [])
                 # Check if endpoint has been removed (deprecated endpoints)
-                error_messages = [str(e.get('message', '')).lower() for e in errors]
-                if any('removed' in msg or 'deprecated' in msg or 'endpoint' in msg for msg in error_messages):
+                error_messages = [str(e.get("message", "")).lower() for e in errors]
+                if any(
+                    "removed" in msg or "deprecated" in msg or "endpoint" in msg
+                    for msg in error_messages
+                ):
                     logger.debug(f"The Graph endpoint deprecated: {self.subgraph_url}")
                     return []
                 else:
@@ -355,10 +365,13 @@ class TheGraphClient:
 
             data = response.json()
             if "errors" in data:
-                errors = data.get('errors', [])
+                errors = data.get("errors", [])
                 # Check if endpoint has been removed (deprecated endpoints)
-                error_messages = [str(e.get('message', '')).lower() for e in errors]
-                if any('removed' in msg or 'deprecated' in msg or 'endpoint' in msg for msg in error_messages):
+                error_messages = [str(e.get("message", "")).lower() for e in errors]
+                if any(
+                    "removed" in msg or "deprecated" in msg or "endpoint" in msg
+                    for msg in error_messages
+                ):
                     logger.debug(f"The Graph endpoint deprecated: {self.subgraph_url}")
                     return []
                 else:
@@ -429,10 +442,13 @@ class TheGraphClient:
 
             data = response.json()
             if "errors" in data:
-                errors = data.get('errors', [])
+                errors = data.get("errors", [])
                 # Check if endpoint has been removed (deprecated endpoints)
-                error_messages = [str(e.get('message', '')).lower() for e in errors]
-                if any('removed' in msg or 'deprecated' in msg or 'endpoint' in msg for msg in error_messages):
+                error_messages = [str(e.get("message", "")).lower() for e in errors]
+                if any(
+                    "removed" in msg or "deprecated" in msg or "endpoint" in msg
+                    for msg in error_messages
+                ):
                     logger.debug(f"The Graph endpoint deprecated: {self.subgraph_url}")
                     return []
                 else:
@@ -471,10 +487,13 @@ class TheGraphClient:
 
             data = response.json()
             if "errors" in data:
-                errors = data.get('errors', [])
+                errors = data.get("errors", [])
                 # Check if endpoint has been removed (deprecated endpoints)
-                error_messages = [str(e.get('message', '')).lower() for e in errors]
-                if any('removed' in msg or 'deprecated' in msg or 'endpoint' in msg for msg in error_messages):
+                error_messages = [str(e.get("message", "")).lower() for e in errors]
+                if any(
+                    "removed" in msg or "deprecated" in msg or "endpoint" in msg
+                    for msg in error_messages
+                ):
                     logger.debug(f"The Graph endpoint deprecated: {self.subgraph_url}")
                     return {"data": {}, "errors": errors}
                 else:

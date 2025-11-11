@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 # Try to import web3 for contract interaction
 try:
     from web3 import Web3
+
     WEB3_AVAILABLE = True
 except ImportError:
     WEB3_AVAILABLE = False
@@ -40,13 +41,13 @@ class EulerPlasmaAdapter:
     def __init__(self, rpc_url: Optional[str] = None):
         """
         Initialize Euler-Plasma adapter.
-        
+
         Args:
             rpc_url: Optional Plasma RPC URL (defaults to env var or Secret Manager)
         """
         self.chain = "PLASMA"
         self.venue = "EULER-PLASMA"
-        
+
         # Initialize web3 provider for Plasma contract interaction
         self.web3 = None
         if WEB3_AVAILABLE:
@@ -55,25 +56,38 @@ class EulerPlasmaAdapter:
                 if not rpc_url:
                     try:
                         from unified_cloud_services import get_secret_with_fallback
+
                         # Try to get Alchemy API key from Secret Manager (same as Morpho)
                         alchemy_key = get_secret_with_fallback(
-                            project_id=os.getenv("GCP_PROJECT_ID", "central-element-323112"),
+                            project_id=os.getenv(
+                                "GCP_PROJECT_ID", "central-element-323112"
+                            ),
                             secret_name="alchemy-api-key",
                             fallback_env_var="ALCHEMY_API_KEY",
                         )
                         if alchemy_key:
                             # Construct Alchemy RPC URL from API key (Plasma is on Ethereum)
                             rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key.strip()}"
-                            logger.info("✅ Constructed Plasma RPC URL from Alchemy API key")
+                            logger.info(
+                                "✅ Constructed Plasma RPC URL from Alchemy API key"
+                            )
                         else:
                             # Fallback to direct RPC URL from env var
-                            rpc_url = os.getenv("PLASMA_RPC_URL") or os.getenv("ETHEREUM_RPC_URL")
+                            rpc_url = os.getenv("PLASMA_RPC_URL") or os.getenv(
+                                "ETHEREUM_RPC_URL"
+                            )
                             if rpc_url:
-                                logger.info("✅ Using Plasma RPC URL from environment variable")
+                                logger.info(
+                                    "✅ Using Plasma RPC URL from environment variable"
+                                )
                     except Exception as e:
-                        logger.warning(f"⚠️ Failed to get Plasma RPC URL from Secret Manager: {e}")
-                        rpc_url = os.getenv("PLASMA_RPC_URL") or os.getenv("ETHEREUM_RPC_URL")
-                
+                        logger.warning(
+                            f"⚠️ Failed to get Plasma RPC URL from Secret Manager: {e}"
+                        )
+                        rpc_url = os.getenv("PLASMA_RPC_URL") or os.getenv(
+                            "ETHEREUM_RPC_URL"
+                        )
+
                 if rpc_url:
                     self.web3 = Web3(Web3.HTTPProvider(rpc_url))
                     if self.web3.is_connected():
@@ -82,13 +96,15 @@ class EulerPlasmaAdapter:
                         logger.warning("⚠️ Failed to connect to Plasma RPC")
                         self.web3 = None
                 else:
-                    logger.warning("⚠️ No Plasma RPC URL provided - contract interaction disabled")
+                    logger.warning(
+                        "⚠️ No Plasma RPC URL provided - contract interaction disabled"
+                    )
             except Exception as e:
                 logger.warning(f"⚠️ Failed to initialize web3 for Plasma: {e}")
-        
+
         # Cache for market configurations
         self._market_config_cache: Dict[str, Dict[str, Any]] = {}
-        
+
         logger.info(f"✅ EulerPlasmaAdapter initialized")
 
     def fetch_markets(self) -> Dict[str, Dict[str, Any]]:
@@ -151,14 +167,14 @@ class EulerPlasmaAdapter:
     def _extract_lending_metadata(self, market: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract lending protocol metadata from market data.
-        
+
         Note: Plasma protocol metadata should be fetched from:
         - Plasma protocol contracts directly (via web3)
         - The Graph subgraph for Plasma protocols
-        
+
         Args:
             market: Market data
-            
+
         Returns:
             Dictionary with lending protocol metadata fields
         """
@@ -206,7 +222,9 @@ class EulerPlasmaAdapter:
             "base_asset": symbol,
             "quote_asset": "",
             "settle_asset": symbol,
-            "base_asset_contract_address": underlying_address if underlying_address else None,
+            "base_asset_contract_address": (
+                underlying_address if underlying_address else None
+            ),
             "quote_asset_contract_address": None,
             "pool_address": a_token_address if a_token_address else None,
             "pool_fee_tier": None,
@@ -219,7 +237,9 @@ class EulerPlasmaAdapter:
             "exchange_raw_symbol": a_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(2024, 11, 1).isoformat(),  # Plasma chain launch (Nov 2024)
+            "available_from_datetime": datetime(
+                2024, 11, 1
+            ).isoformat(),  # Plasma chain launch (Nov 2024)
             "available_to_datetime": None,
             "data_types": "trades,book_snapshot_5",  # Protocol positions - no market data but need valid data_types
             "inverse": False,
@@ -256,7 +276,9 @@ class EulerPlasmaAdapter:
             "base_asset": symbol,
             "quote_asset": "",
             "settle_asset": symbol,
-            "base_asset_contract_address": underlying_address if underlying_address else None,
+            "base_asset_contract_address": (
+                underlying_address if underlying_address else None
+            ),
             "quote_asset_contract_address": None,
             "pool_address": debt_token_address if debt_token_address else None,
             "pool_fee_tier": None,
@@ -269,7 +291,9 @@ class EulerPlasmaAdapter:
             "exchange_raw_symbol": debt_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(2024, 11, 1).isoformat(),  # Plasma chain launch (Nov 2024)
+            "available_from_datetime": datetime(
+                2024, 11, 1
+            ).isoformat(),  # Plasma chain launch (Nov 2024)
             "available_to_datetime": None,
             "data_types": "trades,book_snapshot_5",  # Protocol positions - no market data but need valid data_types
             "inverse": False,
@@ -293,13 +317,13 @@ class FluidPlasmaAdapter:
     def __init__(self, rpc_url: Optional[str] = None):
         """
         Initialize Fluid-Plasma adapter.
-        
+
         Args:
             rpc_url: Optional Plasma RPC URL (defaults to env var or Secret Manager)
         """
         self.chain = "PLASMA"
         self.venue = "FLUID-PLASMA"
-        
+
         # Initialize web3 provider for Plasma contract interaction
         self.web3 = None
         if WEB3_AVAILABLE:
@@ -307,14 +331,17 @@ class FluidPlasmaAdapter:
                 if not rpc_url:
                     try:
                         from unified_cloud_services import get_secret_with_fallback
+
                         rpc_url = get_secret_with_fallback(
-                            project_id=os.getenv("GCP_PROJECT_ID", "central-element-323112"),
+                            project_id=os.getenv(
+                                "GCP_PROJECT_ID", "central-element-323112"
+                            ),
                             secret_name="plasma-rpc-url",
                             fallback_env_var="PLASMA_RPC_URL",
                         )
                     except Exception:
                         rpc_url = os.getenv("PLASMA_RPC_URL")
-                
+
                 if rpc_url:
                     self.web3 = Web3(Web3.HTTPProvider(rpc_url))
                     if self.web3.is_connected():
@@ -323,31 +350,35 @@ class FluidPlasmaAdapter:
                         self.web3 = None
             except Exception:
                 pass
-        
+
         self._market_config_cache: Dict[str, Dict[str, Any]] = {}
         logger.info(f"✅ FluidPlasmaAdapter initialized")
 
-    def _fetch_market_config_from_contract(self, market_address: str) -> Optional[Dict[str, Any]]:
+    def _fetch_market_config_from_contract(
+        self, market_address: str
+    ) -> Optional[Dict[str, Any]]:
         """Fetch market configuration from Plasma protocol contract."""
         if not self.web3 or not WEB3_AVAILABLE or not market_address:
             return None
         if market_address in self._market_config_cache:
             return self._market_config_cache[market_address]
         # TODO: Implement contract interaction based on Fluid-Plasma protocol ABI
-        logger.debug(f"⚠️ Contract interaction not yet implemented for Fluid-Plasma market: {market_address}")
+        logger.debug(
+            f"⚠️ Contract interaction not yet implemented for Fluid-Plasma market: {market_address}"
+        )
         return None
 
     def _extract_lending_metadata(self, market: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract lending protocol metadata from market data.
-        
+
         Fetches data from:
         - Plasma protocol contracts directly (via web3)
         - The Graph subgraph for Plasma protocols (if available)
-        
+
         Args:
             market: Market data
-            
+
         Returns:
             Dictionary with lending protocol metadata fields
         """
@@ -355,23 +386,39 @@ class FluidPlasmaAdapter:
         market_config = None
         if market_address and self.web3:
             market_config = self._fetch_market_config_from_contract(market_address)
-        
+
         return {
             "flash_loan_providers": None,  # TODO: Fetch from Plasma protocol contracts
             "instadapp_routing": None,  # TODO: Fetch from Instadapp if applicable
             "ltv": market_config.get("ltv") if market_config else None,
-            "liquidation_threshold": market_config.get("liquidation_threshold") if market_config else None,
-            "liquidation_bonus": market_config.get("liquidation_bonus") if market_config else None,
-            "reserve_factor": market_config.get("reserve_factor") if market_config else None,
+            "liquidation_threshold": (
+                market_config.get("liquidation_threshold") if market_config else None
+            ),
+            "liquidation_bonus": (
+                market_config.get("liquidation_bonus") if market_config else None
+            ),
+            "reserve_factor": (
+                market_config.get("reserve_factor") if market_config else None
+            ),
             "emode_category_id": None,  # Not applicable to Plasma protocols
             "emode_label": None,  # Not applicable to Plasma protocols
             "emode_underlying": None,  # Not applicable to Plasma protocols
             "emode_liquidation_threshold": None,  # Not applicable to Plasma protocols
             "emode_liquidation_bonus": None,  # Not applicable to Plasma protocols
-            "optimal_utilization_rate": market_config.get("optimal_utilization_rate") if market_config else None,
-            "base_variable_borrow_rate": market_config.get("base_variable_borrow_rate") if market_config else None,
-            "variable_rate_slope1": market_config.get("variable_rate_slope1") if market_config else None,
-            "variable_rate_slope2": market_config.get("variable_rate_slope2") if market_config else None,
+            "optimal_utilization_rate": (
+                market_config.get("optimal_utilization_rate") if market_config else None
+            ),
+            "base_variable_borrow_rate": (
+                market_config.get("base_variable_borrow_rate")
+                if market_config
+                else None
+            ),
+            "variable_rate_slope1": (
+                market_config.get("variable_rate_slope1") if market_config else None
+            ),
+            "variable_rate_slope2": (
+                market_config.get("variable_rate_slope2") if market_config else None
+            ),
         }
 
     def fetch_markets(self) -> Dict[str, Dict[str, Any]]:
@@ -447,7 +494,9 @@ class FluidPlasmaAdapter:
             "base_asset": symbol,
             "quote_asset": "",
             "settle_asset": symbol,
-            "base_asset_contract_address": underlying_address if underlying_address else None,
+            "base_asset_contract_address": (
+                underlying_address if underlying_address else None
+            ),
             "quote_asset_contract_address": None,
             "pool_address": a_token_address if a_token_address else None,
             "pool_fee_tier": None,
@@ -460,7 +509,9 @@ class FluidPlasmaAdapter:
             "exchange_raw_symbol": a_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(2024, 11, 1).isoformat(),  # Plasma chain launch (Nov 2024)
+            "available_from_datetime": datetime(
+                2024, 11, 1
+            ).isoformat(),  # Plasma chain launch (Nov 2024)
             "available_to_datetime": None,
             "data_types": "trades,book_snapshot_5",  # Protocol positions - no market data but need valid data_types
             "inverse": False,
@@ -497,7 +548,9 @@ class FluidPlasmaAdapter:
             "base_asset": symbol,
             "quote_asset": "",
             "settle_asset": symbol,
-            "base_asset_contract_address": underlying_address if underlying_address else None,
+            "base_asset_contract_address": (
+                underlying_address if underlying_address else None
+            ),
             "quote_asset_contract_address": None,
             "pool_address": debt_token_address if debt_token_address else None,
             "pool_fee_tier": None,
@@ -510,7 +563,9 @@ class FluidPlasmaAdapter:
             "exchange_raw_symbol": debt_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(2024, 11, 1).isoformat(),  # Plasma chain launch (Nov 2024)
+            "available_from_datetime": datetime(
+                2024, 11, 1
+            ).isoformat(),  # Plasma chain launch (Nov 2024)
             "available_to_datetime": None,
             "data_types": "trades,book_snapshot_5",  # Protocol positions - no market data but need valid data_types
             "inverse": False,
@@ -534,13 +589,13 @@ class AavePlasmaAdapter:
     def __init__(self, rpc_url: Optional[str] = None):
         """
         Initialize AAVE-Plasma adapter.
-        
+
         Args:
             rpc_url: Optional Plasma RPC URL (defaults to env var or Secret Manager)
         """
         self.chain = "PLASMA"
         self.venue = "AAVE-PLASMA"
-        
+
         # Initialize web3 provider for Plasma contract interaction
         self.web3 = None
         if WEB3_AVAILABLE:
@@ -548,14 +603,17 @@ class AavePlasmaAdapter:
                 if not rpc_url:
                     try:
                         from unified_cloud_services import get_secret_with_fallback
+
                         rpc_url = get_secret_with_fallback(
-                            project_id=os.getenv("GCP_PROJECT_ID", "central-element-323112"),
+                            project_id=os.getenv(
+                                "GCP_PROJECT_ID", "central-element-323112"
+                            ),
                             secret_name="plasma-rpc-url",
                             fallback_env_var="PLASMA_RPC_URL",
                         )
                     except Exception:
                         rpc_url = os.getenv("PLASMA_RPC_URL")
-                
+
                 if rpc_url:
                     self.web3 = Web3(Web3.HTTPProvider(rpc_url))
                     if self.web3.is_connected():
@@ -564,31 +622,35 @@ class AavePlasmaAdapter:
                         self.web3 = None
             except Exception:
                 pass
-        
+
         self._market_config_cache: Dict[str, Dict[str, Any]] = {}
         logger.info(f"✅ AavePlasmaAdapter initialized")
 
-    def _fetch_market_config_from_contract(self, market_address: str) -> Optional[Dict[str, Any]]:
+    def _fetch_market_config_from_contract(
+        self, market_address: str
+    ) -> Optional[Dict[str, Any]]:
         """Fetch market configuration from Plasma protocol contract."""
         if not self.web3 or not WEB3_AVAILABLE or not market_address:
             return None
         if market_address in self._market_config_cache:
             return self._market_config_cache[market_address]
         # TODO: Implement contract interaction based on AAVE-Plasma protocol ABI
-        logger.debug(f"⚠️ Contract interaction not yet implemented for AAVE-Plasma market: {market_address}")
+        logger.debug(
+            f"⚠️ Contract interaction not yet implemented for AAVE-Plasma market: {market_address}"
+        )
         return None
 
     def _extract_lending_metadata(self, market: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract lending protocol metadata from market data.
-        
+
         Fetches data from:
         - Plasma protocol contracts directly (via web3)
         - The Graph subgraph for Plasma protocols (if available)
-        
+
         Args:
             market: Market data
-            
+
         Returns:
             Dictionary with lending protocol metadata fields
         """
@@ -596,23 +658,39 @@ class AavePlasmaAdapter:
         market_config = None
         if market_address and self.web3:
             market_config = self._fetch_market_config_from_contract(market_address)
-        
+
         return {
             "flash_loan_providers": None,  # TODO: Fetch from Plasma protocol contracts
             "instadapp_routing": None,  # TODO: Fetch from Instadapp if applicable
             "ltv": market_config.get("ltv") if market_config else None,
-            "liquidation_threshold": market_config.get("liquidation_threshold") if market_config else None,
-            "liquidation_bonus": market_config.get("liquidation_bonus") if market_config else None,
-            "reserve_factor": market_config.get("reserve_factor") if market_config else None,
+            "liquidation_threshold": (
+                market_config.get("liquidation_threshold") if market_config else None
+            ),
+            "liquidation_bonus": (
+                market_config.get("liquidation_bonus") if market_config else None
+            ),
+            "reserve_factor": (
+                market_config.get("reserve_factor") if market_config else None
+            ),
             "emode_category_id": None,  # Not applicable to Plasma protocols
             "emode_label": None,  # Not applicable to Plasma protocols
             "emode_underlying": None,  # Not applicable to Plasma protocols
             "emode_liquidation_threshold": None,  # Not applicable to Plasma protocols
             "emode_liquidation_bonus": None,  # Not applicable to Plasma protocols
-            "optimal_utilization_rate": market_config.get("optimal_utilization_rate") if market_config else None,
-            "base_variable_borrow_rate": market_config.get("base_variable_borrow_rate") if market_config else None,
-            "variable_rate_slope1": market_config.get("variable_rate_slope1") if market_config else None,
-            "variable_rate_slope2": market_config.get("variable_rate_slope2") if market_config else None,
+            "optimal_utilization_rate": (
+                market_config.get("optimal_utilization_rate") if market_config else None
+            ),
+            "base_variable_borrow_rate": (
+                market_config.get("base_variable_borrow_rate")
+                if market_config
+                else None
+            ),
+            "variable_rate_slope1": (
+                market_config.get("variable_rate_slope1") if market_config else None
+            ),
+            "variable_rate_slope2": (
+                market_config.get("variable_rate_slope2") if market_config else None
+            ),
         }
 
     def fetch_markets(self) -> Dict[str, Dict[str, Any]]:
@@ -688,7 +766,9 @@ class AavePlasmaAdapter:
             "base_asset": symbol,
             "quote_asset": "",
             "settle_asset": symbol,
-            "base_asset_contract_address": underlying_address if underlying_address else None,
+            "base_asset_contract_address": (
+                underlying_address if underlying_address else None
+            ),
             "quote_asset_contract_address": None,
             "pool_address": a_token_address if a_token_address else None,
             "pool_fee_tier": None,
@@ -701,7 +781,9 @@ class AavePlasmaAdapter:
             "exchange_raw_symbol": a_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(2024, 11, 1).isoformat(),  # Plasma chain launch (Nov 2024)
+            "available_from_datetime": datetime(
+                2024, 11, 1
+            ).isoformat(),  # Plasma chain launch (Nov 2024)
             "available_to_datetime": None,
             "data_types": "trades,book_snapshot_5",  # Protocol positions - no market data but need valid data_types
             "inverse": False,
@@ -738,7 +820,9 @@ class AavePlasmaAdapter:
             "base_asset": symbol,
             "quote_asset": "",
             "settle_asset": symbol,
-            "base_asset_contract_address": underlying_address if underlying_address else None,
+            "base_asset_contract_address": (
+                underlying_address if underlying_address else None
+            ),
             "quote_asset_contract_address": None,
             "pool_address": debt_token_address if debt_token_address else None,
             "pool_fee_tier": None,
@@ -751,7 +835,9 @@ class AavePlasmaAdapter:
             "exchange_raw_symbol": debt_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(2024, 11, 1).isoformat(),  # Plasma chain launch (Nov 2024)
+            "available_from_datetime": datetime(
+                2024, 11, 1
+            ).isoformat(),  # Plasma chain launch (Nov 2024)
             "available_to_datetime": None,
             "data_types": "trades,book_snapshot_5",  # Protocol positions - no market data but need valid data_types
             "inverse": False,
@@ -761,4 +847,3 @@ class AavePlasmaAdapter:
             "underlying": symbol,
             **lending_metadata,  # Include all lending protocol metadata fields
         }
-
