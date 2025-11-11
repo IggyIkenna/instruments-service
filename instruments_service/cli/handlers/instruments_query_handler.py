@@ -95,6 +95,10 @@ class InstrumentsQueryHandler(ModeHandler):
         # Format output
         output_format = kwargs.get("output_format", "summary")
 
+        # Note: CSV sampling is handled automatically by CloudInstrumentStorage
+        # when storing instruments (via unified-cloud-services SamplingService).
+        # Query handlers should not duplicate sampling logic - that violates DRY.
+
         if output_format == "json":
             # Return as JSON-serializable data
             result_data = instruments_df.to_dict("records")

@@ -161,6 +161,10 @@ class InstrumentDefinition(BaseModel):
     )
 
     # DeFi-specific fields (for DEX pools and protocol tokens)
+    chain: str = Field(
+        default="off-chain",
+        description="Chain identifier: 'off-chain' for CeFi/TradFi, chain name for DeFi (e.g., 'ETHEREUM', 'POLKADOT', 'HYPERLIQUID')",
+    )
     base_asset_contract_address: Optional[str] = Field(
         default=None, description="ERC-20 contract address for base asset (DeFi)"
     )
@@ -174,6 +178,68 @@ class InstrumentDefinition(BaseModel):
     pool_fee_tier: Optional[int] = Field(
         default=None,
         description="Pool fee in basis points (e.g., 500 = 0.05%, 3000 = 0.3%)",
+    )
+
+    # Lending protocol-specific fields (for AAVE, Morpho, Plasma protocols)
+    flash_loan_providers: Optional[str] = Field(
+        default=None,
+        description="Comma-separated list of flash loan provider addresses (for lending protocols)",
+    )
+    instadapp_routing: Optional[str] = Field(
+        default=None,
+        description="Instadapp routing configuration for this reserve (if applicable)",
+    )
+    ltv: Optional[float] = Field(
+        default=None,
+        description="Loan-to-Value ratio (as decimal, e.g., 0.75 = 75%) - maximum borrowing power against collateral",
+    )
+    liquidation_threshold: Optional[float] = Field(
+        default=None,
+        description="Liquidation threshold (as decimal, e.g., 0.80 = 80%) - price at which position becomes liquidatable",
+    )
+    liquidation_bonus: Optional[float] = Field(
+        default=None,
+        description="Liquidation bonus (as decimal, e.g., 0.05 = 5%) - bonus paid to liquidators",
+    )
+    reserve_factor: Optional[float] = Field(
+        default=None,
+        description="Reserve factor (as decimal, e.g., 0.10 = 10%) - portion of interest reserved for protocol",
+    )
+    emode_category_id: Optional[int] = Field(
+        default=None,
+        description="E-mode category ID (for AAVE e-mode - efficient mode for correlated assets)",
+    )
+    emode_label: Optional[str] = Field(
+        default=None,
+        description="E-mode category label (e.g., 'Stablecoins', 'ETH correlated')",
+    )
+    emode_underlying: Optional[str] = Field(
+        default=None,
+        description="E-mode underlying asset symbol (for e-mode category)",
+    )
+    emode_liquidation_threshold: Optional[float] = Field(
+        default=None,
+        description="E-mode liquidation threshold (as decimal) - higher threshold when in e-mode",
+    )
+    emode_liquidation_bonus: Optional[float] = Field(
+        default=None,
+        description="E-mode liquidation bonus (as decimal) - bonus when in e-mode",
+    )
+    optimal_utilization_rate: Optional[float] = Field(
+        default=None,
+        description="Optimal utilization rate (as decimal, e.g., 0.80 = 80%) - utilization rate where interest rate model changes slope",
+    )
+    base_variable_borrow_rate: Optional[float] = Field(
+        default=None,
+        description="Base variable borrow rate (as decimal, e.g., 0.01 = 1%) - minimum borrow rate at 0% utilization",
+    )
+    variable_rate_slope1: Optional[float] = Field(
+        default=None,
+        description="Variable rate slope 1 (as decimal) - interest rate increase per utilization below optimal",
+    )
+    variable_rate_slope2: Optional[float] = Field(
+        default=None,
+        description="Variable rate slope 2 (as decimal) - interest rate increase per utilization above optimal",
     )
 
     # Note: validation_warnings removed to avoid circular reference issues
@@ -365,7 +431,8 @@ class InstrumentDefinition(BaseModel):
                 "options_chain",
                 "liquidations",
                 "quotes",  # TradFi quotes (Databento) - note: actual fetching uses OHLCV for cost efficiency
-                "ohlcv_1m",  # 1-minute OHLCV candles (Databento TradFi)
+                "ohlcv_1m",  # 1-minute OHLCV candles (Databento TradFi, Hyperliquid, Aster)
+                "ohlcv_1h",  # 1-hour OHLCV candles (fallback for Hyperliquid, Aster)
             ]
             types = [t.strip() for t in self.data_types.split(",")]
             for data_type in types:

@@ -97,6 +97,7 @@ class EtherFiAdapter:
             "quote_asset_contract_address": contract_address,
             "pool_address": contract_address,
             "pool_fee_tier": None,
+            "chain": self.chain,  # Chain identifier (ETHEREUM)
             "asset_class": "crypto",
             "venue_type": "protocol",
             "data_provider": "etherfi",
@@ -105,9 +106,9 @@ class EtherFiAdapter:
             "exchange_raw_symbol": symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime.now().isoformat(),  # TODO: Get actual launch date
+            "available_from_datetime": datetime(2024, 2, 1).isoformat(),  # EtherFi weETH launch date (Feb 2024)
             "available_to_datetime": None,
-            "data_types": "",
+            "data_types": "trades,book_snapshot_5",  # LST tokens trade on DEXes
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
@@ -205,6 +206,7 @@ class LidoAdapter:
             "quote_asset_contract_address": contract_address,
             "pool_address": contract_address,
             "pool_fee_tier": None,
+            "chain": self.chain,  # Chain identifier (ETHEREUM)
             "asset_class": "crypto",
             "venue_type": "protocol",
             "data_provider": "lido",
@@ -213,9 +215,9 @@ class LidoAdapter:
             "exchange_raw_symbol": symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime.now().isoformat(),  # TODO: Get actual launch date
+            "available_from_datetime": datetime(2020, 12, 18).isoformat(),  # Lido stETH launch date (Dec 18, 2020)
             "available_to_datetime": None,
-            "data_types": "",
+            "data_types": "trades,book_snapshot_5",  # LST tokens trade on DEXes
             "inverse": False,
             "contract_size": None,
             "tick_size": "",

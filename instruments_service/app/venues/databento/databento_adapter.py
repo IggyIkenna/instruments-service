@@ -127,44 +127,51 @@ class DatabentoAdapter:
         start_date_str = (adjusted_date - timedelta(days=1)).strftime("%Y-%m-%d")
         end_date_str = adjusted_date.strftime("%Y-%m-%d")
 
-        # Group symbols by stype_in (parent vs raw_symbol)
-        # Databento API requires separate calls for different stype_in values
-        symbols_by_stype = {}
+        # Group symbols by dataset AND stype_in
+        # Some exchanges (like ICE) have symbols on different datasets:
+        # - ICE Europe Commodities (BRN, G) -> IFEU.IMPACT
+        # - ICE Futures US Softs (KC, OJ, CC, SB) -> IFUS.IMPACT
+        # Databento API requires separate calls for different datasets and stype_in values
+        symbols_by_dataset_and_stype = {}
         for symbol in symbols:
-            # For DBEQ.BASIC (NASDAQ/NYSE) and OPRA.PILLAR (CBOE), don't filter by venue since datasets cover multiple venues
-            # For other datasets, filter by venue
+            # Get instrument definition to determine dataset
             if dataset in ["DBEQ.BASIC", "OPRA.PILLAR"]:
                 inst = unified_config.get_instrument(symbol, venue=None)  # Search across all venues
             else:
                 inst = unified_config.get_instrument(symbol, venue=exchange)
             
             if inst:
+                # Use dataset from instrument definition (may differ from exchange default)
+                symbol_dataset = inst.dataset
                 stype = inst.stype_in
-                if stype not in symbols_by_stype:
-                    symbols_by_stype[stype] = []
-                symbols_by_stype[stype].append(symbol)
+                key = (symbol_dataset, stype)
+                if key not in symbols_by_dataset_and_stype:
+                    symbols_by_dataset_and_stype[key] = []
+                symbols_by_dataset_and_stype[key].append(symbol)
             else:
-                # Fallback: try to infer stype_in from symbol format
+                # Fallback: use default dataset and infer stype_in
+                symbol_dataset = dataset
                 if symbol.endswith(".FUT") or symbol.endswith(".OPT"):
                     stype = "parent"
                 else:
                     stype = "raw_symbol"
-                if stype not in symbols_by_stype:
-                    symbols_by_stype[stype] = []
-                symbols_by_stype[stype].append(symbol)
-                logger.warning(f"Symbol {symbol} not found in unified config, inferring stype_in={stype}")
+                key = (symbol_dataset, stype)
+                if key not in symbols_by_dataset_and_stype:
+                    symbols_by_dataset_and_stype[key] = []
+                symbols_by_dataset_and_stype[key].append(symbol)
+                logger.warning(f"Symbol {symbol} not found in unified config, using dataset={symbol_dataset}, stype_in={stype}")
 
-        if not symbols_by_stype:
+        if not symbols_by_dataset_and_stype:
             logger.warning(f"No valid symbols found for {exchange} on {start_date_str}")
             return {}
 
-        # Fetch instruments for each stype_in group
+        # Fetch instruments for each (dataset, stype_in) group
         all_instruments = {}
-        for stype_in, symbol_group in symbols_by_stype.items():
+        for (symbol_dataset, stype_in), symbol_group in symbols_by_dataset_and_stype.items():
             try:
-                # Fetch instrument definitions for this stype_in group
+                # Fetch instrument definitions for this dataset/stype_in group
                 zipped_data = self.client.timeseries.get_range(
-                    dataset=dataset,
+                    dataset=symbol_dataset,  # Use dataset from instrument definition
                     schema=db.Schema.DEFINITION,
                     symbols=symbol_group,
                     stype_in=stype_in,
@@ -188,7 +195,7 @@ class DatabentoAdapter:
                 
                 # Filter by publisher_id == 39 for DBEQ.BASIC (NASDAQ/NYSE equities)
                 # Per DATABENTO_TRANSLATION_PLAN.md: Filter DBEQ.BASIC by publisher_id == 39
-                if dataset == "DBEQ.BASIC" and "publisher_id" in df.columns:
+                if symbol_dataset == "DBEQ.BASIC" and "publisher_id" in df.columns:
                     df = df[df["publisher_id"] == 39]
                     if df.empty:
                         logger.warning(
@@ -197,7 +204,7 @@ class DatabentoAdapter:
                         continue
 
                 # Process and merge into all_instruments
-                group_instruments = self._process_databento_dataframe(df, exchange, dataset, symbol_group, stype_in)
+                group_instruments = self._process_databento_dataframe(df, exchange, symbol_dataset, symbol_group, stype_in)
                 all_instruments.update(group_instruments)
 
             except Exception as e:
@@ -220,7 +227,8 @@ class DatabentoAdapter:
             "CME": "GLBX.MDP3",
             "NASDAQ": "DBEQ.BASIC",
             "NYSE": "DBEQ.BASIC",
-            "ICE": "IFEU.IMPACT",  # Fixed: ICE Europe Commodities uses IFEU.IMPACT, not ICE.NYBOT
+            "ICE": "IFEU.IMPACT",  # ICE Europe Commodities iMpact (default for ICE)
+            # Note: ICE Futures US softs (KC, OJ, CC, SB) use IFUS.IMPACT, handled via symbol lookup
             "CBOE": "OPRA.PILLAR",  # CBOE options (SPX, SPY options)
         }
 
@@ -593,6 +601,7 @@ class DatabentoAdapter:
             "min_size": str(min_price_increment),
             "asset_class": "traditional",
             "venue_type": "exchange",
+            "chain": "off-chain",  # TradFi exchanges are off-chain
             "data_provider": "databento",
             "tardis_exchange": "",
             "tardis_symbol": "",
