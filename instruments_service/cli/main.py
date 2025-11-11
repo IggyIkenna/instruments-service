@@ -17,7 +17,7 @@ from typing import Dict, Any
 # This must happen BEFORE any other imports that might use environment variables
 try:
     from dotenv import load_dotenv
-    
+
     # Find .env file in instruments-service directory (parent of this file)
     # Path structure: instruments_service/cli/main.py -> instruments_service -> instruments-service -> .env
     env_path = Path(__file__).parent.parent.parent / ".env"
@@ -84,7 +84,7 @@ def main() -> Dict[str, Any]:
             handler_kwargs["force"] = args.force
         if args.exchanges:
             handler_kwargs["exchanges"] = args.exchanges
-        
+
         # Market type filters
         if args.CEFI:
             handler_kwargs["cefi"] = True

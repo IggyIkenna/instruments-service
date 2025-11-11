@@ -81,7 +81,7 @@ def parse_arguments() -> argparse.Namespace:
         nargs="+",
         help="Exchanges to process (binance, binance-futures, deribit, bybit, okx, etc.)",
     )
-    
+
     # Market type filters (can be combined, default is ALL if none specified)
     parser.add_argument(
         "--CEFI",
@@ -201,7 +201,7 @@ def validate_arguments(args: argparse.Namespace) -> None:
     # Market type filters can be combined (e.g., --CEFI --TRADFI)
     # If none specified, all will be processed by default
     # No validation needed - flags are additive
-    
+
     # Validate query-specific arguments
     if args.mode == "instruments-query":
         if args.query_type in ["details", "trading-params"] and not args.instrument_id:

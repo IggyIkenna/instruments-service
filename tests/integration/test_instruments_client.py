@@ -12,7 +12,10 @@ import pytest
 try:
     from instruments_service.clients.instruments_client import InstrumentsClient
 except ImportError:
-    pytest.skip("instruments_service.clients.instruments_client not available", allow_module_level=True)
+    pytest.skip(
+        "instruments_service.clients.instruments_client not available",
+        allow_module_level=True,
+    )
 
 
 @pytest.fixture
