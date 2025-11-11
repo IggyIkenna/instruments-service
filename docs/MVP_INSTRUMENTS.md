@@ -214,13 +214,13 @@ python -m instruments_service --mode instruments \
 
 ```bash
 # Query MVP perpetuals
-python -m instruments_service --mode instruments-query \
+python -m instruments_service --mode instruments \
     --start-date 2023-05-23 \
     --venues BINANCE-FUTURES OKX BYBIT \
     --instrument-types PERPETUAL
 
 # Query DeFi instruments
-python -m instruments_service --mode instruments-query \
+python -m instruments_service --mode instruments \
     --start-date 2023-05-23 \
     --venues AAVE_V3_ETH ETHERFI LIDO UNISWAPV3-ETH
 ```
@@ -230,4 +230,5 @@ python -m instruments_service --mode instruments-query \
 - [`INSTRUMENT_SPECIFICATION.md`](./INSTRUMENT_SPECIFICATION.md) - Complete instrument ID specification
 - [`DEFI_GUIDE.md`](./DEFI_GUIDE.md) - DeFi protocols and instruments
 - [`VENUE_ADAPTERS.md`](./VENUE_ADAPTERS.md) - Venue adapter details
+
 

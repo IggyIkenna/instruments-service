@@ -43,7 +43,7 @@ class TestCLIHandlersInit:
             assert "instruments" in _handler_registry
 
     def test_get_handler_for_mode_instruments_query(self):
-        """Test getting instruments-query handler."""
+        """Test getting instruments handler."""
         config = {"project_id": "test-project", "gcs_bucket": "test-bucket"}
 
         # Clear registry first to ensure fresh state
@@ -58,10 +58,10 @@ class TestCLIHandlersInit:
             mock_handler = Mock()
             mock_handler_class.return_value = mock_handler
 
-            handler = get_handler_for_mode("instruments-query", config)
+            handler = get_handler_for_mode("instruments", config)
 
             assert handler is not None
-            assert "instruments-query" in _handler_registry
+            assert "instruments" in _handler_registry
 
     def test_get_handler_for_mode_unsupported(self):
         """Test getting unsupported mode raises error."""
@@ -102,7 +102,7 @@ class TestCLIHandlersInit:
             assert handler is not None
             # Verify registry was populated
             assert "instruments" in _handler_registry
-            assert "instruments-query" in _handler_registry
+            assert "instruments" in _handler_registry
 
         # Restore original registry
         _handler_registry.update(original_registry)

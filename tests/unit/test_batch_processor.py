@@ -72,3 +72,4 @@ class TestInstrumentBatchProcessor:
         assert len(batches) == 3  # 250 / 100 = 3 batches
         assert len(batches[0]) == 100
         assert len(batches[2]) == 50  # Last batch has remainder
+
