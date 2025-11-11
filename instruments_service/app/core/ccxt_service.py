@@ -6,7 +6,7 @@ Caches markets per venue for performance optimization.
 
 Used by:
 - HyperliquidAdapter
-- AsterAdapter  
+- AsterAdapter
 - TardisAdapter (via InstrumentProcessingService)
 - InstrumentProcessingService (for metadata enrichment)
 """
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class CCXTService:
     """
     Centralized CCXT service for market data and metadata.
-    
+
     Provides:
     - Exchange initialization
     - Market loading with caching
@@ -32,27 +32,27 @@ class CCXTService:
     def __init__(self, venue_mapping: Any, cache_ttl_hours: int = 4):
         """
         Initialize CCXT service.
-        
+
         Args:
             venue_mapping: VenueMapping instance for venue-to-CCXT mapping
             cache_ttl_hours: Cache TTL in hours (default: 4)
         """
         self.venue_mapping = venue_mapping
         self.cache_ttl_hours = cache_ttl_hours
-        
+
         # Cache markets per venue
         self._markets_cache: Dict[str, Dict[str, Any]] = {}
         self._cache_timestamps: Dict[str, datetime] = {}
-        
+
         logger.info(f"✅ CCXTService initialized (cache TTL: {cache_ttl_hours}h)")
 
     def get_ccxt_exchange(self, venue: str) -> Optional[ccxt.Exchange]:
         """
         Get CCXT exchange instance for a venue.
-        
+
         Args:
             venue: Venue identifier (e.g., 'HYPERLIQUID', 'ASTER', 'BINANCE')
-            
+
         Returns:
             CCXT exchange instance or None if not supported
         """
@@ -66,19 +66,23 @@ class CCXTService:
             logger.debug(f"CCXT exchange not available: {ccxt_exchange_id}")
             return None
 
-        return exchange_class({
-            "enableRateLimit": True,
-            "timeout": 15000,  # 15s timeout for initial load
-        })
+        return exchange_class(
+            {
+                "enableRateLimit": True,
+                "timeout": 15000,  # 15s timeout for initial load
+            }
+        )
 
-    def load_markets(self, venue: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
+    def load_markets(
+        self, venue: str, force_refresh: bool = False
+    ) -> Optional[Dict[str, Any]]:
         """
         Load markets for a venue with caching.
-        
+
         Args:
             venue: Venue identifier
             force_refresh: If True, bypass cache and reload
-            
+
         Returns:
             Dictionary with 'exchange', 'markets', 'exchange_id' or None
         """
@@ -124,18 +128,23 @@ class CCXTService:
             return None
 
     def _build_symbol_formats(
-        self, venue: str, base_asset: str, quote_asset: str, symbol_id: str, tardis_symbol: Optional[str] = None
+        self,
+        venue: str,
+        base_asset: str,
+        quote_asset: str,
+        symbol_id: str,
+        tardis_symbol: Optional[str] = None,
     ) -> list:
         """
         Build possible CCXT symbol formats for a venue.
-        
+
         Args:
             venue: Venue identifier
             base_asset: Base asset symbol
             quote_asset: Quote asset symbol
             symbol_id: Symbol identifier
             tardis_symbol: Optional Tardis symbol format for better matching
-            
+
         Returns:
             List of possible symbol formats to try
         """
@@ -161,24 +170,30 @@ class CCXTService:
 
                 if base_asset in special_mappings:
                     alt_base = special_mappings[base_asset]
-                    possible_symbols.extend([
-                        f"{alt_base}/{quote_asset}:{quote_asset}",
-                        f"{alt_base}/{quote_asset}",
-                    ])
+                    possible_symbols.extend(
+                        [
+                            f"{alt_base}/{quote_asset}:{quote_asset}",
+                            f"{alt_base}/{quote_asset}",
+                        ]
+                    )
 
             # Standard Bybit formats
-            possible_symbols.extend([
-                f"{base_asset}/{quote_asset}",  # Spot format: BTC/USDT
-                f"{base_asset}{quote_asset}",  # Compressed: BTCUSDT
-            ])
+            possible_symbols.extend(
+                [
+                    f"{base_asset}/{quote_asset}",  # Spot format: BTC/USDT
+                    f"{base_asset}{quote_asset}",  # Compressed: BTCUSDT
+                ]
+            )
 
         elif venue == "HYPERLIQUID":
             # Hyperliquid CCXT formats: BTC/USDC:USDC for perpetuals
             if base_asset and quote_asset:
-                possible_symbols.extend([
-                    f"{base_asset}/{quote_asset}:{quote_asset}",  # BTC/USDC:USDC (perpetual)
-                    f"{base_asset}/{quote_asset}",  # BTC/USDC (spot, if exists)
-                ])
+                possible_symbols.extend(
+                    [
+                        f"{base_asset}/{quote_asset}:{quote_asset}",  # BTC/USDC:USDC (perpetual)
+                        f"{base_asset}/{quote_asset}",  # BTC/USDC (spot, if exists)
+                    ]
+                )
 
         elif venue == "ASTER":
             # Aster doesn't have CCXT support, return empty
@@ -191,7 +206,11 @@ class CCXTService:
                     possible_symbols.append(f"{base_asset}/USD:{base_asset}")  # Inverse
                 elif quote_asset in ["USDC", "USDT"]:
                     possible_symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}")
-            elif "OPTION" in tardis_symbol or "-C" in tardis_symbol or "-P" in tardis_symbol:
+            elif (
+                "OPTION" in tardis_symbol
+                or "-C" in tardis_symbol
+                or "-P" in tardis_symbol
+            ):
                 # Deribit options: BTC/USD:BTC-25DEC25-50000-C
                 possible_symbols.append(f"{base_asset}/{quote_asset}:{tardis_symbol}")
             elif "FUTURE" in tardis_symbol or any(
@@ -202,34 +221,43 @@ class CCXTService:
 
         # Standard formats for all venues
         if base_asset and quote_asset:
-            possible_symbols.extend([
-                f"{base_asset}/{quote_asset}",  # Standard: BTC/USDT
-                f"{base_asset}{quote_asset}",  # Binance: BTCUSDT
-                f"{base_asset}-{quote_asset}",  # Alternative dash format
-            ])
-        
+            possible_symbols.extend(
+                [
+                    f"{base_asset}/{quote_asset}",  # Standard: BTC/USDT
+                    f"{base_asset}{quote_asset}",  # Binance: BTCUSDT
+                    f"{base_asset}-{quote_asset}",  # Alternative dash format
+                ]
+            )
+
         # Add original symbols
-        possible_symbols.extend([
-            tardis_symbol,
-            symbol_id.upper(),
-            symbol_id.lower(),
-        ])
+        possible_symbols.extend(
+            [
+                tardis_symbol,
+                symbol_id.upper(),
+                symbol_id.lower(),
+            ]
+        )
 
         return possible_symbols
 
     def get_metadata(
-        self, venue: str, base_asset: str, quote_asset: str, symbol_id: str, tardis_symbol: Optional[str] = None
+        self,
+        venue: str,
+        base_asset: str,
+        quote_asset: str,
+        symbol_id: str,
+        tardis_symbol: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Get CCXT metadata (tick_size, min_size, contract_size) for an instrument.
-        
+
         Args:
             venue: Venue identifier
             base_asset: Base asset symbol
             quote_asset: Quote asset symbol
             symbol_id: Symbol identifier for lookup
             tardis_symbol: Optional Tardis symbol format for better matching
-            
+
         Returns:
             Dictionary with metadata fields or empty dict
         """
@@ -240,7 +268,9 @@ class CCXTService:
         markets = ccxt_data["markets"]
 
         # Build possible symbol formats based on venue
-        possible_symbols = self._build_symbol_formats(venue, base_asset, quote_asset, symbol_id, tardis_symbol)
+        possible_symbols = self._build_symbol_formats(
+            venue, base_asset, quote_asset, symbol_id, tardis_symbol
+        )
 
         # Try to find market in CCXT
         ccxt_market = None
@@ -298,7 +328,7 @@ class CCXTService:
     def clear_cache(self, venue: Optional[str] = None):
         """
         Clear cache for a venue or all venues.
-        
+
         Args:
             venue: Venue to clear cache for, or None to clear all
         """
@@ -313,4 +343,3 @@ class CCXTService:
             self._markets_cache.clear()
             self._cache_timestamps.clear()
             logger.info("Cleared all CCXT cache")
-

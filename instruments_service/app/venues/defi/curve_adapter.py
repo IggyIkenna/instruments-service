@@ -49,9 +49,12 @@ class CurveAdapter:
         if subgraph_url is None:
             # Use SubgraphService to resolve Curve subgraph URL (uses Context7 + API key)
             from instruments_service.app.core.subgraph_service import SubgraphService
+
             subgraph_service = SubgraphService()
-            subgraph_url = subgraph_service.get_subgraph_url("curve", self.chain, api_key=api_key)
-            
+            subgraph_url = subgraph_service.get_subgraph_url(
+                "curve", self.chain, api_key=api_key
+            )
+
             # If SubgraphService returns None, skip Curve (no valid endpoint available)
             if not subgraph_url:
                 logger.info(
@@ -67,11 +70,15 @@ class CurveAdapter:
         logger.info(f"✅ CurveAdapter initialized for chain: {self.chain}")
 
     def fetch_pools(
-        self, base_currency: Optional[str] = None, base_currency_list: Optional[List[str]] = None, quote_currency_list: Optional[List[str]] = None, min_liquidity: Optional[float] = None
+        self,
+        base_currency: Optional[str] = None,
+        base_currency_list: Optional[List[str]] = None,
+        quote_currency_list: Optional[List[str]] = None,
+        min_liquidity: Optional[float] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch Curve pools and convert to instrument definitions.
-        
+
         Tries multiple data sources in order:
         1. The Graph Network gateway (if subgraph ID available)
         2. RPC direct contract queries (fallback)
@@ -86,33 +93,34 @@ class CurveAdapter:
             Dictionary mapping instrument_key to instrument definition
         """
         pools = []
-        
+
         # Option 1: Try The Graph subgraph first
         if self.graph_client:
             logger.info("🔄 Trying Curve pools from The Graph subgraph...")
             pools = self._query_curve_pools(base_currency, min_liquidity)
             if pools:
                 logger.info(f"✅ Fetched {len(pools)} Curve pools from The Graph")
-        
+
         # Option 2: Fallback to RPC if Graph fails
         if not pools:
             logger.info("🔄 Trying Curve pools from RPC (direct contract queries)...")
             try:
                 from .curve_rpc_adapter import CurveRPCAdapter
+
                 rpc_adapter = CurveRPCAdapter(project_id=self.project_id)
                 pools = rpc_adapter.fetch_pools(base_currency=base_currency)
                 if pools:
                     logger.info(f"✅ Fetched {len(pools)} Curve pools via RPC")
             except Exception as e:
                 logger.debug(f"RPC fallback failed: {e}")
-        
+
         # If still no pools, return empty
         if not pools:
             logger.warning("⚠️ Curve adapter: No pools found from any data source")
             return {}
 
         instruments = {}
-        
+
         # Normalize base and quote currency lists for comparison
         allowed_bases = None
         allowed_quotes = None
@@ -120,7 +128,7 @@ class CurveAdapter:
             allowed_bases = {b.upper() for b in base_currency_list}
         if quote_currency_list:
             allowed_quotes = {q.upper() for q in quote_currency_list}
-        
+
         # Wrapped/staked token mappings
         wrapped_mappings = {
             "WETH": "ETH",
@@ -134,23 +142,29 @@ class CurveAdapter:
                 coins = pool.get("coins", [])
                 if len(coins) < 2:
                     continue
-                
+
                 token0_symbol = coins[0].get("symbol", "").upper()
                 token1_symbol = coins[1].get("symbol", "").upper()
-                
+
                 # Filter by base and quote currencies
                 if allowed_bases or allowed_quotes:
                     if base_currency:
                         # When querying by specific base_currency, ensure it's in MVP base list and quote is in MVP quote list
                         base_upper = base_currency.upper()
-                        
+
                         # Check if base currency is in MVP list (or wrapped version)
-                        base_in_mvp = base_upper in allowed_bases if allowed_bases else True
+                        base_in_mvp = (
+                            base_upper in allowed_bases if allowed_bases else True
+                        )
                         if not base_in_mvp and base_upper in wrapped_mappings:
-                            base_in_mvp = wrapped_mappings[base_upper] in allowed_bases if allowed_bases else True
+                            base_in_mvp = (
+                                wrapped_mappings[base_upper] in allowed_bases
+                                if allowed_bases
+                                else True
+                            )
                         if allowed_bases and not base_in_mvp:
                             continue
-                        
+
                         # Determine which token is base and which is quote
                         if token0_symbol == base_upper:
                             quote_symbol = token1_symbol
@@ -158,42 +172,74 @@ class CurveAdapter:
                             quote_symbol = token0_symbol
                         else:
                             continue  # Base currency not in pool, skip
-                        
+
                         # CRITICAL: Quote MUST be in MVP list (or wrapped version)
-                        quote_in_mvp = quote_symbol in allowed_quotes if allowed_quotes else True
+                        quote_in_mvp = (
+                            quote_symbol in allowed_quotes if allowed_quotes else True
+                        )
                         if not quote_in_mvp and quote_symbol in wrapped_mappings:
-                            quote_in_mvp = wrapped_mappings[quote_symbol] in allowed_quotes if allowed_quotes else True
+                            quote_in_mvp = (
+                                wrapped_mappings[quote_symbol] in allowed_quotes
+                                if allowed_quotes
+                                else True
+                            )
                         if allowed_quotes and not quote_in_mvp:
                             continue
                     else:
                         # No specific base filter - require at least one token in base list AND one in quote list
-                        token0_in_bases = token0_symbol in allowed_bases if allowed_bases else True
-                        token1_in_bases = token1_symbol in allowed_bases if allowed_bases else True
-                        token0_in_quotes = token0_symbol in allowed_quotes if allowed_quotes else True
-                        token1_in_quotes = token1_symbol in allowed_quotes if allowed_quotes else True
-                        
+                        token0_in_bases = (
+                            token0_symbol in allowed_bases if allowed_bases else True
+                        )
+                        token1_in_bases = (
+                            token1_symbol in allowed_bases if allowed_bases else True
+                        )
+                        token0_in_quotes = (
+                            token0_symbol in allowed_quotes if allowed_quotes else True
+                        )
+                        token1_in_quotes = (
+                            token1_symbol in allowed_quotes if allowed_quotes else True
+                        )
+
                         # Check wrapped versions
                         if not token0_in_bases and token0_symbol in wrapped_mappings:
-                            token0_in_bases = wrapped_mappings[token0_symbol] in allowed_bases if allowed_bases else True
+                            token0_in_bases = (
+                                wrapped_mappings[token0_symbol] in allowed_bases
+                                if allowed_bases
+                                else True
+                            )
                         if not token1_in_bases and token1_symbol in wrapped_mappings:
-                            token1_in_bases = wrapped_mappings[token1_symbol] in allowed_bases if allowed_bases else True
+                            token1_in_bases = (
+                                wrapped_mappings[token1_symbol] in allowed_bases
+                                if allowed_bases
+                                else True
+                            )
                         if not token0_in_quotes and token0_symbol in wrapped_mappings:
-                            token0_in_quotes = wrapped_mappings[token0_symbol] in allowed_quotes if allowed_quotes else True
+                            token0_in_quotes = (
+                                wrapped_mappings[token0_symbol] in allowed_quotes
+                                if allowed_quotes
+                                else True
+                            )
                         if not token1_in_quotes and token1_symbol in wrapped_mappings:
-                            token1_in_quotes = wrapped_mappings[token1_symbol] in allowed_quotes if allowed_quotes else True
-                        
+                            token1_in_quotes = (
+                                wrapped_mappings[token1_symbol] in allowed_quotes
+                                if allowed_quotes
+                                else True
+                            )
+
                         # Require: (token0 in bases AND token1 in quotes) OR (token1 in bases AND token0 in quotes)
                         valid_pair = False
                         if allowed_bases and allowed_quotes:
-                            valid_pair = (token0_in_bases and token1_in_quotes) or (token1_in_bases and token0_in_quotes)
+                            valid_pair = (token0_in_bases and token1_in_quotes) or (
+                                token1_in_bases and token0_in_quotes
+                            )
                         elif allowed_bases:
                             valid_pair = token0_in_bases or token1_in_bases
                         elif allowed_quotes:
                             valid_pair = token0_in_quotes or token1_in_quotes
-                        
+
                         if not valid_pair:
                             continue  # Skip if pair doesn't meet base/quote requirements
-                
+
                 inst_def = self._convert_pool_to_instrument(pool)
                 if inst_def:
                     instruments[inst_def["instrument_key"]] = inst_def
@@ -250,7 +296,7 @@ class CurveAdapter:
             import requests
 
             headers = {"Content-Type": "application/json"}
-            
+
             response = requests.post(
                 self.graph_client.subgraph_url,
                 json={"query": query},
@@ -261,11 +307,19 @@ class CurveAdapter:
 
             data = response.json()
             if "errors" in data:
-                errors = data.get('errors', [])
+                errors = data.get("errors", [])
                 # Check if endpoint has been removed (deprecated endpoints)
-                error_messages = [str(e.get('message', '')).lower() for e in errors]
-                if any('removed' in msg or 'deprecated' in msg or 'endpoint' in msg or 'not found' in msg for msg in error_messages):
-                    logger.debug(f"Curve subgraph endpoint deprecated or unavailable: {self.graph_client.subgraph_url}")
+                error_messages = [str(e.get("message", "")).lower() for e in errors]
+                if any(
+                    "removed" in msg
+                    or "deprecated" in msg
+                    or "endpoint" in msg
+                    or "not found" in msg
+                    for msg in error_messages
+                ):
+                    logger.debug(
+                        f"Curve subgraph endpoint deprecated or unavailable: {self.graph_client.subgraph_url}"
+                    )
                     return []
                 else:
                     logger.error(f"Curve GraphQL query errors: {errors}")
