@@ -72,8 +72,13 @@ python -m instruments_service --mode instruments \
 
 ### Query Instruments
 
+**Output Formats**: The `--output-format` option supports three formats:
+- `summary` (default): Prints formatted summary to stdout
+- `json`: Prints full JSON data to stdout
+- `csv`: Saves data to a CSV file
+
 ```bash
-# List instruments for a date
+# List instruments for a date (default: summary format)
 python -m instruments_service --mode instruments-query \
     --start-date 2023-05-23
 
@@ -94,7 +99,12 @@ python -m instruments_service --mode instruments-query \
     --start-date 2023-05-23 \
     --query-type summary
 
-# Export to CSV
+# Export to JSON (prints to stdout, can redirect with >)
+python -m instruments_service --mode instruments-query \
+    --start-date 2023-05-23 \
+    --output-format json
+
+# Export to CSV file
 python -m instruments_service --mode instruments-query \
     --start-date 2023-05-23 \
     --output-format csv \

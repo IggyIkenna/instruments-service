@@ -46,7 +46,7 @@ class TestCLIParserExtended:
     def test_validate_arguments_query_mode(self):
         """Test argument validation for query mode."""
         args = argparse.Namespace(
-            mode="instruments-query",
+            mode="instruments",
             start_date=None,
             end_date=None,
             query_type="details",
@@ -72,7 +72,7 @@ class TestCLIParserExtended:
     def test_validate_arguments_query_details_missing_id(self):
         """Test validation error for missing instrument_id in details query."""
         args = argparse.Namespace(
-            mode="instruments-query",
+            mode="instruments",
             start_date=None,
             end_date=None,
             query_type="details",
