@@ -1497,22 +1497,44 @@ def main():
         # Try environment variable
         api_token = os.getenv("CLICKUP_API_TOKEN")
         if not api_token:
-            # Try service-specific .env.clickup file first
-            for env_file in [service_env_file, root_env_file]:
-                if env_file.exists():
-                    for line in env_file.read_text().splitlines():
-                        if line.startswith("clickup_api_token="):
-                            api_token = line.split("=", 1)[1].strip()
+            # Try Secret Manager via unified-cloud-services
+            try:
+                from unified_cloud_services import get_secret_with_fallback
+                project_id = os.getenv("GCP_PROJECT_ID", "central-element-323112")
+                secret_name = os.getenv("CLICKUP_SECRET_NAME", "clickup-api-key")
+                api_token = get_secret_with_fallback(
+                    secret_name=secret_name,
+                    project_id=project_id,
+                    fallback_env_var="CLICKUP_API_TOKEN",
+                )
+                if api_token:
+                    api_token = api_token.strip()
+                    print(f"✅ Retrieved ClickUp API key from Secret Manager (secret: {secret_name})")
+            except ImportError:
+                pass  # unified-cloud-services not available, continue to .env files
+            except Exception as e:
+                print(f"⚠️  Secret Manager lookup failed: {e}")
+            
+            if not api_token:
+                # Try service-specific .env.clickup file first
+                for env_file in [service_env_file, root_env_file]:
+                    if env_file.exists():
+                        for line in env_file.read_text().splitlines():
+                            if line.startswith("clickup_api_token="):
+                                api_token = line.split("=", 1)[1].strip()
+                                break
+                        if api_token:
                             break
-                    if api_token:
-                        break
 
     if not api_token:
         print(
             "❌ API token not found. Set --api-token or CLICKUP_API_TOKEN env var or add clickup_api_token=... to .env.clickup"
         )
+        print(f"   Checked: Secret Manager (clickup-api-key)")
         print(f"   Checked: {service_env_file}")
         print(f"   Checked: {root_env_file}")
+        print(f"\n💡 To store API key in Secret Manager, run:")
+        print(f"   python scripts/store_clickup_secret.py --api-key YOUR_TOKEN")
         return 1
 
     # Get List ID from args or env var

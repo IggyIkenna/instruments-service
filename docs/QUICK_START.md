@@ -116,9 +116,9 @@ instruments_df = client.get_instruments_for_date(
 ## Next Steps
 
 - **[SETUP_GUIDE.md](./SETUP_GUIDE.md)** - Detailed setup instructions
-- **[usage/USAGE_GUIDE.md](./usage/USAGE_GUIDE.md)** - Comprehensive usage guide
+- **[USAGE_GUIDE.md](./USAGE_GUIDE.md)** - Comprehensive usage guide
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Architecture documentation
-- **[reference/API_REFERENCE.md](./reference/API_REFERENCE.md)** - Complete API reference
+- **[API_REFERENCE.md](./API_REFERENCE.md)** - Complete API reference
 
 ---
 
