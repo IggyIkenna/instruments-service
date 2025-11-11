@@ -40,7 +40,7 @@ class TestCloudDataProvider:
     def provider(self, mock_cloud_service, mock_cloud_target):
         """Create provider with mocked dependencies."""
         with patch(
-            "instruments_service.app.core.cloud_data_provider.create_market_data_service",
+            "instruments_service.app.core.cloud_data_provider.StandardizedDomainCloudService",
             return_value=mock_cloud_service,
         ), patch(
             "instruments_service.app.core.cloud_data_provider.CloudTarget",
@@ -53,7 +53,7 @@ class TestCloudDataProvider:
     def test_init_with_cloud_target(self, mock_cloud_service, mock_cloud_target):
         """Test initialization with cloud target."""
         with patch(
-            "instruments_service.app.core.cloud_data_provider.create_market_data_service",
+            "instruments_service.app.core.cloud_data_provider.StandardizedDomainCloudService",
             return_value=mock_cloud_service,
         ):
             provider = CloudDataProvider(cloud_target=mock_cloud_target)
@@ -63,7 +63,7 @@ class TestCloudDataProvider:
     def test_init_without_cloud_target(self, mock_cloud_service):
         """Test initialization without cloud target (uses defaults)."""
         with patch(
-            "instruments_service.app.core.cloud_data_provider.create_market_data_service",
+            "instruments_service.app.core.cloud_data_provider.StandardizedDomainCloudService",
             return_value=mock_cloud_service,
         ), patch(
             "instruments_service.app.core.cloud_data_provider.CloudTarget"

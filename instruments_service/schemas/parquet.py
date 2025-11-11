@@ -273,6 +273,114 @@ INSTRUMENTS_PARQUET_SCHEMA: List[Dict[str, str]] = [
         "description": "Pool fee in basis points (e.g., 500 = 0.05%, 3000 = 0.3%). Only for DEX pools.",
     },
     # ============================================================================
+    # LENDING PROTOCOL-SPECIFIC FIELDS (for AAVE, Morpho, Plasma protocols)
+    # ============================================================================
+    {
+        "name": "flash_loan_providers",
+        "type": "string",
+        "required": False,
+        "nullable": True,
+        "description": "Comma-separated list of flash loan provider addresses (for lending protocols)",
+    },
+    {
+        "name": "instadapp_routing",
+        "type": "string",
+        "required": False,
+        "nullable": True,
+        "description": "Instadapp routing configuration for this reserve (if applicable)",
+    },
+    {
+        "name": "ltv",
+        "type": "float64",
+        "required": False,
+        "nullable": True,
+        "description": "Loan-to-Value ratio (as decimal, e.g., 0.75 = 75%) - maximum borrowing power against collateral",
+    },
+    {
+        "name": "liquidation_threshold",
+        "type": "float64",
+        "required": False,
+        "nullable": True,
+        "description": "Liquidation threshold (as decimal, e.g., 0.80 = 80%) - price at which position becomes liquidatable",
+    },
+    {
+        "name": "liquidation_bonus",
+        "type": "float64",
+        "required": False,
+        "nullable": True,
+        "description": "Liquidation bonus (as decimal, e.g., 0.05 = 5%) - bonus paid to liquidators",
+    },
+    {
+        "name": "reserve_factor",
+        "type": "float64",
+        "required": False,
+        "nullable": True,
+        "description": "Reserve factor (as decimal, e.g., 0.10 = 10%) - portion of interest reserved for protocol",
+    },
+    {
+        "name": "emode_category_id",
+        "type": "int64",
+        "required": False,
+        "nullable": True,
+        "description": "E-mode category ID (for AAVE e-mode - efficient mode for correlated assets)",
+    },
+    {
+        "name": "emode_label",
+        "type": "string",
+        "required": False,
+        "nullable": True,
+        "description": "E-mode category label (e.g., 'Stablecoins', 'ETH correlated')",
+    },
+    {
+        "name": "emode_underlying",
+        "type": "string",
+        "required": False,
+        "nullable": True,
+        "description": "E-mode underlying asset symbol (for e-mode category)",
+    },
+    {
+        "name": "emode_liquidation_threshold",
+        "type": "float64",
+        "required": False,
+        "nullable": True,
+        "description": "E-mode liquidation threshold (as decimal) - higher threshold when in e-mode",
+    },
+    {
+        "name": "emode_liquidation_bonus",
+        "type": "float64",
+        "required": False,
+        "nullable": True,
+        "description": "E-mode liquidation bonus (as decimal) - bonus when in e-mode",
+    },
+    {
+        "name": "optimal_utilization_rate",
+        "type": "float64",
+        "required": False,
+        "nullable": True,
+        "description": "Optimal utilization rate (as decimal, e.g., 0.80 = 80%) - utilization rate where interest rate model changes slope",
+    },
+    {
+        "name": "base_variable_borrow_rate",
+        "type": "float64",
+        "required": False,
+        "nullable": True,
+        "description": "Base variable borrow rate (as decimal, e.g., 0.01 = 1%) - minimum borrow rate at 0% utilization",
+    },
+    {
+        "name": "variable_rate_slope1",
+        "type": "float64",
+        "required": False,
+        "nullable": True,
+        "description": "Variable rate slope 1 (as decimal) - interest rate increase per utilization below optimal",
+    },
+    {
+        "name": "variable_rate_slope2",
+        "type": "float64",
+        "required": False,
+        "nullable": True,
+        "description": "Variable rate slope 2 (as decimal) - interest rate increase per utilization above optimal",
+    },
+    # ============================================================================
     # STORAGE METADATA (added during storage)
     # ============================================================================
     {

@@ -13,7 +13,24 @@ import os
 from pathlib import Path
 from typing import Dict, Any
 
-# Setup logging
+# Load environment variables from .env file (if it exists)
+# This must happen BEFORE any other imports that might use environment variables
+try:
+    from dotenv import load_dotenv
+    
+    # Find .env file in instruments-service directory (parent of this file)
+    # Path structure: instruments_service/cli/main.py -> instruments_service -> instruments-service -> .env
+    env_path = Path(__file__).parent.parent.parent / ".env"
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=False)
+        # Use print for early loading (before logging is configured)
+        if os.getenv("DEBUG", "").lower() == "true":
+            print(f"✅ Loaded environment variables from {env_path}")
+except ImportError:
+    # python-dotenv not installed, skip loading .env
+    pass
+
+# Setup logging (after .env is loaded so LOG_LEVEL can be read from .env)
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
@@ -75,6 +92,10 @@ def main() -> Dict[str, Any]:
             handler_kwargs["tradfi"] = True
         if args.DEFI:
             handler_kwargs["defi"] = True
+
+        # Venue filters (for both generation and query modes)
+        if args.venues:
+            handler_kwargs["venues"] = args.venues
 
         # Query-specific arguments
         if args.mode == "instruments-query":

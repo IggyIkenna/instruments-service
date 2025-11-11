@@ -7,6 +7,11 @@ python-dateutil>=2.8.0
 numpy>=1.24.0
 requests>=2.28.0
 ccxt>=4.1.77
+python-dotenv>=1.0.0  # For loading .env files
+
+# Web3 and DeFi protocol integrations
+web3>=6.0.0  # For interacting with Ethereum/Plasma contracts (Morpho, Plasma protocols)
+eth-abi>=4.0.0  # ABI encoding/decoding for web3
 
 # Data provider integrations
 databento>=0.20.0  # TradFi instruments (CME, NASDAQ, NYSE)

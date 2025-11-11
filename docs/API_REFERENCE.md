@@ -1,10 +1,9 @@
 # API Reference
 
 > **Related Documentation**: 
-> - [`../ARCHITECTURE.md`](../ARCHITECTURE.md) - Service overview and architecture
-> - [`../INSTRUMENT_KEY.md`](../INSTRUMENT_KEY.md) - Instrument ID format and implementation details
-> - [`../usage/USAGE_GUIDE.md`](../usage/USAGE_GUIDE.md) - Usage examples and patterns
-> - **Canonical Spec**: [`docs/INSTRUMENT_VENUE_SPECIFICATION.md`](../../../docs/INSTRUMENT_VENUE_SPECIFICATION.md) - Complete canonical instrument ID specification
+> - [`ARCHITECTURE.md`](./ARCHITECTURE.md) - Service overview and architecture
+> - [`INSTRUMENT_SPECIFICATION.md`](./INSTRUMENT_SPECIFICATION.md) - Instrument ID format and implementation details
+> - [`USAGE_GUIDE.md`](./USAGE_GUIDE.md) - Usage examples and patterns
 
 ---
 
