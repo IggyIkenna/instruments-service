@@ -57,11 +57,7 @@ class UnifiedInstrumentConfig:
             InstrumentDefinition("NG.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "NATGAS", "USD", "NG"),
             InstrumentDefinition("SI.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SILVER", "USD", "SI"),
             InstrumentDefinition("HG.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "COPPER", "USD", "HG"),
-            InstrumentDefinition("SB.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SUGAR", "USD", "SB"),
-            InstrumentDefinition("KC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "COFFEE", "USD", "KC"),
             InstrumentDefinition("CT.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "COTTON", "USD", "CT"),
-            InstrumentDefinition("CC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "COCOA", "USD", "CC"),
-            InstrumentDefinition("OJ.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "OJ", "USD", "OJ"),
             InstrumentDefinition("ZS.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SOYBEANS", "USD", "ZS"),
             InstrumentDefinition("ZC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CORN", "USD", "ZC"),
             InstrumentDefinition("ZW.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "WHEAT", "USD", "ZW"),
@@ -80,9 +76,15 @@ class UnifiedInstrumentConfig:
             InstrumentDefinition("6Z.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "ZAR", "USD", "6Z"),
             InstrumentDefinition("6L.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "BRL", "USD", "6L"),
             
-            # ICE Commodities - use .FUT suffix, dataset is IFEU.IMPACT
+            # ICE Commodities - use .FUT suffix
+            # ICE Europe Commodities (IFEU.IMPACT)
             InstrumentDefinition("BRN.FUT", "ICE", "FUTURE", "IFEU.IMPACT", "parent", "BRENT", "USD", "BRN"),
             InstrumentDefinition("G.FUT", "ICE", "FUTURE", "IFEU.IMPACT", "parent", "GASOIL", "USD", "G"),
+            # ICE Futures US Softs (IFUS.IMPACT) - Coffee, Orange Juice, Cocoa, Sugar
+            InstrumentDefinition("KC.FUT", "ICE", "FUTURE", "IFUS.IMPACT", "parent", "COFFEE", "USD", "KC"),
+            InstrumentDefinition("OJ.FUT", "ICE", "FUTURE", "IFUS.IMPACT", "parent", "OJ", "USD", "OJ"),
+            InstrumentDefinition("CC.FUT", "ICE", "FUTURE", "IFUS.IMPACT", "parent", "COCOA", "USD", "CC"),
+            InstrumentDefinition("SB.FUT", "ICE", "FUTURE", "IFUS.IMPACT", "parent", "SUGAR", "USD", "SB"),
             
             # Equities/ETFs (NASDAQ/NYSE) - use raw_symbol stype_in (no .FUT/.OPT suffix)
             InstrumentDefinition("SPY", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "SPY", "USD"),
@@ -315,7 +317,7 @@ class VenueMapping:
             # Ethereum DEX protocols
             "UNISWAPV2-ETH",  # Uniswap V2 Ethereum
             "UNISWAPV3-ETH",  # Uniswap V3 Ethereum
-            "UNISWAPV4-ETH",  # Uniswap V4 Ethereum
+            "UNISWAPV4-ETH",  # Uniswap V4 Ethereum (launched January 31, 2025)
             "CURVE-ETH",  # Curve Ethereum
             "BALANCER-ETH",  # Balancer V2 Ethereum
             "AAVE_V3_ETH",  # AAVE V3 Ethereum
@@ -362,6 +364,8 @@ class VenueMapping:
             "DERIBIT": "deribit",
             "BYBIT": "bybit",  # Unified
             "OKX": "okx",  # Unified
+            "HYPERLIQUID": "hyperliquid",  # CCXT supports Hyperliquid
+            # Note: ASTER not in CCXT yet
         }
     )
 
@@ -378,6 +382,30 @@ class VenueMapping:
             "okex-swap": "OKX",
         }
     )
+    
+    # Map venues to their data providers (for non-Tardis venues)
+    venue_to_data_provider: Dict[str, str] = field(
+        default_factory=lambda: {
+            # DeFi venues with direct API integration
+            "HYPERLIQUID": "hyperliquid_api",  # Hyperliquid REST/WebSocket API + S3 archive
+            "ASTER": "aster_api",  # Aster REST API
+            # DeFi venues using The Graph
+            "UNISWAPV2-ETH": "the_graph",
+            "UNISWAPV3-ETH": "the_graph",
+            "UNISWAPV4-ETH": "the_graph",
+            "CURVE-ETH": "the_graph",
+            "BALANCER-ETH": "the_graph",
+            # DeFi venues using protocol SDKs
+            "AAVE_V3_ETH": "protocol_sdk",
+            "MORPHO-ETHEREUM": "protocol_sdk",
+            "EULER-PLASMA": "protocol_sdk",
+            "FLUID-PLASMA": "protocol_sdk",
+            "AAVE-PLASMA": "protocol_sdk",
+            "ETHERFI": "protocol_sdk",
+            "LIDO": "protocol_sdk",
+            "ETHENA": "protocol_sdk",
+        }
+    )
 
     # MVP token list for DeFi pool discovery (configurable)
     defi_mvp_base_currencies: List[str] = field(
@@ -392,6 +420,34 @@ class VenueMapping:
             "weETH",  # EtherFi LST (Wrapped eETH) - non-rebasing, contract: 0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee
             "WSTETH",  # Lido LST (non-rebasing, wrapped version)
             # STETH removed - rebasing token, not supported by AAVE
+        ]
+    )
+
+    # MVP base assets for Hyperliquid and Aster perpetuals (from INSTRUMENT_SPECIFICATION_GUIDE.md)
+    # These are the 21 trading assets used for CeFi/TradFi MVP, not DeFi-specific tokens
+    hyperliquid_aster_mvp_base_assets: List[str] = field(
+        default_factory=lambda: [
+            "SOL",  # Solana
+            "BTC",  # Bitcoin
+            "ETH",  # Ethereum
+            "AVAX",  # Avalanche
+            "ADA",  # Cardano
+            "SUSHI",  # SushiSwap
+            "CAKE",  # PancakeSwap
+            "XRP",  # Ripple
+            "DOGE",  # Dogecoin
+            "XLM",  # Stellar
+            "LTC",  # Litecoin
+            "ALGO",  # Algorand
+            "FIL",  # Filecoin
+            "TRX",  # Tron
+            "BNB",  # Binance Coin
+            "LINK",  # Chainlink
+            "MATIC",  # Polygon
+            "APT",  # Aptos
+            "VET",  # VeChain
+            "ATOM",  # Cosmos
+            "NEAR",  # Near Protocol
         ]
     )
 
@@ -419,6 +475,7 @@ class VenueMapping:
         return self.venue_to_databento.get(venue)
 
     # CRITICAL: Map venue+instrument_type → Tardis exchange endpoint
+    # Note: HYPERLIQUID and ASTER use direct APIs, not Tardis
     venue_instrument_type_to_tardis: Dict[tuple, str] = field(
         default_factory=lambda: {
             # Binance mappings
@@ -454,6 +511,19 @@ class VenueMapping:
             "deribit": ["SPOT_PAIR", "PERPETUAL", "FUTURE", "OPTION"],
         }
     )
+    
+    def get_data_provider(self, venue: str) -> Optional[str]:
+        """Get data provider for a venue (tardis, databento, hyperliquid_api, aster_api, the_graph, protocol_sdk)."""
+        # Check if it's a Tardis venue
+        if venue in self.tardis_to_venue.values() or any(
+            venue == v for v in self.tardis_to_venue.values()
+        ):
+            return "tardis"
+        # Check if it's a Databento venue
+        if venue in self.all_databento_venues:
+            return "databento"
+        # Check venue_to_data_provider mapping
+        return self.venue_to_data_provider.get(venue)
 
 
 @dataclass

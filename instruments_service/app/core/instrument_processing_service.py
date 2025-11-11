@@ -39,10 +39,10 @@ logger = logging.getLogger(__name__)
 
 try:
     from unified_cloud_services import get_secret_with_fallback
-
     SECRET_MANAGER_AVAILABLE = True
 except ImportError:
     SECRET_MANAGER_AVAILABLE = False
+    get_secret_with_fallback = None
     logger.warning("unified-cloud-services not available for Secret Manager")
 
 
@@ -98,25 +98,32 @@ class InstrumentProcessingService:
         # Try to get API key from config first
         self.api_key = config.get("tardis_api_key") or config.get("api_key")
 
-        # If not in config, try Secret Manager
+        # If not in config, try Secret Manager (only if available)
         if not self.api_key and SECRET_MANAGER_AVAILABLE:
             try:
+                import os
+                # Import here to avoid scoping issues
+                from unified_cloud_services import get_secret_with_fallback
+                secret_name = os.getenv("TARDIS_SECRET_NAME", "tardis-api-key")
+                logger.debug(f"Attempting to retrieve Tardis API key from Secret Manager (secret: {secret_name}, project: {project_id})")
                 self.api_key = get_secret_with_fallback(
+                    secret_name=secret_name,
                     project_id=project_id,
-                    secret_name="tardis-api-key",
                     fallback_env_var="TARDIS_API_KEY",
                 )
                 if self.api_key:
+                    self.api_key = self.api_key.strip()  # Remove any trailing newlines
                     logger.info("✅ Retrieved Tardis API key from Secret Manager")
+                else:
+                    logger.warning("⚠️ Tardis API key retrieval returned None (only needed for CeFi)")
             except Exception as e:
-                logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
+                logger.warning(f"⚠️ Tardis API key not available (only needed for CeFi): {e}")
+                self.api_key = None  # Not required for DeFi/TradFi modes
+        elif not self.api_key:
+            logger.debug("Secret Manager not available - Tardis API key will need to be provided via config or env var")
 
-        if not self.api_key:
-            raise ValueError(
-                "API key required for instrument processing. "
-                "Provide 'tardis_api_key' in config, or ensure Secret Manager access "
-                "to 'tardis-api-key' secret."
-            )
+        # Note: API key is optional - only required when fetching CeFi instruments
+        # For DeFi/TradFi modes, we don't need Tardis API key
 
         # Use centralized configs from config.py (DRY principle)
         self.venue_mapping = VenueMapping()
@@ -124,7 +131,7 @@ class InstrumentProcessingService:
         self.data_config = DataTypeConfig()
 
         self.processing_config = InstrumentProcessingConfig(
-            api_key=self.api_key,
+            api_key=self.api_key or "",  # Empty string if not available (only needed for CeFi)
             retry_max_attempts=config.get("retry_max_attempts", 3),
             retry_backoff_factor=config.get("retry_backoff_factor", 1.0),
             enable_ccxt_integration=config.get("enable_ccxt_integration", True),
@@ -137,14 +144,53 @@ class InstrumentProcessingService:
         self._metadata_cache: Dict[str, InstrumentDefinition] = {}
         self._cache_timestamps: Dict[str, datetime] = {}
 
-        # Initialize Tardis adapter (required)
-        from instruments_service.app.venues.tardis import TardisAdapter
+        # Tardis adapter - lazy-loaded only when needed for CeFi instruments
+        self.tardis_adapter = None
+        self._tardis_project_id = project_id
 
-        self.tardis_adapter = TardisAdapter(api_key=self.api_key, project_id=project_id)
+        # Initialize centralized services
+        from instruments_service.app.core.subgraph_service import SubgraphService
+        from instruments_service.app.core.date_filter_service import DateFilterService
+        from instruments_service.app.core.ccxt_service import CCXTService
 
-        # Initialize CCXT markets cache (per venue) - MAJOR PERFORMANCE OPTIMIZATION
-        self._ccxt_markets_cache: Dict[str, Dict[str, Any]] = {}
-        self._ccxt_cache_timestamps: Dict[str, datetime] = {}
+        self.subgraph_service = SubgraphService()
+        self.date_filter_service = DateFilterService()
+        
+        # Retrieve Graph API key once at initialization and cache it
+        # This avoids repeated Secret Manager calls when fetching DeFi instruments
+        self._graph_api_key = None
+        try:
+            from unified_cloud_services import get_secret_with_fallback
+            import os
+            project_id_for_graph = os.getenv("GCP_PROJECT_ID", "central-element-323112")
+            secret_name = os.getenv("GRAPH_SECRET_NAME", "graph-api-key")
+            self._graph_api_key = get_secret_with_fallback(
+                project_id=project_id_for_graph,
+                secret_name=secret_name,
+                fallback_env_var="THE_GRAPH_API_KEY",
+            )
+            if self._graph_api_key:
+                self._graph_api_key = self._graph_api_key.strip()
+                # Also set it in TheGraphClient's module-level cache
+                import instruments_service.app.venues.defi.the_graph_client as tgc_module
+                tgc_module._API_KEY_CACHE = self._graph_api_key
+                tgc_module._API_KEY_PROJECT_ID = project_id_for_graph
+                # Also set it in SubgraphService's module-level cache
+                import instruments_service.app.core.subgraph_service as sg_module
+                sg_module._GRAPH_API_KEY_CACHE = self._graph_api_key
+                sg_module._GRAPH_API_KEY_PROJECT_ID = project_id_for_graph
+                logger.info("✅ Retrieved and cached Graph API key at initialization")
+        except Exception as e:
+            logger.debug(f"Could not retrieve Graph API key at initialization: {e}")
+        
+        # Initialize CCXT service if enabled
+        if self.processing_config.enable_ccxt_integration:
+            self.ccxt_service = CCXTService(
+                venue_mapping=self.venue_mapping,
+                cache_ttl_hours=config.get("cache_ttl_hours", 4),
+            )
+        else:
+            self.ccxt_service = None
 
         logger.info(
             f"✅ InstrumentProcessingService initialized: "
@@ -481,6 +527,27 @@ class InstrumentProcessingService:
             logger.warning(f"Unhandled instrument type: {instrument_type}")
             return None
 
+    def _get_tardis_adapter(self):
+        """
+        Lazy-load Tardis adapter only when needed for CeFi instruments.
+        
+        Returns:
+            TardisAdapter instance
+            
+        Raises:
+            ValueError: If API key is not available when trying to fetch CeFi instruments
+        """
+        if self.tardis_adapter is None:
+            if not self.api_key:
+                raise ValueError(
+                    "Tardis API key required for CeFi instruments. "
+                    "Provide 'tardis_api_key' in config, or ensure Secret Manager access "
+                    "to 'tardis-api-key' secret."
+                )
+            from instruments_service.app.venues.tardis import TardisAdapter
+            self.tardis_adapter = TardisAdapter(api_key=self.api_key, project_id=self._tardis_project_id)
+        return self.tardis_adapter
+
     async def fetch_exchange_instruments(
         self, exchange: str, target_date: datetime = None, force: bool = False
     ) -> Tuple[Dict[str, Dict[str, Any]], int]:
@@ -502,7 +569,7 @@ class InstrumentProcessingService:
 
         # Fetch instruments using TardisAdapter
         available_symbols_list, date_filtered_count = (
-            self.tardis_adapter.fetch_exchange_instruments(
+            self._get_tardis_adapter().fetch_exchange_instruments(
                 exchange=exchange, target_date=target_date, force_refresh=force
             )
         )
@@ -817,6 +884,7 @@ class InstrumentProcessingService:
                         base_asset=clean_base,
                         quote_asset=clean_quote,
                         settle_asset=settle_asset,  # ✅ ADDED: Direct field instead of attributes
+                        chain="off-chain",  # CeFi exchanges are off-chain
                         exchange_raw_symbol=symbol_id,
                         tardis_symbol=self._convert_to_tardis_symbol(
                             symbol_id, exchange
@@ -1027,206 +1095,54 @@ class InstrumentProcessingService:
 
         return inst_data
 
-    def _get_ccxt_data_for_venue(self, venue):
-        """Get CCXT market data for venue (CACHED for performance - load once per exchange)."""
-        try:
-
-            ccxt_exchange_id = self.venue_mapping.venue_to_ccxt.get(venue)
-            if not ccxt_exchange_id:
-                logger.debug(f"No CCXT mapping for venue: {venue}")
-                return None
-
-            # Check if we have cached markets for this venue
-            cache_key = f"{venue}_{ccxt_exchange_id}"
-            if self._is_ccxt_cache_valid(cache_key):
-                logger.debug(
-                    f"📋 Using cached CCXT markets for {venue} ({len(self._ccxt_markets_cache[cache_key]['markets'])} markets)"
-                )
-                return self._ccxt_markets_cache[cache_key]
-
-            # Initialize CCXT exchange
-            exchange_class = getattr(ccxt, ccxt_exchange_id, None)
-            if not exchange_class:
-                logger.debug(f"CCXT exchange not available: {ccxt_exchange_id}")
-                return None
-
-            ccxt_exchange = exchange_class(
-                {
-                    "enableRateLimit": True,
-                    "timeout": 15000,  # 15s timeout for initial load
-                }
-            )
-
-            # Load markets ONCE per exchange (major performance optimization)
-            markets = ccxt_exchange.load_markets()
-            logger.info(
-                f"⚡ Loaded {len(markets)} CCXT markets for {venue} ({ccxt_exchange_id}) - CACHED for reuse"
-            )
-
-            # Cache the results for reuse
-            ccxt_data = {
-                "exchange": ccxt_exchange,
-                "markets": markets,
-                "exchange_id": ccxt_exchange_id,
+    def _get_manual_ccxt_fallback(self, venue: str, base_asset: str) -> dict:
+        """
+        Manual fallback mappings for tick_size and min_size when CCXT lookup fails.
+        These values are stable and don't change often, so manual mapping is better than nothing.
+        
+        Based on actual CCXT values observed:
+        - Hyperliquid: tick_size varies by coin (1.0 for BTC, 0.1 for ETH, etc.)
+        - min_size: cost_min:10.0 for all Hyperliquid perpetuals
+        - contract_size: 1.0 for all Hyperliquid perpetuals
+        """
+        if venue == "HYPERLIQUID":
+            # Manual mappings from CCXT (these don't change often)
+            # Format: {base_asset: {"tick_size": "...", "min_size": "...", "contract_size": ...}}
+            HYPERLIQUID_MANUAL_MAPPINGS = {
+                "BTC": {"tick_size": "1.0", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "ETH": {"tick_size": "0.1", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "SOL": {"tick_size": "0.01", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "AVAX": {"tick_size": "0.01", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "ATOM": {"tick_size": "0.0001", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "DOGE": {"tick_size": "1e-05", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "NEAR": {"tick_size": "0.0001", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "BNB": {"tick_size": "0.01", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "LTC": {"tick_size": "0.01", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "TRX": {"tick_size": "1e-05", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "ADA": {"tick_size": "0.0001", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "ALGO": {"tick_size": "0.0001", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "APT": {"tick_size": "0.01", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "CAKE": {"tick_size": "0.0001", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "SUSHI": {"tick_size": "0.0001", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "XLM": {"tick_size": "1e-05", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "MATIC": {"tick_size": "0.0001", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "LINK": {"tick_size": "0.0001", "min_size": "cost_min:10.0", "contract_size": 1.0},
+                "UNI": {"tick_size": "0.0001", "min_size": "cost_min:10.0", "contract_size": 1.0},
             }
-
-            self._ccxt_markets_cache[cache_key] = ccxt_data
-            self._ccxt_cache_timestamps[cache_key] = datetime.now()
-
-            return ccxt_data
-
-        except Exception as e:
-            logger.debug(f"CCXT data unavailable for {venue}: {e}")
-            return None
-
-    def _is_ccxt_cache_valid(self, cache_key):
-        """Check if CCXT cache is still valid (4 hour TTL)."""
-        if cache_key not in self._ccxt_markets_cache:
-            return False
-        if cache_key not in self._ccxt_cache_timestamps:
-            return False
-
-        cache_age = datetime.now() - self._ccxt_cache_timestamps[cache_key]
-        return cache_age < timedelta(hours=4)
-
-    def get_ccxt_metadata_from_cache(self, venue, base_asset, quote_asset, symbol_id):
-        """Get CCXT metadata using CACHED markets data (ENHANCED for Bybit perpetuals use context7)."""
-        try:
-            # Get cached CCXT data for venue
-            ccxt_data = self._get_ccxt_data_for_venue(venue)
-            if not ccxt_data or not ccxt_data.get("markets"):
-                return {}
-
-            markets = ccxt_data["markets"]
-
-            # Enhanced symbol format detection using tardis_symbol use context7
-            # Get tardis_symbol from InstrumentDefinition if available for better CCXT lookup
-            tardis_symbol = getattr(self, "_current_tardis_symbol", symbol_id)
-
-            # ENHANCED: Bybit perpetual-specific CCXT format mapping use context7
-            possible_symbols = []
-
-            if venue == "BYBIT" and base_asset and quote_asset:
-                # From context7: Bybit perpetuals use BASE/QUOTE:QUOTE format
-                possible_symbols.append(
-                    f"{base_asset}/{quote_asset}:{quote_asset}"
-                )  # BTC/USDT:USDT
-
-                # Handle compound symbols that likely don't exist as perpetuals in CCXT
-                if len(base_asset) > 5:  # Compound symbols like ETHBTC, SHIB1000
-                    logger.debug(
-                        f"🔍 Bybit compound symbol (likely unavailable in CCXT): {base_asset}"
-                    )
-
-                    # Special mappings for known variations use context7
-                    special_mappings = {
-                        "SHIB1000": "1000SHIB",  # SHIB1000 → 1000SHIB
-                        "LUNA2": "LUNC",  # LUNA2 → LUNC
-                        "PEPE1000": "1000PEPE",  # 1000x pattern
-                    }
-
-                    if base_asset in special_mappings:
-                        alt_base = special_mappings[base_asset]
-                        possible_symbols.extend(
-                            [
-                                f"{alt_base}/{quote_asset}:{quote_asset}",
-                                f"{alt_base}/{quote_asset}",
-                            ]
-                        )
-
-                # Standard Bybit formats
-                possible_symbols.extend(
-                    [
-                        f"{base_asset}/{quote_asset}",  # Spot format: BTC/USDT
-                        f"{base_asset}{quote_asset}",  # Compressed: BTCUSDT
-                    ]
-                )
-
-            elif venue == "DERIBIT":
-                # Deribit CCXT formats from context7: BTC/USD:BTC for perpetuals
-                if "PERPETUAL" in tardis_symbol:
-                    base_clean = tardis_symbol.replace("-PERPETUAL", "")
-                    if quote_asset == "USD":
-                        possible_symbols.append(
-                            f"{base_asset}/USD:{base_asset}"
-                        )  # BTC/USD:BTC (inverse)
-                    elif quote_asset in ["USDC", "USDT"]:
-                        possible_symbols.append(
-                            f"{base_asset}/{quote_asset}:{quote_asset}"
-                        )  # BTC/USDC:USDC
-                elif (
-                    "OPTION" in tardis_symbol
-                    or "-C" in tardis_symbol
-                    or "-P" in tardis_symbol
-                ):
-                    # Deribit options: BTC/USD:BTC-25DEC25-50000-C
-                    possible_symbols.append(
-                        f"{base_asset}/{quote_asset}:{tardis_symbol}"
-                    )
-                elif "FUTURE" in tardis_symbol or any(
-                    month in tardis_symbol for month in ["JAN", "FEB", "MAR", "DEC"]
-                ):
-                    # Deribit futures: BTC/USD:BTC-25DEC25
-                    possible_symbols.append(
-                        f"{base_asset}/{quote_asset}:{tardis_symbol}"
-                    )
-
-            # Standard formats for all venues
-            possible_symbols.extend(
-                [
-                    f"{base_asset}/{quote_asset}",  # Standard: BTC/USDT
-                    f"{base_asset}{quote_asset}",  # Binance: BTCUSDT
-                    f"{base_asset}-{quote_asset}",  # Alternative dash format
-                    tardis_symbol,  # Original tardis symbol
-                    symbol_id.upper(),  # Original symbol
-                    symbol_id.lower(),  # Original lowercase
-                ]
-            )
-
-            ccxt_market = None
-            matched_symbol = None
-
-            for symbol_format in possible_symbols:
-                if symbol_format in markets:
-                    ccxt_market = markets[symbol_format]
-                    matched_symbol = symbol_format
-                    break
-
-            if not ccxt_market:
-                logger.debug(
-                    f"No CCXT market found for {venue}:{symbol_id} (tried {len(possible_symbols)} formats)"
-                )
-                return {}
-
-            # Extract metadata from cached CCXT market using correct CCXT field mappings
-            ccxt_metadata = {
-                "ccxt_symbol": matched_symbol,
-                "ccxt_exchange": ccxt_data.get("exchange_id", ""),
-                # tick_size = price precision (minimum price increment)
-                "tick_size": str(
-                    ccxt_market.get("precision", {}).get("price", "") or ""
-                ),
-                # min_size = minimum amount limit (minimum order size)
-                "min_size": str(
-                    ccxt_market.get("limits", {}).get("amount", {}).get("min", "") or ""
-                ),
-                # contract_size for derivatives
-                "contract_size": str(ccxt_market.get("contractSize", "") or ""),
+            return HYPERLIQUID_MANUAL_MAPPINGS.get(base_asset, {})
+        
+        elif venue == "ASTER":
+            # Aster doesn't have CCXT support, but we can use exchange API defaults
+            # These are from Aster exchangeInfo API
+            ASTER_MANUAL_MAPPINGS = {
+                "BTC": {"tick_size": "0.1", "min_size": "0.001", "contract_size": None},
+                "ETH": {"tick_size": "0.01", "min_size": "0.001", "contract_size": None},
+                "SOL": {"tick_size": "0.01", "min_size": "0.01", "contract_size": None},
+                # Add more as needed
             }
-
-            # Clean None values
-            ccxt_metadata = {
-                k: v for k, v in ccxt_metadata.items() if v is not None and v != ""
-            }
-
-            logger.debug(
-                f"📊 Enhanced CCXT metadata for {symbol_id}: {len(ccxt_metadata)} fields from cache"
-            )
-            return ccxt_metadata
-
-        except Exception as e:
-            logger.debug(f"CCXT cache lookup failed for {venue}:{symbol_id}: {e}")
-            return {}
+            return ASTER_MANUAL_MAPPINGS.get(base_asset, {})
+        
+        return {}
 
     def _parse_symbol_components(self, symbol_id, exchange):
         """Parse base/quote assets from Tardis symbol ID - ENHANCED from canonical_key_generator.py."""
@@ -1614,24 +1530,25 @@ class InstrumentProcessingService:
                 )
                 derived_fields["expiry"] = expiry_date or "2025-12-25T08:00:00Z"
 
-            # 2. Enhanced CCXT integration using cached markets (from sample logic)
+            # 2. Enhanced CCXT integration using centralized service
             if self.processing_config.enable_ccxt_integration:
-                ccxt_data = self.get_ccxt_metadata_from_cache(
-                    venue, base_asset, quote_asset, symbol_id
+                ccxt_metadata = self.ccxt_service.get_metadata(
+                    venue=venue,
+                    base_asset=base_asset,
+                    quote_asset=quote_asset,
+                    symbol_id=symbol_id,
+                    tardis_symbol=None,  # tardis_symbol not available in this context
                 )
 
-                # Populate CCXT-derived fields (using sample logic)
-                if ccxt_data:
+                # Populate CCXT-derived fields
+                if ccxt_metadata:
                     derived_fields.update(
                         {
-                            "ccxt_symbol": ccxt_data.get("ccxt_symbol", ""),
-                            "ccxt_exchange": ccxt_data.get("ccxt_exchange", ""),
-                            "tick_size": ccxt_data.get("tick_size", ""),
-                            "min_size": ccxt_data.get("min_size", ""),
-                            # Note: 'max_size' and 'min_notional' fields removed - not part of InstrumentDefinition schema
-                            "contract_size": ccxt_data.get("contract_size", ""),
-                            # Note: 'active' field removed - not part of InstrumentDefinition schema
-                            # Note: precision fields removed - not part of InstrumentDefinition schema
+                            "ccxt_symbol": ccxt_metadata.get("ccxt_symbol", ""),
+                            "ccxt_exchange": ccxt_metadata.get("ccxt_exchange", ""),
+                            "tick_size": ccxt_metadata.get("tick_size", ""),
+                            "min_size": ccxt_metadata.get("min_size", ""),
+                            "contract_size": ccxt_metadata.get("contract_size", ""),
                         }
                     )
 
@@ -2047,37 +1964,84 @@ class InstrumentProcessingService:
             return {}
 
     def fetch_defi_instruments(
-        self, protocol: str, chain: str = "ETHEREUM", **kwargs
+        self, protocol: str, chain: str = "ETHEREUM", target_date: Optional[datetime] = None, **kwargs
     ) -> Dict[str, InstrumentDefinition]:
         """
         Fetch DeFi instruments from various protocols.
 
         Args:
-            protocol: Protocol name ('uniswap_v3', 'curve', 'aave_v3', 'etherfi', 'lido')
-            chain: Chain identifier (default: 'ETHEREUM')
+            protocol: Protocol name ('uniswap_v2', 'uniswap_v3', 'uniswap_v4', 'curve', 'balancer', 'aave_v3', 'etherfi', 'lido', 'morpho', 'euler_plasma', 'fluid_plasma', 'aave_plasma', 'hyperliquid', 'aster', 'ethena')
+            chain: Chain identifier (default: 'ETHEREUM', not used for hyperliquid/aster/plasma protocols)
+            target_date: Optional target date to filter instruments by available_from_datetime
             **kwargs: Additional protocol-specific arguments
-
+            
         Returns:
             Dictionary mapping instrument_key to InstrumentDefinition
         """
         try:
-            if protocol.lower() == "uniswap_v3":
+            # Get MVP base and quote currencies from config for filtering
+            # Note: For DeFi, base and quote currencies use the same MVP list (defi_mvp_base_currencies)
+            base_currency_list = self.venue_mapping.get_defi_mvp_tokens()
+            quote_currency_list = self.venue_mapping.get_defi_mvp_tokens()
+            
+            # Use cached Graph API key (retrieved at initialization)
+            graph_api_key = self._graph_api_key
+            
+            if protocol.lower() == "uniswap_v2":
+                from instruments_service.app.venues.defi import UniswapV2Adapter
+
+                adapter = UniswapV2Adapter(chain=chain, api_key=graph_api_key)
+                raw_instruments = adapter.fetch_pools(
+                    base_currency_list=base_currency_list,
+                    quote_currency_list=quote_currency_list,
+                    **kwargs
+                )
+
+            elif protocol.lower() == "uniswap_v3":
                 from instruments_service.app.venues.defi import UniswapV3Adapter
 
-                adapter = UniswapV3Adapter(chain=chain)
-                raw_instruments = adapter.fetch_pools(**kwargs)
+                adapter = UniswapV3Adapter(chain=chain, api_key=graph_api_key)
+                raw_instruments = adapter.fetch_pools(
+                    base_currency_list=base_currency_list,
+                    quote_currency_list=quote_currency_list,
+                    **kwargs
+                )
+
+            elif protocol.lower() == "uniswap_v4":
+                from instruments_service.app.venues.defi import UniswapV4Adapter
+
+                adapter = UniswapV4Adapter(chain=chain, api_key=graph_api_key)
+                raw_instruments = adapter.fetch_pools(
+                    base_currency_list=base_currency_list,
+                    quote_currency_list=quote_currency_list,
+                    **kwargs
+                )
 
             elif protocol.lower() == "curve":
                 from instruments_service.app.venues.defi import CurveAdapter
 
-                adapter = CurveAdapter(chain=chain)
-                raw_instruments = adapter.fetch_pools(**kwargs)
+                adapter = CurveAdapter(chain=chain, api_key=graph_api_key)
+                raw_instruments = adapter.fetch_pools(
+                    base_currency_list=base_currency_list,
+                    quote_currency_list=quote_currency_list,
+                    **kwargs
+                )
+
+            elif protocol.lower() == "balancer":
+                from instruments_service.app.venues.defi import BalancerAdapter
+
+                adapter = BalancerAdapter(chain=chain)
+                raw_instruments = adapter.fetch_pools(
+                    base_currency_list=base_currency_list,
+                    quote_currency_list=quote_currency_list,
+                    **kwargs
+                )
 
             elif protocol.lower() == "aave_v3":
                 from instruments_service.app.venues.defi import AaveV3Adapter
 
-                adapter = AaveV3Adapter(chain=chain)
-                raw_instruments = adapter.fetch_markets()
+                adapter = AaveV3Adapter(chain=chain, graph_api_key=graph_api_key)
+                raw_instruments = adapter.fetch_markets(target_date=target_date)
 
             elif protocol.lower() == "etherfi":
                 from instruments_service.app.venues.defi import EtherFiAdapter
@@ -2091,15 +2055,189 @@ class InstrumentProcessingService:
                 adapter = LidoAdapter(chain=chain)
                 raw_instruments = adapter.fetch_lst_instruments()
 
+            elif protocol.lower() == "morpho":
+                from instruments_service.app.venues.defi import MorphoAdapter
+
+                adapter = MorphoAdapter(chain=chain)
+                raw_instruments = adapter.fetch_markets()
+
+            elif protocol.lower() == "euler_plasma":
+                from instruments_service.app.venues.defi import EulerPlasmaAdapter
+
+                adapter = EulerPlasmaAdapter()
+                raw_instruments = adapter.fetch_markets()
+
+            elif protocol.lower() == "fluid_plasma":
+                from instruments_service.app.venues.defi import FluidPlasmaAdapter
+
+                adapter = FluidPlasmaAdapter()
+                raw_instruments = adapter.fetch_markets()
+
+            elif protocol.lower() == "aave_plasma":
+                from instruments_service.app.venues.defi import AavePlasmaAdapter
+
+                adapter = AavePlasmaAdapter()
+                raw_instruments = adapter.fetch_markets()
+
+            elif protocol.lower() == "hyperliquid":
+                from instruments_service.app.venues.defi import HyperliquidAdapter
+
+                # Use MVP base assets from spec guide (21 trading assets), not DeFi tokens
+                hyperliquid_base_assets = self.venue_mapping.hyperliquid_aster_mvp_base_assets
+                adapter = HyperliquidAdapter(base_currency_list=hyperliquid_base_assets)
+                # Fetch both perpetuals and spot pairs for MVP coins
+                # Quote currency is USDC (both Hyperliquid and Aster support USDC)
+                perpetuals = adapter.fetch_perpetuals(test_data_availability=False)
+                spot_pairs = adapter.fetch_spot_pairs(test_data_availability=False)
+                raw_instruments = {**perpetuals, **spot_pairs}
+
+            elif protocol.lower() == "aster":
+                from instruments_service.app.venues.defi import AsterAdapter
+
+                # Use MVP base assets from spec guide (21 trading assets), not DeFi tokens
+                aster_base_assets = self.venue_mapping.hyperliquid_aster_mvp_base_assets
+                adapter = AsterAdapter(base_currency_list=aster_base_assets)
+                # Fetch both perpetuals and spot pairs for MVP coins
+                # Quote currency is USDC (both Hyperliquid and Aster support USDC)
+                # Note: Aster spot markets may be illiquid, but we include them for completeness
+                perpetuals = adapter.fetch_perpetuals(test_data_availability=False)
+                spot_pairs = adapter.fetch_spot_pairs(test_data_availability=False)
+                raw_instruments = {**perpetuals, **spot_pairs}
+
+            elif protocol.lower() == "ethena":
+                from instruments_service.app.venues.defi import EthenaAdapter
+
+                adapter = EthenaAdapter(chain=chain)
+                raw_instruments = adapter.fetch_instruments()
+
             else:
                 logger.error(f"Unknown DeFi protocol: {protocol}")
                 return {}
 
+            # Apply uniform date filtering using DateFilterService
+            if target_date:
+                raw_instruments = self.date_filter_service.filter_instruments_by_date(
+                    instruments=raw_instruments,
+                    target_date=target_date,
+                    protocol=protocol,
+                )
+            
+            # Pre-load CCXT markets for venues that support it (skip Aster - CCXT doesn't support it)
+            # This ensures cache is ready and avoids repeated loads during enrichment
+            venues_to_enrich = set()
+            for inst_data in raw_instruments.values():
+                protocol_lower = protocol.lower()
+                if protocol_lower == "hyperliquid":
+                    venues_to_enrich.add(inst_data.get("venue"))
+                # Skip Aster - CCXT doesn't support it
+            
+            for venue in venues_to_enrich:
+                logger.info(f"⚡ Pre-loading CCXT markets for {venue} to ensure enrichment works")
+                ccxt_data = self.ccxt_service.load_markets(venue)
+                if ccxt_data and ccxt_data.get("markets"):
+                    logger.info(f"✅ CCXT markets loaded for {venue}: {len(ccxt_data['markets'])} markets")
+                else:
+                    logger.warning(f"⚠️ Failed to load CCXT markets for {venue}")
+            
             # Convert to InstrumentDefinition objects
             instruments = {}
+            
+            # Filter by MVP base and quote currencies after fetching (for protocols that don't support filtering)
+            # For Hyperliquid and Aster, use hyperliquid_aster_mvp_base_assets instead of defi_mvp_base_currencies
+            if protocol.lower() in ["hyperliquid", "aster"]:
+                mvp_bases = {b.upper() for b in self.venue_mapping.hyperliquid_aster_mvp_base_assets}
+                # Hyperliquid and Aster use USDC as quote currency
+                mvp_quotes = {"USDC"}
+            else:
+                mvp_quotes = {q.upper() for q in quote_currency_list}
+                mvp_bases = {b.upper() for b in base_currency_list}
+            
+            # Wrapped/staked token mappings for base assets (same as quotes)
+            base_versions = {
+                "WETH": "ETH",  # WETH wraps ETH
+                "WSTETH": "ETH",  # WSTETH wraps STETH, but STETH represents ETH
+                "WEETH": "ETH",  # weETH wraps eETH, which represents ETH
+                "STETH": "ETH",  # STETH is rebasing version of ETH
+            }
+            
             for inst_key, inst_data in raw_instruments.items():
                 try:
+                    # CRITICAL: Filter out instruments where base currency is not in MVP list
+                    base_asset = inst_data.get("base_asset", "").upper()
+                    if base_asset:
+                        if base_asset not in mvp_bases:
+                            # Check if it's a wrapped/staked version
+                            if base_asset not in base_versions or base_versions[base_asset] not in mvp_bases:
+                                logger.debug(f"Skipping {inst_key}: base currency '{base_asset}' not in MVP list")
+                                continue
+                    
+                    # CRITICAL: Filter out instruments where quote currency is not in MVP list
+                    quote_asset = inst_data.get("quote_asset", "").upper()
+                    if quote_asset and quote_asset not in mvp_quotes:
+                        # Also check if it's a wrapped/staked version (e.g., WETH, WSTETH, weETH)
+                        # These should be allowed if the base version is in MVP list
+                        quote_versions = {
+                            "WETH": "ETH",  # WETH wraps ETH
+                            "WSTETH": "ETH",  # WSTETH wraps STETH, but STETH represents ETH
+                            "WEETH": "ETH",  # weETH wraps eETH, which represents ETH
+                            "STETH": "ETH",  # STETH is rebasing version of ETH
+                        }
+                        if quote_asset not in quote_versions or quote_versions[quote_asset] not in mvp_quotes:
+                            logger.debug(f"Skipping {inst_key}: quote currency '{quote_asset}' not in MVP list")
+                            continue
+                    
                     inst_def = InstrumentDefinition(**inst_data)
+                    
+                    # Enrich with CCXT metadata if available (like TradFi instruments)
+                    # This populates tick_size, min_size, contract_size from CCXT cache
+                    # CCXT markets are pre-loaded above for venues that support it
+                    if protocol.lower() == "hyperliquid":
+                        venue = inst_def.venue
+                        ccxt_metadata = self.ccxt_service.get_metadata(
+                            venue=venue,
+                            base_asset=inst_def.base_asset,
+                            quote_asset=inst_def.quote_asset,
+                            symbol_id=inst_def.exchange_raw_symbol or inst_def.symbol,
+                        )
+                        if ccxt_metadata:
+                            # Always update fields if CCXT provides them (even if already set)
+                            # This ensures CCXT enrichment overrides any defaults
+                            if ccxt_metadata.get("tick_size"):
+                                inst_def.tick_size = ccxt_metadata["tick_size"]
+                            if ccxt_metadata.get("min_size"):
+                                inst_def.min_size = ccxt_metadata["min_size"]
+                            if ccxt_metadata.get("contract_size"):
+                                try:
+                                    inst_def.contract_size = float(ccxt_metadata["contract_size"])
+                                except (ValueError, TypeError):
+                                    pass
+                        else:
+                            # CCXT enrichment failed - use manual fallback mappings
+                            # These are stable values from CCXT that don't change often
+                            manual_metadata = self._get_manual_ccxt_fallback(venue, inst_def.base_asset)
+                            if manual_metadata:
+                                if not inst_def.tick_size and manual_metadata.get("tick_size"):
+                                    inst_def.tick_size = manual_metadata["tick_size"]
+                                if not inst_def.min_size and manual_metadata.get("min_size"):
+                                    inst_def.min_size = manual_metadata["min_size"]
+                                if not inst_def.contract_size and manual_metadata.get("contract_size"):
+                                    try:
+                                        inst_def.contract_size = float(manual_metadata["contract_size"])
+                                    except (ValueError, TypeError):
+                                        pass
+                                logger.debug(
+                                    f"✅ Used manual fallback for {inst_def.instrument_key}: "
+                                    f"tick_size={inst_def.tick_size}, min_size={inst_def.min_size}"
+                                )
+                            else:
+                                # Log when both CCXT and manual fallback fail
+                                logger.debug(
+                                    f"⚠️ CCXT enrichment failed for {inst_def.instrument_key}: "
+                                    f"venue={venue}, base={inst_def.base_asset}, quote={inst_def.quote_asset}, "
+                                    f"symbol_id={inst_def.exchange_raw_symbol or inst_def.symbol}, "
+                                    f"ccxt_symbol={inst_def.ccxt_symbol}"
+                                )
+                    
                     instruments[inst_key] = inst_def
                 except Exception as e:
                     logger.warning(
@@ -2122,8 +2260,19 @@ class InstrumentProcessingService:
     def cleanup(self):
         """Cleanup resources and close connections"""
         # Cleanup Tardis adapter (handles its own session)
-        if hasattr(self, "tardis_adapter") and self.tardis_adapter:
+        if hasattr(self, "tardis_adapter") and self.tardis_adapter is not None:
             self.tardis_adapter.cleanup()
 
-        self.clear_cache()
+        # Cleanup CCXT service cache
+        if hasattr(self, "ccxt_service") and self.ccxt_service:
+            self.ccxt_service.clear_cache()
+
+        # Cleanup subgraph service cache
+        if hasattr(self, "subgraph_service") and self.subgraph_service:
+            self.subgraph_service.clear_cache()
+
+        # Clear metadata cache
+        self._metadata_cache.clear()
+        self._cache_timestamps.clear()
+        
         logger.info("🧹 InstrumentProcessingService cleanup completed")

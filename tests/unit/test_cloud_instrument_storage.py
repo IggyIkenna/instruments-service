@@ -34,7 +34,7 @@ class TestCloudInstrumentStorage:
     def storage(self, mock_cloud_service, mock_cloud_target):
         """Create storage with mocked dependencies."""
         with patch(
-            "instruments_service.app.core.cloud_instrument_storage.create_market_data_service",
+            "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
             return_value=mock_cloud_service,
         ), patch(
             "instruments_service.app.core.cloud_instrument_storage.CloudTarget",
@@ -47,7 +47,7 @@ class TestCloudInstrumentStorage:
     def test_init_with_cloud_target(self, mock_cloud_service, mock_cloud_target):
         """Test initialization with cloud target."""
         with patch(
-            "instruments_service.app.core.cloud_instrument_storage.create_market_data_service",
+            "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
             return_value=mock_cloud_service,
         ):
             storage = CloudInstrumentStorage(cloud_target=mock_cloud_target)
@@ -57,7 +57,7 @@ class TestCloudInstrumentStorage:
     def test_init_without_cloud_target(self, mock_cloud_service):
         """Test initialization without cloud target (uses defaults)."""
         with patch(
-            "instruments_service.app.core.cloud_instrument_storage.create_market_data_service",
+            "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
             return_value=mock_cloud_service,
         ), patch(
             "instruments_service.app.core.cloud_instrument_storage.CloudTarget"
@@ -75,7 +75,7 @@ class TestCloudInstrumentStorage:
     def test_init_test_mode(self, mock_cloud_service):
         """Test initialization in test mode."""
         with patch(
-            "instruments_service.app.core.cloud_instrument_storage.create_market_data_service",
+            "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
             return_value=mock_cloud_service,
         ), patch(
             "instruments_service.app.core.cloud_instrument_storage.CloudTarget"
@@ -97,6 +97,7 @@ class TestCloudInstrumentStorage:
                 "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
                 "venue": ["TEST"],
                 "instrument_type": ["SPOT_PAIR"],
+                "symbol": ["BTC-USDT"],
                 "available_from_datetime": ["2024-01-01T00:00:00Z"],
             }
         )
@@ -117,6 +118,7 @@ class TestCloudInstrumentStorage:
                 "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
                 "venue": ["TEST"],
                 "instrument_type": ["SPOT_PAIR"],
+                "symbol": ["BTC-USDT"],
                 "available_from_datetime": ["2024-01-01T00:00:00Z"],
             }
         )
@@ -135,6 +137,7 @@ class TestCloudInstrumentStorage:
                 "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
                 "venue": ["TEST"],
                 "instrument_type": ["SPOT_PAIR"],
+                "symbol": ["BTC-USDT"],
                 "available_from_datetime": ["2024-01-01T00:00:00Z"],
             }
         )
@@ -169,8 +172,9 @@ class TestCloudInstrumentStorage:
             }
         )
 
-        with pytest.raises(ValueError, match="Missing required columns"):
-            storage.store_instruments(df, table_name="instruments")
+        # Storage returns False when validation fails, doesn't raise ValueError
+        result = storage.store_instruments(df, table_name="instruments")
+        assert result is False
 
     def test_store_instruments_exception_handling(self, storage, mock_cloud_service):
         """Test exception handling during storage."""
@@ -179,6 +183,7 @@ class TestCloudInstrumentStorage:
                 "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
                 "venue": ["TEST"],
                 "instrument_type": ["SPOT_PAIR"],
+                "symbol": ["BTC-USDT"],
                 "available_from_datetime": ["2024-01-01T00:00:00Z"],
             }
         )
@@ -198,6 +203,7 @@ class TestCloudInstrumentStorage:
                 "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
                 "venue": ["TEST"],
                 "instrument_type": ["SPOT_PAIR"],
+                "symbol": ["BTC-USDT"],
                 "available_from_datetime": [pd.Timestamp("2024-01-15T00:00:00Z")],
             }
         )
@@ -217,6 +223,7 @@ class TestCloudInstrumentStorage:
                 "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
                 "venue": ["TEST"],
                 "instrument_type": ["SPOT_PAIR"],
+                "symbol": ["BTC-USDT"],
                 "available_from_datetime": [
                     pd.Timestamp("2024-01-01T00:00:00Z", tz="UTC")
                 ],
@@ -241,6 +248,7 @@ class TestCloudInstrumentStorage:
                 "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
                 "venue": ["TEST"],
                 "instrument_type": ["SPOT_PAIR"],
+                "symbol": ["BTC-USDT"],
                 "available_from_datetime": ["2024-01-01T00:00:00Z"],
                 "timestamp": ["2024-01-01T00:00:00Z"],
             }
@@ -273,6 +281,7 @@ class TestCloudInstrumentStorage:
                 "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
                 "venue": ["TEST"],
                 "instrument_type": ["SPOT_PAIR"],
+                "symbol": ["BTC-USDT"],
                 "available_from_datetime": [
                     "invalid-date"
                 ],  # Invalid date, should fallback
@@ -297,6 +306,7 @@ class TestCloudInstrumentStorage:
                 "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
                 "venue": ["TEST"],
                 "instrument_type": ["SPOT_PAIR"],
+                "symbol": ["BTC-USDT"],
                 "available_from_datetime": ["2024-01-01T00:00:00Z"],  # Required column
             }
         )
@@ -319,6 +329,7 @@ class TestCloudInstrumentStorage:
                 "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
                 "venue": ["TEST"],
                 "instrument_type": ["SPOT_PAIR"],
+                "symbol": ["BTC-USDT"],
                 "available_from_datetime": ["2024-01-01T00:00:00Z"],
                 "timestamp": ["invalid-timestamp"],  # Invalid timestamp
             }
