@@ -114,9 +114,9 @@ class DatabentoAdapter:
         """
         # Import unified config to get stype_in for each symbol
         from instruments_service.config import UnifiedInstrumentConfig
-        
+
         unified_config = UnifiedInstrumentConfig()
-        
+
         # Map exchange to Databento dataset
         if dataset is None:
             dataset = self._get_dataset_for_exchange(exchange)
@@ -136,10 +136,12 @@ class DatabentoAdapter:
         for symbol in symbols:
             # Get instrument definition to determine dataset
             if dataset in ["DBEQ.BASIC", "OPRA.PILLAR"]:
-                inst = unified_config.get_instrument(symbol, venue=None)  # Search across all venues
+                inst = unified_config.get_instrument(
+                    symbol, venue=None
+                )  # Search across all venues
             else:
                 inst = unified_config.get_instrument(symbol, venue=exchange)
-            
+
             if inst:
                 # Use dataset from instrument definition (may differ from exchange default)
                 symbol_dataset = inst.dataset
@@ -159,7 +161,9 @@ class DatabentoAdapter:
                 if key not in symbols_by_dataset_and_stype:
                     symbols_by_dataset_and_stype[key] = []
                 symbols_by_dataset_and_stype[key].append(symbol)
-                logger.warning(f"Symbol {symbol} not found in unified config, using dataset={symbol_dataset}, stype_in={stype}")
+                logger.warning(
+                    f"Symbol {symbol} not found in unified config, using dataset={symbol_dataset}, stype_in={stype}"
+                )
 
         if not symbols_by_dataset_and_stype:
             logger.warning(f"No valid symbols found for {exchange} on {start_date_str}")
@@ -167,7 +171,10 @@ class DatabentoAdapter:
 
         # Fetch instruments for each (dataset, stype_in) group
         all_instruments = {}
-        for (symbol_dataset, stype_in), symbol_group in symbols_by_dataset_and_stype.items():
+        for (
+            symbol_dataset,
+            stype_in,
+        ), symbol_group in symbols_by_dataset_and_stype.items():
             try:
                 # Fetch instrument definitions for this dataset/stype_in group
                 zipped_data = self.client.timeseries.get_range(
@@ -192,7 +199,7 @@ class DatabentoAdapter:
                 # Filter out non-trading instruments
                 if "instrument_class" in df.columns:
                     df = df[df["instrument_class"] != "S"]  # Exclude settlement-only
-                
+
                 # Filter by publisher_id == 39 for DBEQ.BASIC (NASDAQ/NYSE equities)
                 # Per DATABENTO_TRANSLATION_PLAN.md: Filter DBEQ.BASIC by publisher_id == 39
                 if symbol_dataset == "DBEQ.BASIC" and "publisher_id" in df.columns:
@@ -204,11 +211,15 @@ class DatabentoAdapter:
                         continue
 
                 # Process and merge into all_instruments
-                group_instruments = self._process_databento_dataframe(df, exchange, symbol_dataset, symbol_group, stype_in)
+                group_instruments = self._process_databento_dataframe(
+                    df, exchange, symbol_dataset, symbol_group, stype_in
+                )
                 all_instruments.update(group_instruments)
 
             except Exception as e:
-                logger.error(f"Failed to fetch Databento instruments for {exchange} (stype_in={stype_in}): {e}")
+                logger.error(
+                    f"Failed to fetch Databento instruments for {exchange} (stype_in={stype_in}): {e}"
+                )
                 continue
 
         return all_instruments
@@ -269,7 +280,12 @@ class DatabentoAdapter:
         return symbols
 
     def _process_databento_dataframe(
-        self, df: pd.DataFrame, exchange: str, dataset: str, query_symbols: List[str], stype_in: str
+        self,
+        df: pd.DataFrame,
+        exchange: str,
+        dataset: str,
+        query_symbols: List[str],
+        stype_in: str,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Process Databento DataFrame into instrument definition format.
@@ -285,16 +301,16 @@ class DatabentoAdapter:
             Dictionary mapping symbol to instrument definition
         """
         instruments = {}
-        
+
         # Create mapping from asset to query symbol for futures/options
         # For parent symbology, we need to map asset (e.g., 'ES') back to query symbol (e.g., 'ES.FUT')
         asset_to_query_symbol = {}
         for query_sym in query_symbols:
             # Extract base asset from query symbol
-            if query_sym.endswith('.FUT'):
+            if query_sym.endswith(".FUT"):
                 base_asset = query_sym[:-4]  # Remove '.FUT'
                 asset_to_query_symbol[base_asset] = query_sym
-            elif query_sym.endswith('.OPT'):
+            elif query_sym.endswith(".OPT"):
                 base_asset = query_sym[:-4]  # Remove '.OPT'
                 asset_to_query_symbol[base_asset] = query_sym
             else:
@@ -305,7 +321,9 @@ class DatabentoAdapter:
         # Databento uses 'raw_symbol' in definition schema (v0.13.1+)
         if "raw_symbol" in df.columns:
             df_grouped = df.groupby("raw_symbol").first()
-            logger.info(f"📊 Processing {len(df_grouped)} unique instruments from Databento response (query: {query_symbols[:5]}...)")
+            logger.info(
+                f"📊 Processing {len(df_grouped)} unique instruments from Databento response (query: {query_symbols[:5]}...)"
+            )
         else:
             # No raw_symbol column, use index
             df_grouped = df
@@ -316,20 +334,22 @@ class DatabentoAdapter:
                 # Get the query symbol used for this instrument
                 asset = row.get("asset", "")
                 asset = "" if pd.isna(asset) else str(asset)
-                
+
                 # Determine databento_symbol (the query symbol we used)
                 if stype_in == "parent":
                     # For parent symbology, map asset back to query symbol
-                    databento_symbol = asset_to_query_symbol.get(asset, query_symbols[0] if query_symbols else "")
+                    databento_symbol = asset_to_query_symbol.get(
+                        asset, query_symbols[0] if query_symbols else ""
+                    )
                 else:
                     # For raw_symbol, the asset IS the query symbol
                     databento_symbol = asset_to_query_symbol.get(asset, asset)
-                
+
                 # exchange_raw_symbol should be the actual Databento symbol (contract symbol)
                 # This is what the exchange uses internally, not the asset/base
                 # For futures: "ESZ24" (specific contract), for options: "SPY 251219C500", for equities: "AAPL"
                 exchange_raw_symbol = str(symbol) if symbol else asset
-                
+
                 inst_def = self._convert_to_instrument_definition(
                     row, exchange, dataset, databento_symbol, exchange_raw_symbol
                 )
@@ -341,7 +361,12 @@ class DatabentoAdapter:
         return instruments
 
     def _convert_to_instrument_definition(
-        self, row: pd.Series, exchange: str, dataset: str, databento_symbol: str, exchange_raw_symbol: str = ""
+        self,
+        row: pd.Series,
+        exchange: str,
+        dataset: str,
+        databento_symbol: str,
+        exchange_raw_symbol: str = "",
     ) -> Dict[str, Any]:
         """
         Convert Databento row to instrument definition format.
@@ -357,27 +382,29 @@ class DatabentoAdapter:
             Instrument definition dictionary
         """
         from instruments_service.config import UnifiedInstrumentConfig
-        
+
         unified_config = UnifiedInstrumentConfig()
-        
+
         # Extract fields from Databento schema (handle NaNs)
         asset_raw = row.get("asset", "")
         asset_raw = "" if pd.isna(asset_raw) else str(asset_raw)
-        
+
         # For equities/ETFs, if asset is empty, use the symbol (ticker) from Databento
         # The symbol field is the actual ticker (AAPL, SPY, etc.) for equities
         if not asset_raw and exchange_raw_symbol:
             # Use exchange_raw_symbol (which is the Databento symbol) as fallback for equities
             asset_raw = exchange_raw_symbol
-        
+
         currency_raw = row.get("currency", "USD")
         currency_raw = "USD" if pd.isna(currency_raw) else str(currency_raw)
-        
+
         security_type = row.get("security_type", "")
         security_type = "" if pd.isna(security_type) else str(security_type)
-        
+
         min_price_increment = row.get("min_price_increment", 0.01)
-        min_price_increment = 0.01 if pd.isna(min_price_increment) else float(min_price_increment)
+        min_price_increment = (
+            0.01 if pd.isna(min_price_increment) else float(min_price_increment)
+        )
 
         # Determine instrument type FIRST (needed for underlying extraction and quote_asset logic)
         if security_type == "FUT":
@@ -399,7 +426,7 @@ class DatabentoAdapter:
         # If not provided, fall back to asset (base symbol)
         if not exchange_raw_symbol:
             exchange_raw_symbol = asset_raw
-        
+
         # For equities/ETFs, if asset is still empty, use exchange_raw_symbol (the Databento symbol)
         # This handles cases where Databento doesn't populate the asset field for equities
         if not asset_raw and exchange_raw_symbol and security_type in ["STK", "ETF"]:
@@ -410,27 +437,31 @@ class DatabentoAdapter:
         # But sometimes Databento returns the full OCC symbol in the asset field
         # OCC format: SPY   230523C00480000 (21 chars: 6-char padded underlying + YYMMDD + C/P + 8-digit strike)
         underlying_asset = asset_raw
-        
+
         # For options, check if asset_raw looks like an OCC symbol (contains digits and C/P)
         # If so, parse it. Otherwise, if asset is empty, parse from exchange_raw_symbol
         if instrument_type == "OPTION":
             # Check if asset_raw looks like OCC format (has digits and C/P character)
-            if underlying_asset and re.search(r'\d{6}[CP]\d{8}', str(underlying_asset).strip().upper()):
+            if underlying_asset and re.search(
+                r"\d{6}[CP]\d{8}", str(underlying_asset).strip().upper()
+            ):
                 # asset_raw contains full OCC symbol, parse underlying from it
                 symbol_str = str(underlying_asset).strip().upper()
-                match = re.match(r'^([A-Z]+)\s*', symbol_str)
+                match = re.match(r"^([A-Z]+)\s*", symbol_str)
                 if match:
                     underlying_asset = match.group(1).strip()
             elif not underlying_asset and exchange_raw_symbol:
                 # asset_raw is empty, parse from exchange_raw_symbol
                 symbol_str = str(exchange_raw_symbol).strip().upper()
-                match = re.match(r'^([A-Z]+)\s*', symbol_str)
+                match = re.match(r"^([A-Z]+)\s*", symbol_str)
                 if match:
                     underlying_asset = match.group(1).strip()
 
         # Convert to human-readable names using unified config
         # For equities/ETFs, asset is already human-readable (AAPL, SPY, etc.), only convert futures codes
-        if security_type in ["STK", "ETF"] or (not security_type and underlying_asset and len(underlying_asset) <= 5):
+        if security_type in ["STK", "ETF"] or (
+            not security_type and underlying_asset and len(underlying_asset) <= 5
+        ):
             # Equities/ETFs are already human-readable, don't convert
             base_asset = underlying_asset if underlying_asset else exchange_raw_symbol
         elif instrument_type == "OPTION":
@@ -438,15 +469,23 @@ class DatabentoAdapter:
             base_asset = underlying_asset if underlying_asset else ""
         else:
             # Futures: convert exchange codes to human-readable names
-            base_asset = unified_config.get_human_readable_name(underlying_asset) if underlying_asset else ""
-        
+            base_asset = (
+                unified_config.get_human_readable_name(underlying_asset)
+                if underlying_asset
+                else ""
+            )
+
         # For TradFi (equities, options, futures), quote currency is always USD
         # Per INSTRUMENT_KEY.md: stocks/equities use USD as quote currency
-        if security_type in ["STK", "ETF", "OPT", "FUT"] or instrument_type in ["EQUITY", "OPTION", "FUTURE"]:
+        if security_type in ["STK", "ETF", "OPT", "FUT"] or instrument_type in [
+            "EQUITY",
+            "OPTION",
+            "FUTURE",
+        ]:
             quote_asset = "USD"
         else:
             quote_asset = currency_raw  # Currency codes are already human-readable (USD, EUR, etc.)
-        
+
         # Parse expiry if available
         expiry_time = None
         expiry_str = ""
@@ -473,14 +512,14 @@ class DatabentoAdapter:
                     strike_price = str(strike_price_val)
                 else:
                     strike_price = str(strike_price_val)
-            
+
             # Parse OCC format from raw_symbol if strike/option_type not found
             # OCC format: SPY   230523C00480000 (21 chars)
             # Format: [6-char padded underlying][YYMMDD][C/P][8-digit strike]
             databento_symbol_raw = row.get("raw_symbol", "") or exchange_raw_symbol
             if pd.notna(databento_symbol_raw) and databento_symbol_raw:
                 symbol_str = str(databento_symbol_raw).strip().upper()
-                
+
                 # OCC format parsing: extract expiry, option type, and strike
                 # Pattern: [UNDERLYING][YYMMDD][C/P][8_DIGIT_STRIKE]
                 # Example: SPY   230523C00480000
@@ -488,31 +527,35 @@ class DatabentoAdapter:
                 # - Expiry: 230523 (YYMMDD, 6 digits)
                 # - Option type: C (1 char)
                 # - Strike: 00480000 (8 digits, represents 480.000)
-                
+
                 # Try OCC format: find YYMMDD pattern followed by C/P followed by 8 digits
-                occ_match = re.search(r'(\d{6})([CP])(\d{8})$', symbol_str)
+                occ_match = re.search(r"(\d{6})([CP])(\d{8})$", symbol_str)
                 if occ_match:
                     expiry_occ = occ_match.group(1)  # YYMMDD
                     opt_char = occ_match.group(2)  # C or P
                     strike_occ = occ_match.group(3)  # 8-digit strike
-                    
+
                     # Parse strike: 8 digits with 3 decimal places (e.g., 00480000 = 480.000)
                     # Only parse if strike_price not already extracted from Databento response
                     if not strike_price:
                         strike_int = int(strike_occ)
                         strike_decimal = strike_int / 1000.0  # 3 decimal places
-                        strike_price = str(int(strike_decimal)) if strike_decimal.is_integer() else str(strike_decimal)
-                    
+                        strike_price = (
+                            str(int(strike_decimal))
+                            if strike_decimal.is_integer()
+                            else str(strike_decimal)
+                        )
+
                     # Parse option type (always parse from OCC if not set)
                     if not option_type:
                         option_type = "CALL" if opt_char == "C" else "PUT"
-                    
+
                     # If expiry_str not set yet, use OCC expiry
                     if not expiry_str:
                         expiry_str = expiry_occ
                 else:
                     # Fallback: try to find C/P followed by digits
-                    match = re.search(r'([CP])(\d+)', symbol_str)
+                    match = re.search(r"([CP])(\d+)", symbol_str)
                     if match:
                         opt_char = match.group(1)
                         strike_digits = match.group(2)
@@ -523,8 +566,12 @@ class DatabentoAdapter:
                             if len(strike_digits) == 8:
                                 strike_int = int(strike_digits)
                                 strike_decimal = strike_int / 1000.0
-                                strike_price = str(int(strike_decimal)) if strike_decimal.is_integer() else str(strike_decimal)
-            
+                                strike_price = (
+                                    str(int(strike_decimal))
+                                    if strike_decimal.is_integer()
+                                    else str(strike_decimal)
+                                )
+
             # If still not found, check for explicit fields
             if not option_type:
                 if "option_type" in row and pd.notna(row["option_type"]):
@@ -544,7 +591,11 @@ class DatabentoAdapter:
             strike_clean = ""
             if strike_price:
                 # Remove .0 suffix if present, but don't strip trailing zeros from integers
-                strike_clean = strike_price.replace(".0", "").rstrip(".") if "." in strike_price else strike_price
+                strike_clean = (
+                    strike_price.replace(".0", "").rstrip(".")
+                    if "." in strike_price
+                    else strike_price
+                )
             if strike_clean and option_type and expiry_str:
                 symbol = f"{base_asset}-{quote_asset}-{expiry_str}-{strike_clean}-{option_type}@LIN"
             elif expiry_str:
@@ -613,10 +664,18 @@ class DatabentoAdapter:
             "available_to_datetime": expiry_iso,
             "data_types": "ohlcv_1m",  # We fetch OHLCV 1m candles from Databento
             "inverse": False,
-            "contract_size": row.get("contract_size", None) if pd.notna(row.get("contract_size")) else None,
+            "contract_size": (
+                row.get("contract_size", None)
+                if pd.notna(row.get("contract_size"))
+                else None
+            ),
             "underlying": base_asset,  # Human-readable underlying
-            "strike": strike_price if instrument_type == "OPTION" else "",  # Strike price for options
-            "option_type": option_type if instrument_type == "OPTION" else "",  # CALL or PUT for options
+            "strike": (
+                strike_price if instrument_type == "OPTION" else ""
+            ),  # Strike price for options
+            "option_type": (
+                option_type if instrument_type == "OPTION" else ""
+            ),  # CALL or PUT for options
         }
 
     def _normalize_venue(self, exchange: str) -> str:

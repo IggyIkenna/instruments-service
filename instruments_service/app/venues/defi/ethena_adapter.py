@@ -121,4 +121,3 @@ class EthenaAdapter:
             "min_size": "",
             "underlying": underlying,
         }
-

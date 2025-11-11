@@ -119,10 +119,12 @@ class InstrumentDefinition(BaseModel):
 
     # Exchange-specific identifiers
     exchange_raw_symbol: str = Field(
-        default="", description="Raw exchange code from exchange API (e.g., '6A', '6E', 'ES', 'AAPL')"
+        default="",
+        description="Raw exchange code from exchange API (e.g., '6A', '6E', 'ES', 'AAPL')",
     )
     databento_symbol: str = Field(
-        default="", description="Databento query symbol format (e.g., '6A.FUT', 'ES.FUT', 'SPY', 'SPY.OPT')"
+        default="",
+        description="Databento query symbol format (e.g., '6A.FUT', 'ES.FUT', 'SPY', 'SPY.OPT')",
     )
     tardis_symbol: str = Field(
         default="", description="Symbol format used by Tardis API"
@@ -645,7 +647,9 @@ class InstrumentDefinition(BaseModel):
                 # For futures: BASE-QUOTE-YYMMDD@LIN or BASE-QUOTE-YYMMDD@INV (e.g., BTC-USDT-260327@LIN)
                 # Check if last part has @LIN or @INV suffix
                 if len(symbol_parts) >= 3:
-                    potential_date = symbol_parts[-1]  # Could be YYMMDD or YYMMDD@LIN/YYMMDD@INV
+                    potential_date = symbol_parts[
+                        -1
+                    ]  # Could be YYMMDD or YYMMDD@LIN/YYMMDD@INV
                     # Remove @LIN or @INV suffix if present
                     if "@" in potential_date:
                         potential_date = potential_date.split("@")[0]

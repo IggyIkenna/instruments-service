@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 # Try to import web3 for contract interaction
 try:
     from web3 import Web3
+
     WEB3_AVAILABLE = True
 except ImportError:
     WEB3_AVAILABLE = False
@@ -42,7 +43,7 @@ class MorphoAdapter:
         """
         self.chain = chain.upper()
         self.venue = "MORPHO-ETHEREUM"  # Per config.py
-        
+
         # Initialize web3 provider for contract interaction
         self.web3 = None
         if WEB3_AVAILABLE:
@@ -51,25 +52,34 @@ class MorphoAdapter:
                 if not rpc_url:
                     try:
                         from unified_cloud_services import get_secret_with_fallback
+
                         # Try to get Alchemy API key from Secret Manager
                         alchemy_key = get_secret_with_fallback(
-                            project_id=os.getenv("GCP_PROJECT_ID", "central-element-323112"),
+                            project_id=os.getenv(
+                                "GCP_PROJECT_ID", "central-element-323112"
+                            ),
                             secret_name="alchemy-api-key",
                             fallback_env_var="ALCHEMY_API_KEY",
                         )
                         if alchemy_key:
                             # Construct Alchemy RPC URL from API key
                             rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key.strip()}"
-                            logger.info("✅ Constructed Ethereum RPC URL from Alchemy API key")
+                            logger.info(
+                                "✅ Constructed Ethereum RPC URL from Alchemy API key"
+                            )
                         else:
                             # Fallback to direct RPC URL from env var
                             rpc_url = os.getenv("ETHEREUM_RPC_URL")
                             if rpc_url:
-                                logger.info("✅ Using Ethereum RPC URL from environment variable")
+                                logger.info(
+                                    "✅ Using Ethereum RPC URL from environment variable"
+                                )
                     except Exception as e:
-                        logger.warning(f"⚠️ Failed to get RPC URL from Secret Manager: {e}")
+                        logger.warning(
+                            f"⚠️ Failed to get RPC URL from Secret Manager: {e}"
+                        )
                         rpc_url = os.getenv("ETHEREUM_RPC_URL")
-                
+
                 if rpc_url:
                     self.web3 = Web3(Web3.HTTPProvider(rpc_url))
                     if self.web3.is_connected():
@@ -78,18 +88,20 @@ class MorphoAdapter:
                         logger.warning("⚠️ Failed to connect to Ethereum RPC")
                         self.web3 = None
                 else:
-                    logger.warning("⚠️ No RPC URL provided - Morpho contract interaction disabled")
+                    logger.warning(
+                        "⚠️ No RPC URL provided - Morpho contract interaction disabled"
+                    )
             except Exception as e:
                 logger.warning(f"⚠️ Failed to initialize web3: {e}")
-        
+
         # Morpho Blue contract addresses (Ethereum mainnet)
         # Morpho Blue: 0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb
         # MarketParams are stored in Morpho Blue contract
         self.morpho_blue_address = "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb"
-        
+
         # Cache for market configurations
         self._market_config_cache: Dict[str, Dict[str, Any]] = {}
-        
+
         logger.info(f"✅ MorphoAdapter initialized for chain: {self.chain}")
 
     def fetch_markets(self) -> Dict[str, Dict[str, Any]]:
@@ -155,34 +167,50 @@ class MorphoAdapter:
             },
         ]
 
-    def _fetch_market_params_from_contract(self, market_id: str) -> Optional[Dict[str, Any]]:
+    def _fetch_market_params_from_contract(
+        self, market_id: str
+    ) -> Optional[Dict[str, Any]]:
         """
         Fetch MarketParams from Morpho Blue contract.
-        
+
         Args:
             market_id: Market ID (can be market address or market ID hash)
-            
+
         Returns:
             MarketParams dictionary with lltv, liquidationIncentiveFactor, etc.
         """
         if not self.web3 or not WEB3_AVAILABLE:
             return None
-        
+
         if market_id in self._market_config_cache:
             return self._market_config_cache[market_id]
-        
+
         try:
             # Morpho Blue contract ABI (simplified - just the functions we need)
             # MarketParams struct: (loanToken, collateralToken, oracle, irm, lltv)
             # liquidationIncentiveFactor is calculated from lltv
             morpho_blue_abi = [
                 {
-                    "inputs": [{"internalType": "bytes32", "name": "id", "type": "bytes32"}],
+                    "inputs": [
+                        {"internalType": "bytes32", "name": "id", "type": "bytes32"}
+                    ],
                     "name": "idToMarketParams",
                     "outputs": [
-                        {"internalType": "address", "name": "loanToken", "type": "address"},
-                        {"internalType": "address", "name": "collateralToken", "type": "address"},
-                        {"internalType": "address", "name": "oracle", "type": "address"},
+                        {
+                            "internalType": "address",
+                            "name": "loanToken",
+                            "type": "address",
+                        },
+                        {
+                            "internalType": "address",
+                            "name": "collateralToken",
+                            "type": "address",
+                        },
+                        {
+                            "internalType": "address",
+                            "name": "oracle",
+                            "type": "address",
+                        },
                         {"internalType": "address", "name": "irm", "type": "address"},
                         {"internalType": "uint256", "name": "lltv", "type": "uint256"},
                     ],
@@ -190,34 +218,40 @@ class MorphoAdapter:
                     "type": "function",
                 }
             ]
-            
+
             contract = self.web3.eth.contract(
                 address=Web3.to_checksum_address(self.morpho_blue_address),
-                abi=morpho_blue_abi
+                abi=morpho_blue_abi,
             )
-            
+
             # Convert market_id to bytes32 if it's a hex string
             if isinstance(market_id, str) and market_id.startswith("0x"):
                 market_id_bytes = bytes.fromhex(market_id[2:])
                 if len(market_id_bytes) == 32:
-                    market_params = contract.functions.idToMarketParams(market_id_bytes).call()
-                    
+                    market_params = contract.functions.idToMarketParams(
+                        market_id_bytes
+                    ).call()
+
                     # Extract values
                     loan_token = market_params[0]
                     collateral_token = market_params[1]
                     oracle = market_params[2]
                     irm = market_params[3]
                     lltv = market_params[4]
-                    
+
                     # Convert lltv from WAD (1e18) to decimal
                     # lltv is loan-to-liquidation-threshold-value (e.g., 945000000000000000 = 94.5%)
                     lltv_decimal = float(lltv) / 1e18 if lltv else None
-                    
+
                     # Liquidation threshold = 100% (1.0) since lltv is the max LTV
                     # Liquidation bonus = (1 / lltv) - 1
                     liquidation_threshold = 1.0  # Morpho uses lltv as max LTV
-                    liquidation_bonus = (1.0 / lltv_decimal - 1.0) if lltv_decimal and lltv_decimal > 0 else None
-                    
+                    liquidation_bonus = (
+                        (1.0 / lltv_decimal - 1.0)
+                        if lltv_decimal and lltv_decimal > 0
+                        else None
+                    )
+
                     config = {
                         "ltv": lltv_decimal,
                         "liquidation_threshold": liquidation_threshold,
@@ -227,44 +261,48 @@ class MorphoAdapter:
                         "oracle": oracle,
                         "irm": irm,
                     }
-                    
+
                     self._market_config_cache[market_id] = config
                     return config
-            
+
             return None
-            
+
         except Exception as e:
             logger.warning(f"⚠️ Failed to fetch Morpho market params from contract: {e}")
             return None
-    
+
     def _extract_lending_metadata(self, market: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract lending protocol metadata from market data.
-        
+
         Fetches data from:
         - Morpho Blue contract (MarketParams: lltv, liquidationIncentiveFactor)
         - Interest Rate Model contract (if available)
-        
+
         Args:
             market: Market data
-            
+
         Returns:
             Dictionary with lending protocol metadata fields
         """
         # Morpho Blue contract address (flash loan provider)
         flash_loan_providers = self.morpho_blue_address if self.web3 else None
-        
+
         # Try to fetch market params from contract if we have market_id
         market_id = market.get("marketId") or market.get("id")
         market_params = None
         if market_id and self.web3:
             market_params = self._fetch_market_params_from_contract(market_id)
-        
+
         # Extract values from market_params if available
         ltv = market_params.get("ltv") if market_params else None
-        liquidation_threshold = market_params.get("liquidation_threshold") if market_params else None
-        liquidation_bonus = market_params.get("liquidation_bonus") if market_params else None
-        
+        liquidation_threshold = (
+            market_params.get("liquidation_threshold") if market_params else None
+        )
+        liquidation_bonus = (
+            market_params.get("liquidation_bonus") if market_params else None
+        )
+
         return {
             "flash_loan_providers": flash_loan_providers,
             "instadapp_routing": None,  # TODO: Fetch from Instadapp if applicable
@@ -331,7 +369,9 @@ class MorphoAdapter:
             "exchange_raw_symbol": a_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(2023, 6, 1).isoformat(),  # Morpho launch date (June 2023)
+            "available_from_datetime": datetime(
+                2023, 6, 1
+            ).isoformat(),  # Morpho launch date (June 2023)
             "available_to_datetime": None,
             "data_types": "trades,book_snapshot_5",  # Protocol positions - no market data but need valid data_types
             "inverse": False,
@@ -390,7 +430,9 @@ class MorphoAdapter:
             "exchange_raw_symbol": debt_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(2023, 6, 1).isoformat(),  # Morpho launch date (June 2023)
+            "available_from_datetime": datetime(
+                2023, 6, 1
+            ).isoformat(),  # Morpho launch date (June 2023)
             "available_to_datetime": None,
             "data_types": "trades,book_snapshot_5",  # Protocol positions - no market data but need valid data_types
             "inverse": False,

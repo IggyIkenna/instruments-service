@@ -41,8 +41,14 @@ class TestCCXTService:
         mock_exchange_class = Mock()
         mock_exchange_instance = Mock()
         mock_exchange_instance.load_markets.return_value = {
-            "BTC/USDT:USDT": {"precision": {"price": 0.01}, "limits": {"amount": {"min": 0.001}}},
-            "ETH/USDT:USDT": {"precision": {"price": 0.1}, "limits": {"amount": {"min": 0.01}}},
+            "BTC/USDT:USDT": {
+                "precision": {"price": 0.01},
+                "limits": {"amount": {"min": 0.001}},
+            },
+            "ETH/USDT:USDT": {
+                "precision": {"price": 0.1},
+                "limits": {"amount": {"min": 0.01}},
+            },
         }
         mock_getattr.return_value = mock_exchange_class
         mock_exchange_class.return_value = mock_exchange_instance
@@ -87,14 +93,16 @@ class TestCCXTService:
             symbol_id="BTCUSDT",
         )
 
-        assert "tick_size" in metadata or metadata == {}  # May be empty if symbol not found
+        assert (
+            "tick_size" in metadata or metadata == {}
+        )  # May be empty if symbol not found
 
     @patch("instruments_service.app.core.ccxt_service.CCXTService.load_markets")
     def test_get_metadata_no_cache(self, mock_load_markets, ccxt_service):
         """Test metadata retrieval when cache is empty."""
         # Mock load_markets to return None (simulating no markets available)
         mock_load_markets.return_value = None
-        
+
         metadata = ccxt_service.get_metadata(
             venue="BINANCE-FUTURES",
             base_asset="BTC",
@@ -125,4 +133,3 @@ class TestCCXTService:
 
         assert ccxt_service._markets_cache == {}
         assert ccxt_service._cache_timestamps == {}
-
