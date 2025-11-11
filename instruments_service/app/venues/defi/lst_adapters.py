@@ -106,7 +106,9 @@ class EtherFiAdapter:
             "exchange_raw_symbol": symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(2024, 2, 1).isoformat(),  # EtherFi weETH launch date (Feb 2024)
+            "available_from_datetime": datetime(
+                2024, 2, 1
+            ).isoformat(),  # EtherFi weETH launch date (Feb 2024)
             "available_to_datetime": None,
             "data_types": "trades,book_snapshot_5",  # LST tokens trade on DEXes
             "inverse": False,
@@ -215,7 +217,9 @@ class LidoAdapter:
             "exchange_raw_symbol": symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(2020, 12, 18).isoformat(),  # Lido stETH launch date (Dec 18, 2020)
+            "available_from_datetime": datetime(
+                2020, 12, 18
+            ).isoformat(),  # Lido stETH launch date (Dec 18, 2020)
             "available_to_datetime": None,
             "data_types": "trades,book_snapshot_5",  # LST tokens trade on DEXes
             "inverse": False,

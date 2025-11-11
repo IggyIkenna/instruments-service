@@ -91,7 +91,9 @@ class InstrumentsService:
             Dictionary with generation results
         """
         date_str = date.strftime("%Y-%m-%d")
-        logger.info(f"📅 Generating instruments for {date_str} (CeFi={cefi}, TradFi={tradfi}, DeFi={defi})")
+        logger.info(
+            f"📅 Generating instruments for {date_str} (CeFi={cefi}, TradFi={tradfi}, DeFi={defi})"
+        )
 
         all_instruments = {}
 
@@ -121,53 +123,73 @@ class InstrumentsService:
         if tradfi:
             try:
                 from ...config import DatabentoInstrumentConfig
+
                 databento_config = DatabentoInstrumentConfig()
-                
+
                 # Common TradFi exchanges via Databento
                 databento_exchanges = ["CME", "NASDAQ", "NYSE", "ICE", "CBOE"]
-                
+
                 # Track DBEQ.BASIC symbols to avoid duplicate fetches
                 dbeq_symbols_fetched = False
-                
+
                 for exchange in databento_exchanges:
                     try:
                         # For NASDAQ/NYSE, fetch all DBEQ.BASIC symbols once
                         if exchange in ["NASDAQ", "NYSE"]:
                             if dbeq_symbols_fetched:
-                                logger.info(f"⏭️ Skipping {exchange} (already fetched DBEQ.BASIC symbols via NASDAQ)")
+                                logger.info(
+                                    f"⏭️ Skipping {exchange} (already fetched DBEQ.BASIC symbols via NASDAQ)"
+                                )
                                 continue
-                            
+
                             # Get all equities from DBEQ.BASIC dataset
-                            symbols = databento_config._unified.get_symbols_for_dataset("DBEQ.BASIC")
+                            symbols = databento_config._unified.get_symbols_for_dataset(
+                                "DBEQ.BASIC"
+                            )
                             dbeq_symbols_fetched = True
-                            logger.info(f"📋 Fetching all DBEQ.BASIC symbols ({len(symbols)} symbols) for {exchange}")
+                            logger.info(
+                                f"📋 Fetching all DBEQ.BASIC symbols ({len(symbols)} symbols) for {exchange}"
+                            )
                         elif exchange == "CBOE":
                             # Get options symbols for CBOE
-                            symbols = databento_config._unified.get_symbols_for_dataset("OPRA.PILLAR")
-                            logger.info(f"📋 Fetching CBOE options symbols ({len(symbols)} symbols)")
+                            symbols = databento_config._unified.get_symbols_for_dataset(
+                                "OPRA.PILLAR"
+                            )
+                            logger.info(
+                                f"📋 Fetching CBOE options symbols ({len(symbols)} symbols)"
+                            )
                         else:
                             # Get symbols for this exchange from config (exchange names are venues)
                             symbols = databento_config.get_symbols_for_venue(exchange)
-                        
+
                         if not symbols:
-                            logger.warning(f"⚠️ No symbols configured for {exchange}, skipping")
+                            logger.warning(
+                                f"⚠️ No symbols configured for {exchange}, skipping"
+                            )
                             continue
-                        
+
                         # Fetch Databento instruments
-                        databento_instruments = self.processing_service.fetch_databento_instruments(
-                            exchange=exchange,
-                            symbols=symbols,
-                            target_date=date,
+                        databento_instruments = (
+                            self.processing_service.fetch_databento_instruments(
+                                exchange=exchange,
+                                symbols=symbols,
+                                target_date=date,
+                            )
                         )
                         if databento_instruments:
                             all_instruments.update(databento_instruments)
-                            logger.info(f"✅ Processed {len(databento_instruments)} instruments from {exchange}")
+                            logger.info(
+                                f"✅ Processed {len(databento_instruments)} instruments from {exchange}"
+                            )
                     except Exception as e:
                         logger.error(
-                            f"❌ Failed to process Databento exchange {exchange}: {e}", exc_info=True
+                            f"❌ Failed to process Databento exchange {exchange}: {e}",
+                            exc_info=True,
                         )
             except Exception as e:
-                logger.error(f"❌ Failed to initialize Databento processing: {e}", exc_info=True)
+                logger.error(
+                    f"❌ Failed to initialize Databento processing: {e}", exc_info=True
+                )
 
         # Process DEFI protocols
         if defi:
@@ -176,13 +198,13 @@ class InstrumentsService:
                 venues_filter = venues or []
                 if isinstance(venues_filter, str):
                     venues_filter = [venues_filter]
-                
+
                 # Map venues to protocols
                 venue_to_protocol = {
                     "HYPERLIQUID": ("hyperliquid", None),
                     "ASTER": ("aster", None),
                 }
-                
+
                 # Common DeFi protocols
                 all_defi_protocols = [
                     ("uniswap_v2", "ETHEREUM"),
@@ -201,7 +223,7 @@ class InstrumentsService:
                     ("aster", None),
                     ("ethena", "ETHEREUM"),
                 ]
-                
+
                 # Filter protocols if venues specified
                 if venues_filter:
                     defi_protocols = []
@@ -210,36 +232,50 @@ class InstrumentsService:
                             protocol, chain = venue_to_protocol[venue.upper()]
                             defi_protocols.append((protocol, chain))
                     if not defi_protocols:
-                        logger.warning(f"⚠️ No matching protocols found for venues: {venues_filter}")
+                        logger.warning(
+                            f"⚠️ No matching protocols found for venues: {venues_filter}"
+                        )
                         defi_protocols = all_defi_protocols
                 else:
                     defi_protocols = all_defi_protocols
-                
+
                 for protocol, chain in defi_protocols:
                     try:
                         # Fetch DeFi instruments
                         if chain:
-                            defi_instruments = self.processing_service.fetch_defi_instruments(
-                                protocol=protocol,
-                                chain=chain,
-                                target_date=date,
+                            defi_instruments = (
+                                self.processing_service.fetch_defi_instruments(
+                                    protocol=protocol,
+                                    chain=chain,
+                                    target_date=date,
+                                )
                             )
                         else:
-                            defi_instruments = self.processing_service.fetch_defi_instruments(
-                                protocol=protocol,
-                                target_date=date,
+                            defi_instruments = (
+                                self.processing_service.fetch_defi_instruments(
+                                    protocol=protocol,
+                                    target_date=date,
+                                )
                             )
                         if defi_instruments:
                             all_instruments.update(defi_instruments)
-                            logger.info(f"✅ Processed {len(defi_instruments)} instruments from {protocol}")
+                            logger.info(
+                                f"✅ Processed {len(defi_instruments)} instruments from {protocol}"
+                            )
                     except Exception as e:
-                        logger.error(f"❌ Failed to process {protocol}: {e}", exc_info=True)
+                        logger.error(
+                            f"❌ Failed to process {protocol}: {e}", exc_info=True
+                        )
             except Exception as e:
-                logger.error(f"❌ Failed to initialize DeFi processing: {e}", exc_info=True)
+                logger.error(
+                    f"❌ Failed to initialize DeFi processing: {e}", exc_info=True
+                )
 
         # If no mode flags specified, process all three modes
         if not cefi and not tradfi and not defi:
-            logger.info("📋 No mode flags specified, processing all modes (CeFi, TradFi, DeFi)")
+            logger.info(
+                "📋 No mode flags specified, processing all modes (CeFi, TradFi, DeFi)"
+            )
             return await self.generate_instruments_for_date(
                 date=date,
                 exchanges=exchanges,

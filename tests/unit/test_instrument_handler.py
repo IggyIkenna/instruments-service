@@ -52,10 +52,9 @@ class TestInstrumentHandler:
     def mock_instrument_service(self):
         """Create mock instrument service."""
         service = Mock()
-        service.generate_instruments_for_date = AsyncMock(return_value={
-            "status": "success",
-            "instruments_generated": 10
-        })
+        service.generate_instruments_for_date = AsyncMock(
+            return_value={"status": "success", "instruments_generated": 10}
+        )
         service.cleanup = Mock()
         return service
 
@@ -122,10 +121,9 @@ class TestInstrumentHandler:
     ):
         """Test successful instrument generation."""
         # Mock instruments service to return success
-        mock_instrument_service.generate_instruments_for_date = AsyncMock(return_value={
-            "status": "success",
-            "instruments_generated": 10
-        })
+        mock_instrument_service.generate_instruments_for_date = AsyncMock(
+            return_value={"status": "success", "instruments_generated": 10}
+        )
 
         # Mock date to be in the past
         today = datetime.now(timezone.utc).date()
@@ -206,10 +204,9 @@ class TestInstrumentHandler:
         with patch(
             "instruments_service.cli.handlers.instrument_handler.CloudDataProvider"
         ):
-            handler.instruments_service.generate_instruments_for_date = AsyncMock(return_value={
-                "status": "warning",
-                "instruments_generated": 0
-            })
+            handler.instruments_service.generate_instruments_for_date = AsyncMock(
+                return_value={"status": "warning", "instruments_generated": 0}
+            )
             today = datetime.now(timezone.utc).date()
             test_date = today - timedelta(days=1)
 
@@ -230,10 +227,9 @@ class TestInstrumentHandler:
         with patch(
             "instruments_service.cli.handlers.instrument_handler.CloudDataProvider"
         ):
-            handler.instruments_service.generate_instruments_for_date = AsyncMock(return_value={
-                "status": "success",
-                "instruments_generated": 10
-            })
+            handler.instruments_service.generate_instruments_for_date = AsyncMock(
+                return_value={"status": "success", "instruments_generated": 10}
+            )
             today = datetime.now(timezone.utc).date()
             test_date = today - timedelta(days=1)
 
@@ -266,10 +262,9 @@ class TestInstrumentHandler:
 
     def test_generate_instruments_for_date(self, handler, mock_instrument_service):
         """Test generating instruments for a date."""
-        mock_instrument_service.generate_instruments_for_date = AsyncMock(return_value={
-            "status": "success",
-            "instruments_generated": 5
-        })
+        mock_instrument_service.generate_instruments_for_date = AsyncMock(
+            return_value={"status": "success", "instruments_generated": 5}
+        )
 
         today = datetime.now(timezone.utc)
         result = handler._generate_instruments_for_date(
@@ -282,10 +277,9 @@ class TestInstrumentHandler:
         self, handler, mock_instrument_service
     ):
         """Test generating instruments for all exchanges."""
-        mock_instrument_service.generate_instruments_for_date = AsyncMock(return_value={
-            "status": "success",
-            "instruments_generated": 10
-        })
+        mock_instrument_service.generate_instruments_for_date = AsyncMock(
+            return_value={"status": "success", "instruments_generated": 10}
+        )
 
         today = datetime.now(timezone.utc)
         result = handler._generate_instruments_for_date(

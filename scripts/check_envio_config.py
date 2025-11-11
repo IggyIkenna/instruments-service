@@ -13,19 +13,21 @@ import sys
 import requests
 from google.cloud import secretmanager
 
+
 def get_envio_secret():
     """Get Envio API token from Secret Manager."""
     project_id = "central-element-323112"
     secret_id = "envio-api-key"
-    
+
     try:
         client = secretmanager.SecretManagerServiceClient()
         name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
         response = client.access_secret_version(name=name)
-        return response.payload.data.decode('UTF-8').strip()
+        return response.payload.data.decode("UTF-8").strip()
     except Exception as e:
         print(f"❌ Error retrieving secret: {e}")
         return None
+
 
 def test_envio_endpoint(api_url: str, api_token: str):
     """Test Envio GraphQL endpoint with a simple query."""
@@ -38,39 +40,39 @@ def test_envio_endpoint(api_url: str, api_token: str):
       }
     }
     """
-    
+
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_token}"
+        "Authorization": f"Bearer {api_token}",
     }
-    
+
     try:
         response = requests.post(
-            api_url,
-            json={"query": query},
-            headers=headers,
-            timeout=10
+            api_url, json={"query": query}, headers=headers, timeout=10
         )
         response.raise_for_status()
         data = response.json()
-        
+
         if "errors" in data:
             print(f"⚠️  GraphQL errors: {data['errors']}")
             return False
-        
+
         print(f"✅ Endpoint is accessible and responding!")
-        print(f"   Query type: {data.get('data', {}).get('__schema', {}).get('queryType', {}).get('name', 'Unknown')}")
+        print(
+            f"   Query type: {data.get('data', {}).get('__schema', {}).get('queryType', {}).get('name', 'Unknown')}"
+        )
         return True
-        
+
     except requests.exceptions.RequestException as e:
         print(f"❌ Failed to connect to endpoint: {e}")
         return False
+
 
 def main():
     print("=" * 60)
     print("Envio Configuration Checker")
     print("=" * 60)
-    
+
     # Check API token
     print("\n1. Checking Envio API token from Secret Manager...")
     api_token = get_envio_secret()
@@ -79,13 +81,13 @@ def main():
     else:
         print("❌ Failed to retrieve API token")
         return 1
-    
+
     # Check endpoint URL
     print("\n2. Checking ENVIO_API_URL environment variable...")
     api_url = os.getenv("ENVIO_API_URL")
     if api_url:
         print(f"✅ Endpoint URL configured: {api_url}")
-        
+
         # Test endpoint
         print("\n3. Testing endpoint connectivity...")
         if test_envio_endpoint(api_url, api_token):
@@ -116,6 +118,6 @@ def main():
         print("\n   See docs/ENVIO_DEPLOYMENT_GUIDE.md for detailed instructions")
         return 1
 
+
 if __name__ == "__main__":
     sys.exit(main())
-
