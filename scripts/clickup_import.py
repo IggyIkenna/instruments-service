@@ -117,12 +117,12 @@ class ClickUpClient:
     def get_tasks(self, list_id: str, archived: bool = False, include_subtasks: bool = False) -> List[Dict]:
         """
         Get all tasks from a list
-        
+
         Args:
             list_id: ClickUp list ID
             archived: Whether to include archived tasks
             include_subtasks: Whether to include subtasks in the response
-            
+
         Returns:
             List of task dictionaries
         """
@@ -286,7 +286,7 @@ class StatusMdParser:
             # Try alternative pattern
             pattern = r"## Completed Milestones|### Completed Milestones"
             match = re.search(pattern, self.content)
-        
+
         if not match:
             print("⚠️  WARNING: Completed Milestones table not found in STATUS.md")
             return completed_milestones
@@ -295,7 +295,7 @@ class StatusMdParser:
         content_after = self.content[match.end() :]
         table_pattern = r"\|\s*Milestone\s*\|\s*Target Date\s*\|\s*Actual Date\s*\|\s*Status\s*\|\s*Notes\s*\|"
         table_match = re.search(table_pattern, content_after)
-        
+
         if not table_match:
             print("⚠️  WARNING: Completed Milestones table format not found")
             return completed_milestones
@@ -393,7 +393,7 @@ class StatusMdParser:
                 continue
 
             section_content = content_after[section_match.end() :]
-            
+
             # Stop at next section (### or ##)
             next_section_match = re.search(r"\n(###|##)", section_content)
             if next_section_match:
@@ -416,7 +416,7 @@ class StatusMdParser:
                 # Also handle numbered prefixes: - [ ] 1.) Task Name - ...
                 task_pattern = r"- \[ \] (\d+\.\)\s*)?([^-]+) - `([^`]+)` - `Owner:\s*([^`]+)` - `Priority:\s*([^`]+)` - `Blocks:\s*([^`]+)` - `Dependencies:\s*([^`]+)`(?:\s*-\s*`Note:\s*([^`]+)`)?"
                 task_match = re.match(task_pattern, line)
-                
+
                 if task_match:
                     numbered_prefix = task_match.group(1)  # e.g., "1.) "
                     task_name = task_match.group(2).strip()
@@ -490,29 +490,29 @@ class StatusMdParser:
             # Try alternative pattern
             pattern = r"## Dependencies|### Dependencies"
             match = re.search(pattern, self.content)
-        
+
         if not match:
             print("⚠️  WARNING: Dependencies section not found in STATUS.md")
             return dependencies
 
         content_after = self.content[match.end() :]
-        
+
         # Parse dependency lines: - `name`: `Status` - `Blocking` - ✅/⏳ description
         # Pattern: - `name`: `Status` - `Blocking` - ✅/⏳ description
         dep_pattern = r"- `([^`]+)`: `([^`]+)` - `([^`]+)` - (.*)"
-        
+
         lines = content_after.split("\n")
         for line in lines[:20]:  # Limit to reasonable number
             if not line.strip():
                 continue
-            
+
             dep_match = re.match(dep_pattern, line)
             if dep_match:
                 dep_name = dep_match.group(1).strip()
                 dep_status = dep_match.group(2).strip()
                 dep_blocking = dep_match.group(3).strip()
                 dep_description = dep_match.group(4).strip()
-                
+
                 # Parse status
                 status_clean = dep_status.lower()
                 if "complete" in status_clean:
@@ -521,7 +521,7 @@ class StatusMdParser:
                 else:
                     status_value = "to do"
                     tags = [self.service_tag, "dependency", "planned"]
-                
+
                 dependencies.append({
                     "name": dep_name,
                     "status": status_value,
@@ -529,7 +529,7 @@ class StatusMdParser:
                     "notes": f"{dep_blocking} - {dep_description}",
                     "blocking": dep_blocking,
                 })
-        
+
         if len(dependencies) == 0:
             print("⚠️  WARNING: No dependencies parsed from Dependencies section")
         else:
@@ -710,7 +710,7 @@ class ClickUpImporter:
         self.all_tasks_from_status_md = (
             set()
         )  # Track all task names from STATUS.md (for orphan detection)
-        
+
         # Detect service name from script path or use provided
         if service_name:
             self.service_name = service_name
@@ -718,7 +718,7 @@ class ClickUpImporter:
             # Extract from script path: {service}/scripts/clickup_import.py -> {service}
             script_path = Path(__file__)
             self.service_name = script_path.parent.parent.name
-        
+
         self.service_tag = self.service_name  # e.g., "instruments-service" or "market-tick-data-handler"
 
         # Calculate week dates based on sprint start
@@ -1098,26 +1098,26 @@ class ClickUpImporter:
     ) -> Optional[str]:
         """
         Find existing strategy milestone parent task or create if it doesn't exist.
-        
+
         Strategy milestone parents are shared across services, so we check if they
         already exist before creating.
-        
+
         Args:
             parent_name: Name of the strategy milestone (e.g., "ML Delta-One Strategy Backtest")
             tags: Tags for the parent task (should NOT include service tag)
             strategies: Strategy names for custom field
             due_date: Optional due date timestamp
-        
+
         Returns:
             Task ID of the parent task, or None if creation failed
         """
         # Check if parent already exists
         existing_parent_id = self.existing_tasks.get(parent_name)
-        
+
         if existing_parent_id:
             print(f"   ✅ Found existing strategy parent: {parent_name}")
             return existing_parent_id
-        
+
         # Parent doesn't exist - create it
         # Note: Parent tasks do NOT have service tag (they're shared)
         parent_task = {
@@ -1127,15 +1127,15 @@ class ClickUpImporter:
             "strategies": strategies,
             "due_date": due_date,
         }
-        
+
         print(f"   🆕 Creating new strategy parent: {parent_name}")
         parent_id = self.create_task(parent_task)
-        
+
         if parent_id:
             # Add to existing_tasks cache so other services can find it
             self.existing_tasks[parent_name] = parent_id
             self.task_map[parent_name] = parent_id
-        
+
         return parent_id
 
     def create_task(
@@ -1239,10 +1239,10 @@ class ClickUpImporter:
             # Normalize task name for matching (handle truncation)
             original_task_name = task_data.get("name", "")
             normalized_task_name = self.normalize_task_name(original_task_name)
-            
+
             # Check both original and normalized names
             existing_task_id = self.existing_tasks.get(original_task_name) or self.existing_tasks.get(normalized_task_name)
-            
+
             # Also check if any existing task name matches (for truncated names)
             if not existing_task_id:
                 for existing_name, existing_id in self.existing_tasks.items():
@@ -1498,7 +1498,7 @@ class ClickUpImporter:
         # Print service information
         print(f"📦 Service: {self.service_name}")
         print(f"🏷️  Service tag: {self.service_tag}")
-        
+
         # Ensure custom fields exist
         print("🔧 Setting up custom fields...")
         self.ensure_custom_fields()
@@ -1537,7 +1537,7 @@ class ClickUpImporter:
         # Separate strategy milestones (cross-service) from service-specific milestones
         strategy_milestones = []
         service_milestones = []
-        
+
         for milestone in milestones:
             if "Strategy" in milestone["name"]:
                 strategy_milestones.append(milestone)
@@ -1579,7 +1579,7 @@ class ClickUpImporter:
             # Parent tasks do NOT have service tag (they're shared across services)
             tags = ["milestone", "strategy-milestone", "cross-service"]
             strategies = []
-            
+
             if "ML Delta-One" in strategy_milestone["name"]:
                 tags.append("ml-delta-one")
                 strategies.append("Delta-One ML")
@@ -1603,17 +1603,17 @@ class ClickUpImporter:
                 strategies=strategies,
                 due_date=strategy_milestone.get("due_date")
             )
-            
+
             if not parent_id:
                 print(f"   ⚠️  Failed to create/find parent for {strategy_milestone['name']}")
                 continue  # Skip creating subtasks if parent doesn't exist
-                
+
                 # Create service-specific subtasks for instruments-service
                 # Distinguish between Code Complete, Batch Data Run, and Daily Backfill (for Live)
                 # Make subtask names unique by including strategy name
                 strategy_prefix = strategy_milestone["name"].replace(" Strategy", "").replace(" ", "-")
                 service_subtasks = []
-                
+
                 if "ML Delta-One" in strategy_milestone["name"]:
                     if "Backtest" in strategy_milestone["name"]:
                         # Code complete (CeFi + TradFi MVP)
@@ -1782,13 +1782,13 @@ class ClickUpImporter:
                             "notes": "Daily T+1 backfill scheduler needed",
                             "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
                         })
-                
+
                 # Create all service subtasks
                 for subtask_data in service_subtasks:
                     subtask_name = subtask_data["name"]
                     # Check if this subtask already exists (might be created by other services)
                     existing_subtask_id = self.existing_tasks.get(subtask_name)
-                    
+
                     if existing_subtask_id:
                         # Update existing subtask to be under this parent
                         update_payload = {"parent": parent_id}
@@ -1820,7 +1820,7 @@ class ClickUpImporter:
         for completed_milestone in completed_milestones:
             tags = [self.service_tag, "milestone", "complete"]
             strategies = []
-            
+
             if "DeFi" in completed_milestone["name"]:
                 tags.append("defi")
                 strategies.append("DeFi")

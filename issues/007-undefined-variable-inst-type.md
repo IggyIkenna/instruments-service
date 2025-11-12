@@ -1,8 +1,8 @@
 # Issue 007: Undefined Variable `inst_type` in `_populate_complete_instrument_data`
 
-**Status**: RESOLVED  
-**Severity**: CRITICAL  
-**Date Found**: 2025-11-06  
+**Status**: RESOLVED
+**Severity**: CRITICAL
+**Date Found**: 2025-11-06
 **Date Resolved**: 2025-11-06
 
 ## Description
@@ -47,4 +47,3 @@ else:
 2. **Linting**: Use linters that catch undefined variables
 3. **Testing**: Run tests after code changes to catch runtime errors
 4. **Incremental Changes**: Make complete changes rather than partial edits
-

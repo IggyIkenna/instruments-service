@@ -77,4 +77,3 @@ def clear_pool():
     with _POOL_LOCK:
         _SESSION_POOL.clear()
         logger.debug("Cleared HTTP session pool")
-

@@ -57,9 +57,7 @@ class AaveV3Adapter:
                 from unified_cloud_services import get_secret_with_fallback
 
                 secret_name = os.getenv("AAVESCAN_SECRET_NAME", "aavescan-api-key")
-                project_id = project_id or os.getenv(
-                    "GCP_PROJECT_ID", "central-element-323112"
-                )
+                project_id = project_id or os.getenv("GCP_PROJECT_ID", "central-element-323112")
 
                 self.api_key = get_secret_with_fallback(
                     project_id=project_id,
@@ -72,9 +70,7 @@ class AaveV3Adapter:
                         f"✅ Retrieved AaveScan API key from Secret Manager (secret: {secret_name})"
                     )
             except ImportError:
-                logger.warning(
-                    "unified-cloud-services not available, falling back to env var"
-                )
+                logger.warning("unified-cloud-services not available, falling back to env var")
                 self.api_key = os.getenv("AAVESCAN_API_KEY")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
@@ -99,9 +95,7 @@ class AaveV3Adapter:
                 pass
 
         # Store project_id for later use
-        self.project_id = project_id or os.getenv(
-            "GCP_PROJECT_ID", "central-element-323112"
-        )
+        self.project_id = project_id or os.getenv("GCP_PROJECT_ID", "central-element-323112")
 
         # Cache Alchemy API key at initialization to avoid repeated Secret Manager calls
         # get_secret_with_fallback now includes caching internally
@@ -141,9 +135,7 @@ class AaveV3Adapter:
 
         logger.info(f"✅ AaveV3Adapter initialized for chain: {self.chain}")
 
-    def fetch_markets(
-        self, target_date: Optional[datetime] = None
-    ) -> Dict[str, Dict[str, Any]]:
+    def fetch_markets(self, target_date: Optional[datetime] = None) -> Dict[str, Dict[str, Any]]:
         """
         Fetch AAVE V3 markets and convert to instrument definitions.
 
@@ -163,9 +155,7 @@ class AaveV3Adapter:
             for reserve in reserves:
                 try:
                     # Generate aToken instrument
-                    a_token_def = self._create_a_token_instrument(
-                        reserve, target_date=target_date
-                    )
+                    a_token_def = self._create_a_token_instrument(reserve, target_date=target_date)
                     if a_token_def:
                         instruments[a_token_def["instrument_key"]] = a_token_def
 
@@ -177,9 +167,7 @@ class AaveV3Adapter:
                         instruments[debt_token_def["instrument_key"]] = debt_token_def
 
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to process reserve {reserve.get('symbol')}: {e}"
-                    )
+                    logger.warning(f"Failed to process reserve {reserve.get('symbol')}: {e}")
                     continue
 
             logger.info(f"✅ Generated {len(instruments)} AAVE V3 instruments")
@@ -189,9 +177,7 @@ class AaveV3Adapter:
             logger.error(f"Failed to fetch AAVE markets: {e}")
             return {}
 
-    def _fetch_reserves(
-        self, target_date: Optional[datetime] = None
-    ) -> List[Dict[str, Any]]:
+    def _fetch_reserves(self, target_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """
         Fetch reserves from AaveScan Pro API (primary) with optional historical Graph fallback.
 
@@ -199,7 +185,7 @@ class AaveV3Adapter:
             target_date: Optional target date for historical queries. If provided:
                         1. Tries The Graph subgraph once (if not already failed)
                         2. Falls back immediately to current data from AaveScan API (primary source)
-                        
+
                         Note: AaveScan is the primary data source. Graph is only attempted
                         once for historical data, then cached as failed to avoid retries.
 
@@ -209,7 +195,7 @@ class AaveV3Adapter:
         # If target_date is provided, try Graph once (if not already failed), then use AaveScan
         if target_date:
             date_key = target_date.isoformat()
-            
+
             # Try Graph once if we haven't already failed for this date
             if date_key not in self._historical_query_failed:
                 logger.info(
@@ -364,18 +350,11 @@ class AaveV3Adapter:
                                 timeout=10,
                             ).json()
 
-                            if (
-                                "result" in latest_block_data
-                                and latest_block_data["result"]
-                            ):
-                                latest_timestamp = int(
-                                    latest_block_data["result"]["timestamp"], 16
-                                )
+                            if "result" in latest_block_data and latest_block_data["result"]:
+                                latest_timestamp = int(latest_block_data["result"]["timestamp"], 16)
                                 seconds_diff = latest_timestamp - timestamp
                                 estimated_blocks_back = int(seconds_diff / 12)
-                                estimated_block = max(
-                                    0, latest_block - estimated_blocks_back
-                                )
+                                estimated_block = max(0, latest_block - estimated_blocks_back)
 
                                 # Get exact block
                                 block_data = session.post(
@@ -390,9 +369,7 @@ class AaveV3Adapter:
                                 ).json()
 
                                 if "result" in block_data and block_data["result"]:
-                                    block_timestamp = int(
-                                        block_data["result"]["timestamp"], 16
-                                    )
+                                    block_timestamp = int(block_data["result"]["timestamp"], 16)
                                     # Binary search for exact block if needed
                                     if (
                                         abs(block_timestamp - timestamp) > 60
@@ -481,16 +458,12 @@ class AaveV3Adapter:
                 {
                     "inputs": [],
                     "name": "getReservesList",
-                    "outputs": [
-                        {"internalType": "address[]", "name": "", "type": "address[]"}
-                    ],
+                    "outputs": [{"internalType": "address[]", "name": "", "type": "address[]"}],
                     "stateMutability": "view",
                     "type": "function",
                 },
                 {
-                    "inputs": [
-                        {"internalType": "address", "name": "asset", "type": "address"}
-                    ],
+                    "inputs": [{"internalType": "address", "name": "asset", "type": "address"}],
                     "name": "getReserveData",
                     "outputs": [
                         {
@@ -613,7 +586,7 @@ class AaveV3Adapter:
     def _fetch_reserves_from_graph(self, target_date: datetime) -> List[Dict[str, Any]]:
         """
         Fetch reserves from The Graph subgraph for historical data (one-time attempt).
-        
+
         This is a fallback attempt - AaveScan is the primary data source.
         If this fails, it will be cached and AaveScan will be used instead.
 
@@ -624,7 +597,7 @@ class AaveV3Adapter:
             List of reserve dictionaries, or empty list if failed (will trigger AaveScan fallback)
         """
         date_key = target_date.isoformat()
-        
+
         # Check failure cache first - if we already know historical queries fail for this date/block, skip
         if date_key in self._historical_query_failed:
             logger.debug(f"⏭️ Skipping historical Graph query for {date_key} - already failed")
@@ -653,9 +626,7 @@ class AaveV3Adapter:
                     if _API_KEY_CACHE:
                         graph_api_key = _API_KEY_CACHE
                         self.graph_api_key = graph_api_key  # Cache for future use
-                        logger.debug(
-                            "✅ Using cached Graph API key in _fetch_reserves_from_graph"
-                        )
+                        logger.debug("✅ Using cached Graph API key in _fetch_reserves_from_graph")
                 except (ImportError, AttributeError):
                     pass
 
@@ -670,14 +641,10 @@ class AaveV3Adapter:
                 )
                 if graph_api_key:
                     self.graph_api_key = graph_api_key  # Cache for future use
-                    logger.debug(
-                        "✅ Retrieved Graph API key from Secret Manager (first time)"
-                    )
+                    logger.debug("✅ Retrieved Graph API key from Secret Manager (first time)")
 
             if not graph_api_key:
-                logger.warning(
-                    "⚠️ No The Graph API key found - will use AaveScan current data"
-                )
+                logger.warning("⚠️ No The Graph API key found - will use AaveScan current data")
                 # Cache the failure
                 self._historical_query_failed.add(date_key)
                 return []
@@ -793,9 +760,7 @@ query GetReserves($blockNumber: Int!) {
                     response_no_emode.raise_for_status()
                     data = response_no_emode.json()
                     if "errors" in data:
-                        logger.warning(
-                            f"⚠️ GraphQL query errors (no eMode): {data['errors']}"
-                        )
+                        logger.warning(f"⚠️ GraphQL query errors (no eMode): {data['errors']}")
                         # Cache the failure - will use AaveScan
                         self._historical_query_failed.add(date_key)
                         if block_number:
@@ -835,9 +800,7 @@ query GetReserves($blockNumber: Int!) {
                         "address": reserve.get("underlyingAsset", ""),
                         "decimals": reserve.get("decimals", 18),
                     },
-                    "usageAsCollateralEnabled": reserve.get(
-                        "usageAsCollateralEnabled", False
-                    ),
+                    "usageAsCollateralEnabled": reserve.get("usageAsCollateralEnabled", False),
                     "borrowingEnabled": reserve.get("borrowingEnabled", False),
                     "isActive": reserve.get("isActive", True),
                     "isFrozen": reserve.get("isFrozen", False),
@@ -881,17 +844,13 @@ query GetReserves($blockNumber: Int!) {
                 "symbol": "USDT",
                 "underlyingAsset": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
                 "aToken": {"address": "0x3Ed3B47Dd13EC9a98b44e6204A523E766B225811"},
-                "variableDebtToken": {
-                    "address": "0x531842cEbbdD378f8ee36D171d6cC9C4fcf475Ec"
-                },
+                "variableDebtToken": {"address": "0x531842cEbbdD378f8ee36D171d6cC9C4fcf475Ec"},
             },
             {
                 "symbol": "WETH",
                 "underlyingAsset": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
                 "aToken": {"address": "0x4d5F47FA6A74757f35C14fD3a6Ef8E3C9BC514E8"},
-                "variableDebtToken": {
-                    "address": "0xeA51d7853EEFb32b6ee06b1C12E6dcCA88Be0fFE"
-                },
+                "variableDebtToken": {"address": "0xeA51d7853EEFb32b6ee06b1C12E6dcCA88Be0fFE"},
             },
         ]
 
@@ -966,9 +925,7 @@ query GetReserves($blockNumber: Int!) {
             return data
 
         except Exception as e:
-            logger.warning(
-                f"⚠️ Failed to fetch market configurations from AaveScan: {e}"
-            )
+            logger.warning(f"⚠️ Failed to fetch market configurations from AaveScan: {e}")
             return {}
 
     def _fetch_reserve_config_from_graph(
@@ -988,7 +945,9 @@ query GetReserves($blockNumber: Int!) {
         if target_date:
             date_key = target_date.isoformat()
             if date_key in self._historical_query_failed:
-                logger.debug(f"⏭️ Skipping historical Graph config query for {date_key} - already failed")
+                logger.debug(
+                    f"⏭️ Skipping historical Graph config query for {date_key} - already failed"
+                )
                 return None
 
         cache_key = f"{underlying_address}_{target_date.isoformat() if target_date else 'current'}"
@@ -1025,9 +984,7 @@ query GetReserves($blockNumber: Int!) {
                 )
                 if graph_api_key:
                     self.graph_api_key = graph_api_key  # Cache for future use
-                    logger.debug(
-                        "✅ Retrieved Graph API key from Secret Manager (first time)"
-                    )
+                    logger.debug("✅ Retrieved Graph API key from Secret Manager (first time)")
 
             if not graph_api_key:
                 logger.warning("⚠️ No The Graph API key found - skipping subgraph query")
@@ -1210,9 +1167,7 @@ query GetReserve($underlyingAddress: Bytes!) {
     }
 }
 """.strip()
-                        variables_no_emode = {
-                            "underlyingAddress": underlying_address.lower()
-                        }
+                        variables_no_emode = {"underlyingAddress": underlying_address.lower()}
 
                     response_no_emode = session.post(
                         subgraph_url,
@@ -1223,9 +1178,7 @@ query GetReserve($underlyingAddress: Bytes!) {
                     response_no_emode.raise_for_status()
                     data = response_no_emode.json()
                     if "errors" in data:
-                        logger.warning(
-                            f"⚠️ GraphQL query errors (no eMode): {data['errors']}"
-                        )
+                        logger.warning(f"⚠️ GraphQL query errors (no eMode): {data['errors']}")
                         return None
                     # Continue with data without eModeCategoryId
                 elif has_missing_block_error:
@@ -1254,27 +1207,21 @@ query GetReserve($underlyingAddress: Bytes!) {
                 base_ltv = reserve_config.get("baseLTVasCollateral")
                 ltv = float(base_ltv) / 10000.0 if base_ltv is not None else None
 
-                reserve_liquidation_threshold = reserve_config.get(
-                    "reserveLiquidationThreshold"
-                )
+                reserve_liquidation_threshold = reserve_config.get("reserveLiquidationThreshold")
                 liquidation_threshold = (
                     float(reserve_liquidation_threshold) / 10000.0
                     if reserve_liquidation_threshold is not None
                     else None
                 )
 
-                reserve_liquidation_bonus = reserve_config.get(
-                    "reserveLiquidationBonus"
-                )
+                reserve_liquidation_bonus = reserve_config.get("reserveLiquidationBonus")
                 liquidation_bonus = (
                     float(reserve_liquidation_bonus) / 10000.0
                     if reserve_liquidation_bonus is not None
                     else None
                 )
 
-                optimal_utilization_rate_raw = reserve_config.get(
-                    "optimalUtilisationRate"
-                )
+                optimal_utilization_rate_raw = reserve_config.get("optimalUtilisationRate")
                 optimal_utilization_rate = (
                     float(optimal_utilization_rate_raw) / 1e27
                     if optimal_utilization_rate_raw is not None
@@ -1295,9 +1242,7 @@ query GetReserve($underlyingAddress: Bytes!) {
                     else None
                 )
 
-                base_variable_borrow_rate_raw = reserve_config.get(
-                    "baseVariableBorrowRate"
-                )
+                base_variable_borrow_rate_raw = reserve_config.get("baseVariableBorrowRate")
                 base_variable_borrow_rate = (
                     float(base_variable_borrow_rate_raw) / 1e27
                     if base_variable_borrow_rate_raw is not None
@@ -1306,9 +1251,7 @@ query GetReserve($underlyingAddress: Bytes!) {
 
                 reserve_factor_raw = reserve_config.get("reserveFactor")
                 reserve_factor = (
-                    float(reserve_factor_raw) / 10000.0
-                    if reserve_factor_raw is not None
-                    else None
+                    float(reserve_factor_raw) / 10000.0 if reserve_factor_raw is not None else None
                 )
 
                 # Extract reserve mode
@@ -1342,12 +1285,8 @@ query GetReserve($underlyingAddress: Bytes!) {
                     )
                     if emode_category:
                         emode_label = emode_category.get("label")
-                        emode_liquidation_threshold = emode_category.get(
-                            "liquidation_threshold"
-                        )
-                        emode_liquidation_bonus = emode_category.get(
-                            "liquidation_bonus"
-                        )
+                        emode_liquidation_threshold = emode_category.get("liquidation_threshold")
+                        emode_liquidation_bonus = emode_category.get("liquidation_bonus")
                         emode_price_source = emode_category.get("price_source")
                         emode_oracle_id = emode_category.get("oracle_id")
 
@@ -1356,9 +1295,7 @@ query GetReserve($underlyingAddress: Bytes!) {
                     "liquidation_threshold": liquidation_threshold,
                     "liquidation_bonus": liquidation_bonus,
                     "reserve_factor": reserve_factor,
-                    "interest_rate_strategy": reserve_config.get(
-                        "reserveInterestRateStrategy"
-                    ),
+                    "interest_rate_strategy": reserve_config.get("reserveInterestRateStrategy"),
                     "optimal_utilization_rate": optimal_utilization_rate,
                     "variable_rate_slope1": variable_rate_slope1,
                     "variable_rate_slope2": variable_rate_slope2,
@@ -1440,9 +1377,7 @@ query GetReserve($underlyingAddress: Bytes!) {
             # ABI for getReserveData - returns tuple with configuration as first element
             pool_abi = [
                 {
-                    "inputs": [
-                        {"internalType": "address", "name": "asset", "type": "address"}
-                    ],
+                    "inputs": [{"internalType": "address", "name": "asset", "type": "address"}],
                     "name": "getReserveData",
                     "outputs": [
                         {
@@ -1529,13 +1464,11 @@ query GetReserve($underlyingAddress: Bytes!) {
 
             # Call getReserveData - configuration is the first element
             if block_number:
-                reserve_data = pool_contract.functions.getReserveData(
-                    reserve_address
-                ).call(block_identifier=block_number)
+                reserve_data = pool_contract.functions.getReserveData(reserve_address).call(
+                    block_identifier=block_number
+                )
             else:
-                reserve_data = pool_contract.functions.getReserveData(
-                    reserve_address
-                ).call()
+                reserve_data = pool_contract.functions.getReserveData(reserve_address).call()
 
             configuration = reserve_data[0]  # First element is the configuration bitmap
 
@@ -1634,9 +1567,7 @@ query GetReserve($underlyingAddress: Bytes!) {
             # Returns: (uint16 ltv, uint16 liquidationThreshold, uint16 liquidationBonus, address priceSource, string label)
             pool_abi = [
                 {
-                    "inputs": [
-                        {"internalType": "uint8", "name": "id", "type": "uint8"}
-                    ],
+                    "inputs": [{"internalType": "uint8", "name": "id", "type": "uint8"}],
                     "name": "getEModeCategoryData",
                     "outputs": [
                         {"internalType": "uint16", "name": "ltv", "type": "uint16"},
@@ -1667,9 +1598,7 @@ query GetReserve($underlyingAddress: Bytes!) {
             )
 
             # Call getEModeCategoryData using raw call to handle string return type
-            function_abi = pool_abi[
-                0
-            ]  # getEModeCategoryData is the first function in our ABI
+            function_abi = pool_abi[0]  # getEModeCategoryData is the first function in our ABI
             function = pool_contract.functions.getEModeCategoryData(category_id_int)
 
             if block_number:
@@ -1696,9 +1625,7 @@ query GetReserve($underlyingAddress: Bytes!) {
                 # Structure: [offset(32), ltv(32), liquidationThreshold(32), liquidationBonus(32), priceSource(32), string_offset(32), string_length(32), string_data(variable)]
                 # Each value is padded to 32 bytes in ABI encoding
                 ltv_raw = int.from_bytes(result[32:64], byteorder="big")
-                liquidation_threshold_raw = int.from_bytes(
-                    result[64:96], byteorder="big"
-                )
+                liquidation_threshold_raw = int.from_bytes(result[64:96], byteorder="big")
                 liquidation_bonus_raw = int.from_bytes(result[96:128], byteorder="big")
                 price_source_bytes = result[128:148]  # Address is 20 bytes
                 price_source = "0x" + price_source_bytes.hex()
@@ -1706,17 +1633,12 @@ query GetReserve($underlyingAddress: Bytes!) {
                 # String offset is at bytes 160-192 (after priceSource)
                 # The offset is relative to the start of the data (byte 32), not absolute
                 if len(result) >= 192:
-                    string_offset_from_data = int.from_bytes(
-                        result[160:192], byteorder="big"
-                    )
+                    string_offset_from_data = int.from_bytes(result[160:192], byteorder="big")
                     data_start = 32  # Data starts after the initial offset
                     string_metadata_start = data_start + string_offset_from_data
 
                     # String length is at the string_metadata_start position
-                    if (
-                        string_metadata_start > 0
-                        and len(result) >= string_metadata_start + 32
-                    ):
+                    if string_metadata_start > 0 and len(result) >= string_metadata_start + 32:
                         string_length = int.from_bytes(
                             result[string_metadata_start : string_metadata_start + 32],
                             byteorder="big",
@@ -1725,8 +1647,7 @@ query GetReserve($underlyingAddress: Bytes!) {
                         if (
                             string_length > 0
                             and string_length < 256
-                            and len(result)
-                            >= string_metadata_start + 32 + string_length
+                            and len(result) >= string_metadata_start + 32 + string_length
                         ):
                             string_data = result[
                                 string_metadata_start
@@ -1734,9 +1655,7 @@ query GetReserve($underlyingAddress: Bytes!) {
                                 + 32
                                 + string_length
                             ]
-                            label = string_data.decode("utf-8", errors="ignore").rstrip(
-                                "\x00"
-                            )
+                            label = string_data.decode("utf-8", errors="ignore").rstrip("\x00")
                             logger.debug(f"✅ Extracted eMode category label: {label}")
                         else:
                             label = ""
@@ -1749,9 +1668,7 @@ query GetReserve($underlyingAddress: Bytes!) {
                 try:
                     from eth_abi import decode
 
-                    decoded = decode(
-                        ["uint16", "uint16", "uint16", "address", "string"], result
-                    )
+                    decoded = decode(["uint16", "uint16", "uint16", "address", "string"], result)
                     (
                         ltv_raw,
                         liquidation_threshold_raw,
@@ -1771,14 +1688,10 @@ query GetReserve($underlyingAddress: Bytes!) {
             # Convert from basis points (bps) to decimal
             ltv = float(ltv_raw) / 10000.0 if ltv_raw else None
             liquidation_threshold = (
-                float(liquidation_threshold_raw) / 10000.0
-                if liquidation_threshold_raw
-                else None
+                float(liquidation_threshold_raw) / 10000.0 if liquidation_threshold_raw else None
             )
             liquidation_bonus = (
-                float(liquidation_bonus_raw) / 10000.0
-                if liquidation_bonus_raw
-                else None
+                float(liquidation_bonus_raw) / 10000.0 if liquidation_bonus_raw else None
             )
 
             category_data = {
@@ -1798,9 +1711,7 @@ query GetReserve($underlyingAddress: Bytes!) {
             if not target_date:
                 self._emode_category_cache[category_id_int] = category_data
 
-            logger.debug(
-                f"✅ Fetched eMode category {category_id_int} from RPC: {label or 'N/A'}"
-            )
+            logger.debug(f"✅ Fetched eMode category {category_id_int} from RPC: {label or 'N/A'}")
             return category_data
 
         except Exception as e:
@@ -1824,7 +1735,9 @@ query GetReserve($underlyingAddress: Bytes!) {
         if target_date:
             date_key = target_date.isoformat()
             if date_key in self._historical_query_failed:
-                logger.debug(f"⏭️ Skipping historical Graph eMode query for {date_key} - already failed")
+                logger.debug(
+                    f"⏭️ Skipping historical Graph eMode query for {date_key} - already failed"
+                )
                 return None
 
         # Convert category_id to int if it's a string
@@ -1874,9 +1787,7 @@ query GetReserve($underlyingAddress: Bytes!) {
                     logger.debug("✅ Retrieved Graph API key from Secret Manager")
 
             if not graph_api_key:
-                logger.warning(
-                    "⚠️ No The Graph API key found - skipping eMode category query"
-                )
+                logger.warning("⚠️ No The Graph API key found - skipping eMode category query")
                 return None
 
             graph_api_key = graph_api_key.strip()
@@ -1958,9 +1869,7 @@ query GetEModeCategory($categoryId: Int!) {
                     self._historical_query_failed.add(str(block_number))
                     return None
                 else:
-                    logger.warning(
-                        f"⚠️ GraphQL query errors for eMode category: {errors}"
-                    )
+                    logger.warning(f"⚠️ GraphQL query errors for eMode category: {errors}")
                     # Cache the failure
                     if target_date:
                         self._historical_query_failed.add(target_date.isoformat())
@@ -2051,13 +1960,17 @@ query GetEModeCategory($categoryId: Int!) {
         liquidation_threshold_from_aavescan = None
         liquidation_bonus_from_aavescan = None
         reserve_factor_from_aavescan = None
-        
+
         # Try to extract LTV from AaveScan reserve data (try multiple field names)
         ltv_raw = (
-            reserve.get("baseLTVasCollateral") 
-            or reserve.get("baseLTV") 
+            reserve.get("baseLTVasCollateral")
+            or reserve.get("baseLTV")
             or reserve.get("ltv")
-            or (reserve.get("configuration", {}) if isinstance(reserve.get("configuration"), dict) else {}).get("baseLTVasCollateral")
+            or (
+                reserve.get("configuration", {})
+                if isinstance(reserve.get("configuration"), dict)
+                else {}
+            ).get("baseLTVasCollateral")
         )
         if ltv_raw:
             try:
@@ -2065,38 +1978,50 @@ query GetEModeCategory($categoryId: Int!) {
                 ltv_from_aavescan = float(ltv_raw) / 10000.0
             except (ValueError, TypeError):
                 pass
-        
+
         # Try to extract liquidation threshold
         liquidation_threshold_raw = (
             reserve.get("reserveLiquidationThreshold")
             or reserve.get("liquidationThreshold")
             or reserve.get("liquidation_threshold")
-            or (reserve.get("configuration", {}) if isinstance(reserve.get("configuration"), dict) else {}).get("reserveLiquidationThreshold")
+            or (
+                reserve.get("configuration", {})
+                if isinstance(reserve.get("configuration"), dict)
+                else {}
+            ).get("reserveLiquidationThreshold")
         )
         if liquidation_threshold_raw:
             try:
                 liquidation_threshold_from_aavescan = float(liquidation_threshold_raw) / 10000.0
             except (ValueError, TypeError):
                 pass
-        
+
         # Try to extract liquidation bonus
         liquidation_bonus_raw = (
             reserve.get("reserveLiquidationBonus")
             or reserve.get("liquidationBonus")
             or reserve.get("liquidation_bonus")
-            or (reserve.get("configuration", {}) if isinstance(reserve.get("configuration"), dict) else {}).get("reserveLiquidationBonus")
+            or (
+                reserve.get("configuration", {})
+                if isinstance(reserve.get("configuration"), dict)
+                else {}
+            ).get("reserveLiquidationBonus")
         )
         if liquidation_bonus_raw:
             try:
                 liquidation_bonus_from_aavescan = float(liquidation_bonus_raw) / 10000.0
             except (ValueError, TypeError):
                 pass
-        
+
         # Try to extract reserve factor
         reserve_factor_raw = (
             reserve.get("reserveFactor")
             or reserve.get("reserve_factor")
-            or (reserve.get("configuration", {}) if isinstance(reserve.get("configuration"), dict) else {}).get("reserveFactor")
+            or (
+                reserve.get("configuration", {})
+                if isinstance(reserve.get("configuration"), dict)
+                else {}
+            ).get("reserveFactor")
         )
         if reserve_factor_raw:
             try:
@@ -2112,7 +2037,9 @@ query GetEModeCategory($categoryId: Int!) {
                 underlying_address, target_date=target_date
             )
             if not reserve_config:
-                logger.debug(f"⚠️ No reserve config from Graph for {underlying_address} - using AaveScan data")
+                logger.debug(
+                    f"⚠️ No reserve config from Graph for {underlying_address} - using AaveScan data"
+                )
         elif not underlying_address:
             logger.debug(
                 f"⚠️ No underlying_address provided for reserve: {reserve.get('asset', {}).get('symbol', 'unknown')}"
@@ -2201,21 +2128,15 @@ query GetEModeCategory($categoryId: Int!) {
 
             if emode_category:
                 emode_label = emode_category.get("label")
-                emode_liquidation_threshold = emode_category.get(
-                    "liquidation_threshold"
-                )
+                emode_liquidation_threshold = emode_category.get("liquidation_threshold")
                 emode_liquidation_bonus = emode_category.get("liquidation_bonus")
                 emode_price_source = emode_category.get("price_source")
                 emode_oracle_id = emode_category.get("oracle_id")
         elif reserve_config:
             # Fallback: use values from reserve_config if available
-            emode_category_id = emode_category_id or reserve_config.get(
-                "emode_category_id"
-            )
+            emode_category_id = emode_category_id or reserve_config.get("emode_category_id")
             emode_label = reserve_config.get("emode_label")
-            emode_liquidation_threshold = reserve_config.get(
-                "emode_liquidation_threshold"
-            )
+            emode_liquidation_threshold = reserve_config.get("emode_liquidation_threshold")
             emode_liquidation_bonus = reserve_config.get("emode_liquidation_bonus")
             emode_price_source = reserve_config.get("emode_price_source")
             emode_oracle_id = reserve_config.get("emode_oracle_id")
@@ -2253,9 +2174,7 @@ query GetEModeCategory($categoryId: Int!) {
                             strategy.get("address", "").lower()
                             == interest_rate_strategy_address.lower()
                         ):
-                            optimal_utilization_rate = strategy.get(
-                                "optimalUtilizationRate"
-                            )
+                            optimal_utilization_rate = strategy.get("optimalUtilizationRate")
                             variable_rate_slope1 = strategy.get("variableRateSlope1")
                             variable_rate_slope2 = strategy.get("variableRateSlope2")
                             # Convert from Ray (1e27) to decimal if needed
@@ -2268,16 +2187,12 @@ query GetEModeCategory($categoryId: Int!) {
                                     pass
                             if variable_rate_slope1:
                                 try:
-                                    variable_rate_slope1 = (
-                                        float(variable_rate_slope1) / 1e27
-                                    )
+                                    variable_rate_slope1 = float(variable_rate_slope1) / 1e27
                                 except (ValueError, TypeError):
                                     pass
                             if variable_rate_slope2:
                                 try:
-                                    variable_rate_slope2 = (
-                                        float(variable_rate_slope2) / 1e27
-                                    )
+                                    variable_rate_slope2 = float(variable_rate_slope2) / 1e27
                                 except (ValueError, TypeError):
                                     pass
                             break
@@ -2352,9 +2267,7 @@ query GetEModeCategory($categoryId: Int!) {
         instrument_key = f"{self.venue}:A_TOKEN:{a_token_symbol}{chain_suffix}"
 
         # Extract lending protocol metadata (with target_date for historical queries)
-        lending_metadata = self._extract_lending_metadata(
-            reserve, target_date=target_date
-        )
+        lending_metadata = self._extract_lending_metadata(reserve, target_date=target_date)
 
         return {
             "instrument_key": instrument_key,
@@ -2422,9 +2335,7 @@ query GetEModeCategory($categoryId: Int!) {
         instrument_key = f"{self.venue}:DEBT_TOKEN:{debt_token_symbol}{chain_suffix}"
 
         # Extract lending protocol metadata (with target_date for historical queries)
-        lending_metadata = self._extract_lending_metadata(
-            reserve, target_date=target_date
-        )
+        lending_metadata = self._extract_lending_metadata(reserve, target_date=target_date)
 
         return {
             "instrument_key": instrument_key,

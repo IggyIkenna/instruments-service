@@ -33,7 +33,7 @@ python scripts/clickup_import.py \
 
 **Setup**: See `scripts/CLICKUP_GUIDE.md` for complete setup and usage guide.
 
-**Requirements**: 
+**Requirements**:
 - ClickUp API token (get from https://app.clickup.com/settings/apps)
 - ClickUp List ID (from URL)
 - `requests` library (already in requirements.txt)
@@ -60,4 +60,3 @@ When adding new scripts:
 3. **Add shebang**: `#!/usr/bin/env python3` at top
 4. **Add docstring**: Explain purpose and usage
 5. **Handle errors**: Use proper error handling and exit codes
-

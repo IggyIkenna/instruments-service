@@ -1,8 +1,8 @@
 # Issue 002: Deribit Data Types Not Using Only options_chain
 
-**Status**: RESOLVED  
-**Severity**: HIGH  
-**Date Found**: 2025-11-06  
+**Status**: RESOLVED
+**Severity**: HIGH
+**Date Found**: 2025-11-06
 **Date Resolved**: 2025-11-06
 
 ## Description
@@ -63,4 +63,3 @@ After fix:
 1. **Venue-Specific Overrides**: When venue-specific rules exist, check venue before instrument type
 2. **Documentation Alignment**: Ensure code matches documented behavior
 3. **Validation**: Add validation to check venue-specific data type rules
-

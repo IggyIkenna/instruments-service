@@ -43,7 +43,9 @@ def get_web3_client(rpc_url: str) -> Optional[Web3]:
                 return w3
             except Exception:
                 # Connection failed, remove from pool and create new one
-                logger.debug(f"Web3 connection failed, removing from pool: {normalized_url[:50]}...")
+                logger.debug(
+                    f"Web3 connection failed, removing from pool: {normalized_url[:50]}..."
+                )
                 del _WEB3_POOL[normalized_url]
 
     # Create new Web3 instance
@@ -69,4 +71,3 @@ def clear_pool():
     with _POOL_LOCK:
         _WEB3_POOL.clear()
         logger.debug("Cleared Web3 client pool")
-

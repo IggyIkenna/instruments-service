@@ -100,9 +100,7 @@ class SubgraphService:
             if url:
                 self._subgraph_cache[cache_key] = url
                 self._cache_timestamps[cache_key] = datetime.now()
-                logger.info(
-                    f"✅ Resolved subgraph URL for {protocol} on {chain} via Context7"
-                )
+                logger.info(f"✅ Resolved subgraph URL for {protocol} on {chain} via Context7")
                 return url
         except Exception as e:
             logger.debug(f"Context7 resolution failed for {protocol} on {chain}: {e}")
@@ -206,9 +204,7 @@ class SubgraphService:
                 if subgraph_id:
                     # Construct Network endpoint URL
                     url = f"https://gateway.thegraph.com/api/{graph_api_key}/subgraphs/id/{subgraph_id}"
-                    logger.info(
-                        f"✅ Constructed Network subgraph URL for {protocol} on {chain}"
-                    )
+                    logger.info(f"✅ Constructed Network subgraph URL for {protocol} on {chain}")
                     return url
                 else:
                     logger.debug(f"No Network subgraph ID for {protocol} on {chain}")
@@ -246,9 +242,7 @@ class SubgraphService:
         elif protocol:
             # Clear all chains for protocol
             keys_to_remove = [
-                k
-                for k in self._subgraph_cache.keys()
-                if k.startswith(f"{protocol.lower()}_")
+                k for k in self._subgraph_cache.keys() if k.startswith(f"{protocol.lower()}_")
             ]
             for key in keys_to_remove:
                 self._subgraph_cache.pop(key, None)

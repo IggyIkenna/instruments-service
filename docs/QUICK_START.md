@@ -131,5 +131,3 @@ instruments_df = client.get_instruments_for_date(
 ---
 
 *See [SETUP_GUIDE.md](./SETUP_GUIDE.md) for detailed setup instructions.*
-
-
