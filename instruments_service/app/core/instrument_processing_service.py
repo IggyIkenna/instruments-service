@@ -161,8 +161,7 @@ class InstrumentProcessingService:
         self._tardis_project_id = project_id
 
         # Initialize centralized services
-        from instruments_service.app.core.subgraph_service import SubgraphService
-        from instruments_service.app.core.date_filter_service import DateFilterService
+        from unified_cloud_services import SubgraphService, DateFilterService
         from instruments_service.app.core.ccxt_service import CCXTService
 
         self.subgraph_service = SubgraphService()
@@ -1654,6 +1653,48 @@ class InstrumentProcessingService:
                             "contract_size": ccxt_metadata.get("contract_size", ""),
                         }
                     )
+
+                # 2b. Fetch leverage limits and risk parameters for CEFI derivatives
+                # Only populate for PERPETUAL and FUTURE instruments (not SPOT_PAIR unless margin-enabled)
+                if inst_type in ["PERPETUAL", "FUTURE"]:
+                    # Get CCXT symbol format for leverage tiers lookup
+                    ccxt_symbol_for_tiers = (
+                        ccxt_metadata.get("ccxt_symbol", "")
+                        if ccxt_metadata
+                        else f"{base_asset}/{quote_asset}:{quote_asset}"
+                        if quote_asset
+                        else f"{base_asset}/{quote_asset}"
+                    )
+
+                    leverage_limits = self.ccxt_service.get_leverage_limits(
+                        venue=venue,
+                        symbol=ccxt_symbol_for_tiers,
+                        base_asset=base_asset,
+                        quote_asset=quote_asset,
+                        symbol_id=symbol_id,
+                        tardis_symbol=None,
+                    )
+
+                    # Populate risk parameter fields
+                    if leverage_limits:
+                        if leverage_limits.get("max_leverage") is not None:
+                            derived_fields["max_leverage"] = leverage_limits["max_leverage"]
+                        if leverage_limits.get("max_position_size") is not None:
+                            derived_fields["max_position_size"] = leverage_limits[
+                                "max_position_size"
+                            ]
+                        if leverage_limits.get("initial_margin_rate") is not None:
+                            derived_fields["initial_margin_rate"] = leverage_limits[
+                                "initial_margin_rate"
+                            ]
+                        if leverage_limits.get("maintenance_margin_rate") is not None:
+                            derived_fields["maintenance_margin_rate"] = leverage_limits[
+                                "maintenance_margin_rate"
+                            ]
+                        if leverage_limits.get("leverage_tiers_json"):
+                            derived_fields["leverage_tiers_json"] = leverage_limits[
+                                "leverage_tiers_json"
+                            ]
 
             # 3. Business logic fields (from sample logic)
             if venue == "DERIBIT" and quote_asset == "USD":

@@ -12,6 +12,7 @@ Used by:
 """
 
 import logging
+import json
 import ccxt
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
@@ -314,6 +315,201 @@ class CCXTService:
             metadata["contract_size"] = float(contract_size_val)
 
         return metadata
+
+    def get_leverage_limits(
+        self,
+        venue: str,
+        symbol: str,
+        base_asset: str,
+        quote_asset: str,
+        symbol_id: str,
+        tardis_symbol: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Get leverage limits and risk parameters from CCXT leverage tiers.
+
+        Args:
+            venue: Venue identifier
+            symbol: CCXT symbol format (e.g., 'BTC/USDT:USDT')
+            base_asset: Base asset symbol
+            quote_asset: Quote asset symbol
+            symbol_id: Symbol identifier for lookup
+            tardis_symbol: Optional Tardis symbol format for better matching
+
+        Returns:
+            Dictionary with risk parameters: max_leverage, max_position_size,
+            initial_margin_rate, maintenance_margin_rate, leverage_tiers_json
+        """
+        ccxt_data = self.load_markets(venue)
+        if not ccxt_data or not ccxt_data.get("exchange"):
+            return {}
+
+        exchange = ccxt_data["exchange"]
+
+        # Check if exchange supports fetchMarketLeverageTiers
+        if not hasattr(exchange, "fetchMarketLeverageTiers"):
+            logger.debug(
+                f"Exchange {venue} does not support fetchMarketLeverageTiers"
+            )
+            # Try fallback to Context7 documentation lookup
+            return self._get_leverage_limits_fallback(venue)
+
+        try:
+            # Build possible symbol formats
+            possible_symbols = self._build_symbol_formats(
+                venue, base_asset, quote_asset, symbol_id, tardis_symbol
+            )
+
+            # Try to fetch leverage tiers for each symbol format
+            leverage_tiers = None
+            matched_symbol = None
+
+            for symbol_format in possible_symbols:
+                try:
+                    tiers = exchange.fetchMarketLeverageTiers(symbol_format)
+                    if tiers:
+                        leverage_tiers = tiers
+                        matched_symbol = symbol_format
+                        break
+                except Exception as e:
+                    logger.debug(
+                        f"Failed to fetch leverage tiers for {symbol_format}: {e}"
+                    )
+                    continue
+
+            if not leverage_tiers:
+                logger.debug(
+                    f"No leverage tiers found for {venue}:{symbol_id} (tried {len(possible_symbols)} formats)"
+                )
+                # Try fallback
+                return self._get_leverage_limits_fallback(venue)
+
+            # Extract risk parameters from leverage tiers
+            risk_params = self._extract_risk_params_from_tiers(leverage_tiers)
+
+            logger.debug(
+                f"✅ Extracted risk parameters for {venue}:{matched_symbol}: "
+                f"max_leverage={risk_params.get('max_leverage')}, "
+                f"max_position_size={risk_params.get('max_position_size')}"
+            )
+
+            return risk_params
+
+        except Exception as e:
+            logger.debug(
+                f"Error fetching leverage tiers for {venue}:{symbol_id}: {e}"
+            )
+            # Try fallback
+            return self._get_leverage_limits_fallback(venue)
+
+    def _extract_risk_params_from_tiers(
+        self, leverage_tiers: list
+    ) -> Dict[str, Any]:
+        """
+        Extract risk parameters from CCXT leverage tiers structure.
+
+        Args:
+            leverage_tiers: List of leverage tier dictionaries from CCXT
+
+        Returns:
+            Dictionary with extracted risk parameters
+        """
+        if not leverage_tiers or len(leverage_tiers) == 0:
+            return {}
+
+        risk_params = {}
+
+        # Get tier 1 (first tier, typically has highest leverage)
+        tier_1 = leverage_tiers[0] if leverage_tiers else None
+
+        if tier_1:
+            # Extract from tier 1
+            risk_params["max_leverage"] = tier_1.get("maxLeverage")
+            risk_params["initial_margin_rate"] = tier_1.get("initialMargin")
+            risk_params["maintenance_margin_rate"] = tier_1.get(
+                "maintenanceMargin"
+            )
+
+        # Get highest tier (largest maxNotional = max position size)
+        highest_tier = None
+        max_notional = 0
+
+        for tier in leverage_tiers:
+            tier_max_notional = tier.get("maxNotional", 0)
+            if isinstance(tier_max_notional, (int, float)):
+                if tier_max_notional > max_notional:
+                    max_notional = tier_max_notional
+                    highest_tier = tier
+
+        if highest_tier:
+            risk_params["max_position_size"] = max_notional
+
+        # Serialize all tiers to JSON for advanced calculations
+        try:
+            # Convert tiers to serializable format
+            tiers_serializable = []
+            for tier in leverage_tiers:
+                tier_dict = {
+                    "tier": tier.get("tier"),
+                    "minNotional": tier.get("minNotional"),
+                    "maxNotional": tier.get("maxNotional"),
+                    "initialMargin": tier.get("initialMargin"),
+                    "maintenanceMargin": tier.get("maintenanceMargin"),
+                    "maxLeverage": tier.get("maxLeverage"),
+                }
+                tiers_serializable.append(tier_dict)
+
+            risk_params["leverage_tiers_json"] = json.dumps(tiers_serializable)
+        except Exception as e:
+            logger.debug(f"Error serializing leverage tiers to JSON: {e}")
+
+        return risk_params
+
+    def _get_leverage_limits_fallback(self, venue: str) -> Dict[str, Any]:
+        """
+        Fallback method to get exchange-specific default leverage limits.
+
+        Uses hardcoded defaults based on common exchange limits.
+        In the future, this could use Context7 documentation lookup.
+
+        Args:
+            venue: Venue identifier
+
+        Returns:
+            Dictionary with default risk parameters
+        """
+        # Exchange-specific defaults (from common knowledge and Context7 docs)
+        # These are conservative defaults - actual values should come from API when available
+        exchange_defaults = {
+            "BINANCE-FUTURES": {
+                "max_leverage": 125.0,
+                "initial_margin_rate": 0.008,  # ~1/125
+                "maintenance_margin_rate": 0.004,  # ~0.4%
+            },
+            "BYBIT": {
+                "max_leverage": 100.0,
+                "initial_margin_rate": 0.01,  # 1/100
+                "maintenance_margin_rate": 0.005,  # 0.5%
+            },
+            "OKX": {
+                "max_leverage": 125.0,
+                "initial_margin_rate": 0.008,  # ~1/125
+                "maintenance_margin_rate": 0.004,  # ~0.4%
+            },
+            "DERIBIT": {
+                "max_leverage": 100.0,
+                "initial_margin_rate": 0.01,  # 1/100
+                "maintenance_margin_rate": 0.005,  # 0.5%
+            },
+        }
+
+        defaults = exchange_defaults.get(venue, {})
+        if defaults:
+            logger.debug(
+                f"Using fallback defaults for {venue}: max_leverage={defaults.get('max_leverage')}"
+            )
+
+        return defaults
 
     def _is_cache_valid(self, cache_key: str) -> bool:
         """Check if cache is still valid."""
