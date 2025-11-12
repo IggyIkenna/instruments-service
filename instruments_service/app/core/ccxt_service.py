@@ -44,6 +44,9 @@ class CCXTService:
         # Cache markets per venue
         self._markets_cache: Dict[str, Dict[str, Any]] = {}
         self._cache_timestamps: Dict[str, datetime] = {}
+        
+        # Cache leverage tiers per venue (to avoid repeated API calls)
+        self._leverage_tiers_cache: Dict[str, Dict[str, Any]] = {}
 
         logger.info(f"✅ CCXTService initialized (cache TTL: {cache_ttl_hours}h)")
 
@@ -319,6 +322,8 @@ class CCXTService:
     ) -> Dict[str, Any]:
         """
         Get leverage limits and risk parameters from CCXT leverage tiers.
+        
+        Uses caching per venue to avoid repeated API calls for the same exchange.
 
         Args:
             venue: Venue identifier
@@ -332,9 +337,19 @@ class CCXTService:
             Dictionary with risk parameters: max_leverage, max_position_size,
             initial_margin_rate, maintenance_margin_rate, leverage_tiers_json
         """
+        # Check cache first (leverage tiers are usually the same per venue)
+        if venue in self._leverage_tiers_cache:
+            cached_params = self._leverage_tiers_cache[venue]
+            logger.debug(f"Using cached leverage tiers for {venue}")
+            return cached_params.copy()  # Return copy to avoid mutation
+        
         ccxt_data = self.load_markets(venue)
         if not ccxt_data or not ccxt_data.get("exchange"):
-            return {}
+            # Use fallback and cache it
+            fallback_params = self._get_leverage_limits_fallback(venue)
+            if fallback_params:
+                self._leverage_tiers_cache[venue] = fallback_params
+            return fallback_params
 
         exchange = ccxt_data["exchange"]
 
@@ -342,7 +357,10 @@ class CCXTService:
         if not hasattr(exchange, "fetchMarketLeverageTiers"):
             logger.debug(f"Exchange {venue} does not support fetchMarketLeverageTiers")
             # Try fallback to Context7 documentation lookup
-            return self._get_leverage_limits_fallback(venue)
+            fallback_params = self._get_leverage_limits_fallback(venue)
+            if fallback_params:
+                self._leverage_tiers_cache[venue] = fallback_params
+            return fallback_params
 
         try:
             # Build possible symbol formats
@@ -369,14 +387,20 @@ class CCXTService:
                 logger.debug(
                     f"No leverage tiers found for {venue}:{symbol_id} (tried {len(possible_symbols)} formats)"
                 )
-                # Try fallback
-                return self._get_leverage_limits_fallback(venue)
+                # Try fallback and cache it
+                fallback_params = self._get_leverage_limits_fallback(venue)
+                if fallback_params:
+                    self._leverage_tiers_cache[venue] = fallback_params
+                return fallback_params
 
             # Extract risk parameters from leverage tiers
             risk_params = self._extract_risk_params_from_tiers(leverage_tiers)
 
-            logger.debug(
-                f"✅ Extracted risk parameters for {venue}:{matched_symbol}: "
+            # Cache the results for this venue
+            self._leverage_tiers_cache[venue] = risk_params
+
+            logger.info(
+                f"✅ Fetched and cached leverage tiers for {venue}: "
                 f"max_leverage={risk_params.get('max_leverage')}, "
                 f"max_position_size={risk_params.get('max_position_size')}"
             )
@@ -384,9 +408,14 @@ class CCXTService:
             return risk_params
 
         except Exception as e:
-            logger.debug(f"Error fetching leverage tiers for {venue}:{symbol_id}: {e}")
-            # Try fallback
-            return self._get_leverage_limits_fallback(venue)
+            logger.debug(
+                f"Error fetching leverage tiers for {venue}:{symbol_id}: {e}"
+            )
+            # Try fallback and cache it
+            fallback_params = self._get_leverage_limits_fallback(venue)
+            if fallback_params:
+                self._leverage_tiers_cache[venue] = fallback_params
+            return fallback_params
 
     def _extract_risk_params_from_tiers(self, leverage_tiers: list) -> Dict[str, Any]:
         """
