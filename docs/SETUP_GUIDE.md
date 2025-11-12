@@ -167,6 +167,3 @@ pytest tests/unit/ -v
 ## Quick Start
 
 Once setup is complete, see `examples/` directory for usage examples and [`QUICK_START.md`](./QUICK_START.md) for a quick overview.
-
-
-

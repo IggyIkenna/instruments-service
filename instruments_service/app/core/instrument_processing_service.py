@@ -124,9 +124,7 @@ class InstrumentProcessingService:
                         "⚠️ Tardis API key retrieval returned None (only needed for CeFi)"
                     )
             except Exception as e:
-                logger.warning(
-                    f"⚠️ Tardis API key not available (only needed for CeFi): {e}"
-                )
+                logger.warning(f"⚠️ Tardis API key not available (only needed for CeFi): {e}")
                 self.api_key = None  # Not required for DeFi/TradFi modes
         elif not self.api_key:
             logger.debug(
@@ -142,8 +140,7 @@ class InstrumentProcessingService:
         self.data_config = DataTypeConfig()
 
         self.processing_config = InstrumentProcessingConfig(
-            api_key=self.api_key
-            or "",  # Empty string if not available (only needed for CeFi)
+            api_key=self.api_key or "",  # Empty string if not available (only needed for CeFi)
             retry_max_attempts=config.get("retry_max_attempts", 3),
             retry_backoff_factor=config.get("retry_backoff_factor", 1.0),
             enable_ccxt_integration=config.get("enable_ccxt_integration", True),
@@ -336,12 +333,8 @@ class InstrumentProcessingService:
             clean_quote = quote_asset.strip() if quote_asset else ""
 
             # Filter out invalid Unicode characters
-            clean_base = "".join(
-                c for c in clean_base if c.isprintable() and c.isascii()
-            )
-            clean_quote = "".join(
-                c for c in clean_quote if c.isprintable() and c.isascii()
-            )
+            clean_base = "".join(c for c in clean_base if c.isprintable() and c.isascii())
+            clean_quote = "".join(c for c in clean_quote if c.isprintable() and c.isascii())
 
             if not clean_base or not clean_quote:
                 logger.debug(
@@ -355,13 +348,9 @@ class InstrumentProcessingService:
             # Determine settle_asset based on venue/exchange rules (same logic as in process_exchange_instruments)
             settle_asset = "USDT"  # Default
             if venue == "DERIBIT":
-                deribit_quotes = self.exchange_config.valid_quote_currencies.get(
-                    "DERIBIT", []
-                )
+                deribit_quotes = self.exchange_config.valid_quote_currencies.get("DERIBIT", [])
                 if clean_quote == "USD":
-                    settle_asset = (
-                        clean_base  # Coin margin - settle in base asset (inverse)
-                    )
+                    settle_asset = clean_base  # Coin margin - settle in base asset (inverse)
                 elif clean_quote in deribit_quotes and clean_quote != "USD":
                     settle_asset = clean_quote  # Cash settled (USDC, etc.) - linear
             else:
@@ -392,17 +381,13 @@ class InstrumentProcessingService:
                 # Parse expiry from symbol_id using comprehensive patterns
                 expiry_date = self._parse_expiry_from_symbol(symbol_id, exchange)
                 if expiry_date:
-                    logger.debug(
-                        f"✅ Parsed expiry from symbol: {symbol_id} → {expiry_date}"
-                    )
+                    logger.debug(f"✅ Parsed expiry from symbol: {symbol_id} → {expiry_date}")
 
             if expiry_date:
                 # Format as YYMMDD
                 if isinstance(expiry_date, str):
                     try:
-                        expiry_dt = datetime.fromisoformat(
-                            expiry_date.replace("Z", "+00:00")
-                        )
+                        expiry_dt = datetime.fromisoformat(expiry_date.replace("Z", "+00:00"))
                         expiry_str = expiry_dt.strftime("%y%m%d")
                     except:
                         expiry_str = expiry_date  # Use as-is if parsing fails
@@ -432,13 +417,9 @@ class InstrumentProcessingService:
                 # Use same logic as perpetuals
                 settle_asset = "USDT"  # Default
                 if venue == "DERIBIT":
-                    deribit_quotes = self.exchange_config.valid_quote_currencies.get(
-                        "DERIBIT", []
-                    )
+                    deribit_quotes = self.exchange_config.valid_quote_currencies.get("DERIBIT", [])
                     if clean_quote == "USD":
-                        settle_asset = (
-                            clean_base  # Coin margin - settle in base asset (inverse)
-                        )
+                        settle_asset = clean_base  # Coin margin - settle in base asset (inverse)
                     elif clean_quote in deribit_quotes and clean_quote != "USD":
                         settle_asset = clean_quote  # Cash settled (USDC, etc.) - linear
                 else:
@@ -461,17 +442,14 @@ class InstrumentProcessingService:
 
                 return f"{venue}:FUTURE:{clean_base}-{clean_quote}-{expiry_str}@{future_flavor}"
             else:
-                logger.warning(
-                    f"Missing expiry date for future {symbol_id} exchange: {exchange}"
-                )
+                logger.warning(f"Missing expiry date for future {symbol_id} exchange: {exchange}")
                 return None
 
         elif instrument_type == "OPTION":
             # Filter complex Deribit option strategies using config
 
             if exchange == "deribit" and any(
-                strategy in symbol_id
-                for strategy in self.data_config.excluded_deribit_strategies
+                strategy in symbol_id for strategy in self.data_config.excluded_deribit_strategies
             ):
                 logger.debug(f"Filtered complex Deribit strategy option: {symbol_id}")
                 return None  # Skip complex strategies per config
@@ -486,9 +464,7 @@ class InstrumentProcessingService:
                 parsed_option = self._parse_option_components(symbol_id, exchange)
                 expiry_date = expiry_date or parsed_option.get("expiry_date")
                 strike_price = strike_price or parsed_option.get("strike_price")
-                option_type = (
-                    option_type or parsed_option.get("option_type", "").upper()
-                )
+                option_type = option_type or parsed_option.get("option_type", "").upper()
 
             if not all([expiry_date, strike_price, option_type]):
                 logger.warning(f"Missing option parameters for {symbol_id}")
@@ -497,9 +473,7 @@ class InstrumentProcessingService:
             # Format expiry as YYMMDD
             if isinstance(expiry_date, str):
                 try:
-                    expiry_dt = datetime.fromisoformat(
-                        expiry_date.replace("Z", "+00:00")
-                    )
+                    expiry_dt = datetime.fromisoformat(expiry_date.replace("Z", "+00:00"))
                     expiry_str = expiry_dt.strftime("%y%m%d")
                 except:
                     expiry_str = expiry_date
@@ -512,13 +486,9 @@ class InstrumentProcessingService:
             clean_quote = quote_asset.upper()
             settle_asset = "USDT"  # Default
             if venue == "DERIBIT":
-                deribit_quotes = self.exchange_config.valid_quote_currencies.get(
-                    "DERIBIT", []
-                )
+                deribit_quotes = self.exchange_config.valid_quote_currencies.get("DERIBIT", [])
                 if clean_quote == "USD":
-                    settle_asset = (
-                        clean_base  # Coin margin - settle in base asset (inverse)
-                    )
+                    settle_asset = clean_base  # Coin margin - settle in base asset (inverse)
                 elif clean_quote in deribit_quotes and clean_quote != "USD":
                     settle_asset = clean_quote  # Cash settled (USDC, etc.) - linear
             else:
@@ -597,9 +567,7 @@ class InstrumentProcessingService:
         )
         # Convert list to dict keyed by symbol_id
         available_symbols = {
-            symbol.get("id", ""): symbol
-            for symbol in available_symbols_list
-            if symbol.get("id")
+            symbol.get("id", ""): symbol for symbol in available_symbols_list if symbol.get("id")
         }
 
         # Filter instruments available at target date AND exclude unwanted types
@@ -611,9 +579,7 @@ class InstrumentProcessingService:
 
             # Filter excluded instrument types (e.g., combos)
             if symbol_type in self.data_config.excluded_instrument_types:
-                logger.debug(
-                    f"Filtered excluded instrument type: {symbol_id} ({symbol_type})"
-                )
+                logger.debug(f"Filtered excluded instrument type: {symbol_id} ({symbol_type})")
                 continue
 
             # Filter problematic Binance instruments with weird naming patterns
@@ -632,9 +598,7 @@ class InstrumentProcessingService:
                 f"✅ Filtered to {len(instruments_data)} instruments available on {date_str}"
             )
         else:
-            logger.info(
-                f"✅ Retrieved {len(instruments_data)} currently active instruments"
-            )
+            logger.info(f"✅ Retrieved {len(instruments_data)} currently active instruments")
         return instruments_data, date_filtered_count
 
     async def process_exchange_instruments(
@@ -661,24 +625,16 @@ class InstrumentProcessingService:
         # This filters out invalid instrument types, quote currencies (even in force mode)
         # Expected to reduce from ~250k to ~10k instruments across all exchanges
         canonical_venue = self.normalize_venue(exchange)
-        valid_types = self.exchange_config.exchange_instrument_types.get(
-            canonical_venue, []
-        )
-        valid_quotes = self.exchange_config.valid_quote_currencies.get(
-            canonical_venue, ["USDT"]
-        )
+        valid_types = self.exchange_config.exchange_instrument_types.get(canonical_venue, [])
+        valid_quotes = self.exchange_config.valid_quote_currencies.get(canonical_venue, ["USDT"])
 
         logger.info(
             f"🔍 Pre-filtering by exchange config: {canonical_venue} accepts types={valid_types}, quotes={valid_quotes}"
         )
 
         # Get excluded base currencies and symbol patterns for this exchange
-        excluded_bases = self.exchange_config.excluded_base_currencies.get(
-            canonical_venue, []
-        )
-        excluded_patterns = self.exchange_config.excluded_symbol_patterns.get(
-            canonical_venue, []
-        )
+        excluded_bases = self.exchange_config.excluded_base_currencies.get(canonical_venue, [])
+        excluded_patterns = self.exchange_config.excluded_symbol_patterns.get(canonical_venue, [])
 
         # Pre-filter by exchange config before expensive processing
         pre_filtered = {}
@@ -710,9 +666,7 @@ class InstrumentProcessingService:
                 base_asset = parsed_components.get("base_asset", "").upper()
                 quote_asset = parsed_components.get("quote_asset", "").upper()
             else:
-                base_asset, quote_asset = (
-                    parsed_components if parsed_components else ("", "")
-                )
+                base_asset, quote_asset = parsed_components if parsed_components else ("", "")
                 base_asset = base_asset.upper() if base_asset else ""
                 quote_asset = quote_asset.upper() if quote_asset else ""
 
@@ -766,9 +720,7 @@ class InstrumentProcessingService:
 
                 if canonical_key:
                     # Parse base/quote from symbol_id (Tardis doesn't provide these fields)
-                    parsed_components = self._parse_symbol_components(
-                        symbol_id, exchange
-                    )
+                    parsed_components = self._parse_symbol_components(symbol_id, exchange)
                     if isinstance(parsed_components, dict):
                         base_asset = parsed_components.get("base_asset", "")
                         quote_asset = parsed_components.get("quote_asset", "")
@@ -778,14 +730,8 @@ class InstrumentProcessingService:
                         )
 
                     # Clean and validate parsed values (fix NoneType errors)
-                    clean_base = (
-                        str(base_asset or "").upper() if base_asset is not None else ""
-                    )
-                    clean_quote = (
-                        str(quote_asset or "").upper()
-                        if quote_asset is not None
-                        else ""
-                    )
+                    clean_base = str(base_asset or "").upper() if base_asset is not None else ""
+                    clean_quote = str(quote_asset or "").upper() if quote_asset is not None else ""
 
                     # Filter nonsensical pairs: base_asset == quote_asset (USDT-USDT, BTC-BTC, etc.)
                     if clean_base == clean_quote and clean_base:
@@ -799,15 +745,11 @@ class InstrumentProcessingService:
                     settle_asset = "USDT"
                     canonical_venue = self.normalize_venue(exchange)
                     if canonical_venue == "DERIBIT":
-                        deribit_quotes = (
-                            self.exchange_config.valid_quote_currencies.get(
-                                "DERIBIT", []
-                            )
+                        deribit_quotes = self.exchange_config.valid_quote_currencies.get(
+                            "DERIBIT", []
                         )
                         if clean_quote == "USD":
-                            settle_asset = (
-                                clean_base  # Coin margin - settle in base asset
-                            )
+                            settle_asset = clean_base  # Coin margin - settle in base asset
                         elif clean_quote in deribit_quotes and clean_quote != "USD":
                             settle_asset = clean_quote  # Cash settled (USDC, etc.)
 
@@ -852,11 +794,9 @@ class InstrumentProcessingService:
                         canonical_venue,
                         normalized_instrument_type or "SPOT_PAIR",
                     )
-                    tardis_exchange = (
-                        self.venue_mapping.venue_instrument_type_to_tardis.get(
-                            mapping_key,
-                            exchange.lower(),  # Fallback to original exchange name
-                        )
+                    tardis_exchange = self.venue_mapping.venue_instrument_type_to_tardis.get(
+                        mapping_key,
+                        exchange.lower(),  # Fallback to original exchange name
                     )
 
                     # CRITICAL: Get available_to from Tardis API (availableTo field)
@@ -894,9 +834,7 @@ class InstrumentProcessingService:
                                     )
                                     continue
                             except Exception as e:
-                                logger.debug(
-                                    f"⚠️ Could not parse expiry '{expiry_str}': {e}"
-                                )
+                                logger.debug(f"⚠️ Could not parse expiry '{expiry_str}': {e}")
 
                     metadata = InstrumentDefinition(
                         instrument_key=canonical_key,
@@ -931,9 +869,7 @@ class InstrumentProcessingService:
 
         # Log detailed filtering statistics
         total_filtered = sum(v for k, v in filter_stats.items() if k != "success")
-        logger.info(
-            f"📊 Processed {len(processed_instruments)} instruments from {exchange}"
-        )
+        logger.info(f"📊 Processed {len(processed_instruments)} instruments from {exchange}")
         if total_filtered > 0:
             logger.info(
                 f"🔍 Filtering breakdown for {exchange}: "
@@ -971,18 +907,14 @@ class InstrumentProcessingService:
 
         # Filter supported exchanges
         supported_exchanges = [
-            ex
-            for ex in exchanges
-            if ex.lower() in self.processing_config.supported_exchanges
+            ex for ex in exchanges if ex.lower() in self.processing_config.supported_exchanges
         ]
 
         if not supported_exchanges:
             logger.warning(f"No supported exchanges in: {exchanges}")
             return {}
 
-        logger.info(
-            f"🚀 Processing {len(supported_exchanges)} exchanges: {supported_exchanges}"
-        )
+        logger.info(f"🚀 Processing {len(supported_exchanges)} exchanges: {supported_exchanges}")
 
         # Process exchanges individually for now (can be parallelized later with ConcurrencyService)
         all_instruments = {}
@@ -994,9 +926,7 @@ class InstrumentProcessingService:
                 )
                 all_instruments.update(exchange_instruments)
 
-                logger.info(
-                    f"✅ {exchange}: {len(exchange_instruments)} instruments processed"
-                )
+                logger.info(f"✅ {exchange}: {len(exchange_instruments)} instruments processed")
 
             except Exception as e:
                 logger.error(f"❌ Failed to process {exchange}: {e}")
@@ -1013,18 +943,12 @@ class InstrumentProcessingService:
         valid_types = self.exchange_config.exchange_instrument_types.get(
             canonical_venue, ["SPOT_PAIR"]
         )
-        valid_quotes = self.exchange_config.valid_quote_currencies.get(
-            canonical_venue, ["USDT"]
-        )
+        valid_quotes = self.exchange_config.valid_quote_currencies.get(canonical_venue, ["USDT"])
         is_derivative = canonical_venue in self.exchange_config.derivative_exchanges
 
         # Get excluded base currencies and symbol patterns for this exchange
-        excluded_bases = self.exchange_config.excluded_base_currencies.get(
-            canonical_venue, []
-        )
-        excluded_patterns = self.exchange_config.excluded_symbol_patterns.get(
-            canonical_venue, []
-        )
+        excluded_bases = self.exchange_config.excluded_base_currencies.get(canonical_venue, [])
+        excluded_patterns = self.exchange_config.excluded_symbol_patterns.get(canonical_venue, [])
 
         filtered = {}
 
@@ -1110,9 +1034,7 @@ class InstrumentProcessingService:
         else:
             inst_type = inst_data.get("instrument_type", "SPOT_PAIR")
             inst_data["data_types"] = ",".join(
-                self.data_config.instrument_data_types.get(
-                    inst_type, ["trades", "book_snapshot_5"]
-                )
+                self.data_config.instrument_data_types.get(inst_type, ["trades", "book_snapshot_5"])
             )
 
         return inst_data
@@ -1260,9 +1182,7 @@ class InstrumentProcessingService:
                         logger.debug(f"✅ Valid Binance 1000x multiplier: {s}")
                         # Continue to normal parsing - these are legitimate
                     elif s and s[0].isdigit():
-                        logger.debug(
-                            f"🚫 Binance invalid: {s} starts with number (non-1000x)"
-                        )
+                        logger.debug(f"🚫 Binance invalid: {s} starts with number (non-1000x)")
                         return "", ""  # Invalid pattern
 
                     # Filter USDT as base (should be quote only)
@@ -1280,10 +1200,7 @@ class InstrumentProcessingService:
                             "NGN",
                             "ZAR",
                         ]
-                        if any(
-                            s.upper().endswith(f"USDT{suffix}")
-                            for suffix in usdt_suffixes
-                        ):
+                        if any(s.upper().endswith(f"USDT{suffix}") for suffix in usdt_suffixes):
                             logger.debug(f"🚫 Binance invalid: {s} has USDT as base")
                             return "", ""  # Invalid USDT base pattern
 
@@ -1380,9 +1297,7 @@ class InstrumentProcessingService:
                         return {"base_asset": first_part, "quote_asset": "USD"}
 
                 # Spot: BTC_USDC, ETH_BTC, USDC_USDT
-                elif "_" in symbol_id and not any(
-                    x in symbol_id for x in ["-", "PERPETUAL"]
-                ):
+                elif "_" in symbol_id and not any(x in symbol_id for x in ["-", "PERPETUAL"]):
                     parts = symbol_id.split("_")
                     if len(parts) == 2:
                         return {"base_asset": parts[0], "quote_asset": parts[1]}
@@ -1397,10 +1312,8 @@ class InstrumentProcessingService:
                     base_currency = base_currency.rstrip("_")
 
                     # Check if quote is valid for Deribit using centralized config
-                    deribit_valid_quotes = (
-                        self.exchange_config.valid_quote_currencies.get(
-                            "DERIBIT", ["USD"]
-                        )
+                    deribit_valid_quotes = self.exchange_config.valid_quote_currencies.get(
+                        "DERIBIT", ["USD"]
                     )
                     if (
                         detected_quote in deribit_valid_quotes
@@ -1489,16 +1402,12 @@ class InstrumentProcessingService:
                     "RON",
                     "UAH",
                 ]
-                crypto_quotes.sort(
-                    key=len, reverse=True
-                )  # Longest first to avoid false matches
+                crypto_quotes.sort(key=len, reverse=True)  # Longest first to avoid false matches
 
                 for quote in crypto_quotes:
                     if clean_symbol.endswith(quote):
                         base = clean_symbol[: -len(quote)]
-                        if (
-                            base and len(base) >= 2
-                        ):  # Meaningful base asset (avoid single chars)
+                        if base and len(base) >= 2:  # Meaningful base asset (avoid single chars)
                             # BINANCE-specific filtering: exclude invalid patterns
                             if exchange in ["binance", "binance-futures"]:
                                 # Filter symbols starting with numbers (invalid)
@@ -1515,9 +1424,7 @@ class InstrumentProcessingService:
                                     )
                                     return {"base_asset": "", "quote_asset": ""}
 
-                            logger.debug(
-                                f"✅ Valid compound: {symbol_id} → '{base}' + '{quote}'"
-                            )
+                            logger.debug(f"✅ Valid compound: {symbol_id} → '{base}' + '{quote}'")
                             return {"base_asset": base, "quote_asset": quote}
 
                 # PRIORITY 2: Suffix removal fallback with Binance validation
@@ -1548,17 +1455,11 @@ class InstrumentProcessingService:
                 if symbol_id.startswith("PERP-"):
                     quote_part = symbol_id[5:]  # Remove 'PERP-' prefix
                     if quote_part in ["USDT", "USDC", "USD"]:
-                        logger.debug(
-                            f"✅ OKX PERP pattern: {symbol_id} → 'PERP' + '{quote_part}'"
-                        )
+                        logger.debug(f"✅ OKX PERP pattern: {symbol_id} → 'PERP' + '{quote_part}'")
                         return {"base_asset": "PERP", "quote_asset": quote_part}
 
                 # Standard OKX patterns: BTC-USDT, BTC-USD-SWAP, etc.
-                clean_id = (
-                    symbol_id.replace("PERP", "")
-                    .replace("SWAP", "")
-                    .replace("-SWAP", "")
-                )
+                clean_id = symbol_id.replace("PERP", "").replace("SWAP", "").replace("-SWAP", "")
 
                 # Use comprehensive suffix removal
                 base_currency, detected_quote = remove_suffix(clean_id)
@@ -1606,17 +1507,13 @@ class InstrumentProcessingService:
             if inst_type == "OPTION":
                 # Use the original tardis exchange name for parsing (FIXED use context7)
                 tardis_exchange = exchange or venue.lower()
-                option_components = self._parse_option_components(
-                    symbol_id, tardis_exchange
-                )
+                option_components = self._parse_option_components(symbol_id, tardis_exchange)
                 logger.debug(
                     f"🔍 Option components for {symbol_id} (exchange: {tardis_exchange}): {option_components}"
                 )
                 derived_fields.update(
                     {
-                        "expiry": option_components.get(
-                            "expiry_date", "2025-12-25T08:00:00Z"
-                        ),
+                        "expiry": option_components.get("expiry_date", "2025-12-25T08:00:00Z"),
                         "strike": option_components.get("strike_price", ""),
                         "option_type": option_components.get("option_type", "").upper(),
                     }
@@ -1661,9 +1558,11 @@ class InstrumentProcessingService:
                     ccxt_symbol_for_tiers = (
                         ccxt_metadata.get("ccxt_symbol", "")
                         if ccxt_metadata
-                        else f"{base_asset}/{quote_asset}:{quote_asset}"
-                        if quote_asset
-                        else f"{base_asset}/{quote_asset}"
+                        else (
+                            f"{base_asset}/{quote_asset}:{quote_asset}"
+                            if quote_asset
+                            else f"{base_asset}/{quote_asset}"
+                        )
                     )
 
                     leverage_limits = self.ccxt_service.get_leverage_limits(
@@ -1701,17 +1600,12 @@ class InstrumentProcessingService:
                 derived_fields["inverse"] = True
             elif (
                 venue == "DERIBIT"
-                and quote_asset
-                in self.exchange_config.valid_quote_currencies.get("DERIBIT", [])
+                and quote_asset in self.exchange_config.valid_quote_currencies.get("DERIBIT", [])
             ):
                 derived_fields["inverse"] = False
 
             # 4. Underlying asset for derivatives
-            if (
-                inst_type in ["PERPETUAL", "FUTURE", "OPTION"]
-                and base_asset
-                and quote_asset
-            ):
+            if inst_type in ["PERPETUAL", "FUTURE", "OPTION"] and base_asset and quote_asset:
                 derived_fields["underlying"] = f"{base_asset}-{quote_asset}"
 
             return derived_fields
@@ -1737,9 +1631,7 @@ class InstrumentProcessingService:
                         r"-(\d{6})-(\d+)-(CALL|PUT)$"
                     ),  # Date-Strike-Type: -240329-120000-CALL
                     re.compile(r"-(\d+)-(C|P)$"),  # Short format: -50000-C
-                    re.compile(
-                        r"-(\d+d?\d*)-"
-                    ),  # Traditional: -50000- (least specific, last)
+                    re.compile(r"-(\d+d?\d*)-"),  # Traditional: -50000- (least specific, last)
                 ]
 
                 # Enhanced option type patterns
@@ -1754,16 +1646,10 @@ class InstrumentProcessingService:
                     strike_match = pattern.search(symbol_id)
                     if strike_match:
                         # Handle different pattern groups (updated for reordered patterns)
-                        if (
-                            i == 0
-                        ):  # Date-Strike-Type pattern: -240329-120000-CALL (now first)
-                            strike_raw = strike_match.group(
-                                2
-                            )  # Second group is strike price
+                        if i == 0:  # Date-Strike-Type pattern: -240329-120000-CALL (now first)
+                            strike_raw = strike_match.group(2)  # Second group is strike price
                         else:  # Traditional patterns
-                            strike_raw = strike_match.group(
-                                1
-                            )  # First group is strike price
+                            strike_raw = strike_match.group(1)  # First group is strike price
 
                         # Convert Deribit decimal format (1d14 -> 1.14, 0d455 -> 0.455)
                         if "d" in strike_raw:
@@ -1863,13 +1749,9 @@ class InstrumentProcessingService:
             expiry_patterns = {
                 "deribit": [
                     re.compile(r"-(\d{2}[A-Z]{3}\d{2})-"),  # BTC-25DEC25-50000-C
-                    re.compile(
-                        r"-(\d{1}[A-Z]{3}\d{2})-"
-                    ),  # BTC-7NOV25-50000-C (single digit day)
+                    re.compile(r"-(\d{1}[A-Z]{3}\d{2})-"),  # BTC-7NOV25-50000-C (single digit day)
                     re.compile(r"-(\d{2}[A-Z]{3}\d{2})$"),  # BTC-26DEC25 (futures)
-                    re.compile(
-                        r"-(\d{1}[A-Z]{3}\d{2})$"
-                    ),  # BTC-7NOV25 (futures, single digit)
+                    re.compile(r"-(\d{1}[A-Z]{3}\d{2})$"),  # BTC-7NOV25 (futures, single digit)
                     re.compile(r"-(\d{6})$"),  # BTC-251225 (YYMMDD format)
                 ],
                 "binance": [
@@ -2088,20 +1970,14 @@ class InstrumentProcessingService:
                     inst_def = InstrumentDefinition(**inst_data)
                     instruments[inst_key] = inst_def
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to create InstrumentDefinition for {inst_key}: {e}"
-                    )
+                    logger.warning(f"Failed to create InstrumentDefinition for {inst_key}: {e}")
                     continue
 
-            logger.info(
-                f"✅ Fetched {len(instruments)} Databento instruments for {exchange}"
-            )
+            logger.info(f"✅ Fetched {len(instruments)} Databento instruments for {exchange}")
             return instruments
 
         except ImportError:
-            logger.error(
-                "Databento adapter not available. Install: pip install databento"
-            )
+            logger.error("Databento adapter not available. Install: pip install databento")
             return {}
         except Exception as e:
             logger.error(f"Failed to fetch Databento instruments: {e}")
@@ -2231,9 +2107,7 @@ class InstrumentProcessingService:
                 from instruments_service.app.venues.defi import HyperliquidAdapter
 
                 # Use MVP base assets from spec guide (21 trading assets), not DeFi tokens
-                hyperliquid_base_assets = (
-                    self.venue_mapping.hyperliquid_aster_mvp_base_assets
-                )
+                hyperliquid_base_assets = self.venue_mapping.hyperliquid_aster_mvp_base_assets
                 adapter = HyperliquidAdapter(base_currency_list=hyperliquid_base_assets)
                 # Fetch both perpetuals and spot pairs for MVP coins
                 # Quote currency is USDC (both Hyperliquid and Aster support USDC)
@@ -2282,9 +2156,7 @@ class InstrumentProcessingService:
                 # Skip Aster - CCXT doesn't support it
 
             for venue in venues_to_enrich:
-                logger.info(
-                    f"⚡ Pre-loading CCXT markets for {venue} to ensure enrichment works"
-                )
+                logger.info(f"⚡ Pre-loading CCXT markets for {venue} to ensure enrichment works")
                 ccxt_data = self.ccxt_service.load_markets(venue)
                 if ccxt_data and ccxt_data.get("markets"):
                     logger.info(
@@ -2300,8 +2172,7 @@ class InstrumentProcessingService:
             # For Hyperliquid and Aster, use hyperliquid_aster_mvp_base_assets instead of defi_mvp_base_currencies
             if protocol.lower() in ["hyperliquid", "aster"]:
                 mvp_bases = {
-                    b.upper()
-                    for b in self.venue_mapping.hyperliquid_aster_mvp_base_assets
+                    b.upper() for b in self.venue_mapping.hyperliquid_aster_mvp_base_assets
                 }
                 # Hyperliquid and Aster use USDC as quote currency
                 mvp_quotes = {"USDC"}
@@ -2375,9 +2246,7 @@ class InstrumentProcessingService:
                                 inst_def.min_size = ccxt_metadata["min_size"]
                             if ccxt_metadata.get("contract_size"):
                                 try:
-                                    inst_def.contract_size = float(
-                                        ccxt_metadata["contract_size"]
-                                    )
+                                    inst_def.contract_size = float(ccxt_metadata["contract_size"])
                                 except (ValueError, TypeError):
                                     pass
                         else:
@@ -2387,13 +2256,9 @@ class InstrumentProcessingService:
                                 venue, inst_def.base_asset
                             )
                             if manual_metadata:
-                                if not inst_def.tick_size and manual_metadata.get(
-                                    "tick_size"
-                                ):
+                                if not inst_def.tick_size and manual_metadata.get("tick_size"):
                                     inst_def.tick_size = manual_metadata["tick_size"]
-                                if not inst_def.min_size and manual_metadata.get(
-                                    "min_size"
-                                ):
+                                if not inst_def.min_size and manual_metadata.get("min_size"):
                                     inst_def.min_size = manual_metadata["min_size"]
                                 if not inst_def.contract_size and manual_metadata.get(
                                     "contract_size"
@@ -2419,14 +2284,10 @@ class InstrumentProcessingService:
 
                     instruments[inst_key] = inst_def
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to create InstrumentDefinition for {inst_key}: {e}"
-                    )
+                    logger.warning(f"Failed to create InstrumentDefinition for {inst_key}: {e}")
                     continue
 
-            logger.info(
-                f"✅ Fetched {len(instruments)} {protocol} instruments for {chain}"
-            )
+            logger.info(f"✅ Fetched {len(instruments)} {protocol} instruments for {chain}")
             return instruments
 
         except ImportError as e:

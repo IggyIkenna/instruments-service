@@ -20,9 +20,7 @@ try:
     DATABENTO_AVAILABLE = True
 except ImportError:
     DATABENTO_AVAILABLE = False
-    logging.warning(
-        "databento package not available. Install with: pip install databento"
-    )
+    logging.warning("databento package not available. Install with: pip install databento")
 
 logger = logging.getLogger(__name__)
 
@@ -60,9 +58,7 @@ class DatabentoAdapter:
                 from unified_cloud_services import get_secret_with_fallback
 
                 secret_name = os.getenv("DATABENTO_SECRET_NAME", "databento-api-key")
-                project_id = project_id or os.getenv(
-                    "GCP_PROJECT_ID", "central-element-323112"
-                )
+                project_id = project_id or os.getenv("GCP_PROJECT_ID", "central-element-323112")
 
                 self.api_key = get_secret_with_fallback(
                     project_id=project_id,
@@ -75,9 +71,7 @@ class DatabentoAdapter:
                         f"✅ Retrieved Databento API key from Secret Manager (secret: {secret_name})"
                     )
             except ImportError:
-                logger.warning(
-                    "unified-cloud-services not available, falling back to env var"
-                )
+                logger.warning("unified-cloud-services not available, falling back to env var")
                 self.api_key = os.getenv("DATABENTO_API_KEY")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
@@ -136,9 +130,7 @@ class DatabentoAdapter:
         for symbol in symbols:
             # Get instrument definition to determine dataset
             if dataset in ["DBEQ.BASIC", "OPRA.PILLAR"]:
-                inst = unified_config.get_instrument(
-                    symbol, venue=None
-                )  # Search across all venues
+                inst = unified_config.get_instrument(symbol, venue=None)  # Search across all venues
             else:
                 inst = unified_config.get_instrument(symbol, venue=exchange)
 
@@ -402,9 +394,7 @@ class DatabentoAdapter:
         security_type = "" if pd.isna(security_type) else str(security_type)
 
         min_price_increment = row.get("min_price_increment", 0.01)
-        min_price_increment = (
-            0.01 if pd.isna(min_price_increment) else float(min_price_increment)
-        )
+        min_price_increment = 0.01 if pd.isna(min_price_increment) else float(min_price_increment)
 
         # Determine instrument type FIRST (needed for underlying extraction and quote_asset logic)
         if security_type == "FUT":
@@ -470,9 +460,7 @@ class DatabentoAdapter:
         else:
             # Futures: convert exchange codes to human-readable names
             base_asset = (
-                unified_config.get_human_readable_name(underlying_asset)
-                if underlying_asset
-                else ""
+                unified_config.get_human_readable_name(underlying_asset) if underlying_asset else ""
             )
 
         # For TradFi (equities, options, futures), quote currency is always USD
@@ -665,9 +653,7 @@ class DatabentoAdapter:
             "data_types": "ohlcv_1m",  # We fetch OHLCV 1m candles from Databento
             "inverse": False,
             "contract_size": (
-                row.get("contract_size", None)
-                if pd.notna(row.get("contract_size"))
-                else None
+                row.get("contract_size", None) if pd.notna(row.get("contract_size")) else None
             ),
             "underlying": base_asset,  # Human-readable underlying
             "strike": (

@@ -220,6 +220,3 @@ See `examples/` directory for complete working examples:
 - `generate_instruments_date_range.py` - Date range processing
 - `batch_generation.py` - Using orchestration service
 - `query_instruments.py` - Query examples
-
-
-

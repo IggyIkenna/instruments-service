@@ -109,12 +109,8 @@ class InstrumentDefinition(BaseModel):
     )
 
     # Asset information
-    base_asset: str = Field(
-        default="", description="Base asset symbol (e.g., BTC, ETH)"
-    )
-    quote_asset: str = Field(
-        default="", description="Quote asset symbol (e.g., USDT, USD)"
-    )
+    base_asset: str = Field(default="", description="Base asset symbol (e.g., BTC, ETH)")
+    quote_asset: str = Field(default="", description="Quote asset symbol (e.g., USDT, USD)")
     settle_asset: str = Field(default="", description="Settlement asset symbol")
 
     # Exchange-specific identifiers
@@ -126,41 +122,29 @@ class InstrumentDefinition(BaseModel):
         default="",
         description="Databento query symbol format (e.g., '6A.FUT', 'ES.FUT', 'SPY', 'SPY.OPT')",
     )
-    tardis_symbol: str = Field(
-        default="", description="Symbol format used by Tardis API"
-    )
+    tardis_symbol: str = Field(default="", description="Symbol format used by Tardis API")
 
     # Trading parameters
-    inverse: bool = Field(
-        default=False, description="Whether this is an inverse contract"
-    )
+    inverse: bool = Field(default=False, description="Whether this is an inverse contract")
 
     # Note: symbol_type field removed to avoid confusion with canonical instrument_type
 
     # Option-specific fields
     strike: str = Field(default="", description="Strike price for options")
-    option_type: str = Field(
-        default="", description="Option type (C for call, P for put)"
-    )
+    option_type: str = Field(default="", description="Option type (C for call, P for put)")
 
     # Contract-specific fields
     expiry: Optional[str] = Field(
         default=None, description="Expiry datetime for futures/options (ISO string)"
     )
-    contract_size: Optional[float] = Field(
-        default=None, description="Contract size/multiplier"
-    )
+    contract_size: Optional[float] = Field(default=None, description="Contract size/multiplier")
     tick_size: Optional[str] = Field(default="", description="Minimum price increment")
-    underlying: Optional[str] = Field(
-        default="", description="Underlying asset for derivatives"
-    )
+    underlying: Optional[str] = Field(default="", description="Underlying asset for derivatives")
     min_size: Optional[str] = Field(default="", description="Minimum order size")
 
     # CCXT integration fields
     ccxt_symbol: str = Field(default="", description="Symbol format for CCXT library")
-    ccxt_exchange: str = Field(
-        default="", description="Exchange identifier for CCXT library"
-    )
+    ccxt_exchange: str = Field(default="", description="Exchange identifier for CCXT library")
 
     # DeFi-specific fields (for DEX pools and protocol tokens)
     chain: str = Field(
@@ -392,9 +376,7 @@ class InstrumentDefinition(BaseModel):
             raise ValueError(f"Inverse must be boolean, got: {type(v)}")
         return v
 
-    @field_validator(
-        "tick_size", "min_size", "underlying", "ccxt_symbol", "ccxt_exchange"
-    )
+    @field_validator("tick_size", "min_size", "underlying", "ccxt_symbol", "ccxt_exchange")
     @classmethod
     def validate_optional_strings(cls, v):
         """Validate optional string fields - convert None to empty string"""
@@ -442,9 +424,7 @@ class InstrumentDefinition(BaseModel):
                 # Check instrument type
                 valid_types = [t.value for t in InstrumentType]
                 if instrument_type not in valid_types:
-                    logger.warning(
-                        f"Unknown instrument type in instrument key: {instrument_type}"
-                    )
+                    logger.warning(f"Unknown instrument type in instrument key: {instrument_type}")
 
         # Check data types
         if self.data_types:
@@ -469,17 +449,13 @@ class InstrumentDefinition(BaseModel):
             if extracted_expiry:
                 self.expiry = extracted_expiry
             else:
-                logger.warning(
-                    f"Futures/options should have expiry: {self.instrument_key}"
-                )
+                logger.warning(f"Futures/options should have expiry: {self.instrument_key}")
 
         # Options should have strike and option_type - extract from instrument_key if missing
         if self.instrument_type == "OPTION":
             # Extract strike and option_type from canonical key if missing
             if not self.strike or not self.option_type:
-                extracted_strike, extracted_option_type = (
-                    self._extract_option_info_from_key()
-                )
+                extracted_strike, extracted_option_type = self._extract_option_info_from_key()
 
                 if not self.strike and extracted_strike:
                     self.strike = extracted_strike
@@ -489,13 +465,9 @@ class InstrumentDefinition(BaseModel):
 
             # Still warn if we couldn't extract the information
             if not self.strike:
-                logger.warning(
-                    f"Options should have strike price: {self.instrument_key}"
-                )
+                logger.warning(f"Options should have strike price: {self.instrument_key}")
             if not self.option_type:
-                logger.warning(
-                    f"Options should have option type: {self.instrument_key}"
-                )
+                logger.warning(f"Options should have option type: {self.instrument_key}")
 
         return self
 
@@ -520,30 +492,22 @@ class InstrumentDefinition(BaseModel):
                 if len(parts) >= 3:
                     # Get the symbol part (third part): ETH-USDC-251027-3500-CALL
                     key_symbol = parts[2]
-                    strike_price, option_type = self._parse_option_from_symbol_string(
-                        key_symbol
-                    )
+                    strike_price, option_type = self._parse_option_from_symbol_string(key_symbol)
         except Exception as e:
             logger.debug(
                 f"Failed to extract option info from instrument_key {self.instrument_key}: {e}"
             )
 
         # If not found, try parsing from symbol field as backup
-        if (
-            (not strike_price or not option_type)
-            and hasattr(self, "symbol")
-            and self.symbol
-        ):
+        if (not strike_price or not option_type) and hasattr(self, "symbol") and self.symbol:
             try:
-                backup_strike, backup_option_type = (
-                    self._parse_option_from_symbol_string(self.symbol)
+                backup_strike, backup_option_type = self._parse_option_from_symbol_string(
+                    self.symbol
                 )
                 strike_price = strike_price or backup_strike
                 option_type = option_type or backup_option_type
             except Exception as e:
-                logger.debug(
-                    f"Failed to extract option info from symbol {self.symbol}: {e}"
-                )
+                logger.debug(f"Failed to extract option info from symbol {self.symbol}: {e}")
 
         return strike_price, option_type
 
@@ -632,9 +596,7 @@ class InstrumentDefinition(BaseModel):
             return strike_price, option_type
 
         except Exception as e:
-            logger.debug(
-                f"Failed to parse option info from symbol string {symbol_string}: {e}"
-            )
+            logger.debug(f"Failed to parse option info from symbol string {symbol_string}: {e}")
             return "", ""
 
     def _extract_expiry_from_key(self) -> str:
@@ -669,9 +631,7 @@ class InstrumentDefinition(BaseModel):
                 # For futures: BASE-QUOTE-YYMMDD@LIN or BASE-QUOTE-YYMMDD@INV (e.g., BTC-USDT-260327@LIN)
                 # Check if last part has @LIN or @INV suffix
                 if len(symbol_parts) >= 3:
-                    potential_date = symbol_parts[
-                        -1
-                    ]  # Could be YYMMDD or YYMMDD@LIN/YYMMDD@INV
+                    potential_date = symbol_parts[-1]  # Could be YYMMDD or YYMMDD@LIN/YYMMDD@INV
                     # Remove @LIN or @INV suffix if present
                     if "@" in potential_date:
                         potential_date = potential_date.split("@")[0]
@@ -682,9 +642,7 @@ class InstrumentDefinition(BaseModel):
                 # Handle decimal strikes: TRX-USDC-251026-0.304-PUT@LIN (strike has decimal)
                 if len(symbol_parts) >= 4:
                     # Find the YYMMDD part - it should be the first 6-digit numeric part after base-quote
-                    for i in range(
-                        2, len(symbol_parts)
-                    ):  # Start from index 2 (after BASE-QUOTE)
+                    for i in range(2, len(symbol_parts)):  # Start from index 2 (after BASE-QUOTE)
                         part = symbol_parts[i]
                         # Remove @LIN or @INV suffix if present
                         if "@" in part:
@@ -727,9 +685,7 @@ class InstrumentDefinition(BaseModel):
             if yy <= 49:
                 yyyy = 2000 + yy
             else:
-                yyyy = (
-                    1900 + yy
-                )  # This handles 50-99 as 1950-1999, but for crypto likely 2050+
+                yyyy = 1900 + yy  # This handles 50-99 as 1950-1999, but for crypto likely 2050+
                 if yyyy < 2020:  # Adjust for crypto context - assume future dates
                     yyyy += 100  # 50-99 becomes 2050-2099
 

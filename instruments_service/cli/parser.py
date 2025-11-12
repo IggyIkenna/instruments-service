@@ -123,12 +123,8 @@ def parse_arguments() -> argparse.Namespace:
         nargs="+",
         help="Filter by instrument types (SPOT_PAIR, PERPETUAL, FUTURE, OPTION, etc.)",
     )
-    parser.add_argument(
-        "--base-currency", help="Filter by base currency (BTC, ETH, SOL, etc.)"
-    )
-    parser.add_argument(
-        "--quote-currency", help="Filter by quote currency (USDT, USD, USDC, etc.)"
-    )
+    parser.add_argument("--base-currency", help="Filter by base currency (BTC, ETH, SOL, etc.)")
+    parser.add_argument("--quote-currency", help="Filter by quote currency (USDT, USD, USDC, etc.)")
     parser.add_argument(
         "--symbol-pattern", help="Regex pattern to match symbols (e.g., BTC.*, .*USDT)"
     )
@@ -205,9 +201,7 @@ def validate_arguments(args: argparse.Namespace) -> None:
     # Validate query-specific arguments
     if args.mode == "instruments-query":
         if args.query_type in ["details", "trading-params"] and not args.instrument_id:
-            raise ValueError(
-                f"--instrument-id is required for query-type={args.query_type}"
-            )
+            raise ValueError(f"--instrument-id is required for query-type={args.query_type}")
         if args.query_type == "data-types" and not args.data_type:
             raise ValueError("--data-type is required for query-type=data-types")
 

@@ -541,4 +541,3 @@ The script is production-ready and handles everything automatically including:
 - Rate limiting
 - Error recovery
 - Idempotency
-

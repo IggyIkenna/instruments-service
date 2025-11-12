@@ -31,4 +31,3 @@ Each issue file follows this format:
 Technical decisions are documented in:
 - [`docs/SERVICE_OVERVIEW.md`](../docs/SERVICE_OVERVIEW.md) - Key Design Decisions section
 - [`docs/INSTRUMENT_ENRICHMENT_PROPOSAL.md`](../docs/INSTRUMENT_ENRICHMENT_PROPOSAL.md) - Architecture patterns
-

@@ -79,4 +79,3 @@ class TestCloudInstrumentStorage:
         assert storage.cloud_target.gcs_bucket == test_bucket_name
         assert storage.cloud_target.gcs_bucket != prod_bucket_name
         assert "test" in storage.cloud_target.gcs_bucket.lower()
-

@@ -163,18 +163,14 @@ class InstrumentsService:
                             symbols = databento_config.get_symbols_for_venue(exchange)
 
                         if not symbols:
-                            logger.warning(
-                                f"⚠️ No symbols configured for {exchange}, skipping"
-                            )
+                            logger.warning(f"⚠️ No symbols configured for {exchange}, skipping")
                             continue
 
                         # Fetch Databento instruments
-                        databento_instruments = (
-                            self.processing_service.fetch_databento_instruments(
-                                exchange=exchange,
-                                symbols=symbols,
-                                target_date=date,
-                            )
+                        databento_instruments = self.processing_service.fetch_databento_instruments(
+                            exchange=exchange,
+                            symbols=symbols,
+                            target_date=date,
                         )
                         if databento_instruments:
                             all_instruments.update(databento_instruments)
@@ -187,9 +183,7 @@ class InstrumentsService:
                             exc_info=True,
                         )
             except Exception as e:
-                logger.error(
-                    f"❌ Failed to initialize Databento processing: {e}", exc_info=True
-                )
+                logger.error(f"❌ Failed to initialize Databento processing: {e}", exc_info=True)
 
         # Process DEFI protocols
         if defi:
@@ -232,9 +226,7 @@ class InstrumentsService:
                             protocol, chain = venue_to_protocol[venue.upper()]
                             defi_protocols.append((protocol, chain))
                     if not defi_protocols:
-                        logger.warning(
-                            f"⚠️ No matching protocols found for venues: {venues_filter}"
-                        )
+                        logger.warning(f"⚠️ No matching protocols found for venues: {venues_filter}")
                         defi_protocols = all_defi_protocols
                 else:
                     defi_protocols = all_defi_protocols
@@ -243,19 +235,15 @@ class InstrumentsService:
                     try:
                         # Fetch DeFi instruments
                         if chain:
-                            defi_instruments = (
-                                self.processing_service.fetch_defi_instruments(
-                                    protocol=protocol,
-                                    chain=chain,
-                                    target_date=date,
-                                )
+                            defi_instruments = self.processing_service.fetch_defi_instruments(
+                                protocol=protocol,
+                                chain=chain,
+                                target_date=date,
                             )
                         else:
-                            defi_instruments = (
-                                self.processing_service.fetch_defi_instruments(
-                                    protocol=protocol,
-                                    target_date=date,
-                                )
+                            defi_instruments = self.processing_service.fetch_defi_instruments(
+                                protocol=protocol,
+                                target_date=date,
                             )
                         if defi_instruments:
                             all_instruments.update(defi_instruments)
@@ -263,19 +251,13 @@ class InstrumentsService:
                                 f"✅ Processed {len(defi_instruments)} instruments from {protocol}"
                             )
                     except Exception as e:
-                        logger.error(
-                            f"❌ Failed to process {protocol}: {e}", exc_info=True
-                        )
+                        logger.error(f"❌ Failed to process {protocol}: {e}", exc_info=True)
             except Exception as e:
-                logger.error(
-                    f"❌ Failed to initialize DeFi processing: {e}", exc_info=True
-                )
+                logger.error(f"❌ Failed to initialize DeFi processing: {e}", exc_info=True)
 
         # If no mode flags specified, process all three modes
         if not cefi and not tradfi and not defi:
-            logger.info(
-                "📋 No mode flags specified, processing all modes (CeFi, TradFi, DeFi)"
-            )
+            logger.info("📋 No mode flags specified, processing all modes (CeFi, TradFi, DeFi)")
             return await self.generate_instruments_for_date(
                 date=date,
                 exchanges=exchanges,
@@ -436,9 +418,7 @@ class InstrumentsService:
         Returns:
             DataFrame with instruments
         """
-        return self.cloud_storage.query_instruments(
-            venue=venue, instrument_type=instrument_type
-        )
+        return self.cloud_storage.query_instruments(venue=venue, instrument_type=instrument_type)
 
     def get_processing_stats(self) -> Dict[str, Any]:
         """Get processing statistics."""

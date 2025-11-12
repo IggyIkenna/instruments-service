@@ -91,7 +91,7 @@ def query_subgraph_registry(subgraph_name: str) -> Optional[str]:
         """
     {
         subgraphs(
-            where: { 
+            where: {
                 displayName_contains: "%s"
             }
             first: 20

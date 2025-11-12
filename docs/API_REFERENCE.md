@@ -1,6 +1,6 @@
 # API Reference
 
-> **Related Documentation**: 
+> **Related Documentation**:
 > - [`ARCHITECTURE.md`](./ARCHITECTURE.md) - Service overview and architecture
 > - [`INSTRUMENT_SPECIFICATION.md`](./INSTRUMENT_SPECIFICATION.md) - Instrument ID format and implementation details
 > - [`USAGE_GUIDE.md`](./USAGE_GUIDE.md) - Usage examples and patterns
@@ -275,6 +275,3 @@ Get summary statistics for instruments on a specific date.
 
 **Returns:**
 - Dictionary with comprehensive statistics
-
-
-

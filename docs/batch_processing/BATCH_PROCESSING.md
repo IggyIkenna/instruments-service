@@ -41,13 +41,13 @@ async def generate_batch(start_date: str, end_date: str):
         'gcs_bucket': 'instruments-store',
         'bigquery_dataset': 'instruments'
     }
-    
+
     processing_service = InstrumentProcessingService(config)
     storage_service = CloudInstrumentStorage(config)
-    
+
     start_dt = datetime.strptime(start_date, '%Y-%m-%d')
     end_dt = datetime.strptime(end_date, '%Y-%m-%d')
-    
+
     current_date = start_dt
     while current_date <= end_dt:
         # Generate instruments for date
@@ -55,7 +55,7 @@ async def generate_batch(start_date: str, end_date: str):
             exchange='binance-futures',
             target_date=current_date
         )
-        
+
         # Store to cloud
         if instruments:
             import pandas as pd
@@ -65,7 +65,7 @@ async def generate_batch(start_date: str, end_date: str):
                 table_name="instruments",
                 date=current_date
             )
-        
+
         current_date += timedelta(days=1)
 
 # Run
@@ -96,5 +96,3 @@ asyncio.run(generate_batch('2023-05-23', '2023-05-24'))
 ---
 
 *See [examples/batch_generation.py](../../examples/batch_generation.py) for complete example.*
-
-

@@ -2,9 +2,9 @@
 
 > **ClickUp Ready**: ✅ This document is structured for ClickUp integration with timeline tracking. All milestones include target dates for Gantt chart generation. Can be imported to ClickUp immediately or after completing other services' STATUS.md files.
 
-**Service Name**: `instruments-service`  
-**Last Updated**: `2025-11-12`  
-**Status**: `In Progress`  
+**Service Name**: `instruments-service`
+**Last Updated**: `2025-11-12`
+**Status**: `In Progress`
 **Owner**: `Data Pipeline Team`
 
 ---
@@ -28,7 +28,7 @@
 
 ### unified-cloud-services Integration
 
-**Status**: `Complete`  
+**Status**: `Complete`
 **Last Verified**: `2025-11-12`
 
 #### Usage Tracking
@@ -58,7 +58,7 @@
 
 ### Dependency: Tardis API (External - CeFi Crypto)
 
-**Data Type**: Instrument definitions from CeFi crypto exchange APIs  
+**Data Type**: Instrument definitions from CeFi crypto exchange APIs
 **Access Method**: `Batch` (only method needed)
 
 #### Batch Access
@@ -71,7 +71,7 @@
 
 ### Dependency: Databento API (External - TradFi)
 
-**Data Type**: Instrument definitions from TradFi exchange APIs  
+**Data Type**: Instrument definitions from TradFi exchange APIs
 **Access Method**: `Batch` (only method needed)
 
 #### Batch Access
@@ -84,7 +84,7 @@
 
 ### Dependency: The Graph API (External - DeFi)
 
-**Data Type**: DEX pool enumeration and metadata  
+**Data Type**: DEX pool enumeration and metadata
 **Access Method**: `Batch` (only method needed)
 
 #### Batch Access
@@ -97,7 +97,7 @@
 
 ### Dependency: Envio API (External - DeFi)
 
-**Data Type**: Uniswap V4 pool enumeration  
+**Data Type**: Uniswap V4 pool enumeration
 **Access Method**: `Batch` (only method needed)
 
 #### Batch Access
@@ -110,7 +110,7 @@
 
 ### Dependency: Protocol SDKs (External - DeFi)
 
-**Data Type**: Protocol-specific instrument metadata (AAVE, Lido, Morpho, etc.)  
+**Data Type**: Protocol-specific instrument metadata (AAVE, Lido, Morpho, etc.)
 **Access Method**: `Batch` (only method needed)
 
 #### Batch Access
@@ -123,7 +123,7 @@
 
 ### Dependency: Alchemy/web3 (External - DeFi)
 
-**Data Type**: On-chain data for DeFi protocols  
+**Data Type**: On-chain data for DeFi protocols
 **Access Method**: `Batch` (only method needed)
 
 #### Batch Access
@@ -140,7 +140,7 @@
 
 ### Batch Processing
 
-**Status**: `Complete`  
+**Status**: `Complete`
 **Implementation Date**: `2025-11-11`
 
 - **Core Logic**: ✅ Complete
@@ -150,7 +150,7 @@
 - **Gap Detection**: ✅ Complete
 - **Validation**: ✅ Complete
 
-**Test Coverage**: `33.81%` ❌ (target: 75%) - **23 failed tests, 28 errors**  
+**Test Coverage**: `33.81%` ❌ (target: 75%) - **23 failed tests, 28 errors**
 **Performance Benchmarks**:
 - **Compute Time (1 day)**: `TBD` (needs measurement - varies significantly by venue type and date range)
 - **Memory Usage**: `TBD` (should be tracked via unified-cloud-services shared monitoring)
@@ -161,7 +161,7 @@
 
 ### Daily Backfill Processing
 
-**Status**: `Not Started`  
+**Status**: `Not Started`
 **Implementation Date**: `N/A` (planned for Nov 13, 2025 per Next Steps)
 
 - **Scheduler**: `Not Configured`
@@ -169,7 +169,7 @@
 - **Error Recovery**: `N/A`
 - **Monitoring**: `N/A`
 
-**Test Coverage**: `N/A`  
+**Test Coverage**: `N/A`
 **Performance Benchmarks**: `N/A`
 
 **Target Success Criteria**: `Not yet defined`
@@ -178,7 +178,7 @@
 
 ### Live Processing
 
-**Status**: `Not Needed`  
+**Status**: `Not Needed`
 **Implementation Date**: `N/A`
 
 - **Stream Ingestion**: `N/A`
@@ -186,12 +186,12 @@
 - **State Management**: `N/A`
 - **Error Recovery**: `N/A`
 
-**Test Coverage**: `N/A`  
+**Test Coverage**: `N/A`
 **Performance Benchmarks**: `N/A`
 
 **Target Success Criteria**: `N/A`
 
-**Processing Logic Parity**: `N/A`  
+**Processing Logic Parity**: `N/A`
 **Notes**: Live streaming not needed for this service. Instrument definitions are relatively static and slow-moving. Batch processing for historical dates or date ranges is sufficient. Daily backfill (T+1) handles incremental updates. Live streaming would not add value since instruments are static reference data that changes infrequently.
 
 ---
@@ -202,9 +202,9 @@
 
 ### Delta-One ML Strategy
 
-**Support Level**: `Must Support`  
-**Status**: `Complete` (Code) / `Not Deployed` (Deployment)  
-**Code Completion Date**: `2025-11-09`  
+**Support Level**: `Must Support`
+**Status**: `Complete` (Code) / `Not Deployed` (Deployment)
+**Code Completion Date**: `2025-11-09`
 **Deployment Status**: `Not Started` (VM deployment not tested)
 
 **Features/Instruments Supported**:
@@ -219,16 +219,16 @@
 - **Coverage**: `100%` of required CeFi crypto instruments (primary for ML Strategy)
 - **TradFi Coverage**: `100%` (can be used as correlated input, but trading is primarily crypto)
 
-**Batch Completion Date**: `2025-11-09` (Code) / `N/A` (Deployment)  
+**Batch Completion Date**: `2025-11-09` (Code) / `N/A` (Deployment)
 **Live Completion Date**: `N/A` (Not needed - instrument definitions are static)
 
-**Notes**: Delta-One ML Strategy is crypto-predominant. TradFi instruments (via Databento) can be used as correlated input to ML models, but primary pricing and trading is in crypto (CeFi venues via Tardis). CeFi crypto instruments exist via Tardis API and are available in GCS for batch processing. TradFi instruments exist via Databento API (code complete, not deployed). 
+**Notes**: Delta-One ML Strategy is crypto-predominant. TradFi instruments (via Databento) can be used as correlated input to ML models, but primary pricing and trading is in crypto (CeFi venues via Tardis). CeFi crypto instruments exist via Tardis API and are available in GCS for batch processing. TradFi instruments exist via Databento API (code complete, not deployed).
 
 ### DeFi Strategy
 
-**Support Level**: `Must Support`  
-**Status**: `In Progress` (Code) / `Not Deployed` (Deployment)  
-**Code Completion Date**: `2025-11-10` (MVP partial)  
+**Support Level**: `Must Support`
+**Status**: `In Progress` (Code) / `Not Deployed` (Deployment)
+**Code Completion Date**: `2025-11-10` (MVP partial)
 **Deployment Status**: `Not Started` (VM deployment not tested)
 
 **Features/Instruments Supported**:
@@ -288,10 +288,10 @@
 - **Date To**: `2025-11-11`
 - **Coverage**: `~60%` (MVP structure complete, missing Curve, Uniswap V2/V4, AAVE validation, Plasma protocols)
 
-**Batch Completion Date**: `2025-11-10` (Code) / `N/A` (Deployment)  
+**Batch Completion Date**: `2025-11-10` (Code) / `N/A` (Deployment)
 **Live Completion Date**: `N/A` (Not needed - instrument definitions are static)
 
-**Notes**: 
+**Notes**:
 - DeFi instruments are partially implemented (MVP structure complete Nov 9-11, 2025).
 - Models support DeFi instrument types (LST, A_TOKEN, DEBT_TOKEN) ✅
 - Venue enum includes DeFi venues (AAVE_V3, ETHERFI, LIDO, MORPHO, etc.) ✅
@@ -302,9 +302,9 @@
 
 ### Options Strategy (Crypto Options)
 
-**Support Level**: `Must Support`  
-**Status**: `Complete` (Code) / `Not Deployed` (Deployment)  
-**Code Completion Date**: `2025-11-10`  
+**Support Level**: `Must Support`
+**Status**: `Complete` (Code) / `Not Deployed` (Deployment)
+**Code Completion Date**: `2025-11-10`
 **Deployment Status**: `Not Started` (VM deployment not tested)
 
 **Features/Instruments Supported**:
@@ -317,19 +317,19 @@
 - **Date To**: `2025-11-11`
 - **Coverage**: `100%` of required crypto options instrument definitions
 
-**Batch Completion Date**: `2025-11-10` (Code) / `N/A` (Deployment)  
+**Batch Completion Date**: `2025-11-10` (Code) / `N/A` (Deployment)
 **Live Completion Date**: `N/A` (Not needed - instrument definitions are static)
 
-**Notes**: 
+**Notes**:
 - Beyond MVP instrument definitions for crypto options ARE in GCS for batch processing.
 - Crypto options only (DERIBIT venue) - fully completed.
 - Format: `DERIBIT:OPTION:BTC-USD-241225-50000-CALL` (venue:type:base-quote:expiry:strike:call/put)
 
 ### TradFi Strategy
 
-**Support Level**: `Must Support`  
-**Status**: `Complete` (Code) / `Not Deployed` (Deployment)  
-**Code Completion Date**: `2025-11-10`  
+**Support Level**: `Must Support`
+**Status**: `Complete` (Code) / `Not Deployed` (Deployment)
+**Code Completion Date**: `2025-11-10`
 **Deployment Status**: `Not Started` (VM deployment not tested)
 
 **Features/Instruments Supported**:
@@ -366,10 +366,10 @@
 - **Date To**: `2025-11-11`
 - **Coverage**: `100%` (most liquid instruments complete)
 
-**Batch Completion Date**: `2025-11-10` (Code) / `N/A` (Deployment)  
+**Batch Completion Date**: `2025-11-10` (Code) / `N/A` (Deployment)
 **Live Completion Date**: `N/A` (Not needed - instrument definitions are static)
 
-**Notes**: 
+**Notes**:
 - TradFi strategy instruments are complete (code complete Nov 10, 2025, not deployed).
 - Databento integration complete with most liquid micro futures/ETFs selection.
 - Reference files: `archive/genConfig/instrumentDefinitionConfig/dataBentoInstrumentSelection.py`, `archive/loadMarketDataHist/downloadUpload/dataBento/dataBentoDataLoader.py`
@@ -377,9 +377,9 @@
 
 ### TradFi Options Strategy
 
-**Support Level**: `Must Support`  
-**Status**: `Complete` (Code) / `Not Deployed` (Deployment)  
-**Code Completion Date**: `2025-11-10`  
+**Support Level**: `Must Support`
+**Status**: `Complete` (Code) / `Not Deployed` (Deployment)
+**Code Completion Date**: `2025-11-10`
 **Deployment Status**: `Not Started` (VM deployment not tested)
 
 **Features/Instruments Supported**:
@@ -392,10 +392,10 @@
 - **Date To**: `2025-11-11`
 - **Coverage**: `100%` of required TradFi options instrument definitions
 
-**Batch Completion Date**: `2025-11-10` (Code) / `N/A` (Deployment)  
+**Batch Completion Date**: `2025-11-10` (Code) / `N/A` (Deployment)
 **Live Completion Date**: `N/A` (Not needed - instrument definitions are static)
 
-**Notes**: 
+**Notes**:
 - TradFi options instrument definitions ARE in GCS for batch processing.
 - S&P 500 simple premium-based model complete (covered calls and picking strikes).
 
@@ -463,7 +463,7 @@
 
 ### GCS Batch Storage
 
-**Status**: `Complete`  
+**Status**: `Complete`
 **Implementation Date**: `2025-11-09`
 
 - **Storage Format**: `Parquet`
@@ -475,7 +475,7 @@
 
 ### Daily Backfill Scheduler
 
-**Status**: `Not Started`  
+**Status**: `Not Started`
 **Implementation Date**: `N/A` (planned for Nov 13, 2025 per Next Steps)
 
 - **Scheduler Type**: `Not Configured`
@@ -489,7 +489,7 @@
 
 ### Live Streaming
 
-**Status**: `Not Needed`  
+**Status**: `Not Needed`
 **Implementation Date**: `N/A`
 
 **Method**: `Not Needed`
@@ -543,7 +543,7 @@
 
 ### Local Development
 
-**Status**: `Working`  
+**Status**: `Working`
 **Last Verified**: `2025-11-11`
 
 - **Setup**: ✅ Complete (see `docs/SETUP_GUIDE.md`)
@@ -552,7 +552,7 @@
 
 ### Cloud Deployment
 
-**Status**: `Not Deployed`  
+**Status**: `Not Deployed`
 **Deployment Date**: `N/A` (VM deployment not tested through Femi)
 
 #### Batch Mode
@@ -916,4 +916,3 @@ Consider creating a script to:
 - Generate CSV/JSON for bulk import
 - Sync updates from STATUS.md to ClickUp (or vice versa)
 - Generate unified Gantt chart across all services
-
