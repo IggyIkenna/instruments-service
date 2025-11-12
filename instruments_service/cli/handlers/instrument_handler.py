@@ -26,9 +26,7 @@ def parse_date(date_str: str) -> datetime:
     try:
         return datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     except ValueError as e:
-        raise ValueError(
-            f"Invalid date format '{date_str}'. Use YYYY-MM-DD format."
-        ) from e
+        raise ValueError(f"Invalid date format '{date_str}'. Use YYYY-MM-DD format.") from e
 
 
 def get_date_range(start_date_str: str, end_date_str: str) -> List[datetime]:
@@ -37,9 +35,7 @@ def get_date_range(start_date_str: str, end_date_str: str) -> List[datetime]:
     end_date = parse_date(end_date_str)
 
     if start_date > end_date:
-        raise ValueError(
-            f"Start date {start_date_str} must be <= end date {end_date_str}"
-        )
+        raise ValueError(f"Start date {start_date_str} must be <= end date {end_date_str}")
 
     date_range = []
     current_date = start_date
@@ -80,13 +76,9 @@ class InstrumentHandler(ModeHandler):
 
     def run(self, start_date, end_date, force=False, **kwargs) -> Dict[str, Any]:
         """Execute instrument generation."""
-        return self._execute_instrument_generation(
-            start_date, end_date, force, **kwargs
-        )
+        return self._execute_instrument_generation(start_date, end_date, force, **kwargs)
 
-    def _execute_instrument_generation(
-        self, start_date, end_date, force=False, **kwargs
-    ):
+    def _execute_instrument_generation(self, start_date, end_date, force=False, **kwargs):
         """Generate instruments with direct GCS existence checks."""
         # Parse dates
         if isinstance(start_date, str):
@@ -95,9 +87,7 @@ class InstrumentHandler(ModeHandler):
             end_date = parse_date(end_date)
 
         # Generate date range
-        date_range = get_date_range(
-            start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
-        )
+        date_range = get_date_range(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
 
         # Observability metrics tracking
         total_generated = 0
@@ -132,9 +122,7 @@ class InstrumentHandler(ModeHandler):
 
         # Set exchanges for CEFI processing
         if cefi:
-            exchanges_to_process = kwargs.get(
-                "exchanges", self.venue_mapping.all_tardis_exchanges
-            )
+            exchanges_to_process = kwargs.get("exchanges", self.venue_mapping.all_tardis_exchanges)
         else:
             exchanges_to_process = []
 
@@ -188,9 +176,7 @@ class InstrumentHandler(ModeHandler):
                     # when storing to GCS (via unified-cloud-services SamplingService).
                     # No need to download and sample again here - that would be wasteful.
                 elif result.get("status") == "warning":
-                    logger.warning(
-                        f"⚠️ No instruments generated for {date.strftime('%Y-%m-%d')}"
-                    )
+                    logger.warning(f"⚠️ No instruments generated for {date.strftime('%Y-%m-%d')}")
                     total_dates_processed += 1
                 else:
                     logger.error(
@@ -207,11 +193,7 @@ class InstrumentHandler(ModeHandler):
 
         # Calculate success rate and provide comprehensive summary
         total_attempted = total_dates_processed + total_errors
-        success_rate = (
-            (total_dates_processed / total_attempted * 100)
-            if total_attempted > 0
-            else 0
-        )
+        success_rate = (total_dates_processed / total_attempted * 100) if total_attempted > 0 else 0
 
         logger.info(f"📊 Instrument generation pipeline complete:")
         logger.info(f"   Generated: {total_generated} instruments")

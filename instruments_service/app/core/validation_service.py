@@ -72,9 +72,7 @@ class ValidationService:
 
         return True, None
 
-    def validate_instruments_dataframe(
-        self, df: pd.DataFrame
-    ) -> tuple[bool, List[str]]:
+    def validate_instruments_dataframe(self, df: pd.DataFrame) -> tuple[bool, List[str]]:
         """
         Validate a DataFrame of instruments.
 
@@ -134,10 +132,7 @@ class ValidationService:
 
         # Check instrument_type format (UPPERCASE with underscores)
         instrument_type = parts[1]
-        if (
-            not instrument_type.isupper()
-            or not instrument_type.replace("_", "").isalnum()
-        ):
+        if not instrument_type.isupper() or not instrument_type.replace("_", "").isalnum():
             return False
 
         # Symbol should not be empty
@@ -223,4 +218,3 @@ class ValidationService:
             logger.warning(f"⚠️ Start date {start_date.date()} is in the future")
 
         return True, None
-

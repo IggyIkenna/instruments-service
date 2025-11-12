@@ -59,9 +59,7 @@ class EtherFiAdapter:
                 if inst_def:
                     instruments[inst_def["instrument_key"]] = inst_def
             except Exception as e:
-                logger.warning(
-                    f"Failed to create EtherFi instrument for {token['symbol']}: {e}"
-                )
+                logger.warning(f"Failed to create EtherFi instrument for {token['symbol']}: {e}")
                 continue
 
         logger.info(f"✅ Generated {len(instruments)} EtherFi instruments")
@@ -170,9 +168,7 @@ class LidoAdapter:
                 if inst_def:
                     instruments[inst_def["instrument_key"]] = inst_def
             except Exception as e:
-                logger.warning(
-                    f"Failed to create Lido instrument for {token['symbol']}: {e}"
-                )
+                logger.warning(f"Failed to create Lido instrument for {token['symbol']}: {e}")
                 continue
 
         logger.info(f"✅ Generated {len(instruments)} Lido instruments")

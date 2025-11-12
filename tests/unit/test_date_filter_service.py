@@ -139,5 +139,3 @@ class TestDateFilterService:
             target_date=target_date_naive,
         )
         assert len(filtered_naive) > 0
-
-

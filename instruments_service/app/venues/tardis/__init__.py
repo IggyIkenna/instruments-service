@@ -55,9 +55,7 @@ class TardisAdapter:
             if SECRET_MANAGER_AVAILABLE:
                 try:
                     secret_name = os.getenv("TARDIS_SECRET_NAME", "tardis-api-key")
-                    project_id = project_id or os.getenv(
-                        "GCP_PROJECT_ID", "central-element-323112"
-                    )
+                    project_id = project_id or os.getenv("GCP_PROJECT_ID", "central-element-323112")
 
                     self.api_key = get_secret_with_fallback(
                         project_id=project_id,
@@ -70,9 +68,7 @@ class TardisAdapter:
                             f"✅ Retrieved Tardis API key from Secret Manager (secret: {secret_name})"
                         )
                 except Exception as e:
-                    logger.warning(
-                        f"⚠️ Failed to retrieve API key from Secret Manager: {e}"
-                    )
+                    logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
                     self.api_key = os.getenv("TARDIS_API_KEY")
             else:
                 self.api_key = os.getenv("TARDIS_API_KEY")
@@ -236,9 +232,7 @@ class TardisAdapter:
             # Parse availableTo
             if available_to:
                 try:
-                    to_date = datetime.fromisoformat(
-                        available_to.replace("Z", "+00:00")
-                    ).date()
+                    to_date = datetime.fromisoformat(available_to.replace("Z", "+00:00")).date()
                     if target_date > to_date:
                         return False
                 except (ValueError, AttributeError):
@@ -252,9 +246,7 @@ class TardisAdapter:
             )
             return True  # Default to available if parsing fails
 
-    def _is_instrument_currently_active(
-        self, symbol: Dict[str, Any], today: date
-    ) -> bool:
+    def _is_instrument_currently_active(self, symbol: Dict[str, Any], today: date) -> bool:
         """
         Check if instrument is currently active (not expired).
 
@@ -288,4 +280,3 @@ class TardisAdapter:
             self.session.close()
         self.clear_cache()
         logger.info("🧹 TardisAdapter cleanup completed")
-

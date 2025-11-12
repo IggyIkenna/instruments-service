@@ -49,9 +49,7 @@ class BalancerAdapter(BaseDefiAdapter):
             "ARBITRUM": "ARB",
             "BASE": "BASE",
         }
-        venue_suffix = chain_suffix_map.get(
-            self.chain, self.chain[:3]
-        )  # Default to first 3 chars
+        venue_suffix = chain_suffix_map.get(self.chain, self.chain[:3])  # Default to first 3 chars
         self.venue = f"BALANCER-{venue_suffix}"
 
         # Initialize Balancer API v3 client (GraphQL endpoint)
@@ -62,9 +60,7 @@ class BalancerAdapter(BaseDefiAdapter):
                 # Balancer API v3 GraphQL endpoint (no API key needed for public queries)
                 subgraph_url = "https://api-v3.balancer.fi/graphql"
             else:
-                logger.warning(
-                    f"⚠️  Chain {self.chain} not supported yet, defaulting to Ethereum"
-                )
+                logger.warning(f"⚠️  Chain {self.chain} not supported yet, defaulting to Ethereum")
                 subgraph_url = "https://api-v3.balancer.fi/graphql"
 
         # Use TheGraphClient for GraphQL queries (works with any GraphQL endpoint)
@@ -131,15 +127,11 @@ class BalancerAdapter(BaseDefiAdapter):
                         quote_symbol = quote_candidates[0]
                     else:
                         # No base filter - require at least 2 tokens in MVP list (for a valid pair)
-                        tokens_in_mvp = sum(
-                            1 for sym in token_symbols if sym in allowed_quotes
-                        )
+                        tokens_in_mvp = sum(1 for sym in token_symbols if sym in allowed_quotes)
                         if tokens_in_mvp < 2:
                             continue  # Skip pools where less than 2 tokens are in MVP list
 
-                inst_def = self._convert_pool_to_instrument(
-                    pool, base_currency, allowed_quotes
-                )
+                inst_def = self._convert_pool_to_instrument(pool, base_currency, allowed_quotes)
                 if inst_def and self._validate_instrument_definition(inst_def):
                     instruments[inst_def["instrument_key"]] = inst_def
             except Exception as e:
@@ -314,9 +306,7 @@ class BalancerAdapter(BaseDefiAdapter):
                 converted_pool = {
                     "id": pool.get("address", pool.get("id", "")),
                     "tokens": tokens,
-                    "totalLiquidity": pool.get("dynamicData", {}).get(
-                        "totalLiquidity", 0
-                    ),
+                    "totalLiquidity": pool.get("dynamicData", {}).get("totalLiquidity", 0),
                     "name": pool.get("name", ""),
                 }
 
@@ -395,9 +385,7 @@ class BalancerAdapter(BaseDefiAdapter):
         instrument_key = f"{self.venue}:POOL:{base_symbol}-{quote_symbol}{chain_suffix}"
 
         # Get creation timestamp from pool (if available)
-        created_timestamp = pool.get("createdAtTimestamp") or pool.get(
-            "createdTimestamp"
-        )
+        created_timestamp = pool.get("createdAtTimestamp") or pool.get("createdTimestamp")
         if created_timestamp:
             available_from = datetime.fromtimestamp(int(created_timestamp)).isoformat()
         else:
