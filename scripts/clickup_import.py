@@ -182,9 +182,10 @@ class ClickUpClient:
 class StatusMdParser:
     """Parses STATUS.md to extract tasks, subtasks, and dependencies"""
 
-    def __init__(self, status_md_path: Path):
+    def __init__(self, status_md_path: Path, service_tag: str = None):
         self.status_md_path = status_md_path
         self.content = status_md_path.read_text()
+        self.service_tag = service_tag or "instruments-service"  # Default fallback
 
     def parse_milestones(self) -> List[Dict]:
         """Parse milestone tasks from Timeline Tracking section"""
@@ -273,6 +274,268 @@ class StatusMdParser:
             )
 
         return milestones
+
+    def parse_completed_milestones(self) -> List[Dict]:
+        """Parse completed milestone tasks from Completed Milestones table"""
+        completed_milestones = []
+
+        # Find the Completed Milestones table
+        pattern = r"\*\*Completed Milestones\*\*"
+        match = re.search(pattern, self.content)
+        if not match:
+            # Try alternative pattern
+            pattern = r"## Completed Milestones|### Completed Milestones"
+            match = re.search(pattern, self.content)
+        
+        if not match:
+            print("⚠️  WARNING: Completed Milestones table not found in STATUS.md")
+            return completed_milestones
+
+        # Find the table header after the section
+        content_after = self.content[match.end() :]
+        table_pattern = r"\|\s*Milestone\s*\|\s*Target Date\s*\|\s*Actual Date\s*\|\s*Status\s*\|\s*Notes\s*\|"
+        table_match = re.search(table_pattern, content_after)
+        
+        if not table_match:
+            print("⚠️  WARNING: Completed Milestones table format not found")
+            return completed_milestones
+
+        # Extract table rows
+        lines = content_after[table_match.end() :].split("\n")
+        rows_parsed = 0
+        rows_skipped = 0
+
+        for line in lines[:20]:  # Limit to reasonable number
+            if not line.strip() or not line.startswith("|"):
+                continue
+
+            parts = [p.strip() for p in line.split("|")]
+            if len(parts) < 6:
+                rows_skipped += 1
+                continue
+
+            milestone_name = parts[1]
+            target_date = parts[2]
+            actual_date = parts[3]
+            status = parts[4]
+            notes = parts[5]
+
+            # Skip header row
+            if milestone_name == "Milestone" or "---" in milestone_name:
+                continue
+
+            # Only parse completed milestones
+            status_clean = status.replace("✅", "").replace("⏳", "").strip().lower()
+            if "complete" not in status_clean:
+                continue
+
+            # Parse dates
+            due_date = None
+            if actual_date and actual_date != "TBD" and actual_date != "N/A":
+                try:
+                    # Handle "Week 5-6" format
+                    if "Week" in actual_date:
+                        due_date = actual_date  # Keep as string, will convert later
+                    else:
+                        due_date = int(
+                            datetime.strptime(actual_date, "%Y-%m-%d").timestamp()
+                            * 1000
+                        )
+                except:
+                    pass
+
+            completed_milestones.append(
+                {
+                    "name": milestone_name,
+                    "status": "complete",
+                    "due_date": due_date,
+                    "notes": notes,
+                    "actual_date": actual_date if actual_date != "N/A" else None,
+                    "week": (
+                        target_date if "Week" in str(target_date) else None
+                    ),  # Store week string
+                }
+            )
+            rows_parsed += 1
+
+        if rows_parsed == 0:
+            print("⚠️  WARNING: No completed milestone rows parsed")
+        elif rows_skipped > 0:
+            print(
+                f"⚠️  WARNING: {rows_skipped} completed milestone row(s) skipped due to formatting issues"
+            )
+
+        return completed_milestones
+
+    def parse_priority_tasks(self) -> List[Dict]:
+        """Parse tasks from priority sections (High/Medium/Low Priority Tasks)"""
+        tasks = []
+
+        # Find Next Steps section
+        pattern = r"## Next Steps"
+        match = re.search(pattern, self.content)
+        if not match:
+            print("⚠️  WARNING: '## Next Steps' section not found in STATUS.md")
+            return tasks
+
+        content_after = self.content[match.end() :]
+
+        # Find all priority sections
+        priority_sections = [
+            (r"### 🔴 High Priority Tasks", "High"),
+            (r"### 🟡 Medium Priority Tasks", "Medium"),
+            (r"### 🟢 Low Priority Tasks", "Low"),
+        ]
+
+        for section_pattern, priority_level in priority_sections:
+            section_match = re.search(section_pattern, content_after)
+            if not section_match:
+                continue
+
+            section_content = content_after[section_match.end() :]
+            
+            # Stop at next section (### or ##)
+            next_section_match = re.search(r"\n(###|##)", section_content)
+            if next_section_match:
+                section_content = section_content[: next_section_match.start()]
+
+            lines = section_content.split("\n")
+            current_parent = None
+            parent_task_data = None
+
+            for line_num, line in enumerate(lines, start=1):
+                # Skip empty lines
+                if not line.strip():
+                    continue
+
+                # Stop if we hit a new section or non-task content
+                if line.strip().startswith("#"):
+                    break
+
+                # Pattern: - [ ] Task Name - `Date` - `Owner: Name` - `Priority: Level` - `Blocks: ...` - `Dependencies: ...` - `Note: ...` (optional)
+                # Also handle numbered prefixes: - [ ] 1.) Task Name - ...
+                task_pattern = r"- \[ \] (\d+\.\)\s*)?([^-]+) - `([^`]+)` - `Owner:\s*([^`]+)` - `Priority:\s*([^`]+)` - `Blocks:\s*([^`]+)` - `Dependencies:\s*([^`]+)`(?:\s*-\s*`Note:\s*([^`]+)`)?"
+                task_match = re.match(task_pattern, line)
+                
+                if task_match:
+                    numbered_prefix = task_match.group(1)  # e.g., "1.) "
+                    task_name = task_match.group(2).strip()
+                    due_date_str = task_match.group(3).strip()
+                    owner = task_match.group(4).strip()
+                    priority = task_match.group(5).strip()
+                    blocks = task_match.group(6).strip()
+                    dependencies = task_match.group(7).strip()
+
+                    # Parse due date
+                    due_date = None
+                    if due_date_str and due_date_str != "TBD" and due_date_str != "N/A":
+                        try:
+                            due_date = int(
+                                datetime.strptime(due_date_str, "%Y-%m-%d").timestamp()
+                                * 1000
+                            )
+                        except:
+                            pass
+
+                    # Map priority to ClickUp priority (1=Urgent, 2=High, 3=Normal, 4=Low)
+                    priority_map = {
+                        "High": 2,
+                        "Medium": 3,
+                        "Low": 4,
+                    }
+                    clickup_priority = priority_map.get(priority_level, 3)
+
+                    task_data = {
+                        "name": task_name,
+                        "due_date": due_date,
+                        "owner": owner,
+                        "priority": clickup_priority,
+                        "priority_level": priority_level,
+                        "blocks": blocks if blocks != "None" else None,
+                        "dependencies": dependencies if dependencies != "None" else None,
+                        "subtasks": [],
+                    }
+
+                    # This is a parent task
+                    current_parent = task_name
+                    parent_task_data = task_data
+                    tasks.append(task_data)
+
+                # Check for subtask (indented with 2 spaces)
+                elif current_parent and line.strip().startswith("  - [ ]"):
+                    subtask_name = line.strip()[6:].strip()  # Remove "- [ ] " prefix
+                    if parent_task_data:
+                        parent_task_data["subtasks"].append(subtask_name)
+                elif line.strip() and not line.startswith("  "):
+                    # End of current parent's subtasks
+                    current_parent = None
+                    parent_task_data = None
+
+        if len(tasks) == 0:
+            print("⚠️  WARNING: No priority tasks found in Next Steps section")
+            print("   Expected format: - [ ] Task Name - `Date` - `Owner: Name` - `Priority: Level` - `Blocks: ...` - `Dependencies: ...`")
+        else:
+            print(f"   Found {len(tasks)} priority task(s)")
+
+        return tasks
+
+    def parse_dependencies(self) -> List[Dict]:
+        """Parse dependency tasks from Dependencies section"""
+        dependencies = []
+
+        # Find Dependencies section
+        pattern = r"\*\*Dependencies\*\*:"
+        match = re.search(pattern, self.content)
+        if not match:
+            # Try alternative pattern
+            pattern = r"## Dependencies|### Dependencies"
+            match = re.search(pattern, self.content)
+        
+        if not match:
+            print("⚠️  WARNING: Dependencies section not found in STATUS.md")
+            return dependencies
+
+        content_after = self.content[match.end() :]
+        
+        # Parse dependency lines: - `name`: `Status` - `Blocking` - ✅/⏳ description
+        # Pattern: - `name`: `Status` - `Blocking` - ✅/⏳ description
+        dep_pattern = r"- `([^`]+)`: `([^`]+)` - `([^`]+)` - (.*)"
+        
+        lines = content_after.split("\n")
+        for line in lines[:20]:  # Limit to reasonable number
+            if not line.strip():
+                continue
+            
+            dep_match = re.match(dep_pattern, line)
+            if dep_match:
+                dep_name = dep_match.group(1).strip()
+                dep_status = dep_match.group(2).strip()
+                dep_blocking = dep_match.group(3).strip()
+                dep_description = dep_match.group(4).strip()
+                
+                # Parse status
+                status_clean = dep_status.lower()
+                if "complete" in status_clean:
+                    status_value = "complete"
+                    tags = [self.service_tag, "dependency", "complete"]
+                else:
+                    status_value = "to do"
+                    tags = [self.service_tag, "dependency", "planned"]
+                
+                dependencies.append({
+                    "name": dep_name,
+                    "status": status_value,
+                    "tags": tags,
+                    "notes": f"{dep_blocking} - {dep_description}",
+                    "blocking": dep_blocking,
+                })
+        
+        if len(dependencies) == 0:
+            print("⚠️  WARNING: No dependencies parsed from Dependencies section")
+        else:
+            print(f"   Found {len(dependencies)} dependency/dependencies")
+
+        return dependencies
 
     def parse_subtasks(self) -> Dict[str, List[Dict]]:
         """Parse subtasks from Next Steps section, grouped by parent"""
@@ -434,6 +697,7 @@ class ClickUpImporter:
         dry_run: bool = False,
         sprint_start_date: Optional[str] = None,
         clean_orphaned: bool = False,
+        service_name: Optional[str] = None,
     ):
         self.client = ClickUpClient(api_token)
         self.list_id = list_id
@@ -446,13 +710,23 @@ class ClickUpImporter:
         self.all_tasks_from_status_md = (
             set()
         )  # Track all task names from STATUS.md (for orphan detection)
+        
+        # Detect service name from script path or use provided
+        if service_name:
+            self.service_name = service_name
+        else:
+            # Extract from script path: {service}/scripts/clickup_import.py -> {service}
+            script_path = Path(__file__)
+            self.service_name = script_path.parent.parent.name
+        
+        self.service_tag = self.service_name  # e.g., "instruments-service" or "market-tick-data-handler"
 
         # Calculate week dates based on sprint start
-        # Default: Nov 7, 2025 (current date), Week 1 ends Nov 14
+        # Default: Nov 9, 2025 (actual start date), Week 1 ends Nov 16
         if sprint_start_date:
             self.sprint_start = datetime.strptime(sprint_start_date, "%Y-%m-%d")
         else:
-            self.sprint_start = datetime(2025, 11, 7)  # Nov 7, 2025
+            self.sprint_start = datetime(2025, 11, 9)  # Nov 9, 2025 - actual start date
 
         # Calculate week end dates (each week is 7 days)
         self.week_dates = {}
@@ -521,7 +795,11 @@ class ClickUpImporter:
             return
 
         # If still not found, try API
-        if not self.assignee_map.get("Ikenna") or not self.assignee_map.get("Harsh"):
+        if (
+            not self.assignee_map.get("Ikenna")
+            or not self.assignee_map.get("Harsh")
+            or not self.assignee_map.get("Femi")
+        ):
             try:
                 # Get team members
                 teams = self.client._request("GET", "/team")
@@ -547,10 +825,19 @@ class ClickUpImporter:
                             "harsh" in username or "harsh" in email
                         ) and not self.assignee_map.get("Harsh"):
                             self.assignee_map["Harsh"] = user_id
+                        elif (
+                            "femi" in username
+                            or "femi" in email
+                            or "datadodo" in email
+                            or "femi" in full_name
+                        ) and not self.assignee_map.get("Femi"):
+                            self.assignee_map["Femi"] = user_id
             except Exception as e:
                 print(f"⚠️  Could not resolve user IDs from API: {e}")
-                if not self.assignee_map.get("Ikenna") or not self.assignee_map.get(
-                    "Harsh"
+                if (
+                    not self.assignee_map.get("Ikenna")
+                    or not self.assignee_map.get("Harsh")
+                    or not self.assignee_map.get("Femi")
                 ):
                     print(
                         "   Run 'python scripts/get_clickup_user_ids.py' to get user IDs"
@@ -558,6 +845,7 @@ class ClickUpImporter:
                     print("   Then add them to instruments-service/.env.clickup file:")
                     print("   clickup_user_id_ikenna=YOUR_ID")
                     print("   clickup_user_id_harsh=YOUR_ID")
+                    print("   clickup_user_id_femi=YOUR_ID")
 
     def get_week_due_date(self, week_str: str) -> Optional[int]:
         """Convert week string (e.g., 'Week 5-6') to Unix timestamp"""
@@ -794,6 +1082,62 @@ class ClickUpImporter:
             print(f"⚠️  Could not get team members: {e}")
             return []
 
+    def normalize_task_name(self, task_name: str) -> str:
+        """Normalize task name for matching (handle truncation, backticks, etc.)"""
+        if not task_name:
+            return ""
+        # Clean task name - remove or replace problematic characters
+        normalized = task_name.replace("`", "'")
+        # Truncate to 100 chars if needed (same as ClickUp limit)
+        if len(normalized) > 100:
+            normalized = normalized[:97] + "..."
+        return normalized
+
+    def find_or_create_strategy_parent(
+        self, parent_name: str, tags: List[str], strategies: List[str], due_date: Optional[int] = None
+    ) -> Optional[str]:
+        """
+        Find existing strategy milestone parent task or create if it doesn't exist.
+        
+        Strategy milestone parents are shared across services, so we check if they
+        already exist before creating.
+        
+        Args:
+            parent_name: Name of the strategy milestone (e.g., "ML Delta-One Strategy Backtest")
+            tags: Tags for the parent task (should NOT include service tag)
+            strategies: Strategy names for custom field
+            due_date: Optional due date timestamp
+        
+        Returns:
+            Task ID of the parent task, or None if creation failed
+        """
+        # Check if parent already exists
+        existing_parent_id = self.existing_tasks.get(parent_name)
+        
+        if existing_parent_id:
+            print(f"   ✅ Found existing strategy parent: {parent_name}")
+            return existing_parent_id
+        
+        # Parent doesn't exist - create it
+        # Note: Parent tasks do NOT have service tag (they're shared)
+        parent_task = {
+            "name": parent_name,
+            "status": "to do",
+            "tags": tags,  # Should NOT include service tag
+            "strategies": strategies,
+            "due_date": due_date,
+        }
+        
+        print(f"   🆕 Creating new strategy parent: {parent_name}")
+        parent_id = self.create_task(parent_task)
+        
+        if parent_id:
+            # Add to existing_tasks cache so other services can find it
+            self.existing_tasks[parent_name] = parent_id
+            self.task_map[parent_name] = parent_id
+        
+        return parent_id
+
     def create_task(
         self, task_data: Dict, parent_id: Optional[str] = None
     ) -> Optional[str]:
@@ -816,14 +1160,15 @@ class ClickUpImporter:
             # Databento API Access -> Ikenna (credentials needed)
             elif "Databento API Access" in task_name:
                 assignee_id = self.assignee_map.get("Ikenna")
-            # Databento Integration/TradFi -> Harsh (implementation)
+            # Databento Integration/TradFi -> Ikenna (implementation)
+            # Note: DeFi and TradFi are assigned to Ikenna (all completed tasks should be Ikenna per user request)
             elif (
                 "Databento" in task_name or "TradFi" in task_name
             ) and "API Access" not in task_name:
-                assignee_id = self.assignee_map.get("Harsh")
-            # DeFi -> Harsh
+                assignee_id = self.assignee_map.get("Ikenna")
+            # DeFi -> Ikenna (all completed tasks should be Ikenna per user request)
             elif "DeFi" in task_name:
-                assignee_id = self.assignee_map.get("Harsh")
+                assignee_id = self.assignee_map.get("Ikenna")
             else:
                 # Default: Ikenna for instruments-service tasks
                 assignee_id = self.assignee_map.get("Ikenna")
@@ -891,13 +1236,25 @@ class ClickUpImporter:
 
         try:
             # Check if task already exists (idempotency)
-            task_name = task_data.get("name", "")
-            existing_task_id = self.existing_tasks.get(task_name)
+            # Normalize task name for matching (handle truncation)
+            original_task_name = task_data.get("name", "")
+            normalized_task_name = self.normalize_task_name(original_task_name)
+            
+            # Check both original and normalized names
+            existing_task_id = self.existing_tasks.get(original_task_name) or self.existing_tasks.get(normalized_task_name)
+            
+            # Also check if any existing task name matches (for truncated names)
+            if not existing_task_id:
+                for existing_name, existing_id in self.existing_tasks.items():
+                    normalized_existing = self.normalize_task_name(existing_name)
+                    if normalized_existing == normalized_task_name:
+                        existing_task_id = existing_id
+                        break
 
             if existing_task_id:
                 # Task exists - update it instead of creating duplicate
                 print(
-                    f"🔄 Task '{task_name}' already exists (ID: {existing_task_id}), updating..."
+                    f"🔄 Task '{normalized_task_name}' already exists (ID: {existing_task_id}), updating..."
                 )
 
                 # Prepare update payload (only include fields that should be updated)
@@ -973,20 +1330,13 @@ class ClickUpImporter:
             # Task doesn't exist - create new one
             # Prepare task payload
             # ClickUp task name limit is 100 characters - truncate if needed
-            task_name = task_data["name"]
-            original_name = task_name
+            original_name = task_data["name"]
+            task_name = self.normalize_task_name(original_name)
 
-            # Clean task name - remove or replace problematic characters
-            # ClickUp doesn't like backticks in task names
-            task_name = task_name.replace("`", "'")
-
-            if len(task_name) > 100:
-                # Truncate to 97 chars and add "..."
-                truncated_name = task_name[:97] + "..."
+            if len(original_name) > 100:
                 print(
-                    f"⚠️  Task name too long ({len(task_name)} chars), truncating to 100 chars"
+                    f"⚠️  Task name too long ({len(original_name)} chars), truncating to 100 chars"
                 )
-                task_name = truncated_name
 
             payload = {
                 "name": task_name,
@@ -1120,7 +1470,7 @@ class ClickUpImporter:
 
     def import_from_status_md(self, status_md_path: Path):
         """Import tasks from STATUS.md"""
-        parser = StatusMdParser(status_md_path)
+        parser = StatusMdParser(status_md_path, service_tag=self.service_tag)
 
         print("📋 Parsing STATUS.md...")
 
@@ -1145,6 +1495,10 @@ class ClickUpImporter:
             if self.assignee_map.get("Carlos"):
                 print(f"   ✅ Found Carlos: {self.assignee_map['Carlos']}")
 
+        # Print service information
+        print(f"📦 Service: {self.service_name}")
+        print(f"🏷️  Service tag: {self.service_tag}")
+        
         # Ensure custom fields exist
         print("🔧 Setting up custom fields...")
         self.ensure_custom_fields()
@@ -1157,10 +1511,16 @@ class ClickUpImporter:
                 task_name = task.get("name", "")
                 task_id = task.get("id", "")
                 if task_name and task_id:
+                    # Store both original and normalized names for matching
                     self.existing_tasks[task_name] = task_id
+                    normalized_name = self.normalize_task_name(task_name)
+                    if normalized_name != task_name:
+                        self.existing_tasks[normalized_name] = task_id
             if self.existing_tasks:
+                # Count unique task IDs (not names, since we store both original and normalized)
+                unique_task_ids = len(set(self.existing_tasks.values()))
                 print(
-                    f"   Found {len(self.existing_tasks)} existing task(s) - will update instead of duplicate"
+                    f"   Found {unique_task_ids} existing task(s) - will update instead of duplicate"
                 )
 
         # Parse milestones
@@ -1174,11 +1534,21 @@ class ClickUpImporter:
         else:
             print(f"   Found {len(milestones)} milestones")
 
-        # Create milestone tasks
-        print("\n🎯 Creating milestone tasks...")
+        # Separate strategy milestones (cross-service) from service-specific milestones
+        strategy_milestones = []
+        service_milestones = []
+        
         for milestone in milestones:
+            if "Strategy" in milestone["name"]:
+                strategy_milestones.append(milestone)
+            else:
+                service_milestones.append(milestone)
+
+        # Create service-specific milestone tasks (non-strategy milestones)
+        print("\n🎯 Creating service-specific milestone tasks...")
+        for milestone in service_milestones:
             # Determine tags and strategy based on milestone name
-            tags = ["instruments-service", "milestone"]
+            tags = [self.service_tag, "milestone"]
             strategies = []  # For Strategy custom field
 
             if "DeFi" in milestone["name"]:
@@ -1202,81 +1572,340 @@ class ClickUpImporter:
             if task_id:
                 self.task_map[milestone["name"]] = task_id
 
-        # Parse and create subtasks
-        print("\n📝 Parsing subtasks...")
-        subtasks_by_parent = parser.parse_subtasks()
-        if len(subtasks_by_parent) == 0:
-            print("   ⚠️  WARNING: No subtasks found!")
+        # Create strategy milestone parent tasks with service subtasks (Option A)
+        print("\n🎯 Creating strategy milestone parent tasks...")
+        for strategy_milestone in strategy_milestones:
+            # Determine tags and strategy based on milestone name
+            # Parent tasks do NOT have service tag (they're shared across services)
+            tags = ["milestone", "strategy-milestone", "cross-service"]
+            strategies = []
+            
+            if "ML Delta-One" in strategy_milestone["name"]:
+                tags.append("ml-delta-one")
+                strategies.append("Delta-One ML")
+            elif "DeFi" in strategy_milestone["name"]:
+                tags.append("defi")
+                strategies.append("DeFi")
+            elif "TradFi" in strategy_milestone["name"]:
+                tags.append("tradfi")
+                strategies.append("TradFi")
+            elif "Crypto Options" in strategy_milestone["name"]:
+                tags.append("crypto-options")
+                strategies.append("Options")
+            elif "TradFi Options" in strategy_milestone["name"]:
+                tags.append("tradfi-options")
+                strategies.append("Options")
+
+            # Find or create parent task (shared across services)
+            parent_id = self.find_or_create_strategy_parent(
+                parent_name=strategy_milestone["name"],
+                tags=tags,
+                strategies=strategies,
+                due_date=strategy_milestone.get("due_date")
+            )
+            
+            if not parent_id:
+                print(f"   ⚠️  Failed to create/find parent for {strategy_milestone['name']}")
+                continue  # Skip creating subtasks if parent doesn't exist
+                
+                # Create service-specific subtasks for instruments-service
+                # Distinguish between Code Complete, Batch Data Run, and Daily Backfill (for Live)
+                # Make subtask names unique by including strategy name
+                strategy_prefix = strategy_milestone["name"].replace(" Strategy", "").replace(" ", "-")
+                service_subtasks = []
+                
+                if "ML Delta-One" in strategy_milestone["name"]:
+                    if "Backtest" in strategy_milestone["name"]:
+                        # Code complete (CeFi + TradFi MVP)
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Code Complete",
+                            "status": "complete",  # Code is complete
+                            "notes": "CeFi crypto instruments (Tardis) and TradFi instruments (Databento) MVP code complete",
+                            "assignees": [self.assignee_map.get("Ikenna")] if self.assignee_map.get("Ikenna") else None,
+                        })
+                        # Batch data not run yet
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Batch Data Run",
+                            "status": "to do",  # Batch data hasn't been run
+                            "notes": "Batch data backfill (Jan 1, 2020 - Today) needs to be run for backtest",
+                            "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
+                        })
+                    elif "Live" in strategy_milestone["name"]:
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Code Complete",
+                            "status": "complete",
+                            "notes": "Code complete for live trading",
+                            "assignees": [self.assignee_map.get("Ikenna")] if self.assignee_map.get("Ikenna") else None,
+                        })
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Batch Data Run",
+                            "status": "to do",
+                            "notes": "Batch data backfill needed",
+                            "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
+                        })
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Daily Backfill Configured",
+                            "status": "to do",
+                            "notes": "Daily T+1 backfill scheduler needs to be configured",
+                            "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
+                        })
+                elif "DeFi" in strategy_milestone["name"]:
+                    if "Backtest" in strategy_milestone["name"]:
+                        # DeFi code NOT complete due to warnings and failed tests
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Code Complete",
+                            "status": "in progress",  # NOT complete - warnings and failed tests
+                            "notes": "DeFi instruments MVP structure exists but has warnings (Curve, Uniswap V4, The Graph issues) and failed tests. Not ready for backtest.",
+                            "assignees": [self.assignee_map.get("Ikenna")] if self.assignee_map.get("Ikenna") else None,
+                        })
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Batch Data Run",
+                            "status": "to do",
+                            "notes": "Batch data backfill needed once code is complete",
+                            "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
+                        })
+                    elif "Live" in strategy_milestone["name"]:
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Code Complete",
+                            "status": "in progress",
+                            "notes": "DeFi code has warnings and failed tests",
+                            "assignees": [self.assignee_map.get("Ikenna")] if self.assignee_map.get("Ikenna") else None,
+                        })
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Batch Data Run",
+                            "status": "to do",
+                            "notes": "Batch data backfill needed",
+                            "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
+                        })
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Daily Backfill Configured",
+                            "status": "to do",
+                            "notes": "Daily T+1 backfill scheduler needed",
+                            "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
+                        })
+                elif "TradFi" in strategy_milestone["name"] and "Options" not in strategy_milestone["name"]:
+                    if "Backtest" in strategy_milestone["name"]:
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Code Complete",
+                            "status": "complete",
+                            "notes": "TradFi instruments (Databento) MVP code complete",
+                            "assignees": [self.assignee_map.get("Ikenna")] if self.assignee_map.get("Ikenna") else None,
+                        })
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Batch Data Run",
+                            "status": "to do",
+                            "notes": "Batch data backfill (Jan 1, 2020 - Today) needed for backtest",
+                            "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
+                        })
+                    elif "Live" in strategy_milestone["name"]:
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Code Complete",
+                            "status": "complete",
+                            "notes": "TradFi code complete",
+                            "assignees": [self.assignee_map.get("Ikenna")] if self.assignee_map.get("Ikenna") else None,
+                        })
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Batch Data Run",
+                            "status": "to do",
+                            "notes": "Batch data backfill needed",
+                            "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
+                        })
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Daily Backfill Configured",
+                            "status": "to do",
+                            "notes": "Daily T+1 backfill scheduler needed",
+                            "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
+                        })
+                elif "Crypto Options" in strategy_milestone["name"]:
+                    if "Backtest" in strategy_milestone["name"]:
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Code Complete",
+                            "status": "complete",
+                            "notes": "Crypto options instruments (DERIBIT) MVP code complete",
+                            "assignees": [self.assignee_map.get("Ikenna")] if self.assignee_map.get("Ikenna") else None,
+                        })
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Batch Data Run",
+                            "status": "to do",
+                            "notes": "Batch data backfill (Jan 1, 2020 - Today) needed for backtest",
+                            "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
+                        })
+                    elif "Live" in strategy_milestone["name"]:
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Code Complete",
+                            "status": "complete",
+                            "notes": "Crypto options code complete",
+                            "assignees": [self.assignee_map.get("Ikenna")] if self.assignee_map.get("Ikenna") else None,
+                        })
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Batch Data Run",
+                            "status": "to do",
+                            "notes": "Batch data backfill needed",
+                            "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
+                        })
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Daily Backfill Configured",
+                            "status": "to do",
+                            "notes": "Daily T+1 backfill scheduler needed",
+                            "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
+                        })
+                elif "TradFi Options" in strategy_milestone["name"]:
+                    if "Backtest" in strategy_milestone["name"]:
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Code Complete",
+                            "status": "complete",
+                            "notes": "TradFi options instruments (S&P 500 simple premium-based model) MVP code complete",
+                            "assignees": [self.assignee_map.get("Ikenna")] if self.assignee_map.get("Ikenna") else None,
+                        })
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Batch Data Run",
+                            "status": "to do",
+                            "notes": "Batch data backfill (Jan 1, 2020 - Today) needed for backtest",
+                            "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
+                        })
+                    elif "Live" in strategy_milestone["name"]:
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Code Complete",
+                            "status": "complete",
+                            "notes": "TradFi options code complete",
+                            "assignees": [self.assignee_map.get("Ikenna")] if self.assignee_map.get("Ikenna") else None,
+                        })
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Batch Data Run",
+                            "status": "to do",
+                            "notes": "Batch data backfill needed",
+                            "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
+                        })
+                        service_subtasks.append({
+                            "name": f"{self.service_name} ({strategy_prefix}): Daily Backfill Configured",
+                            "status": "to do",
+                            "notes": "Daily T+1 backfill scheduler needed",
+                            "assignees": [self.assignee_map.get("Femi")] if self.assignee_map.get("Femi") else None,
+                        })
+                
+                # Create all service subtasks
+                for subtask_data in service_subtasks:
+                    subtask_name = subtask_data["name"]
+                    # Check if this subtask already exists (might be created by other services)
+                    existing_subtask_id = self.existing_tasks.get(subtask_name)
+                    
+                    if existing_subtask_id:
+                        # Update existing subtask to be under this parent
+                        update_payload = {"parent": parent_id}
+                        if self.update_task(existing_subtask_id, update_payload):
+                            print(f"   🔄 Linked existing subtask '{subtask_name}' to parent")
+                            self.task_map[subtask_name] = existing_subtask_id
+                    else:
+                        # Create new subtask
+                        service_subtask = {
+                            "name": subtask_name,
+                            "status": subtask_data["status"],
+                            "tags": [self.service_tag] + tags + ["service-subtask"],
+                            "notes": subtask_data["notes"],
+                            "assignees": subtask_data.get("assignees"),
+                        }
+                        subtask_id = self.create_task(service_subtask, parent_id=parent_id)
+                        if subtask_id:
+                            self.task_map[subtask_name] = subtask_id
+
+        # Parse and create completed milestones
+        print("\n✅ Parsing completed milestones...")
+        completed_milestones = parser.parse_completed_milestones()
+        if len(completed_milestones) == 0:
+            print("   ℹ️  No completed milestones found (this is OK if none exist)")
+        else:
+            print(f"   Found {len(completed_milestones)} completed milestone(s)")
+
+        print("\n🎯 Creating completed milestone tasks...")
+        for completed_milestone in completed_milestones:
+            tags = [self.service_tag, "milestone", "complete"]
+            strategies = []
+            
+            if "DeFi" in completed_milestone["name"]:
+                tags.append("defi")
+                strategies.append("DeFi")
+            elif "TradFi" in completed_milestone["name"] or "Databento" in completed_milestone["name"]:
+                tags.append("tradfi")
+                strategies.append("TradFi")
+            elif "Options" in completed_milestone["name"]:
+                tags.append("options")
+                strategies.append("Options")
+            else:
+                strategies.append("Delta-One ML")
+
+            completed_milestone["tags"] = tags
+            completed_milestone["strategies"] = strategies
+            # All completed milestones are assigned to Ikenna (as per user request)
+            completed_milestone["assignees"] = [self.assignee_map.get("Ikenna")] if self.assignee_map.get("Ikenna") else None
+            task_id = self.create_task(completed_milestone)
+            if task_id:
+                self.task_map[completed_milestone["name"]] = task_id
+
+        # Parse and create priority tasks
+        print("\n📝 Parsing priority tasks...")
+        priority_tasks = parser.parse_priority_tasks()
+        if len(priority_tasks) == 0:
+            print("   ⚠️  WARNING: No priority tasks found!")
             print(
-                "   Check STATUS.md formatting - need '## Next Steps' > '### 📋 Planned' section"
+                "   Check STATUS.md formatting - need '## Next Steps' > priority sections (High/Medium/Low)"
             )
         else:
-            print(f"   Found {len(subtasks_by_parent)} parent tasks with subtasks")
+            print(f"   Found {len(priority_tasks)} priority task(s)")
 
-        print("\n🔗 Creating subtasks...")
+        # Create priority tasks
+        print("\n🎯 Creating priority tasks...")
+        task_count = 0
         subtask_count = 0
 
-        # Map parent task names from STATUS.md to milestone names
-        parent_name_mapping = {
-            "Configure daily backfill scheduler": "Daily Backfill Job",
-            "Implement TradFi instrument support (Databento)": "Databento Integration (TradFi)",
-            "Implement DeFi instrument support": "DeFi Instrument Support",
-            "Implement performance benchmarks": "Performance Benchmarks",
-            "Add upstream data access example for Tardis (if needed)": "Upstream Data Access Example (Tardis)",
-        }
+        for task_data in priority_tasks:
+            # Determine assignee
+            owner_name = task_data.get("owner", "").strip()
+            assignee_id = None
+            if owner_name:
+                assignee_id = self.assignee_map.get(owner_name)
+                if not assignee_id:
+                    print(f"   ⚠️  Owner '{owner_name}' not found in assignee_map")
 
-        for parent_name, parent_data in subtasks_by_parent.items():
-            # Map to milestone name if exists
-            milestone_name = parent_name_mapping.get(parent_name, parent_name)
-            if milestone_name is None:
-                print(
-                    f"⚠️  Parent task '{parent_name}' has no milestone, skipping subtasks"
-                )
-                continue
+            # Determine tags based on priority level
+            tags = [self.service_tag, "task"]
+            if task_data.get("priority_level") == "High":
+                tags.append("high-priority")
+            elif task_data.get("priority_level") == "Medium":
+                tags.append("medium-priority")
+            elif task_data.get("priority_level") == "Low":
+                tags.append("low-priority")
 
-            parent_id = self.task_map.get(milestone_name)
-            if not parent_id:
-                print(
-                    f"⚠️  Parent task '{milestone_name}' (from '{parent_name}') not found, skipping subtasks"
-                )
-                continue
+            # Create parent task
+            parent_task_data = {
+                "name": task_data["name"],
+                "status": "to do",
+                "tags": tags,
+                "due_date": task_data.get("due_date"),
+                "assignees": [assignee_id] if assignee_id else None,
+                "priority": task_data.get("priority", 3),
+                "notes": f"Blocks: {task_data.get('blocks', 'None')}\nDependencies: {task_data.get('dependencies', 'None')}",
+            }
 
-            # Determine tags based on milestone name
-            tags = ["instruments-service"]
-            if "DeFi" in milestone_name:
-                tags.extend(["defi", "week-5-6"])
-            elif "TradFi" in milestone_name or "Databento" in milestone_name:
-                tags.extend(["tradfi", "week-7-8"])
+            parent_id = self.create_task(parent_task_data)
+            if parent_id:
+                self.task_map[task_data["name"]] = parent_id
+                task_count += 1
 
-            for subtask_data in parent_data["subtasks"]:
-                # Convert week string to actual date if needed
-                if isinstance(
-                    subtask_data.get("due_date"), str
-                ) and "Week" in subtask_data.get("due_date", ""):
-                    subtask_data["due_date"] = self.get_week_due_date(
-                        subtask_data["due_date"]
-                    )
+                # Create subtasks if any
+                for subtask_name in task_data.get("subtasks", []):
+                    subtask_task_data = {
+                        "name": subtask_name,
+                        "status": "to do",
+                        "tags": tags + ["subtask"],
+                        "assignees": [assignee_id] if assignee_id else None,
+                    }
+                    self.create_task(subtask_task_data, parent_id=parent_id)
+                    subtask_count += 1
 
-                # Determine assignee based on milestone name (not parent_name)
-                assignee_id = None
-                if "Databento" in milestone_name or "TradFi" in milestone_name:
-                    assignee_id = self.assignee_map.get("Harsh")
-                elif "DeFi" in milestone_name:
-                    assignee_id = self.assignee_map.get("Harsh")
-                else:
-                    assignee_id = self.assignee_map.get("Ikenna")
-
-                subtask_task = {
-                    "name": subtask_data["name"],
-                    "status": "to do",
-                    "tags": tags,
-                    # Don't set week custom field for subtasks - causes errors
-                    # Week is only for milestones (parent tasks)
-                    "due_date": subtask_data.get("due_date"),  # Pass converted due_date
-                    "assignees": [assignee_id] if assignee_id else None,
-                }
-                self.create_task(subtask_task, parent_id=parent_id)
-                subtask_count += 1
+        if task_count > 0:
+            print(f"   ✅ Created {task_count} priority task(s)")
+        if subtask_count > 0:
+            print(f"   ✅ Created {subtask_count} subtask(s)")
 
         # Parse in-progress tasks
         print("\n🔄 Parsing in-progress tasks...")
@@ -1287,38 +1916,29 @@ class ClickUpImporter:
             print(f"   Found {len(in_progress)} in-progress tasks")
 
         for task_data in in_progress:
-            task_data["tags"] = ["instruments-service", "in-progress", "bug-fix"]
+            task_data["tags"] = [self.service_tag, "in-progress", "bug-fix"]
             self.create_task(task_data)
 
-        # Create dependency tasks if they don't exist (from Dependencies section)
-        print("\n🔧 Creating dependency tasks...")
-        dependency_tasks = [
-            {
-                "name": "unified-cloud-services Integration",
-                "status": "complete",
-                "tags": ["instruments-service", "dependency", "complete"],
-                "notes": "Complete - Non-blocking - ✅ Fully integrated",
-            },
-            {
-                "name": "Tardis API Integration",
-                "status": "complete",
-                "tags": ["instruments-service", "dependency", "complete"],
-                "notes": "Complete - Non-blocking - ✅ Working",
-            },
-            {
-                "name": "Databento API Access",
-                "status": "to do",
-                "tags": ["instruments-service", "dependency", "planned"],
-                "notes": "Required for TradFi strategy support. Planned Week 7-8.",
-                "priority": 3,  # Normal priority
-            },
-        ]
+        # Parse and create dependency tasks (from Dependencies section)
+        print("\n🔧 Parsing dependencies...")
+        parsed_dependencies = parser.parse_dependencies()
+        if len(parsed_dependencies) == 0:
+            print("   ℹ️  No dependencies found (this is OK if none exist)")
+        else:
+            print(f"   Found {len(parsed_dependencies)} dependency/dependencies")
 
-        for dep_task in dependency_tasks:
+        print("\n🔧 Creating dependency tasks...")
+        for dep_task in parsed_dependencies:
             if dep_task["name"] not in self.task_map:
                 task_id = self.create_task(dep_task)
                 if task_id:
                     self.task_map[dep_task["name"]] = task_id
+            else:
+                # Update existing dependency task status if it changed
+                existing_id = self.task_map[dep_task["name"]]
+                update_payload = {"status": dep_task["status"]}
+                if self.update_task(existing_id, update_payload):
+                    print(f"   🔄 Updated dependency '{dep_task['name']}' status to '{dep_task['status']}'")
 
         # Link dependencies after all tasks are created
         print("\n🔗 Linking task dependencies...")
@@ -1338,24 +1958,30 @@ class ClickUpImporter:
             else:
                 if not task_id:
                     print(f"⚠️  Task '{task_name}' not found for dependency")
+                    # Check if it's a completed milestone that should exist
+                    if task_name in [cm["name"] for cm in completed_milestones]:
+                        print(f"   💡 Note: '{task_name}' is a completed milestone - ensure it was created")
                 if not depends_on_id:
                     print(
-                        f"⚠️  Dependency task '{depends_on_name}' not found (will be created as separate task)"
+                        f"⚠️  Dependency task '{depends_on_name}' not found - check if it's in Dependencies section of STATUS.md"
                     )
 
         # Track all task names from STATUS.md for orphan detection
         for milestone in milestones:
             self.all_tasks_from_status_md.add(milestone["name"])
 
-        for parent_name, parent_data in subtasks_by_parent.items():
-            self.all_tasks_from_status_md.add(parent_name)
-            for subtask in parent_data.get("subtasks", []):
-                self.all_tasks_from_status_md.add(subtask["name"])
+        for completed_milestone in completed_milestones:
+            self.all_tasks_from_status_md.add(completed_milestone["name"])
+
+        for task_data in priority_tasks:
+            self.all_tasks_from_status_md.add(task_data["name"])
+            for subtask_name in task_data.get("subtasks", []):
+                self.all_tasks_from_status_md.add(subtask_name)
 
         for task in in_progress:
             self.all_tasks_from_status_md.add(task["name"])
 
-        for dep_task in dependency_tasks:
+        for dep_task in parsed_dependencies:
             self.all_tasks_from_status_md.add(dep_task["name"])
 
         # Handle orphaned tasks (tasks in ClickUp but not in STATUS.md)
@@ -1371,7 +1997,7 @@ class ClickUpImporter:
                         tags = [
                             tag.get("name", "") for tag in task_info.get("tags", [])
                         ]
-                        if "instruments-service" in tags:
+                        if self.service_tag in tags:
                             print(
                                 f"   🗑️  Deleting orphaned task: {task_name} (ID: {task_id})"
                             )
@@ -1434,7 +2060,7 @@ class ClickUpImporter:
                 f"   ✅ Due Dates: Automatically set (Week 5-6 = {self.week_dates['Week 5-6'].strftime('%Y-%m-%d')}, Week 7-8 = {self.week_dates['Week 7-8'].strftime('%Y-%m-%d')})"
             )
             print(
-                f"   ✅ Assignees: Automatically assigned (Ikenna for general, Harsh for DeFi/TradFi)"
+                f"   ✅ Assignees: Automatically assigned (Ikenna for all tasks)"
             )
             print(f"   ✅ Tags: Automatically applied")
             print(f"   ✅ Custom Fields: Automatically created and populated")
@@ -1449,7 +2075,7 @@ class ClickUpImporter:
                 f"   ✅ Due Dates: Will be set automatically (Week 5-6 = {self.week_dates['Week 5-6'].strftime('%Y-%m-%d')}, Week 7-8 = {self.week_dates['Week 7-8'].strftime('%Y-%m-%d')})"
             )
             print(
-                f"   ✅ Assignees: Will be assigned automatically (Ikenna for general, Harsh for DeFi/TradFi, Femi for infrastructure/backfill)"
+                f"   ✅ Assignees: Will be assigned automatically (Ikenna for code tasks, Femi for infrastructure/backfill)"
             )
             print(f"   ✅ Tags: Will be applied automatically")
             print(f"   ✅ Custom Fields: Will be created and populated automatically")
@@ -1490,8 +2116,13 @@ def main():
     )
     parser.add_argument(
         "--sprint-start",
-        default="2025-11-07",
-        help="Sprint start date (YYYY-MM-DD). Default: 2025-11-07",
+        default="2025-11-09",
+        help="Sprint start date (YYYY-MM-DD). Default: 2025-11-09",
+    )
+    parser.add_argument(
+        "--service-name",
+        default=None,
+        help="Service name (auto-detected from script path if not provided)",
     )
 
     args = parser.parse_args()
@@ -1607,6 +2238,7 @@ def main():
         dry_run=args.dry_run,
         sprint_start_date=args.sprint_start,
         clean_orphaned=args.clean_orphaned,
+        service_name=args.service_name,
     )
     importer.import_from_status_md(status_md_path)
 
