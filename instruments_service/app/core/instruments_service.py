@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from .instrument_processing_service import InstrumentProcessingService
 from .cloud_instrument_storage import CloudInstrumentStorage
 from .batch_processor import InstrumentBatchProcessor
-from ...config import VenueMapping
+from instruments_service.config import VenueMapping
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +122,7 @@ class InstrumentsService:
         # Process TRADFI (Databento) exchanges
         if tradfi:
             try:
-                from ...config import DatabentoInstrumentConfig
+                from instruments_service.config import DatabentoInstrumentConfig
 
                 databento_config = DatabentoInstrumentConfig()
 
