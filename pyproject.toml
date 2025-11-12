@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=80.9.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "instruments-service"
+version = "0.1.0"
+description = "Service for generating canonical instrument definitions from exchange APIs"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Unified Trading System", email = "ikenna@odum-research.com"}
+]
+keywords = ["trading", "instruments", "exchange", "market-data", "ccxt", "cryptocurrency"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+]
+requires-python = ">=3.13"
+dependencies = [
+    "pydantic>=2.12.4",
+    "pydantic-settings>=2.12.0",
+    "pandas>=2.3.3",
+    "python-dateutil>=2.8.0",
+    "requests>=2.32.5",
+    "ccxt>=4.5.18",
+    "plotly>=6.4.0",
+    "web3>=6.0.0",
+    "boto3>=1.40.70",
+    # Note: unified-cloud-services must be installed separately from local repo:
+    # pip install -e ../unified-cloud-services
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.0",
+    "pytest-cov>=7.0.0",
+    "black>=25.11.0",
+    "isort>=7.0.0",
+    "mypy>=1.18.2",
+    "pre-commit>=4.4.0",
+]
+
+[project.scripts]
+instruments-service = "instruments_service.cli.main:run_cli"
+
+[project.urls]
+Homepage = "https://github.com/iggyikenna/instruments-service"
+Documentation = "https://github.com/iggyikenna/instruments-service"
+Repository = "https://github.com/iggyikenna/instruments-service"
+
+[tool.setuptools]
+packages = ["instruments_service"]
+include-package-data = true
+
+[tool.black]
+line-length = 100
+target-version = ['py313']
+
+[tool.mypy]
+python_version = "3.13.7"
+warn_return_any = true
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+
