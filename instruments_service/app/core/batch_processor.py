@@ -1,39 +1,41 @@
 """
 Instrument Batch Processor
 
-Handles batch processing of instrument downloads with lookback computation,
-date range calculation, and memory estimation.
+Extends GenericBatchProcessor with instrument specific batch processing logic.
+Handles instrument downloads with lookback computation, date range calculation, and memory estimation.
 """
 
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 from pathlib import Path
+from unified_cloud_services import GenericBatchProcessor
 
 logger = logging.getLogger(__name__)
 
 
-class InstrumentBatchProcessor:
+class InstrumentBatchProcessor(GenericBatchProcessor):
     """
-    Batch processor for instrument downloads.
-
-    Handles:
-    - Lookback computation (determining historical data requirements)
-    - Date range calculation
-    - Memory estimation
-    - Batch processing orchestration
+    Instrument specific batch processor.
+    
+    Extends GenericBatchProcessor with instrument specific logic:
+    - Instrument metadata requirements
+    - Instrument memory estimation  
+    - Venue-specific batch orchestration
     """
 
     def __init__(self, config: Dict[str, Any]):
         """
-        Initialize batch processor.
+        Initialize instrument batch processor.
 
         Args:
             config: Configuration with batch processing settings
         """
-        self.config = config
+        super().__init__()  # GenericBatchProcessor doesn't take config argument
+        
+        # Instrument specific configuration
         self.max_batch_size = config.get("max_batch_size", 1000)
-        self.lookback_days = config.get("lookback_days", 0)  # Default: no lookback
+        self.lookback_days = config.get("lookback_days", 0)  # Default: no lookback for instruments
 
     def calculate_date_range(
         self, target_date: datetime, lookback_days: Optional[int] = None
