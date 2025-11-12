@@ -11,7 +11,6 @@ import logging
 import os
 from typing import Dict, List, Optional, Any
 from datetime import datetime
-import requests
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +103,22 @@ class AaveV3Adapter:
             "GCP_PROJECT_ID", "central-element-323112"
         )
 
+        # Cache Alchemy API key at initialization to avoid repeated Secret Manager calls
+        # get_secret_with_fallback now includes caching internally
+        self._alchemy_api_key = None
+        try:
+            from unified_cloud_services import get_secret_with_fallback
+
+            self._alchemy_api_key = get_secret_with_fallback(
+                secret_name="alchemy-api-key",
+                project_id=self.project_id,
+                fallback_env_var="ALCHEMY_API_KEY",
+            )
+            if self._alchemy_api_key:
+                self._alchemy_api_key = self._alchemy_api_key.strip()
+        except Exception as e:
+            logger.debug(f"Could not cache Alchemy API key: {e}")
+
         # AaveScan Pro API uses v2 endpoint with apiKey query parameter
         # Base URL: https://api.aavescan.com/v2
         self.base_url = "https://api.aavescan.com/v2"
@@ -118,6 +133,11 @@ class AaveV3Adapter:
 
         # Cache for eMode categories (key: category_id, value: category dict)
         self._emode_category_cache: Dict[int, Dict[str, Any]] = {}
+
+        # Failure caches to avoid retrying operations that already failed
+        # Cache keys: date ISO string or block number
+        self._historical_query_failed: set = set()  # Dates/blocks where historical queries failed
+        self._block_conversion_failed: set = set()  # Dates where block conversion failed
 
         logger.info(f"✅ AaveV3Adapter initialized for chain: {self.chain}")
 
@@ -173,36 +193,49 @@ class AaveV3Adapter:
         self, target_date: Optional[datetime] = None
     ) -> List[Dict[str, Any]]:
         """
-        Fetch reserves from AaveScan Pro API, The Graph subgraph, or direct RPC queries.
+        Fetch reserves from AaveScan Pro API (primary) with optional historical Graph fallback.
 
         Args:
-            target_date: Optional target date for historical queries. If provided, attempts to:
-                        1. Query AAVE contracts directly via RPC (most accurate)
-                        2. Fall back to The Graph subgraph if RPC unavailable
-                        3. Fall back to current data from AaveScan API
+            target_date: Optional target date for historical queries. If provided:
+                        1. Tries The Graph subgraph once (if not already failed)
+                        2. Falls back immediately to current data from AaveScan API (primary source)
+                        
+                        Note: AaveScan is the primary data source. Graph is only attempted
+                        once for historical data, then cached as failed to avoid retries.
 
         Returns:
             List of reserve dictionaries
         """
-        # If target_date is provided, try RPC first, then Graph, then current data
+        # If target_date is provided, try Graph once (if not already failed), then use AaveScan
         if target_date:
-            # Try RPC first (most accurate, no indexer dependency)
-            rpc_reserves = self._fetch_reserves_from_rpc(target_date=target_date)
-            if rpc_reserves:
-                return rpc_reserves
-
-            # Fall back to The Graph subgraph
-            graph_reserves = self._fetch_reserves_from_graph(target_date=target_date)
-            if graph_reserves:
-                return graph_reserves
-
-            # Final fallback: current data
-            logger.warning(
-                f"⚠️ Could not fetch historical data for {target_date.isoformat()}. "
-                f"Using current data instead."
-            )
+            date_key = target_date.isoformat()
+            
+            # Try Graph once if we haven't already failed for this date
+            if date_key not in self._historical_query_failed:
+                logger.info(
+                    f"📅 Attempting historical query for {date_key} via The Graph (one-time attempt)"
+                )
+                graph_reserves = self._fetch_reserves_from_graph(target_date=target_date)
+                if graph_reserves:
+                    logger.info(f"✅ Successfully fetched historical reserves from The Graph")
+                    return graph_reserves
+                else:
+                    # Graph failed - log warning and mark as failed, then use AaveScan
+                    logger.warning(
+                        f"⚠️ Historical Graph query failed for {date_key}. "
+                        f"Falling back to current data from AaveScan API (primary source)."
+                    )
+                    # Failure is already cached in _fetch_reserves_from_graph
+            else:
+                # Already tried Graph and it failed - use AaveScan directly
+                logger.debug(
+                    f"⏭️ Skipping Graph query for {date_key} (already failed). "
+                    f"Using current data from AaveScan API."
+                )
 
         try:
+            from instruments_service.app.core.http_session_pool import get_http_session
+
             # AaveScan Pro API uses apiKey as query parameter, not Authorization header
             # Endpoint: https://api.aavescan.com/v2/reserves/latest?market=aave-v3-ethereum&apiKey=...
             url = f"{self.base_url}/reserves/latest"
@@ -214,7 +247,9 @@ class AaveV3Adapter:
             # Add market parameter for Ethereum mainnet
             params["market"] = "aave-v3-ethereum"
 
-            response = requests.get(url, params=params, timeout=30)
+            # Use pooled HTTP session
+            session = get_http_session(base_url=self.base_url)
+            response = session.get(url, params=params, timeout=30)
             response.raise_for_status()
 
             data = response.json()
@@ -263,6 +298,12 @@ class AaveV3Adapter:
             if target_date.tzinfo is None:
                 target_date = target_date.replace(tzinfo=timezone.utc)
 
+            # Check failure cache first - if we already know this date fails, skip retrying
+            date_key = target_date.isoformat()
+            if date_key in self._block_conversion_failed:
+                logger.debug(f"⏭️ Skipping block conversion for {date_key} - already failed")
+                return None
+
             # Check if target_date is in the future
             now = datetime.now(timezone.utc)
             if target_date > now:
@@ -274,20 +315,29 @@ class AaveV3Adapter:
 
             # Try to get exact block number from RPC endpoint
             try:
-                from unified_cloud_services import get_secret_with_fallback
-                import requests
+                from instruments_service.app.core.http_session_pool import get_http_session
 
-                # Get Alchemy API key (used for Ethereum RPC)
-                alchemy_key = get_secret_with_fallback(
-                    project_id=self.project_id,
-                    secret_name="alchemy-api-key",
-                    fallback_env_var="ALCHEMY_API_KEY",
-                )
+                # Use cached Alchemy API key
+                alchemy_key = self._alchemy_api_key
+                if not alchemy_key:
+                    from unified_cloud_services import get_secret_with_fallback
+
+                    alchemy_key = get_secret_with_fallback(
+                        secret_name="alchemy-api-key",
+                        project_id=self.project_id,
+                        fallback_env_var="ALCHEMY_API_KEY",
+                    )
+                    if alchemy_key:
+                        self._alchemy_api_key = alchemy_key.strip()
+                        alchemy_key = self._alchemy_api_key
 
                 if alchemy_key:
                     # Use Alchemy's getBlockByNumber with timestamp estimation
                     rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key}"
                     timestamp = int(target_date.timestamp())
+
+                    # Use pooled HTTP session
+                    session = get_http_session(base_url=rpc_url)
 
                     # First, get latest block to estimate
                     payload_latest = {
@@ -296,14 +346,14 @@ class AaveV3Adapter:
                         "params": [],
                         "id": 1,
                     }
-                    response = requests.post(rpc_url, json=payload_latest, timeout=10)
+                    response = session.post(rpc_url, json=payload_latest, timeout=10)
                     if response.status_code == 200:
                         data = response.json()
                         if "result" in data:
                             latest_block = int(data["result"], 16)
 
                             # Estimate block number (12 seconds per block)
-                            latest_block_data = requests.post(
+                            latest_block_data = session.post(
                                 rpc_url,
                                 json={
                                     "jsonrpc": "2.0",
@@ -328,7 +378,7 @@ class AaveV3Adapter:
                                 )
 
                                 # Get exact block
-                                block_data = requests.post(
+                                block_data = session.post(
                                     rpc_url,
                                     json={
                                         "jsonrpc": "2.0",
@@ -371,6 +421,9 @@ class AaveV3Adapter:
 
         except Exception as e:
             logger.warning(f"⚠️ Failed to convert date to block number: {e}")
+            # Cache the failure
+            date_key = target_date.isoformat()
+            self._block_conversion_failed.add(date_key)
             return None
 
     def _fetch_reserves_from_rpc(self, target_date: datetime) -> List[Dict[str, Any]]:
@@ -387,29 +440,36 @@ class AaveV3Adapter:
             List of reserve dictionaries, or empty list if RPC unavailable
         """
         try:
-            from web3 import Web3
-            from unified_cloud_services import get_secret_with_fallback
+            from instruments_service.app.core.web3_client_pool import get_web3_client
 
             # Get block number
             block_number = self._date_to_block_number(target_date)
             if not block_number:
                 return []
 
-            # Get RPC URL
-            alchemy_key = get_secret_with_fallback(
-                project_id=self.project_id,
-                secret_name="alchemy-api-key",
-                fallback_env_var="ALCHEMY_API_KEY",
-            )
+            # Use cached Alchemy API key
+            alchemy_key = self._alchemy_api_key
+            if not alchemy_key:
+                from unified_cloud_services import get_secret_with_fallback
+
+                alchemy_key = get_secret_with_fallback(
+                    secret_name="alchemy-api-key",
+                    project_id=self.project_id,
+                    fallback_env_var="ALCHEMY_API_KEY",
+                )
+                if alchemy_key:
+                    self._alchemy_api_key = alchemy_key.strip()
+                    alchemy_key = self._alchemy_api_key
 
             if not alchemy_key:
                 logger.debug("No Alchemy API key found for RPC queries")
                 return []
 
             rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key}"
-            w3 = Web3(Web3.HTTPProvider(rpc_url))
+            # Use pooled Web3 client
+            w3 = get_web3_client(rpc_url)
 
-            if not w3.is_connected():
+            if not w3 or not w3.is_connected():
                 logger.debug("Failed to connect to Ethereum RPC")
                 return []
 
@@ -552,14 +612,24 @@ class AaveV3Adapter:
 
     def _fetch_reserves_from_graph(self, target_date: datetime) -> List[Dict[str, Any]]:
         """
-        Fetch reserves from The Graph subgraph for historical data.
+        Fetch reserves from The Graph subgraph for historical data (one-time attempt).
+        
+        This is a fallback attempt - AaveScan is the primary data source.
+        If this fails, it will be cached and AaveScan will be used instead.
 
         Args:
             target_date: Target date for historical query
 
         Returns:
-            List of reserve dictionaries
+            List of reserve dictionaries, or empty list if failed (will trigger AaveScan fallback)
         """
+        date_key = target_date.isoformat()
+        
+        # Check failure cache first - if we already know historical queries fail for this date/block, skip
+        if date_key in self._historical_query_failed:
+            logger.debug(f"⏭️ Skipping historical Graph query for {date_key} - already failed")
+            return []
+
         try:
             # Convert date to block number
             block_number = self._date_to_block_number(target_date)
@@ -567,7 +637,9 @@ class AaveV3Adapter:
                 logger.warning(
                     "⚠️ Could not convert date to block number, falling back to current data"
                 )
-                return self._fetch_reserves(target_date=None)
+                # Cache the failure
+                self._historical_query_failed.add(date_key)
+                return []
 
             # Get The Graph API key (use cached instance variable or module-level cache)
             graph_api_key = self.graph_api_key
@@ -604,9 +676,11 @@ class AaveV3Adapter:
 
             if not graph_api_key:
                 logger.warning(
-                    "⚠️ No The Graph API key found - falling back to current data"
+                    "⚠️ No The Graph API key found - will use AaveScan current data"
                 )
-                return self._fetch_reserves(target_date=None)
+                # Cache the failure
+                self._historical_query_failed.add(date_key)
+                return []
 
             graph_api_key = graph_api_key.strip()
 
@@ -645,8 +719,12 @@ query GetReserves($blockNumber: Int!) {
 
             variables = {"blockNumber": block_number}
 
+            from instruments_service.app.core.http_session_pool import get_http_session
+
             headers = {"Content-Type": "application/json"}
-            response = requests.post(
+            # Use pooled HTTP session
+            session = get_http_session(base_url="https://gateway.thegraph.com")
+            response = session.post(
                 subgraph_url,
                 json={"query": query, "variables": variables},
                 headers=headers,
@@ -706,7 +784,7 @@ query GetReserves($blockNumber: Int!) {
     }
 }
 """.strip()
-                    response_no_emode = requests.post(
+                    response_no_emode = session.post(
                         subgraph_url,
                         json={"query": query_no_emode, "variables": variables},
                         headers=headers,
@@ -718,63 +796,30 @@ query GetReserves($blockNumber: Int!) {
                         logger.warning(
                             f"⚠️ GraphQL query errors (no eMode): {data['errors']}"
                         )
-                        logger.info("Falling back to current data from AaveScan API")
-                        return self._fetch_reserves(target_date=None)
+                        # Cache the failure - will use AaveScan
+                        self._historical_query_failed.add(date_key)
+                        if block_number:
+                            self._historical_query_failed.add(str(block_number))
+                        return []
                     # Continue with data without eModeCategoryId
                 elif has_missing_block_error:
                     logger.warning(
                         f"⚠️ The Graph indexers don't have data for block {block_number} yet "
                         f"(latest indexed: ~23,775,170 from Aug 2024). "
-                        f"Falling back to latest available data (without block number)."
+                        f"Caching failure and skipping future retries for this date."
                     )
-                    # Retry query without block number to get latest available data
-                    query_no_block = """
-query GetReserves {
-    reserves {
-        id
-        underlyingAsset
-        symbol
-        name
-        decimals
-        baseLTVasCollateral
-        reserveLiquidationThreshold
-        reserveLiquidationBonus
-        reserveInterestRateStrategy
-        optimalUtilisationRate
-        variableRateSlope1
-        variableRateSlope2
-        baseVariableBorrowRate
-        reserveFactor
-        usageAsCollateralEnabled
-        borrowingEnabled
-        isActive
-        isFrozen
-        isPaused
-        eModeCategoryId
-        pool {
-            id
-        }
-    }
-}
-""".strip()
-                    response_no_block = requests.post(
-                        subgraph_url,
-                        json={"query": query_no_block},
-                        headers=headers,
-                        timeout=30,
-                    )
-                    response_no_block.raise_for_status()
-                    data = response_no_block.json()
-                    if "errors" in data:
-                        logger.warning(
-                            f"⚠️ GraphQL query errors (no block): {data['errors']}"
-                        )
-                        logger.info("Falling back to current data from AaveScan API")
-                        return self._fetch_reserves(target_date=None)
+                    # Cache the failure - don't retry for this date/block
+                    self._historical_query_failed.add(date_key)
+                    if block_number:
+                        self._historical_query_failed.add(str(block_number))
+                    return []
                 else:
                     logger.warning(f"⚠️ GraphQL query errors: {errors}")
-                    logger.info("Falling back to current data from AaveScan API")
-                    return self._fetch_reserves(target_date=None)
+                    # Cache the failure
+                    self._historical_query_failed.add(date_key)
+                    if block_number:
+                        self._historical_query_failed.add(str(block_number))
+                    return []
 
             reserves = data.get("data", {}).get("reserves", [])
 
@@ -814,9 +859,14 @@ query GetReserves {
             return formatted_reserves
 
         except Exception as e:
-            logger.warning(f"⚠️ Failed to fetch historical reserves from The Graph: {e}")
-            logger.info("Falling back to current data from AaveScan API")
-            return self._fetch_reserves(target_date=None)
+            logger.warning(
+                f"⚠️ Failed to fetch historical reserves from The Graph: {e}. "
+                f"Will use AaveScan current data instead."
+            )
+            # Cache the failure
+            date_key = target_date.isoformat()
+            self._historical_query_failed.add(date_key)
+            return []
 
     def _get_fallback_reserves(self) -> List[Dict[str, Any]]:
         """
@@ -894,6 +944,8 @@ query GetReserves {
             return self._market_config_cache
 
         try:
+            from instruments_service.app.core.http_session_pool import get_http_session
+
             url = f"{self.base_url}/market-configurations"
             params = {}
 
@@ -902,7 +954,9 @@ query GetReserves {
 
             params["market"] = "aave-v3-ethereum"
 
-            response = requests.get(url, params=params, timeout=30)
+            # Use pooled HTTP session
+            session = get_http_session(base_url=self.base_url)
+            response = session.get(url, params=params, timeout=30)
             response.raise_for_status()
 
             data = response.json()
@@ -930,6 +984,13 @@ query GetReserves {
         Returns:
             Reserve configuration dictionary or None
         """
+        # Check failure cache first for historical queries
+        if target_date:
+            date_key = target_date.isoformat()
+            if date_key in self._historical_query_failed:
+                logger.debug(f"⏭️ Skipping historical Graph config query for {date_key} - already failed")
+                return None
+
         cache_key = f"{underlying_address}_{target_date.isoformat() if target_date else 'current'}"
         if cache_key in self._reserve_config_cache:
             return self._reserve_config_cache[cache_key]
@@ -1050,8 +1111,12 @@ query GetReserve($underlyingAddress: Bytes!) {
 }
 """.strip()
 
+            from instruments_service.app.core.http_session_pool import get_http_session
+
             headers = {"Content-Type": "application/json"}
-            response = requests.post(
+            # Use pooled HTTP session
+            session = get_http_session(base_url="https://gateway.thegraph.com")
+            response = session.post(
                 subgraph_url,
                 json={"query": query, "variables": variables},
                 headers=headers,
@@ -1149,7 +1214,7 @@ query GetReserve($underlyingAddress: Bytes!) {
                             "underlyingAddress": underlying_address.lower()
                         }
 
-                    response_no_emode = requests.post(
+                    response_no_emode = session.post(
                         subgraph_url,
                         json={"query": query_no_emode, "variables": variables_no_emode},
                         headers=headers,
@@ -1166,59 +1231,19 @@ query GetReserve($underlyingAddress: Bytes!) {
                 elif has_missing_block_error:
                     logger.warning(
                         f"⚠️ The Graph indexers don't have data for block {block_number} yet. "
-                        f"Retrying query without block number to get latest available data."
+                        f"Caching failure and skipping future retries."
                     )
-                    # Retry query without block number
-                    query_no_block = """
-query GetReserve($underlyingAddress: Bytes!) {
-    reserves(where: { underlyingAsset: $underlyingAddress }) {
-        id
-        underlyingAsset
-        symbol
-        name
-        decimals
-        baseLTVasCollateral
-        reserveLiquidationThreshold
-        reserveLiquidationBonus
-        reserveInterestRateStrategy
-        optimalUtilisationRate
-        variableRateSlope1
-        variableRateSlope2
-        baseVariableBorrowRate
-        reserveFactor
-        usageAsCollateralEnabled
-        borrowingEnabled
-        isActive
-        isFrozen
-        isPaused
-        eModeCategoryId
-        pool {
-            id
-        }
-    }
-}
-""".strip()
-                    variables_no_block = {
-                        "underlyingAddress": underlying_address.lower()
-                    }
-                    response_no_block = requests.post(
-                        subgraph_url,
-                        json={"query": query_no_block, "variables": variables_no_block},
-                        headers=headers,
-                        timeout=30,
-                    )
-                    response_no_block.raise_for_status()
-                    data_no_block = response_no_block.json()
-                    if "errors" in data_no_block:
-                        logger.warning(
-                            f"⚠️ GraphQL query errors (no block): {data_no_block['errors']}"
-                        )
-                        logger.info("Falling back to current data from AaveScan API")
-                        return None
-                    # Use the data from the retry
-                    data = data_no_block
+                    # Cache the failure - don't retry
+                    if target_date:
+                        self._historical_query_failed.add(target_date.isoformat())
+                    if block_number:
+                        self._historical_query_failed.add(str(block_number))
+                    return None
                 else:
                     logger.warning(f"⚠️ GraphQL query errors: {errors}")
+                    # Cache the failure
+                    if target_date:
+                        self._historical_query_failed.add(target_date.isoformat())
                     return None
 
             reserves = data.get("data", {}).get("reserves", [])
@@ -1353,6 +1378,9 @@ query GetReserve($underlyingAddress: Bytes!) {
 
         except Exception as e:
             logger.warning(f"⚠️ Failed to fetch reserve config from The Graph: {e}")
+            # Cache the failure for historical queries
+            if target_date:
+                self._historical_query_failed.add(target_date.isoformat())
             return None
 
     def _fetch_reserve_emode_from_rpc(
@@ -1371,8 +1399,7 @@ query GetReserve($underlyingAddress: Bytes!) {
             eMode category ID (integer) or None
         """
         try:
-            from web3 import Web3
-            from unified_cloud_services import get_secret_with_fallback
+            from instruments_service.app.core.web3_client_pool import get_web3_client
 
             # Get block number if target_date provided
             block_number = None
@@ -1381,29 +1408,30 @@ query GetReserve($underlyingAddress: Bytes!) {
                 if not block_number:
                     return None
 
-            # Get RPC URL
-            alchemy_key = get_secret_with_fallback(
-                project_id=self.project_id,
-                secret_name="alchemy-api-key",
-                fallback_env_var="ALCHEMY_API_KEY",
-            )
+            # Use cached Alchemy API key
+            alchemy_key = self._alchemy_api_key
+            if not alchemy_key:
+                from unified_cloud_services import get_secret_with_fallback
+
+                alchemy_key = get_secret_with_fallback(
+                    secret_name="alchemy-api-key",
+                    project_id=self.project_id,
+                    fallback_env_var="ALCHEMY_API_KEY",
+                )
+                if alchemy_key:
+                    self._alchemy_api_key = alchemy_key.strip()
+                    alchemy_key = self._alchemy_api_key
 
             if not alchemy_key:
                 logger.debug("No Alchemy API key found for RPC eMode queries")
                 return None
 
-            # Strip any whitespace/newlines from API key
-            alchemy_key = alchemy_key.strip()
             rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key}"
 
-            try:
-                w3 = Web3(Web3.HTTPProvider(rpc_url))
-                # Test connection with a simple call
-                _ = w3.eth.block_number
-            except Exception as conn_error:
-                logger.debug(
-                    f"Failed to connect to Ethereum RPC for eMode query: {conn_error}"
-                )
+            # Use pooled Web3 client
+            w3 = get_web3_client(rpc_url)
+            if not w3:
+                logger.debug("Failed to connect to Ethereum RPC for eMode query")
                 return None
 
             # AAVE V3 Pool contract address
@@ -1564,8 +1592,7 @@ query GetReserve($underlyingAddress: Bytes!) {
             return cached
 
         try:
-            from web3 import Web3
-            from unified_cloud_services import get_secret_with_fallback
+            from instruments_service.app.core.web3_client_pool import get_web3_client
 
             # Get block number if target_date provided
             block_number = None
@@ -1574,29 +1601,30 @@ query GetReserve($underlyingAddress: Bytes!) {
                 if not block_number:
                     return None
 
-            # Get RPC URL
-            alchemy_key = get_secret_with_fallback(
-                project_id=self.project_id,
-                secret_name="alchemy-api-key",
-                fallback_env_var="ALCHEMY_API_KEY",
-            )
+            # Use cached Alchemy API key
+            alchemy_key = self._alchemy_api_key
+            if not alchemy_key:
+                from unified_cloud_services import get_secret_with_fallback
+
+                alchemy_key = get_secret_with_fallback(
+                    secret_name="alchemy-api-key",
+                    project_id=self.project_id,
+                    fallback_env_var="ALCHEMY_API_KEY",
+                )
+                if alchemy_key:
+                    self._alchemy_api_key = alchemy_key.strip()
+                    alchemy_key = self._alchemy_api_key
 
             if not alchemy_key:
                 logger.debug("No Alchemy API key found for RPC eMode category query")
                 return None
 
-            # Strip any whitespace/newlines from API key
-            alchemy_key = alchemy_key.strip()
             rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key}"
 
-            try:
-                w3 = Web3(Web3.HTTPProvider(rpc_url))
-                # Test connection with a simple call
-                _ = w3.eth.block_number
-            except Exception as conn_error:
-                logger.debug(
-                    f"Failed to connect to Ethereum RPC for eMode category query: {conn_error}"
-                )
+            # Use pooled Web3 client
+            w3 = get_web3_client(rpc_url)
+            if not w3:
+                logger.debug("Failed to connect to Ethereum RPC for eMode category query")
                 return None
 
             # AAVE V3 Pool contract address
@@ -1792,6 +1820,13 @@ query GetReserve($underlyingAddress: Bytes!) {
         Returns:
             EModeCategory dictionary with details or None
         """
+        # Check failure cache first for historical queries
+        if target_date:
+            date_key = target_date.isoformat()
+            if date_key in self._historical_query_failed:
+                logger.debug(f"⏭️ Skipping historical Graph eMode query for {date_key} - already failed")
+                return None
+
         # Convert category_id to int if it's a string
         try:
             category_id_int = int(category_id) if category_id is not None else None
@@ -1889,8 +1924,12 @@ query GetEModeCategory($categoryId: Int!) {
 }
 """.strip()
 
+            from instruments_service.app.core.http_session_pool import get_http_session
+
             headers = {"Content-Type": "application/json"}
-            response = requests.post(
+            # Use pooled HTTP session
+            session = get_http_session(base_url="https://gateway.thegraph.com")
+            response = session.post(
                 subgraph_url,
                 json={"query": query, "variables": variables},
                 headers=headers,
@@ -1911,41 +1950,20 @@ query GetEModeCategory($categoryId: Int!) {
 
                 if has_missing_block_error and block_number:
                     logger.debug(
-                        f"⚠️ The Graph doesn't have eMode category data for block {block_number}, retrying without block"
+                        f"⚠️ The Graph doesn't have eMode category data for block {block_number}, caching failure"
                     )
-                    # Retry without block number
-                    query_no_block = """
-query GetEModeCategory($categoryId: Int!) {
-    eModeCategories(where: { id: $categoryId }) {
-        id
-        label
-        liquidationThreshold
-        liquidationBonus
-        priceSource
-        oracleId
-    }
-}
-""".strip()
-                    response_no_block = requests.post(
-                        subgraph_url,
-                        json={
-                            "query": query_no_block,
-                            "variables": {"categoryId": category_id_int},
-                        },
-                        headers=headers,
-                        timeout=30,
-                    )
-                    response_no_block.raise_for_status()
-                    data = response_no_block.json()
-                    if "errors" in data:
-                        logger.warning(
-                            f"⚠️ GraphQL query errors for eMode category: {data['errors']}"
-                        )
-                        return None
+                    # Cache the failure - don't retry
+                    if target_date:
+                        self._historical_query_failed.add(target_date.isoformat())
+                    self._historical_query_failed.add(str(block_number))
+                    return None
                 else:
                     logger.warning(
                         f"⚠️ GraphQL query errors for eMode category: {errors}"
                     )
+                    # Cache the failure
+                    if target_date:
+                        self._historical_query_failed.add(target_date.isoformat())
                     return None
 
             categories = data.get("data", {}).get("eModeCategories", [])
@@ -1986,6 +2004,9 @@ query GetEModeCategory($categoryId: Int!) {
 
         except Exception as e:
             logger.warning(f"⚠️ Failed to fetch eMode category from The Graph: {e}")
+            # Cache the failure for historical queries
+            if target_date:
+                self._historical_query_failed.add(target_date.isoformat())
             return None
 
     def _extract_lending_metadata(
@@ -2023,15 +2044,76 @@ query GetEModeCategory($categoryId: Int!) {
             except (ValueError, TypeError):
                 pass
 
-        # Fetch reserve configuration from The Graph subgraph (with target_date if provided)
+        # Extract metadata from AaveScan reserve data first (primary source)
+        # AaveScan API provides most of the metadata we need
+        # Try multiple field name variations (AaveScan may use different naming)
+        ltv_from_aavescan = None
+        liquidation_threshold_from_aavescan = None
+        liquidation_bonus_from_aavescan = None
+        reserve_factor_from_aavescan = None
+        
+        # Try to extract LTV from AaveScan reserve data (try multiple field names)
+        ltv_raw = (
+            reserve.get("baseLTVasCollateral") 
+            or reserve.get("baseLTV") 
+            or reserve.get("ltv")
+            or (reserve.get("configuration", {}) if isinstance(reserve.get("configuration"), dict) else {}).get("baseLTVasCollateral")
+        )
+        if ltv_raw:
+            try:
+                # AaveScan returns in basis points (bps), convert to decimal
+                ltv_from_aavescan = float(ltv_raw) / 10000.0
+            except (ValueError, TypeError):
+                pass
+        
+        # Try to extract liquidation threshold
+        liquidation_threshold_raw = (
+            reserve.get("reserveLiquidationThreshold")
+            or reserve.get("liquidationThreshold")
+            or reserve.get("liquidation_threshold")
+            or (reserve.get("configuration", {}) if isinstance(reserve.get("configuration"), dict) else {}).get("reserveLiquidationThreshold")
+        )
+        if liquidation_threshold_raw:
+            try:
+                liquidation_threshold_from_aavescan = float(liquidation_threshold_raw) / 10000.0
+            except (ValueError, TypeError):
+                pass
+        
+        # Try to extract liquidation bonus
+        liquidation_bonus_raw = (
+            reserve.get("reserveLiquidationBonus")
+            or reserve.get("liquidationBonus")
+            or reserve.get("liquidation_bonus")
+            or (reserve.get("configuration", {}) if isinstance(reserve.get("configuration"), dict) else {}).get("reserveLiquidationBonus")
+        )
+        if liquidation_bonus_raw:
+            try:
+                liquidation_bonus_from_aavescan = float(liquidation_bonus_raw) / 10000.0
+            except (ValueError, TypeError):
+                pass
+        
+        # Try to extract reserve factor
+        reserve_factor_raw = (
+            reserve.get("reserveFactor")
+            or reserve.get("reserve_factor")
+            or (reserve.get("configuration", {}) if isinstance(reserve.get("configuration"), dict) else {}).get("reserveFactor")
+        )
+        if reserve_factor_raw:
+            try:
+                reserve_factor_from_aavescan = float(reserve_factor_raw) / 10000.0
+            except (ValueError, TypeError):
+                pass
+
+        # Try Graph config as fallback (one-time attempt, cached if fails)
         reserve_config = None
-        if underlying_address:
+        if underlying_address and target_date:
+            # Only try Graph for historical queries - for current data, use AaveScan
             reserve_config = self._fetch_reserve_config_from_graph(
                 underlying_address, target_date=target_date
             )
             if not reserve_config:
-                logger.debug(f"⚠️ No reserve config from Graph for {underlying_address}")
-        else:
+                logger.debug(f"⚠️ No reserve config from Graph for {underlying_address} - using AaveScan data")
+        elif not underlying_address:
             logger.debug(
                 f"⚠️ No underlying_address provided for reserve: {reserve.get('asset', {}).get('symbol', 'unknown')}"
             )
@@ -2205,19 +2287,25 @@ query GetEModeCategory($categoryId: Int!) {
             base_variable_borrow_rate = base_variable_borrow_rate_from_config
         # Otherwise use the value extracted from API response above
 
+        # Use AaveScan data as primary source, Graph config as fallback
+        ltv = ltv_from_aavescan or (reserve_config.get("ltv") if reserve_config else None)
+        liquidation_threshold = liquidation_threshold_from_aavescan or (
+            reserve_config.get("liquidation_threshold") if reserve_config else None
+        )
+        liquidation_bonus = liquidation_bonus_from_aavescan or (
+            reserve_config.get("liquidation_bonus") if reserve_config else None
+        )
+        reserve_factor = reserve_factor_from_aavescan or (
+            reserve_config.get("reserve_factor") if reserve_config else None
+        )
+
         return {
             "flash_loan_providers": flash_loan_providers,
             "instadapp_routing": None,  # TODO: Fetch from Instadapp if applicable
-            "ltv": reserve_config.get("ltv") if reserve_config else None,
-            "liquidation_threshold": (
-                reserve_config.get("liquidation_threshold") if reserve_config else None
-            ),
-            "liquidation_bonus": (
-                reserve_config.get("liquidation_bonus") if reserve_config else None
-            ),
-            "reserve_factor": (
-                reserve_config.get("reserve_factor") if reserve_config else None
-            ),
+            "ltv": ltv,
+            "liquidation_threshold": liquidation_threshold,
+            "liquidation_bonus": liquidation_bonus,
+            "reserve_factor": reserve_factor,
             "reserve_mode": reserve_mode,
             "emode_category_id": emode_category_id,
             "emode_label": emode_label,
