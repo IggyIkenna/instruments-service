@@ -113,16 +113,60 @@ class TasksMdParser:
 def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False):
     """Delete all tasks with 'instruments-service' tag (including archived/completed)"""
     print("🔍 Loading all tasks (including subtasks and archived)...")
-    # Get both active and archived tasks, including subtasks
-    active_tasks = client.get_tasks(list_id, archived=False, include_subtasks=True)
-    archived_tasks = client.get_tasks(list_id, archived=True, include_subtasks=True)
-    all_tasks = active_tasks + archived_tasks
+    
+    # Get workspace/team ID from list to search across all lists
+    try:
+        list_info = client.get_list(list_id)
+        workspace_id = list_info.get("workspace", {}).get("id")
+        if not workspace_id:
+            print("   ⚠️  Could not get workspace ID from list - falling back to single list search")
+            workspace_id = None
+    except Exception as e:
+        print(f"   ⚠️  Could not get list info: {e} - falling back to single list search")
+        workspace_id = None
+    
+    all_tasks = []
+    active_tasks = []
+    archived_tasks = []
+    
+    if workspace_id:
+        # Use filtered team tasks endpoint to search across ALL lists/folders by tag
+        print(f"   Searching across all lists in workspace {workspace_id}...")
+        try:
+            # Get tasks from entire workspace (will filter by tag below)
+            params = {
+                "subtasks": "true",
+                "archived": "false",  # Get active tasks first
+            }
+            
+            result = client._request("GET", f"/team/{workspace_id}/task", params=params)
+            if result:
+                active_tasks = result.get("tasks", [])
+                all_tasks.extend(active_tasks)
+            
+            # Get archived tasks
+            params["archived"] = "true"
+            result = client._request("GET", f"/team/{workspace_id}/task", params=params)
+            if result:
+                archived_tasks = result.get("tasks", [])
+                all_tasks.extend(archived_tasks)
+                
+            print(f"   Found {len(active_tasks)} active task(s) and {len(archived_tasks)} archived task(s) across all lists")
+        except Exception as e:
+            print(f"   ⚠️  Could not search workspace tasks: {e}")
+            print("   Falling back to single list search...")
+            workspace_id = None
+    
+    if not workspace_id:
+        # Fallback: search only the specified list
+        active_tasks = client.get_tasks(list_id, archived=False, include_subtasks=True)
+        archived_tasks = client.get_tasks(list_id, archived=True, include_subtasks=True)
+        all_tasks = active_tasks + archived_tasks
+        print(f"   Found {len(active_tasks)} active task(s) and {len(archived_tasks)} archived task(s) in list")
 
     if not all_tasks:
         print("   ✅ No tasks found")
         return 0
-
-    print(f"   Found {len(active_tasks)} active task(s) and {len(archived_tasks)} archived task(s)")
 
     # Filter tasks with instruments-service tag
     tasks_to_delete = []
