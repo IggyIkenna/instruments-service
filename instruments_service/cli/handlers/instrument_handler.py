@@ -16,7 +16,7 @@ from pathlib import Path
 from ..base_handler import ModeHandler
 from ...app.core.instruments_service import InstrumentsService
 from ...app.core.cloud_instrument_storage import CloudInstrumentStorage
-from ...config import VenueMapping, DatabentoInstrumentConfig
+from instruments_service.config import VenueMapping, DatabentoInstrumentConfig
 
 logger = logging.getLogger(__name__)
 
