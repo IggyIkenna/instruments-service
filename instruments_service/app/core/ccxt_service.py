@@ -74,9 +74,7 @@ class CCXTService:
             }
         )
 
-    def load_markets(
-        self, venue: str, force_refresh: bool = False
-    ) -> Optional[Dict[str, Any]]:
+    def load_markets(self, venue: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
         """
         Load markets for a venue with caching.
 
@@ -158,9 +156,7 @@ class CCXTService:
 
             # Handle compound symbols that likely don't exist as perpetuals in CCXT
             if len(base_asset) > 5:  # Compound symbols like ETHBTC, SHIB1000
-                logger.debug(
-                    f"🔍 Bybit compound symbol (likely unavailable in CCXT): {base_asset}"
-                )
+                logger.debug(f"🔍 Bybit compound symbol (likely unavailable in CCXT): {base_asset}")
 
                 # Special mappings for known variations
                 special_mappings = {
@@ -207,11 +203,7 @@ class CCXTService:
                     possible_symbols.append(f"{base_asset}/USD:{base_asset}")  # Inverse
                 elif quote_asset in ["USDC", "USDT"]:
                     possible_symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}")
-            elif (
-                "OPTION" in tardis_symbol
-                or "-C" in tardis_symbol
-                or "-P" in tardis_symbol
-            ):
+            elif "OPTION" in tardis_symbol or "-C" in tardis_symbol or "-P" in tardis_symbol:
                 # Deribit options: BTC/USD:BTC-25DEC25-50000-C
                 possible_symbols.append(f"{base_asset}/{quote_asset}:{tardis_symbol}")
             elif "FUTURE" in tardis_symbol or any(
@@ -348,9 +340,7 @@ class CCXTService:
 
         # Check if exchange supports fetchMarketLeverageTiers
         if not hasattr(exchange, "fetchMarketLeverageTiers"):
-            logger.debug(
-                f"Exchange {venue} does not support fetchMarketLeverageTiers"
-            )
+            logger.debug(f"Exchange {venue} does not support fetchMarketLeverageTiers")
             # Try fallback to Context7 documentation lookup
             return self._get_leverage_limits_fallback(venue)
 
@@ -372,9 +362,7 @@ class CCXTService:
                         matched_symbol = symbol_format
                         break
                 except Exception as e:
-                    logger.debug(
-                        f"Failed to fetch leverage tiers for {symbol_format}: {e}"
-                    )
+                    logger.debug(f"Failed to fetch leverage tiers for {symbol_format}: {e}")
                     continue
 
             if not leverage_tiers:
@@ -396,15 +384,11 @@ class CCXTService:
             return risk_params
 
         except Exception as e:
-            logger.debug(
-                f"Error fetching leverage tiers for {venue}:{symbol_id}: {e}"
-            )
+            logger.debug(f"Error fetching leverage tiers for {venue}:{symbol_id}: {e}")
             # Try fallback
             return self._get_leverage_limits_fallback(venue)
 
-    def _extract_risk_params_from_tiers(
-        self, leverage_tiers: list
-    ) -> Dict[str, Any]:
+    def _extract_risk_params_from_tiers(self, leverage_tiers: list) -> Dict[str, Any]:
         """
         Extract risk parameters from CCXT leverage tiers structure.
 
@@ -426,9 +410,7 @@ class CCXTService:
             # Extract from tier 1
             risk_params["max_leverage"] = tier_1.get("maxLeverage")
             risk_params["initial_margin_rate"] = tier_1.get("initialMargin")
-            risk_params["maintenance_margin_rate"] = tier_1.get(
-                "maintenanceMargin"
-            )
+            risk_params["maintenance_margin_rate"] = tier_1.get("maintenanceMargin")
 
         # Get highest tier (largest maxNotional = max position size)
         highest_tier = None

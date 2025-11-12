@@ -311,7 +311,7 @@ Exchange APIs return raw types (lowercase) which are mapped to canonical types (
 
 ```
 Exchange API 'spot' → Canonical 'SPOT_PAIR'
-Exchange API 'perpetual' → Canonical 'PERPETUAL'  
+Exchange API 'perpetual' → Canonical 'PERPETUAL'
 Exchange API 'future' → Canonical 'FUTURE'
 Exchange API 'option' → Canonical 'OPTION'
 ```
@@ -414,28 +414,28 @@ UNISWAPV2-ETH:POOL:ETH-USDT@ETHEREUM       # Uniswap V2 (0.3% fee implied)
 
 ## FAQ
 
-**Q: Why is SPOT_PAIR routing-only?**  
+**Q: Why is SPOT_PAIR routing-only?**
 A: Trades result in SPOT_ASSET deltas; SPOT_PAIR simplifies execution routing without becoming a held position.
 
-**Q: What's the difference between SPOT_ASSET and SPOT_PAIR?**  
+**Q: What's the difference between SPOT_ASSET and SPOT_PAIR?**
 A: SPOT_ASSET represents actual spot positions held on a specific venue, SPOT_PAIR is used for routing and execution.
 
-**Q: How do SPOT_PAIR and SPOT_ASSET work together?**  
+**Q: How do SPOT_PAIR and SPOT_ASSET work together?**
 A: SPOT_PAIR is used for finding the best exchange to trade a pair, SPOT_ASSET tracks your actual asset holdings after the trade.
 
-**Q: Are CME futures different from crypto futures?**  
+**Q: Are CME futures different from crypto futures?**
 A: Same `instrument_type=FUTURE`; differences live in attributes (`contract_size`, codes, settlement, `asset_class`).
 
-**Q: Why UPPERCASE?**  
+**Q: Why UPPERCASE?**
 A: Consistent formatting makes instrument IDs more readable and easier to parse programmatically.
 
-**Q: What's the difference between "instrument ID" and "instrument key"?**  
+**Q: What's the difference between "instrument ID" and "instrument key"?**
 A: They refer to the same thing - the canonical instrument identifier. "Instrument ID" is preferred in documentation, while "instrument_key" is used in code field names.
 
-**Q: How are multiple pools for the same pair handled?**  
+**Q: How are multiple pools for the same pair handled?**
 A: Each pool gets its own instrument definition with version + fee tier in the venue name (e.g., `UNISWAPV3-ETH:POOL:ETH-USDT:3000`, `UNISWAPV3-ETH:POOL:ETH-USDT:500`).
 
-**Q: When should instruments be enriched with contract addresses?**  
+**Q: When should instruments be enriched with contract addresses?**
 A: Enrichment is done on-demand when needed for execution. Don't require enrichment at instrument definition time.
 
 ## Related Documentation
@@ -444,5 +444,3 @@ A: Enrichment is done on-demand when needed for execution. Don't require enrichm
 - [`VENUE_ADAPTERS.md`](./VENUE_ADAPTERS.md) - Venue adapter pattern and data sources
 - [`DEFI_GUIDE.md`](./DEFI_GUIDE.md) - DeFi protocols and integration details
 - [`USAGE_GUIDE.md`](./USAGE_GUIDE.md) - Usage examples and client patterns
-
-

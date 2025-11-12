@@ -60,9 +60,7 @@ class TheGraphClient:
             global _API_KEY_CACHE, _API_KEY_PROJECT_ID
 
             # Check if we have a cached API key for the same project
-            project_id = project_id or os.getenv(
-                "GCP_PROJECT_ID", "central-element-323112"
-            )
+            project_id = project_id or os.getenv("GCP_PROJECT_ID", "central-element-323112")
 
             if _API_KEY_CACHE and _API_KEY_PROJECT_ID == project_id:
                 # Use cached API key
@@ -93,17 +91,13 @@ class TheGraphClient:
                             f"✅ Retrieved The Graph API key from Secret Manager (secret: {secret_name})"
                         )
                 except ImportError:
-                    logger.warning(
-                        "unified-cloud-services not available, falling back to env var"
-                    )
+                    logger.warning("unified-cloud-services not available, falling back to env var")
                     self.api_key = os.getenv("THE_GRAPH_API_KEY", "")
                     if self.api_key:
                         _API_KEY_CACHE = self.api_key
                         _API_KEY_PROJECT_ID = project_id
                 except Exception as e:
-                    logger.warning(
-                        f"⚠️ Failed to retrieve API key from Secret Manager: {e}"
-                    )
+                    logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
                     self.api_key = os.getenv("THE_GRAPH_API_KEY", "")
                     if self.api_key:
                         _API_KEY_CACHE = self.api_key
@@ -123,9 +117,7 @@ class TheGraphClient:
         if self.api_key:
             logger.info("✅ Using The Graph API key for authenticated requests")
         else:
-            logger.warning(
-                "⚠️ No API key provided - using Studio endpoint (rate-limited)"
-            )
+            logger.warning("⚠️ No API key provided - using Studio endpoint (rate-limited)")
 
     def query_pools(
         self,
@@ -297,9 +289,7 @@ class TheGraphClient:
                     return []
 
             pools = data.get("data", {}).get("pools", [])
-            logger.info(
-                f"✅ Fetched {len(pools)} pools for {base_currency} from The Graph"
-            )
+            logger.info(f"✅ Fetched {len(pools)} pools for {base_currency} from The Graph")
             return pools
 
         except Exception as e:
@@ -456,9 +446,7 @@ class TheGraphClient:
                     return []
 
             pairs = data.get("data", {}).get("pairs", [])
-            logger.info(
-                f"✅ Fetched {len(pairs)} pairs for {base_currency} from The Graph"
-            )
+            logger.info(f"✅ Fetched {len(pairs)} pairs for {base_currency} from The Graph")
             return pairs
 
         except Exception as e:

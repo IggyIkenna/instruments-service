@@ -87,9 +87,7 @@ class EnvioClient:
         if not self.api_key:
             global _ENVIO_API_KEY_CACHE, _ENVIO_API_KEY_PROJECT_ID
 
-            project_id = project_id or os.getenv(
-                "GCP_PROJECT_ID", "central-element-323112"
-            )
+            project_id = project_id or os.getenv("GCP_PROJECT_ID", "central-element-323112")
 
             if _ENVIO_API_KEY_CACHE and _ENVIO_API_KEY_PROJECT_ID == project_id:
                 self.api_key = _ENVIO_API_KEY_CACHE
@@ -114,9 +112,7 @@ class EnvioClient:
                             f"✅ Retrieved Envio API key from Secret Manager (secret: {secret_name})"
                         )
                 except ImportError:
-                    logger.warning(
-                        "unified-cloud-services not available, falling back to env var"
-                    )
+                    logger.warning("unified-cloud-services not available, falling back to env var")
                     self.api_key = os.getenv("ENVIO_API_KEY", "")
 
         if self.api_key:

@@ -68,4 +68,3 @@ disallow_untyped_defs = false
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
-

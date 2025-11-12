@@ -53,9 +53,7 @@ class AsterAdapter:
             f"✅ AsterAdapter initialized (MVP only: {mvp_only}, base currencies: {len(self.mvp_base_currencies) if self.mvp_base_currencies else 'all'})"
         )
 
-    def fetch_perpetuals(
-        self, test_data_availability: bool = False
-    ) -> Dict[str, Dict[str, Any]]:
+    def fetch_perpetuals(self, test_data_availability: bool = False) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all perpetual futures from Aster.
 
@@ -67,9 +65,7 @@ class AsterAdapter:
         """
         try:
             # Get exchange info to get all symbols
-            response = requests.get(
-                f"{self.futures_api_base_url}/fapi/v1/exchangeInfo", timeout=30
-            )
+            response = requests.get(f"{self.futures_api_base_url}/fapi/v1/exchangeInfo", timeout=30)
             response.raise_for_status()
             exchange_info = response.json()
 
@@ -110,9 +106,7 @@ class AsterAdapter:
             logger.error(f"Failed to fetch Aster perpetuals: {e}")
             return {}
 
-    def fetch_spot_pairs(
-        self, test_data_availability: bool = False
-    ) -> Dict[str, Dict[str, Any]]:
+    def fetch_spot_pairs(self, test_data_availability: bool = False) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all spot trading pairs from Aster for MVP coins.
 
@@ -128,9 +122,7 @@ class AsterAdapter:
         try:
             # Get exchange info from spot API
             # Note: Aster spot API endpoint may not be publicly accessible or may have DNS issues
-            response = requests.get(
-                f"{self.spot_api_base_url}/api/v3/exchangeInfo", timeout=30
-            )
+            response = requests.get(f"{self.spot_api_base_url}/api/v3/exchangeInfo", timeout=30)
             response.raise_for_status()
             exchange_info = response.json()
 
@@ -169,9 +161,7 @@ class AsterAdapter:
 
         except requests.exceptions.RequestException as e:
             # DNS errors, connection errors, etc. - Aster spot API may not be publicly accessible
-            logger.debug(
-                f"Aster spot API unavailable (endpoint: {self.spot_api_base_url}): {e}"
-            )
+            logger.debug(f"Aster spot API unavailable (endpoint: {self.spot_api_base_url}): {e}")
             logger.info(
                 "ℹ️  Aster spot trading API not accessible - skipping spot pairs (perpetuals only)"
             )
@@ -180,9 +170,7 @@ class AsterAdapter:
             logger.warning(f"⚠️ Failed to fetch Aster spot pairs: {e}")
             return {}
 
-    def _convert_symbol_to_spot_pair(
-        self, symbol_info: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _convert_symbol_to_spot_pair(self, symbol_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Convert Aster symbol data to SPOT_PAIR instrument definition.
 
@@ -392,16 +380,12 @@ class AsterAdapter:
             if response.status_code == 200:
                 klines = response.json()
                 if klines and len(klines) > 0:
-                    logger.info(
-                        f"✅ Historical candles ({interval}) available for {symbol}"
-                    )
+                    logger.info(f"✅ Historical candles ({interval}) available for {symbol}")
                     return True
                 else:
                     logger.warning(f"⚠️ No candles found for {symbol} in date range")
             else:
-                logger.warning(
-                    f"⚠️ Failed to fetch candles for {symbol}: {response.status_code}"
-                )
+                logger.warning(f"⚠️ Failed to fetch candles for {symbol}: {response.status_code}")
         except Exception as e:
             logger.warning(f"⚠️ Error testing candles for {symbol}: {e}")
 

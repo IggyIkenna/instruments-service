@@ -230,5 +230,3 @@ python -m instruments_service --mode instruments \
 - [`INSTRUMENT_SPECIFICATION.md`](./INSTRUMENT_SPECIFICATION.md) - Complete instrument ID specification
 - [`DEFI_GUIDE.md`](./DEFI_GUIDE.md) - DeFi protocols and instruments
 - [`VENUE_ADAPTERS.md`](./VENUE_ADAPTERS.md) - Venue adapter details
-
-

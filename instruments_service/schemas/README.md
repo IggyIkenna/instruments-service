@@ -55,4 +55,3 @@ summary = get_schema_summary()
 ## Future Schemas
 
 If BigQuery live streaming is needed in the future, add `bigquery.py` here with BigQuery table schema definitions.
-

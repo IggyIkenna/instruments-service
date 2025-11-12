@@ -59,34 +59,22 @@ class EulerPlasmaAdapter:
 
                         # Try to get Alchemy API key from Secret Manager (same as Morpho)
                         alchemy_key = get_secret_with_fallback(
-                            project_id=os.getenv(
-                                "GCP_PROJECT_ID", "central-element-323112"
-                            ),
+                            project_id=os.getenv("GCP_PROJECT_ID", "central-element-323112"),
                             secret_name="alchemy-api-key",
                             fallback_env_var="ALCHEMY_API_KEY",
                         )
                         if alchemy_key:
                             # Construct Alchemy RPC URL from API key (Plasma is on Ethereum)
                             rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key.strip()}"
-                            logger.info(
-                                "✅ Constructed Plasma RPC URL from Alchemy API key"
-                            )
+                            logger.info("✅ Constructed Plasma RPC URL from Alchemy API key")
                         else:
                             # Fallback to direct RPC URL from env var
-                            rpc_url = os.getenv("PLASMA_RPC_URL") or os.getenv(
-                                "ETHEREUM_RPC_URL"
-                            )
+                            rpc_url = os.getenv("PLASMA_RPC_URL") or os.getenv("ETHEREUM_RPC_URL")
                             if rpc_url:
-                                logger.info(
-                                    "✅ Using Plasma RPC URL from environment variable"
-                                )
+                                logger.info("✅ Using Plasma RPC URL from environment variable")
                     except Exception as e:
-                        logger.warning(
-                            f"⚠️ Failed to get Plasma RPC URL from Secret Manager: {e}"
-                        )
-                        rpc_url = os.getenv("PLASMA_RPC_URL") or os.getenv(
-                            "ETHEREUM_RPC_URL"
-                        )
+                        logger.warning(f"⚠️ Failed to get Plasma RPC URL from Secret Manager: {e}")
+                        rpc_url = os.getenv("PLASMA_RPC_URL") or os.getenv("ETHEREUM_RPC_URL")
 
                 if rpc_url:
                     self.web3 = Web3(Web3.HTTPProvider(rpc_url))
@@ -96,9 +84,7 @@ class EulerPlasmaAdapter:
                         logger.warning("⚠️ Failed to connect to Plasma RPC")
                         self.web3 = None
                 else:
-                    logger.warning(
-                        "⚠️ No Plasma RPC URL provided - contract interaction disabled"
-                    )
+                    logger.warning("⚠️ No Plasma RPC URL provided - contract interaction disabled")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to initialize web3 for Plasma: {e}")
 
@@ -196,9 +182,7 @@ class EulerPlasmaAdapter:
             "variable_rate_slope2": None,  # TODO: Fetch from Plasma interest rate model
         }
 
-    def _create_a_token_instrument(
-        self, market: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _create_a_token_instrument(self, market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Create aToken instrument definition."""
         symbol = market.get("symbol", "")
         underlying_address = market.get("underlyingAsset", "")
@@ -222,9 +206,7 @@ class EulerPlasmaAdapter:
             "base_asset": symbol,
             "quote_asset": "",
             "settle_asset": symbol,
-            "base_asset_contract_address": (
-                underlying_address if underlying_address else None
-            ),
+            "base_asset_contract_address": (underlying_address if underlying_address else None),
             "quote_asset_contract_address": None,
             "pool_address": a_token_address if a_token_address else None,
             "pool_fee_tier": None,
@@ -250,9 +232,7 @@ class EulerPlasmaAdapter:
             **lending_metadata,  # Include all lending protocol metadata fields
         }
 
-    def _create_debt_token_instrument(
-        self, market: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _create_debt_token_instrument(self, market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Create debtToken instrument definition."""
         symbol = market.get("symbol", "")
         underlying_address = market.get("underlyingAsset", "")
@@ -276,9 +256,7 @@ class EulerPlasmaAdapter:
             "base_asset": symbol,
             "quote_asset": "",
             "settle_asset": symbol,
-            "base_asset_contract_address": (
-                underlying_address if underlying_address else None
-            ),
+            "base_asset_contract_address": (underlying_address if underlying_address else None),
             "quote_asset_contract_address": None,
             "pool_address": debt_token_address if debt_token_address else None,
             "pool_fee_tier": None,
@@ -333,9 +311,7 @@ class FluidPlasmaAdapter:
                         from unified_cloud_services import get_secret_with_fallback
 
                         rpc_url = get_secret_with_fallback(
-                            project_id=os.getenv(
-                                "GCP_PROJECT_ID", "central-element-323112"
-                            ),
+                            project_id=os.getenv("GCP_PROJECT_ID", "central-element-323112"),
                             secret_name="plasma-rpc-url",
                             fallback_env_var="PLASMA_RPC_URL",
                         )
@@ -354,9 +330,7 @@ class FluidPlasmaAdapter:
         self._market_config_cache: Dict[str, Dict[str, Any]] = {}
         logger.info(f"✅ FluidPlasmaAdapter initialized")
 
-    def _fetch_market_config_from_contract(
-        self, market_address: str
-    ) -> Optional[Dict[str, Any]]:
+    def _fetch_market_config_from_contract(self, market_address: str) -> Optional[Dict[str, Any]]:
         """Fetch market configuration from Plasma protocol contract."""
         if not self.web3 or not WEB3_AVAILABLE or not market_address:
             return None
@@ -397,9 +371,7 @@ class FluidPlasmaAdapter:
             "liquidation_bonus": (
                 market_config.get("liquidation_bonus") if market_config else None
             ),
-            "reserve_factor": (
-                market_config.get("reserve_factor") if market_config else None
-            ),
+            "reserve_factor": (market_config.get("reserve_factor") if market_config else None),
             "emode_category_id": None,  # Not applicable to Plasma protocols
             "emode_label": None,  # Not applicable to Plasma protocols
             "emode_underlying": None,  # Not applicable to Plasma protocols
@@ -409,9 +381,7 @@ class FluidPlasmaAdapter:
                 market_config.get("optimal_utilization_rate") if market_config else None
             ),
             "base_variable_borrow_rate": (
-                market_config.get("base_variable_borrow_rate")
-                if market_config
-                else None
+                market_config.get("base_variable_borrow_rate") if market_config else None
             ),
             "variable_rate_slope1": (
                 market_config.get("variable_rate_slope1") if market_config else None
@@ -468,9 +438,7 @@ class FluidPlasmaAdapter:
             },
         ]
 
-    def _create_a_token_instrument(
-        self, market: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _create_a_token_instrument(self, market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Create aToken instrument definition."""
         symbol = market.get("symbol", "")
         underlying_address = market.get("underlyingAsset", "")
@@ -494,9 +462,7 @@ class FluidPlasmaAdapter:
             "base_asset": symbol,
             "quote_asset": "",
             "settle_asset": symbol,
-            "base_asset_contract_address": (
-                underlying_address if underlying_address else None
-            ),
+            "base_asset_contract_address": (underlying_address if underlying_address else None),
             "quote_asset_contract_address": None,
             "pool_address": a_token_address if a_token_address else None,
             "pool_fee_tier": None,
@@ -522,9 +488,7 @@ class FluidPlasmaAdapter:
             **lending_metadata,  # Include all lending protocol metadata fields
         }
 
-    def _create_debt_token_instrument(
-        self, market: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _create_debt_token_instrument(self, market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Create debtToken instrument definition."""
         symbol = market.get("symbol", "")
         underlying_address = market.get("underlyingAsset", "")
@@ -548,9 +512,7 @@ class FluidPlasmaAdapter:
             "base_asset": symbol,
             "quote_asset": "",
             "settle_asset": symbol,
-            "base_asset_contract_address": (
-                underlying_address if underlying_address else None
-            ),
+            "base_asset_contract_address": (underlying_address if underlying_address else None),
             "quote_asset_contract_address": None,
             "pool_address": debt_token_address if debt_token_address else None,
             "pool_fee_tier": None,
@@ -605,9 +567,7 @@ class AavePlasmaAdapter:
                         from unified_cloud_services import get_secret_with_fallback
 
                         rpc_url = get_secret_with_fallback(
-                            project_id=os.getenv(
-                                "GCP_PROJECT_ID", "central-element-323112"
-                            ),
+                            project_id=os.getenv("GCP_PROJECT_ID", "central-element-323112"),
                             secret_name="plasma-rpc-url",
                             fallback_env_var="PLASMA_RPC_URL",
                         )
@@ -626,9 +586,7 @@ class AavePlasmaAdapter:
         self._market_config_cache: Dict[str, Dict[str, Any]] = {}
         logger.info(f"✅ AavePlasmaAdapter initialized")
 
-    def _fetch_market_config_from_contract(
-        self, market_address: str
-    ) -> Optional[Dict[str, Any]]:
+    def _fetch_market_config_from_contract(self, market_address: str) -> Optional[Dict[str, Any]]:
         """Fetch market configuration from Plasma protocol contract."""
         if not self.web3 or not WEB3_AVAILABLE or not market_address:
             return None
@@ -669,9 +627,7 @@ class AavePlasmaAdapter:
             "liquidation_bonus": (
                 market_config.get("liquidation_bonus") if market_config else None
             ),
-            "reserve_factor": (
-                market_config.get("reserve_factor") if market_config else None
-            ),
+            "reserve_factor": (market_config.get("reserve_factor") if market_config else None),
             "emode_category_id": None,  # Not applicable to Plasma protocols
             "emode_label": None,  # Not applicable to Plasma protocols
             "emode_underlying": None,  # Not applicable to Plasma protocols
@@ -681,9 +637,7 @@ class AavePlasmaAdapter:
                 market_config.get("optimal_utilization_rate") if market_config else None
             ),
             "base_variable_borrow_rate": (
-                market_config.get("base_variable_borrow_rate")
-                if market_config
-                else None
+                market_config.get("base_variable_borrow_rate") if market_config else None
             ),
             "variable_rate_slope1": (
                 market_config.get("variable_rate_slope1") if market_config else None
@@ -740,9 +694,7 @@ class AavePlasmaAdapter:
             },
         ]
 
-    def _create_a_token_instrument(
-        self, market: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _create_a_token_instrument(self, market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Create aToken instrument definition."""
         symbol = market.get("symbol", "")
         underlying_address = market.get("underlyingAsset", "")
@@ -766,9 +718,7 @@ class AavePlasmaAdapter:
             "base_asset": symbol,
             "quote_asset": "",
             "settle_asset": symbol,
-            "base_asset_contract_address": (
-                underlying_address if underlying_address else None
-            ),
+            "base_asset_contract_address": (underlying_address if underlying_address else None),
             "quote_asset_contract_address": None,
             "pool_address": a_token_address if a_token_address else None,
             "pool_fee_tier": None,
@@ -794,9 +744,7 @@ class AavePlasmaAdapter:
             **lending_metadata,  # Include all lending protocol metadata fields
         }
 
-    def _create_debt_token_instrument(
-        self, market: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _create_debt_token_instrument(self, market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Create debtToken instrument definition."""
         symbol = market.get("symbol", "")
         underlying_address = market.get("underlyingAsset", "")
@@ -820,9 +768,7 @@ class AavePlasmaAdapter:
             "base_asset": symbol,
             "quote_asset": "",
             "settle_asset": symbol,
-            "base_asset_contract_address": (
-                underlying_address if underlying_address else None
-            ),
+            "base_asset_contract_address": (underlying_address if underlying_address else None),
             "quote_asset_contract_address": None,
             "pool_address": debt_token_address if debt_token_address else None,
             "pool_fee_tier": None,

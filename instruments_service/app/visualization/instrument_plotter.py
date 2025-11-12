@@ -50,9 +50,7 @@ class InstrumentPlotter:
 
         # Group by date and count instruments
         if "available_from_datetime" in instruments.columns:
-            instruments["date"] = pd.to_datetime(
-                instruments["available_from_datetime"]
-            ).dt.date
+            instruments["date"] = pd.to_datetime(instruments["available_from_datetime"]).dt.date
             availability = instruments.groupby("date").size().reset_index(name="count")
 
             fig.add_trace(
@@ -142,9 +140,7 @@ class InstrumentPlotter:
 
         fig = go.Figure()
 
-        fig.add_trace(
-            go.Pie(labels=type_counts.index, values=type_counts.values, hole=0.4)
-        )
+        fig.add_trace(go.Pie(labels=type_counts.index, values=type_counts.values, hole=0.4))
 
         fig.update_layout(title=title, height=height, showlegend=True)
 
@@ -197,4 +193,3 @@ class InstrumentPlotter:
         )
 
         return fig
-
