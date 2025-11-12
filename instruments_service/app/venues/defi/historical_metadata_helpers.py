@@ -113,9 +113,7 @@ def find_earliest_data_via_testing_hyperliquid(
                 candles = response.json()
                 if candles and len(candles) > 0:
                     earliest_found = test_date
-                    logger.info(
-                        f"Found data for {coin} on {test_date.strftime('%Y-%m-%d')}"
-                    )
+                    logger.info(f"Found data for {coin} on {test_date.strftime('%Y-%m-%d')}")
                 else:
                     # No data found, stop searching backwards
                     if earliest_found:
@@ -221,9 +219,7 @@ def get_earliest_funding_rate_aster(symbol: str) -> Optional[datetime]:
         elif response.status_code == 429:
             logger.warning(f"Rate limited when fetching funding rates for {symbol}")
         else:
-            logger.debug(
-                f"Failed to fetch funding rates for {symbol}: {response.status_code}"
-            )
+            logger.debug(f"Failed to fetch funding rates for {symbol}: {response.status_code}")
 
     except Exception as e:
         logger.debug(f"Error getting earliest funding rate for {symbol}: {e}")

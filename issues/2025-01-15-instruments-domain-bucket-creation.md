@@ -1,8 +1,8 @@
 # Instruments Domain GCS Bucket Creation Required
 
-**Date**: 2025-01-15  
-**Status**: ⚠️ Action Required  
-**Repository**: `instruments-service`, `unified-trading-system-repos`  
+**Date**: 2025-01-15
+**Status**: ⚠️ Action Required
+**Repository**: `instruments-service`, `unified-trading-system-repos`
 **Session**: Domain separation - instruments moved to own bucket/dataset
 
 ## Issue Summary
@@ -120,4 +120,3 @@ After creation, verify:
 - Domain separation architecture change
 - Environment variable updates
 - Code refactoring to use new bucket/dataset
-

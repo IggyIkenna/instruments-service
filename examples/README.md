@@ -8,7 +8,7 @@ The `examples/` directory serves two purposes:
 1. **Service Usage**: Demonstrate how to run and use THIS service locally
 2. **Dependency Access**: Show how to access dependency service data (if applicable)
 
-**Note**: 
+**Note**:
 - `instruments-service` has no dependencies (it provides instruments to all other services), so dependency access examples are not needed here.
 - Instrument definitions are relatively static and don't change frequently, so batch processing for historical dates is the primary use case.
 
@@ -83,7 +83,7 @@ instruments_df = client.get_instruments_for_date(
    # Install instruments-service
    cd /path/to/instruments-service
    pip install -e .
-   
+
    # Install unified-cloud-services
    cd /path/to/unified-cloud-services
    pip install -e .

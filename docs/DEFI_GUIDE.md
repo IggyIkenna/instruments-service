@@ -11,7 +11,7 @@
 
 This guide covers DeFi protocol integration, data sources, and instrument discovery for the instruments-service. The service fetches **instrument definitions** (metadata about what instruments exist), not market data (rates, prices, OHLCV).
 
-**Key Distinction**: 
+**Key Distinction**:
 - **Instrument Definitions**: Pool addresses, token addresses, fee tiers, contract addresses
 - **Market Data**: Supply/borrow rates, oracle prices, OHLCV prices, staking yields (fetched by other services)
 
@@ -37,7 +37,7 @@ This guide covers DeFi protocol integration, data sources, and instrument discov
 
 #### Uniswap V2/V3/V4
 
-**Status**: 
+**Status**:
 - ✅ **V3**: Implemented (`UniswapV3Adapter`)
 - ✅ **V2**: Implemented (`UniswapV2Adapter`)
 - ✅ **V4**: Implemented (`UniswapV4Adapter`) - Uses Envio fallback
@@ -202,9 +202,9 @@ This guide covers DeFi protocol integration, data sources, and instrument discov
 
 ### The Graph Protocol
 
-**What**: Decentralized indexing protocol for blockchain data  
-**API**: GraphQL  
-**Authentication**: API key required (free tier available)  
+**What**: Decentralized indexing protocol for blockchain data
+**API**: GraphQL
+**Authentication**: API key required (free tier available)
 **Documentation**: https://thegraph.com/docs/
 
 **Subgraphs Required**:
@@ -257,9 +257,9 @@ query GetPools($first: Int!, $skip: Int!) {
 
 ### Alchemy SDK
 
-**What**: Comprehensive Web3 development platform  
-**API**: REST API + SDK  
-**Authentication**: API key required  
+**What**: Comprehensive Web3 development platform
+**API**: REST API + SDK
+**Authentication**: API key required
 **Documentation**: https://docs.alchemy.com/
 
 **Key Methods**:
@@ -276,9 +276,9 @@ query GetPools($first: Int!, $skip: Int!) {
 
 ### Envio
 
-**What**: Alternative blockchain indexer (HyperIndex/HyperSync)  
-**API**: GraphQL  
-**Authentication**: API token required  
+**What**: Alternative blockchain indexer (HyperIndex/HyperSync)
+**API**: GraphQL
+**Authentication**: API token required
 **Documentation**: https://docs.envio.dev/
 
 **Key Concepts**:
@@ -320,7 +320,7 @@ query TopPools {
 
 #### AAVE SDK
 
-**Library**: `@aave/aave-sdk` (TypeScript/JavaScript)  
+**Library**: `@aave/aave-sdk` (TypeScript/JavaScript)
 **Documentation**: https://github.com/aave/aave-sdk
 
 **Usage**: Market data, borrow/supply rates, user positions
@@ -329,7 +329,7 @@ query TopPools {
 
 #### Lido SDK
 
-**Library**: `@lidofinance/lido-ethereum-sdk` (TypeScript/JavaScript)  
+**Library**: `@lidofinance/lido-ethereum-sdk` (TypeScript/JavaScript)
 **Documentation**: https://github.com/lidofinance/lido-ethereum-sdk
 
 **Usage**: Stake/unstake operations, share rates, validator info
@@ -677,5 +677,3 @@ If adapters fail to import:
 - [`VENUE_ADAPTERS.md`](./VENUE_ADAPTERS.md) - Venue adapter pattern and implementation details
 - [`INSTRUMENT_SPECIFICATION.md`](./INSTRUMENT_SPECIFICATION.md) - Complete instrument ID specification
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) - Service architecture and design decisions
-
-

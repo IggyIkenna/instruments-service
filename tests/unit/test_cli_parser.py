@@ -83,4 +83,3 @@ def test_validate_arguments_query_mode():
     )
     with pytest.raises(ValueError, match="--instrument-id is required"):
         validate_arguments(args)
-

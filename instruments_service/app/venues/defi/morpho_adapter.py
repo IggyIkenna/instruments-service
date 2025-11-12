@@ -55,29 +55,21 @@ class MorphoAdapter:
 
                         # Try to get Alchemy API key from Secret Manager
                         alchemy_key = get_secret_with_fallback(
-                            project_id=os.getenv(
-                                "GCP_PROJECT_ID", "central-element-323112"
-                            ),
+                            project_id=os.getenv("GCP_PROJECT_ID", "central-element-323112"),
                             secret_name="alchemy-api-key",
                             fallback_env_var="ALCHEMY_API_KEY",
                         )
                         if alchemy_key:
                             # Construct Alchemy RPC URL from API key
                             rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key.strip()}"
-                            logger.info(
-                                "✅ Constructed Ethereum RPC URL from Alchemy API key"
-                            )
+                            logger.info("✅ Constructed Ethereum RPC URL from Alchemy API key")
                         else:
                             # Fallback to direct RPC URL from env var
                             rpc_url = os.getenv("ETHEREUM_RPC_URL")
                             if rpc_url:
-                                logger.info(
-                                    "✅ Using Ethereum RPC URL from environment variable"
-                                )
+                                logger.info("✅ Using Ethereum RPC URL from environment variable")
                     except Exception as e:
-                        logger.warning(
-                            f"⚠️ Failed to get RPC URL from Secret Manager: {e}"
-                        )
+                        logger.warning(f"⚠️ Failed to get RPC URL from Secret Manager: {e}")
                         rpc_url = os.getenv("ETHEREUM_RPC_URL")
 
                 if rpc_url:
@@ -88,9 +80,7 @@ class MorphoAdapter:
                         logger.warning("⚠️ Failed to connect to Ethereum RPC")
                         self.web3 = None
                 else:
-                    logger.warning(
-                        "⚠️ No RPC URL provided - Morpho contract interaction disabled"
-                    )
+                    logger.warning("⚠️ No RPC URL provided - Morpho contract interaction disabled")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to initialize web3: {e}")
 
@@ -131,9 +121,7 @@ class MorphoAdapter:
                         instruments[debt_token_def["instrument_key"]] = debt_token_def
 
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to process Morpho market {market.get('symbol')}: {e}"
-                    )
+                    logger.warning(f"Failed to process Morpho market {market.get('symbol')}: {e}")
                     continue
 
             logger.info(f"✅ Generated {len(instruments)} Morpho instruments")
@@ -167,9 +155,7 @@ class MorphoAdapter:
             },
         ]
 
-    def _fetch_market_params_from_contract(
-        self, market_id: str
-    ) -> Optional[Dict[str, Any]]:
+    def _fetch_market_params_from_contract(self, market_id: str) -> Optional[Dict[str, Any]]:
         """
         Fetch MarketParams from Morpho Blue contract.
 
@@ -191,9 +177,7 @@ class MorphoAdapter:
             # liquidationIncentiveFactor is calculated from lltv
             morpho_blue_abi = [
                 {
-                    "inputs": [
-                        {"internalType": "bytes32", "name": "id", "type": "bytes32"}
-                    ],
+                    "inputs": [{"internalType": "bytes32", "name": "id", "type": "bytes32"}],
                     "name": "idToMarketParams",
                     "outputs": [
                         {
@@ -228,9 +212,7 @@ class MorphoAdapter:
             if isinstance(market_id, str) and market_id.startswith("0x"):
                 market_id_bytes = bytes.fromhex(market_id[2:])
                 if len(market_id_bytes) == 32:
-                    market_params = contract.functions.idToMarketParams(
-                        market_id_bytes
-                    ).call()
+                    market_params = contract.functions.idToMarketParams(market_id_bytes).call()
 
                     # Extract values
                     loan_token = market_params[0]
@@ -247,9 +229,7 @@ class MorphoAdapter:
                     # Liquidation bonus = (1 / lltv) - 1
                     liquidation_threshold = 1.0  # Morpho uses lltv as max LTV
                     liquidation_bonus = (
-                        (1.0 / lltv_decimal - 1.0)
-                        if lltv_decimal and lltv_decimal > 0
-                        else None
+                        (1.0 / lltv_decimal - 1.0) if lltv_decimal and lltv_decimal > 0 else None
                     )
 
                     config = {
@@ -299,9 +279,7 @@ class MorphoAdapter:
         liquidation_threshold = (
             market_params.get("liquidation_threshold") if market_params else None
         )
-        liquidation_bonus = (
-            market_params.get("liquidation_bonus") if market_params else None
-        )
+        liquidation_bonus = market_params.get("liquidation_bonus") if market_params else None
 
         return {
             "flash_loan_providers": flash_loan_providers,
@@ -321,9 +299,7 @@ class MorphoAdapter:
             "variable_rate_slope2": None,  # TODO: Fetch from IRM contract
         }
 
-    def _create_a_token_instrument(
-        self, market: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _create_a_token_instrument(self, market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Create aToken instrument definition (supply position).
 
@@ -382,9 +358,7 @@ class MorphoAdapter:
             **lending_metadata,  # Include all lending protocol metadata fields
         }
 
-    def _create_debt_token_instrument(
-        self, market: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _create_debt_token_instrument(self, market: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Create debtToken instrument definition (borrow position).
 

@@ -126,9 +126,7 @@ class InstrumentsQueryHandler(ModeHandler):
                     else []
                 ),
                 "venues": (
-                    instruments_df["venue"].unique().tolist()
-                    if not instruments_df.empty
-                    else []
+                    instruments_df["venue"].unique().tolist() if not instruments_df.empty else []
                 ),
                 "instrument_types": (
                     instruments_df["instrument_type"].unique().tolist()
@@ -245,9 +243,7 @@ class InstrumentsQueryHandler(ModeHandler):
             "results": {
                 "instruments_found": len(instruments_df),
                 "instruments": (
-                    instruments_df["instrument_key"].tolist()
-                    if not instruments_df.empty
-                    else []
+                    instruments_df["instrument_key"].tolist() if not instruments_df.empty else []
                 ),
             },
         }
@@ -279,9 +275,7 @@ class InstrumentsQueryHandler(ModeHandler):
             "results": {
                 "instruments_found": len(expiring_df),
                 "expiring_instruments": (
-                    expiring_df[["instrument_key", "available_to_datetime"]].to_dict(
-                        "records"
-                    )
+                    expiring_df[["instrument_key", "available_to_datetime"]].to_dict("records")
                     if not expiring_df.empty
                     else []
                 ),

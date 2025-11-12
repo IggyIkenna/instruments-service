@@ -78,9 +78,7 @@ class CloudInstrumentStorage:
             cloud_target = CloudTarget(
                 project_id=os.getenv("GCP_PROJECT_ID", "central-element-323112"),
                 gcs_bucket=bucket_name,
-                bigquery_dataset=os.getenv(
-                    "INSTRUMENTS_BIGQUERY_DATASET", "instruments"
-                ),
+                bigquery_dataset=os.getenv("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
                 bigquery_location=os.getenv(
                     "BIGQUERY_LOCATION", "asia-northeast1"
                 ),  # Default to asia-northeast1 per .env
@@ -189,12 +187,10 @@ class CloudInstrumentStorage:
                     if instruments_df[ts_col].dtype.name.startswith("datetime64"):
                         ts_series = pd.to_datetime(instruments_df[ts_col])
                         if ts_series.dt.tz is not None:
-                            instruments_df[ts_col] = ts_series.dt.tz_convert(
-                                "UTC"
-                            ).dt.tz_localize(None)
-                        instruments_df[ts_col] = instruments_df[ts_col].astype(
-                            "datetime64[ns]"
-                        )
+                            instruments_df[ts_col] = ts_series.dt.tz_convert("UTC").dt.tz_localize(
+                                None
+                            )
+                        instruments_df[ts_col] = instruments_df[ts_col].astype("datetime64[ns]")
                     elif instruments_df[ts_col].dtype == "object":
                         # Try to parse string timestamps
                         try:
@@ -221,17 +217,13 @@ class CloudInstrumentStorage:
                 else:
                     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
-            gcs_path = (
-                f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
-            )
+            gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
 
             try:
                 self.cloud_service.upload_to_gcs(
                     data=instruments_df, gcs_path=gcs_path, format="parquet"
                 )
-                logger.info(
-                    f"✅ Uploaded {len(instruments_df)} instruments to GCS: {gcs_path}"
-                )
+                logger.info(f"✅ Uploaded {len(instruments_df)} instruments to GCS: {gcs_path}")
             except Exception as gcs_error:
                 logger.error(f"❌ GCS upload failed: {gcs_error}")
                 return False

@@ -499,5 +499,3 @@ If adapters fail to import:
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) - Service architecture and design decisions
 - [`DEFI_GUIDE.md`](./DEFI_GUIDE.md) - DeFi protocols and data sources
 - [`INSTRUMENT_SPECIFICATION.md`](./INSTRUMENT_SPECIFICATION.md) - Instrument ID specification
-
-

@@ -135,9 +135,7 @@ class DateFilterService:
                                 available_from_str.replace("Z", "+00:00")
                             )
                             if available_from.tzinfo is None:
-                                available_from = available_from.replace(
-                                    tzinfo=timezone.utc
-                                )
+                                available_from = available_from.replace(tzinfo=timezone.utc)
                         else:
                             available_from = available_from_str
                     except (ValueError, AttributeError) as e:
@@ -146,18 +144,16 @@ class DateFilterService:
                         )
                         # Use protocol default or skip
                         if protocol and protocol.lower() in self._protocol_defaults:
-                            default_from = self._protocol_defaults[
-                                protocol.lower()
-                            ].get("available_from")
+                            default_from = self._protocol_defaults[protocol.lower()].get(
+                                "available_from"
+                            )
                             if default_from:
                                 try:
                                     available_from = datetime.fromisoformat(
                                         default_from.replace("Z", "+00:00")
                                     )
                                     if available_from.tzinfo is None:
-                                        available_from = available_from.replace(
-                                            tzinfo=timezone.utc
-                                        )
+                                        available_from = available_from.replace(tzinfo=timezone.utc)
                                 except ValueError:
                                     pass
 

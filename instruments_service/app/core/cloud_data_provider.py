@@ -34,9 +34,7 @@ class CloudDataProvider:
             cloud_target = CloudTarget(
                 project_id=os.getenv("GCP_PROJECT_ID", "central-element-323112"),
                 gcs_bucket=os.getenv("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
-                bigquery_dataset=os.getenv(
-                    "INSTRUMENTS_BIGQUERY_DATASET", "instruments"
-                ),
+                bigquery_dataset=os.getenv("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
                 bigquery_location=os.getenv(
                     "BIGQUERY_LOCATION", "asia-northeast1"
                 ),  # Default to asia-northeast1 per .env
@@ -68,15 +66,11 @@ class CloudDataProvider:
         """
         if gcs_path is None:
             date_str = date.strftime("%Y-%m-%d")
-            gcs_path = (
-                f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
-            )
+            gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
 
         try:
             logger.info(f"📥 Loading instruments from GCS: {gcs_path}")
-            df = self.cloud_service.download_from_gcs(
-                gcs_path=gcs_path, format="parquet"
-            )
+            df = self.cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet")
 
             if df.empty:
                 logger.warning(f"⚠️ No instruments found at {gcs_path}")
@@ -151,9 +145,7 @@ class CloudDataProvider:
 
         try:
             # Try to download to check existence
-            df = self.cloud_service.download_from_gcs(
-                gcs_path=gcs_path, format="parquet"
-            )
+            df = self.cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet")
             exists = df is not None and not df.empty
             logger.debug(f"📊 Instruments exist check for {date_str}: {exists}")
             return exists

@@ -57,9 +57,7 @@ def main() -> Dict[str, Any]:
 
         logger.info(f"🚀 Starting {args.mode} operation")
         if args.start_date:
-            logger.info(
-                f"📅 Date range: {args.start_date} to {args.end_date or args.start_date}"
-            )
+            logger.info(f"📅 Date range: {args.start_date} to {args.end_date or args.start_date}")
 
         # Build configuration from arguments
         config = {
@@ -141,7 +139,7 @@ def main() -> Dict[str, Any]:
         # Print query results to stdout for instruments-query mode
         if args.mode == "instruments-query":
             output_format = getattr(args, "output_format", "summary")
-            
+
             if output_format == "json":
                 # Print JSON output to stdout
                 print(json.dumps(result, indent=2, default=str))
@@ -157,26 +155,30 @@ def main() -> Dict[str, Any]:
                     print("\n" + "=" * 70)
                     print("QUERY RESULTS")
                     print("=" * 70)
-                    
+
                     if "instruments_found" in results:
                         print(f"📊 Instruments Found: {results['instruments_found']}")
-                    
+
                     if "venues" in results and results["venues"]:
-                        print(f"🏢 Venues ({len(results['venues'])}): {', '.join(results['venues'][:10])}")
+                        print(
+                            f"🏢 Venues ({len(results['venues'])}): {', '.join(results['venues'][:10])}"
+                        )
                         if len(results["venues"]) > 10:
                             print(f"   ... and {len(results['venues']) - 10} more")
-                    
+
                     if "instrument_types" in results and results["instrument_types"]:
-                        print(f"📈 Instrument Types ({len(results['instrument_types'])}): {', '.join(results['instrument_types'])}")
-                    
+                        print(
+                            f"📈 Instrument Types ({len(results['instrument_types'])}): {', '.join(results['instrument_types'])}"
+                        )
+
                     if "sample_instruments" in results and results["sample_instruments"]:
                         print(f"\n📋 Sample Instruments (first 10):")
                         for inst in results["sample_instruments"][:10]:
                             print(f"   - {inst}")
-                    
+
                     if "total_instruments" in results:
                         print(f"\n📊 Total Instruments: {results['total_instruments']}")
-                    
+
                     print("=" * 70)
 
         return result
@@ -201,7 +203,5 @@ def run_cli():
 
 if __name__ == "__main__":
     result = run_cli()
-    exit_code = (
-        0 if result.get("success", False) or result.get("status") == "success" else 1
-    )
+    exit_code = 0 if result.get("success", False) or result.get("status") == "success" else 1
     sys.exit(exit_code)
