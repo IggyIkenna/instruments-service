@@ -381,6 +381,44 @@ INSTRUMENTS_PARQUET_SCHEMA: List[Dict[str, str]] = [
         "description": "Variable rate slope 2 (as decimal) - interest rate increase per utilization above optimal",
     },
     # ============================================================================
+    # CEFI RISK PARAMETERS (from CCXT leverage tiers)
+    # ============================================================================
+    {
+        "name": "max_position_size",
+        "type": "float64",
+        "required": False,
+        "nullable": True,
+        "description": "Maximum position size in quote currency (from highest tier's maxNotional)",
+    },
+    {
+        "name": "max_leverage",
+        "type": "float64",
+        "required": False,
+        "nullable": True,
+        "description": "Maximum leverage available (from tier 1, highest leverage tier)",
+    },
+    {
+        "name": "initial_margin_rate",
+        "type": "float64",
+        "required": False,
+        "nullable": True,
+        "description": "Initial margin rate required to open position (from tier 1, as decimal e.g., 0.01 = 1%)",
+    },
+    {
+        "name": "maintenance_margin_rate",
+        "type": "float64",
+        "required": False,
+        "nullable": True,
+        "description": "Maintenance margin rate (liquidation threshold, from tier 1, as decimal e.g., 0.005 = 0.5%)",
+    },
+    {
+        "name": "leverage_tiers_json",
+        "type": "string",
+        "required": False,
+        "nullable": True,
+        "description": "JSON string of all leverage tiers for this instrument (for advanced risk calculations)",
+    },
+    # ============================================================================
     # STORAGE METADATA (added during storage)
     # ============================================================================
     {
