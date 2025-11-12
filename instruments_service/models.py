@@ -244,6 +244,28 @@ class InstrumentDefinition(BaseModel):
         description="Variable rate slope 2 (as decimal) - interest rate increase per utilization above optimal",
     )
 
+    # CEFI risk parameters (from CCXT leverage tiers)
+    max_position_size: Optional[float] = Field(
+        default=None,
+        description="Maximum position size in quote currency (from highest tier's maxNotional)",
+    )
+    max_leverage: Optional[float] = Field(
+        default=None,
+        description="Maximum leverage available (from tier 1, highest leverage tier)",
+    )
+    initial_margin_rate: Optional[float] = Field(
+        default=None,
+        description="Initial margin rate required to open position (from tier 1, as decimal e.g., 0.01 = 1%)",
+    )
+    maintenance_margin_rate: Optional[float] = Field(
+        default=None,
+        description="Maintenance margin rate (liquidation threshold, from tier 1, as decimal e.g., 0.005 = 0.5%)",
+    )
+    leverage_tiers_json: Optional[str] = Field(
+        default=None,
+        description="JSON string of all leverage tiers for this instrument (for advanced risk calculations)",
+    )
+
     # Note: validation_warnings removed to avoid circular reference issues
 
     @field_validator("instrument_key")

@@ -702,6 +702,7 @@
 - [ ] 4.) Validate AAVE Risk Params for DeFi Strategy - `2025-12-01` - `Owner: Ikenna` - `Priority: Medium` - `Blocks: DeFi Strategy Backtest` - `Dependencies: None`
 - [x] 11.) Performance Optimization (secret caching, client pooling, failure caching) - `2025-11-12` - `Owner: Ikenna` - `Priority: Medium` - `Blocks: None` - `Dependencies: None` - `Note: Moved secret cache to unified-cloud-services, added web3/http session pooling, added failure caching to avoid retrying failed Graph queries`
 - [ ] 12.) Get AAVE Historical Data from Actual Date (not current data fallback) - `2025-12-01` - `Owner: Ikenna` - `Priority: Medium` - `Blocks: DeFi Strategy Backtest` - `Dependencies: None` - `Note: Currently falls back to AaveScan current data when historical Graph queries fail. Need to implement RPC-based historical queries or fix Graph indexer sync for historical dates.`
+- [ ] 14.) Add Risk Parameters (Position Limits, Leverage, Margin Requirements) to CEFI Instruments - `TBD` - `Owner: Ikenna` - `Priority: Medium` - `Blocks: None` - `Dependencies: None` - `Note: Use Context7 and CCXT API to populate max_position_size, max_leverage, initial_margin_rate, maintenance_margin_rate, and leverage_tiers_json fields. These enable proper liquidation risk calculations and margin requirement tracking.`
 
 ### 🟢 Low Priority Tasks
 
