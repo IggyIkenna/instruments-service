@@ -443,6 +443,22 @@ clickup_user_id_harsh=YOUR_ID
 - Or delete manually in ClickUp
 - Only affects tasks with `instruments-service` tag
 
+### Data Catalogue Subtasks Not Found
+- **Problem**: Data catalogue subtasks can't find parent milestones
+- **Cause**: Milestone names may have markdown formatting (`**text**`) in STATUS.md
+- **Solution**: Script automatically normalizes milestone names (strips markdown formatting)
+- **Debug**: Check output for "Available milestones in task_map" and "Available milestones in existing_tasks"
+- **Fix**: Ensure milestone names in STATUS.md Timeline Tracking table match exactly (markdown is auto-stripped)
+
+### Parent Milestone Lookup Issues
+- **Problem**: "Could not find parent milestone for strategy 'X'"
+- **Cause**: Milestone may not exist yet, or name mismatch due to formatting
+- **Solution**: 
+  1. Run `instruments-service` import first (creates parent milestones)
+  2. Script uses normalized matching (handles markdown formatting automatically)
+  3. Check debug output to see what milestones are available
+  4. Ensure strategy names in Data Catalogue table match milestone names (e.g., "ML Delta-One" not "Delta-One ML")
+
 ---
 
 ## Features
