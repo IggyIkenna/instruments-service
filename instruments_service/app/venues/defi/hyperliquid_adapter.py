@@ -49,9 +49,7 @@ class HyperliquidAdapter:
             f"✅ HyperliquidAdapter initialized (MVP only: {mvp_only}, base currencies: {len(self.mvp_base_currencies) if self.mvp_base_currencies else 'all'})"
         )
 
-    def fetch_perpetuals(
-        self, test_data_availability: bool = False
-    ) -> Dict[str, Dict[str, Any]]:
+    def fetch_perpetuals(self, test_data_availability: bool = False) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all perpetual futures from Hyperliquid.
 
@@ -98,23 +96,17 @@ class HyperliquidAdapter:
 
                         instruments[inst_def["instrument_key"]] = inst_def
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to convert asset {asset.get('name', 'unknown')}: {e}"
-                    )
+                    logger.warning(f"Failed to convert asset {asset.get('name', 'unknown')}: {e}")
                     continue
 
-            logger.info(
-                f"✅ Generated {len(instruments)} Hyperliquid perpetual instruments"
-            )
+            logger.info(f"✅ Generated {len(instruments)} Hyperliquid perpetual instruments")
             return instruments
 
         except Exception as e:
             logger.error(f"Failed to fetch Hyperliquid perpetuals: {e}")
             return {}
 
-    def fetch_spot_pairs(
-        self, test_data_availability: bool = False
-    ) -> Dict[str, Dict[str, Any]]:
+    def fetch_spot_pairs(self, test_data_availability: bool = False) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all spot trading pairs from Hyperliquid for MVP coins.
 
@@ -167,18 +159,14 @@ class HyperliquidAdapter:
                     )
                     continue
 
-            logger.info(
-                f"✅ Generated {len(instruments)} Hyperliquid spot pair instruments"
-            )
+            logger.info(f"✅ Generated {len(instruments)} Hyperliquid spot pair instruments")
             return instruments
 
         except Exception as e:
             logger.error(f"Failed to fetch Hyperliquid spot pairs: {e}")
             return {}
 
-    def _convert_asset_to_spot_pair(
-        self, asset: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _convert_asset_to_spot_pair(self, asset: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Convert Hyperliquid asset data to SPOT_PAIR instrument definition.
 
@@ -231,9 +219,7 @@ class HyperliquidAdapter:
             "underlying": coin,
         }
 
-    def _convert_asset_to_instrument(
-        self, asset: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _convert_asset_to_instrument(self, asset: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Convert Hyperliquid asset data to instrument definition.
 
@@ -340,16 +326,12 @@ class HyperliquidAdapter:
             if response.status_code == 200:
                 candles = response.json()
                 if candles and len(candles) > 0:
-                    logger.info(
-                        f"✅ Historical candles ({interval}) available for {coin}"
-                    )
+                    logger.info(f"✅ Historical candles ({interval}) available for {coin}")
                     return True
                 else:
                     logger.warning(f"⚠️ No candles found for {coin} in date range")
             else:
-                logger.warning(
-                    f"⚠️ Failed to fetch candles for {coin}: {response.status_code}"
-                )
+                logger.warning(f"⚠️ Failed to fetch candles for {coin}: {response.status_code}")
         except Exception as e:
             logger.warning(f"⚠️ Error testing candles for {coin}: {e}")
 

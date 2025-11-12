@@ -26,26 +26,26 @@ from scripts.clickup_import import ClickUpClient
 
 class TasksMdParser:
     """Parser for tasks.md format"""
-    
+
     def __init__(self, tasks_md_path: Path):
         self.tasks_md_path = tasks_md_path
         self.content = tasks_md_path.read_text()
-    
+
     def parse_tasks(self) -> List[Dict]:
         """Parse tasks from tasks.md markdown format"""
         tasks = []
-        
+
         # Pattern to match task headers: ### N. Task Name
         task_pattern = r'^### (\d+)\.\s+(.+)$'
-        
+
         # Pattern to match task metadata lines
         status_pattern = r'\*\*Status\*\*:\s*(.+)$'
         due_pattern = r'\*\*Due\*\*:\s*(.+)$'
         owner_pattern = r'\*\*Owner\*\*:\s*(.+)$'
-        
+
         lines = self.content.split('\n')
         current_task = None
-        
+
         for line in lines:
             # Check for task header
             task_match = re.match(task_pattern, line)
@@ -53,7 +53,7 @@ class TasksMdParser:
                 # Save previous task if exists
                 if current_task:
                     tasks.append(current_task)
-                
+
                 # Start new task
                 task_num = task_match.group(1)
                 task_name = task_match.group(2).strip()
@@ -66,14 +66,14 @@ class TasksMdParser:
                     'description': []
                 }
                 continue
-            
+
             if current_task:
                 # Check for metadata fields
                 status_match = re.search(status_pattern, line)
                 if status_match:
                     current_task['status'] = status_match.group(1).strip()
                     continue
-                
+
                 due_match = re.search(due_pattern, line)
                 if due_match:
                     due_str = due_match.group(1).strip()
@@ -93,20 +93,20 @@ class TasksMdParser:
                     except:
                         current_task['due_date'] = due_str
                     continue
-                
+
                 owner_match = re.search(owner_pattern, line)
                 if owner_match:
                     current_task['owner'] = owner_match.group(1).strip()
                     continue
-                
+
                 # Collect description lines (non-empty, non-metadata lines)
                 if line.strip() and not line.strip().startswith('**') and not line.strip().startswith('|'):
                     current_task['description'].append(line.strip())
-        
+
         # Don't forget the last task
         if current_task:
             tasks.append(current_task)
-        
+
         return tasks
 
 
@@ -117,23 +117,23 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
     active_tasks = client.get_tasks(list_id, archived=False, include_subtasks=True)
     archived_tasks = client.get_tasks(list_id, archived=True, include_subtasks=True)
     all_tasks = active_tasks + archived_tasks
-    
+
     if not all_tasks:
         print("   ✅ No tasks found")
         return 0
-    
+
     print(f"   Found {len(active_tasks)} active task(s) and {len(archived_tasks)} archived task(s)")
-    
+
     # Filter tasks with instruments-service tag
     tasks_to_delete = []
     archived_task_ids = {task.get("id") for task in archived_tasks}  # Set of archived task IDs
-    
+
     for task in all_tasks:
         task_id = task.get("id")
         task_name = task.get("name", "Unknown")
         tags = [tag.get("name", "") for tag in task.get("tags", [])]
         status = task.get("status", {}).get("status", "unknown")
-        
+
         if "instruments-service" in tags:
             # Handle parent field - can be string (task ID) or object with id
             parent_field = task.get("parent")
@@ -143,7 +143,7 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
                 parent_id = parent_field
             else:
                 parent_id = None
-            
+
             tasks_to_delete.append({
                 "id": task_id,
                 "name": task_name,
@@ -151,11 +151,11 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
                 "status": status,
                 "is_archived": task_id in archived_task_ids
             })
-    
+
     if not tasks_to_delete:
         print("   ✅ No tasks with 'instruments-service' tag found")
         return 0
-    
+
     print(f"\n🗑️  Found {len(tasks_to_delete)} task(s) with 'instruments-service' tag to delete:")
     subtask_count = sum(1 for t in tasks_to_delete if t["is_subtask"])
     parent_count = len(tasks_to_delete) - subtask_count
@@ -167,7 +167,7 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
         print(f"   - {completed_count} completed task(s)")
     if archived_count > 0:
         print(f"   - {archived_count} archived task(s)")
-    
+
     if dry_run:
         print("\n🔍 [DRY RUN] Would delete the following tasks:")
         for task in tasks_to_delete[:20]:  # Show first 20
@@ -178,15 +178,15 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
         if len(tasks_to_delete) > 20:
             print(f"   ... and {len(tasks_to_delete) - 20} more")
         return len(tasks_to_delete)
-    
+
     # Delete subtasks first (to avoid orphaned subtasks)
     print("\n🗑️  Deleting tasks...")
     deleted_count = 0
     failed_count = 0
-    
+
     # Sort: subtasks first, then parent tasks
     tasks_to_delete_sorted = sorted(tasks_to_delete, key=lambda x: (not x["is_subtask"], x["name"]))
-    
+
     for task in tasks_to_delete_sorted:
         task_type = "subtask" if task["is_subtask"] else "task"
         try:
@@ -200,12 +200,12 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
         except Exception as e:
             failed_count += 1
             print(f"   ⚠️  Error deleting {task_type} '{task['name']}': {e}")
-    
+
     print(f"\n✅ Cleanup complete!")
     print(f"   - Deleted: {deleted_count} task(s)")
     if failed_count > 0:
         print(f"   - Failed: {failed_count} task(s)")
-    
+
     return deleted_count
 
 
@@ -214,7 +214,7 @@ def import_from_tasks_md(client: ClickUpClient, list_id: str, tasks_md_path: Pat
     print(f"\n⚠️  Note: tasks.md has been merged into STATUS.md")
     print(f"   Use --source STATUS.md instead to import from STATUS.md")
     print(f"   This function is kept for backwards compatibility but will use STATUS.md parser")
-    
+
     # Redirect to STATUS.md import
     status_md_path = tasks_md_path.parent.parent / "docs" / "STATUS.md"
     if status_md_path.exists():
@@ -234,16 +234,16 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Dry run mode (don't delete, just show what would be deleted)")
     parser.add_argument("--no-reimport", action="store_true", help="Don't re-import after cleanup (just delete)")
     parser.add_argument("--source", choices=["tasks.md", "STATUS.md"], default="tasks.md", help="Source file to import from (default: tasks.md)")
-    
+
     args = parser.parse_args()
-    
+
     # Get API token from args, env var, or .env file
     import os
     from pathlib import Path
-    
+
     service_env_file = Path(__file__).parent.parent / ".env.clickup"
     root_env_file = Path(__file__).parent.parent.parent / ".env"
-    
+
     api_token = args.api_token
     if not api_token:
         api_token = os.getenv("CLICKUP_API_TOKEN")
@@ -265,7 +265,7 @@ def main():
                 pass  # unified-cloud-services not available, continue to .env files
             except Exception as e:
                 print(f"⚠️  Secret Manager lookup failed: {e}")
-            
+
             if not api_token:
                 for env_file in [service_env_file, root_env_file]:
                     if env_file.exists():
@@ -275,7 +275,7 @@ def main():
                                 break
                         if api_token:
                             break
-    
+
     if not api_token:
         print("❌ API token not found. Set --api-token or CLICKUP_API_TOKEN env var")
         print(f"   Checked: Secret Manager (clickup-api-key)")
@@ -284,7 +284,7 @@ def main():
         print(f"\n💡 To store API key in Secret Manager, run:")
         print(f"   python scripts/store_clickup_secret.py --api-key YOUR_TOKEN")
         return 1
-    
+
     list_id = args.list_id or os.getenv("CLICKUP_LIST_ID")
     if not list_id:
         # Try .env files (service-specific .env.clickup first, then root .env)
@@ -305,7 +305,7 @@ def main():
                         break
                 if list_id:
                     break
-    
+
     if not list_id:
         print("❌ List ID not found. Set --list-id or CLICKUP_LIST_ID env var or add clickup_list_id_instruments_service=... to .env.clickup")
         print("\n📋 How to find your List ID:")
@@ -315,7 +315,7 @@ def main():
         print("      Example: https://app.clickup.com/12345678/v/l/li/98765432")
         print("      List ID would be: 98765432")
         return 1
-    
+
     if args.dry_run:
         print("🔍 [DRY RUN MODE] - No tasks will be deleted")
     else:
@@ -324,47 +324,47 @@ def main():
         if response.lower() != "yes":
             print("   Cancelled.")
             return 0
-    
+
     print(f"✅ Using API token: {api_token[:20]}...")
     print(f"✅ Using List ID: {list_id}\n")
-    
+
     client = ClickUpClient(api_token)
-    
+
     # Delete all tasks
     deleted_count = delete_all_tasks(client, list_id, dry_run=args.dry_run)
-    
+
     if args.dry_run:
         print("\n🔍 [DRY RUN] Would delete tasks, then re-import from source file")
         return 0
-    
+
     if args.no_reimport:
         print("\n✅ Cleanup complete. Run clickup_import.py to re-import tasks.")
         return 0
-    
+
     # Re-import from source file
     if deleted_count > 0 or args.source == "tasks.md":
         if args.source == "tasks.md":
             print("\n⚠️  Note: tasks.md has been merged into STATUS.md")
             print("   Redirecting to STATUS.md import...")
             args.source = "STATUS.md"  # Redirect to STATUS.md
-        
+
         if args.source == "STATUS.md":
             # Re-import from STATUS.md (original behavior)
             print("\n📥 Re-importing tasks from STATUS.md...")
             print("   (Run: python scripts/clickup_import.py --clean-orphaned)")
-            
+
             # Import the importer and run it
             from scripts.clickup_import import ClickUpImporter
-            
+
             status_md_path = Path(__file__).parent.parent / "docs" / "STATUS.md"
             if not status_md_path.exists():
                 print(f"⚠️  STATUS.md not found at {status_md_path}")
                 return 1
-            
+
             sprint_start = "2025-11-07"  # Default sprint start
             importer = ClickUpImporter(api_token, list_id, dry_run=False, sprint_start_date=sprint_start, clean_orphaned=False)
             importer.import_from_status_md(status_md_path)
-    
+
     return 0
 
 

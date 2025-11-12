@@ -53,9 +53,7 @@ class UniswapV4Adapter:
             "ARBITRUM": "ARB",
             "BASE": "BASE",
         }
-        venue_suffix = chain_suffix_map.get(
-            self.chain, self.chain[:3]
-        )  # Default to first 3 chars
+        venue_suffix = chain_suffix_map.get(self.chain, self.chain[:3])  # Default to first 3 chars
         self.venue = f"UNISWAPV4-{venue_suffix}"
 
         # Initialize The Graph client
@@ -78,9 +76,7 @@ class UniswapV4Adapter:
                 self.graph_client = None
                 return
 
-        self.graph_client = TheGraphClient(
-            subgraph_url, api_key=api_key, project_id=project_id
-        )
+        self.graph_client = TheGraphClient(subgraph_url, api_key=api_key, project_id=project_id)
         self.project_id = project_id
         logger.info(f"✅ UniswapV4Adapter initialized for chain: {self.chain}")
 
@@ -115,15 +111,11 @@ class UniswapV4Adapter:
             logger.info("🔄 Trying Uniswap V4 pools from The Graph Network gateway...")
             try:
                 if base_currency:
-                    pools = self.graph_client.query_pools_by_base_currency(
-                        base_currency
-                    )
+                    pools = self.graph_client.query_pools_by_base_currency(base_currency)
                 else:
                     pools = self.graph_client.query_pools(min_liquidity=min_liquidity)
                 if pools:
-                    logger.info(
-                        f"✅ Fetched {len(pools)} Uniswap V4 pools from The Graph"
-                    )
+                    logger.info(f"✅ Fetched {len(pools)} Uniswap V4 pools from The Graph")
             except Exception as e:
                 logger.debug(f"The Graph query failed: {e}")
 
@@ -135,9 +127,7 @@ class UniswapV4Adapter:
 
                 envio_client = EnvioClient(project_id=self.project_id)
                 if base_currency:
-                    pools = envio_client.query_pools_by_token(
-                        base_currency, chain_id="1"
-                    )
+                    pools = envio_client.query_pools_by_token(base_currency, chain_id="1")
                 else:
                     pools = envio_client.query_pools(chain_id="1", limit=1000)
                 if pools:
@@ -186,9 +176,7 @@ class UniswapV4Adapter:
                         base_upper = base_currency.upper()
 
                         # Check if base currency is in MVP list (or wrapped version)
-                        base_in_mvp = (
-                            base_upper in allowed_bases if allowed_bases else True
-                        )
+                        base_in_mvp = base_upper in allowed_bases if allowed_bases else True
                         if not base_in_mvp and base_upper in wrapped_mappings:
                             base_in_mvp = (
                                 wrapped_mappings[base_upper] in allowed_bases
@@ -207,9 +195,7 @@ class UniswapV4Adapter:
                             continue  # Base currency not in pool, skip
 
                         # CRITICAL: Quote MUST be in MVP list (or wrapped version)
-                        quote_in_mvp = (
-                            quote_symbol in allowed_quotes if allowed_quotes else True
-                        )
+                        quote_in_mvp = quote_symbol in allowed_quotes if allowed_quotes else True
                         if not quote_in_mvp and quote_symbol in wrapped_mappings:
                             quote_in_mvp = (
                                 wrapped_mappings[quote_symbol] in allowed_quotes
@@ -220,12 +206,8 @@ class UniswapV4Adapter:
                             continue
                     else:
                         # No specific base filter - require at least one token in base list AND one in quote list
-                        token0_in_bases = (
-                            token0_symbol in allowed_bases if allowed_bases else True
-                        )
-                        token1_in_bases = (
-                            token1_symbol in allowed_bases if allowed_bases else True
-                        )
+                        token0_in_bases = token0_symbol in allowed_bases if allowed_bases else True
+                        token1_in_bases = token1_symbol in allowed_bases if allowed_bases else True
                         token0_in_quotes = (
                             token0_symbol in allowed_quotes if allowed_quotes else True
                         )
@@ -283,9 +265,7 @@ class UniswapV4Adapter:
         logger.info(f"✅ Generated {len(instruments)} Uniswap V4 instruments")
         return instruments
 
-    def _convert_envio_pools(
-        self, envio_pools: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+    def _convert_envio_pools(self, envio_pools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Convert Envio pool format to The Graph format for compatibility.
 
@@ -319,9 +299,7 @@ class UniswapV4Adapter:
             converted.append(converted_pool)
         return converted
 
-    def _convert_pool_to_instrument(
-        self, pool: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _convert_pool_to_instrument(self, pool: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Convert The Graph pool data to instrument definition.
 
@@ -349,9 +327,7 @@ class UniswapV4Adapter:
 
         # CRITICAL: Skip Curve LP tokens (they start with "crv" prefix)
         # Curve LP tokens should be handled by CurveAdapter, not Uniswap adapters
-        if token0_symbol.upper().startswith("CRV") or token1_symbol.upper().startswith(
-            "CRV"
-        ):
+        if token0_symbol.upper().startswith("CRV") or token1_symbol.upper().startswith("CRV"):
             logger.debug(
                 f"Skipping pool {pool_id}: Contains Curve LP token ({token0_symbol}/{token1_symbol})"
             )

@@ -51,9 +51,7 @@ class CurveAdapter:
             from instruments_service.app.core.subgraph_service import SubgraphService
 
             subgraph_service = SubgraphService()
-            subgraph_url = subgraph_service.get_subgraph_url(
-                "curve", self.chain, api_key=api_key
-            )
+            subgraph_url = subgraph_service.get_subgraph_url("curve", self.chain, api_key=api_key)
 
             # If SubgraphService returns None, skip Curve (no valid endpoint available)
             if not subgraph_url:
@@ -153,9 +151,7 @@ class CurveAdapter:
                         base_upper = base_currency.upper()
 
                         # Check if base currency is in MVP list (or wrapped version)
-                        base_in_mvp = (
-                            base_upper in allowed_bases if allowed_bases else True
-                        )
+                        base_in_mvp = base_upper in allowed_bases if allowed_bases else True
                         if not base_in_mvp and base_upper in wrapped_mappings:
                             base_in_mvp = (
                                 wrapped_mappings[base_upper] in allowed_bases
@@ -174,9 +170,7 @@ class CurveAdapter:
                             continue  # Base currency not in pool, skip
 
                         # CRITICAL: Quote MUST be in MVP list (or wrapped version)
-                        quote_in_mvp = (
-                            quote_symbol in allowed_quotes if allowed_quotes else True
-                        )
+                        quote_in_mvp = quote_symbol in allowed_quotes if allowed_quotes else True
                         if not quote_in_mvp and quote_symbol in wrapped_mappings:
                             quote_in_mvp = (
                                 wrapped_mappings[quote_symbol] in allowed_quotes
@@ -187,12 +181,8 @@ class CurveAdapter:
                             continue
                     else:
                         # No specific base filter - require at least one token in base list AND one in quote list
-                        token0_in_bases = (
-                            token0_symbol in allowed_bases if allowed_bases else True
-                        )
-                        token1_in_bases = (
-                            token1_symbol in allowed_bases if allowed_bases else True
-                        )
+                        token0_in_bases = token0_symbol in allowed_bases if allowed_bases else True
+                        token1_in_bases = token1_symbol in allowed_bases if allowed_bases else True
                         token0_in_quotes = (
                             token0_symbol in allowed_quotes if allowed_quotes else True
                         )
@@ -345,9 +335,7 @@ class CurveAdapter:
             logger.error(f"Failed to query Curve pools from The Graph: {e}")
             return []
 
-    def _convert_pool_to_instrument(
-        self, pool: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _convert_pool_to_instrument(self, pool: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Convert Curve pool data to instrument definition.
 
@@ -435,9 +423,7 @@ class CurveAdapter:
             "underlying": f"{base_symbol}-{quote_symbol}",
         }
 
-    def fetch_spot_pairs(
-        self, base_currency: Optional[str] = None
-    ) -> Dict[str, Dict[str, Any]]:
+    def fetch_spot_pairs(self, base_currency: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
         """
         Fetch Curve spot trading pairs (SPOT_PAIR instrument type).
 

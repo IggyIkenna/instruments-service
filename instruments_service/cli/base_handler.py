@@ -100,9 +100,7 @@ class ModeHandler(ABC):
             #     "failed_count": 0
             # }
         """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} must implement run() method"
-        )
+        raise NotImplementedError(f"{self.__class__.__name__} must implement run() method")
 
     def cleanup(self) -> None:
         """
@@ -119,4 +117,3 @@ class ModeHandler(ABC):
     def __repr__(self) -> str:
         """String representation of the handler."""
         return f"{self.__class__.__name__}()"
-

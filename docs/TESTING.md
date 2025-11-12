@@ -137,7 +137,7 @@ gcloud secrets add-iam-policy-binding tardis-api-key \
 
 #### ✅ DO: Use Same Service Account
 
-**Why**: 
+**Why**:
 - Simpler setup (no need to manage multiple service accounts)
 - Same permissions model as production
 - Easier credential management
@@ -227,9 +227,9 @@ All tests must pass with:
 
 **Current Coverage**: 75.82% ✅ (target: 75%+)
 
-**Total Tests**: 273  
-**Passing**: 238  
-**Failing**: 21  
+**Total Tests**: 273
+**Passing**: 238
+**Failing**: 21
 **Errors**: 14
 
 ## Common Test Failures
@@ -375,5 +375,3 @@ This will generate a sample CSV with:
 - [`ARCHITECTURE.md`](./ARCHITECTURE.md) - Service architecture and design decisions
 - [`SETUP_GUIDE.md`](./SETUP_GUIDE.md) - Setup and installation instructions
 - [`API_REFERENCE.md`](./API_REFERENCE.md) - Complete API documentation
-
-

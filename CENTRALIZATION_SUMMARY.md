@@ -1,6 +1,6 @@
 # Centralization Summary: Credentials & Sampling
 
-**Date**: 2025-11-06  
+**Date**: 2025-11-06
 **Status**: ✅ COMPLETE
 
 ## Overview
@@ -98,7 +98,7 @@ Other services can migrate to centralized sampling:
 2. **Use centralized service**:
    ```python
    from unified_cloud_services import create_sampling_service
-   
+
    sampling_service = create_sampling_service()
    sampling_service.generate_csv_sample(df, 'prefix', data_type='...')
    ```
@@ -140,7 +140,3 @@ ENVIRONMENT=production python -m instruments_service --mode instruments --start-
 ## Conclusion
 
 ✅ **Centralization complete** - Credentials and sampling are now centralized in `unified-cloud-services`, following DRY principles and the unified architecture specification. All services can now use these centralized utilities without duplication.
-
-
-
-

@@ -184,12 +184,8 @@ class UnifiedInstrumentConfig:
                 "SB.FUT", "ICE", "FUTURE", "IFUS.IMPACT", "parent", "SUGAR", "USD", "SB"
             ),
             # Equities/ETFs (NASDAQ/NYSE) - use raw_symbol stype_in (no .FUT/.OPT suffix)
-            InstrumentDefinition(
-                "SPY", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "SPY", "USD"
-            ),
-            InstrumentDefinition(
-                "QQQ", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "QQQ", "USD"
-            ),
+            InstrumentDefinition("SPY", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "SPY", "USD"),
+            InstrumentDefinition("QQQ", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "QQQ", "USD"),
             InstrumentDefinition(
                 "AAPL", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "AAPL", "USD"
             ),
@@ -292,9 +288,7 @@ class UnifiedInstrumentConfig:
         """Get all symbols for an instrument type (e.g., 'FUTURE', 'EQUITY', 'OPTION')"""
         all_insts = self.get_all_instruments()
         return [
-            inst.symbol
-            for inst in all_insts
-            if inst.instrument_type == instrument_type.upper()
+            inst.symbol for inst in all_insts if inst.instrument_type == instrument_type.upper()
         ]
 
     def get_dataset_and_stype(self, symbol: str) -> Optional[Tuple[str, str]]:
@@ -982,9 +976,7 @@ class VenueMapping:
     @property
     def all_exchanges(self) -> List[str]:
         """All exchanges (Tardis + Databento + DeFi)"""
-        return (
-            self.all_tardis_exchanges + self.all_databento_venues + self.all_defi_venues
-        )
+        return self.all_tardis_exchanges + self.all_databento_venues + self.all_defi_venues
 
     # Map canonical venues to Databento dataset identifiers
     venue_to_databento: Dict[str, str] = field(
@@ -1295,36 +1287,24 @@ if BASE_SERVICE_CONFIG_AVAILABLE and BaseServiceConfig is not None:
         Extends BaseServiceConfig with instruments-specific settings.
         """
 
-        service_name: str = Field(
-            default="instruments-service", description="Service name"
-        )
+        service_name: str = Field(default="instruments-service", description="Service name")
 
         # Instruments-specific configuration
         enable_ccxt_integration: bool = Field(
             default=True, description="Enable CCXT metadata enrichment"
         )
-        enable_metadata_caching: bool = Field(
-            default=True, description="Enable metadata caching"
-        )
+        enable_metadata_caching: bool = Field(default=True, description="Enable metadata caching")
         cache_ttl_hours: int = Field(default=24, description="Cache TTL in hours")
-        max_batch_size: int = Field(
-            default=1000, description="Maximum batch size for processing"
-        )
-        lookback_days: int = Field(
-            default=0, description="Lookback days for batch processing"
-        )
+        max_batch_size: int = Field(default=1000, description="Maximum batch size for processing")
+        lookback_days: int = Field(default=0, description="Lookback days for batch processing")
 
         # GCS and BigQuery defaults for instruments
         gcs_bucket: str = Field(
-            default_factory=lambda: os.getenv(
-                "INSTRUMENTS_GCS_BUCKET", "instruments-store"
-            ),
+            default_factory=lambda: os.getenv("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
             description="GCS bucket for instruments",
         )
         bigquery_dataset: str = Field(
-            default_factory=lambda: os.getenv(
-                "INSTRUMENTS_BIGQUERY_DATASET", "instruments"
-            ),
+            default_factory=lambda: os.getenv("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
             description="BigQuery dataset for instruments",
         )
 
