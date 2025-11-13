@@ -6,9 +6,8 @@ Handles instrument downloads with lookback computation, date range calculation, 
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
-from pathlib import Path
 from unified_cloud_services import GenericBatchProcessor
 
 logger = logging.getLogger(__name__)
@@ -17,10 +16,10 @@ logger = logging.getLogger(__name__)
 class InstrumentBatchProcessor(GenericBatchProcessor):
     """
     Instrument specific batch processor.
-    
+
     Extends GenericBatchProcessor with instrument specific logic:
     - Instrument metadata requirements
-    - Instrument memory estimation  
+    - Instrument memory estimation
     - Venue-specific batch orchestration
     """
 
@@ -32,10 +31,12 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
             config: Configuration with batch processing settings
         """
         super().__init__()  # GenericBatchProcessor doesn't take config argument
-        
+
         # Instrument specific configuration
-        self.max_batch_size = config.get("max_batch_size", 1000)
-        self.lookback_days = config.get("lookback_days", 0)  # Default: no lookback for instruments
+        self.max_batch_size: int = config.get("max_batch_size", 1000)
+        self.lookback_days: int = config.get(
+            "lookback_days", 0
+        )  # Default: no lookback for instruments
 
     def calculate_date_range(
         self, target_date: datetime, lookback_days: Optional[int] = None
