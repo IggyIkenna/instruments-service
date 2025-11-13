@@ -15,6 +15,7 @@ from .instrument_processing_service import InstrumentProcessingService
 from .cloud_instrument_storage import CloudInstrumentStorage
 from .batch_processor import InstrumentBatchProcessor
 from instruments_service.config import VenueMapping
+from instruments_service.config import DatabentoInstrumentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -122,8 +123,6 @@ class InstrumentsService:
         # Process TRADFI (Databento) exchanges
         if tradfi:
             try:
-                from instruments_service.config import DatabentoInstrumentConfig
-
                 databento_config = DatabentoInstrumentConfig()
 
                 # Common TradFi exchanges via Databento
