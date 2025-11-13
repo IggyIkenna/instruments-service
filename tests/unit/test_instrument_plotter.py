@@ -96,3 +96,4 @@ class TestInstrumentPlotter:
         assert fig.layout.title.text == "Custom Title"
         assert fig.layout.height == 800
 
+
