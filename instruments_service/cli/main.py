@@ -37,8 +37,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from .parser import parse_arguments
-from .handlers import get_handler_for_mode
+from instruments_service.cli.parser import parse_arguments
+from instruments_service.cli.handlers import get_handler_for_mode
 
 
 def main() -> Dict[str, Any]:

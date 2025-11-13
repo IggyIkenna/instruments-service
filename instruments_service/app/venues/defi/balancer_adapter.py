@@ -11,8 +11,8 @@ import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
-from .base_defi_adapter import BaseDefiAdapter
-from .the_graph_client import TheGraphClient
+from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
+from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
 
 logger = logging.getLogger(__name__)
 

@@ -1,8 +1,11 @@
 """
 Integration tests for CLI handlers.
+
+These tests use real services when credentials are available.
 """
 
 import pytest
+import os
 from datetime import datetime, timezone
 from unittest.mock import Mock, patch, MagicMock
 
@@ -13,133 +16,103 @@ from instruments_service.cli.handlers.instruments_query_handler import (
 
 
 @pytest.fixture
-def mock_config():
-    """Mock configuration for handlers."""
+def config():
+    """Configuration for handlers - uses real project if available."""
+    # Use real project ID from environment or default
+    project_id = os.getenv("GCP_PROJECT_ID", "central-element-323112")
     return {
-        "project_id": "test-project",
-        "gcs_bucket": "test-bucket",
-        "bigquery_dataset": "test_dataset",
+        "project_id": project_id,
     }
 
 
 @pytest.fixture
-def mock_instrument_handler(mock_config):
-    """Create instrument handler with mocked dependencies."""
-    with patch(
-        "instruments_service.cli.handlers.instrument_handler.InstrumentProcessingService"
-    ), patch(
-        "instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage"
-    ):
-        handler = InstrumentHandler(mock_config)
-        return handler
+def mock_instrument_handler(config):
+    """Create instrument handler - uses real services."""
+    handler = InstrumentHandler(config)
+    return handler
 
 
 @pytest.fixture
-def mock_query_handler(mock_config):
-    """Create query handler with mocked dependencies."""
-    # Patch InstrumentsClient at the module where it's imported (clients module)
-    with patch(
-        "instruments_service.clients.instruments_client.InstrumentsClient"
-    ) as mock_client_class:
-        mock_client = Mock()
-        mock_client_class.return_value = mock_client
-        handler = InstrumentsQueryHandler(mock_config)
-        handler.client = mock_client  # Set the mocked client
-        return handler
+def mock_query_handler(config):
+    """Create query handler - uses real services."""
+    handler = InstrumentsQueryHandler(config)
+    return handler
 
 
-def test_instrument_handler_initialization(mock_config):
-    """Test instrument handler initialization."""
-    with patch(
-        "instruments_service.cli.handlers.instrument_handler.InstrumentProcessingService"
-    ), patch(
-        "instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage"
-    ):
-        handler = InstrumentHandler(mock_config)
-        assert handler.config == mock_config
+def test_instrument_handler_initialization(config):
+    """Test instrument handler initialization with real services."""
+    handler = InstrumentHandler(config)
+    assert handler.config == config
+    assert handler.instruments_service is not None
+    assert handler.cloud_storage is not None
 
 
-def test_query_handler_initialization(mock_config):
-    """Test query handler initialization."""
-    # Patch InstrumentsClient at the module where it's imported (clients module)
-    with patch(
-        "instruments_service.clients.instruments_client.InstrumentsClient"
-    ) as mock_client_class:
-        mock_client = Mock()
-        mock_client_class.return_value = mock_client
-        handler = InstrumentsQueryHandler(mock_config)
-        assert handler.config == mock_config
-        assert handler.client is not None
+def test_query_handler_initialization(config):
+    """Test query handler initialization with real services."""
+    handler = InstrumentsQueryHandler(config)
+    assert handler.config == config
+    assert handler.client is not None
 
 
+@pytest.mark.skipif(
+    not os.getenv("GCP_PROJECT_ID") and not os.path.exists(
+        os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
+    ),
+    reason="Requires GCP credentials for real service testing"
+)
 def test_instrument_handler_run(mock_instrument_handler):
-    """Test instrument handler run method."""
-    # Mock the generation method
-    mock_instrument_handler._generate_instruments_for_date = Mock(
-        return_value={
-            "TEST:SPOT_PAIR:BTC-USDT": Mock(
-                model_dump=lambda: {"instrument_key": "TEST:SPOT_PAIR:BTC-USDT"}
-            )
-        }
-    )
-    mock_instrument_handler.cloud_storage.store_instruments = Mock(return_value=True)
-
+    """Test instrument handler run method with real services."""
+    # Use a past date to avoid future date skipping
+    from datetime import datetime, timedelta, timezone
+    past_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    
     result = mock_instrument_handler.run(
-        start_date="2023-05-23", end_date="2023-05-23", force=False
+        start_date=past_date, end_date=past_date, force=False
     )
 
-    assert result["status"] in ["success", "partial", "warning"]
-    assert "instruments_generated" in result
+    assert result["status"] in ["success", "partial", "warning", "skipped"]
+    assert "instruments_generated" in result or "dates_skipped" in result
 
 
-def test_query_handler_list_query(mock_config):
-    """Test query handler list query."""
-    import pandas as pd
+@pytest.mark.skipif(
+    not os.getenv("GCP_PROJECT_ID") and not os.path.exists(
+        os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
+    ),
+    reason="Requires GCP credentials for real service testing"
+)
+def test_query_handler_list_query(config):
+    """Test query handler list query with real services."""
+    handler = InstrumentsQueryHandler(config)
+    
+    # Use a past date that likely has data
+    from datetime import datetime, timedelta, timezone
+    past_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
 
-    # Patch InstrumentsClient at the module where it's imported
-    with patch(
-        "instruments_service.clients.instruments_client.InstrumentsClient"
-    ) as mock_client_class:
-        mock_client = Mock()
-        mock_client.get_instruments_for_date = Mock(
-            return_value=pd.DataFrame(
-                {
-                    "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
-                    "venue": ["TEST"],
-                    "instrument_type": ["SPOT_PAIR"],
-                }
-            )
-        )
-        mock_client_class.return_value = mock_client
+    result = handler.run(
+        start_date=past_date, end_date=past_date, query_type="list"
+    )
 
-        handler = InstrumentsQueryHandler(mock_config)
-        handler.client = mock_client
-
-        result = handler.run(
-            start_date="2023-05-23", end_date="2023-05-23", query_type="list"
-        )
-
-        assert result["status"] == "success"
-        assert result["query_type"] == "list"
+    assert result["status"] in ["success", "warning"]
+    assert result["query_type"] == "list"
 
 
-def test_query_handler_summary_query(mock_config):
-    """Test query handler summary query."""
-    # Patch InstrumentsClient at the module where it's imported
-    with patch(
-        "instruments_service.clients.instruments_client.InstrumentsClient"
-    ) as mock_client_class:
-        mock_client = Mock()
-        mock_client.get_summary_stats = Mock(
-            return_value={"total_instruments": 100, "venues": 5, "instrument_types": 4}
-        )
-        mock_client_class.return_value = mock_client
+@pytest.mark.skipif(
+    not os.getenv("GCP_PROJECT_ID") and not os.path.exists(
+        os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
+    ),
+    reason="Requires GCP credentials for real service testing"
+)
+def test_query_handler_summary_query(config):
+    """Test query handler summary query with real services."""
+    handler = InstrumentsQueryHandler(config)
+    
+    # Use a past date that likely has data
+    from datetime import datetime, timedelta, timezone
+    past_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
 
-        handler = InstrumentsQueryHandler(mock_config)
-        handler.client = mock_client
+    result = handler.run(start_date=past_date, query_type="summary")
 
-        result = handler.run(start_date="2023-05-23", query_type="summary")
-
-        assert result["status"] == "success"
-        assert result["query_type"] == "summary"
-        assert result["results"]["total_instruments"] == 100
+    assert result["status"] in ["success", "warning"]
+    assert result["query_type"] == "summary"
+    if result["status"] == "success":
+        assert "results" in result

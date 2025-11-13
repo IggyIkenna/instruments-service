@@ -12,12 +12,13 @@ import os
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
-from .the_graph_client import TheGraphClient
+from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
+from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 
 logger = logging.getLogger(__name__)
 
 
-class UniswapV3Adapter:
+class UniswapV3Adapter(BaseDefiAdapter):
     """
     Adapter for fetching Uniswap V3 pool instruments.
 
@@ -42,7 +43,7 @@ class UniswapV3Adapter:
             api_key: Optional The Graph API key (uses Secret Manager if not provided)
             project_id: GCP project ID for Secret Manager (defaults to GCP_PROJECT_ID env var)
         """
-        self.chain = chain.upper()
+        super().__init__(chain, api_key, project_id)
         # Map chain to venue format matching config.py
         chain_to_venue = {
             "ETHEREUM": "UNISWAPV3-ETH",
@@ -53,7 +54,7 @@ class UniswapV3Adapter:
 
         # Use provided API key or check TheGraphClient's module-level cache
         # If not provided, TheGraphClient will handle retrieval with caching
-        if not api_key:
+        if not self.api_key:
             # Check if TheGraphClient has cached it (module-level cache)
             # Import here to avoid circular dependency
             try:
@@ -62,11 +63,11 @@ class UniswapV3Adapter:
                     _API_KEY_PROJECT_ID,
                 )
 
-                project_id_check = project_id or os.getenv(
+                project_id_check = self.project_id or os.getenv(
                     "GCP_PROJECT_ID", "central-element-323112"
                 )
                 if _API_KEY_CACHE and _API_KEY_PROJECT_ID == project_id_check:
-                    api_key = _API_KEY_CACHE
+                    self.api_key = _API_KEY_CACHE
                     logger.debug("✅ Using cached Graph API key in UniswapV3Adapter")
             except (ImportError, AttributeError):
                 # Cache not available, let TheGraphClient handle it
@@ -79,17 +80,17 @@ class UniswapV3Adapter:
             # Format: https://gateway.thegraph.com/api/<API_KEY>/subgraphs/id/<SUBGRAPH_ID>
             # Uniswap V3 Ethereum subgraph ID: 5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV
 
-            if api_key:
+            if self.api_key:
                 # Use The Graph Network endpoint with API key
                 subgraph_urls = {
-                    "ETHEREUM": f"https://gateway.thegraph.com/api/{api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
+                    "ETHEREUM": f"https://gateway.thegraph.com/api/{self.api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
                     "ARBITRUM": os.getenv(
                         "THE_GRAPH_UNISWAP_V3_ARB_URL",
-                        f"https://gateway-arbitrum.network.thegraph.com/api/{api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
+                        f"https://gateway-arbitrum.network.thegraph.com/api/{self.api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
                     ),
                     "BASE": os.getenv(
                         "THE_GRAPH_UNISWAP_V3_BASE_URL",
-                        f"https://gateway.thegraph.com/api/{api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
+                        f"https://gateway.thegraph.com/api/{self.api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
                     ),
                 }
             else:
@@ -114,7 +115,7 @@ class UniswapV3Adapter:
             subgraph_url = subgraph_urls.get(self.chain, subgraph_urls["ETHEREUM"])
 
         self.graph_client = TheGraphClient(
-            subgraph_url=subgraph_url, api_key=api_key, project_id=project_id
+            subgraph_url=subgraph_url, api_key=self.api_key, project_id=self.project_id
         )
         logger.info(f"✅ UniswapV3Adapter initialized for chain: {self.chain}")
 
@@ -340,6 +341,7 @@ class UniswapV3Adapter:
             "base_asset_contract_address": base_address,
             "quote_asset_contract_address": quote_address,
             "chain": self.chain,  # Chain identifier (ETHEREUM, ARBITRUM, BASE, etc.)
+            "market_category": "DEFI",  # DeFi instruments have chain != "off-chain"
             "asset_class": "crypto",
             "venue_type": "protocol",
             "data_provider": "the_graph",
