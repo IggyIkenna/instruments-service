@@ -15,11 +15,17 @@ Reference: archive/genConfig/instrumentDefinitionConfig/dataBentoInstrumentSelec
 """
 
 import logging
-import os
 import re
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta, timezone, time
 import pandas as pd
+
+try:
+    from unified_cloud_services import get_config
+except ImportError:
+    # Fallback if unified-cloud-services not available
+    import os
+    get_config = os.getenv
 
 try:
     import databento as db
@@ -94,8 +100,8 @@ class DatabentoAdapter:
                 try:
                     from unified_cloud_services import get_secret_with_fallback
 
-                    secret_name = os.getenv("DATABENTO_SECRET_NAME", "databento-api-key")
-                    project_id = project_id or os.getenv("GCP_PROJECT_ID", "central-element-323112")
+                    secret_name = get_config("DATABENTO_SECRET_NAME", "databento-api-key")
+                    project_id = project_id or get_config("GCP_PROJECT_ID", "central-element-323112")
 
                     self.api_key = get_secret_with_fallback(
                         project_id=project_id,
@@ -109,10 +115,10 @@ class DatabentoAdapter:
                         )
                 except ImportError:
                     logger.warning("unified-cloud-services not available, falling back to env var")
-                    self.api_key = os.getenv("DATABENTO_API_KEY")
+                    self.api_key = get_config("DATABENTO_API_KEY")
                 except Exception as e:
                     logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                    self.api_key = os.getenv("DATABENTO_API_KEY")
+                    self.api_key = get_config("DATABENTO_API_KEY")
 
             if not self.api_key:
                 raise ValueError(

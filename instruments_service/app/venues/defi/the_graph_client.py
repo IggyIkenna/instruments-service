@@ -13,7 +13,6 @@ For production use, use The Graph Network endpoints with API keys.
 """
 
 import logging
-import os
 from typing import Dict, List, Optional, Any
 import requests
 
@@ -59,7 +58,7 @@ class TheGraphClient:
             global _API_KEY_CACHE, _API_KEY_PROJECT_ID
 
             # Check if we have a cached API key for the same project
-            project_id = project_id or os.getenv("GCP_PROJECT_ID", "central-element-323112")
+            project_id = project_id or get_config("GCP_PROJECT_ID", "central-element-323112")
 
             if _API_KEY_CACHE and _API_KEY_PROJECT_ID == project_id:
                 # Use cached API key
@@ -68,9 +67,9 @@ class TheGraphClient:
             else:
                 # Retrieve from Secret Manager and cache it
                 try:
-                    from unified_cloud_services import get_secret_with_fallback
+                    from unified_cloud_services import get_secret_with_fallback, get_config
 
-                    secret_name = os.getenv("GRAPH_SECRET_NAME", "graph-api-key")
+                    secret_name = get_config("GRAPH_SECRET_NAME", "graph-api-key")
 
                     self.api_key = get_secret_with_fallback(
                         project_id=project_id,
@@ -91,13 +90,13 @@ class TheGraphClient:
                         )
                 except ImportError:
                     logger.warning("unified-cloud-services not available, falling back to env var")
-                    self.api_key = os.getenv("THE_GRAPH_API_KEY", "")
+                    self.api_key = get_config("THE_GRAPH_API_KEY", "")
                     if self.api_key:
                         _API_KEY_CACHE = self.api_key
                         _API_KEY_PROJECT_ID = project_id
                 except Exception as e:
                     logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                    self.api_key = os.getenv("THE_GRAPH_API_KEY", "")
+                    self.api_key = get_config("THE_GRAPH_API_KEY", "")
                     if self.api_key:
                         _API_KEY_CACHE = self.api_key
                         _API_KEY_PROJECT_ID = project_id
@@ -106,9 +105,8 @@ class TheGraphClient:
             self.subgraph_url = subgraph_url
         else:
             # Default: Try to use Studio endpoint (no API key needed, but rate-limited)
-            self.subgraph_url = os.getenv(
-                "THE_GRAPH_UNISWAP_V3_URL",
-                # Fallback Studio endpoint (rate-limited, for testing only)
+            self.subgraph_url = get_config(
+                "THE_GRAPH_UNISWAP_V3_URL", # Fallback Studio endpoint (rate-limited, for testing only)
                 "https://api.studio.thegraph.com/query/50688/uniswap-v3/version/latest",
             )
 

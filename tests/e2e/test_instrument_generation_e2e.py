@@ -14,7 +14,6 @@ import asyncio
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-import os
 
 from instruments_service.app.core.instrument_processing_service import (
     InstrumentProcessingService,
@@ -22,6 +21,7 @@ from instruments_service.app.core.instrument_processing_service import (
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 from instruments_service.config import VenueMapping
+from unified_cloud_services import get_config
 
 
 # Test configuration
@@ -120,7 +120,7 @@ async def test_instrument_generation_e2e(
             ), f"Failed to store instruments for {current_date.strftime('%Y-%m-%d')}"
 
             # Verify CSV sample was generated (if enabled)
-            if os.getenv("ENABLE_CSV_SAMPLING", "false").lower() == "true":
+            if get_config("ENABLE_CSV_SAMPLING", "false").lower() == "true":
                 date_str = current_date.strftime("%Y%m%d")
                 sample_files = list(csv_sample_dir.glob(f"instruments_{date_str}_*.csv"))
                 assert len(sample_files) > 0, f"CSV sample should be generated for {date_str}"
@@ -148,7 +148,7 @@ async def test_instrument_generation_e2e(
     ), "Should be able to download instruments back from test bucket"
 
     # Verify test bucket isolation: Check that we're not writing to prod bucket
-    prod_bucket = os.getenv("INSTRUMENTS_GCS_BUCKET", "market-data-tick")
+    prod_bucket = get_config("INSTRUMENTS_GCS_BUCKET", "market-data-tick")
     assert (
         storage.cloud_target.gcs_bucket != prod_bucket
     ), f"Must not write to prod bucket {prod_bucket}, got {storage.cloud_target.gcs_bucket}"
