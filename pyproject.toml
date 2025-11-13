@@ -23,7 +23,7 @@ dependencies = [
     "pydantic>=2.12.4",
     "pydantic-settings>=2.12.0",
     "pandas>=2.2.0",
-    "numpy>=1.26.0,<2.0.0",  # pandas 2.2.x requires numpy<2 for Python 3.12+
+    "numpy>=2.1.0,<3.0.0",  # pandas 2.2.x requires numpy<2 for Python 3.12+
     "python-dateutil>=2.8.0",
     "python-dotenv>=1.0.0",  # For loading .env files
     "requests>=2.32.5",
@@ -34,7 +34,9 @@ dependencies = [
     "databento>=0.20.0",  # TradFi instruments (CME, NASDAQ, NYSE)
     "boto3>=1.40.70",
     # Unified cloud services (infrastructure)
-    "unified-cloud-services>=1.2.0",
+    # For local development: pip install -e ../unified-cloud-services
+    # For production/CI: Install from GitHub or use published package
+    # "unified-cloud-services @ git+ssh://git@github.com/iggyikenna/unified-cloud-services.git@v1.2.0",
 ]
 
 [project.optional-dependencies]

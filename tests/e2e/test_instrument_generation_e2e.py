@@ -21,7 +21,8 @@ from instruments_service.app.core.instrument_processing_service import (
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 from instruments_service.config import VenueMapping
-from unified_cloud_services import get_config
+# Import get_config from conftest (avoids circular import issues)
+from tests.conftest import get_config
 
 
 # Test configuration
