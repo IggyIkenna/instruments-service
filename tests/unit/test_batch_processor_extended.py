@@ -49,10 +49,10 @@ class TestInstrumentBatchProcessorExtended:
 
     def test_process_batch_large(self):
         """Test processing large batch that needs splitting."""
-        config = {"max_batch_size": 1000, "lookback_days": 5}
+        config = {"max_batch_size": 100, "lookback_days": 5}  # Changed to 100 to force splitting
         processor = InstrumentBatchProcessor(config)
 
         instruments = [{"id": i} for i in range(250)]
         batches = processor.process_batch(instruments)
-        assert len(batches) > 1  # Should split into multiple batches
-        assert len(batches[0]) == 100
+        assert len(batches) > 1  # Should split into multiple batches (250/100 = 3 batches)
+        assert len(batches[0]) == 100  # First batch should be exactly 100

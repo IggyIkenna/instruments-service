@@ -3,7 +3,7 @@ End-to-end test for instrument generation.
 
 Tests the complete workflow:
 1. Download instruments from Tardis API for 2023-05-23 to 2023-05-24
-2. Upload to test bucket (market-data-tick-test)
+2. Upload to test bucket (instruments-store-test-*)
 3. Verify authentication (GCP credentials + Secret Manager)
 4. Verify CSV samples generated
 5. Verify data integrity (can query back from test bucket)
@@ -50,10 +50,7 @@ async def test_instrument_generation_e2e(
     - Data integrity (can query back)
     """
     # Verify we're using test bucket (not prod)
-    assert (
-        test_bucket_name == "market-data-tick-test"
-    ), f"Expected test bucket, got {test_bucket_name}"
-    assert "test" in test_bucket_name.lower(), "Must use test bucket for E2E test"
+    assert "test" in test_bucket_name.lower(), f"Must use test bucket for E2E test, got {test_bucket_name}"
 
     # Verify API key retrieved from Secret Manager
     assert (
