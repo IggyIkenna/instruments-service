@@ -42,10 +42,9 @@ class CurveRPCAdapter:
         if rpc_url:
             self.rpc_url = rpc_url
         else:
-            from unified_cloud_services import get_secret_with_fallback
-            import os
+            from unified_cloud_services import get_secret_with_fallback, get_config
 
-            project_id = project_id or os.getenv("GCP_PROJECT_ID", "central-element-323112")
+            project_id = project_id or get_config("GCP_PROJECT_ID", "central-element-323112")
             alchemy_key = get_secret_with_fallback(
                 project_id=project_id,
                 secret_name="alchemy-api-key",
@@ -55,7 +54,7 @@ class CurveRPCAdapter:
             if alchemy_key:
                 self.rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key}"
             else:
-                self.rpc_url = os.getenv("ETHEREUM_RPC_URL")
+                self.rpc_url = get_config("ETHEREUM_RPC_URL")
 
         if self.rpc_url:
             try:

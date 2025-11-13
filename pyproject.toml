@@ -25,10 +25,13 @@ dependencies = [
     "pandas>=2.2.0",
     "numpy>=1.26.0,<2.0.0",  # pandas 2.2.x requires numpy<2 for Python 3.12+
     "python-dateutil>=2.8.0",
+    "python-dotenv>=1.0.0",  # For loading .env files
     "requests>=2.32.5",
     "ccxt>=4.5.18",
     "plotly>=6.4.0",
     "web3>=6.0.0",
+    "eth-abi>=4.0.0",  # ABI encoding/decoding for web3
+    "databento>=0.20.0",  # TradFi instruments (CME, NASDAQ, NYSE)
     "boto3>=1.40.70",
     # Unified cloud services (infrastructure)
     "unified-cloud-services>=1.0.0",

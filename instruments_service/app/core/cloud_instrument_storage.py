@@ -11,7 +11,7 @@ from typing import Dict, Optional, Any, List
 from datetime import datetime, timezone
 import os
 
-from unified_cloud_services import (
+from unified_cloud_services import (get_config,
     determine_market_category,
     get_bucket_for_category,
 )
@@ -62,15 +62,15 @@ class CloudInstrumentStorage:
         if cloud_target is None:
             # Check if we're in test mode (pytest or test environment)
             # Priority: ENVIRONMENT=test > pytest detection > default to prod
-            environment = os.getenv("ENVIRONMENT", "development").lower()
-            test_bucket = os.getenv("INSTRUMENTS_GCS_BUCKET_TEST")
-            prod_bucket = os.getenv("INSTRUMENTS_GCS_BUCKET", "instruments-store")
+            environment = get_config("ENVIRONMENT", "development").lower()
+            test_bucket = get_config("INSTRUMENTS_GCS_BUCKET_TEST")
+            prod_bucket = get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store")
 
             # Only use test bucket if explicitly in test environment
             is_test = (
                 environment in ["test", "testing"]  # Explicit test environment
                 or "pytest" in os.environ.get("_", "")
-                or os.getenv("PYTEST_CURRENT_TEST") is not None
+                or get_config("PYTEST_CURRENT_TEST") is not None
             )
 
             # Use test bucket if in test mode, otherwise use prod bucket
@@ -81,10 +81,10 @@ class CloudInstrumentStorage:
                 bucket_name = prod_bucket
 
             cloud_target = CloudTarget(
-                project_id=os.getenv("GCP_PROJECT_ID", "central-element-323112"),
+                project_id=get_config("GCP_PROJECT_ID", "central-element-323112"),
                 gcs_bucket=bucket_name,
-                bigquery_dataset=os.getenv("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
-                bigquery_location=os.getenv(
+                bigquery_dataset=get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
+                bigquery_location=get_config(
                     "BIGQUERY_LOCATION", "asia-northeast1"
                 ),  # Default to asia-northeast1 per .env
             )
@@ -238,11 +238,11 @@ class CloudInstrumentStorage:
             all_successful = True
             
             # Detect test mode for bucket selection
-            environment = os.getenv("ENVIRONMENT", "development").lower()
+            environment = get_config("ENVIRONMENT", "development").lower()
             is_test = (
                 environment in ["test", "testing"]
                 or "pytest" in os.environ.get("_", "")
-                or os.getenv("PYTEST_CURRENT_TEST") is not None
+                or get_config("PYTEST_CURRENT_TEST") is not None
             )
             
             # Upload each category group to its respective bucket

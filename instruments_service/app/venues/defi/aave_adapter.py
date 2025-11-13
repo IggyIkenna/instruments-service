@@ -8,9 +8,8 @@ Reference: archive/basis-strategy-v1/docs/MVP_DEFI_INSTRUMENTS.md
 """
 
 import logging
-import os
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 
@@ -107,9 +106,9 @@ class AaveV3Adapter(BaseDefiAdapter):
             # If not provided, try Secret Manager
             if not self.api_key:
                 try:
-                    from unified_cloud_services import get_secret_with_fallback
+                    from unified_cloud_services import get_secret_with_fallback, get_config
 
-                    secret_name = os.getenv("AAVESCAN_SECRET_NAME", "aavescan-api-key")
+                    secret_name = get_config("AAVESCAN_SECRET_NAME", "aavescan-api-key")
 
                     self.api_key = get_secret_with_fallback(
                         project_id=self.project_id,
@@ -123,10 +122,10 @@ class AaveV3Adapter(BaseDefiAdapter):
                         )
                 except ImportError:
                     logger.warning("unified-cloud-services not available, falling back to env var")
-                    self.api_key = os.getenv("AAVESCAN_API_KEY")
+                    self.api_key = get_config("AAVESCAN_API_KEY")
                 except Exception as e:
                     logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                    self.api_key = os.getenv("AAVESCAN_API_KEY")
+                    self.api_key = get_config("AAVESCAN_API_KEY")
 
             if not self.api_key:
                 logger.warning("AaveScan API key not found. Some features may be limited.")
@@ -152,7 +151,7 @@ class AaveV3Adapter(BaseDefiAdapter):
             # get_secret_with_fallback now includes caching internally
             self._alchemy_api_key = None
             try:
-                from unified_cloud_services import get_secret_with_fallback
+                from unified_cloud_services import get_secret_with_fallback, get_config
 
                 self._alchemy_api_key = get_secret_with_fallback(
                     secret_name="alchemy-api-key",
@@ -441,7 +440,7 @@ class AaveV3Adapter(BaseDefiAdapter):
                 # Use cached Alchemy API key
                 alchemy_key = self._alchemy_api_key
                 if not alchemy_key:
-                    from unified_cloud_services import get_secret_with_fallback
+                    from unified_cloud_services import get_secret_with_fallback, get_config
 
                     alchemy_key = get_secret_with_fallback(
                         secret_name="alchemy-api-key",
@@ -568,7 +567,7 @@ class AaveV3Adapter(BaseDefiAdapter):
             # Use cached Alchemy API key
             alchemy_key = self._alchemy_api_key
             if not alchemy_key:
-                from unified_cloud_services import get_secret_with_fallback
+                from unified_cloud_services import get_secret_with_fallback, get_config
 
                 alchemy_key = get_secret_with_fallback(
                     secret_name="alchemy-api-key",
@@ -773,7 +772,7 @@ class AaveV3Adapter(BaseDefiAdapter):
 
             # Only fetch from Secret Manager if not cached
             if not graph_api_key:
-                from unified_cloud_services import get_secret_with_fallback
+                from unified_cloud_services import get_secret_with_fallback, get_config
 
                 graph_api_key = get_secret_with_fallback(
                     project_id=self.project_id,
@@ -909,8 +908,9 @@ query GetReserves($blockNumber: Int!) {
                         return []
                     # Continue with data without eModeCategoryId
                 elif has_missing_block_error:
-                    logger.warning(
-                        f"⚠️ The Graph indexers don't have data for block {block_number} yet "
+                    # Historical data not yet indexed - this is expected for recent dates
+                    logger.debug(
+                        f"The Graph indexers don't have data for block {block_number} yet "
                         f"(latest indexed: ~23,775,170 from Aug 2024). "
                         f"Caching failure and skipping future retries for this date."
                     )
@@ -1098,7 +1098,7 @@ query GetReserves($blockNumber: Int!) {
 
             # Only fetch from Secret Manager if not cached
             if not graph_api_key:
-                from unified_cloud_services import get_secret_with_fallback
+                from unified_cloud_services import get_secret_with_fallback, get_config
 
                 graph_api_key = get_secret_with_fallback(
                     project_id=self.project_id,
@@ -1305,8 +1305,9 @@ query GetReserve($underlyingAddress: Bytes!) {
                         return None
                     # Continue with data without eModeCategoryId
                 elif has_missing_block_error:
-                    logger.warning(
-                        f"⚠️ The Graph indexers don't have data for block {block_number} yet. "
+                    # Historical data not yet indexed - this is expected for recent dates
+                    logger.debug(
+                        f"The Graph indexers don't have data for block {block_number} yet. "
                         f"Caching failure and skipping future retries."
                     )
                     # Cache the failure - don't retry
@@ -1471,7 +1472,7 @@ query GetReserve($underlyingAddress: Bytes!) {
             # Use cached Alchemy API key
             alchemy_key = self._alchemy_api_key
             if not alchemy_key:
-                from unified_cloud_services import get_secret_with_fallback
+                from unified_cloud_services import get_secret_with_fallback, get_config
 
                 alchemy_key = get_secret_with_fallback(
                     secret_name="alchemy-api-key",
@@ -1660,7 +1661,7 @@ query GetReserve($underlyingAddress: Bytes!) {
             # Use cached Alchemy API key
             alchemy_key = self._alchemy_api_key
             if not alchemy_key:
-                from unified_cloud_services import get_secret_with_fallback
+                from unified_cloud_services import get_secret_with_fallback, get_config
 
                 alchemy_key = get_secret_with_fallback(
                     secret_name="alchemy-api-key",
@@ -1898,7 +1899,7 @@ query GetReserve($underlyingAddress: Bytes!) {
 
             # Only fetch from Secret Manager if not cached
             if not graph_api_key:
-                from unified_cloud_services import get_secret_with_fallback
+                from unified_cloud_services import get_secret_with_fallback, get_config
 
                 graph_api_key = get_secret_with_fallback(
                     project_id=self.project_id,
@@ -2274,7 +2275,8 @@ query GetEModeCategory($categoryId: Int!) {
             emode_oracle_id = reserve_config.get("emode_oracle_id")
             logger.info(f"  ✅ Using reserve_config eMode data: label={emode_label}")
         else:
-            logger.warning(f"  ⚠️ No eMode category ID or reserve_config available for {reserve.get('asset', {}).get('symbol', 'UNKNOWN')}")
+            # Some tokens (e.g., USDT) don't have eMode categories - this is expected behavior
+            logger.debug(f"  No eMode category ID or reserve_config available for {reserve.get('asset', {}).get('symbol', 'UNKNOWN')} (expected for some tokens)")
 
         # Fetch market configurations for interest rate model parameters (only if not historical)
         market_configs = None
