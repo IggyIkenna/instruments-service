@@ -8,6 +8,7 @@ based on ENVIRONMENT variable (dev mode: auto-detects, production: VM service ac
 """
 
 import sys
+import os
 import logging
 import json
 from pathlib import Path
@@ -23,7 +24,8 @@ env_path = Path(__file__).parent.parent.parent / ".env"
 if env_path.exists():
     load_dotenv(dotenv_path=env_path, override=False)
     # Use print for early loading (before logging is configured)
-    if get_config("DEBUG", "").lower() == "true":
+    # Use os.getenv directly here since get_config is imported later
+    if os.getenv("DEBUG", "").lower() == "true":
         print(f"✅ Loaded environment variables from {env_path}")
 
 # Setup logging (after .env is loaded so LOG_LEVEL can be read from .env)
