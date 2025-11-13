@@ -46,8 +46,17 @@ python scripts/clickup_import.py \
 
 **Usage**:
 ```bash
+# Run all quality gates (coverage threshold: 70%)
 python scripts/run_quality_gates.py
+
+# Skip performance tests (faster)
+python scripts/run_quality_gates.py --skip-performance
+
+# Custom coverage threshold
+python scripts/run_quality_gates.py --coverage-threshold 75
 ```
+
+**Coverage Threshold**: 70% (default)
 
 ---
 

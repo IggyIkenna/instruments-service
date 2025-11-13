@@ -7,9 +7,12 @@ Each domain has its own bucket and dataset (instruments domain).
 
 import logging
 import pandas as pd
+import os
 from typing import Optional, Dict, Any
 from datetime import datetime
 from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
+
+from unified_cloud_services import get_bucket_for_category
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +55,7 @@ class CloudDataProvider:
         )
 
     def get_instruments_from_gcs(
-        self, date: datetime, gcs_path: Optional[str] = None
+        self, date: datetime, gcs_path: Optional[str] = None, category: Optional[str] = None
     ) -> pd.DataFrame:
         """
         Get instruments from GCS for a specific date.
@@ -60,6 +63,7 @@ class CloudDataProvider:
         Args:
             date: Target date
             gcs_path: Optional custom GCS path (default: uses standard path format)
+            category: Optional market category ("CEFI", "TRADFI", "DEFI") to read from category-specific bucket
 
         Returns:
             DataFrame with instruments
@@ -69,6 +73,10 @@ class CloudDataProvider:
             gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
 
         try:
+            # If category specified, use category-specific bucket
+            if category:
+                return self.get_instruments_from_category(date, category, gcs_path=gcs_path)
+            
             logger.info(f"📥 Loading instruments from GCS: {gcs_path}")
             df = self.cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet")
 
@@ -81,6 +89,65 @@ class CloudDataProvider:
 
         except Exception as e:
             logger.error(f"❌ Failed to load instruments from GCS: {e}")
+            return pd.DataFrame()
+    
+    def get_instruments_from_category(
+        self, date: datetime, category: str, gcs_path: Optional[str] = None
+    ) -> pd.DataFrame:
+        """
+        Get instruments from category-specific bucket for a specific date.
+
+        Args:
+            date: Target date
+            category: Market category ("CEFI", "TRADFI", or "DEFI")
+            gcs_path: Optional custom GCS path (default: uses standard path format)
+
+        Returns:
+            DataFrame with instruments from the specified category bucket
+        """
+        if gcs_path is None:
+            date_str = date.strftime("%Y-%m-%d")
+            gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
+
+        try:
+            # Detect test mode
+            environment = os.getenv("ENVIRONMENT", "development").lower()
+            is_test = (
+                environment in ["test", "testing"]
+                or "pytest" in os.environ.get("_", "")
+                or os.getenv("PYTEST_CURRENT_TEST") is not None
+            )
+            
+            # Get bucket for category
+            category_bucket = get_bucket_for_category(category, test_mode=is_test)
+            
+            # Create cloud service for category bucket
+            category_cloud_target = CloudTarget(
+                project_id=self.cloud_target.project_id,
+                gcs_bucket=category_bucket,
+                bigquery_dataset=self.cloud_target.bigquery_dataset,
+                bigquery_location=self.cloud_target.bigquery_location,
+            )
+            category_cloud_service = StandardizedDomainCloudService(
+                domain="instruments", cloud_target=category_cloud_target
+            )
+            
+            logger.info(
+                f"📥 Loading {category} instruments from GCS: {category_bucket}/{gcs_path}"
+            )
+            df = category_cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet")
+
+            if df.empty:
+                logger.warning(
+                    f"⚠️ No {category} instruments found at {category_bucket}/{gcs_path}"
+                )
+            else:
+                logger.info(f"✅ Loaded {len(df)} {category} instruments from GCS")
+
+            return df
+
+        except Exception as e:
+            logger.error(f"❌ Failed to load {category} instruments from GCS: {e}")
             return pd.DataFrame()
 
     def get_instruments_from_bigquery(

@@ -419,6 +419,44 @@ INSTRUMENTS_PARQUET_SCHEMA: List[Dict[str, str]] = [
         "description": "JSON string of all leverage tiers for this instrument (for advanced risk calculations)",
     },
     # ============================================================================
+    # TRADING HOURS METADATA (TradFi instruments only)
+    # ============================================================================
+    {
+        "name": "trading_hours_open",
+        "type": "string",
+        "required": False,
+        "nullable": True,
+        "description": "Trading hours open time in ISO time format with timezone (e.g., '09:30:00-05:00' for EST). Only populated for TradFi instruments.",
+    },
+    {
+        "name": "trading_hours_close",
+        "type": "string",
+        "required": False,
+        "nullable": True,
+        "description": "Trading hours close time in ISO time format with timezone (e.g., '16:00:00-05:00' for EST). Only populated for TradFi instruments.",
+    },
+    {
+        "name": "trading_session",
+        "type": "string",
+        "required": False,
+        "nullable": True,
+        "description": "Trading session identifier (e.g., 'regular', 'pre_market', 'after_hours', 'extended'). Only populated for TradFi instruments.",
+    },
+    {
+        "name": "is_trading_day",
+        "type": "bool",
+        "required": False,
+        "nullable": True,
+        "description": "Whether instrument trades on given date (accounts for holidays). Only populated for TradFi instruments.",
+    },
+    {
+        "name": "holiday_calendar",
+        "type": "string",
+        "required": False,
+        "nullable": True,
+        "description": "Exchange holiday calendar identifier (e.g., 'NYSE', 'CME', 'NASDAQ'). Only populated for TradFi instruments.",
+    },
+    # ============================================================================
     # STORAGE METADATA (added during storage)
     # ============================================================================
     {

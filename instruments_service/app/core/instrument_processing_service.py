@@ -159,7 +159,7 @@ class InstrumentProcessingService:
 
         # Initialize centralized services
         from unified_cloud_services import SubgraphService, DateFilterService
-        from instruments_service.app.core.ccxt_service import CCXTService
+        from instruments_service.utils.ccxt_service import CCXTService
 
         self.subgraph_service = SubgraphService()
         self.date_filter_service = DateFilterService()
@@ -186,7 +186,7 @@ class InstrumentProcessingService:
                 tgc_module._API_KEY_CACHE = self._graph_api_key
                 tgc_module._API_KEY_PROJECT_ID = project_id_for_graph
                 # Also set it in SubgraphService's module-level cache
-                import instruments_service.app.core.subgraph_service as sg_module
+                import instruments_service.utils.subgraph_service as sg_module
 
                 sg_module._GRAPH_API_KEY_CACHE = self._graph_api_key
                 sg_module._GRAPH_API_KEY_PROJECT_ID = project_id_for_graph
@@ -544,6 +544,8 @@ class InstrumentProcessingService:
     ) -> Tuple[Dict[str, Dict[str, Any]], int]:
         """
         Fetch instrument data from Tardis API for specific exchange.
+        
+        OPTIMIZED: Wraps synchronous Tardis API call in asyncio.to_thread for true parallelism.
 
         Replaces direct API calls scattered across handlers.
 
@@ -555,15 +557,21 @@ class InstrumentProcessingService:
         Returns:
             Tuple of (instruments_data dict, date_filtered_count)
         """
+        import asyncio
+        
         target_date = target_date or datetime.now(timezone.utc)
         date_str = target_date.strftime("%Y-%m-%d")
 
-        # Fetch instruments using TardisAdapter
+        # OPTIMIZATION: Wrap synchronous Tardis API call in asyncio.to_thread for true parallelism
+        # This allows multiple exchanges to be fetched simultaneously without blocking
         (
             available_symbols_list,
             date_filtered_count,
-        ) = self._get_tardis_adapter().fetch_exchange_instruments(
-            exchange=exchange, target_date=target_date, force_refresh=force
+        ) = await asyncio.to_thread(
+            self._get_tardis_adapter().fetch_exchange_instruments,
+            exchange=exchange,
+            target_date=target_date,
+            force_refresh=force
         )
         # Convert list to dict keyed by symbol_id
         available_symbols = {
@@ -694,11 +702,15 @@ class InstrumentProcessingService:
             "no_canonical_key": 0,
             "same_base_quote": 0,
             "date_filtered": date_filtered_count,  # From fetch_exchange_instruments
-            "expiry_filtered": 0,
+            "expired_filtered": 0,  # Filtered by availableTo (expired/delisted instruments)
+            "expiry_filtered": 0,  # Filtered by expiry date (futures/options)
             "processing_error": 0,
             "success": 0,
         }
 
+        # NOTE: Processing loop is CPU-bound (parsing, validation, object creation)
+        # Python's GIL prevents true CPU parallelism with asyncio, so sequential is fine
+        # The real performance gain is from parallel I/O (API fetches), which we've optimized
         processed_instruments = {}
         for symbol_id, symbol_info in instruments_data.items():
             try:
@@ -800,14 +812,83 @@ class InstrumentProcessingService:
                     )
 
                     # CRITICAL: Get available_to from Tardis API (availableTo field)
-                    # If Tardis doesn't provide availableTo, default to blank (None)
+                    # Tardis provides availableTo for expired/delisted instruments (including spot pairs)
                     available_to = symbol_info.get("availableTo")
-                    available_to_datetime = available_to if available_to else None
+                    available_to_datetime = None
+                    
+                    if available_to:
+                        # Parse and normalize availableTo from Tardis API
+                        try:
+                            # Ensure proper ISO format with timezone
+                            if isinstance(available_to, str):
+                                if available_to.endswith("Z"):
+                                    available_to_datetime = available_to
+                                else:
+                                    # Add timezone if missing
+                                    available_to_datetime = available_to.replace("Z", "+00:00") if "+" not in available_to else available_to
+                            else:
+                                available_to_datetime = str(available_to)
+                        except Exception as e:
+                            logger.debug(f"⚠️ Could not parse availableTo '{available_to}': {e}")
+
+                    # CRITICAL FIX: For options and futures, set available_to_datetime to midnight of day after expiry
+                    # if Tardis didn't provide availableTo. This ensures all derivatives have expiration dates.
+                    if (
+                        not available_to_datetime
+                        and normalized_instrument_type in ["FUTURE", "OPTION"]
+                        and "expiry" in enhanced_fields
+                    ):
+                        expiry_str = enhanced_fields.get("expiry")
+                        if expiry_str:
+                            try:
+                                # Parse expiry datetime
+                                expiry_dt = datetime.fromisoformat(
+                                    expiry_str.replace("Z", "+00:00")
+                                )
+                                
+                                # Get the date of expiry and add one day, then set to midnight UTC
+                                expiry_date = expiry_dt.date()
+                                day_after_expiry = expiry_date + timedelta(days=1)
+                                # Set to midnight UTC (00:00:00)
+                                available_to_datetime = datetime.combine(
+                                    day_after_expiry, datetime.min.time()
+                                ).replace(tzinfo=timezone.utc).isoformat()
+                                
+                                logger.debug(
+                                    f"✅ Set available_to_datetime for {symbol_id} to midnight after expiry: {available_to_datetime}"
+                                )
+                            except Exception as e:
+                                logger.debug(f"⚠️ Could not parse expiry '{expiry_str}' for available_to_datetime: {e}")
+
+                    # CRITICAL FIX: Filter out expired instruments (ALL types, including spot)
+                    # Tardis provides availableTo for expired/delisted instruments - we must respect this
+                    if available_to_datetime:
+                        try:
+                            # Parse available_to_datetime for comparison
+                            available_to_dt = datetime.fromisoformat(
+                                available_to_datetime.replace("Z", "+00:00")
+                            )
+                            if available_to_dt.tzinfo is None:
+                                available_to_dt = available_to_dt.replace(tzinfo=timezone.utc)
+                            
+                            # Get comparison date (use target_date if provided, otherwise today)
+                            comparison_date = target_date if target_date else datetime.now(timezone.utc)
+                            if comparison_date.tzinfo is None:
+                                comparison_date = comparison_date.replace(tzinfo=timezone.utc)
+                            
+                            # Filter if instrument has expired (availableTo is in the past)
+                            if comparison_date.date() > available_to_dt.date():
+                                filter_stats["expired_filtered"] = filter_stats.get("expired_filtered", 0) + 1
+                                logger.debug(
+                                    f"🚫 Filtered expired instrument: {symbol_id} - availableTo {available_to_dt.date()} < comparison_date {comparison_date.date()}"
+                                )
+                                continue
+                        except Exception as e:
+                            logger.debug(f"⚠️ Could not parse available_to_datetime '{available_to_datetime}' for filtering: {e}")
 
                     # NOTE: Date filtering (availableSince/availableTo) is already done in fetch_exchange_instruments
-                    # We only need to check expiry for futures/options here
-                    # Check expiry for futures/options: filter if expired
-                    # This is separate from available_to - expiry filtering still applies even if available_to is blank
+                    # But we also check expiry for futures/options as a secondary filter
+                    # Check expiry for futures/options: filter if expired (secondary check)
                     if (
                         target_date
                         and normalized_instrument_type in ["FUTURE", "OPTION"]
@@ -836,6 +917,14 @@ class InstrumentProcessingService:
                             except Exception as e:
                                 logger.debug(f"⚠️ Could not parse expiry '{expiry_str}': {e}")
 
+                    # Determine market category
+                    from unified_cloud_services import determine_market_category
+                    instrument_dict = {
+                        'databento_symbol': '',  # CeFi instruments don't have databento_symbol
+                        'chain': 'off-chain',
+                    }
+                    market_category = determine_market_category(instrument_dict)
+                    
                     metadata = InstrumentDefinition(
                         instrument_key=canonical_key,
                         venue=canonical_venue,
@@ -845,6 +934,7 @@ class InstrumentProcessingService:
                         quote_asset=clean_quote,
                         settle_asset=settle_asset,  # ✅ ADDED: Direct field instead of attributes
                         chain="off-chain",  # CeFi exchanges are off-chain
+                        market_category=market_category,  # Auto-populated market category
                         exchange_raw_symbol=symbol_id,
                         tardis_symbol=self._convert_to_tardis_symbol(
                             symbol_id, exchange
@@ -876,6 +966,7 @@ class InstrumentProcessingService:
                 f"no_key={filter_stats['no_canonical_key']}, "
                 f"same_base_quote={filter_stats['same_base_quote']}, "
                 f"date_filtered={filter_stats['date_filtered']}, "
+                f"expired_filtered={filter_stats.get('expired_filtered', 0)}, "
                 f"expiry_filtered={filter_stats['expiry_filtered']}, "
                 f"errors={filter_stats['processing_error']}, "
                 f"success={filter_stats['success']}"
@@ -1530,6 +1621,17 @@ class InstrumentProcessingService:
                 derived_fields["expiry"] = expiry_date or "2025-12-25T08:00:00Z"
 
             # 2. Enhanced CCXT integration using centralized service
+            # CRITICAL FIX: Always populate ccxt_symbol and ccxt_exchange, even if CCXT integration is disabled
+            # or markets aren't found - use venue mapping as fallback
+            ccxt_exchange_id = self.venue_mapping.venue_to_ccxt.get(venue)
+            default_ccxt_symbol = (
+                f"{base_asset}/{quote_asset}:{quote_asset}"
+                if quote_asset and inst_type in ["PERPETUAL", "FUTURE"]
+                else f"{base_asset}/{quote_asset}"
+                if base_asset and quote_asset
+                else ""
+            )
+            
             if self.processing_config.enable_ccxt_integration:
                 ccxt_metadata = self.ccxt_service.get_metadata(
                     venue=venue,
@@ -1537,51 +1639,55 @@ class InstrumentProcessingService:
                     quote_asset=quote_asset,
                     symbol_id=symbol_id,
                     tardis_symbol=None,  # tardis_symbol not available in this context
+                    instrument_type=inst_type,  # CRITICAL: Pass instrument_type for proper Deribit symbol generation
                 )
 
-                # Populate CCXT-derived fields
+                # Populate CCXT-derived fields (CRITICAL: ccxt_symbol and ccxt_exchange were missing!)
                 if ccxt_metadata:
                     derived_fields.update(
                         {
-                            "ccxt_symbol": ccxt_metadata.get("ccxt_symbol", ""),
-                            "ccxt_exchange": ccxt_metadata.get("ccxt_exchange", ""),
+                            "ccxt_symbol": ccxt_metadata.get("ccxt_symbol", default_ccxt_symbol),
+                            "ccxt_exchange": ccxt_metadata.get("ccxt_exchange", ccxt_exchange_id or ""),
                             "tick_size": ccxt_metadata.get("tick_size", ""),
                             "min_size": ccxt_metadata.get("min_size", ""),
                             "contract_size": ccxt_metadata.get("contract_size", ""),
                         }
                     )
+                else:
+                    # Fallback: populate from venue mapping even if CCXT market not found
+                    derived_fields["ccxt_symbol"] = default_ccxt_symbol
+                    derived_fields["ccxt_exchange"] = ccxt_exchange_id or ""
 
-                # 2b. Fetch leverage limits and risk parameters for CEFI derivatives
-                # Only populate for PERPETUAL and FUTURE instruments (not SPOT_PAIR unless margin-enabled)
+                # 2b. Fetch leverage limits and risk parameters for ALL CEFI instruments
+                # CRITICAL FIX: Populate max_position_size for ALL instruments, not just PERPETUAL/FUTURE
+                # Leverage fields (max_leverage, initial_margin_rate, maintenance_margin_rate) 
+                # are only for derivatives (PERPETUAL, FUTURE), but max_position_size applies to all
+                
+                # Get CCXT symbol format for leverage tiers lookup
+                ccxt_symbol_for_tiers = (
+                    ccxt_metadata.get("ccxt_symbol", "") if ccxt_metadata else default_ccxt_symbol
+                )
+
+                leverage_limits = self.ccxt_service.get_leverage_limits(
+                    venue=venue,
+                    symbol=ccxt_symbol_for_tiers,
+                    base_asset=base_asset,
+                    quote_asset=quote_asset,
+                    symbol_id=symbol_id,
+                    tardis_symbol=None,
+                    instrument_type=inst_type,  # Pass instrument_type for proper Deribit symbol matching
+                )
+
+                # Populate max_position_size for ALL instruments (SPOT_PAIR, PERPETUAL, FUTURE, OPTION)
+                if leverage_limits and leverage_limits.get("max_position_size") is not None:
+                    derived_fields["max_position_size"] = leverage_limits["max_position_size"]
+
+                # Populate leverage fields ONLY for derivatives (PERPETUAL, FUTURE)
+                # CRITICAL FIX: These should work for ALL venues that support derivatives, not just BINANCE-FUTURES
                 if inst_type in ["PERPETUAL", "FUTURE"]:
-                    # Get CCXT symbol format for leverage tiers lookup
-                    ccxt_symbol_for_tiers = (
-                        ccxt_metadata.get("ccxt_symbol", "")
-                        if ccxt_metadata
-                        else (
-                            f"{base_asset}/{quote_asset}:{quote_asset}"
-                            if quote_asset
-                            else f"{base_asset}/{quote_asset}"
-                        )
-                    )
-
-                    leverage_limits = self.ccxt_service.get_leverage_limits(
-                        venue=venue,
-                        symbol=ccxt_symbol_for_tiers,
-                        base_asset=base_asset,
-                        quote_asset=quote_asset,
-                        symbol_id=symbol_id,
-                        tardis_symbol=None,
-                    )
-
-                    # Populate risk parameter fields
                     if leverage_limits:
                         if leverage_limits.get("max_leverage") is not None:
                             derived_fields["max_leverage"] = leverage_limits["max_leverage"]
-                        if leverage_limits.get("max_position_size") is not None:
-                            derived_fields["max_position_size"] = leverage_limits[
-                                "max_position_size"
-                            ]
                         if leverage_limits.get("initial_margin_rate") is not None:
                             derived_fields["initial_margin_rate"] = leverage_limits[
                                 "initial_margin_rate"
@@ -1590,9 +1696,39 @@ class InstrumentProcessingService:
                             derived_fields["maintenance_margin_rate"] = leverage_limits[
                                 "maintenance_margin_rate"
                             ]
-                        if leverage_limits.get("leverage_tiers_json"):
-                            derived_fields["leverage_tiers_json"] = leverage_limits[
-                                "leverage_tiers_json"
+                        # Note: leverage_tiers_json removed for simplicity - use fallback defaults instead
+            else:
+                # CCXT integration disabled - still populate basic fields from venue mapping
+                derived_fields["ccxt_symbol"] = default_ccxt_symbol
+                derived_fields["ccxt_exchange"] = ccxt_exchange_id or ""
+                
+                # Still try to get leverage limits from fallback (uses hardcoded defaults)
+                leverage_limits = self.ccxt_service.get_leverage_limits(
+                    venue=venue,
+                    symbol=default_ccxt_symbol,
+                    base_asset=base_asset,
+                    quote_asset=quote_asset,
+                    symbol_id=symbol_id,
+                    tardis_symbol=None,
+                    instrument_type=inst_type,  # Pass instrument_type for proper symbol matching
+                )
+                
+                # Populate max_position_size for ALL instruments even when CCXT disabled
+                if leverage_limits and leverage_limits.get("max_position_size") is not None:
+                    derived_fields["max_position_size"] = leverage_limits["max_position_size"]
+                
+                # Populate leverage fields for derivatives even when CCXT disabled
+                if inst_type in ["PERPETUAL", "FUTURE"]:
+                    if leverage_limits:
+                        if leverage_limits.get("max_leverage") is not None:
+                            derived_fields["max_leverage"] = leverage_limits["max_leverage"]
+                        if leverage_limits.get("initial_margin_rate") is not None:
+                            derived_fields["initial_margin_rate"] = leverage_limits[
+                                "initial_margin_rate"
+                            ]
+                        if leverage_limits.get("maintenance_margin_rate") is not None:
+                            derived_fields["maintenance_margin_rate"] = leverage_limits[
+                                "maintenance_margin_rate"
                             ]
 
             # 3. Business logic fields (from sample logic)
@@ -1939,11 +2075,13 @@ class InstrumentProcessingService:
         self._cache_timestamps.clear()
         logger.info(f"🧹 Cleared {cache_count} cached instruments")
 
-    def fetch_databento_instruments(
+    async def fetch_databento_instruments(
         self, exchange: str, symbols: List[str], target_date: Optional[datetime] = None
     ) -> Dict[str, InstrumentDefinition]:
         """
         Fetch TradFi instruments from Databento.
+        
+        OPTIMIZED: Async wrapper for Databento API calls to enable true parallelism.
 
         Args:
             exchange: Exchange name (e.g., 'CME', 'NASDAQ')
@@ -1953,14 +2091,20 @@ class InstrumentProcessingService:
         Returns:
             Dictionary mapping instrument_key to InstrumentDefinition
         """
+        import asyncio
+        
         try:
             from instruments_service.app.venues.databento import DatabentoAdapter
 
             adapter = DatabentoAdapter()
             date = target_date or datetime.now(timezone.utc)
 
-            raw_instruments = adapter.fetch_instrument_definitions(
-                exchange=exchange, symbols=symbols, date=date
+            # OPTIMIZATION: Wrap synchronous Databento API call in asyncio.to_thread for true parallelism
+            raw_instruments = await asyncio.to_thread(
+                adapter.fetch_instrument_definitions,
+                exchange=exchange,
+                symbols=symbols,
+                date=date
             )
 
             # Convert to InstrumentDefinition objects
@@ -2085,23 +2229,9 @@ class InstrumentProcessingService:
                 adapter = MorphoAdapter(chain=chain)
                 raw_instruments = adapter.fetch_markets()
 
-            elif protocol.lower() == "euler_plasma":
-                from instruments_service.app.venues.defi import EulerPlasmaAdapter
 
-                adapter = EulerPlasmaAdapter()
-                raw_instruments = adapter.fetch_markets()
 
-            elif protocol.lower() == "fluid_plasma":
-                from instruments_service.app.venues.defi import FluidPlasmaAdapter
-
-                adapter = FluidPlasmaAdapter()
-                raw_instruments = adapter.fetch_markets()
-
-            elif protocol.lower() == "aave_plasma":
-                from instruments_service.app.venues.defi import AavePlasmaAdapter
-
-                adapter = AavePlasmaAdapter()
-                raw_instruments = adapter.fetch_markets()
+                
 
             elif protocol.lower() == "hyperliquid":
                 from instruments_service.app.venues.defi import HyperliquidAdapter
@@ -2236,8 +2366,15 @@ class InstrumentProcessingService:
                             base_asset=inst_def.base_asset,
                             quote_asset=inst_def.quote_asset,
                             symbol_id=inst_def.exchange_raw_symbol or inst_def.symbol,
+                            instrument_type=inst_def.instrument_type,  # Pass instrument_type for proper symbol generation
                         )
                         if ccxt_metadata:
+                            # CRITICAL: Update ccxt_symbol and ccxt_exchange from centralized CCXT service
+                            # (same as CEFI exchanges) - ensures consistency across all venues
+                            if ccxt_metadata.get("ccxt_symbol"):
+                                inst_def.ccxt_symbol = ccxt_metadata["ccxt_symbol"]
+                            if ccxt_metadata.get("ccxt_exchange"):
+                                inst_def.ccxt_exchange = ccxt_metadata["ccxt_exchange"]
                             # Always update fields if CCXT provides them (even if already set)
                             # This ensures CCXT enrichment overrides any defaults
                             if ccxt_metadata.get("tick_size"):
@@ -2250,7 +2387,23 @@ class InstrumentProcessingService:
                                 except (ValueError, TypeError):
                                     pass
                         else:
-                            # CCXT enrichment failed - use manual fallback mappings
+                            # CCXT enrichment failed - still populate ccxt_symbol and ccxt_exchange
+                            # using centralized default generation (same as CEFI exchanges)
+                            if not inst_def.ccxt_symbol or not inst_def.ccxt_exchange:
+                                default_ccxt_symbol = self.ccxt_service._generate_default_ccxt_symbol(
+                                    venue=venue,
+                                    base_asset=inst_def.base_asset,
+                                    quote_asset=inst_def.quote_asset,
+                                    symbol_id=inst_def.exchange_raw_symbol or inst_def.symbol,
+                                    instrument_type=inst_def.instrument_type,
+                                )
+                                ccxt_exchange_id = self.venue_mapping.venue_to_ccxt.get(venue, "")
+                                if not inst_def.ccxt_symbol:
+                                    inst_def.ccxt_symbol = default_ccxt_symbol
+                                if not inst_def.ccxt_exchange:
+                                    inst_def.ccxt_exchange = ccxt_exchange_id
+                            
+                            # Use manual fallback mappings for tick_size, min_size, contract_size
                             # These are stable values from CCXT that don't change often
                             manual_metadata = self._get_manual_ccxt_fallback(
                                 venue, inst_def.base_asset

@@ -95,3 +95,147 @@ class TestDataTypeConfig:
         # SPOT_PAIR should have trades and book_snapshot_5
         spot_types = config.instrument_data_types.get("SPOT_PAIR", [])
         assert "trades" in spot_types
+
+
+class TestUnifiedInstrumentConfig:
+    """Test UnifiedInstrumentConfig."""
+
+    def test_unified_config_creation(self):
+        """Test creating UnifiedInstrumentConfig."""
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        config = UnifiedInstrumentConfig()
+        assert len(config.instruments) > 0
+
+    def test_get_symbols_by_type(self):
+        """Test getting symbols by instrument type."""
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        config = UnifiedInstrumentConfig()
+        futures = config.get_symbols_by_type("FUTURE")
+        assert isinstance(futures, list)
+        assert len(futures) > 0
+
+    def test_get_symbols_for_venue(self):
+        """Test getting symbols for a venue."""
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        config = UnifiedInstrumentConfig()
+        cme_symbols = config.get_symbols_for_venue("CME")
+        assert isinstance(cme_symbols, list)
+        assert len(cme_symbols) > 0
+
+    def test_get_dataset_and_stype(self):
+        """Test getting dataset and stype for a symbol."""
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        config = UnifiedInstrumentConfig()
+        dataset, stype = config.get_dataset_and_stype("ES.FUT")
+        assert dataset == "GLBX.MDP3"
+        assert stype == "parent"
+
+    def test_get_human_readable_name(self):
+        """Test getting human-readable name for exchange code."""
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        config = UnifiedInstrumentConfig()
+        name = config.get_human_readable_name("ES")
+        assert isinstance(name, str)
+        assert len(name) > 0
+
+    def test_get_all_instruments(self):
+        """Test getting all instruments."""
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        config = UnifiedInstrumentConfig()
+        instruments = config.get_all_instruments()
+        assert isinstance(instruments, list)
+        assert len(instruments) > 0
+
+
+class TestDatabentoInstrumentConfig:
+    """Test DatabentoInstrumentConfig."""
+
+    def test_databento_config_creation(self):
+        """Test creating DatabentoInstrumentConfig."""
+        from instruments_service.config import DatabentoInstrumentConfig
+
+        config = DatabentoInstrumentConfig()
+        assert len(config.extended_symbols) > 0
+
+    def test_sp500_stocks(self):
+        """Test getting S&P 500 stocks."""
+        from instruments_service.config import DatabentoInstrumentConfig
+
+        config = DatabentoInstrumentConfig()
+        stocks = config.sp500_stocks
+        assert isinstance(stocks, list)
+
+    def test_get_dataset_and_stype(self):
+        """Test getting dataset and stype."""
+        from instruments_service.config import DatabentoInstrumentConfig
+
+        config = DatabentoInstrumentConfig()
+        dataset, stype = config.get_dataset_and_stype("ES.FUT")
+        assert dataset == "GLBX.MDP3"
+        assert stype == "parent"
+
+    def test_get_symbols_for_venue(self):
+        """Test getting symbols for venue."""
+        from instruments_service.config import DatabentoInstrumentConfig
+
+        config = DatabentoInstrumentConfig()
+        symbols = config.get_symbols_for_venue("CME")
+        assert isinstance(symbols, list)
+
+    def test_get_symbols_for_dataset(self):
+        """Test getting symbols for dataset."""
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        config = UnifiedInstrumentConfig()
+        symbols = config.get_symbols_for_dataset("GLBX.MDP3")
+        assert isinstance(symbols, list)
+        assert len(symbols) > 0
+
+    def test_get_instrument(self):
+        """Test getting instrument by symbol."""
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        config = UnifiedInstrumentConfig()
+        inst = config.get_instrument("ES.FUT")
+        assert inst is not None
+        assert inst.symbol == "ES.FUT"
+        assert inst.venue == "CME"
+
+    def test_get_instrument_with_venue(self):
+        """Test getting instrument by symbol with venue filter."""
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        config = UnifiedInstrumentConfig()
+        inst = config.get_instrument("ES.FUT", venue="CME")
+        assert inst is not None
+        assert inst.venue == "CME"
+
+    def test_get_instrument_not_found(self):
+        """Test getting instrument that doesn't exist."""
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        config = UnifiedInstrumentConfig()
+        inst = config.get_instrument("NONEXISTENT.FUT")
+        assert inst is None
+
+    def test_get_human_readable_name_micro(self):
+        """Test getting human-readable name for micro version."""
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        config = UnifiedInstrumentConfig()
+        name = config.get_human_readable_name("MES")
+        assert isinstance(name, str)
+
+    def test_get_human_readable_name_fallback(self):
+        """Test getting human-readable name fallback."""
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        config = UnifiedInstrumentConfig()
+        name = config.get_human_readable_name("UNKNOWN")
+        assert name == "UNKNOWN"

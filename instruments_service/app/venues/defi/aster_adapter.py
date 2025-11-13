@@ -10,7 +10,7 @@ Reference: https://github.com/asterdex/api-docs
 import logging
 import requests
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 

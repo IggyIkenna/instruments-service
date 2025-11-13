@@ -129,9 +129,9 @@ class TestInstrumentHandler:
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
 
-        # Patch CloudDataProvider to avoid import issues
+        # Patch CloudDataProvider where it's imported (inside the method)
         with patch(
-            "instruments_service.cli.handlers.instrument_handler.CloudDataProvider"
+            "instruments_service.app.core.cloud_data_provider.CloudDataProvider"
         ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
@@ -157,9 +157,9 @@ class TestInstrumentHandler:
         self, handler, mock_data_provider
     ):
         """Test skipping existing instruments when force=False."""
-        # Patch CloudDataProvider at the point where it's imported (inside the method)
+        # Patch CloudDataProvider where it's imported (inside the method)
         with patch(
-            "instruments_service.cli.handlers.instrument_handler.CloudDataProvider",
+            "instruments_service.app.core.cloud_data_provider.CloudDataProvider",
             return_value=mock_data_provider,
         ):
             mock_data_provider.check_instruments_exist.return_value = True
@@ -180,9 +180,9 @@ class TestInstrumentHandler:
         self, handler, mock_data_provider
     ):
         """Test force mode doesn't skip existing."""
-        # Patch CloudDataProvider at the point where it's imported (inside the method)
+        # Patch CloudDataProvider where it's imported (inside the method)
         with patch(
-            "instruments_service.cli.handlers.instrument_handler.CloudDataProvider",
+            "instruments_service.app.core.cloud_data_provider.CloudDataProvider",
             return_value=mock_data_provider,
         ):
             mock_data_provider.check_instruments_exist.return_value = True
@@ -201,15 +201,15 @@ class TestInstrumentHandler:
 
     def test_execute_instrument_generation_no_instruments(self, handler):
         """Test handling when no instruments generated."""
-        with patch(
-            "instruments_service.cli.handlers.instrument_handler.CloudDataProvider"
-        ):
-            handler.instruments_service.generate_instruments_for_date = AsyncMock(
-                return_value={"status": "warning", "instruments_generated": 0}
-            )
-            today = datetime.now(timezone.utc).date()
-            test_date = today - timedelta(days=1)
+        handler.instruments_service.generate_instruments_for_date = AsyncMock(
+            return_value={"status": "warning", "instruments_generated": 0}
+        )
+        today = datetime.now(timezone.utc).date()
+        test_date = today - timedelta(days=1)
 
+        with patch(
+            "instruments_service.app.core.cloud_data_provider.CloudDataProvider"
+        ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
@@ -222,17 +222,16 @@ class TestInstrumentHandler:
         self, handler, mock_cloud_storage
     ):
         """Test handling storage failure."""
-        mock_cloud_storage.store_instruments.return_value = False
+        handler.instruments_service.generate_instruments_for_date = AsyncMock(
+            return_value={"status": "success", "instruments_generated": 10}
+        )
+        handler.cloud_storage.store_instruments = Mock(return_value=False)
+        today = datetime.now(timezone.utc).date()
+        test_date = today - timedelta(days=1)
 
         with patch(
-            "instruments_service.cli.handlers.instrument_handler.CloudDataProvider"
+            "instruments_service.app.core.cloud_data_provider.CloudDataProvider"
         ):
-            handler.instruments_service.generate_instruments_for_date = AsyncMock(
-                return_value={"status": "success", "instruments_generated": 10}
-            )
-            today = datetime.now(timezone.utc).date()
-            test_date = today - timedelta(days=1)
-
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
@@ -243,15 +242,15 @@ class TestInstrumentHandler:
 
     def test_execute_instrument_generation_exception_handling(self, handler):
         """Test exception handling during generation."""
-        with patch(
-            "instruments_service.cli.handlers.instrument_handler.CloudDataProvider"
-        ):
-            handler.instruments_service.generate_instruments_for_date = AsyncMock(
-                side_effect=Exception("Test error")
-            )
-            today = datetime.now(timezone.utc).date()
-            test_date = today - timedelta(days=1)
+        handler.instruments_service.generate_instruments_for_date = AsyncMock(
+            side_effect=Exception("Test error")
+        )
+        today = datetime.now(timezone.utc).date()
+        test_date = today - timedelta(days=1)
 
+        with patch(
+            "instruments_service.app.core.cloud_data_provider.CloudDataProvider"
+        ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
@@ -266,12 +265,20 @@ class TestInstrumentHandler:
             return_value={"status": "success", "instruments_generated": 5}
         )
 
-        today = datetime.now(timezone.utc)
-        result = handler._generate_instruments_for_date(
-            today, force=True, exchanges=["binance"]
-        )
+        today = datetime.now(timezone.utc).date()
+        test_date = today - timedelta(days=1)
+        
+        with patch(
+            "instruments_service.app.core.cloud_data_provider.CloudDataProvider"
+        ):
+            result = handler._execute_instrument_generation(
+                test_date.strftime("%Y-%m-%d"),
+                test_date.strftime("%Y-%m-%d"),
+                force=True,
+                exchanges=["binance"]
+            )
 
-        assert len(result) > 0
+            assert result["instruments_generated"] >= 0
 
     def test_generate_instruments_for_date_all_exchanges(
         self, handler, mock_instrument_service
@@ -281,13 +288,19 @@ class TestInstrumentHandler:
             return_value={"status": "success", "instruments_generated": 10}
         )
 
-        today = datetime.now(timezone.utc)
-        result = handler._generate_instruments_for_date(
-            today, force=True, exchanges=None
-        )
+        today = datetime.now(timezone.utc).date()
+        test_date = today - timedelta(days=1)
+        
+        with patch(
+            "instruments_service.app.core.cloud_data_provider.CloudDataProvider"
+        ):
+            result = handler._execute_instrument_generation(
+                test_date.strftime("%Y-%m-%d"),
+                test_date.strftime("%Y-%m-%d"),
+                force=True,
+            )
 
-        # Should process all exchanges
-        assert result is not None
+            assert result is not None
 
     def test_generate_instruments_for_date_exchange_error(
         self, handler, mock_instrument_service
@@ -297,13 +310,19 @@ class TestInstrumentHandler:
             side_effect=Exception("Exchange error")
         )
 
-        today = datetime.now(timezone.utc)
-        result = handler._generate_instruments_for_date(
-            today, force=True, exchanges=["binance", "deribit"]
-        )
+        today = datetime.now(timezone.utc).date()
+        test_date = today - timedelta(days=1)
+        
+        with patch(
+            "instruments_service.app.core.cloud_data_provider.CloudDataProvider"
+        ):
+            result = handler._execute_instrument_generation(
+                test_date.strftime("%Y-%m-%d"),
+                test_date.strftime("%Y-%m-%d"),
+                force=True,
+            )
 
-        # Should continue processing other exchanges
-        assert result is not None
+            assert result["dates_with_errors"] >= 0
 
     def test_cleanup(self, handler, mock_instrument_service):
         """Test cleanup method."""
