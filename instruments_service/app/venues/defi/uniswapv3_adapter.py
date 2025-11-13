@@ -8,12 +8,12 @@ Reference: archive/basis-strategy-v1/docs/MVP_DEFI_INSTRUMENTS.md
 """
 
 import logging
-import os
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
 from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
+from unified_cloud_services import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +63,7 @@ class UniswapV3Adapter(BaseDefiAdapter):
                     _API_KEY_PROJECT_ID,
                 )
 
-                project_id_check = self.project_id or os.getenv(
+                project_id_check = self.project_id or get_config(
                     "GCP_PROJECT_ID", "central-element-323112"
                 )
                 if _API_KEY_CACHE and _API_KEY_PROJECT_ID == project_id_check:
@@ -84,13 +84,11 @@ class UniswapV3Adapter(BaseDefiAdapter):
                 # Use The Graph Network endpoint with API key
                 subgraph_urls = {
                     "ETHEREUM": f"https://gateway.thegraph.com/api/{self.api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
-                    "ARBITRUM": os.getenv(
-                        "THE_GRAPH_UNISWAP_V3_ARB_URL",
-                        f"https://gateway-arbitrum.network.thegraph.com/api/{self.api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
+                    "ARBITRUM": get_config(
+                        "THE_GRAPH_UNISWAP_V3_ARB_URL", f"https://gateway-arbitrum.network.thegraph.com/api/{self.api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
                     ),
-                    "BASE": os.getenv(
-                        "THE_GRAPH_UNISWAP_V3_BASE_URL",
-                        f"https://gateway.thegraph.com/api/{self.api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
+                    "BASE": get_config(
+                        "THE_GRAPH_UNISWAP_V3_BASE_URL", f"https://gateway.thegraph.com/api/{self.api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
                     ),
                 }
             else:
@@ -99,17 +97,14 @@ class UniswapV3Adapter(BaseDefiAdapter):
                     "⚠️ No The Graph API key found - using Studio endpoint (rate-limited)"
                 )
                 subgraph_urls = {
-                    "ETHEREUM": os.getenv(
-                        "THE_GRAPH_UNISWAP_V3_URL",
-                        "https://api.studio.thegraph.com/query/50688/uniswap-v3/version/latest",
+                    "ETHEREUM": get_config(
+                        "THE_GRAPH_UNISWAP_V3_URL", "https://api.studio.thegraph.com/query/50688/uniswap-v3/version/latest",
                     ),
-                    "ARBITRUM": os.getenv(
-                        "THE_GRAPH_UNISWAP_V3_ARB_URL",
-                        "https://api.studio.thegraph.com/query/50688/uniswap-v3-arbitrum/version/latest",
+                    "ARBITRUM": get_config(
+                        "THE_GRAPH_UNISWAP_V3_ARB_URL", "https://api.studio.thegraph.com/query/50688/uniswap-v3-arbitrum/version/latest",
                     ),
-                    "BASE": os.getenv(
-                        "THE_GRAPH_UNISWAP_V3_BASE_URL",
-                        "https://api.studio.thegraph.com/query/50688/uniswap-v3-base/version/latest",
+                    "BASE": get_config(
+                        "THE_GRAPH_UNISWAP_V3_BASE_URL", "https://api.studio.thegraph.com/query/50688/uniswap-v3-base/version/latest",
                     ),
                 }
             subgraph_url = subgraph_urls.get(self.chain, subgraph_urls["ETHEREUM"])

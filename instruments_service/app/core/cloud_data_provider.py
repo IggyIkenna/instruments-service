@@ -10,7 +10,7 @@ import pandas as pd
 import os
 from typing import Optional, Dict, Any
 from datetime import datetime
-from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
+from unified_cloud_services import StandardizedDomainCloudService, CloudTarget, get_config
 
 from unified_cloud_services import get_bucket_for_category
 
@@ -35,10 +35,10 @@ class CloudDataProvider:
             import os
 
             cloud_target = CloudTarget(
-                project_id=os.getenv("GCP_PROJECT_ID", "central-element-323112"),
-                gcs_bucket=os.getenv("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
-                bigquery_dataset=os.getenv("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
-                bigquery_location=os.getenv(
+                project_id=get_config("GCP_PROJECT_ID", "central-element-323112"),
+                gcs_bucket=get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
+                bigquery_dataset=get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
+                bigquery_location=get_config(
                     "BIGQUERY_LOCATION", "asia-northeast1"
                 ),  # Default to asia-northeast1 per .env
             )
@@ -111,11 +111,11 @@ class CloudDataProvider:
 
         try:
             # Detect test mode
-            environment = os.getenv("ENVIRONMENT", "development").lower()
+            environment = get_config("ENVIRONMENT", "development").lower()
             is_test = (
                 environment in ["test", "testing"]
                 or "pytest" in os.environ.get("_", "")
-                or os.getenv("PYTEST_CURRENT_TEST") is not None
+                or get_config("PYTEST_CURRENT_TEST") is not None
             )
             
             # Get bucket for category

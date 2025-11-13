@@ -38,7 +38,7 @@ from instruments_service.config import (
 logger = logging.getLogger(__name__)
 
 try:
-    from unified_cloud_services import get_secret_with_fallback
+    from unified_cloud_services import get_secret_with_fallback, get_config
 
     SECRET_MANAGER_AVAILABLE = True
 except ImportError:
@@ -102,12 +102,11 @@ class InstrumentProcessingService:
         # If not in config, try Secret Manager (only if available)
         if not self.api_key and SECRET_MANAGER_AVAILABLE:
             try:
-                import os
 
                 # Import here to avoid scoping issues
-                from unified_cloud_services import get_secret_with_fallback
+                from unified_cloud_services import get_secret_with_fallback, get_config
 
-                secret_name = os.getenv("TARDIS_SECRET_NAME", "tardis-api-key")
+                secret_name = get_config("TARDIS_SECRET_NAME", "tardis-api-key")
                 logger.debug(
                     f"Attempting to retrieve Tardis API key from Secret Manager (secret: {secret_name}, project: {project_id})"
                 )
@@ -168,11 +167,10 @@ class InstrumentProcessingService:
         # This avoids repeated Secret Manager calls when fetching DeFi instruments
         self._graph_api_key = None
         try:
-            from unified_cloud_services import get_secret_with_fallback
-            import os
+            from unified_cloud_services import get_secret_with_fallback, get_config
 
-            project_id_for_graph = os.getenv("GCP_PROJECT_ID", "central-element-323112")
-            secret_name = os.getenv("GRAPH_SECRET_NAME", "graph-api-key")
+            project_id_for_graph = get_config("GCP_PROJECT_ID", "central-element-323112")
+            secret_name = get_config("GRAPH_SECRET_NAME", "graph-api-key")
             self._graph_api_key = get_secret_with_fallback(
                 project_id=project_id_for_graph,
                 secret_name=secret_name,
@@ -2265,7 +2263,8 @@ class InstrumentProcessingService:
                 raw_instruments = adapter.fetch_instruments()
 
             else:
-                logger.error(f"Unknown DeFi protocol: {protocol}")
+                # Protocol is listed but not yet implemented (e.g., euler_plasma, fluid_plasma, aave_plasma)
+                logger.debug(f"DeFi protocol '{protocol}' not yet implemented, skipping")
                 return {}
 
             # Apply uniform date filtering using DateFilterService
@@ -2444,7 +2443,8 @@ class InstrumentProcessingService:
             return instruments
 
         except ImportError as e:
-            logger.error(f"DeFi adapter not available: {e}")
+            # Adapter not yet implemented (e.g., UniswapV2Adapter, UniswapV4Adapter, CurveAdapter, EthenaAdapter)
+            logger.debug(f"DeFi adapter not available (not yet implemented): {e}")
             return {}
         except Exception as e:
             logger.error(f"Failed to fetch {protocol} instruments: {e}")

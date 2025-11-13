@@ -8,6 +8,7 @@ This script queries The Graph Explorer API to find subgraph IDs for popular DeFi
 import requests
 import json
 from typing import Dict, Optional
+from unified_cloud_services import get_config
 
 # Subgraph names we need IDs for (Ethereum only)
 SUBDGRAPH_NAMES = {
@@ -144,9 +145,8 @@ def main():
     print("=" * 60)
 
     # Get API key from environment or use placeholder
-    import os
 
-    api_key = os.getenv("THEGRAPH_API_KEY", "test-key")
+    api_key = get_config("THEGRAPH_API_KEY", "test-key")
 
     subgraph_ids = {}
 
