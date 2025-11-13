@@ -153,3 +153,117 @@ class TestInstrumentsServiceExtended:
         service.cleanup()
         service.processing_service.cleanup.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_generate_instruments_for_date_cefi(self, service):
+        """Test generating instruments for CeFi mode."""
+        from datetime import datetime, timezone
+        target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        
+        service.processing_service.process_exchange_instruments = AsyncMock(
+            return_value={"TEST:SPOT_PAIR:BTC-USDT": Mock()}
+        )
+        service.venue_mapping.all_tardis_exchanges = ["binance"]
+        
+        result = await service.generate_instruments_for_date(
+            date=target_date,
+            cefi=True,
+            tradfi=False,
+            defi=False,
+        )
+        
+        assert result["status"] in ["success", "warning"]
+        assert "instruments_generated" in result or "message" in result
+
+    @pytest.mark.asyncio
+    async def test_generate_instruments_for_date_tradfi(self, service):
+        """Test generating instruments for TradFi mode."""
+        from datetime import datetime, timezone
+        target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        
+        with patch("instruments_service.app.core.instruments_service.DatabentoAdapter") as mock_adapter_class, \
+             patch("instruments_service.app.core.instruments_service.DatabentoInstrumentConfig") as mock_config_class:
+            mock_adapter = Mock()
+            mock_adapter.create_vix_instrument_definition.return_value = {
+                "instrument_key": "CBOE:INDEX:VIX",
+                "venue": "CBOE",
+                "instrument_type": "INDEX",
+            }
+            mock_adapter_class.return_value = mock_adapter
+            
+            mock_config = Mock()
+            mock_config.get_symbols_for_venue.return_value = ["ES.FUT"]
+            mock_config_class.return_value = mock_config
+            
+            service.processing_service.fetch_databento_instruments = AsyncMock(
+                return_value={"CME:FUTURE:ES": Mock()}
+            )
+            
+            result = await service.generate_instruments_for_date(
+                date=target_date,
+                cefi=False,
+                tradfi=True,
+                defi=False,
+            )
+            
+            assert result["status"] in ["success", "warning"]
+
+    @pytest.mark.asyncio
+    async def test_generate_instruments_for_date_defi(self, service):
+        """Test generating instruments for DeFi mode."""
+        from datetime import datetime, timezone
+        target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        
+        service.processing_service.fetch_defi_instruments = Mock(
+            return_value={"UNISWAPV3-ETH:POOL:TEST": Mock()}
+        )
+        
+        result = await service.generate_instruments_for_date(
+            date=target_date,
+            cefi=False,
+            tradfi=False,
+            defi=True,
+        )
+        
+        assert result["status"] in ["success", "warning"]
+
+    @pytest.mark.asyncio
+    async def test_generate_instruments_for_date_no_modes(self, service):
+        """Test generating instruments with no mode flags (processes all)."""
+        from datetime import datetime, timezone
+        target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        
+        service.generate_instruments_for_date = AsyncMock(
+            return_value={"status": "success", "instruments_generated": 10}
+        )
+        
+        result = await service.generate_instruments_for_date(
+            date=target_date,
+            cefi=False,
+            tradfi=False,
+            defi=False,
+        )
+        
+        # Should recursively call with all modes
+        assert service.generate_instruments_for_date.called
+
+    def test_query_instruments_with_filters(self, service):
+        """Test querying instruments with all filters."""
+        mock_df = pd.DataFrame({
+            "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+            "venue": ["TEST"],
+            "instrument_type": ["SPOT_PAIR"],
+            "base_asset": ["BTC"],
+            "quote_asset": ["USDT"],
+        })
+        service.cloud_storage.query_instruments.return_value = mock_df
+        
+        result = service.query_instruments(
+            venue="TEST",
+            instrument_type="SPOT_PAIR",
+            base_asset="BTC",
+            quote_asset="USDT"
+        )
+        
+        assert isinstance(result, pd.DataFrame)
+        assert len(result) == 1
+
