@@ -55,9 +55,7 @@ def run_tests_with_coverage(coverage_threshold: int = 75) -> dict:
     if coverage_file.exists():
         with open(coverage_file, "r") as f:
             coverage_data = json.load(f)
-            coverage_percent = coverage_data.get("totals", {}).get(
-                "percent_covered", 0.0
-            )
+            coverage_percent = coverage_data.get("totals", {}).get("percent_covered", 0.0)
 
     # Check if coverage meets threshold
     coverage_meets_threshold = coverage_percent >= coverage_threshold
@@ -80,9 +78,7 @@ def run_tests_with_coverage(coverage_threshold: int = 75) -> dict:
         if not test_passed:
             print("  - Tests are failing")
         if not coverage_meets_threshold:
-            print(
-                f"  - Coverage {coverage_percent:.2f}% is below threshold {coverage_threshold}%"
-            )
+            print(f"  - Coverage {coverage_percent:.2f}% is below threshold {coverage_threshold}%")
 
     return {
         "tests_passed": test_passed,
@@ -95,9 +91,7 @@ def run_tests_with_coverage(coverage_threshold: int = 75) -> dict:
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="Quality Gates for instruments-service"
-    )
+    parser = argparse.ArgumentParser(description="Quality Gates for instruments-service")
     parser.add_argument(
         "--coverage-threshold",
         type=int,

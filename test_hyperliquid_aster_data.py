@@ -16,8 +16,7 @@ from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidA
 from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
 
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -53,9 +52,7 @@ def test_hyperliquid_data():
         logger.info(f"\n🔍 Testing data availability for {coin} ({inst_key})...")
 
         data_availability = adapter.test_historical_data_availability(
-            coin=coin,
-            start_date=test_date,
-            end_date=end_date
+            coin=coin, start_date=test_date, end_date=end_date
         )
 
         results[inst_key] = {
@@ -108,9 +105,7 @@ def test_aster_data():
         logger.info(f"\n🔍 Testing data availability for {symbol} ({inst_key})...")
 
         data_availability = adapter.test_historical_data_availability(
-            symbol=symbol,
-            start_date=test_date,
-            end_date=end_date
+            symbol=symbol, start_date=test_date, end_date=end_date
         )
 
         results[inst_key] = {
@@ -147,15 +142,23 @@ def main():
 
     logger.info(f"\nHyperliquid: Tested {len(hyperliquid_results)} instruments")
     if hyperliquid_results:
-        trades_available = sum(1 for r in hyperliquid_results.values() if r["data_availability"]["trades"])
-        book_available = sum(1 for r in hyperliquid_results.values() if r["data_availability"]["book_snapshot_5"])
+        trades_available = sum(
+            1 for r in hyperliquid_results.values() if r["data_availability"]["trades"]
+        )
+        book_available = sum(
+            1 for r in hyperliquid_results.values() if r["data_availability"]["book_snapshot_5"]
+        )
         logger.info(f"  - Trades available: {trades_available}/{len(hyperliquid_results)}")
         logger.info(f"  - Book snapshot available: {book_available}/{len(hyperliquid_results)}")
 
     logger.info(f"\nAster: Tested {len(aster_results)} instruments")
     if aster_results:
-        trades_available = sum(1 for r in aster_results.values() if r["data_availability"]["trades"])
-        book_available = sum(1 for r in aster_results.values() if r["data_availability"]["book_snapshot_5"])
+        trades_available = sum(
+            1 for r in aster_results.values() if r["data_availability"]["trades"]
+        )
+        book_available = sum(
+            1 for r in aster_results.values() if r["data_availability"]["book_snapshot_5"]
+        )
         logger.info(f"  - Trades available: {trades_available}/{len(aster_results)}")
         logger.info(f"  - Book snapshot available: {book_available}/{len(aster_results)}")
 

@@ -78,9 +78,7 @@ class TestInstrumentProcessingIntegration:
         assert len(service.api_key) > 0
 
     @pytest.mark.asyncio
-    async def test_generate_instruments_for_exchanges(
-        self, gcp_project_id, tardis_api_key
-    ):
+    async def test_generate_instruments_for_exchanges(self, gcp_project_id, tardis_api_key):
         """Test generating instruments for multiple exchanges."""
         config = {
             "project_id": gcp_project_id,

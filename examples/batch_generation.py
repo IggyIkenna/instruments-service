@@ -89,16 +89,12 @@ async def generate_instruments_batch(
             for exchange in exchanges:
                 try:
                     logger.info(f"  🔍 Processing {exchange}...")
-                    exchange_instruments = (
-                        await processing_service.process_exchange_instruments(
-                            exchange=exchange, target_date=current_date, force=force
-                        )
+                    exchange_instruments = await processing_service.process_exchange_instruments(
+                        exchange=exchange, target_date=current_date, force=force
                     )
                     if exchange_instruments:
                         all_instruments.update(exchange_instruments)
-                        logger.info(
-                            f"  ✅ {exchange}: {len(exchange_instruments)} instruments"
-                        )
+                        logger.info(f"  ✅ {exchange}: {len(exchange_instruments)} instruments")
                 except Exception as e:
                     logger.error(f"  ❌ Failed to process {exchange}: {e}")
                     errors.append(f"{date_str}/{exchange}: {e}")
@@ -168,9 +164,7 @@ def main():
     parser = argparse.ArgumentParser(description="Batch instrument generation")
     parser.add_argument("--start-date", required=True, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end-date", required=True, help="End date (YYYY-MM-DD)")
-    parser.add_argument(
-        "--exchanges", nargs="+", help="Exchanges to process (default: all)"
-    )
+    parser.add_argument("--exchanges", nargs="+", help="Exchanges to process (default: all)")
     parser.add_argument("--force", action="store_true", help="Force regeneration")
 
     args = parser.parse_args()

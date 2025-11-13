@@ -87,5 +87,3 @@ Both venues support:
 - ✅ `book_snapshot_5` - Order book depth (5+ levels)
 
 Sample CSV files have been generated in `sample_data/` directory showing the actual data structure.
-
-
