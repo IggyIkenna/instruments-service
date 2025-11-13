@@ -129,9 +129,10 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
         gh_pat = os.getenv("GH_PAT") or os.getenv("GITHUB_TOKEN")
         if gh_pat:
             print("\n📦 Attempting GitHub Packages installation...")
+            # Use __token__ format for GitHub Packages (more secure)
             cmd = [
                 sys.executable, "-m", "pip", "install", "unified-cloud-services",
-                "--extra-index-url", f"https://{gh_pat}@pypi.pkg.github.com/iggyikenna/simple"
+                "--extra-index-url", f"https://__token__:{gh_pat}@pypi.pkg.github.com/iggyikenna/simple"
             ]
             result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
             
@@ -142,6 +143,10 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
                 print("⚠️  GitHub Packages installation failed")
                 if result.stderr:
                     print(f"   Error: {result.stderr[:300]}")
+                # Check if package exists at all
+                if "Could not find a version" in result.stderr:
+                    print("   ℹ️  Package may not be published to GitHub Packages yet")
+                    print("   ℹ️  Run the publish workflow in unified-cloud-services repository")
         else:
             print("⚠️  Skipping GitHub Packages (GH_PAT or GITHUB_TOKEN not set)")
     
@@ -150,11 +155,27 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
         gh_pat = os.getenv("GH_PAT") or os.getenv("GITHUB_TOKEN")
         if gh_pat:
             print("\n📦 Attempting GitHub repository installation...")
+            # Disable interactive prompts
+            env = os.environ.copy()
+            env["GIT_TERMINAL_PROMPT"] = "0"
+            
+            # Determine if we're using GITHUB_TOKEN (from GitHub Actions) or a PAT
+            # GITHUB_TOKEN works better with x-access-token format
+            # PATs work with token-as-username format
+            is_github_token = os.getenv("GITHUB_TOKEN") == gh_pat
+            
+            # Try x-access-token format first (works best in GitHub Actions)
+            if is_github_token:
+                print("   Using x-access-token format (GitHub Actions token)")
+                url = f"git+https://x-access-token:{gh_pat}@github.com/iggyikenna/unified-cloud-services.git"
+            else:
+                print("   Using PAT format")
+                url = f"git+https://{gh_pat}@github.com/iggyikenna/unified-cloud-services.git"
+            
             cmd = [
-                sys.executable, "-m", "pip", "install",
-                f"git+https://{gh_pat}@github.com/iggyikenna/unified-cloud-services.git"
+                sys.executable, "-m", "pip", "install", url
             ]
-            result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
+            result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True, env=env)
             
             if result.returncode == 0:
                 print("✅ unified-cloud-services installed successfully from GitHub repository")
@@ -163,6 +184,19 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
                 print("⚠️  GitHub repository installation failed")
                 if result.stderr:
                     print(f"   Error: {result.stderr[:300]}")
+                # Try alternative format if first attempt failed
+                if not is_github_token and ("could not read Password" in result.stderr or "No such device" in result.stderr):
+                    print("   🔄 Retrying with x-access-token format...")
+                    url_alt = f"git+https://x-access-token:{gh_pat}@github.com/iggyikenna/unified-cloud-services.git"
+                    cmd_alt = [
+                        sys.executable, "-m", "pip", "install", url_alt
+                    ]
+                    result_alt = subprocess.run(cmd_alt, cwd=project_root, capture_output=True, text=True, env=env)
+                    if result_alt.returncode == 0:
+                        print("✅ unified-cloud-services installed successfully from GitHub repository (x-access-token)")
+                        installed = True
+                    else:
+                        print(f"   Error (retry): {result_alt.stderr[:300] if result_alt.stderr else result_alt.stdout[:300]}")
         else:
             print("⚠️  Skipping GitHub repository (GH_PAT or GITHUB_TOKEN not set)")
     
