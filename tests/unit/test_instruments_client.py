@@ -62,9 +62,7 @@ class TestInstrumentsClient:
             "instruments_service.clients.instruments_client.StandardizedDomainCloudService",
             return_value=mock_cloud_service,
         ):
-            client = InstrumentsClient(
-                project_id="test-project", bucket_name="test-bucket"
-            )
+            client = InstrumentsClient(project_id="test-project", bucket_name="test-bucket")
             client.cloud_service = mock_cloud_service
             return client
 
@@ -74,9 +72,7 @@ class TestInstrumentsClient:
             "instruments_service.clients.instruments_client.StandardizedDomainCloudService",
             return_value=mock_cloud_service,
         ):
-            client = InstrumentsClient(
-                project_id="test-project", bucket_name="test-bucket"
-            )
+            client = InstrumentsClient(project_id="test-project", bucket_name="test-bucket")
             assert client.project_id == "test-project"
             assert client.bucket_name == "test-bucket"
             assert client.cloud_service is not None
@@ -230,9 +226,7 @@ class TestInstrumentsClient:
                 ]
             }
         )
-        result = client._apply_filters(
-            df, instrument_ids=["BINANCE-SPOT:SPOT_PAIR:BTC-USDT"]
-        )
+        result = client._apply_filters(df, instrument_ids=["BINANCE-SPOT:SPOT_PAIR:BTC-USDT"])
         assert len(result) == 1
 
     def test_apply_filters_multiple(self, client):
@@ -271,9 +265,7 @@ class TestInstrumentsClient:
 
     def test_get_available_instrument_types_with_venue(self, client):
         """Test getting available instrument types with venue filter."""
-        result = client.get_available_instrument_types(
-            "2024-01-01", venue="BINANCE-SPOT"
-        )
+        result = client.get_available_instrument_types("2024-01-01", venue="BINANCE-SPOT")
         assert isinstance(result, list)
 
     def test_get_available_base_currencies(self, client):
@@ -325,9 +317,7 @@ class TestInstrumentsClient:
                 }
             )
         )
-        result = client.get_instrument_details(
-            "2024-01-01", "BINANCE-SPOT:SPOT_PAIR:BTC-USDT"
-        )
+        result = client.get_instrument_details("2024-01-01", "BINANCE-SPOT:SPOT_PAIR:BTC-USDT")
         assert result is not None
         assert "instrument_key" in result
 
@@ -348,9 +338,7 @@ class TestInstrumentsClient:
                 "data_types": "trades,book_snapshot_5",
             }
         )
-        result = client.get_trading_parameters(
-            "2024-01-01", "BINANCE-SPOT:SPOT_PAIR:BTC-USDT"
-        )
+        result = client.get_trading_parameters("2024-01-01", "BINANCE-SPOT:SPOT_PAIR:BTC-USDT")
         assert result is not None
 
     def test_get_trading_parameters_not_found(self, client):

@@ -75,12 +75,15 @@ class TestInstrumentHandler:
     @pytest.fixture
     def handler(self, mock_instrument_service, mock_cloud_storage, mock_data_provider):
         """Create handler with mocked dependencies."""
-        with patch(
-            "instruments_service.cli.handlers.instrument_handler.InstrumentsService",
-            return_value=mock_instrument_service,
-        ), patch(
-            "instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage",
-            return_value=mock_cloud_storage,
+        with (
+            patch(
+                "instruments_service.cli.handlers.instrument_handler.InstrumentsService",
+                return_value=mock_instrument_service,
+            ),
+            patch(
+                "instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage",
+                return_value=mock_cloud_storage,
+            ),
         ):
 
             config = {"project_id": "test-project"}
@@ -93,12 +96,15 @@ class TestInstrumentHandler:
 
     def test_init(self, mock_instrument_service, mock_cloud_storage):
         """Test handler initialization."""
-        with patch(
-            "instruments_service.cli.handlers.instrument_handler.InstrumentsService",
-            return_value=mock_instrument_service,
-        ), patch(
-            "instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage",
-            return_value=mock_cloud_storage,
+        with (
+            patch(
+                "instruments_service.cli.handlers.instrument_handler.InstrumentsService",
+                return_value=mock_instrument_service,
+            ),
+            patch(
+                "instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage",
+                return_value=mock_cloud_storage,
+            ),
         ):
             config = {"project_id": "test-project"}
             handler = InstrumentHandler(config)
@@ -130,9 +136,7 @@ class TestInstrumentHandler:
         test_date = today - timedelta(days=1)
 
         # Patch CloudDataProvider to avoid import issues
-        with patch(
-            "instruments_service.cli.handlers.instrument_handler.CloudDataProvider"
-        ):
+        with patch("instruments_service.cli.handlers.instrument_handler.CloudDataProvider"):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
@@ -153,9 +157,7 @@ class TestInstrumentHandler:
         # Should skip future date
         assert result["dates_skipped"] >= 0
 
-    def test_execute_instrument_generation_skip_existing(
-        self, handler, mock_data_provider
-    ):
+    def test_execute_instrument_generation_skip_existing(self, handler, mock_data_provider):
         """Test skipping existing instruments when force=False."""
         # Patch CloudDataProvider at the point where it's imported (inside the method)
         with patch(
@@ -176,9 +178,7 @@ class TestInstrumentHandler:
             # Should skip if exists
             assert result["dates_skipped"] >= 0
 
-    def test_execute_instrument_generation_force_mode(
-        self, handler, mock_data_provider
-    ):
+    def test_execute_instrument_generation_force_mode(self, handler, mock_data_provider):
         """Test force mode doesn't skip existing."""
         # Patch CloudDataProvider at the point where it's imported (inside the method)
         with patch(
@@ -201,9 +201,7 @@ class TestInstrumentHandler:
 
     def test_execute_instrument_generation_no_instruments(self, handler):
         """Test handling when no instruments generated."""
-        with patch(
-            "instruments_service.cli.handlers.instrument_handler.CloudDataProvider"
-        ):
+        with patch("instruments_service.cli.handlers.instrument_handler.CloudDataProvider"):
             handler.instruments_service.generate_instruments_for_date = AsyncMock(
                 return_value={"status": "warning", "instruments_generated": 0}
             )
@@ -218,15 +216,11 @@ class TestInstrumentHandler:
 
             assert result["instruments_generated"] == 0
 
-    def test_execute_instrument_generation_storage_failure(
-        self, handler, mock_cloud_storage
-    ):
+    def test_execute_instrument_generation_storage_failure(self, handler, mock_cloud_storage):
         """Test handling storage failure."""
         mock_cloud_storage.store_instruments.return_value = False
 
-        with patch(
-            "instruments_service.cli.handlers.instrument_handler.CloudDataProvider"
-        ):
+        with patch("instruments_service.cli.handlers.instrument_handler.CloudDataProvider"):
             handler.instruments_service.generate_instruments_for_date = AsyncMock(
                 return_value={"status": "success", "instruments_generated": 10}
             )
@@ -243,9 +237,7 @@ class TestInstrumentHandler:
 
     def test_execute_instrument_generation_exception_handling(self, handler):
         """Test exception handling during generation."""
-        with patch(
-            "instruments_service.cli.handlers.instrument_handler.CloudDataProvider"
-        ):
+        with patch("instruments_service.cli.handlers.instrument_handler.CloudDataProvider"):
             handler.instruments_service.generate_instruments_for_date = AsyncMock(
                 side_effect=Exception("Test error")
             )
@@ -260,22 +252,24 @@ class TestInstrumentHandler:
 
             assert result["dates_with_errors"] >= 0
 
-    @pytest.mark.skip(reason="Method _generate_instruments_for_date no longer exists in implementation")
+    @pytest.mark.skip(
+        reason="Method _generate_instruments_for_date no longer exists in implementation"
+    )
     def test_generate_instruments_for_date(self, handler, mock_instrument_service):
         """Test generating instruments for a date."""
         pass
 
-    @pytest.mark.skip(reason="Method _generate_instruments_for_date no longer exists in implementation")
-    def test_generate_instruments_for_date_all_exchanges(
-        self, handler, mock_instrument_service
-    ):
+    @pytest.mark.skip(
+        reason="Method _generate_instruments_for_date no longer exists in implementation"
+    )
+    def test_generate_instruments_for_date_all_exchanges(self, handler, mock_instrument_service):
         """Test generating instruments for all exchanges."""
         pass
 
-    @pytest.mark.skip(reason="Method _generate_instruments_for_date no longer exists in implementation")
-    def test_generate_instruments_for_date_exchange_error(
-        self, handler, mock_instrument_service
-    ):
+    @pytest.mark.skip(
+        reason="Method _generate_instruments_for_date no longer exists in implementation"
+    )
+    def test_generate_instruments_for_date_exchange_error(self, handler, mock_instrument_service):
         """Test handling exchange processing errors."""
         pass
 

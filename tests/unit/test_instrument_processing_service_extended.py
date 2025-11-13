@@ -50,7 +50,9 @@ class TestInstrumentProcessingServiceExtended:
     # Note: fetch_exchange_instruments requires real API calls or complex mocking
     # Testing date filtering logic separately via _is_instrument_available_on_date
 
-    @pytest.mark.skip(reason="Method _is_instrument_available_on_date no longer exists in implementation")
+    @pytest.mark.skip(
+        reason="Method _is_instrument_available_on_date no longer exists in implementation"
+    )
     def test_is_instrument_available_on_date(self):
         """Test date availability checking."""
         config = {"tardis_api_key": "test-key"}
@@ -95,7 +97,9 @@ class TestInstrumentProcessingServiceExtended:
             == False
         )
 
-    @pytest.mark.skip(reason="Method _is_instrument_currently_active no longer exists in implementation")
+    @pytest.mark.skip(
+        reason="Method _is_instrument_currently_active no longer exists in implementation"
+    )
     def test_is_instrument_currently_active(self):
         """Test currently active instrument checking."""
         config = {"tardis_api_key": "test-key"}
@@ -283,9 +287,7 @@ class TestInstrumentProcessingServiceExtended:
             },
         }
 
-        filtered = service.filter_instruments_by_exchange_config(
-            instruments, "BINANCE-FUTURES"
-        )
+        filtered = service.filter_instruments_by_exchange_config(instruments, "BINANCE-FUTURES")
         # SPOT_PAIR should be filtered out (BINANCE-FUTURES only accepts PERPETUAL, FUTURE)
         assert "BINANCE-FUTURES:PERPETUAL:BTC-USDT" in filtered or len(filtered) == 0
 
@@ -356,9 +358,7 @@ class TestInstrumentProcessingServiceExtended:
         service = InstrumentProcessingService(config)
 
         # New format: BTC-USD-240329-120000-CALL
-        result = service._parse_option_components(
-            "BTC-USD-240329-120000-CALL", "deribit"
-        )
+        result = service._parse_option_components("BTC-USD-240329-120000-CALL", "deribit")
         assert "strike_price" in result
         assert "option_type" in result
         assert result["option_type"] == "CALL"
@@ -458,7 +458,9 @@ class TestInstrumentProcessingServiceExtended:
         assert isinstance(result, dict)
         assert result.get("base_asset") == "PERP"
 
-    @pytest.mark.skip(reason="Method _is_instrument_available_on_date no longer exists in implementation")
+    @pytest.mark.skip(
+        reason="Method _is_instrument_available_on_date no longer exists in implementation"
+    )
     def test_is_instrument_available_on_date_with_expiry_future(self):
         """Test date availability with future expiry."""
         config = {"tardis_api_key": "test-key"}
@@ -473,7 +475,9 @@ class TestInstrumentProcessingServiceExtended:
             == True
         )
 
-    @pytest.mark.skip(reason="Method _is_instrument_available_on_date no longer exists in implementation")
+    @pytest.mark.skip(
+        reason="Method _is_instrument_available_on_date no longer exists in implementation"
+    )
     def test_is_instrument_available_on_date_with_expiry_expired(self):
         """Test date availability with expired future."""
         config = {"tardis_api_key": "test-key"}
@@ -490,7 +494,9 @@ class TestInstrumentProcessingServiceExtended:
         # Should be False if expiry parsing works correctly
         assert isinstance(result, bool)
 
-    @pytest.mark.skip(reason="Method _is_instrument_available_on_date no longer exists in implementation")
+    @pytest.mark.skip(
+        reason="Method _is_instrument_available_on_date no longer exists in implementation"
+    )
     def test_is_instrument_available_on_date_parse_error(self):
         """Test date availability with parse error defaults to True."""
         config = {"tardis_api_key": "test-key"}

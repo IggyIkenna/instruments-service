@@ -75,9 +75,7 @@ def query_subgraph_registry(subgraph_name: str) -> Optional[str]:
         Subgraph ID or None
     """
     # The Graph Network subgraph registry
-    registry_url = (
-        "https://api.thegraph.com/subgraphs/name/graphprotocol/graph-network-mainnet"
-    )
+    registry_url = "https://api.thegraph.com/subgraphs/name/graphprotocol/graph-network-mainnet"
 
     # Extract org and name
     parts = subgraph_name.split("/")

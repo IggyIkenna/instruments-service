@@ -73,9 +73,7 @@ class TestCLIHandlersInit:
         _handler_registry.clear()
 
         # Mock handler to populate registry
-        with patch(
-            "instruments_service.cli.handlers.instrument_handler.InstrumentHandler"
-        ):
+        with patch("instruments_service.cli.handlers.instrument_handler.InstrumentHandler"):
             get_handler_for_mode("instruments", config)  # This populates registry
 
         with pytest.raises(ValueError, match="Unsupported mode"):
