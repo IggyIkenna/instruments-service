@@ -34,7 +34,7 @@ dependencies = [
     "databento>=0.20.0",  # TradFi instruments (CME, NASDAQ, NYSE)
     "boto3>=1.40.70",
     # Unified cloud services (infrastructure)
-    "unified-cloud-services>=1.0.0",
+    "unified-cloud-services>=1.2.0",
 ]
 
 [project.optional-dependencies]
