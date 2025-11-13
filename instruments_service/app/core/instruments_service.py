@@ -11,10 +11,11 @@ import asyncio
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 
-from .instrument_processing_service import InstrumentProcessingService
-from .cloud_instrument_storage import CloudInstrumentStorage
-from .batch_processor import InstrumentBatchProcessor
+from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
+from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
+from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 from instruments_service.config import VenueMapping
+from instruments_service.app.venues.databento.databento_adapter import DatabentoAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -99,11 +100,17 @@ class InstrumentsService:
 
         # Process CEFI (Tardis) exchanges
         if cefi:
+            import asyncio
+            
             # Use specified exchanges or all Tardis exchanges
             if exchanges is None:
                 exchanges = self.venue_mapping.all_tardis_exchanges
 
-            for exchange in exchanges:
+            logger.info(f"🚀 Processing {len(exchanges)} CeFi exchanges in parallel...")
+            
+            # OPTIMIZATION: Process all exchanges in parallel using asyncio.gather
+            # Each exchange is independent, so we can parallelize API calls
+            async def process_single_exchange(exchange: str):
                 try:
                     logger.info(f"🔍 Processing CeFi exchange {exchange}...")
                     exchange_instruments = (
@@ -112,76 +119,90 @@ class InstrumentsService:
                         )
                     )
                     if exchange_instruments:
-                        all_instruments.update(exchange_instruments)
                         logger.info(
                             f"✅ Processed {len(exchange_instruments)} instruments from {exchange}"
                         )
+                        return exchange_instruments
+                    return {}
                 except Exception as e:
                     logger.error(f"❌ Failed to process {exchange}: {e}", exc_info=True)
+                    return {}
+            
+            # Process all exchanges in parallel
+            results = await asyncio.gather(
+                *[process_single_exchange(ex) for ex in exchanges],
+                return_exceptions=False  # Let individual exceptions be caught in process_single_exchange
+            )
+            
+            # Merge all results
+            for result in results:
+                if result:
+                    all_instruments.update(result)
 
         # Process TRADFI (Databento) exchanges
         if tradfi:
+            import asyncio
+            
             try:
                 from instruments_service.config import DatabentoInstrumentConfig
 
                 databento_config = DatabentoInstrumentConfig()
 
-                # Common TradFi exchanges via Databento
-                databento_exchanges = ["CME", "NASDAQ", "NYSE", "ICE", "CBOE"]
+                # Simplified TradFi exchanges (CME + VIX only)
+                databento_exchanges = ["CME", "CBOE"]
+                
+                logger.info(f"🚀 Processing {len(databento_exchanges)} TradFi venues...")
 
-                # Track DBEQ.BASIC symbols to avoid duplicate fetches
-                dbeq_symbols_fetched = False
-
-                for exchange in databento_exchanges:
+                # OPTIMIZATION: Process CME and VIX in parallel
+                async def process_databento_exchange(exchange: str):
                     try:
-                        # For NASDAQ/NYSE, fetch all DBEQ.BASIC symbols once
-                        if exchange in ["NASDAQ", "NYSE"]:
-                            if dbeq_symbols_fetched:
-                                logger.info(
-                                    f"⏭️ Skipping {exchange} (already fetched DBEQ.BASIC symbols via NASDAQ)"
-                                )
-                                continue
-
-                            # Get all equities from DBEQ.BASIC dataset
-                            symbols = databento_config._unified.get_symbols_for_dataset(
-                                "DBEQ.BASIC"
-                            )
-                            dbeq_symbols_fetched = True
-                            logger.info(
-                                f"📋 Fetching all DBEQ.BASIC symbols ({len(symbols)} symbols) for {exchange}"
-                            )
-                        elif exchange == "CBOE":
-                            # Get options symbols for CBOE
-                            symbols = databento_config._unified.get_symbols_for_dataset(
-                                "OPRA.PILLAR"
-                            )
-                            logger.info(
-                                f"📋 Fetching CBOE options symbols ({len(symbols)} symbols)"
-                            )
+                        if exchange == "CBOE":
+                            # CBOE only has VIX index (static definition)
+                            from instruments_service.models import InstrumentDefinition
+                            
+                            # Create Databento adapter instance (reuses cached client)
+                            databento_adapter = DatabentoAdapter()
+                            
+                            # Create VIX instrument definition
+                            vix_def_dict = databento_adapter.create_vix_instrument_definition(date)
+                            if vix_def_dict:
+                                vix_def = InstrumentDefinition(**vix_def_dict)
+                                logger.info(f"✅ Created VIX: {vix_def.instrument_key}")
+                                return {vix_def.instrument_key: vix_def}
+                            return {}
                         else:
-                            # Get symbols for this exchange from config (exchange names are venues)
+                            # Get symbols for CME from config
                             symbols = databento_config.get_symbols_for_venue(exchange)
+                            
+                            if not symbols:
+                                logger.warning(f"⚠️ No symbols configured for {exchange}")
+                                return {}
 
-                        if not symbols:
-                            logger.warning(f"⚠️ No symbols configured for {exchange}, skipping")
-                            continue
-
-                        # Fetch Databento instruments
-                        databento_instruments = self.processing_service.fetch_databento_instruments(
-                            exchange=exchange,
-                            symbols=symbols,
-                            target_date=date,
-                        )
-                        if databento_instruments:
-                            all_instruments.update(databento_instruments)
-                            logger.info(
-                                f"✅ Processed {len(databento_instruments)} instruments from {exchange}"
+                            # Fetch Databento instruments (uses cached client, runs in thread pool)
+                            databento_instruments = await self.processing_service.fetch_databento_instruments(
+                                exchange=exchange,
+                                symbols=symbols,
+                                target_date=date,
                             )
+                            
+                            if databento_instruments:
+                                logger.info(f"✅ Processed {len(databento_instruments)} instruments from {exchange}")
+                            return databento_instruments or {}
                     except Exception as e:
-                        logger.error(
-                            f"❌ Failed to process Databento exchange {exchange}: {e}",
-                            exc_info=True,
-                        )
+                        logger.error(f"❌ Failed to process {exchange}: {e}", exc_info=True)
+                        return {}
+                
+                # Process CME and CBOE in parallel
+                results = await asyncio.gather(
+                    *[process_databento_exchange(ex) for ex in databento_exchanges],
+                    return_exceptions=False
+                )
+                
+                # Merge results
+                for result in results:
+                    if result:
+                        all_instruments.update(result)
+                        
             except Exception as e:
                 logger.error(f"❌ Failed to initialize Databento processing: {e}", exc_info=True)
 

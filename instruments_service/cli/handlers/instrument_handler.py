@@ -13,7 +13,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from ..base_handler import ModeHandler
+from instruments_service.cli.base_handler import ModeHandler
 from instruments_service.app.core.instruments_service import InstrumentsService
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.config import VenueMapping, DatabentoInstrumentConfig

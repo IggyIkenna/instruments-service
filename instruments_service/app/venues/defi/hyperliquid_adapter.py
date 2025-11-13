@@ -10,8 +10,7 @@ Reference: https://hyperliquid.gitbook.io/hyperliquid-docs/
 import logging
 import requests
 from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta
-import json
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -207,8 +206,8 @@ class HyperliquidAdapter:
             "tardis_exchange": "",
             "tardis_symbol": "",
             "exchange_raw_symbol": coin,
-            "ccxt_symbol": f"{coin}/USDC",  # CCXT format for Hyperliquid spot
-            "ccxt_exchange": "hyperliquid",  # CCXT supports Hyperliquid
+            # ccxt_symbol and ccxt_exchange will be populated by centralized CCXT service
+            # (same as CEFI exchanges) - don't set manually here
             "available_from_datetime": available_from,
             "available_to_datetime": None,  # Spot pairs don't expire
             "data_types": "",  # Will be populated after testing data availability
@@ -277,8 +276,8 @@ class HyperliquidAdapter:
             "tardis_exchange": "",
             "tardis_symbol": "",
             "exchange_raw_symbol": coin,
-            "ccxt_symbol": f"{coin}/USDC:USDC",  # CCXT format for Hyperliquid perpetuals
-            "ccxt_exchange": "hyperliquid",  # CCXT supports Hyperliquid
+            # ccxt_symbol and ccxt_exchange will be populated by centralized CCXT service
+            # (same as CEFI exchanges) - don't set manually here
             "available_from_datetime": available_from,
             "available_to_datetime": None,  # Perpetuals don't expire
             "data_types": "",  # Will be populated after testing data availability

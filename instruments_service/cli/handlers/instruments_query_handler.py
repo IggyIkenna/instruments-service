@@ -9,7 +9,7 @@ import logging
 import json
 from typing import Dict, Any, Optional, List
 
-from ..base_handler import ModeHandler
+from instruments_service.cli.base_handler import ModeHandler
 
 logger = logging.getLogger(__name__)
 
