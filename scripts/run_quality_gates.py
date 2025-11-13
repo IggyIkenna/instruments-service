@@ -159,8 +159,22 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
     installed = False
     
     if force_github:
-        print("\n🔧 GitHub-only mode: Skipping local monorepo")
-        print("   Will only attempt GitHub Packages and GitHub repository")
+        print("\n🔧 GitHub-only mode: Checking for checked-out repository")
+        # In GitHub Actions, the workflow checks out unified-cloud-services to ../unified-cloud-services
+        # Check if it exists (checked out by workflow) and install from there
+        if unified_cloud_services_path.exists():
+            print("\n📦 Attempting installation from checked-out repository (editable mode)...")
+            cmd = [sys.executable, "-m", "pip", "install", "-e", str(unified_cloud_services_path)]
+            result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print("✅ unified-cloud-services installed successfully from checked-out repository")
+                installed = True
+            else:
+                print(f"⚠️  Checked-out repository installation failed: {result.stderr[:200]}")
+                print("   Will try GitHub Packages and GitHub repository as fallback")
+        else:
+            print("   Checked-out repository not found, will try GitHub Packages and GitHub repository")
     else:
         # Priority: Local monorepo (editable) > GitHub Packages > GitHub repo
         # Note: PyPI is skipped - unified-cloud-services is a private package
@@ -185,7 +199,7 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
             # Use __token__ format for GitHub Packages (more secure)
             cmd = [
                 sys.executable, "-m", "pip", "install", "unified-cloud-services",
-                "--extra-index-url", f"https://__token__:{gh_pat}@pypi.pkg.github.com/iggyikenna/simple"
+                "--extra-index-url", f"https://__token__:{gh_pat}@pypi.pkg.github.com/IggyIkenna/simple"
             ]
             result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
             
@@ -221,7 +235,7 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
             # Always use x-access-token format - works for both GITHUB_TOKEN and PATs
             # This is the recommended format for GitHub authentication
             print("   Using x-access-token format")
-            url = f"git+https://x-access-token:{token}@github.com/iggyikenna/unified-cloud-services.git"
+            url = f"git+https://x-access-token:{token}@github.com/IggyIkenna/unified-cloud-services.git"
             
             cmd = [
                 sys.executable, "-m", "pip", "install", url
