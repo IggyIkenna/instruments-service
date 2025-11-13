@@ -8,10 +8,8 @@ Reference: archive/basis-strategy-v1/docs/MVP_DEFI_INSTRUMENTS.md
 """
 
 import logging
-import os
 from typing import Dict, List, Optional, Any
 from datetime import datetime
-import requests
 
 logger = logging.getLogger(__name__)
 

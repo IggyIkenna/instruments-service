@@ -125,7 +125,7 @@ class TestCLIMain:
 
         try:
             mock_args = Mock()
-            mock_args.mode = "instruments"
+            mock_args.mode = "instruments-query"  # Use correct mode for query args
             mock_args.log_level = "INFO"
             mock_args.start_date = "2024-01-01"
             mock_args.end_date = "2024-01-02"
@@ -147,6 +147,9 @@ class TestCLIMain:
             mock_args.output_format = "json"
             mock_args.output_file = "output.json"
             mock_args.limit = 100
+            mock_args.CEFI = False
+            mock_args.TRADFI = False
+            mock_args.DEFI = False
             mock_parse.return_value = mock_args
 
             result = main()

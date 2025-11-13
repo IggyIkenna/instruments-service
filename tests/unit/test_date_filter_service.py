@@ -7,7 +7,7 @@ Tests uniform date filtering logic for instruments.
 import pytest
 from datetime import datetime, timezone
 
-from instruments_service.app.core.date_filter_service import DateFilterService
+from instruments_service.utils.date_filter_service import DateFilterService
 
 
 class TestDateFilterService:

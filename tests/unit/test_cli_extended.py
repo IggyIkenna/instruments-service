@@ -47,7 +47,7 @@ class TestCLIParserExtended:
         """Test argument validation for query mode."""
         args = argparse.Namespace(
             mode="instruments",
-            start_date=None,
+            start_date="2023-01-01",  # Required for instruments mode
             end_date=None,
             query_type="details",
             instrument_id="TEST:SPOT_PAIR:BTC-USDT",
@@ -72,7 +72,7 @@ class TestCLIParserExtended:
     def test_validate_arguments_query_details_missing_id(self):
         """Test validation error for missing instrument_id in details query."""
         args = argparse.Namespace(
-            mode="instruments",
+            mode="instruments-query",  # Use instruments-query mode for query validation
             start_date=None,
             end_date=None,
             query_type="details",

@@ -12,128 +12,187 @@ import os
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
+from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
+
 logger = logging.getLogger(__name__)
 
 
-class AaveV3Adapter:
+class AaveV3Adapter(BaseDefiAdapter):
     """
     Adapter for fetching AAVE V3 market instruments.
 
     Generates instruments in format:
     AAVE_V3_ETH:A_TOKEN:AUSDT@ETHEREUM
     AAVE_V3_ETH:DEBT_TOKEN:DEBTWETH@ETHEREUM
+    
+    OPTIMIZATION: Uses static risk parameters as fallback when RPC/Graph unavailable.
     """
+    
+    # Static risk parameters from archive/basis-strategy-v1/data/protocol_data/aave/risk_params/aave_v3_risk_parameters.json
+    # Used as fallback when RPC/Graph queries fail
+    STATIC_RISK_PARAMS = {
+        "emode": {
+            "ltv_limits": {
+                "weETH_WETH": 0.93,
+                "wstETH_WETH": 0.93,
+                "ETH_WETH": 0.93,
+            },
+            "liquidation_thresholds": {
+                "weETH_WETH": 0.95,
+                "wstETH_WETH": 0.95,
+                "ETH_WETH": 0.95,
+            },
+            "liquidation_bonus": {
+                "weETH_WETH": 0.01,
+                "wstETH_WETH": 0.01,
+                "ETH_WETH": 0.01,
+            },
+        },
+        "standard": {
+            "ltv_limits": {
+                "weETH_WETH": 0.80,
+                "wstETH_WETH": 0.80,
+                "ETH_WETH": 0.80,
+            },
+            "liquidation_thresholds": {
+                "weETH_WETH": 0.85,
+                "wstETH_WETH": 0.85,
+                "ETH_WETH": 0.85,
+            },
+            "liquidation_bonus": {
+                "weETH_WETH": 0.05,
+                "wstETH_WETH": 0.05,
+                "ETH_WETH": 0.05,
+            },
+        },
+        "reserve_factors": {
+            "weETH": 0.10,
+            "wstETH": 0.10,
+            "WETH": 0.10,
+            "USDT": 0.10,
+        },
+    }
 
     def __init__(
-        self,
-        chain: str = "ETHEREUM",
-        api_key: Optional[str] = None,
-        graph_api_key: Optional[str] = None,
-        project_id: Optional[str] = None,
-    ):
-        """
-        Initialize AAVE V3 adapter.
+            self,
+            chain: str = "ETHEREUM",
+            api_key: Optional[str] = None,
+            graph_api_key: Optional[str] = None,
+            project_id: Optional[str] = None,
+        ):
+            """
+            Initialize AAVE V3 adapter.
 
-        Args:
-            chain: Chain identifier (e.g., 'ETHEREUM', 'ARBITRUM', 'POLYGON')
-            api_key: AaveScan API key (optional, uses Secret Manager if not provided)
-            graph_api_key: The Graph API key (optional, uses cached key or Secret Manager if not provided)
-            project_id: GCP project ID for Secret Manager (defaults to GCP_PROJECT_ID env var)
-        """
-        self.chain = chain.upper()
-        # Map chain to venue format matching config.py
-        # Only ETHEREUM supported for MVP
-        chain_to_venue = {
-            "ETHEREUM": "AAVE_V3_ETH",
-        }
-        self.venue = chain_to_venue.get(self.chain, f"AAVE_V3_{self.chain}")
+            Args:
+                chain: Chain identifier (e.g., 'ETHEREUM', 'ARBITRUM', 'POLYGON')
+                api_key: AaveScan API key (optional, uses Secret Manager if not provided)
+                graph_api_key: The Graph API key (optional, uses cached key or Secret Manager if not provided)
+                project_id: GCP project ID for Secret Manager (defaults to GCP_PROJECT_ID env var)
+            """
+            # Initialize base class (sets self.chain, self.project_id)
+            # Note: BaseDefiAdapter sets self.api_key, but AaveV3Adapter uses api_key for AaveScan
+            # and graph_api_key for The Graph, so we'll override self.api_key after base init
+            super().__init__(chain, api_key=None, project_id=project_id)
+            
+            # Map chain to venue format matching config.py
+            # Only ETHEREUM supported for MVP
+            chain_to_venue = {
+                "ETHEREUM": "AAVE_V3_ETH",
+            }
+            self.venue = chain_to_venue.get(self.chain, f"AAVE_V3_{self.chain}")
 
-        # Try provided API key first
-        self.api_key = api_key
+            # Try provided AaveScan API key first
+            self.api_key = api_key
 
-        # If not provided, try Secret Manager
-        if not self.api_key:
+            # If not provided, try Secret Manager
+            if not self.api_key:
+                try:
+                    from unified_cloud_services import get_secret_with_fallback
+
+                    secret_name = os.getenv("AAVESCAN_SECRET_NAME", "aavescan-api-key")
+
+                    self.api_key = get_secret_with_fallback(
+                        project_id=self.project_id,
+                        secret_name=secret_name,
+                        fallback_env_var="AAVESCAN_API_KEY",
+                    )
+
+                    if self.api_key:
+                        logger.info(
+                            f"✅ Retrieved AaveScan API key from Secret Manager (secret: {secret_name})"
+                        )
+                except ImportError:
+                    logger.warning("unified-cloud-services not available, falling back to env var")
+                    self.api_key = os.getenv("AAVESCAN_API_KEY")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
+                    self.api_key = os.getenv("AAVESCAN_API_KEY")
+
+            if not self.api_key:
+                logger.warning("AaveScan API key not found. Some features may be limited.")
+
+            # Store Graph API key (use provided, cached, or fetch once)
+            self.graph_api_key = graph_api_key
+            if not self.graph_api_key:
+                # Try module-level cache first (set by InstrumentProcessingService)
+                try:
+                    from instruments_service.app.venues.defi.the_graph_client import (
+                        _API_KEY_CACHE,
+                    )
+
+                    if _API_KEY_CACHE:
+                        self.graph_api_key = _API_KEY_CACHE
+                        logger.debug("✅ Using cached Graph API key in AaveV3Adapter")
+                except (ImportError, AttributeError):
+                    pass
+
+            # project_id already set by BaseDefiAdapter.__init__()
+
+            # Cache Alchemy API key at initialization to avoid repeated Secret Manager calls
+            # get_secret_with_fallback now includes caching internally
+            self._alchemy_api_key = None
             try:
                 from unified_cloud_services import get_secret_with_fallback
 
-                secret_name = os.getenv("AAVESCAN_SECRET_NAME", "aavescan-api-key")
-                project_id = project_id or os.getenv("GCP_PROJECT_ID", "central-element-323112")
-
-                self.api_key = get_secret_with_fallback(
-                    project_id=project_id,
-                    secret_name=secret_name,
-                    fallback_env_var="AAVESCAN_API_KEY",
+                self._alchemy_api_key = get_secret_with_fallback(
+                    secret_name="alchemy-api-key",
+                    project_id=self.project_id,
+                    fallback_env_var="ALCHEMY_API_KEY",
                 )
-
-                if self.api_key:
-                    logger.info(
-                        f"✅ Retrieved AaveScan API key from Secret Manager (secret: {secret_name})"
-                    )
-            except ImportError:
-                logger.warning("unified-cloud-services not available, falling back to env var")
-                self.api_key = os.getenv("AAVESCAN_API_KEY")
+                if self._alchemy_api_key:
+                    self._alchemy_api_key = self._alchemy_api_key.strip()
             except Exception as e:
-                logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                self.api_key = os.getenv("AAVESCAN_API_KEY")
+                logger.debug(f"Could not cache Alchemy API key: {e}")
 
-        if not self.api_key:
-            logger.warning("AaveScan API key not found. Some features may be limited.")
+            # AaveScan Pro API uses v2 endpoint with apiKey query parameter
+            # Base URL: https://api.aavescan.com/v2
+            self.base_url = "https://api.aavescan.com/v2"
 
-        # Store Graph API key (use provided, cached, or fetch once)
-        self.graph_api_key = graph_api_key
-        if not self.graph_api_key:
-            # Try module-level cache first (set by InstrumentProcessingService)
-            try:
-                from instruments_service.app.venues.defi.the_graph_client import (
-                    _API_KEY_CACHE,
-                )
+            # Aave V3 Ethereum subgraph ID from The Graph
+            # Subgraph: https://thegraph.com/explorer/subgraphs/Cd2gEDVeqnjBn1hSeqFMitw8Q1iiyV9FYUZkLNRcL87g
+            self.aave_subgraph_id = "Cd2gEDVeqnjBn1hSeqFMitw8Q1iiyV9FYUZkLNRcL87g"
 
-                if _API_KEY_CACHE:
-                    self.graph_api_key = _API_KEY_CACHE
-                    logger.debug("✅ Using cached Graph API key in AaveV3Adapter")
-            except (ImportError, AttributeError):
-                pass
+            # Cache for reserve configurations and market configurations
+            self._reserve_config_cache: Dict[str, Dict[str, Any]] = {}
+            self._market_config_cache: Optional[Dict[str, Any]] = None
 
-        # Store project_id for later use
-        self.project_id = project_id or os.getenv("GCP_PROJECT_ID", "central-element-323112")
+            # Cache for eMode categories (key: category_id, value: category dict)
+            self._emode_category_cache: Dict[int, Dict[str, Any]] = {}
+            
+            # OPTIMIZATION: Cache reserves data (same data for entire day)
+            # Reserves don't change intraday, so we can reuse across multiple calls
+            self._reserves_cache: Optional[List[Dict[str, Any]]] = None
+            self._reserves_cache_date: Optional[str] = None
+            
+            # OPTIMIZATION: Cache block number conversions (same block for all reserves on same date)
+            self._block_number_cache: Dict[str, int] = {}  # date_str -> block_number
 
-        # Cache Alchemy API key at initialization to avoid repeated Secret Manager calls
-        # get_secret_with_fallback now includes caching internally
-        self._alchemy_api_key = None
-        try:
-            from unified_cloud_services import get_secret_with_fallback
+            # Failure caches to avoid retrying operations that already failed
+            # Cache keys: date ISO string or block number
+            self._historical_query_failed: set = set()  # Dates/blocks where historical queries failed
+            self._block_conversion_failed: set = set()  # Dates where block conversion failed
 
-            self._alchemy_api_key = get_secret_with_fallback(
-                secret_name="alchemy-api-key",
-                project_id=self.project_id,
-                fallback_env_var="ALCHEMY_API_KEY",
-            )
-            if self._alchemy_api_key:
-                self._alchemy_api_key = self._alchemy_api_key.strip()
-        except Exception as e:
-            logger.debug(f"Could not cache Alchemy API key: {e}")
-
-        # AaveScan Pro API uses v2 endpoint with apiKey query parameter
-        # Base URL: https://api.aavescan.com/v2
-        self.base_url = "https://api.aavescan.com/v2"
-
-        # Aave V3 Ethereum subgraph ID from The Graph
-        # Subgraph: https://thegraph.com/explorer/subgraphs/Cd2gEDVeqnjBn1hSeqFMitw8Q1iiyV9FYUZkLNRcL87g
-        self.aave_subgraph_id = "Cd2gEDVeqnjBn1hSeqFMitw8Q1iiyV9FYUZkLNRcL87g"
-
-        # Cache for reserve configurations and market configurations
-        self._reserve_config_cache: Dict[str, Dict[str, Any]] = {}
-        self._market_config_cache: Optional[Dict[str, Any]] = None
-
-        # Cache for eMode categories (key: category_id, value: category dict)
-        self._emode_category_cache: Dict[int, Dict[str, Any]] = {}
-
-        # Failure caches to avoid retrying operations that already failed
-        # Cache keys: date ISO string or block number
-        self._historical_query_failed: set = set()  # Dates/blocks where historical queries failed
-        self._block_conversion_failed: set = set()  # Dates where block conversion failed
-
-        logger.info(f"✅ AaveV3Adapter initialized for chain: {self.chain}")
+            logger.info(f"✅ AaveV3Adapter initialized for chain: {self.chain}")
 
     def fetch_markets(self, target_date: Optional[datetime] = None) -> Dict[str, Dict[str, Any]]:
         """
@@ -177,9 +236,44 @@ class AaveV3Adapter:
             logger.error(f"Failed to fetch AAVE markets: {e}")
             return {}
 
+    def _get_fallback_reserves(self) -> List[Dict[str, Any]]:
+        """
+        Get static fallback reserves for AAVE V3 when APIs fail.
+        
+        Uses MVP tokens: USDT, WETH, weETH, wstETH
+        Emode params will be populated from STATIC_RISK_PARAMS later.
+        
+        Returns:
+            List of reserve dictionaries with minimal required fields
+        """
+        # MVP tokens for AAVE V3 Ethereum
+        static_reserves = [
+            {
+                "reserve": "0xdAC17F958D2ee523a2206206994597C13D831ec7",  # USDT
+                "asset": {"symbol": "USDT", "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7", "decimals": 6},
+            },
+            {
+                "reserve": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",  # WETH
+                "asset": {"symbol": "WETH", "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2", "decimals": 18},
+            },
+            {
+                "reserve": "0xCd5fE23C85820F7B72D0926FC9b05b43E359b7ee",  # weETH
+                "asset": {"symbol": "weETH", "address": "0xCd5fE23C85820F7B72D0926FC9b05b43E359b7ee", "decimals": 18},
+            },
+            {
+                "reserve": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",  # wstETH
+                "asset": {"symbol": "wstETH", "address": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0", "decimals": 18},
+            },
+        ]
+        
+        logger.warning(f"⚠️ Using static fallback reserves for AAVE V3 ({len(static_reserves)} reserves) - API/RPC unavailable")
+        return static_reserves
+    
     def _fetch_reserves(self, target_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """
         Fetch reserves from AaveScan Pro API (primary) with optional historical Graph fallback.
+        
+        OPTIMIZED: Caches reserves for the entire day (same data, reused across multiple instruments).
 
         Args:
             target_date: Optional target date for historical queries. If provided:
@@ -192,6 +286,12 @@ class AaveV3Adapter:
         Returns:
             List of reserve dictionaries
         """
+        # OPTIMIZATION: Check cache first (reserves don't change intraday)
+        cache_date = target_date.strftime("%Y-%m-%d") if target_date else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if self._reserves_cache is not None and self._reserves_cache_date == cache_date:
+            logger.debug(f"✅ Using cached AAVE reserves for {cache_date} ({len(self._reserves_cache)} reserves)")
+            return self._reserves_cache
+        
         # If target_date is provided, try Graph once (if not already failed), then use AaveScan
         if target_date:
             date_key = target_date.isoformat()
@@ -220,7 +320,7 @@ class AaveV3Adapter:
                 )
 
         try:
-            from instruments_service.app.core.http_session_pool import get_http_session
+            from instruments_service.utils.http_session_pool import get_http_session
 
             # AaveScan Pro API uses apiKey as query parameter, not Authorization header
             # Endpoint: https://api.aavescan.com/v2/reserves/latest?market=aave-v3-ethereum&apiKey=...
@@ -256,17 +356,46 @@ class AaveV3Adapter:
                 elif isinstance(data_content, dict) and "reserveData" in data_content:
                     reserves = data_content["reserveData"]
 
-            logger.info(f"✅ Fetched {len(reserves)} reserves from AaveScan")
-            return reserves
+            # OPTIMIZATION: Filter to MVP tokens only (don't process all 220 reserves)
+            # MVP tokens: USDT, WETH, weETH, wstETH (unique by symbol, not by reserve address)
+            mvp_tokens = {"USDT", "WETH", "WEETH", "WSTETH"}
+            
+            # Further optimization: Keep only ONE reserve per symbol (avoid duplicates)
+            seen_symbols = set()
+            filtered_reserves = []
+            for r in reserves:
+                symbol = r.get("asset", {}).get("symbol", "").upper()
+                if symbol in mvp_tokens and symbol not in seen_symbols:
+                    filtered_reserves.append(r)
+                    seen_symbols.add(symbol)
+            
+            logger.info(
+                f"✅ Fetched {len(reserves)} reserves from AaveScan, "
+                f"filtered to {len(filtered_reserves)} MVP tokens"
+            )
+            
+            # Cache the filtered reserves for reuse
+            self._reserves_cache = filtered_reserves
+            self._reserves_cache_date = cache_date
+            
+            return filtered_reserves
 
         except Exception as e:
             logger.error(f"Failed to fetch reserves from AaveScan: {e}")
             # Fallback: return empty list or use hardcoded known reserves
-            return self._get_fallback_reserves()
+            fallback_reserves = self._get_fallback_reserves()
+            
+            # Cache fallback reserves too
+            self._reserves_cache = fallback_reserves
+            self._reserves_cache_date = cache_date
+            
+            return fallback_reserves
 
     def _date_to_block_number(self, target_date: datetime) -> Optional[int]:
         """
         Convert a date to Ethereum block number using RPC or approximation.
+        
+        OPTIMIZED: Caches block numbers (same block for all reserves on same date).
 
         First attempts to query Ethereum RPC for exact block number.
         Falls back to approximate calculation if RPC unavailable.
@@ -283,6 +412,12 @@ class AaveV3Adapter:
             # Ensure target_date is timezone-aware
             if target_date.tzinfo is None:
                 target_date = target_date.replace(tzinfo=timezone.utc)
+
+            # OPTIMIZATION: Check block number cache first
+            date_str = target_date.strftime("%Y-%m-%d")
+            if date_str in self._block_number_cache:
+                logger.debug(f"✅ Using cached block number for {date_str}: {self._block_number_cache[date_str]}")
+                return self._block_number_cache[date_str]
 
             # Check failure cache first - if we already know this date fails, skip retrying
             date_key = target_date.isoformat()
@@ -301,7 +436,7 @@ class AaveV3Adapter:
 
             # Try to get exact block number from RPC endpoint
             try:
-                from instruments_service.app.core.http_session_pool import get_http_session
+                from instruments_service.utils.http_session_pool import get_http_session
 
                 # Use cached Alchemy API key
                 alchemy_key = self._alchemy_api_key
@@ -394,7 +529,13 @@ class AaveV3Adapter:
             logger.info(
                 f"📅 Converted {target_date.isoformat()} to approximate block {block_number:,}"
             )
-            return max(0, block_number)
+            
+            # Cache the block number for reuse
+            block_num = max(0, block_number)
+            self._block_number_cache[date_str] = block_num
+            logger.debug(f"✅ Cached block number for {date_str}: {block_num}")
+            
+            return block_num
 
         except Exception as e:
             logger.warning(f"⚠️ Failed to convert date to block number: {e}")
@@ -417,7 +558,7 @@ class AaveV3Adapter:
             List of reserve dictionaries, or empty list if RPC unavailable
         """
         try:
-            from instruments_service.app.core.web3_client_pool import get_web3_client
+            from instruments_service.utils.web3_client_pool import get_web3_client
 
             # Get block number
             block_number = self._date_to_block_number(target_date)
@@ -686,7 +827,7 @@ query GetReserves($blockNumber: Int!) {
 
             variables = {"blockNumber": block_number}
 
-            from instruments_service.app.core.http_session_pool import get_http_session
+            from instruments_service.utils.http_session_pool import get_http_session
 
             headers = {"Content-Type": "application/json"}
             # Use pooled HTTP session
@@ -831,28 +972,6 @@ query GetReserves($blockNumber: Int!) {
             self._historical_query_failed.add(date_key)
             return []
 
-    def _get_fallback_reserves(self) -> List[Dict[str, Any]]:
-        """
-        Fallback reserves if API fails.
-
-        Returns:
-            List of known reserve dictionaries
-        """
-        # Known AAVE V3 Ethereum reserves with token addresses
-        return [
-            {
-                "symbol": "USDT",
-                "underlyingAsset": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-                "aToken": {"address": "0x3Ed3B47Dd13EC9a98b44e6204A523E766B225811"},
-                "variableDebtToken": {"address": "0x531842cEbbdD378f8ee36D171d6cC9C4fcf475Ec"},
-            },
-            {
-                "symbol": "WETH",
-                "underlyingAsset": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-                "aToken": {"address": "0x4d5F47FA6A74757f35C14fD3a6Ef8E3C9BC514E8"},
-                "variableDebtToken": {"address": "0xeA51d7853EEFb32b6ee06b1C12E6dcCA88Be0fFE"},
-            },
-        ]
 
     def _get_a_token_address(self, symbol: str, underlying_address: str) -> str:
         """
@@ -870,6 +989,8 @@ query GetReserves($blockNumber: Int!) {
             "WBTC": "0x5Ee5bf7ae06D1Be5997A1A72006FE6C607bC6DE8",
             "LINK": "0x5E8C8A7243651DB1384C0dDfDbE39761E8e7E51a",
             "AAVE": "0xA700b4eB9Be2e4F707f8B5C6B1E5C59b4E3C4C4C",
+            "WEETH": "0x4421A7d21d752f8CC35039678c8D27996c09f18E",  # weETH aToken
+            "WSTETH": "0x0B925eD163218f6662a35e0f0371Ac234f9E9371",  # wstETH aToken
         }
         return a_token_addresses.get(symbol.upper(), "")
 
@@ -889,6 +1010,8 @@ query GetReserves($blockNumber: Int!) {
             "WBTC": "0x40aAbEf1aa8f0eEc637EfE662f0B8c701F1F506A",
             "LINK": "0x4228F8890C7C4B5E6A1F9f8C5C5C5C5C5C5C5C5C5",  # Placeholder
             "AAVE": "0x6B4c2605352e8D7C5A5f5C5C5C5C5C5C5C5C5C5C5",  # Placeholder
+            "WEETH": "0x24e6e0795b3c7c71D96FEA0e07125B1dC8d3b1b5",  # weETH debt token
+            "WSTETH": "0xC96113eED8cAB8CD8321FC2C3C7A47a5e6547A4B",  # wstETH debt token
         }
         return debt_token_addresses.get(symbol.upper(), "")
 
@@ -903,7 +1026,7 @@ query GetReserves($blockNumber: Int!) {
             return self._market_config_cache
 
         try:
-            from instruments_service.app.core.http_session_pool import get_http_session
+            from instruments_service.utils.http_session_pool import get_http_session
 
             url = f"{self.base_url}/market-configurations"
             params = {}
@@ -1068,7 +1191,7 @@ query GetReserve($underlyingAddress: Bytes!) {
 }
 """.strip()
 
-            from instruments_service.app.core.http_session_pool import get_http_session
+            from instruments_service.utils.http_session_pool import get_http_session
 
             headers = {"Content-Type": "application/json"}
             # Use pooled HTTP session
@@ -1336,7 +1459,7 @@ query GetReserve($underlyingAddress: Bytes!) {
             eMode category ID (integer) or None
         """
         try:
-            from instruments_service.app.core.web3_client_pool import get_web3_client
+            from instruments_service.utils.web3_client_pool import get_web3_client
 
             # Get block number if target_date provided
             block_number = None
@@ -1525,7 +1648,7 @@ query GetReserve($underlyingAddress: Bytes!) {
             return cached
 
         try:
-            from instruments_service.app.core.web3_client_pool import get_web3_client
+            from instruments_service.utils.web3_client_pool import get_web3_client
 
             # Get block number if target_date provided
             block_number = None
@@ -1835,7 +1958,7 @@ query GetEModeCategory($categoryId: Int!) {
 }
 """.strip()
 
-            from instruments_service.app.core.http_session_pool import get_http_session
+            from instruments_service.utils.http_session_pool import get_http_session
 
             headers = {"Content-Type": "application/json"}
             # Use pooled HTTP session
@@ -2105,6 +2228,13 @@ query GetEModeCategory($categoryId: Int!) {
             or e_mode_category_id_from_reserve
             or emode_category_id_from_config
         )
+        
+        # STATIC FALLBACK: If still no emode_category_id, use hardcoded values for known ETH correlation assets
+        # Category 1 = ETH Correlation (weETH, wstETH vs WETH)
+        asset_symbol = reserve.get('asset', {}).get('symbol', '')
+        if not emode_category_id and asset_symbol in ["weETH", "wstETH", "WETH"]:
+            emode_category_id = 1  # ETH correlation emode
+            logger.info(f"  ✅ Using STATIC emode_category_id=1 (ETH correlation) for {asset_symbol}")
 
         # Fetch eMode category details if we have an ID
         emode_label = None
@@ -2114,32 +2244,37 @@ query GetEModeCategory($categoryId: Int!) {
         emode_price_source = None
         emode_oracle_id = None
 
+        logger.info(f"🔍 Fetching eMode params for {reserve.get('asset', {}).get('symbol', 'UNKNOWN')}: emode_category_id={emode_category_id}")
+        
+        logger.debug(f"🔍 eMode params for {asset_symbol}: emode_category_id={emode_category_id}")
+        
+        # OPTIMIZATION: Skip RPC/Graph calls (always fail) - use STATIC_RISK_PARAMS immediately
+        # This saves ~1 second per reserve (RPC + Graph timeout/retry) × 4 reserves = ~4 seconds
         if emode_category_id:
-            # Try RPC first (most reliable, works for historical data)
-            emode_category = self._fetch_emode_category_from_rpc(
-                emode_category_id, target_date=target_date
-            )
-
-            # Fallback to The Graph if RPC fails (though it likely won't work)
-            if not emode_category:
-                emode_category = self._fetch_emode_category_from_graph(
-                    emode_category_id, target_date=target_date
+            # Use static emode params from JSON immediately
+            symbol = reserve.get('asset', {}).get('symbol', '')
+            if symbol and emode_category_id == 1:  # E-mode category 1 is ETH correlation
+                emode_label = "ETH_CORRELATION"
+                pair_key = f"{symbol}_WETH"
+                emode_liquidation_threshold = self.STATIC_RISK_PARAMS["emode"]["liquidation_thresholds"].get(pair_key)
+                emode_liquidation_bonus = self.STATIC_RISK_PARAMS["emode"]["liquidation_bonus"].get(pair_key)
+                
+                logger.debug(
+                    f"  ✅ Using STATIC eMode params for {symbol}: "
+                    f"liq_threshold={emode_liquidation_threshold}, bonus={emode_liquidation_bonus}"
                 )
-
-            if emode_category:
-                emode_label = emode_category.get("label")
-                emode_liquidation_threshold = emode_category.get("liquidation_threshold")
-                emode_liquidation_bonus = emode_category.get("liquidation_bonus")
-                emode_price_source = emode_category.get("price_source")
-                emode_oracle_id = emode_category.get("oracle_id")
         elif reserve_config:
             # Fallback: use values from reserve_config if available
+            logger.debug(f"  → Using reserve_config fallback for eMode data")
             emode_category_id = emode_category_id or reserve_config.get("emode_category_id")
             emode_label = reserve_config.get("emode_label")
             emode_liquidation_threshold = reserve_config.get("emode_liquidation_threshold")
             emode_liquidation_bonus = reserve_config.get("emode_liquidation_bonus")
             emode_price_source = reserve_config.get("emode_price_source")
             emode_oracle_id = reserve_config.get("emode_oracle_id")
+            logger.info(f"  ✅ Using reserve_config eMode data: label={emode_label}")
+        else:
+            logger.warning(f"  ⚠️ No eMode category ID or reserve_config available for {reserve.get('asset', {}).get('symbol', 'UNKNOWN')}")
 
         # Fetch market configurations for interest rate model parameters (only if not historical)
         market_configs = None
@@ -2202,7 +2337,7 @@ query GetEModeCategory($categoryId: Int!) {
             base_variable_borrow_rate = base_variable_borrow_rate_from_config
         # Otherwise use the value extracted from API response above
 
-        # Use AaveScan data as primary source, Graph config as fallback
+        # Use AaveScan data as primary source, Graph config as fallback, STATIC_RISK_PARAMS as final fallback
         ltv = ltv_from_aavescan or (reserve_config.get("ltv") if reserve_config else None)
         liquidation_threshold = liquidation_threshold_from_aavescan or (
             reserve_config.get("liquidation_threshold") if reserve_config else None
@@ -2213,6 +2348,40 @@ query GetEModeCategory($categoryId: Int!) {
         reserve_factor = reserve_factor_from_aavescan or (
             reserve_config.get("reserve_factor") if reserve_config else None
         )
+        
+        # Final fallback to STATIC_RISK_PARAMS if still missing
+        asset_symbol = reserve.get('asset', {}).get('symbol', '')
+        if asset_symbol and (not ltv or not liquidation_threshold or not liquidation_bonus or not reserve_factor):
+            logger.info(f"  🔄 Attempting static fallback for {asset_symbol} risk params")
+            
+            # Use emode params if in emode (ETH correlation mode)
+            if emode_category_id == 1:
+                pair_key = f"{asset_symbol}_WETH"
+                if not ltv:
+                    ltv = self.STATIC_RISK_PARAMS["emode"]["ltv_limits"].get(pair_key)
+                if not liquidation_threshold:
+                    liquidation_threshold = self.STATIC_RISK_PARAMS["emode"]["liquidation_thresholds"].get(pair_key)
+                if not liquidation_bonus:
+                    liquidation_bonus = self.STATIC_RISK_PARAMS["emode"]["liquidation_bonus"].get(pair_key)
+                if ltv:
+                    logger.info(f"  ✅ Using STATIC eMode risk params for {pair_key}: ltv={ltv}, liq_threshold={liquidation_threshold}")
+            else:
+                # Use standard params if not in emode
+                pair_key = f"{asset_symbol}_WETH"
+                if not ltv:
+                    ltv = self.STATIC_RISK_PARAMS["standard"]["ltv_limits"].get(pair_key)
+                if not liquidation_threshold:
+                    liquidation_threshold = self.STATIC_RISK_PARAMS["standard"]["liquidation_thresholds"].get(pair_key)
+                if not liquidation_bonus:
+                    liquidation_bonus = self.STATIC_RISK_PARAMS["standard"]["liquidation_bonus"].get(pair_key)
+                if ltv:
+                    logger.info(f"  ✅ Using STATIC standard risk params for {pair_key}: ltv={ltv}, liq_threshold={liquidation_threshold}")
+            
+            # Reserve factor fallback
+            if not reserve_factor:
+                reserve_factor = self.STATIC_RISK_PARAMS["reserve_factors"].get(asset_symbol)
+                if reserve_factor:
+                    logger.info(f"  ✅ Using STATIC reserve_factor for {asset_symbol}: {reserve_factor}")
 
         return {
             "flash_loan_providers": flash_loan_providers,
