@@ -19,7 +19,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 try:
     from unified_cloud_services import create_secret_if_not_exists
 except ImportError:
-    print("❌ Error: unified-cloud-services not found. Install with: pip install -e ../unified-cloud-services")
+    print(
+        "❌ Error: unified-cloud-services not found. Install with: pip install -e ../unified-cloud-services"
+    )
     sys.exit(1)
 
 

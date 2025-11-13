@@ -22,9 +22,7 @@ class TestInstrumentProcessingService:
         service = InstrumentProcessingService(config)
         assert service.api_key == "test-api-key-12345"
 
-    @patch(
-        "instruments_service.app.core.instrument_processing_service.get_secret_with_fallback"
-    )
+    @patch("instruments_service.app.core.instrument_processing_service.get_secret_with_fallback")
     def test_service_creation_with_secret_manager(self, mock_get_secret):
         """Test creating service with Secret Manager."""
         mock_get_secret.return_value = "secret-api-key-67890"
@@ -74,9 +72,7 @@ class TestInstrumentProcessingService:
             symbol_id="btcusdt",
             symbol_info={"base_asset": "BTC", "quote_asset": "USDT"},
         )
-        assert (
-            key == "BINANCE-SPOT:SPOT_PAIR:BTC-USDT"
-        )  # Updated to match canonical spec
+        assert key == "BINANCE-SPOT:SPOT_PAIR:BTC-USDT"  # Updated to match canonical spec
 
     def test_generate_canonical_key_perpetual(self):
         """Test canonical key generation for perpetual."""

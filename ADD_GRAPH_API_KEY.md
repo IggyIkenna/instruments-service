@@ -91,5 +91,3 @@ export THE_GRAPH_API_KEY=3c6f3ec90154a9928c442f2d71335b67
 ```
 
 This will work but is not recommended for production.
-
-

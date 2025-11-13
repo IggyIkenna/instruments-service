@@ -50,12 +50,12 @@ async def test_instrument_generation_e2e(
     - Data integrity (can query back)
     """
     # Verify we're using test bucket (not prod)
-    assert "test" in test_bucket_name.lower(), f"Must use test bucket for E2E test, got {test_bucket_name}"
+    assert (
+        "test" in test_bucket_name.lower()
+    ), f"Must use test bucket for E2E test, got {test_bucket_name}"
 
     # Verify API key retrieved from Secret Manager
-    assert (
-        tardis_api_key is not None
-    ), "Tardis API key must be retrieved from Secret Manager"
+    assert tardis_api_key is not None, "Tardis API key must be retrieved from Secret Manager"
     assert len(tardis_api_key) > 0, "API key must not be empty"
 
     # Initialize services
@@ -122,12 +122,8 @@ async def test_instrument_generation_e2e(
             # Verify CSV sample was generated (if enabled)
             if os.getenv("ENABLE_CSV_SAMPLING", "false").lower() == "true":
                 date_str = current_date.strftime("%Y%m%d")
-                sample_files = list(
-                    csv_sample_dir.glob(f"instruments_{date_str}_*.csv")
-                )
-                assert (
-                    len(sample_files) > 0
-                ), f"CSV sample should be generated for {date_str}"
+                sample_files = list(csv_sample_dir.glob(f"instruments_{date_str}_*.csv"))
+                assert len(sample_files) > 0, f"CSV sample should be generated for {date_str}"
 
         current_date += timedelta(days=1)
 
@@ -135,9 +131,7 @@ async def test_instrument_generation_e2e(
     assert len(all_instruments) > 0, "Should have generated at least some instruments"
 
     # Verify we processed both dates
-    assert (
-        len(dates_processed) == 2
-    ), f"Should process 2 dates, processed {len(dates_processed)}"
+    assert len(dates_processed) == 2, f"Should process 2 dates, processed {len(dates_processed)}"
 
     # Verify data integrity: Query back from test bucket using GCS download
     # Since BigQuery queries were removed, use CloudDataProvider to download from GCS
@@ -181,9 +175,7 @@ def test_test_bucket_isolation(test_bucket_name, prod_bucket_name):
 @pytest.mark.e2e
 def test_secret_manager_access(tardis_api_key):
     """Verify Secret Manager access works."""
-    assert (
-        tardis_api_key is not None
-    ), "Must be able to retrieve API key from Secret Manager"
+    assert tardis_api_key is not None, "Must be able to retrieve API key from Secret Manager"
     assert isinstance(tardis_api_key, str), "API key must be a string"
     assert len(tardis_api_key) > 10, "API key must be reasonable length"
 
@@ -192,6 +184,4 @@ def test_secret_manager_access(tardis_api_key):
 def test_gcp_credentials(gcp_credentials):
     """Verify GCP credentials are configured."""
     assert gcp_credentials is not None, "GCP credentials must be configured"
-    assert Path(
-        gcp_credentials
-    ).exists(), f"Credentials file must exist: {gcp_credentials}"
+    assert Path(gcp_credentials).exists(), f"Credentials file must exist: {gcp_credentials}"
