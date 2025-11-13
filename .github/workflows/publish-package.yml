@@ -65,18 +65,25 @@ jobs:
         run: |
           python -m build
       
-      - name: Publish to GitHub Packages
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+      - name: Note about GitHub Packages
         run: |
-          python -m twine upload \
-            --repository-url https://upload.pkg.github.com/${{ github.repository_owner }} \
-            dist/*
+          echo "⚠️  GitHub Packages does NOT support Python/PyPI packages"
+          echo "📦 Python packages are distributed via GitHub repository installation"
+          echo "🔗 Install with: pip install git+https://x-access-token:\$GITHUB_TOKEN@github.com/iggyikenna/instruments-service.git"
+          echo ""
+          echo "For more info, see: GITHUB_PACKAGES_PYTHON_LIMITATION.md"
       
-      - name: Verify publication
+      - name: Create Release Artifacts
         run: |
-          echo "✅ Package published successfully!"
-          echo "📦 Version: ${{ steps.version.outputs.version }}"
-          echo "🔗 Install with: pip install instruments-service==${{ steps.version.outputs.version }} --extra-index-url https://__token__:\$GITHUB_TOKEN@pypi.pkg.github.com/iggyikenna/simple"
+          echo "📦 Creating release artifacts for version ${{ steps.version.outputs.version }}"
+          # The built packages in dist/ can be attached to GitHub Releases manually
+          # or downloaded from the workflow artifacts
+          ls -lh dist/
+      
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: instruments-service-${{ steps.version.outputs.version }}
+          path: dist/
+          retention-days: 90
 
