@@ -15,7 +15,7 @@ jobs:
       contents: read
       # GITHUB_TOKEN needs contents:read to access other private repos
       # However, GITHUB_TOKEN can only access repos in the same organization
-      # For cross-repo access, use GH_PAT secret instead
+      # For cross-repo access, use GH_PAT secret instead of GITHUB_TOKEN
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
