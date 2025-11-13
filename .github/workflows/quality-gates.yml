@@ -20,6 +20,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
       
+      - name: Checkout unified-cloud-services
+        uses: actions/checkout@v4
+        with:
+          repository: IggyIkenna/unified-cloud-services
+          path: ../unified-cloud-services
+          token: ${{ secrets.GH_PAT || github.token }}
+      
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
@@ -53,11 +60,11 @@ jobs:
             mkdir -p ~/.config/pip
             if [ -f ~/.config/pip/pip.conf ]; then
               # Append to existing config
-              echo "extra-index-url = https://__token__:${AUTH_TOKEN}@pypi.pkg.github.com/iggyikenna/simple" >> ~/.config/pip/pip.conf
+              echo "extra-index-url = https://__token__:${AUTH_TOKEN}@pypi.pkg.github.com/IggyIkenna/simple" >> ~/.config/pip/pip.conf
             else
               cat > ~/.config/pip/pip.conf << EOF
           [global]
-          extra-index-url = https://__token__:${AUTH_TOKEN}@pypi.pkg.github.com/iggyikenna/simple
+          extra-index-url = https://__token__:${AUTH_TOKEN}@pypi.pkg.github.com/IggyIkenna/simple
           EOF
             fi
             echo "✅ GitHub Packages authentication configured"
