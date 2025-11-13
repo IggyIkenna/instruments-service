@@ -6,11 +6,10 @@ Unified instrument configuration with all instruments, mappings, and metadata in
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
-import os
 
 # Try to import BaseServiceConfig from unified-cloud-services
 try:
-    from unified_cloud_services import BaseServiceConfig
+    from unified_cloud_services import BaseServiceConfig, get_config
     from pydantic import Field
 
     BASE_SERVICE_CONFIG_AVAILABLE = True
@@ -19,6 +18,8 @@ except ImportError:
     # Fallback if unified-cloud-services not available
     BaseServiceConfig = None
     Field = None
+    import os
+    get_config = os.getenv
 
 
 @dataclass
@@ -231,9 +232,27 @@ class UnifiedInstrumentConfig:
             InstrumentDefinition(
                 "EW5.OPT", "CME", "OPTION", "GLBX.MDP3", "parent", "SP500", "USD", "EW5"
             ),
+            # ETF Options (NASDAQ) - SPY options
+            InstrumentDefinition(
+                "SPY.OPT", "NASDAQ", "OPTION", "DBEQ.BASIC", "raw_symbol", "SPY", "USD", "SPY"
+            ),
             # Index (CBOE) - VIX volatility index (data from barchart.com, OHLCV 15m)
             InstrumentDefinition(
                 "VIX", "CBOE", "INDEX", "BARCHART", "raw_symbol", "VIX", "USD"
+            ),
+            # ETFs (NASDAQ) - Major ETFs
+            InstrumentDefinition(
+                "SPY", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "SPY", "USD"
+            ),
+            InstrumentDefinition(
+                "QQQ", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "QQQ", "USD"
+            ),
+            # ICE Futures
+            InstrumentDefinition(
+                "BRN.FUT", "ICE", "FUTURE", "IFEU.IMPACT", "parent", "BRENT", "USD", "BRN"
+            ),
+            InstrumentDefinition(
+                "G.FUT", "ICE", "FUTURE", "IFEU.IMPACT", "parent", "GASOIL", "USD", "G"
             ),
         ]
     )
@@ -278,6 +297,9 @@ class UnifiedInstrumentConfig:
             "ZW": "WHEAT",
             "ZL": "SOYBEAN_OIL",
             "ZM": "SOYBEAN_MEAL",
+            # ICE Futures
+            "BRN": "BRENT",
+            "G": "GASOIL",
             # Crypto Futures (CME)
             "BTC": "BTC",
             "ETH": "ETH",
@@ -902,10 +924,12 @@ class UnifiedInstrumentConfig:
         return equities
 
     def get_all_instruments(self) -> List[InstrumentDefinition]:
-        """Get all instruments (CME futures/options + VIX only)"""
-        # SIMPLIFIED: Only return instruments explicitly defined in config
-        # Removed auto-generation of S&P 500 equities (focus on CME + VIX)
-        return list(self.instruments)
+        """Get all instruments (base instruments + dynamically generated S&P 500 equities)"""
+        # Combine base instruments with dynamically generated S&P 500 equities
+        all_insts = list(self.instruments)
+        sp500_equities = self._get_sp500_equities()
+        all_insts.extend(sp500_equities)
+        return all_insts
 
 
 # Legacy compatibility: Keep DatabentoInstrumentConfig as a wrapper
@@ -976,6 +1000,9 @@ class VenueMapping:
         default_factory=lambda: [
             "CME",  # Chicago Mercantile Exchange (futures, options, treasuries)
             "CBOE",  # Cboe Global Markets (VIX index only - special treatment)
+            "NASDAQ",  # NASDAQ Stock Market (equities, ETFs)
+            "NYSE",  # New York Stock Exchange (equities, ETFs)
+            "ICE",  # Intercontinental Exchange (futures, options)
         ]
     )
 
@@ -1014,6 +1041,9 @@ class VenueMapping:
         default_factory=lambda: {
             "CME": "GLBX.MDP3",  # CME Globex Market Data Platform 3.0
             "CBOE": "BARCHART",  # VIX index only (not via Databento OPRA.PILLAR)
+            "NASDAQ": "DBEQ.BASIC",  # NASDAQ equities via Databento DBEQ.BASIC
+            "NYSE": "DBEQ.BASIC",  # NYSE equities via Databento DBEQ.BASIC
+            "ICE": "IFEU.IMPACT",  # ICE futures via Databento IFEU.IMPACT
         }
     )
 
@@ -1126,7 +1156,7 @@ class VenueMapping:
 
     def get_defi_mvp_tokens(self) -> List[str]:
         """Get MVP token list, checking environment variable first."""
-        env_tokens = os.getenv("DEFI_MVP_TOKENS")
+        env_tokens = get_config("DEFI_MVP_TOKENS")
         if env_tokens:
             return [t.strip().upper() for t in env_tokens.split(",")]
         return self.defi_mvp_base_currencies
@@ -1328,24 +1358,24 @@ if BASE_SERVICE_CONFIG_AVAILABLE and BaseServiceConfig is not None:
 
         # GCS and BigQuery defaults for instruments
         gcs_bucket: str = Field(
-            default_factory=lambda: os.getenv("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
+            default_factory=lambda: get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
             description="GCS bucket for instruments (default/backwards compatibility)",
         )
         # Category-specific buckets for independent batch processing
         gcs_bucket_cefi: str = Field(
-            default_factory=lambda: os.getenv("INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-central-element-323112"),
+            default_factory=lambda: get_config("INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-central-element-323112"),
             description="GCS bucket for CEFI instruments",
         )
         gcs_bucket_tradfi: str = Field(
-            default_factory=lambda: os.getenv("INSTRUMENTS_GCS_BUCKET_TRADFI", "instruments-store-tradfi-central-element-323112"),
+            default_factory=lambda: get_config("INSTRUMENTS_GCS_BUCKET_TRADFI", "instruments-store-tradfi-central-element-323112"),
             description="GCS bucket for TRADFI instruments",
         )
         gcs_bucket_defi: str = Field(
-            default_factory=lambda: os.getenv("INSTRUMENTS_GCS_BUCKET_DEFI", "instruments-store-defi-central-element-323112"),
+            default_factory=lambda: get_config("INSTRUMENTS_GCS_BUCKET_DEFI", "instruments-store-defi-central-element-323112"),
             description="GCS bucket for DEFI instruments",
         )
         bigquery_dataset: str = Field(
-            default_factory=lambda: os.getenv("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
+            default_factory=lambda: get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
             description="BigQuery dataset for instruments",
         )
 
@@ -1395,15 +1425,15 @@ else:
             self.max_batch_size = kwargs.get("max_batch_size", 1000)
             self.lookback_days = kwargs.get("lookback_days", 0)
             self.gcs_bucket = kwargs.get(
-                "gcs_bucket", os.getenv("INSTRUMENTS_GCS_BUCKET", "instruments-store")
+                "gcs_bucket", get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store")
             )
             self.bigquery_dataset = kwargs.get(
                 "bigquery_dataset",
-                os.getenv("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
+                get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
             )
             self.gcp_project_id = kwargs.get(
-                "gcp_project_id", os.getenv("GCP_PROJECT_ID", "central-element-323112")
+                "gcp_project_id", get_config("GCP_PROJECT_ID", "central-element-323112")
             )
             self.bigquery_location = kwargs.get(
-                "bigquery_location", os.getenv("BIGQUERY_LOCATION", "asia-northeast1")
+                "bigquery_location", get_config("BIGQUERY_LOCATION", "asia-northeast1")
             )  # Default to asia-northeast1 per .env

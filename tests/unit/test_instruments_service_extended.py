@@ -301,7 +301,7 @@ class TestInstrumentsServiceExtended:
         
         with patch("instruments_service.app.core.instruments_service.DatabentoAdapter") as mock_adapter_class, \
              patch("instruments_service.app.core.instruments_service.DatabentoInstrumentConfig") as mock_config_class, \
-             patch("instruments_service.app.core.instruments_service.InstrumentDefinition") as mock_inst_def:
+             patch("instruments_service.models.InstrumentDefinition") as mock_inst_def:
             mock_adapter = Mock()
             mock_adapter.create_vix_instrument_definition.return_value = {
                 "instrument_key": "CBOE:INDEX:VIX",
@@ -499,7 +499,7 @@ class TestInstrumentsServiceExtended:
             return_value={"TEST:SPOT_PAIR:BTC-USDT": mock_instrument}
         )
         service.venue_mapping.all_tardis_exchanges = ["binance"]
-        service.cloud_storage.store_instruments = AsyncMock(return_value=False)
+        service.cloud_storage.store_instruments = Mock(return_value=False)
         
         result = await service.generate_instruments_for_date(
             date=target_date,

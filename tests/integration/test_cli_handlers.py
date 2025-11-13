@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch, MagicMock
 
 from instruments_service.cli.handlers.instrument_handler import InstrumentHandler
 from instruments_service.cli.handlers.instruments_query_handler import (
+from unified_cloud_services import get_config
     InstrumentsQueryHandler,
 )
 
@@ -19,7 +20,7 @@ from instruments_service.cli.handlers.instruments_query_handler import (
 def config():
     """Configuration for handlers - uses real project if available."""
     # Use real project ID from environment or default
-    project_id = os.getenv("GCP_PROJECT_ID", "central-element-323112")
+    project_id = get_config("GCP_PROJECT_ID", "central-element-323112")
     return {
         "project_id": project_id,
     }
@@ -55,7 +56,7 @@ def test_query_handler_initialization(config):
 
 
 @pytest.mark.skipif(
-    not os.getenv("GCP_PROJECT_ID") and not os.path.exists(
+    not get_config("GCP_PROJECT_ID") and not os.path.exists(
         os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
     ),
     reason="Requires GCP credentials for real service testing"
@@ -75,7 +76,7 @@ def test_instrument_handler_run(mock_instrument_handler):
 
 
 @pytest.mark.skipif(
-    not os.getenv("GCP_PROJECT_ID") and not os.path.exists(
+    not get_config("GCP_PROJECT_ID") and not os.path.exists(
         os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
     ),
     reason="Requires GCP credentials for real service testing"
@@ -97,7 +98,7 @@ def test_query_handler_list_query(config):
 
 
 @pytest.mark.skipif(
-    not os.getenv("GCP_PROJECT_ID") and not os.path.exists(
+    not get_config("GCP_PROJECT_ID") and not os.path.exists(
         os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
     ),
     reason="Requires GCP credentials for real service testing"

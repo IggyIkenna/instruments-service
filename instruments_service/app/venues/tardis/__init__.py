@@ -15,7 +15,6 @@ making the architecture consistent with Databento and DeFi adapters.
 """
 
 import logging
-import os
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timezone, timedelta, date
 import requests
@@ -23,12 +22,15 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 try:
-    from unified_cloud_services import get_secret_with_fallback
+    from unified_cloud_services import get_secret_with_fallback, get_config
 
     SECRET_MANAGER_AVAILABLE = True
 except ImportError:
     SECRET_MANAGER_AVAILABLE = False
     logging.warning("unified-cloud-services not available for Secret Manager")
+    # Fallback if unified-cloud-services not available
+    import os
+    get_config = os.getenv
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +82,8 @@ class TardisAdapter:
             if not self.api_key:
                 if SECRET_MANAGER_AVAILABLE:
                     try:
-                        secret_name = os.getenv("TARDIS_SECRET_NAME", "tardis-api-key")
-                        project_id = project_id or os.getenv("GCP_PROJECT_ID", "central-element-323112")
+                        secret_name = get_config("TARDIS_SECRET_NAME", "tardis-api-key")
+                        project_id = project_id or get_config("GCP_PROJECT_ID", "central-element-323112")
 
                         self.api_key = get_secret_with_fallback(
                             project_id=project_id,
@@ -95,9 +97,9 @@ class TardisAdapter:
                             )
                     except Exception as e:
                         logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                        self.api_key = os.getenv("TARDIS_API_KEY")
+                        self.api_key = get_config("TARDIS_API_KEY")
                 else:
-                    self.api_key = os.getenv("TARDIS_API_KEY")
+                    self.api_key = get_config("TARDIS_API_KEY")
 
             if not self.api_key:
                 raise ValueError(

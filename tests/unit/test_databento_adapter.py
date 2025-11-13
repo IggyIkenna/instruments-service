@@ -44,19 +44,32 @@ class TestDatabentoAdapter:
         
         original_db = getattr(databento_adapter, 'db', None)
         original_available = databento_adapter.DATABENTO_AVAILABLE
+        original_client = getattr(databento_adapter, '_DATABENTO_CLIENT', None)
+        original_api_key = getattr(databento_adapter, '_DATABENTO_API_KEY', None)
         
-        with patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module), \
-             patch("instruments_service.app.venues.databento.databento_adapter.get_secret_with_fallback", return_value="secret-key"):
-            try:
+        try:
+            # Clear any cached state
+            databento_adapter._DATABENTO_CLIENT = None
+            databento_adapter._DATABENTO_API_KEY = None
+            
+            with patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module), \
+                 patch("unified_cloud_services.get_secret_with_fallback", return_value="secret-key"):
                 databento_adapter.db = mock_db_module
                 databento_adapter.DATABENTO_AVAILABLE = True
                 
                 adapter = databento_adapter.DatabentoAdapter()
                 assert adapter.api_key == "secret-key"
-            finally:
-                if original_db is not None:
-                    databento_adapter.db = original_db
-                databento_adapter.DATABENTO_AVAILABLE = original_available
+        finally:
+            # Restore original state
+            if original_db is not None:
+                databento_adapter.db = original_db
+            databento_adapter.DATABENTO_AVAILABLE = original_available
+            if original_client is not None:
+                databento_adapter._DATABENTO_CLIENT = original_client
+            if original_api_key is not None:
+                databento_adapter._DATABENTO_API_KEY = original_api_key
+            else:
+                databento_adapter._DATABENTO_API_KEY = None
 
     def test_init_databento_not_available(self):
         """Test initialization when databento package not available."""

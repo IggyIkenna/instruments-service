@@ -8,7 +8,6 @@ Reference: archive/basis-strategy-v1/docs/MVP_DEFI_INSTRUMENTS.md
 """
 
 import logging
-import os
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
@@ -51,11 +50,11 @@ class MorphoAdapter:
                 # Get RPC URL from parameter, env var, or Secret Manager
                 if not rpc_url:
                     try:
-                        from unified_cloud_services import get_secret_with_fallback
+                        from unified_cloud_services import get_secret_with_fallback, get_config
 
                         # Try to get Alchemy API key from Secret Manager
                         alchemy_key = get_secret_with_fallback(
-                            project_id=os.getenv("GCP_PROJECT_ID", "central-element-323112"),
+                            project_id=get_config("GCP_PROJECT_ID", "central-element-323112"),
                             secret_name="alchemy-api-key",
                             fallback_env_var="ALCHEMY_API_KEY",
                         )
@@ -65,12 +64,12 @@ class MorphoAdapter:
                             logger.info("✅ Constructed Ethereum RPC URL from Alchemy API key")
                         else:
                             # Fallback to direct RPC URL from env var
-                            rpc_url = os.getenv("ETHEREUM_RPC_URL")
+                            rpc_url = get_config("ETHEREUM_RPC_URL")
                             if rpc_url:
                                 logger.info("✅ Using Ethereum RPC URL from environment variable")
                     except Exception as e:
                         logger.warning(f"⚠️ Failed to get RPC URL from Secret Manager: {e}")
-                        rpc_url = os.getenv("ETHEREUM_RPC_URL")
+                        rpc_url = get_config("ETHEREUM_RPC_URL")
 
                 if rpc_url:
                     self.web3 = Web3(Web3.HTTPProvider(rpc_url))
