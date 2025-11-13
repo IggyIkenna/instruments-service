@@ -9,7 +9,6 @@ Usage:
     python scripts/get_clickup_user_ids.py
 """
 
-import os
 import sys
 from pathlib import Path
 
@@ -32,15 +31,15 @@ def get_clickup_user_ids():
     api_token = None
 
     # Try environment variable first
-    api_token = os.getenv("CLICKUP_API_TOKEN")
+    api_token = get_config("CLICKUP_API_TOKEN")
 
     if not api_token:
         # Try Secret Manager via unified-cloud-services
         try:
-            from unified_cloud_services import get_secret_with_fallback
+            from unified_cloud_services import get_secret_with_fallback, get_config
 
-            project_id = os.getenv("GCP_PROJECT_ID", "central-element-323112")
-            secret_name = os.getenv("CLICKUP_SECRET_NAME", "clickup-api-key")
+            project_id = get_config("GCP_PROJECT_ID", "central-element-323112")
+            secret_name = get_config("CLICKUP_SECRET_NAME", "clickup-api-key")
             api_token = get_secret_with_fallback(
                 secret_name=secret_name,
                 project_id=project_id,

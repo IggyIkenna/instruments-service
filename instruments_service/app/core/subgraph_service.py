@@ -136,13 +136,12 @@ class SubgraphService:
             Subgraph URL or None
         """
         try:
-            import os
 
             global _GRAPH_API_KEY_CACHE, _GRAPH_API_KEY_PROJECT_ID
 
             # Get Graph API key (use provided, cached, or retrieve from Secret Manager)
             if not api_key:
-                project_id = os.getenv("GCP_PROJECT_ID", "central-element-323112")
+                project_id = get_config("GCP_PROJECT_ID", "central-element-323112")
 
                 # Check cache first
                 if _GRAPH_API_KEY_CACHE and _GRAPH_API_KEY_PROJECT_ID == project_id:
@@ -150,7 +149,7 @@ class SubgraphService:
                     logger.debug("✅ Using cached Graph API key in SubgraphService")
                 else:
                     # Retrieve from Secret Manager and cache
-                    from unified_cloud_services import get_secret_with_fallback
+                    from unified_cloud_services import get_secret_with_fallback, get_config
 
                     graph_api_key = get_secret_with_fallback(
                         project_id=project_id,

@@ -9,7 +9,6 @@ based on ENVIRONMENT variable (dev mode: auto-detects, production: VM service ac
 
 import sys
 import logging
-import os
 import json
 from pathlib import Path
 from typing import Dict, Any
@@ -24,7 +23,7 @@ env_path = Path(__file__).parent.parent.parent / ".env"
 if env_path.exists():
     load_dotenv(dotenv_path=env_path, override=False)
     # Use print for early loading (before logging is configured)
-    if os.getenv("DEBUG", "").lower() == "true":
+    if get_config("DEBUG", "").lower() == "true":
         print(f"✅ Loaded environment variables from {env_path}")
 
 # Setup logging (after .env is loaded so LOG_LEVEL can be read from .env)
@@ -35,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 from instruments_service.cli.parser import parse_arguments
 from instruments_service.cli.handlers import get_handler_for_mode
+from unified_cloud_services import get_config
 
 
 def main() -> Dict[str, Any]:
@@ -91,6 +91,10 @@ def main() -> Dict[str, Any]:
         # Venue filters (for both generation and query modes)
         if args.venues:
             handler_kwargs["venues"] = args.venues
+        
+        # Instrument ID filters (for both generation and query modes)
+        if args.instrument_ids:
+            handler_kwargs["instrument_ids"] = args.instrument_ids
 
         # Query-specific arguments
         if args.mode == "instruments-query":
