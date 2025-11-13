@@ -76,7 +76,7 @@ class TestInstrumentsQueryHandler:
     def handler(self, mock_client):
         """Create handler with mocked client."""
         with patch(
-            "instruments_service.clients.instruments_client.InstrumentsClient",
+            "unified_cloud_services.create_instruments_client",
             return_value=mock_client,
         ):
             config = {"project_id": "test-project", "gcs_bucket": "test-bucket"}
@@ -87,7 +87,7 @@ class TestInstrumentsQueryHandler:
     def test_init(self, mock_client):
         """Test handler initialization."""
         with patch(
-            "instruments_service.clients.instruments_client.InstrumentsClient",
+            "unified_cloud_services.create_instruments_client",
             return_value=mock_client,
         ):
             config = {"project_id": "test-project", "gcs_bucket": "test-bucket"}
