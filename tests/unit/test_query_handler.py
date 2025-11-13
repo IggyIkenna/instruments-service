@@ -58,9 +58,7 @@ class TestInstrumentsQueryHandler:
             }
         )
         client.get_instruments_by_data_type = Mock(
-            return_value=pd.DataFrame(
-                {"instrument_key": ["BINANCE-SPOT:SPOT_PAIR:BTC-USDT"]}
-            )
+            return_value=pd.DataFrame({"instrument_key": ["BINANCE-SPOT:SPOT_PAIR:BTC-USDT"]})
         )
         client.get_expiring_instruments = Mock(
             return_value=pd.DataFrame(
@@ -200,9 +198,7 @@ class TestInstrumentsQueryHandler:
 
     def test_query_instruments_list_output_json(self, handler):
         """Test list query with JSON output format."""
-        result = handler._query_instruments_list(
-            "2024-01-01", "2024-01-01", output_format="json"
-        )
+        result = handler._query_instruments_list("2024-01-01", "2024-01-01", output_format="json")
         assert result["status"] == "success"
         assert "results" in result
 
