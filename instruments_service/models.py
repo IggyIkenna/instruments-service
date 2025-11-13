@@ -358,6 +358,7 @@ class InstrumentDefinition(BaseModel):
             "liquidations",
             "quotes",  # TradFi quotes (Databento) - note: actual fetching uses OHLCV for cost efficiency
             "ohlcv_1m",  # 1-minute OHLCV candles (Databento TradFi)
+            "ohlcv_15m",  # 15-minute OHLCV candles (Barchart, Databento TradFi)
         ]
         types = [t.strip() for t in v.split(",")]
 
@@ -465,6 +466,7 @@ class InstrumentDefinition(BaseModel):
                 "liquidations",
                 "quotes",  # TradFi quotes (Databento) - note: actual fetching uses OHLCV for cost efficiency
                 "ohlcv_1m",  # 1-minute OHLCV candles (Databento TradFi, Hyperliquid, Aster)
+                "ohlcv_15m",  # 15-minute OHLCV candles (Barchart, Databento TradFi)
                 "ohlcv_1h",  # 1-hour OHLCV candles (fallback for Hyperliquid, Aster)
             ]
             types = [t.strip() for t in self.data_types.split(",")]

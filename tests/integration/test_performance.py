@@ -12,7 +12,8 @@ import os
 import time
 from datetime import datetime, timezone
 from instruments_service.app.core.instruments_service import InstrumentsService
-from unified_cloud_services import get_config
+# Import get_config from conftest (avoids circular import issues)
+from tests.conftest import get_config
 
 
 class TestPerformance:
