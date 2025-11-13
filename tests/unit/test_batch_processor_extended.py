@@ -12,9 +12,10 @@ class TestInstrumentBatchProcessorExtended:
 
     def test_batch_processor_initialization(self):
         """Test batch processor initialization."""
-        config = {"test": "config"}
+        config = {"max_batch_size": 500, "lookback_days": 7}
         processor = InstrumentBatchProcessor(config)
-        assert processor.config == config
+        assert processor.max_batch_size == 500
+        assert processor.lookback_days == 7
 
     def test_estimate_memory_requirements_single_date(self):
         """Test memory estimation for single date."""

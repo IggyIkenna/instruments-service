@@ -1,20 +1,19 @@
 """
-Venues Package
+Venues Package - OPTIMIZED MVP
 
 Contains venue adapters for fetching instruments from various sources:
-- Tardis (crypto exchanges)
-- Databento (TradFi exchanges)
-- The Graph (DeFi DEX pools)
-- Protocol SDKs (DeFi protocols)
+- Tardis (crypto exchanges - parallel processing)
+- Databento (TradFi CME + VIX - cached client)
+- The Graph (DeFi DEX pools - active protocols only)
+- Protocol SDKs (DeFi protocols - AAVE with emode params)
 """
 
-# Import all venue adapters
-from .tardis import TardisAdapter
-from .databento import DatabentoAdapter
-from .defi import (
+# Import all venue adapters (active only)
+from instruments_service.app.venues.tardis import TardisAdapter
+from instruments_service.app.venues.databento import DatabentoAdapter
+from instruments_service.app.venues.defi import (
     TheGraphClient,
     UniswapV3Adapter,
-    CurveAdapter,
     AaveV3Adapter,
     EtherFiAdapter,
     LidoAdapter,
@@ -25,7 +24,6 @@ __all__ = [
     "DatabentoAdapter",
     "TheGraphClient",
     "UniswapV3Adapter",
-    "CurveAdapter",
     "AaveV3Adapter",
     "EtherFiAdapter",
     "LidoAdapter",

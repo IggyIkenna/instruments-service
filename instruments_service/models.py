@@ -151,6 +151,13 @@ class InstrumentDefinition(BaseModel):
         default="off-chain",
         description="Chain identifier: 'off-chain' for CeFi/TradFi, chain name for DeFi (e.g., 'ETHEREUM', 'POLKADOT', 'HYPERLIQUID')",
     )
+    
+    # Market category classification (CEFI, TRADFI, DEFI)
+    market_category: str = Field(
+        default="",
+        description="Market category: 'CEFI' (databento_symbol empty AND chain off-chain), 'TRADFI' (databento_symbol filled), 'DEFI' (chain not off-chain). Auto-populated from databento_symbol and chain fields.",
+    )
+    
     base_asset_contract_address: Optional[str] = Field(
         default=None, description="ERC-20 contract address for base asset (DeFi)"
     )
@@ -248,6 +255,28 @@ class InstrumentDefinition(BaseModel):
     leverage_tiers_json: Optional[str] = Field(
         default=None,
         description="JSON string of all leverage tiers for this instrument (for advanced risk calculations)",
+    )
+
+    # Trading hours metadata (TradFi instruments only)
+    trading_hours_open: Optional[str] = Field(
+        default=None,
+        description="Trading hours open time in UTC (e.g., '14:30:00+00:00' for 9:30 AM ET). Only populated for TradFi instruments.",
+    )
+    trading_hours_close: Optional[str] = Field(
+        default=None,
+        description="Trading hours close time in UTC (e.g., '21:00:00+00:00' for 4:00 PM ET). Only populated for TradFi instruments.",
+    )
+    trading_session: Optional[str] = Field(
+        default=None,
+        description="Trading session identifier (e.g., 'regular', 'pre_market', 'after_hours', 'extended'). Only populated for TradFi instruments.",
+    )
+    is_trading_day: Optional[bool] = Field(
+        default=None,
+        description="Whether instrument trades on given date (accounts for holidays). Only populated for TradFi instruments.",
+    )
+    holiday_calendar: Optional[str] = Field(
+        default=None,
+        description="Exchange holiday calendar identifier (e.g., 'NYSE', 'CME', 'NASDAQ'). Only populated for TradFi instruments.",
     )
 
     # Note: validation_warnings removed to avoid circular reference issues

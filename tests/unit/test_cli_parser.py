@@ -68,16 +68,17 @@ def test_validate_arguments_query_mode():
     """Test validation for query mode."""
     from argparse import Namespace
 
-    # Valid arguments
+    # Valid arguments for instruments mode
     args = Namespace(
-        mode="instruments", start_date="2023-05-23", query_type="list"
+        mode="instruments", start_date="2023-05-23", end_date="2023-05-23", query_type="list"
     )
     validate_arguments(args)  # Should not raise
 
-    # Missing instrument_id for details query
+    # Missing instrument_id for details query in instruments-query mode
     args = Namespace(
-        mode="instruments",
-        start_date="2023-05-23",
+        mode="instruments-query",
+        start_date=None,
+        end_date=None,
         query_type="details",
         instrument_id=None,
     )

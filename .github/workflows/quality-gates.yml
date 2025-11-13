@@ -1,0 +1,211 @@
+name: Quality Gates
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  quality-gates:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+      
+      - name: Configure pip authentication for private packages
+        env:
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          
+          # Configure PyPI authentication if token is provided (for private packages)
+          if [ -n "$PYPI_TOKEN" ]; then
+            echo "Configuring PyPI authentication..."
+            mkdir -p ~/.config/pip
+            cat > ~/.config/pip/pip.conf << EOF
+          [global]
+          extra-index-url = https://__token__:$PYPI_TOKEN@pypi.org/simple
+          EOF
+            echo "✅ PyPI authentication configured"
+          fi
+          
+          # Configure GitHub Packages authentication if PAT is provided
+          if [ -n "$GH_PAT" ]; then
+            echo "Configuring GitHub Packages authentication..."
+            mkdir -p ~/.config/pip
+            if [ -f ~/.config/pip/pip.conf ]; then
+              # Append to existing config
+              echo "extra-index-url = https://${GH_PAT}@pypi.pkg.github.com/iggyikenna/simple" >> ~/.config/pip/pip.conf
+            else
+              cat > ~/.config/pip/pip.conf << EOF
+          [global]
+          extra-index-url = https://${GH_PAT}@pypi.pkg.github.com/iggyikenna/simple
+          EOF
+            fi
+            echo "✅ GitHub Packages authentication configured"
+          fi
+      
+      - name: Install unified-cloud-services from private registry
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          # Install unified-cloud-services from private registry
+          # Priority: PyPI (with token) > GitHub Packages > GitHub repo (with token)
+          
+          INSTALLED=false
+          
+          # Try PyPI first (if PYPI_TOKEN is set, it's already configured)
+          echo "Attempting PyPI installation..."
+          if pip install unified-cloud-services 2>/dev/null; then
+            echo "✅ Installed unified-cloud-services from PyPI"
+            INSTALLED=true
+          fi
+          
+          # Try GitHub Packages if PyPI failed
+          if [ "$INSTALLED" = false ] && [ -n "$GH_PAT" ]; then
+            echo "Attempting GitHub Packages installation..."
+            if pip install unified-cloud-services --extra-index-url https://${GH_PAT}@pypi.pkg.github.com/iggyikenna/simple 2>/dev/null; then
+              echo "✅ Installed unified-cloud-services from GitHub Packages"
+              INSTALLED=true
+            fi
+          fi
+          
+          # Try GitHub repo as fallback (for private repos)
+          if [ "$INSTALLED" = false ]; then
+            TOKEN="${GH_PAT:-$GITHUB_TOKEN}"
+            if [ -n "$TOKEN" ]; then
+              echo "Attempting GitHub repository installation..."
+              if pip install git+https://${TOKEN}@github.com/iggyikenna/unified-cloud-services.git; then
+                echo "✅ Installed unified-cloud-services from GitHub repository"
+                INSTALLED=true
+              fi
+            fi
+          fi
+          
+          if [ "$INSTALLED" = false ]; then
+            echo "❌ Failed to install unified-cloud-services from any source"
+            echo "Please ensure PYPI_TOKEN or GH_PAT secrets are configured"
+            exit 1
+          fi
+      
+      - name: Create GCP service account credentials file
+        env:
+          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$GCP_SERVICE_ACCOUNT_JSON" ]; then
+            echo "❌ GCP_SERVICE_ACCOUNT_JSON secret is not set"
+            echo "Please add the service account JSON as a GitHub secret"
+            echo ""
+            echo "To add the secret:"
+            echo "1. Go to repository Settings → Secrets and variables → Actions"
+            echo "2. Click 'New repository secret'"
+            echo "3. Name: GCP_SERVICE_ACCOUNT_JSON"
+            echo "4. Value: Paste the entire contents of central-element-323112-e35fb0ddafe2.json"
+            exit 1
+          fi
+          
+          # Create credentials file from secret
+          echo "$GCP_SERVICE_ACCOUNT_JSON" > central-element-323112-e35fb0ddafe2.json
+          chmod 600 central-element-323112-e35fb0ddafe2.json
+          echo "✅ Created GCP service account credentials file"
+      
+      - name: Create .env file from secrets
+        run: |
+          # Set defaults for environment variables (use secrets if available, otherwise defaults)
+          GCP_PROJECT_ID="${GCP_PROJECT_ID:-central-element-323112}"
+          GCS_REGION="${GCS_REGION:-asia-northeast1-c}"
+          GCS_LOCATION="${GCS_LOCATION:-asia-northeast1}"
+          INSTRUMENTS_GCS_BUCKET="${INSTRUMENTS_GCS_BUCKET:-instruments-store-central-element-323112}"
+          INSTRUMENTS_GCS_BUCKET_TEST="${INSTRUMENTS_GCS_BUCKET_TEST:-instruments-store-test-central-element-323112}"
+          INSTRUMENTS_GCS_BUCKET_CEFI="${INSTRUMENTS_GCS_BUCKET_CEFI:-instruments-store-cefi-central-element-323112}"
+          INSTRUMENTS_GCS_BUCKET_TRADFI="${INSTRUMENTS_GCS_BUCKET_TRADFI:-instruments-store-tradfi-central-element-323112}"
+          INSTRUMENTS_GCS_BUCKET_DEFI="${INSTRUMENTS_GCS_BUCKET_DEFI:-instruments-store-defi-central-element-323112}"
+          INSTRUMENTS_BIGQUERY_DATASET="${INSTRUMENTS_BIGQUERY_DATASET:-instruments}"
+          BIGQUERY_LOCATION="${BIGQUERY_LOCATION:-asia-northeast1}"
+          TARDIS_SECRET_NAME="${TARDIS_SECRET_NAME:-tardis-api-key}"
+          DATABENTO_SECRET_NAME="${DATABENTO_SECRET_NAME:-databento-api-key}"
+          AAVESCAN_SECRET_NAME="${AAVESCAN_SECRET_NAME:-aavescan-api-key}"
+          ALCHEMY_SECRET_NAME="${ALCHEMY_SECRET_NAME:-alchemy-api-key}"
+          
+          cat > .env << EOF
+          # GCP Configuration
+          GOOGLE_APPLICATION_CREDENTIALS=central-element-323112-e35fb0ddafe2.json
+          GCP_PROJECT_ID=$GCP_PROJECT_ID
+          
+          # GCS Location Configuration
+          GCS_REGION=$GCS_REGION
+          GCS_LOCATION=$GCS_LOCATION
+          
+          # Instruments Service Configuration
+          INSTRUMENTS_GCS_BUCKET=$INSTRUMENTS_GCS_BUCKET
+          INSTRUMENTS_GCS_BUCKET_TEST=$INSTRUMENTS_GCS_BUCKET_TEST
+          INSTRUMENTS_GCS_BUCKET_CEFI=$INSTRUMENTS_GCS_BUCKET_CEFI
+          INSTRUMENTS_GCS_BUCKET_TRADFI=$INSTRUMENTS_GCS_BUCKET_TRADFI
+          INSTRUMENTS_GCS_BUCKET_DEFI=$INSTRUMENTS_GCS_BUCKET_DEFI
+          INSTRUMENTS_BIGQUERY_DATASET=$INSTRUMENTS_BIGQUERY_DATASET
+          BIGQUERY_LOCATION=$BIGQUERY_LOCATION
+          
+          # Environment Settings
+          ENVIRONMENT=development
+          ENABLE_CSV_SAMPLING=true
+          CSV_SAMPLE_SIZE=20000
+          CSV_SAMPLE_DIR=./data/samples
+          
+          # Secret Manager secret names
+          TARDIS_SECRET_NAME=$TARDIS_SECRET_NAME
+          DATABENTO_SECRET_NAME=$DATABENTO_SECRET_NAME
+          AAVESCAN_SECRET_NAME=$AAVESCAN_SECRET_NAME
+          ALCHEMY_SECRET_NAME=$ALCHEMY_SECRET_NAME
+          EOF
+          echo "✅ Created .env file from secrets"
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCS_REGION: ${{ secrets.GCS_REGION }}
+          GCS_LOCATION: ${{ secrets.GCS_LOCATION }}
+          INSTRUMENTS_GCS_BUCKET: ${{ secrets.INSTRUMENTS_GCS_BUCKET }}
+          INSTRUMENTS_GCS_BUCKET_TEST: ${{ secrets.INSTRUMENTS_GCS_BUCKET_TEST }}
+          INSTRUMENTS_GCS_BUCKET_CEFI: ${{ secrets.INSTRUMENTS_GCS_BUCKET_CEFI }}
+          INSTRUMENTS_GCS_BUCKET_TRADFI: ${{ secrets.INSTRUMENTS_GCS_BUCKET_TRADFI }}
+          INSTRUMENTS_GCS_BUCKET_DEFI: ${{ secrets.INSTRUMENTS_GCS_BUCKET_DEFI }}
+          INSTRUMENTS_BIGQUERY_DATASET: ${{ secrets.INSTRUMENTS_BIGQUERY_DATASET }}
+          BIGQUERY_LOCATION: ${{ secrets.BIGQUERY_LOCATION }}
+          TARDIS_SECRET_NAME: ${{ secrets.TARDIS_SECRET_NAME }}
+          DATABENTO_SECRET_NAME: ${{ secrets.DATABENTO_SECRET_NAME }}
+          AAVESCAN_SECRET_NAME: ${{ secrets.AAVESCAN_SECRET_NAME }}
+          ALCHEMY_SECRET_NAME: ${{ secrets.ALCHEMY_SECRET_NAME }}
+      
+      - name: Install instruments-service and run Quality Gates
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/central-element-323112-e35fb0ddafe2.json
+        run: |
+          python scripts/run_quality_gates.py --coverage-threshold 75
+      
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage.json
+            htmlcov/**
+          retention-days: 7
+      
+      - name: Cleanup sensitive files
+        if: always()
+        run: |
+          # Remove credentials file (security best practice)
+          rm -f central-element-323112-e35fb0ddafe2.json
+          echo "✅ Cleaned up sensitive files"
+
