@@ -13,6 +13,7 @@ For production use, use The Graph Network endpoints with API keys.
 """
 
 import logging
+import os
 from typing import Dict, List, Optional, Any
 import requests
 
@@ -21,6 +22,15 @@ logger = logging.getLogger(__name__)
 # Module-level cache for API key to avoid repeated Secret Manager calls
 _API_KEY_CACHE: Optional[str] = None
 _API_KEY_PROJECT_ID: Optional[str] = None
+
+# Import get_config with fallback to os.getenv
+try:
+    from unified_cloud_services import get_config
+except ImportError:
+    # Fallback if unified-cloud-services is not available
+    def get_config(key: str, default: str = "") -> str:
+        """Fallback get_config using os.getenv."""
+        return os.getenv(key, default)
 
 
 class TheGraphClient:
@@ -67,7 +77,7 @@ class TheGraphClient:
             else:
                 # Retrieve from Secret Manager and cache it
                 try:
-                    from unified_cloud_services import get_secret_with_fallback, get_config
+                    from unified_cloud_services import get_secret_with_fallback
 
                     secret_name = get_config("GRAPH_SECRET_NAME", "graph-api-key")
 

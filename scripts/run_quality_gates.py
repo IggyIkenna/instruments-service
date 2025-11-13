@@ -34,6 +34,56 @@ project_root = Path(__file__).parent.parent
 repo_root = project_root.parent
 
 
+def configure_git_credentials() -> None:
+    """Configure git to use credentials from environment variables.
+    
+    This allows pip to install from git URLs in pyproject.toml without
+    hardcoding tokens in the URLs. When pip installs dependencies from
+    pyproject.toml, git will use these credentials.
+    """
+    github_token = os.getenv("GITHUB_TOKEN")
+    gh_pat = os.getenv("GH_PAT")
+    token = github_token or gh_pat
+    
+    if token:
+        # Set environment variables that git credential helper can use
+        os.environ["GIT_TERMINAL_PROMPT"] = "0"
+        os.environ["GIT_ASKPASS"] = "echo"
+        
+        # Configure git credential helper to read from environment
+        # This allows pip to authenticate when installing from git URLs in pyproject.toml
+        # We'll create a temporary credential helper script
+        import tempfile
+        
+        # Create a credential helper script that outputs the token
+        credential_helper_script = f"""#!/bin/sh
+echo "username=x-access-token"
+echo "password={token}"
+"""
+        
+        # Write to temporary file and make executable
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.sh') as f:
+            f.write(credential_helper_script)
+            helper_path = f.name
+        
+        os.chmod(helper_path, 0o755)
+        
+        # Configure git to use this credential helper for github.com
+        subprocess.run(
+            ["git", "config", "--global", f"credential.https://github.com.helper", f"!{helper_path}"],
+            capture_output=True,
+            check=False
+        )
+        
+        # Also set up URL rewriting to inject credentials
+        # This is a fallback if credential helper doesn't work
+        subprocess.run(
+            ["git", "config", "--global", "url.https://x-access-token:{token}@github.com/.insteadOf", "https://github.com/"],
+            capture_output=True,
+            check=False
+        )
+
+
 def ensure_packages_installed(force_github: bool = False) -> bool:
     """Install packages in editable mode so absolute imports work correctly.
     
@@ -46,6 +96,9 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
     if force_github:
         print("(GitHub-only mode - mimicking CI/CD workflow)")
     print("=" * 70)
+    
+    # Configure git credentials before installing
+    configure_git_credentials()
     
     # Install instruments-service in editable mode
     # First install without unified-cloud-services dependency (it's not on PyPI)
@@ -68,7 +121,7 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
         "pydantic>=2.12.4",
         "pydantic-settings>=2.12.0",
         "pandas>=2.2.0",
-        "numpy>=1.26.0,<2.0.0",
+        "numpy>=2.1.0,<2.4.0",
         "python-dateutil>=2.8.0",
         "python-dotenv>=1.0.0",
         "requests>=2.32.5",
@@ -152,25 +205,23 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
     
     # Try GitHub repo as final fallback
     if not installed:
-        gh_pat = os.getenv("GH_PAT") or os.getenv("GITHUB_TOKEN")
-        if gh_pat:
+        # Prioritize GITHUB_TOKEN (automatically available in GitHub Actions)
+        # Fall back to GH_PAT (for local development or custom tokens)
+        github_token = os.getenv("GITHUB_TOKEN")
+        gh_pat = os.getenv("GH_PAT")
+        token = github_token or gh_pat
+        
+        if token:
             print("\n📦 Attempting GitHub repository installation...")
             # Disable interactive prompts
             env = os.environ.copy()
             env["GIT_TERMINAL_PROMPT"] = "0"
+            env["GIT_ASKPASS"] = "echo"  # Disable password prompts
             
-            # Determine if we're using GITHUB_TOKEN (from GitHub Actions) or a PAT
-            # GITHUB_TOKEN works better with x-access-token format
-            # PATs work with token-as-username format
-            is_github_token = os.getenv("GITHUB_TOKEN") == gh_pat
-            
-            # Try x-access-token format first (works best in GitHub Actions)
-            if is_github_token:
-                print("   Using x-access-token format (GitHub Actions token)")
-                url = f"git+https://x-access-token:{gh_pat}@github.com/iggyikenna/unified-cloud-services.git"
-            else:
-                print("   Using PAT format")
-                url = f"git+https://{gh_pat}@github.com/iggyikenna/unified-cloud-services.git"
+            # Always use x-access-token format - works for both GITHUB_TOKEN and PATs
+            # This is the recommended format for GitHub authentication
+            print("   Using x-access-token format")
+            url = f"git+https://x-access-token:{token}@github.com/iggyikenna/unified-cloud-services.git"
             
             cmd = [
                 sys.executable, "-m", "pip", "install", url
@@ -184,19 +235,15 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
                 print("⚠️  GitHub repository installation failed")
                 if result.stderr:
                     print(f"   Error: {result.stderr[:300]}")
-                # Try alternative format if first attempt failed
-                if not is_github_token and ("could not read Password" in result.stderr or "No such device" in result.stderr):
-                    print("   🔄 Retrying with x-access-token format...")
-                    url_alt = f"git+https://x-access-token:{gh_pat}@github.com/iggyikenna/unified-cloud-services.git"
-                    cmd_alt = [
-                        sys.executable, "-m", "pip", "install", url_alt
-                    ]
-                    result_alt = subprocess.run(cmd_alt, cwd=project_root, capture_output=True, text=True, env=env)
-                    if result_alt.returncode == 0:
-                        print("✅ unified-cloud-services installed successfully from GitHub repository (x-access-token)")
-                        installed = True
-                    else:
-                        print(f"   Error (retry): {result_alt.stderr[:300] if result_alt.stderr else result_alt.stdout[:300]}")
+                if result.stdout:
+                    print(f"   Output: {result.stdout[:300]}")
+                
+                # Additional debugging in CI
+                is_ci = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
+                if is_ci:
+                    print(f"   Debug: GITHUB_TOKEN={'set' if github_token else 'not set'}")
+                    print(f"   Debug: GH_PAT={'set' if gh_pat else 'not set'}")
+                    print(f"   Debug: Token length: {len(token) if token else 0}")
         else:
             print("⚠️  Skipping GitHub repository (GH_PAT or GITHUB_TOKEN not set)")
     

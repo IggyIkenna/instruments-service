@@ -11,9 +11,11 @@ from unittest.mock import Mock, patch, MagicMock
 
 from instruments_service.cli.handlers.instrument_handler import InstrumentHandler
 from instruments_service.cli.handlers.instruments_query_handler import (
-from unified_cloud_services import get_config
     InstrumentsQueryHandler,
 )
+
+# Import get_config from conftest (avoids circular import issues)
+from tests.conftest import get_config
 
 
 @pytest.fixture
