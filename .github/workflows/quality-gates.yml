@@ -21,11 +21,18 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Checkout unified-cloud-services
-        uses: actions/checkout@v4
-        with:
-          repository: IggyIkenna/unified-cloud-services
-          path: ../unified-cloud-services
-          token: ${{ secrets.GH_PAT || github.token }}
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          # Use GH_PAT if available, otherwise use GITHUB_TOKEN
+          AUTH_TOKEN="${GH_PAT:-${GITHUB_TOKEN}}"
+          
+          # Clone unified-cloud-services to parent directory (sibling to workspace)
+          # This matches the monorepo structure expected by the installation script
+          cd ${{ github.workspace }}/..
+          git clone https://x-access-token:${AUTH_TOKEN}@github.com/IggyIkenna/unified-cloud-services.git unified-cloud-services
+          echo "✅ Checked out unified-cloud-services to ../unified-cloud-services"
       
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
