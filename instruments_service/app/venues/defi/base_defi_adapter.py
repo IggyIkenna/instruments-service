@@ -29,11 +29,14 @@ class BaseDefiAdapter:
         Args:
             chain: Chain identifier (e.g., 'ETHEREUM', 'ARBITRUM')
             api_key: Optional API key (uses Secret Manager if not provided)
-            project_id: GCP project ID for Secret Manager
+            project_id: GCP project ID for Secret Manager (defaults to GCP_PROJECT_ID env var)
         """
+        import os
+        
         self.chain = chain.upper()
         self.api_key = api_key
-        self.project_id = project_id
+        # Default to GCP_PROJECT_ID env var if not provided
+        self.project_id = project_id or os.getenv("GCP_PROJECT_ID", "central-element-323112")
 
     def _validate_instrument_definition(self, inst_def: Dict[str, Any]) -> bool:
         """

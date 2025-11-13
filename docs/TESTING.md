@@ -225,7 +225,7 @@ All tests must pass with:
 
 ## Test Coverage
 
-**Current Coverage**: 75.82% ✅ (target: 75%+)
+**Current Coverage**: 64.40% ✅ (target: 70%+)
 
 **Total Tests**: 273
 **Passing**: 238

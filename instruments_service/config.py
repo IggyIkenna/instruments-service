@@ -62,6 +62,60 @@ class UnifiedInstrumentConfig:
                 "USD",
                 "NQ",
             ),
+            InstrumentDefinition(
+                "RTY.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "RUSSELL2000", "USD", "RTY"
+            ),
+            InstrumentDefinition(
+                "YM.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "DOW", "USD", "YM"
+            ),
+            InstrumentDefinition(
+                "NKD.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "NIKKEI225", "USD", "NKD"
+            ),
+            # Sector Futures (CME) - SPDR Sector ETF Futures
+            InstrumentDefinition(
+                "XAF.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "ENERGY_SECTOR", "USD", "XAF"
+            ),
+            InstrumentDefinition(
+                "XAK.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "TECH_SECTOR", "USD", "XAK"
+            ),
+            InstrumentDefinition(
+                "XAY.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CONSUMER_DISC_SECTOR", "USD", "XAY"
+            ),
+            InstrumentDefinition(
+                "XAP.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CONSUMER_STAPLES_SECTOR", "USD", "XAP"
+            ),
+            InstrumentDefinition(
+                "XAV.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "HEALTHCARE_SECTOR", "USD", "XAV"
+            ),
+            InstrumentDefinition(
+                "XAI.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "INDUSTRIALS_SECTOR", "USD", "XAI"
+            ),
+            InstrumentDefinition(
+                "XAB.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "MATERIALS_SECTOR", "USD", "XAB"
+            ),
+            InstrumentDefinition(
+                "XAU.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "UTILITIES_SECTOR", "USD", "XAU"
+            ),
+            # Treasury Futures (CME/CBOT) - use .FUT suffix for parent symbology
+            InstrumentDefinition(
+                "ZT.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "TREASURY_2Y", "USD", "ZT"
+            ),
+            InstrumentDefinition(
+                "ZF.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "TREASURY_5Y", "USD", "ZF"
+            ),
+            InstrumentDefinition(
+                "ZN.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "TREASURY_10Y", "USD", "ZN"
+            ),
+            InstrumentDefinition(
+                "ZB.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "TREASURY_30Y", "USD", "ZB"
+            ),
+            # Crypto Futures (CME) - use .FUT suffix
+            InstrumentDefinition(
+                "BTC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "BTC", "USD", "BTC"
+            ),
+            InstrumentDefinition(
+                "ETH.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "ETH", "USD", "ETH"
+            ),
             # Commodities (CME) - use .FUT suffix
             InstrumentDefinition(
                 "GC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "GOLD", "USD", "GC"
@@ -71,6 +125,12 @@ class UnifiedInstrumentConfig:
             ),
             InstrumentDefinition(
                 "NG.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "NATGAS", "USD", "NG"
+            ),
+            InstrumentDefinition(
+                "HO.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "HEATING_OIL", "USD", "HO"
+            ),
+            InstrumentDefinition(
+                "RB.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "GASOLINE", "USD", "RB"
             ),
             InstrumentDefinition(
                 "SI.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SILVER", "USD", "SI"
@@ -148,72 +208,32 @@ class UnifiedInstrumentConfig:
             InstrumentDefinition(
                 "6L.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "BRL", "USD", "6L"
             ),
-            # ICE Commodities - use .FUT suffix
-            # ICE Europe Commodities (IFEU.IMPACT)
+            # Options (CME) - use .OPT suffix for parent symbology
+            # Per Databento docs: ES.OPT returns standard monthly/quarterly options
+            # Weekly and daily options require separate parent symbols (EW1.OPT, EW2.OPT, etc.)
             InstrumentDefinition(
-                "BRN.FUT",
-                "ICE",
-                "FUTURE",
-                "IFEU.IMPACT",
-                "parent",
-                "BRENT",
-                "USD",
-                "BRN",
+                "ES.OPT", "CME", "OPTION", "GLBX.MDP3", "parent", "SP500", "USD", "ES"
+            ),
+            # ES Weekly Options - Per Databento docs, each week has its own parent symbol
+            # EW1 = 1st week, EW2 = 2nd week, EW3 = 3rd week, EW4 = 4th week, EW5 = 5th week
+            InstrumentDefinition(
+                "EW1.OPT", "CME", "OPTION", "GLBX.MDP3", "parent", "SP500", "USD", "EW1"
             ),
             InstrumentDefinition(
-                "G.FUT", "ICE", "FUTURE", "IFEU.IMPACT", "parent", "GASOIL", "USD", "G"
-            ),
-            # ICE Futures US Softs (IFUS.IMPACT) - Coffee, Orange Juice, Cocoa, Sugar
-            InstrumentDefinition(
-                "KC.FUT",
-                "ICE",
-                "FUTURE",
-                "IFUS.IMPACT",
-                "parent",
-                "COFFEE",
-                "USD",
-                "KC",
+                "EW2.OPT", "CME", "OPTION", "GLBX.MDP3", "parent", "SP500", "USD", "EW2"
             ),
             InstrumentDefinition(
-                "OJ.FUT", "ICE", "FUTURE", "IFUS.IMPACT", "parent", "OJ", "USD", "OJ"
+                "EW3.OPT", "CME", "OPTION", "GLBX.MDP3", "parent", "SP500", "USD", "EW3"
             ),
             InstrumentDefinition(
-                "CC.FUT", "ICE", "FUTURE", "IFUS.IMPACT", "parent", "COCOA", "USD", "CC"
+                "EW4.OPT", "CME", "OPTION", "GLBX.MDP3", "parent", "SP500", "USD", "EW4"
             ),
             InstrumentDefinition(
-                "SB.FUT", "ICE", "FUTURE", "IFUS.IMPACT", "parent", "SUGAR", "USD", "SB"
+                "EW5.OPT", "CME", "OPTION", "GLBX.MDP3", "parent", "SP500", "USD", "EW5"
             ),
-            # Equities/ETFs (NASDAQ/NYSE) - use raw_symbol stype_in (no .FUT/.OPT suffix)
-            InstrumentDefinition("SPY", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "SPY", "USD"),
-            InstrumentDefinition("QQQ", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "QQQ", "USD"),
+            # Index (CBOE) - VIX volatility index (data from barchart.com, OHLCV 15m)
             InstrumentDefinition(
-                "AAPL", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "AAPL", "USD"
-            ),
-            InstrumentDefinition(
-                "MSFT", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "MSFT", "USD"
-            ),
-            InstrumentDefinition(
-                "GOOGL", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "GOOGL", "USD"
-            ),
-            InstrumentDefinition(
-                "AMZN", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "AMZN", "USD"
-            ),
-            InstrumentDefinition(
-                "TSLA", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "TSLA", "USD"
-            ),
-            InstrumentDefinition(
-                "NVDA", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "NVDA", "USD"
-            ),
-            InstrumentDefinition(
-                "META", "NASDAQ", "EQUITY", "DBEQ.BASIC", "raw_symbol", "META", "USD"
-            ),
-            InstrumentDefinition(
-                "BRK.B", "NYSE", "EQUITY", "DBEQ.BASIC", "raw_symbol", "BRK.B", "USD"
-            ),
-            # Options (CBOE) - use .OPT suffix for parent symbology
-            # Only SPY options (SPY.OPT) - most liquid, skip SPX options
-            InstrumentDefinition(
-                "SPY.OPT", "CBOE", "OPTION", "OPRA.PILLAR", "parent", "SPY", "USD"
+                "VIX", "CBOE", "INDEX", "BARCHART", "raw_symbol", "VIX", "USD"
             ),
         ]
     )
@@ -246,31 +266,53 @@ class UnifiedInstrumentConfig:
             "MGC": "GOLD",
             "NG": "NATGAS",
             "MNG": "NATGAS",
+            "HO": "HEATING_OIL",
+            "RB": "GASOLINE",
             "SI": "SILVER",
             "MSI": "SILVER",
             "HG": "COPPER",
             "MHG": "COPPER",
-            "SB": "SUGAR",
-            "KC": "COFFEE",
             "CT": "COTTON",
-            "CC": "COCOA",
-            "OJ": "OJ",
             "ZS": "SOYBEANS",
             "ZC": "CORN",
             "ZW": "WHEAT",
             "ZL": "SOYBEAN_OIL",
             "ZM": "SOYBEAN_MEAL",
-            # ICE
-            "BRN": "BRENT",
-            "B": "BRENT",
-            "G": "GASOIL",
+            # Crypto Futures (CME)
+            "BTC": "BTC",
+            "ETH": "ETH",
             # Equity Index Futures
             "ES": "SP500",
             "MES": "SP500",
             "NQ": "NASDAQ100",
             "MNQ": "NASDAQ100",
+            "RTY": "RUSSELL2000",
+            "M2K": "RUSSELL2000",  # Micro Russell 2000
+            "YM": "DOW",
+            "MYM": "DOW",  # Micro Dow
+            "NKD": "NIKKEI225",
+            # Sector Futures (CME SPDR Sector ETF Futures)
+            "XAF": "ENERGY_SECTOR",
+            "XAK": "TECH_SECTOR",
+            "XAY": "CONSUMER_DISC_SECTOR",
+            "XAP": "CONSUMER_STAPLES_SECTOR",
+            "XAV": "HEALTHCARE_SECTOR",
+            "XAI": "INDUSTRIALS_SECTOR",
+            "XAB": "MATERIALS_SECTOR",
+            "XAU": "UTILITIES_SECTOR",
+            # Treasury Futures
+            "ZT": "TREASURY_2Y",
+            "ZF": "TREASURY_5Y",
+            "ZN": "TREASURY_10Y",
+            "ZB": "TREASURY_30Y",
             # S&P 500 Index
             "SPX": "SP500",
+            # ES Weekly Options
+            "EW1": "SP500",  # 1st week options
+            "EW2": "SP500",  # 2nd week options
+            "EW3": "SP500",  # 3rd week options
+            "EW4": "SP500",  # 4th week options
+            "EW5": "SP500",  # 5th week options
         }
     )
 
@@ -860,18 +902,10 @@ class UnifiedInstrumentConfig:
         return equities
 
     def get_all_instruments(self) -> List[InstrumentDefinition]:
-        """Get all instruments including dynamically generated S&P 500 equities"""
-        all_insts = list(self.instruments)
-
-        # Add S&P 500 equities dynamically
-        sp500_equities = self._get_sp500_equities()
-        # Only add if not already in base list
-        existing_symbols = {inst.symbol for inst in all_insts}
-        for eq in sp500_equities:
-            if eq.symbol not in existing_symbols:
-                all_insts.append(eq)
-
-        return all_insts
+        """Get all instruments (CME futures/options + VIX only)"""
+        # SIMPLIFIED: Only return instruments explicitly defined in config
+        # Removed auto-generation of S&P 500 equities (focus on CME + VIX)
+        return list(self.instruments)
 
 
 # Legacy compatibility: Keep DatabentoInstrumentConfig as a wrapper
@@ -940,11 +974,8 @@ class VenueMapping:
     # Canonical TradFi venues (user-friendly names, not data source names)
     all_databento_venues: List[str] = field(
         default_factory=lambda: [
-            "CME",  # Chicago Mercantile Exchange
-            "NASDAQ",  # NASDAQ Stock Market
-            "NYSE",  # New York Stock Exchange
-            "ICE",  # Intercontinental Exchange
-            "CBOE",  # Cboe Global Markets (for SPX options, VIX options)
+            "CME",  # Chicago Mercantile Exchange (futures, options, treasuries)
+            "CBOE",  # Cboe Global Markets (VIX index only - special treatment)
         ]
     )
 
@@ -982,10 +1013,7 @@ class VenueMapping:
     venue_to_databento: Dict[str, str] = field(
         default_factory=lambda: {
             "CME": "GLBX.MDP3",  # CME Globex Market Data Platform 3.0
-            "NASDAQ": "DBEQ.BASIC",  # Databento US Equities Basic (includes NASDAQ data)
-            "NYSE": "DBEQ.BASIC",  # Databento US Equities Basic (includes NYSE data)
-            "ICE": "IFEU.IMPACT",  # ICE Europe Commodities iMpact (for European commodities)
-            "CBOE": "OPRA.PILLAR",  # Cboe Global Markets (SPX options via OPRA.PILLAR dataset)
+            "CBOE": "BARCHART",  # VIX index only (not via Databento OPRA.PILLAR)
         }
     )
 
@@ -1301,20 +1329,55 @@ if BASE_SERVICE_CONFIG_AVAILABLE and BaseServiceConfig is not None:
         # GCS and BigQuery defaults for instruments
         gcs_bucket: str = Field(
             default_factory=lambda: os.getenv("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
-            description="GCS bucket for instruments",
+            description="GCS bucket for instruments (default/backwards compatibility)",
+        )
+        # Category-specific buckets for independent batch processing
+        gcs_bucket_cefi: str = Field(
+            default_factory=lambda: os.getenv("INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-central-element-323112"),
+            description="GCS bucket for CEFI instruments",
+        )
+        gcs_bucket_tradfi: str = Field(
+            default_factory=lambda: os.getenv("INSTRUMENTS_GCS_BUCKET_TRADFI", "instruments-store-tradfi-central-element-323112"),
+            description="GCS bucket for TRADFI instruments",
+        )
+        gcs_bucket_defi: str = Field(
+            default_factory=lambda: os.getenv("INSTRUMENTS_GCS_BUCKET_DEFI", "instruments-store-defi-central-element-323112"),
+            description="GCS bucket for DEFI instruments",
         )
         bigquery_dataset: str = Field(
             default_factory=lambda: os.getenv("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
             description="BigQuery dataset for instruments",
         )
 
-        def get_cloud_target(self):
-            """Get CloudTarget for instruments service."""
+        def get_cloud_target(self, category: Optional[str] = None):
+            """
+            Get CloudTarget for instruments service.
+            
+            Args:
+                category: Optional market category ("CEFI", "TRADFI", "DEFI") to use category-specific bucket
+                
+            Returns:
+                CloudTarget with appropriate bucket for category
+            """
             from unified_cloud_services import CloudTarget
+            
+            # Determine bucket based on category
+            if category:
+                category_upper = category.upper()
+                if category_upper == "CEFI":
+                    bucket = self.gcs_bucket_cefi
+                elif category_upper == "TRADFI":
+                    bucket = self.gcs_bucket_tradfi
+                elif category_upper == "DEFI":
+                    bucket = self.gcs_bucket_defi
+                else:
+                    raise ValueError(f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI")
+            else:
+                bucket = self.gcs_bucket
 
             return CloudTarget(
                 project_id=self.gcp_project_id,
-                gcs_bucket=self.gcs_bucket,
+                gcs_bucket=bucket,
                 bigquery_dataset=self.bigquery_dataset,
                 bigquery_location=self.bigquery_location,
             )

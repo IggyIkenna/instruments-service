@@ -8,7 +8,7 @@ Follows unified repository structure pattern (Layer 3 validation).
 import logging
 import pandas as pd
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -213,7 +213,7 @@ class ValidationService:
             )
 
         # Check if dates are in the future (warn but allow)
-        today = datetime.now().date()
+        today = datetime.now(timezone.utc).date()
         if start_date.date() > today:
             logger.warning(f"⚠️ Start date {start_date.date()} is in the future")
 
