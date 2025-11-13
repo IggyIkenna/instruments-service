@@ -9,16 +9,8 @@ from typing import List, Dict, Optional, Tuple
 import os
 
 # Try to import BaseServiceConfig from unified-cloud-services
-try:
-    from unified_cloud_services import BaseServiceConfig
-    from pydantic import Field
-
-    BASE_SERVICE_CONFIG_AVAILABLE = True
-except ImportError:
-    BASE_SERVICE_CONFIG_AVAILABLE = False
-    # Fallback if unified-cloud-services not available
-    BaseServiceConfig = None
-    Field = None
+from unified_cloud_services import BaseServiceConfig
+from pydantic import Field
 
 
 @dataclass
@@ -1277,70 +1269,41 @@ class ExchangeInstrumentConfig:
     )
 
 
-# Service-level configuration (extends BaseServiceConfig if available)
-if BASE_SERVICE_CONFIG_AVAILABLE and BaseServiceConfig is not None:
+class InstrumentsServiceConfig(BaseServiceConfig):
+    """
+    Service-level configuration for instruments-service.
 
-    class InstrumentsServiceConfig(BaseServiceConfig):
-        """
-        Service-level configuration for instruments-service.
+    Extends BaseServiceConfig with instruments-specific settings.
+    """
 
-        Extends BaseServiceConfig with instruments-specific settings.
-        """
+    service_name: str = Field(default="instruments-service", description="Service name")
 
-        service_name: str = Field(default="instruments-service", description="Service name")
+    # Instruments-specific configuration
+    enable_ccxt_integration: bool = Field(
+        default=True, description="Enable CCXT metadata enrichment"
+    )
+    enable_metadata_caching: bool = Field(default=True, description="Enable metadata caching")
+    cache_ttl_hours: int = Field(default=24, description="Cache TTL in hours")
+    max_batch_size: int = Field(default=1000, description="Maximum batch size for processing")
+    lookback_days: int = Field(default=0, description="Lookback days for batch processing")
 
-        # Instruments-specific configuration
-        enable_ccxt_integration: bool = Field(
-            default=True, description="Enable CCXT metadata enrichment"
+    # GCS and BigQuery defaults for instruments
+    gcs_bucket: str = Field(
+        default_factory=lambda: os.getenv("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
+        description="GCS bucket for instruments",
+    )
+    bigquery_dataset: str = Field(
+        default_factory=lambda: os.getenv("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
+        description="BigQuery dataset for instruments",
+    )
+
+    def get_cloud_target(self):
+        """Get CloudTarget for instruments service."""
+        from unified_cloud_services import CloudTarget
+
+        return CloudTarget(
+            project_id=self.gcp_project_id,
+            gcs_bucket=self.gcs_bucket,
+            bigquery_dataset=self.bigquery_dataset,
+            bigquery_location=self.bigquery_location,
         )
-        enable_metadata_caching: bool = Field(default=True, description="Enable metadata caching")
-        cache_ttl_hours: int = Field(default=24, description="Cache TTL in hours")
-        max_batch_size: int = Field(default=1000, description="Maximum batch size for processing")
-        lookback_days: int = Field(default=0, description="Lookback days for batch processing")
-
-        # GCS and BigQuery defaults for instruments
-        gcs_bucket: str = Field(
-            default_factory=lambda: os.getenv("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
-            description="GCS bucket for instruments",
-        )
-        bigquery_dataset: str = Field(
-            default_factory=lambda: os.getenv("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
-            description="BigQuery dataset for instruments",
-        )
-
-        def get_cloud_target(self):
-            """Get CloudTarget for instruments service."""
-            from unified_cloud_services import CloudTarget
-
-            return CloudTarget(
-                project_id=self.gcp_project_id,
-                gcs_bucket=self.gcs_bucket,
-                bigquery_dataset=self.bigquery_dataset,
-                bigquery_location=self.bigquery_location,
-            )
-
-else:
-    # Fallback if BaseServiceConfig not available
-    class InstrumentsServiceConfig:
-        """Fallback service config if BaseServiceConfig not available."""
-
-        def __init__(self, **kwargs):
-            self.service_name = kwargs.get("service_name", "instruments-service")
-            self.enable_ccxt_integration = kwargs.get("enable_ccxt_integration", True)
-            self.enable_metadata_caching = kwargs.get("enable_metadata_caching", True)
-            self.cache_ttl_hours = kwargs.get("cache_ttl_hours", 24)
-            self.max_batch_size = kwargs.get("max_batch_size", 1000)
-            self.lookback_days = kwargs.get("lookback_days", 0)
-            self.gcs_bucket = kwargs.get(
-                "gcs_bucket", os.getenv("INSTRUMENTS_GCS_BUCKET", "instruments-store")
-            )
-            self.bigquery_dataset = kwargs.get(
-                "bigquery_dataset",
-                os.getenv("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
-            )
-            self.gcp_project_id = kwargs.get(
-                "gcp_project_id", os.getenv("GCP_PROJECT_ID", "central-element-323112")
-            )
-            self.bigquery_location = kwargs.get(
-                "bigquery_location", os.getenv("BIGQUERY_LOCATION", "asia-northeast1")
-            )  # Default to asia-northeast1 per .env

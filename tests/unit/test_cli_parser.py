@@ -5,6 +5,7 @@ Unit tests for CLI parser.
 import pytest
 import sys
 from unittest.mock import patch
+from argparse import Namespace
 
 from instruments_service.cli.parser import parse_arguments, validate_arguments
 
@@ -52,7 +53,6 @@ def test_parse_arguments_query_mode():
 
 def test_validate_arguments_instruments_mode():
     """Test validation for instruments mode."""
-    from argparse import Namespace
 
     # Valid arguments
     args = Namespace(mode="instruments", start_date="2023-05-23", end_date="2023-05-23")
@@ -66,17 +66,14 @@ def test_validate_arguments_instruments_mode():
 
 def test_validate_arguments_query_mode():
     """Test validation for query mode."""
-    from argparse import Namespace
 
-    # Valid arguments
-    args = Namespace(
-        mode="instruments", start_date="2023-05-23", query_type="list"
-    )
+    # Valid arguments for instruments-query mode
+    args = Namespace(mode="instruments-query", start_date="2023-05-23", query_type="list")
     validate_arguments(args)  # Should not raise
 
     # Missing instrument_id for details query
     args = Namespace(
-        mode="instruments",
+        mode="instruments-query",
         start_date="2023-05-23",
         query_type="details",
         instrument_id=None,
