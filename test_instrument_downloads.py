@@ -12,17 +12,13 @@ from pathlib import Path
 from datetime import datetime, timezone
 import pandas as pd
 
-project_root = Path(
-    __file__
-).parent.parent  # instruments-service -> unified-trading-system-repos
+project_root = Path(__file__).parent.parent  # instruments-service -> unified-trading-system-repos
 
 # Set up credentials FIRST before any imports
 cred_locations = [
     project_root / "central-element-323112-e35fb0ddafe2.json",
     project_root / "instruments-service" / "central-element-323112-e35fb0ddafe2.json",
-    project_root
-    / "market-tick-data-handler"
-    / "central-element-323112-e35fb0ddafe2.json",
+    project_root / "market-tick-data-handler" / "central-element-323112-e35fb0ddafe2.json",
 ]
 
 cred_file = None

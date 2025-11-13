@@ -36,14 +36,14 @@ class TasksMdParser:
         tasks = []
 
         # Pattern to match task headers: ### N. Task Name
-        task_pattern = r'^### (\d+)\.\s+(.+)$'
+        task_pattern = r"^### (\d+)\.\s+(.+)$"
 
         # Pattern to match task metadata lines
-        status_pattern = r'\*\*Status\*\*:\s*(.+)$'
-        due_pattern = r'\*\*Due\*\*:\s*(.+)$'
-        owner_pattern = r'\*\*Owner\*\*:\s*(.+)$'
+        status_pattern = r"\*\*Status\*\*:\s*(.+)$"
+        due_pattern = r"\*\*Due\*\*:\s*(.+)$"
+        owner_pattern = r"\*\*Owner\*\*:\s*(.+)$"
 
-        lines = self.content.split('\n')
+        lines = self.content.split("\n")
         current_task = None
 
         for line in lines:
@@ -58,12 +58,12 @@ class TasksMdParser:
                 task_num = task_match.group(1)
                 task_name = task_match.group(2).strip()
                 current_task = {
-                    'name': task_name,
-                    'number': task_num,
-                    'status': None,
-                    'due_date': None,
-                    'owner': None,
-                    'description': []
+                    "name": task_name,
+                    "number": task_num,
+                    "status": None,
+                    "due_date": None,
+                    "owner": None,
+                    "description": [],
                 }
                 continue
 
@@ -71,7 +71,7 @@ class TasksMdParser:
                 # Check for metadata fields
                 status_match = re.search(status_pattern, line)
                 if status_match:
-                    current_task['status'] = status_match.group(1).strip()
+                    current_task["status"] = status_match.group(1).strip()
                     continue
 
                 due_match = re.search(due_pattern, line)
@@ -80,28 +80,36 @@ class TasksMdParser:
                     # Parse date formats like "November 10th, 2025" or "Nov 10"
                     try:
                         # Try to parse common date formats
-                        if 'th' in due_str or 'st' in due_str or 'nd' in due_str or 'rd' in due_str:
+                        if "th" in due_str or "st" in due_str or "nd" in due_str or "rd" in due_str:
                             # Format: "November 10th, 2025"
-                            date_str = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', due_str)
-                            current_task['due_date'] = datetime.strptime(date_str, "%B %d, %Y").strftime("%Y-%m-%d")
-                        elif re.match(r'\w+ \d+', due_str):
+                            date_str = re.sub(r"(\d+)(st|nd|rd|th)", r"\1", due_str)
+                            current_task["due_date"] = datetime.strptime(
+                                date_str, "%B %d, %Y"
+                            ).strftime("%Y-%m-%d")
+                        elif re.match(r"\w+ \d+", due_str):
                             # Format: "Nov 10" - assume current year
                             date_str = f"{due_str}, {datetime.now().year}"
-                            current_task['due_date'] = datetime.strptime(date_str, "%b %d, %Y").strftime("%Y-%m-%d")
+                            current_task["due_date"] = datetime.strptime(
+                                date_str, "%b %d, %Y"
+                            ).strftime("%Y-%m-%d")
                         else:
-                            current_task['due_date'] = due_str
+                            current_task["due_date"] = due_str
                     except:
-                        current_task['due_date'] = due_str
+                        current_task["due_date"] = due_str
                     continue
 
                 owner_match = re.search(owner_pattern, line)
                 if owner_match:
-                    current_task['owner'] = owner_match.group(1).strip()
+                    current_task["owner"] = owner_match.group(1).strip()
                     continue
 
                 # Collect description lines (non-empty, non-metadata lines)
-                if line.strip() and not line.strip().startswith('**') and not line.strip().startswith('|'):
-                    current_task['description'].append(line.strip())
+                if (
+                    line.strip()
+                    and not line.strip().startswith("**")
+                    and not line.strip().startswith("|")
+                ):
+                    current_task["description"].append(line.strip())
 
         # Don't forget the last task
         if current_task:
@@ -113,7 +121,7 @@ class TasksMdParser:
 def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False):
     """Delete all tasks with 'instruments-service' tag (including archived/completed)"""
     print("🔍 Loading all tasks (including subtasks and archived)...")
-    
+
     # Get workspace/team ID from list to search across all lists
     try:
         list_info = client.get_list(list_id)
@@ -124,11 +132,11 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
     except Exception as e:
         print(f"   ⚠️  Could not get list info: {e} - falling back to single list search")
         workspace_id = None
-    
+
     all_tasks = []
     active_tasks = []
     archived_tasks = []
-    
+
     if workspace_id:
         # Use filtered team tasks endpoint to search across ALL lists/folders by tag
         print(f"   Searching across all lists in workspace {workspace_id}...")
@@ -138,31 +146,35 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
                 "subtasks": "true",
                 "archived": "false",  # Get active tasks first
             }
-            
+
             result = client._request("GET", f"/team/{workspace_id}/task", params=params)
             if result:
                 active_tasks = result.get("tasks", [])
                 all_tasks.extend(active_tasks)
-            
+
             # Get archived tasks
             params["archived"] = "true"
             result = client._request("GET", f"/team/{workspace_id}/task", params=params)
             if result:
                 archived_tasks = result.get("tasks", [])
                 all_tasks.extend(archived_tasks)
-                
-            print(f"   Found {len(active_tasks)} active task(s) and {len(archived_tasks)} archived task(s) across all lists")
+
+            print(
+                f"   Found {len(active_tasks)} active task(s) and {len(archived_tasks)} archived task(s) across all lists"
+            )
         except Exception as e:
             print(f"   ⚠️  Could not search workspace tasks: {e}")
             print("   Falling back to single list search...")
             workspace_id = None
-    
+
     if not workspace_id:
         # Fallback: search only the specified list
         active_tasks = client.get_tasks(list_id, archived=False, include_subtasks=True)
         archived_tasks = client.get_tasks(list_id, archived=True, include_subtasks=True)
         all_tasks = active_tasks + archived_tasks
-        print(f"   Found {len(active_tasks)} active task(s) and {len(archived_tasks)} archived task(s) in list")
+        print(
+            f"   Found {len(active_tasks)} active task(s) and {len(archived_tasks)} archived task(s) in list"
+        )
 
     if not all_tasks:
         print("   ✅ No tasks found")
@@ -188,13 +200,15 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
             else:
                 parent_id = None
 
-            tasks_to_delete.append({
-                "id": task_id,
-                "name": task_name,
-                "is_subtask": parent_id is not None,
-                "status": status,
-                "is_archived": task_id in archived_task_ids
-            })
+            tasks_to_delete.append(
+                {
+                    "id": task_id,
+                    "name": task_name,
+                    "is_subtask": parent_id is not None,
+                    "status": status,
+                    "is_archived": task_id in archived_task_ids,
+                }
+            )
 
     if not tasks_to_delete:
         print("   ✅ No tasks with 'instruments-service' tag found")
@@ -203,7 +217,11 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
     print(f"\n🗑️  Found {len(tasks_to_delete)} task(s) with 'instruments-service' tag to delete:")
     subtask_count = sum(1 for t in tasks_to_delete if t["is_subtask"])
     parent_count = len(tasks_to_delete) - subtask_count
-    completed_count = sum(1 for t in tasks_to_delete if t["status"].lower() in ["complete", "closed", "done", "resolved"])
+    completed_count = sum(
+        1
+        for t in tasks_to_delete
+        if t["status"].lower() in ["complete", "closed", "done", "resolved"]
+    )
     archived_count = sum(1 for t in tasks_to_delete if t["is_archived"])
     print(f"   - {parent_count} parent task(s)")
     print(f"   - {subtask_count} subtask(s)")
@@ -218,7 +236,9 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
             task_type = "subtask" if task["is_subtask"] else "task"
             status_info = f" [{task['status']}]" if task["status"] != "unknown" else ""
             archived_info = " [ARCHIVED]" if task["is_archived"] else ""
-            print(f"   - {task_type}: {task['name']}{status_info}{archived_info} (ID: {task['id']})")
+            print(
+                f"   - {task_type}: {task['name']}{status_info}{archived_info} (ID: {task['id']})"
+            )
         if len(tasks_to_delete) > 20:
             print(f"   ... and {len(tasks_to_delete) - 20} more")
         return len(tasks_to_delete)
@@ -253,7 +273,9 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
     return deleted_count
 
 
-def import_from_tasks_md(client: ClickUpClient, list_id: str, tasks_md_path: Path, dry_run: bool = False):
+def import_from_tasks_md(
+    client: ClickUpClient, list_id: str, tasks_md_path: Path, dry_run: bool = False
+):
     """Import tasks from tasks.md (DEPRECATED - tasks.md merged into STATUS.md)"""
     print(f"\n⚠️  Note: tasks.md has been merged into STATUS.md")
     print(f"   Use --source STATUS.md instead to import from STATUS.md")
@@ -264,20 +286,40 @@ def import_from_tasks_md(client: ClickUpClient, list_id: str, tasks_md_path: Pat
     if status_md_path.exists():
         print(f"\n📥 Redirecting to STATUS.md import...")
         from scripts.clickup_import import ClickUpImporter
+
         sprint_start = "2025-11-07"  # Default sprint start
-        importer = ClickUpImporter(client.api_token, list_id, dry_run=dry_run, sprint_start_date=sprint_start, clean_orphaned=False)
+        importer = ClickUpImporter(
+            client.api_token,
+            list_id,
+            dry_run=dry_run,
+            sprint_start_date=sprint_start,
+            clean_orphaned=False,
+        )
         importer.import_from_status_md(status_md_path)
     else:
         print(f"   ⚠️  STATUS.md not found at {status_md_path}")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Delete all ClickUp tasks with 'instruments-service' tag and re-import")
+    parser = argparse.ArgumentParser(
+        description="Delete all ClickUp tasks with 'instruments-service' tag and re-import"
+    )
     parser.add_argument("--api-token", help="ClickUp API token (or set CLICKUP_API_TOKEN env var)")
     parser.add_argument("--list-id", help="ClickUp List ID (or set CLICKUP_LIST_ID env var)")
-    parser.add_argument("--dry-run", action="store_true", help="Dry run mode (don't delete, just show what would be deleted)")
-    parser.add_argument("--no-reimport", action="store_true", help="Don't re-import after cleanup (just delete)")
-    parser.add_argument("--source", choices=["tasks.md", "STATUS.md"], default="tasks.md", help="Source file to import from (default: tasks.md)")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Dry run mode (don't delete, just show what would be deleted)",
+    )
+    parser.add_argument(
+        "--no-reimport", action="store_true", help="Don't re-import after cleanup (just delete)"
+    )
+    parser.add_argument(
+        "--source",
+        choices=["tasks.md", "STATUS.md"],
+        default="tasks.md",
+        help="Source file to import from (default: tasks.md)",
+    )
 
     args = parser.parse_args()
 
@@ -295,6 +337,7 @@ def main():
             # Try Secret Manager via unified-cloud-services
             try:
                 from unified_cloud_services import get_secret_with_fallback
+
                 project_id = os.getenv("GCP_PROJECT_ID", "central-element-323112")
                 secret_name = os.getenv("CLICKUP_SECRET_NAME", "clickup-api-key")
                 api_token = get_secret_with_fallback(
@@ -304,7 +347,9 @@ def main():
                 )
                 if api_token:
                     api_token = api_token.strip()
-                    print(f"✅ Retrieved ClickUp API key from Secret Manager (secret: {secret_name})")
+                    print(
+                        f"✅ Retrieved ClickUp API key from Secret Manager (secret: {secret_name})"
+                    )
             except ImportError:
                 pass  # unified-cloud-services not available, continue to .env files
             except Exception as e:
@@ -351,7 +396,9 @@ def main():
                     break
 
     if not list_id:
-        print("❌ List ID not found. Set --list-id or CLICKUP_LIST_ID env var or add clickup_list_id_instruments_service=... to .env.clickup")
+        print(
+            "❌ List ID not found. Set --list-id or CLICKUP_LIST_ID env var or add clickup_list_id_instruments_service=... to .env.clickup"
+        )
         print("\n📋 How to find your List ID:")
         print("   1. Open your 'Instruments Service' list in ClickUp")
         print("   2. Look at the URL in your browser")
@@ -406,7 +453,13 @@ def main():
                 return 1
 
             sprint_start = "2025-11-07"  # Default sprint start
-            importer = ClickUpImporter(api_token, list_id, dry_run=False, sprint_start_date=sprint_start, clean_orphaned=False)
+            importer = ClickUpImporter(
+                api_token,
+                list_id,
+                dry_run=False,
+                sprint_start_date=sprint_start,
+                clean_orphaned=False,
+            )
             importer.import_from_status_md(status_md_path)
 
     return 0

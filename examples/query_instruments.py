@@ -43,11 +43,7 @@ def query_instruments_example():
     print(f"\n✅ Retrieved {len(instruments_df)} instruments for {date}")
     if not instruments_df.empty:
         print("\nSample instruments:")
-        print(
-            instruments_df[
-                ["instrument_key", "venue", "instrument_type", "symbol"]
-            ].head()
-        )
+        print(instruments_df[["instrument_key", "venue", "instrument_type", "symbol"]].head())
 
     return instruments_df
 
@@ -71,11 +67,7 @@ def query_instruments_filtered():
     print(f"\n✅ Retrieved {len(instruments_df)} BTC-USDT perpetuals")
     if not instruments_df.empty:
         print("\nInstruments:")
-        print(
-            instruments_df[
-                ["instrument_key", "symbol", "base_asset", "quote_asset"]
-            ].head()
-        )
+        print(instruments_df[["instrument_key", "symbol", "base_asset", "quote_asset"]].head())
 
     return instruments_df
 
@@ -89,9 +81,7 @@ def query_instrument_details():
     client = create_instruments_client()
 
     instrument_id = "BINANCE-FUTURES:PERPETUAL:BTC-USDT"
-    details = client.get_instrument_details(
-        date="2023-05-23", instrument_id=instrument_id
-    )
+    details = client.get_instrument_details(date="2023-05-23", instrument_id=instrument_id)
 
     if details:
         print(f"\n✅ Found instrument: {instrument_id}")
@@ -176,9 +166,7 @@ def main():
     """Run all query examples."""
     print("🚀 Instruments Service - Query Examples")
     print("=" * 60)
-    print(
-        "\nThis demonstrates how to query instruments data using unified-cloud-services"
-    )
+    print("\nThis demonstrates how to query instruments data using unified-cloud-services")
     print("=" * 60)
 
     try:

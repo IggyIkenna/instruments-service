@@ -41,9 +41,7 @@ class TestInstrumentKeyExtended:
         ]
 
         for inst_type in inst_types:
-            key = InstrumentKey(
-                venue=Venue.DERIBIT, instrument_type=inst_type, symbol="BTC-USDT"
-            )
+            key = InstrumentKey(venue=Venue.DERIBIT, instrument_type=inst_type, symbol="BTC-USDT")
             assert key.instrument_type == inst_type
 
     def test_instrument_key_from_string_all_formats(self):

@@ -78,9 +78,7 @@ class TestSubgraphService:
         assert subgraph_service._is_cache_valid(cache_key) is True
 
         # Cache should be invalid after TTL expires
-        subgraph_service._cache_timestamps[cache_key] = datetime.now() - timedelta(
-            hours=25
-        )
+        subgraph_service._cache_timestamps[cache_key] = datetime.now() - timedelta(hours=25)
         assert subgraph_service._is_cache_valid(cache_key) is False
 
     def test_clear_cache_all(self, subgraph_service):
