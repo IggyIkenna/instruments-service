@@ -47,15 +47,57 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
         print("(GitHub-only mode - mimicking CI/CD workflow)")
     print("=" * 70)
     
-    # Install instruments-service with dev dependencies (includes pytest, pytest-cov)
-    print("\n📦 Installing instruments-service in editable mode (with dev dependencies)...")
-    cmd = [sys.executable, "-m", "pip", "install", "-e", ".[dev]"]
+    # Install instruments-service in editable mode
+    # First install without unified-cloud-services dependency (it's not on PyPI)
+    # Then install dev dependencies, then unified-cloud-services separately
+    print("\n📦 Installing instruments-service in editable mode...")
+    
+    # Step 1: Install instruments-service without dependencies
+    cmd = [sys.executable, "-m", "pip", "install", "-e", ".", "--no-deps"]
     result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
     
     if result.returncode != 0:
         print(f"❌ Failed to install instruments-service:")
         print(result.stderr)
         return False
+    
+    # Step 2: Install all dependencies EXCEPT unified-cloud-services
+    # Read pyproject.toml and install dependencies manually, skipping unified-cloud-services
+    print("\n📦 Installing dependencies (excluding unified-cloud-services)...")
+    dependencies_to_install = [
+        "pydantic>=2.12.4",
+        "pydantic-settings>=2.12.0",
+        "pandas>=2.2.0",
+        "numpy>=1.26.0,<2.0.0",
+        "python-dateutil>=2.8.0",
+        "python-dotenv>=1.0.0",
+        "requests>=2.32.5",
+        "ccxt>=4.5.18",
+        "plotly>=6.4.0",
+        "web3>=6.0.0",
+        "eth-abi>=4.0.0",
+        "databento>=0.20.0",
+        "boto3>=1.40.70",
+    ]
+    dev_dependencies = [
+        "pytest>=9.0.0",
+        "pytest-cov>=7.0.0",
+        "pytest-asyncio>=0.25.0",
+        "pytest-mock>=3.14.0",
+        "black>=25.11.0",
+        "isort>=7.0.0",
+        "mypy>=1.18.2",
+        "pre-commit>=4.4.0",
+    ]
+    
+    all_deps = dependencies_to_install + dev_dependencies
+    cmd = [sys.executable, "-m", "pip", "install"] + all_deps
+    result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
+    
+    if result.returncode != 0:
+        print(f"⚠️  Warning: Some dependencies failed to install:")
+        print(result.stderr)
+        print("Continuing anyway...")
     
     print("✅ instruments-service installed successfully")
     
@@ -64,11 +106,11 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
     installed = False
     
     if force_github:
-        print("\n🔧 GitHub-only mode: Skipping local monorepo and PyPI")
+        print("\n🔧 GitHub-only mode: Skipping local monorepo")
         print("   Will only attempt GitHub Packages and GitHub repository")
     else:
-        # Priority: Local monorepo (editable) > PyPI > GitHub Packages > GitHub repo
-        # This aligns with GitHub Actions workflow for consistency
+        # Priority: Local monorepo (editable) > GitHub Packages > GitHub repo
+        # Note: PyPI is skipped - unified-cloud-services is a private package
         
         # Try local monorepo first (for local development)
         if unified_cloud_services_path.exists():
@@ -81,18 +123,6 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
                 installed = True
             else:
                 print(f"⚠️  Local monorepo installation failed: {result.stderr[:200]}")
-        
-        # Try PyPI if local monorepo not available or failed
-        if not installed:
-            print("\n📦 Attempting PyPI installation...")
-            cmd = [sys.executable, "-m", "pip", "install", "unified-cloud-services"]
-            result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
-            
-            if result.returncode == 0:
-                print("✅ unified-cloud-services installed successfully from PyPI")
-                installed = True
-            else:
-                print("⚠️  PyPI installation failed (package may not be published)")
     
     # Try GitHub Packages (always attempted if not installed yet)
     if not installed:
@@ -149,10 +179,12 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
             print("⚠️  WARNING: unified-cloud-services could not be installed")
         print("=" * 70)
         print("Installation attempts failed from all sources:")
-        print("  - Local monorepo (../unified-cloud-services)")
-        print("  - PyPI")
+        if not force_github:
+            print("  - Local monorepo (../unified-cloud-services)")
         print("  - GitHub Packages (requires GH_PAT)")
         print("  - GitHub repository (requires GH_PAT)")
+        print("")
+        print("Note: PyPI is not attempted - unified-cloud-services is a private package")
         print("")
         print("To fix this:")
         print("  1. Ensure unified-cloud-services is available in the monorepo, OR")
