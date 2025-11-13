@@ -43,7 +43,7 @@ from instruments_service.app.core.instrument_processing_service import (
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 from instruments_service.models import InstrumentDefinition
-from unified_cloud_services import CloudTarget
+from unified_cloud_services import CloudTarget, get_config
 
 # Test configuration
 TEST_DATE = datetime(2023, 5, 23, tzinfo=timezone.utc)
@@ -59,7 +59,7 @@ def test_instrument_download():
     print("=" * 60)
 
     # Get API key from environment or Secret Manager
-    api_key = os.getenv("TARDIS_API_KEY")
+    api_key = get_config("TARDIS_API_KEY")
     if not api_key:
         # Try to get from Secret Manager
         try:

@@ -1,5 +1,6 @@
 # Environment variables
 .env
+env
 
 # Python
 __pycache__/
@@ -34,6 +35,7 @@ coverage/
 venv/
 env/
 ENV/
+requirements.txt
 
 # IDE
 .vscode/

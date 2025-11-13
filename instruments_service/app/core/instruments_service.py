@@ -14,10 +14,31 @@ from datetime import datetime, timezone
 from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
-from instruments_service.config import VenueMapping
+from instruments_service.config import VenueMapping, DatabentoInstrumentConfig
 from instruments_service.app.venues.databento.databento_adapter import DatabentoAdapter
 
 logger = logging.getLogger(__name__)
+
+
+class ErrorWarningCounter(logging.Handler):
+    """Custom logging handler to count ERROR and WARNING messages."""
+    
+    def __init__(self):
+        super().__init__()
+        self.error_count = 0
+        self.warning_count = 0
+    
+    def emit(self, record):
+        """Count errors and warnings."""
+        if record.levelno == logging.ERROR:
+            self.error_count += 1
+        elif record.levelno == logging.WARNING:
+            self.warning_count += 1
+    
+    def reset(self):
+        """Reset counters."""
+        self.error_count = 0
+        self.warning_count = 0
 
 
 class InstrumentsService:
@@ -75,6 +96,7 @@ class InstrumentsService:
         tradfi: bool = False,
         defi: bool = False,
         venues: Optional[List[str]] = None,
+        instrument_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Generate instruments for a specific date.
@@ -86,255 +108,549 @@ class InstrumentsService:
             cefi: Process CeFi (Tardis) exchanges
             tradfi: Process TradFi (Databento) exchanges
             defi: Process DeFi protocols
-            venues: Optional venue filter (for DeFi mode)
+            venues: Optional venue filter (applies to all market types)
+            instrument_ids: Optional list of specific instrument IDs to include
 
         Returns:
-            Dictionary with generation results
+            Dictionary with generation results including error_count and warning_count
         """
-        date_str = date.strftime("%Y-%m-%d")
-        logger.info(
-            f"📅 Generating instruments for {date_str} (CeFi={cefi}, TradFi={tradfi}, DeFi={defi})"
-        )
-
-        all_instruments = {}
-
-        # Process CEFI (Tardis) exchanges
-        if cefi:
-            import asyncio
-            
-            # Use specified exchanges or all Tardis exchanges
-            if exchanges is None:
-                exchanges = self.venue_mapping.all_tardis_exchanges
-
-            logger.info(f"🚀 Processing {len(exchanges)} CeFi exchanges in parallel...")
-            
-            # OPTIMIZATION: Process all exchanges in parallel using asyncio.gather
-            # Each exchange is independent, so we can parallelize API calls
-            async def process_single_exchange(exchange: str):
-                try:
-                    logger.info(f"🔍 Processing CeFi exchange {exchange}...")
-                    exchange_instruments = (
-                        await self.processing_service.process_exchange_instruments(
-                            exchange=exchange, target_date=date, force=force
-                        )
-                    )
-                    if exchange_instruments:
-                        logger.info(
-                            f"✅ Processed {len(exchange_instruments)} instruments from {exchange}"
-                        )
-                        return exchange_instruments
-                    return {}
-                except Exception as e:
-                    logger.error(f"❌ Failed to process {exchange}: {e}", exc_info=True)
-                    return {}
-            
-            # Process all exchanges in parallel
-            results = await asyncio.gather(
-                *[process_single_exchange(ex) for ex in exchanges],
-                return_exceptions=False  # Let individual exceptions be caught in process_single_exchange
+        # Set up error/warning counter for this operation
+        error_warning_counter = ErrorWarningCounter()
+        root_logger = logging.getLogger()
+        root_logger.addHandler(error_warning_counter)
+        error_warning_counter.reset()
+        
+        # Initialize variables that may be used in finally block
+        success = False
+        instruments_df = None
+        
+        try:
+            date_str = date.strftime("%Y-%m-%d")
+            logger.info(
+                f"📅 Generating instruments for {date_str} (CeFi={cefi}, TradFi={tradfi}, DeFi={defi})"
             )
             
-            # Merge all results
-            for result in results:
-                if result:
-                    all_instruments.update(result)
+            # Normalize venues filter
+            venues_filter = venues or []
+            if isinstance(venues_filter, str):
+                venues_filter = [venues_filter]
+            venues_filter = [v.upper() for v in venues_filter] if venues_filter else []
 
-        # Process TRADFI (Databento) exchanges
-        if tradfi:
-            import asyncio
-            
-            try:
-                from instruments_service.config import DatabentoInstrumentConfig
-
-                databento_config = DatabentoInstrumentConfig()
-
-                # Simplified TradFi exchanges (CME + VIX only)
-                databento_exchanges = ["CME", "CBOE"]
+            # Extract venues from instrument_ids if provided (early filtering)
+            # Format: VENUE:INSTRUMENT_TYPE:SYMBOL or VENUE:INSTRUMENT_TYPE:SYMBOL@LIN
+            if instrument_ids:
+                instrument_ids_list = instrument_ids if isinstance(instrument_ids, list) else [instrument_ids]
+                venues_from_instrument_ids = set()
                 
-                logger.info(f"🚀 Processing {len(databento_exchanges)} TradFi venues...")
-
-                # OPTIMIZATION: Process CME and VIX in parallel
-                async def process_databento_exchange(exchange: str):
-                    try:
-                        if exchange == "CBOE":
-                            # CBOE only has VIX index (static definition)
-                            from instruments_service.models import InstrumentDefinition
-                            
-                            # Create Databento adapter instance (reuses cached client)
-                            databento_adapter = DatabentoAdapter()
-                            
-                            # Create VIX instrument definition
-                            vix_def_dict = databento_adapter.create_vix_instrument_definition(date)
-                            if vix_def_dict:
-                                vix_def = InstrumentDefinition(**vix_def_dict)
-                                logger.info(f"✅ Created VIX: {vix_def.instrument_key}")
-                                return {vix_def.instrument_key: vix_def}
-                            return {}
-                        else:
-                            # Get symbols for CME from config
-                            symbols = databento_config.get_symbols_for_venue(exchange)
-                            
-                            if not symbols:
-                                logger.warning(f"⚠️ No symbols configured for {exchange}")
-                                return {}
-
-                            # Fetch Databento instruments (uses cached client, runs in thread pool)
-                            databento_instruments = await self.processing_service.fetch_databento_instruments(
-                                exchange=exchange,
-                                symbols=symbols,
-                                target_date=date,
+                for inst_id in instrument_ids_list:
+                    # Parse instrument_id to extract venue (first part before :)
+                    parts = str(inst_id).split(":")
+                    if len(parts) >= 1:
+                        venue_from_id = parts[0].upper()
+                        venues_from_instrument_ids.add(venue_from_id)
+                        logger.debug(f"  Extracted venue '{venue_from_id}' from instrument_id: {inst_id}")
+                
+                if venues_from_instrument_ids:
+                    logger.info(f"🔍 Extracted venues from instrument_ids: {sorted(venues_from_instrument_ids)}")
+                    
+                    # If venues filter is also provided, intersect them
+                    if venues_filter:
+                        # Intersect: only process venues that are in both filters
+                        venues_filter = [v for v in venues_filter if v in venues_from_instrument_ids]
+                        if not venues_filter:
+                            logger.warning(
+                                f"⚠️ No matching venues between --venues {venues} and instrument_ids {venues_from_instrument_ids}. "
+                                f"Processing will be skipped."
                             )
-                            
-                            if databento_instruments:
-                                logger.info(f"✅ Processed {len(databento_instruments)} instruments from {exchange}")
-                            return databento_instruments or {}
-                    except Exception as e:
-                        logger.error(f"❌ Failed to process {exchange}: {e}", exc_info=True)
-                        return {}
+                    else:
+                        # Use venues from instrument_ids as the filter
+                        venues_filter = list(venues_from_instrument_ids)
+                        logger.info(f"🔍 Using venues from instrument_ids as venue filter: {venues_filter}")
+
+            # Validate venues against allowed venues for each market type
+            if venues_filter:
+                # Get allowed venues for each market type from config
+                allowed_cefi_venues = set(self.venue_mapping.tardis_to_venue.values())  # Canonical venues from CEFI
+                allowed_tradfi_venues = set(self.venue_mapping.all_databento_venues)  # TRADFI venues
+                allowed_defi_venues = set(self.venue_mapping.all_defi_venues)  # DEFI venues
                 
-                # Process CME and CBOE in parallel
-                results = await asyncio.gather(
-                    *[process_databento_exchange(ex) for ex in databento_exchanges],
-                    return_exceptions=False
-                )
+                # Determine which market types are being processed
+                market_types_being_processed = []
+                if cefi:
+                    market_types_being_processed.append("CEFI")
+                if tradfi:
+                    market_types_being_processed.append("TRADFI")
+                if defi:
+                    market_types_being_processed.append("DEFI")
                 
-                # Merge results
-                for result in results:
-                    if result:
-                        all_instruments.update(result)
+                # If no market types specified, all are processed
+                if not market_types_being_processed:
+                    market_types_being_processed = ["CEFI", "TRADFI", "DEFI"]
+                
+                # Collect all allowed venues for the market types being processed
+                allowed_venues_for_processing = set()
+                if "CEFI" in market_types_being_processed:
+                    allowed_venues_for_processing.update(allowed_cefi_venues)
+                if "TRADFI" in market_types_being_processed:
+                    allowed_venues_for_processing.update(allowed_tradfi_venues)
+                if "DEFI" in market_types_being_processed:
+                    allowed_venues_for_processing.update(allowed_defi_venues)
+                
+                # Validate each venue against allowed venues
+                invalid_venues = []
+                valid_venues_by_type = {"CEFI": [], "TRADFI": [], "DEFI": []}
+                
+                for venue in venues_filter:
+                    venue_valid = False
+                    if venue in allowed_cefi_venues and "CEFI" in market_types_being_processed:
+                        valid_venues_by_type["CEFI"].append(venue)
+                        venue_valid = True
+                    if venue in allowed_tradfi_venues and "TRADFI" in market_types_being_processed:
+                        valid_venues_by_type["TRADFI"].append(venue)
+                        venue_valid = True
+                    if venue in allowed_defi_venues and "DEFI" in market_types_being_processed:
+                        valid_venues_by_type["DEFI"].append(venue)
+                        venue_valid = True
+                    
+                    if not venue_valid:
+                        invalid_venues.append(venue)
+                
+                # Reject invalid venues with clear error message
+                if invalid_venues:
+                    error_msg = (
+                        f"❌ Invalid venues for market types {market_types_being_processed}: {invalid_venues}\n"
+                        f"   Allowed CEFI venues: {sorted(allowed_cefi_venues)}\n"
+                        f"   Allowed TRADFI venues: {sorted(allowed_tradfi_venues)}\n"
+                        f"   Allowed DEFI venues: {sorted(allowed_defi_venues)}"
+                    )
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
+                
+                # Log valid venues by market type
+                for market_type, valid_venues in valid_venues_by_type.items():
+                    if valid_venues:
+                        logger.info(f"✅ Valid {market_type} venues: {valid_venues}")
+                
+                # If no valid venues after filtering, skip all processing
+                if not any(valid_venues_by_type.values()):
+                    logger.warning(
+                        f"⚠️ No valid venues found after filtering. Skipping all processing. "
+                        f"Requested venues: {venues_filter if venues_filter else 'all'}, "
+                        f"Market types: {market_types_being_processed}"
+                    )
+                    # Get error/warning counts before returning
+                    error_count = error_warning_counter.error_count
+                    warning_count = error_warning_counter.warning_count
+                    root_logger.removeHandler(error_warning_counter)
+                    return {
+                        "status": "warning",
+                        "date": date_str,
+                        "instruments_generated": 0,
+                        "message": "No valid venues found after filtering",
+                        "error_count": error_count,
+                        "warning_count": warning_count,
+                    }
+
+            all_instruments = {}
+
+            # Process CEFI (Tardis) exchanges
+            if cefi:
+                import asyncio
+                
+                # Use specified exchanges or all Tardis exchanges
+                if exchanges is None:
+                    exchanges = self.venue_mapping.all_tardis_exchanges
+                
+                # Apply venue filtering for CEFI
+                # venues_filter contains canonical venues (e.g., "BINANCE-SPOT", "DERIBIT")
+                # We need to map them to raw Tardis exchange names (e.g., "binance", "deribit")
+                # Note: Invalid venues have already been rejected in validation above
+                if venues_filter:
+                    # Filter to only CEFI venues (venues were validated above)
+                    cefi_venues = [v for v in venues_filter if v in self.venue_mapping.tardis_to_venue.values()]
+                    
+                    if cefi_venues:
+                        # Build reverse mapping: canonical venue -> list of raw exchange names
+                        # Note: One canonical venue can map to multiple raw exchanges (e.g., OKX -> okex, okex-futures, okex-swap)
+                        venue_to_exchanges = {}
+                        for raw_exchange, canonical_venue in self.venue_mapping.tardis_to_venue.items():
+                            if canonical_venue not in venue_to_exchanges:
+                                venue_to_exchanges[canonical_venue] = []
+                            venue_to_exchanges[canonical_venue].append(raw_exchange)
                         
-            except Exception as e:
-                logger.error(f"❌ Failed to initialize Databento processing: {e}", exc_info=True)
+                        # Filter exchanges by canonical venues
+                        filtered_exchanges = []
+                        for canonical_venue in cefi_venues:
+                            # Look up canonical venue in mapping
+                            if canonical_venue in venue_to_exchanges:
+                                # Get all raw exchange names for this canonical venue
+                                raw_exchanges_for_venue = venue_to_exchanges[canonical_venue]
+                                for raw_exchange in raw_exchanges_for_venue:
+                                    # Only include if it's in the current exchanges list
+                                    if raw_exchange in exchanges and raw_exchange not in filtered_exchanges:
+                                        filtered_exchanges.append(raw_exchange)
+                                        logger.debug(f"  Mapped canonical venue {canonical_venue} -> raw exchange {raw_exchange}")
+                        
+                        if filtered_exchanges:
+                            exchanges = filtered_exchanges
+                            logger.info(f"🔍 Filtered CEFI exchanges by canonical venues {cefi_venues}: {exchanges}")
+                        else:
+                            logger.warning(f"⚠️ No matching CEFI exchanges found for canonical venues: {cefi_venues}")
+                            exchanges = []  # Don't process any CEFI exchanges if no match
+                    else:
+                        # venues_filter provided but no CEFI venues in it, skip CEFI processing
+                        logger.info(f"🔍 No CEFI venues in filter, skipping CEFI processing")
+                        exchanges = []
+                else:
+                    # No venue filter specified, use exchanges as-is (either provided or all Tardis exchanges)
+                    logger.debug(f"🔍 No venue filter specified, processing exchanges: {exchanges}")
 
-        # Process DEFI protocols
-        if defi:
-            try:
-                # Filter protocols by venue if specified
-                venues_filter = venues or []
-                if isinstance(venues_filter, str):
-                    venues_filter = [venues_filter]
+                if not exchanges:
+                    logger.info(f"⏭️ Skipping CEFI processing - no exchanges to process")
+                else:
+                    logger.info(f"🚀 Processing {len(exchanges)} CeFi exchanges in parallel...")
+                    
+                    # OPTIMIZATION: Process all exchanges in parallel using asyncio.gather
+                    # Each exchange is independent, so we can parallelize API calls
+                    async def process_single_exchange(exchange: str):
+                        try:
+                            logger.info(f"🔍 Processing CeFi exchange {exchange}...")
+                            exchange_instruments = (
+                                await self.processing_service.process_exchange_instruments(
+                                    exchange=exchange, target_date=date, force=force
+                                )
+                            )
+                            if exchange_instruments:
+                                logger.info(
+                                    f"✅ Processed {len(exchange_instruments)} instruments from {exchange}"
+                                )
+                                return exchange_instruments
+                            return {}
+                        except Exception as e:
+                            logger.error(f"❌ Failed to process {exchange}: {e}", exc_info=True)
+                            return {}
+                    
+                    # Process all exchanges in parallel
+                    results = await asyncio.gather(
+                        *[process_single_exchange(ex) for ex in exchanges],
+                        return_exceptions=False  # Let individual exceptions be caught in process_single_exchange
+                    )
+                    
+                    # Merge all results
+                    for result in results:
+                        if result:
+                            all_instruments.update(result)
 
-                # Map venues to protocols
-                venue_to_protocol = {
-                    "HYPERLIQUID": ("hyperliquid", None),
-                    "ASTER": ("aster", None),
+            # Process TRADFI (Databento) exchanges
+            if tradfi:
+                import asyncio
+                
+                try:
+                    databento_config = DatabentoInstrumentConfig()
+
+                    # Get all available TradFi exchanges (canonical venues)
+                    # Note: all_databento_venues contains canonical venue names (e.g., "CME", "CBOE", "NASDAQ", "NYSE")
+                    # The DatabentoAdapter handles mapping these to Databento dataset identifiers internally
+                    all_databento_exchanges = self.venue_mapping.all_databento_venues
+                    
+                    # Apply venue filtering for TRADFI
+                    # venues_filter contains canonical venues, which match all_databento_venues directly
+                    # Note: Invalid venues have already been rejected in validation above
+                    if venues_filter:
+                        # Filter to only TRADFI venues (venues were validated above)
+                        tradfi_venues = [v for v in venues_filter if v in all_databento_exchanges]
+                        
+                        if tradfi_venues:
+                            databento_exchanges = tradfi_venues
+                            logger.info(f"🔍 Filtered TRADFI exchanges by canonical venues {tradfi_venues}: {databento_exchanges}")
+                        else:
+                            # No TRADFI venues in filter, don't process TRADFI
+                            logger.info(f"🔍 No TRADFI venues in filter, skipping TRADFI processing")
+                            databento_exchanges = []
+                    else:
+                        # Default: Simplified TradFi exchanges (CME + VIX only)
+                        databento_exchanges = ["CME", "CBOE"]
+                        logger.info(f"🔍 No venue filter specified, processing default TRADFI exchanges: {databento_exchanges}")
+                    
+                    if not databento_exchanges:
+                        logger.info(f"⏭️ Skipping TRADFI processing - no exchanges to process")
+                    else:
+                        logger.info(f"🚀 Processing {len(databento_exchanges)} TradFi venues...")
+
+                        # OPTIMIZATION: Process CME and VIX in parallel
+                        async def process_databento_exchange(exchange: str):
+                            try:
+                                if exchange == "CBOE":
+                                    # CBOE only has VIX index (static definition)
+                                    from instruments_service.models import InstrumentDefinition
+                                    
+                                    # Create Databento adapter instance (reuses cached client)
+                                    databento_adapter = DatabentoAdapter()
+                                    
+                                    # Create VIX instrument definition
+                                    vix_def_dict = databento_adapter.create_vix_instrument_definition(date)
+                                    if vix_def_dict:
+                                        vix_def = InstrumentDefinition(**vix_def_dict)
+                                        logger.info(f"✅ Created VIX: {vix_def.instrument_key}")
+                                        return {vix_def.instrument_key: vix_def}
+                                    return {}
+                                else:
+                                    # Get symbols for CME from config
+                                    symbols = databento_config.get_symbols_for_venue(exchange)
+                                    
+                                    if not symbols:
+                                        logger.warning(f"⚠️ No symbols configured for {exchange}")
+                                        return {}
+
+                                    # Fetch Databento instruments (uses cached client, runs in thread pool)
+                                    databento_instruments = await self.processing_service.fetch_databento_instruments(
+                                        exchange=exchange,
+                                        symbols=symbols,
+                                        target_date=date,
+                                    )
+                                    
+                                    if databento_instruments:
+                                        logger.info(f"✅ Processed {len(databento_instruments)} instruments from {exchange}")
+                                    return databento_instruments or {}
+                            except Exception as e:
+                                logger.error(f"❌ Failed to process {exchange}: {e}", exc_info=True)
+                                return {}
+                        
+                        # Process CME and CBOE in parallel
+                        results = await asyncio.gather(
+                            *[process_databento_exchange(ex) for ex in databento_exchanges],
+                            return_exceptions=False
+                        )
+                        
+                        # Merge results
+                        for result in results:
+                            if result:
+                                all_instruments.update(result)
+                            
+                except Exception as e:
+                    logger.error(f"❌ Failed to initialize Databento processing: {e}", exc_info=True)
+
+            # Process DEFI protocols
+            if defi:
+                try:
+                    # Map canonical venues to protocol names and chains
+                    # venues_filter contains canonical venues (e.g., "UNISWAPV3-ETH", "HYPERLIQUID")
+                    # This mapping translates canonical venues to raw protocol names used by the processing service
+                    venue_to_protocol = {
+                        "HYPERLIQUID": ("hyperliquid", None),
+                        "ASTER": ("aster", None),
+                        "UNISWAPV2-ETH": ("uniswap_v2", "ETHEREUM"),
+                        "UNISWAPV3-ETH": ("uniswap_v3", "ETHEREUM"),
+                        "UNISWAPV4-ETH": ("uniswap_v4", "ETHEREUM"),
+                        "CURVE-ETH": ("curve", "ETHEREUM"),
+                        "BALANCER-ETH": ("balancer", "ETHEREUM"),
+                        "AAVE_V3_ETH": ("aave_v3", "ETHEREUM"),
+                        "ETHERFI": ("etherfi", "ETHEREUM"),
+                        "LIDO": ("lido", "ETHEREUM"),
+                        "MORPHO-ETHEREUM": ("morpho", "ETHEREUM"),
+                        "EULER-PLASMA": ("euler_plasma", None),
+                        "FLUID-PLASMA": ("fluid_plasma", None),
+                        "AAVE-PLASMA": ("aave_plasma", None),
+                        "ETHENA": ("ethena", "ETHEREUM"),
+                    }
+
+                    # Common DeFi protocols
+                    all_defi_protocols = [
+                        ("uniswap_v2", "ETHEREUM"),
+                        ("uniswap_v3", "ETHEREUM"),
+                        ("uniswap_v4", "ETHEREUM"),
+                        ("curve", "ETHEREUM"),
+                        ("balancer", "ETHEREUM"),
+                        ("aave_v3", "ETHEREUM"),
+                        ("etherfi", "ETHEREUM"),
+                        ("lido", "ETHEREUM"),
+                        ("morpho", "ETHEREUM"),
+                        ("euler_plasma", None),
+                        ("fluid_plasma", None),
+                        ("aave_plasma", None),
+                        ("hyperliquid", None),
+                        ("aster", None),
+                        ("ethena", "ETHEREUM"),
+                    ]
+
+                    # Filter protocols if venues specified
+                    # Note: Invalid venues have already been rejected in validation above
+                    if venues_filter:
+                        # Filter to only DEFI venues (venues were validated above)
+                        defi_venues = [v for v in venues_filter if v in self.venue_mapping.all_defi_venues]
+                        
+                        if defi_venues:
+                            defi_protocols = []
+                            for venue in defi_venues:
+                                # venues_filter is already uppercased, but check both cases for robustness
+                                venue_key = venue.upper() if venue else ""
+                                if venue_key in venue_to_protocol:
+                                    protocol, chain = venue_to_protocol[venue_key]
+                                    if (protocol, chain) not in defi_protocols:
+                                        defi_protocols.append((protocol, chain))
+                            if defi_protocols:
+                                logger.info(f"🔍 Filtered DEFI protocols by venues {defi_venues}: {[p[0] for p in defi_protocols]}")
+                            else:
+                                # No matching protocols found (shouldn't happen after validation, but handle gracefully)
+                                logger.warning(f"⚠️ No matching DEFI protocols found for venues: {defi_venues}")
+                                defi_protocols = []
+                        else:
+                            # No DEFI venues in filter, don't process DEFI
+                            logger.info(f"🔍 No DEFI venues in filter, skipping DEFI processing")
+                            defi_protocols = []
+                    else:
+                        defi_protocols = all_defi_protocols
+                        logger.info(f"🔍 No venue filter specified, processing all DEFI protocols")
+
+                    if not defi_protocols:
+                        logger.info(f"⏭️ Skipping DEFI processing - no protocols to process")
+                    else:
+                        for protocol, chain in defi_protocols:
+                            try:
+                                # Fetch DeFi instruments
+                                if chain:
+                                    defi_instruments = self.processing_service.fetch_defi_instruments(
+                                        protocol=protocol,
+                                        chain=chain,
+                                        target_date=date,
+                                    )
+                                else:
+                                    defi_instruments = self.processing_service.fetch_defi_instruments(
+                                        protocol=protocol,
+                                        target_date=date,
+                                    )
+                                if defi_instruments:
+                                    all_instruments.update(defi_instruments)
+                                    logger.info(
+                                        f"✅ Processed {len(defi_instruments)} instruments from {protocol}"
+                                    )
+                            except Exception as e:
+                                logger.error(f"❌ Failed to process {protocol}: {e}", exc_info=True)
+                except Exception as e:
+                    logger.error(f"❌ Failed to initialize DeFi processing: {e}", exc_info=True)
+
+            # If no mode flags specified, process all three modes
+            if not cefi and not tradfi and not defi:
+                logger.info("📋 No mode flags specified, processing all modes (CeFi, TradFi, DeFi)")
+                return await self.generate_instruments_for_date(
+                    date=date,
+                    exchanges=exchanges,
+                    force=force,
+                    cefi=True,
+                    tradfi=True,
+                    defi=True,
+                    venues=venues,
+                    instrument_ids=instrument_ids,
+                )
+
+            # Apply instrument_id filtering if specified
+            if instrument_ids:
+                instrument_ids_list = instrument_ids if isinstance(instrument_ids, list) else [instrument_ids]
+                instrument_ids_set = set(str(inst_id).upper() for inst_id in instrument_ids_list)
+                
+                filtered_instruments = {}
+                for inst_key, inst_obj in all_instruments.items():
+                    # Match case-insensitively
+                    if inst_key.upper() in instrument_ids_set:
+                        filtered_instruments[inst_key] = inst_obj
+                
+                filtered_count = len(all_instruments) - len(filtered_instruments)
+                if filtered_count > 0:
+                    logger.info(
+                        f"🔍 Filtered {filtered_count} instruments by instrument_ids, "
+                        f"{len(filtered_instruments)} matching instruments remaining"
+                    )
+                
+                if filtered_instruments:
+                    logger.info(f"✅ Matching instrument_ids: {list(filtered_instruments.keys())}")
+                else:
+                    logger.warning(
+                        f"⚠️ No instruments matched the specified instrument_ids: {instrument_ids_list}. "
+                        f"Processed {len(all_instruments)} instruments but none matched."
+                    )
+                
+                all_instruments = filtered_instruments
+
+            if not all_instruments:
+                logger.warning(f"⚠️ No instruments generated for {date_str}")
+                # Get error/warning counts before returning
+                error_count = error_warning_counter.error_count
+                warning_count = error_warning_counter.warning_count
+                root_logger.removeHandler(error_warning_counter)
+                return {
+                    "status": "warning",
+                    "date": date_str,
+                    "instruments_generated": 0,
+                    "message": "No instruments generated",
+                    "error_count": error_count,
+                    "warning_count": warning_count,
                 }
 
-                # Common DeFi protocols
-                all_defi_protocols = [
-                    ("uniswap_v2", "ETHEREUM"),
-                    ("uniswap_v3", "ETHEREUM"),
-                    ("uniswap_v4", "ETHEREUM"),
-                    ("curve", "ETHEREUM"),
-                    ("balancer", "ETHEREUM"),
-                    ("aave_v3", "ETHEREUM"),
-                    ("etherfi", "ETHEREUM"),
-                    ("lido", "ETHEREUM"),
-                    ("morpho", "ETHEREUM"),
-                    ("euler_plasma", None),
-                    ("fluid_plasma", None),
-                    ("aave_plasma", None),
-                    ("hyperliquid", None),
-                    ("aster", None),
-                    ("ethena", "ETHEREUM"),
-                ]
-
-                # Filter protocols if venues specified
-                if venues_filter:
-                    defi_protocols = []
-                    for venue in venues_filter:
-                        if venue.upper() in venue_to_protocol:
-                            protocol, chain = venue_to_protocol[venue.upper()]
-                            defi_protocols.append((protocol, chain))
-                    if not defi_protocols:
-                        logger.warning(f"⚠️ No matching protocols found for venues: {venues_filter}")
-                        defi_protocols = all_defi_protocols
+            # Convert to DataFrame
+            instruments_list = []
+            for inst_key, inst_obj in all_instruments.items():
+                if hasattr(inst_obj, "model_dump"):
+                    instruments_list.append(inst_obj.model_dump())
                 else:
-                    defi_protocols = all_defi_protocols
+                    instruments_list.append(inst_obj)
 
-                for protocol, chain in defi_protocols:
-                    try:
-                        # Fetch DeFi instruments
-                        if chain:
-                            defi_instruments = self.processing_service.fetch_defi_instruments(
-                                protocol=protocol,
-                                chain=chain,
-                                target_date=date,
-                            )
-                        else:
-                            defi_instruments = self.processing_service.fetch_defi_instruments(
-                                protocol=protocol,
-                                target_date=date,
-                            )
-                        if defi_instruments:
-                            all_instruments.update(defi_instruments)
-                            logger.info(
-                                f"✅ Processed {len(defi_instruments)} instruments from {protocol}"
-                            )
-                    except Exception as e:
-                        logger.error(f"❌ Failed to process {protocol}: {e}", exc_info=True)
-            except Exception as e:
-                logger.error(f"❌ Failed to initialize DeFi processing: {e}", exc_info=True)
+            instruments_df = pd.DataFrame(instruments_list)
 
-        # If no mode flags specified, process all three modes
-        if not cefi and not tradfi and not defi:
-            logger.info("📋 No mode flags specified, processing all modes (CeFi, TradFi, DeFi)")
-            return await self.generate_instruments_for_date(
-                date=date,
-                exchanges=exchanges,
-                force=force,
-                cefi=True,
-                tradfi=True,
-                defi=True,
-                venues=venues,
+            # Store to cloud
+            logger.info(f"📤 Storing {len(instruments_df)} instruments to cloud...")
+            success = self.cloud_storage.store_instruments(
+                instruments_df=instruments_df, table_name="instruments", date=date
             )
 
-        if not all_instruments:
-            logger.warning(f"⚠️ No instruments generated for {date_str}")
-            return {
-                "status": "warning",
-                "date": date_str,
-                "instruments_generated": 0,
-                "message": "No instruments generated",
-            }
+            # Get error/warning counts before returning
+            root_logger.removeHandler(error_warning_counter)
+            error_count = error_warning_counter.error_count
+            warning_count = error_warning_counter.warning_count
 
-        # Convert to DataFrame
-        instruments_list = []
-        for inst_key, inst_obj in all_instruments.items():
-            if hasattr(inst_obj, "model_dump"):
-                instruments_list.append(inst_obj.model_dump())
+            if success:
+                logger.info(f"✅ Successfully stored instruments for {date_str}")
+                return {
+                    "status": "success",
+                    "date": date_str,
+                    "instruments_generated": len(instruments_df),
+                    "exchanges_processed": len(exchanges) if exchanges else 0,
+                    "venues": (
+                        instruments_df["venue"].unique().tolist()
+                        if "venue" in instruments_df.columns
+                        else []
+                    ),
+                    "error_count": error_count,
+                    "warning_count": warning_count,
+                }
             else:
-                instruments_list.append(inst_obj)
+                logger.error(f"❌ Failed to store instruments for {date_str}")
+                return {
+                    "status": "error",
+                    "date": date_str,
+                    "instruments_generated": len(instruments_df),
+                    "message": "Storage failed",
+                    "error_count": error_count,
+                    "warning_count": warning_count,
+                }
 
-        instruments_df = pd.DataFrame(instruments_list)
-
-        # Store to cloud
-        logger.info(f"📤 Storing {len(instruments_df)} instruments to cloud...")
-        success = self.cloud_storage.store_instruments(
-            instruments_df=instruments_df, table_name="instruments", date=date
-        )
-
-        if success:
-            logger.info(f"✅ Successfully stored instruments for {date_str}")
-            return {
-                "status": "success",
-                "date": date_str,
-                "instruments_generated": len(instruments_df),
-                "exchanges_processed": len(exchanges) if exchanges else 0,
-                "venues": (
-                    instruments_df["venue"].unique().tolist()
-                    if "venue" in instruments_df.columns
-                    else []
-                ),
-            }
-        else:
-            logger.error(f"❌ Failed to store instruments for {date_str}")
+        except Exception as e:
+            # Get error/warning counts before returning
+            root_logger.removeHandler(error_warning_counter)
+            error_count = error_warning_counter.error_count
+            warning_count = error_warning_counter.warning_count
+            logger.error(f"❌ Exception during instrument generation: {e}", exc_info=True)
             return {
                 "status": "error",
-                "date": date_str,
-                "instruments_generated": len(instruments_df),
-                "message": "Storage failed",
+                "date": date_str if 'date_str' in locals() else date.strftime("%Y-%m-%d"),
+                "instruments_generated": 0,
+                "message": f"Exception during processing: {str(e)}",
+                "error_count": error_count,
+                "warning_count": warning_count,
             }
+        finally:
+            # Ensure handler is removed even if exception occurs
+            if error_warning_counter in root_logger.handlers:
+                root_logger.removeHandler(error_warning_counter)
 
     async def generate_instruments_date_range(
         self,
@@ -346,6 +662,7 @@ class InstrumentsService:
         tradfi: bool = False,
         defi: bool = False,
         venues: Optional[List[str]] = None,
+        instrument_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Generate instruments for a date range.
@@ -358,7 +675,8 @@ class InstrumentsService:
             cefi: Process CeFi (Tardis) exchanges
             tradfi: Process TradFi (Databento) exchanges
             defi: Process DeFi protocols
-            venues: Optional venue filter (for DeFi mode)
+            venues: Optional venue filter (applies to all market types)
+            instrument_ids: Optional list of specific instrument IDs to include
 
         Returns:
             Dictionary with batch processing results
@@ -387,6 +705,7 @@ class InstrumentsService:
                     tradfi=tradfi,
                     defi=defi,
                     venues=venues,
+                    instrument_ids=instrument_ids,
                 )
                 results.append(result)
                 if result.get("status") == "success":
@@ -427,7 +746,11 @@ class InstrumentsService:
         }
 
     def query_instruments(
-        self, venue: Optional[str] = None, instrument_type: Optional[str] = None
+        self,
+        venue: Optional[str] = None,
+        instrument_type: Optional[str] = None,
+        base_asset: Optional[str] = None,
+        quote_asset: Optional[str] = None,
     ) -> pd.DataFrame:
         """
         Query stored instruments from BigQuery.
@@ -435,11 +758,19 @@ class InstrumentsService:
         Args:
             venue: Optional venue filter
             instrument_type: Optional instrument type filter
+            base_asset: Optional base asset filter
+            quote_asset: Optional quote asset filter
 
         Returns:
             DataFrame with instruments
         """
-        return self.cloud_storage.query_instruments(venue=venue, instrument_type=instrument_type)
+        result = self.cloud_storage.query_instruments(venue=venue, instrument_type=instrument_type)
+        # Filter by base_asset and quote_asset if provided
+        if base_asset is not None and not result.empty and "base_asset" in result.columns:
+            result = result[result["base_asset"] == base_asset]
+        if quote_asset is not None and not result.empty and "quote_asset" in result.columns:
+            result = result[result["quote_asset"] == quote_asset]
+        return result
 
     def get_processing_stats(self) -> Dict[str, Any]:
         """Get processing statistics."""

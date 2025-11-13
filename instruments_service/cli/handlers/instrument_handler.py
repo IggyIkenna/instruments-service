@@ -95,6 +95,9 @@ class InstrumentHandler(ModeHandler):
         total_dates_processed = 0
         total_skipped = 0
         total_errors = 0
+        total_warnings = 0
+        total_processing_errors = 0  # Errors from processing (not date-level failures)
+        total_processing_warnings = 0  # Warnings from processing
         today = datetime.now(timezone.utc).date()
 
         # Determine which market types to process based on flags
@@ -164,12 +167,26 @@ class InstrumentHandler(ModeHandler):
                         tradfi=tradfi,
                         defi=defi,
                         venues=kwargs.get("venues"),
+                        instrument_ids=kwargs.get("instrument_ids"),
                     )
                 )
 
+                # Track error and warning counts from processing
+                processing_errors = result.get("error_count", 0)
+                processing_warnings = result.get("warning_count", 0)
+                total_processing_errors += processing_errors
+                total_processing_warnings += processing_warnings
+                
                 if result.get("status") == "success":
                     total_generated += result.get("instruments_generated", 0)
                     total_dates_processed += 1
+                    
+                    # Log if there were processing errors/warnings even though overall status is success
+                    if processing_errors > 0 or processing_warnings > 0:
+                        logger.info(
+                            f"⚠️ Processing completed with {processing_errors} errors and {processing_warnings} warnings "
+                            f"for {date.strftime('%Y-%m-%d')}"
+                        )
 
                     # Note: CSV sampling is handled automatically by CloudInstrumentStorage
                     # when storing to GCS (via unified-cloud-services SamplingService).
@@ -177,11 +194,19 @@ class InstrumentHandler(ModeHandler):
                 elif result.get("status") == "warning":
                     logger.warning(f"⚠️ No instruments generated for {date.strftime('%Y-%m-%d')}")
                     total_dates_processed += 1
+                    if processing_errors > 0 or processing_warnings > 0:
+                        logger.info(
+                            f"   (Processing had {processing_errors} errors and {processing_warnings} warnings)"
+                        )
                 else:
                     logger.error(
                         f"❌ Failed to generate instruments for {date.strftime('%Y-%m-%d')}: {result.get('message', 'Unknown error')}"
                     )
                     total_errors += 1
+                    if processing_errors > 0 or processing_warnings > 0:
+                        logger.info(
+                            f"   (Processing had {processing_errors} errors and {processing_warnings} warnings)"
+                        )
 
             except Exception as e:
                 logger.error(
@@ -200,7 +225,9 @@ class InstrumentHandler(ModeHandler):
             f"   Dates processed: {total_dates_processed}/{total_attempted} successful ({success_rate:.1f}%)"
         )
         logger.info(f"   Skipped: {total_skipped} (already existed)")
-        logger.info(f"   Errors: {total_errors}")
+        logger.info(f"   Date-level errors: {total_errors}")
+        logger.info(f"   Processing errors: {total_processing_errors}")
+        logger.info(f"   Processing warnings: {total_processing_warnings}")
 
         return {
             "status": "success" if total_errors == 0 else "partial",
@@ -210,12 +237,16 @@ class InstrumentHandler(ModeHandler):
             "dates_attempted": total_attempted,
             "dates_skipped": total_skipped,
             "dates_with_errors": total_errors,
+            "processing_errors": total_processing_errors,
+            "processing_warnings": total_processing_warnings,
             "success_rate_percent": success_rate,
             "pipeline_summary": {
                 "total_instruments": total_generated,
                 "processing_success_rate": success_rate,
                 "skipped_existing": total_skipped,
-                "error_count": total_errors,
+                "date_level_errors": total_errors,
+                "processing_errors": total_processing_errors,
+                "processing_warnings": total_processing_warnings,
             },
         }
 

@@ -8,10 +8,10 @@ This script helps you:
 3. Test a simple GraphQL query (if endpoint is set)
 """
 
-import os
 import sys
 import requests
 from google.cloud import secretmanager
+from unified_cloud_services import get_config
 
 
 def get_envio_secret():
@@ -82,7 +82,7 @@ def main():
 
     # Check endpoint URL
     print("\n2. Checking ENVIO_API_URL environment variable...")
-    api_url = os.getenv("ENVIO_API_URL")
+    api_url = get_config("ENVIO_API_URL")
     if api_url:
         print(f"✅ Endpoint URL configured: {api_url}")
 
