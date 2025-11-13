@@ -22,16 +22,42 @@ jobs:
       
       - name: Checkout unified-cloud-services
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
-          GITHUB_TOKEN: ${{ github.token }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
-          # Use GH_PAT if available, otherwise use GITHUB_TOKEN
-          AUTH_TOKEN="${GH_PAT:-${GITHUB_TOKEN}}"
+          # Set up SSH for git operations
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          
+          # Add SSH private key
+          if [ -n "$SSH_PRIVATE_KEY" ]; then
+            echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+            chmod 600 ~/.ssh/id_ed25519
+            ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+            echo "✅ SSH key configured"
+          else
+            echo "⚠️  SSH_PRIVATE_KEY secret not set, falling back to HTTPS with token"
+            # Fallback to HTTPS with token
+            GH_PAT="${{ secrets.GH_PAT }}"
+            GITHUB_TOKEN="${{ github.token }}"
+            AUTH_TOKEN="${GH_PAT:-${GITHUB_TOKEN}}"
+            if [ -z "$AUTH_TOKEN" ]; then
+              echo "❌ No authentication method available"
+              exit 1
+            fi
+          fi
           
           # Clone unified-cloud-services to parent directory (sibling to workspace)
           # This matches the monorepo structure expected by the installation script
           cd ${{ github.workspace }}/..
-          git clone https://x-access-token:${AUTH_TOKEN}@github.com/IggyIkenna/unified-cloud-services.git unified-cloud-services
+          
+          if [ -n "$SSH_PRIVATE_KEY" ]; then
+            # Use SSH
+            git clone git@github.com:IggyIkenna/unified-cloud-services.git unified-cloud-services
+          else
+            # Use HTTPS with token
+            git clone https://x-access-token:${AUTH_TOKEN}@github.com/IggyIkenna/unified-cloud-services.git unified-cloud-services
+          fi
+          
           echo "✅ Checked out unified-cloud-services to ../unified-cloud-services"
       
       - name: Set up Python 3.13
