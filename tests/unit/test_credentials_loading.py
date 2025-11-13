@@ -8,6 +8,9 @@ import pytest
 import os
 from unittest.mock import Mock, patch, MagicMock
 
+# Import get_config from conftest (avoids circular import issues)
+from tests.conftest import get_config
+
 
 class TestCredentialLoading:
     """Tests for credential loading from Secret Manager and environment."""
