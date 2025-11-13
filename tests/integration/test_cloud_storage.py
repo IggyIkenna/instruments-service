@@ -14,17 +14,13 @@ from instruments_service.app.core.cloud_instrument_storage import CloudInstrumen
 class TestCloudInstrumentStorage:
     """Test CloudInstrumentStorage with real cloud services."""
 
-    def test_storage_initialization_test_bucket(
-        self, test_cloud_target, test_bucket_name
-    ):
+    def test_storage_initialization_test_bucket(self, test_cloud_target, test_bucket_name):
         """Test storage initialization with test bucket."""
         storage = CloudInstrumentStorage(cloud_target=test_cloud_target)
         assert storage.cloud_target.gcs_bucket == test_bucket_name
         assert "test" in storage.cloud_target.gcs_bucket.lower()
 
-    def test_store_instruments_to_test_bucket(
-        self, test_cloud_target, test_bucket_name
-    ):
+    def test_store_instruments_to_test_bucket(self, test_cloud_target, test_bucket_name):
         """Test storing instruments to test bucket."""
         storage = CloudInstrumentStorage(cloud_target=test_cloud_target)
 
@@ -58,9 +54,7 @@ class TestCloudInstrumentStorage:
         assert result, "Should successfully store instruments to test bucket"
         assert storage.cloud_target.gcs_bucket == test_bucket_name
 
-    def test_query_instruments_from_test_bucket(
-        self, test_cloud_target, test_bucket_name
-    ):
+    def test_query_instruments_from_test_bucket(self, test_cloud_target, test_bucket_name):
         """Test querying instruments from test bucket."""
         storage = CloudInstrumentStorage(cloud_target=test_cloud_target)
 
@@ -71,9 +65,7 @@ class TestCloudInstrumentStorage:
         assert isinstance(results, pd.DataFrame)
         assert storage.cloud_target.gcs_bucket == test_bucket_name
 
-    def test_test_bucket_isolation(
-        self, test_cloud_target, test_bucket_name, prod_bucket_name
-    ):
+    def test_test_bucket_isolation(self, test_cloud_target, test_bucket_name, prod_bucket_name):
         """Test that test bucket is isolated from prod bucket."""
         storage = CloudInstrumentStorage(cloud_target=test_cloud_target)
         assert storage.cloud_target.gcs_bucket == test_bucket_name
