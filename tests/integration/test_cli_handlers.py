@@ -25,10 +25,11 @@ def mock_config():
 @pytest.fixture
 def mock_instrument_handler(mock_config):
     """Create instrument handler with mocked dependencies."""
-    with patch(
-        "instruments_service.cli.handlers.instrument_handler.InstrumentProcessingService"
-    ), patch(
-        "instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage"
+    with (
+        patch("instruments_service.cli.handlers.instrument_handler.InstrumentsService"),
+        patch("instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage"),
+        patch("instruments_service.cli.handlers.instrument_handler.VenueMapping"),
+        patch("instruments_service.cli.handlers.instrument_handler.DatabentoInstrumentConfig"),
     ):
         handler = InstrumentHandler(mock_config)
         return handler
@@ -37,10 +38,8 @@ def mock_instrument_handler(mock_config):
 @pytest.fixture
 def mock_query_handler(mock_config):
     """Create query handler with mocked dependencies."""
-    # Patch InstrumentsClient at the module where it's imported (clients module)
-    with patch(
-        "instruments_service.clients.instruments_client.InstrumentsClient"
-    ) as mock_client_class:
+    # Patch create_instruments_client from unified_cloud_services
+    with patch("unified_cloud_services.create_instruments_client") as mock_client_class:
         mock_client = Mock()
         mock_client_class.return_value = mock_client
         handler = InstrumentsQueryHandler(mock_config)
@@ -50,10 +49,11 @@ def mock_query_handler(mock_config):
 
 def test_instrument_handler_initialization(mock_config):
     """Test instrument handler initialization."""
-    with patch(
-        "instruments_service.cli.handlers.instrument_handler.InstrumentProcessingService"
-    ), patch(
-        "instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage"
+    with (
+        patch("instruments_service.cli.handlers.instrument_handler.InstrumentsService"),
+        patch("instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage"),
+        patch("instruments_service.cli.handlers.instrument_handler.VenueMapping"),
+        patch("instruments_service.cli.handlers.instrument_handler.DatabentoInstrumentConfig"),
     ):
         handler = InstrumentHandler(mock_config)
         assert handler.config == mock_config
@@ -61,10 +61,8 @@ def test_instrument_handler_initialization(mock_config):
 
 def test_query_handler_initialization(mock_config):
     """Test query handler initialization."""
-    # Patch InstrumentsClient at the module where it's imported (clients module)
-    with patch(
-        "instruments_service.clients.instruments_client.InstrumentsClient"
-    ) as mock_client_class:
+    # Patch create_instruments_client from unified_cloud_services
+    with patch("unified_cloud_services.create_instruments_client") as mock_client_class:
         mock_client = Mock()
         mock_client_class.return_value = mock_client
         handler = InstrumentsQueryHandler(mock_config)
@@ -96,10 +94,8 @@ def test_query_handler_list_query(mock_config):
     """Test query handler list query."""
     import pandas as pd
 
-    # Patch InstrumentsClient at the module where it's imported
-    with patch(
-        "instruments_service.clients.instruments_client.InstrumentsClient"
-    ) as mock_client_class:
+    # Patch create_instruments_client from unified_cloud_services
+    with patch("unified_cloud_services.create_instruments_client") as mock_client_class:
         mock_client = Mock()
         mock_client.get_instruments_for_date = Mock(
             return_value=pd.DataFrame(
@@ -115,9 +111,7 @@ def test_query_handler_list_query(mock_config):
         handler = InstrumentsQueryHandler(mock_config)
         handler.client = mock_client
 
-        result = handler.run(
-            start_date="2023-05-23", end_date="2023-05-23", query_type="list"
-        )
+        result = handler.run(start_date="2023-05-23", end_date="2023-05-23", query_type="list")
 
         assert result["status"] == "success"
         assert result["query_type"] == "list"
@@ -125,10 +119,8 @@ def test_query_handler_list_query(mock_config):
 
 def test_query_handler_summary_query(mock_config):
     """Test query handler summary query."""
-    # Patch InstrumentsClient at the module where it's imported
-    with patch(
-        "instruments_service.clients.instruments_client.InstrumentsClient"
-    ) as mock_client_class:
+    # Patch create_instruments_client from unified_cloud_services
+    with patch("unified_cloud_services.create_instruments_client") as mock_client_class:
         mock_client = Mock()
         mock_client.get_summary_stats = Mock(
             return_value={"total_instruments": 100, "venues": 5, "instrument_types": 4}
