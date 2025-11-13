@@ -397,11 +397,13 @@ def run_tests_with_coverage(coverage_threshold: int = 65) -> dict:
     print("=" * 70)
 
     # Run pytest with coverage
+    # Exclude performance tests (they're slow and run separately if needed)
     cmd = [
         sys.executable,
         "-m",
         "pytest",
         "tests/",
+        "--ignore=tests/integration/test_performance.py",  # Exclude performance tests
         "--cov=instruments_service",
         "--cov-report=term-missing",
         "--cov-report=json:coverage.json",
