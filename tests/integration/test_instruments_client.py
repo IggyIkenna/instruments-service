@@ -31,9 +31,7 @@ def mock_client():
 
 def test_client_initialization():
     """Test client initialization."""
-    with patch(
-        "instruments_service.clients.instruments_client.StandardizedDomainCloudService"
-    ):
+    with patch("instruments_service.clients.instruments_client.StandardizedDomainCloudService"):
         client = InstrumentsClient(project_id="test-project", bucket_name="test-bucket")
         assert client.project_id == "test-project"
         assert client.bucket_name == "test-bucket"

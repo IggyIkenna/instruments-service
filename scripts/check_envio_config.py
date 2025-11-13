@@ -47,9 +47,7 @@ def test_envio_endpoint(api_url: str, api_token: str):
     }
 
     try:
-        response = requests.post(
-            api_url, json={"query": query}, headers=headers, timeout=10
-        )
+        response = requests.post(api_url, json={"query": query}, headers=headers, timeout=10)
         response.raise_for_status()
         data = response.json()
 

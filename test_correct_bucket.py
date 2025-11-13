@@ -9,7 +9,7 @@ print("TEST: Query Methods with Correct Bucket (instruments-store-central-elemen
 print("=" * 70)
 
 # Test date that has data
-test_date = '2025-11-11'
+test_date = "2025-11-11"
 
 print(f"\n📅 Testing with date: {test_date}")
 print("-" * 70)
@@ -19,27 +19,27 @@ print("\n1. Using create_instruments_client() with defaults:")
 try:
     client = create_instruments_client()
     print(f"   ✅ Client bucket: {client.cloud_target.gcs_bucket}")
-    
+
     instruments_df = client.get_instruments_for_date(date=test_date)
     print(f"   ✅ Successfully loaded {len(instruments_df)} instruments")
-    
+
     if not instruments_df.empty:
         print(f"   📊 Sample venues: {instruments_df['venue'].unique()[:5].tolist()}")
         print(f"   📊 Total venues: {instruments_df['venue'].nunique()}")
         print(f"   📊 Total instrument types: {instruments_df['instrument_type'].nunique()}")
         print(f"   📊 Columns: {len(instruments_df.columns)}")
         print(f"   📊 Sample instrument keys:")
-        for key in instruments_df['instrument_key'].head(3).tolist():
+        for key in instruments_df["instrument_key"].head(3).tolist():
             print(f"      - {key}")
     else:
         print("   ⚠️ No instruments found")
-        
+
 except Exception as e:
     print(f"   ❌ Error: {e}")
     import traceback
+
     traceback.print_exc()
 
 print("\n" + "=" * 70)
 print("✅ Test Complete")
 print("=" * 70)
-

@@ -453,7 +453,7 @@ clickup_user_id_harsh=YOUR_ID
 ### Parent Milestone Lookup Issues
 - **Problem**: "Could not find parent milestone for strategy 'X'"
 - **Cause**: Milestone may not exist yet, or name mismatch due to formatting
-- **Solution**: 
+- **Solution**:
   1. Run `instruments-service` import first (creates parent milestones)
   2. Script uses normalized matching (handles markdown formatting automatically)
   3. Check debug output to see what milestones are available

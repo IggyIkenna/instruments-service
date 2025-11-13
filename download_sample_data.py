@@ -44,9 +44,7 @@ def find_earliest_available_data_hyperliquid(
     right = max_days_back
     earliest_found = None
 
-    logger.info(
-        f"🔍 Searching for earliest data for {coin} (up to {max_days_back} days back)..."
-    )
+    logger.info(f"🔍 Searching for earliest data for {coin} (up to {max_days_back} days back)...")
 
     # Start from most recent and work backwards
     for days_back in range(0, max_days_back, 30):  # Check every 30 days
@@ -74,13 +72,9 @@ def find_earliest_available_data_hyperliquid(
                 candles = response.json()
                 if candles and len(candles) > 0:
                     earliest_found = test_date
-                    logger.info(
-                        f"  ✅ Found data for {coin} on {test_date.strftime('%Y-%m-%d')}"
-                    )
+                    logger.info(f"  ✅ Found data for {coin} on {test_date.strftime('%Y-%m-%d')}")
                 else:
-                    logger.debug(
-                        f"  ⚠️ No data for {coin} on {test_date.strftime('%Y-%m-%d')}"
-                    )
+                    logger.debug(f"  ⚠️ No data for {coin} on {test_date.strftime('%Y-%m-%d')}")
                     if earliest_found:
                         break  # Found earliest, stop searching
         except Exception as e:
@@ -89,9 +83,7 @@ def find_earliest_available_data_hyperliquid(
     return earliest_found
 
 
-def download_hyperliquid_data_to_csv(
-    coin: str, target_date: datetime, output_dir: Path
-):
+def download_hyperliquid_data_to_csv(coin: str, target_date: datetime, output_dir: Path):
     """
     Download 1 day of Hyperliquid data and save to CSV.
 
@@ -113,9 +105,7 @@ def download_hyperliquid_data_to_csv(
     )
 
     # Download candles (trades data)
-    candles_file = (
-        output_dir / f"hyperliquid_{coin}_candles_{target_date.strftime('%Y%m%d')}.csv"
-    )
+    candles_file = output_dir / f"hyperliquid_{coin}_candles_{target_date.strftime('%Y%m%d')}.csv"
     try:
         response = requests.post(
             f"{api_base_url}/info",
@@ -158,16 +148,12 @@ def download_hyperliquid_data_to_csv(
                             {
                                 "timestamp": candle.get("t", ""),
                                 "open_time": (
-                                    datetime.fromtimestamp(
-                                        candle.get("t", 0) / 1000
-                                    ).isoformat()
+                                    datetime.fromtimestamp(candle.get("t", 0) / 1000).isoformat()
                                     if candle.get("t")
                                     else ""
                                 ),
                                 "close_time": (
-                                    datetime.fromtimestamp(
-                                        candle.get("T", 0) / 1000
-                                    ).isoformat()
+                                    datetime.fromtimestamp(candle.get("T", 0) / 1000).isoformat()
                                     if candle.get("T")
                                     else ""
                                 ),
@@ -190,9 +176,7 @@ def download_hyperliquid_data_to_csv(
         logger.error(f"  ❌ Error downloading candles: {e}")
 
     # Download L2 book snapshots (sample a few times during the day)
-    book_file = (
-        output_dir / f"hyperliquid_{coin}_book_{target_date.strftime('%Y%m%d')}.csv"
-    )
+    book_file = output_dir / f"hyperliquid_{coin}_book_{target_date.strftime('%Y%m%d')}.csv"
     try:
         book_snapshots = []
         # Sample book at 4 times during the day
@@ -235,9 +219,7 @@ def download_hyperliquid_data_to_csv(
                 writer = csv.DictWriter(f, fieldnames=book_snapshots[0].keys())
                 writer.writeheader()
                 writer.writerows(book_snapshots)
-            logger.info(
-                f"  ✅ Saved {len(book_snapshots)} book snapshots to {book_file}"
-            )
+            logger.info(f"  ✅ Saved {len(book_snapshots)} book snapshots to {book_file}")
     except Exception as e:
         logger.error(f"  ❌ Error downloading book snapshots: {e}")
 
@@ -253,14 +235,10 @@ def download_aster_data_to_csv(symbol: str, target_date: datetime, output_dir: P
     """
     futures_api_base_url = "https://fapi.asterdex.com"
 
-    logger.info(
-        f"📥 Downloading Aster data for {symbol} on {target_date.strftime('%Y-%m-%d')}..."
-    )
+    logger.info(f"📥 Downloading Aster data for {symbol} on {target_date.strftime('%Y-%m-%d')}...")
 
     # Download recent trades (historical trades endpoint may require auth)
-    trades_file = (
-        output_dir / f"aster_{symbol}_trades_{target_date.strftime('%Y%m%d')}.csv"
-    )
+    trades_file = output_dir / f"aster_{symbol}_trades_{target_date.strftime('%Y%m%d')}.csv"
     try:
         # Get recent trades (last 1000 trades)
         response = requests.get(
@@ -302,9 +280,7 @@ def download_aster_data_to_csv(symbol: str, target_date: datetime, output_dir: P
                                 "qty": trade.get("qty", ""),
                                 "quoteQty": trade.get("quoteQty", ""),
                                 "time": trade.get("time", ""),
-                                "datetime": (
-                                    trade_time.isoformat() if trade_time else ""
-                                ),
+                                "datetime": (trade_time.isoformat() if trade_time else ""),
                                 "isBuyerMaker": trade.get("isBuyerMaker", ""),
                             }
                         )
@@ -395,17 +371,11 @@ def check_historical_metadata():
         for coin in test_coins:
             inst_key = f"HYPERLIQUID:PERPETUAL:{coin}-USDC"
             if inst_key in perpetuals:
-                earliest = find_earliest_available_data_hyperliquid(
-                    coin, max_days_back=730
-                )
+                earliest = find_earliest_available_data_hyperliquid(coin, max_days_back=730)
                 if earliest:
-                    logger.info(
-                        f"  {coin}: Earliest data found: {earliest.strftime('%Y-%m-%d')}"
-                    )
+                    logger.info(f"  {coin}: Earliest data found: {earliest.strftime('%Y-%m-%d')}")
                     # Update available_from in instrument definition
-                    perpetuals[inst_key][
-                        "available_from_datetime"
-                    ] = earliest.isoformat()
+                    perpetuals[inst_key]["available_from_datetime"] = earliest.isoformat()
                 else:
                     logger.warning(
                         f"  {coin}: Could not determine earliest data (may be very recent)"
@@ -423,9 +393,7 @@ def check_historical_metadata():
         # In production, we'd need to check exchange launch date or use a known date
         logger.info(f"  Found {len(aster_perpetuals)} instruments")
         logger.info("  ⚠️ Aster API doesn't provide historical metadata")
-        logger.info(
-            "  💡 Suggestion: Use exchange launch date or first known trading date"
-        )
+        logger.info("  💡 Suggestion: Use exchange launch date or first known trading date")
 
     return perpetuals, aster_perpetuals
 
