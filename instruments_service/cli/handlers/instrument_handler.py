@@ -17,6 +17,7 @@ from instruments_service.cli.base_handler import ModeHandler
 from instruments_service.app.core.instruments_service import InstrumentsService
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.config import VenueMapping, DatabentoInstrumentConfig
+from instruments_service.app.core.cloud_data_provider import CloudDataProvider
 
 logger = logging.getLogger(__name__)
 
@@ -140,8 +141,6 @@ class InstrumentHandler(ModeHandler):
                 if not force:
                     try:
                         # Use cloud_data_provider to check existence
-                        from instruments_service.app.core.cloud_data_provider import CloudDataProvider
-
                         data_provider = CloudDataProvider()
                         if data_provider.check_instruments_exist(date):
                             logger.info(

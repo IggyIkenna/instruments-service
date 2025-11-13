@@ -16,20 +16,16 @@ from typing import Dict, Any
 
 # Load environment variables from .env file (if it exists)
 # This must happen BEFORE any other imports that might use environment variables
-try:
-    from dotenv import load_dotenv
+from dotenv import load_dotenv
 
-    # Find .env file in instruments-service directory (parent of this file)
-    # Path structure: instruments_service/cli/main.py -> instruments_service -> instruments-service -> .env
-    env_path = Path(__file__).parent.parent.parent / ".env"
-    if env_path.exists():
-        load_dotenv(dotenv_path=env_path, override=False)
-        # Use print for early loading (before logging is configured)
-        if os.getenv("DEBUG", "").lower() == "true":
-            print(f"✅ Loaded environment variables from {env_path}")
-except ImportError:
-    # python-dotenv not installed, skip loading .env
-    pass
+# Find .env file in instruments-service directory (parent of this file)
+# Path structure: instruments_service/cli/main.py -> instruments_service -> instruments-service -> .env
+env_path = Path(__file__).parent.parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path, override=False)
+    # Use print for early loading (before logging is configured)
+    if os.getenv("DEBUG", "").lower() == "true":
+        print(f"✅ Loaded environment variables from {env_path}")
 
 # Setup logging (after .env is loaded so LOG_LEVEL can be read from .env)
 logging.basicConfig(

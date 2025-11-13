@@ -28,12 +28,8 @@ def find_credentials_file() -> Optional[str]:
     project_root = Path(__file__).parent.parent.parent
     cred_locations = [
         project_root / "central-element-323112-e35fb0ddafe2.json",
-        project_root
-        / "instruments-service"
-        / "central-element-323112-e35fb0ddafe2.json",
-        project_root
-        / "market-tick-data-handler"
-        / "central-element-323112-e35fb0ddafe2.json",
+        project_root / "instruments-service" / "central-element-323112-e35fb0ddafe2.json",
+        project_root / "market-tick-data-handler" / "central-element-323112-e35fb0ddafe2.json",
         (
             Path(os.getenv("GOOGLE_APPLICATION_CREDENTIALS", ""))
             if os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
@@ -110,9 +106,7 @@ def ensure_test_bucket_exists(
     """
     try:
         # Load credentials
-        credentials = service_account.Credentials.from_service_account_file(
-            credentials_file
-        )
+        credentials = service_account.Credentials.from_service_account_file(credentials_file)
         storage_client = storage.Client(project=project_id, credentials=credentials)
 
         # Check if bucket exists
@@ -163,9 +157,7 @@ def ensure_test_bucket_exists(
             except Exception as e:
                 # If we can't set IAM policy, that's okay - might already have project-level permissions
                 # or service account might not have IAM admin permissions (which is fine for tests)
-                print(
-                    f"⚠️  Could not set IAM policy (might have project-level permissions): {e}"
-                )
+                print(f"⚠️  Could not set IAM policy (might have project-level permissions): {e}")
 
         return True
 
@@ -202,9 +194,7 @@ def ensure_test_resources(gcp_credentials, gcp_project_id, test_bucket_name):
 
 
 @pytest.fixture(scope="session")
-def test_cloud_target(
-    gcp_project_id, test_bucket_name, bigquery_dataset, ensure_test_resources
-):
+def test_cloud_target(gcp_project_id, test_bucket_name, bigquery_dataset, ensure_test_resources):
     """Cloud target configured for test bucket."""
     return CloudTarget(
         project_id=gcp_project_id,
