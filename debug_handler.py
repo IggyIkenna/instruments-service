@@ -3,7 +3,7 @@ import sys
 import traceback
 
 # Clear any cached modules
-modules_to_clear = [k for k in sys.modules.keys() if 'instruments_service.cli.handlers' in k]
+modules_to_clear = [k for k in sys.modules.keys() if "instruments_service.cli.handlers" in k]
 for mod in modules_to_clear:
     del sys.modules[mod]
 
@@ -11,6 +11,7 @@ for mod in modules_to_clear:
 print("Importing handlers module...")
 try:
     from instruments_service.cli.handlers.instrument_handler import InstrumentHandler
+
     print(f"✅ InstrumentHandler: {InstrumentHandler}")
 except Exception as e:
     print(f"❌ Error importing InstrumentHandler: {e}")
@@ -18,6 +19,7 @@ except Exception as e:
 
 try:
     from instruments_service.cli.handlers.instruments_query_handler import InstrumentsQueryHandler
+
     print(f"✅ InstrumentsQueryHandler: {InstrumentsQueryHandler}")
 except Exception as e:
     print(f"❌ Error importing InstrumentsQueryHandler: {e}")
@@ -25,6 +27,7 @@ except Exception as e:
 
 # Now check registry
 from instruments_service.cli.handlers import _handler_registry, register_handler
+
 print(f"\nRegistry before manual registration: {_handler_registry}")
 
 # Manually register
@@ -37,4 +40,3 @@ try:
 except Exception as e:
     print(f"❌ Error during registration: {e}")
     traceback.print_exc()
-
