@@ -24,9 +24,7 @@ project_root = Path(__file__).parent.parent.parent
 cred_locations = [
     project_root / "central-element-323112-e35fb0ddafe2.json",
     project_root / "instruments-service" / "central-element-323112-e35fb0ddafe2.json",
-    project_root
-    / "market-tick-data-handler"
-    / "central-element-323112-e35fb0ddafe2.json",
+    project_root / "market-tick-data-handler" / "central-element-323112-e35fb0ddafe2.json",
 ]
 
 cred_file = None
@@ -105,12 +103,8 @@ def test_instruments_integration():
                 print(f"   Total instruments: {len(instruments)}")
                 results["instruments_download"] = True
             else:
-                print(
-                    f"⚠️  Test instrument not found, but got {len(instruments)} instruments"
-                )
-                results["instruments_download"] = (
-                    True  # Still pass if we got instruments
-                )
+                print(f"⚠️  Test instrument not found, but got {len(instruments)} instruments")
+                results["instruments_download"] = True  # Still pass if we got instruments
         else:
             print("⚠️  API key not available, skipping download")
     except Exception as e:
@@ -142,9 +136,7 @@ def test_instruments_integration():
                     "venue": "BINANCE-FUTURES",
                     "instrument_type": "PERPETUAL",
                     "symbol": "BTC-USDT",
-                    "available_from_datetime": datetime(
-                        2019, 11, 17, tzinfo=timezone.utc
-                    ),
+                    "available_from_datetime": datetime(2019, 11, 17, tzinfo=timezone.utc),
                     "available_to_datetime": None,
                     "data_types": "trades,book_snapshot_5,derivative_ticker",
                     "base_asset": "BTC",
@@ -155,9 +147,7 @@ def test_instruments_integration():
             ]
         )
 
-        result = storage.store_instruments(
-            test_df, table_name="instruments_pipeline_test"
-        )
+        result = storage.store_instruments(test_df, table_name="instruments_pipeline_test")
         if result:
             print(f"✅ Instruments stored successfully")
             results["instruments_storage"] = True

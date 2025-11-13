@@ -91,5 +91,3 @@ export THE_GRAPH_API_KEY=***REDACTED-THEGRAPH-KEY***
 ```
 
 This will work but is not recommended for production.
-
-
