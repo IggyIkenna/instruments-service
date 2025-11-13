@@ -97,3 +97,4 @@ class TestParquetSchema:
         assert "last_updated" in SCHEMA_METADATA
         assert "source_model" in SCHEMA_METADATA
 
+
