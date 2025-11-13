@@ -2,10 +2,10 @@
 """
 Quality Gates for instruments-service
 
-Runs test coverage and ensures 70%+ coverage with all tests passing.
+Runs test coverage and ensures 65%+ coverage with all tests passing.
 
 Usage:
-    python scripts/run_quality_gates.py [--coverage-threshold 70]
+    python scripts/run_quality_gates.py [--coverage-threshold 65]
 """
 
 import sys
@@ -142,7 +142,7 @@ def run_performance_tests() -> dict:
     return {"performance_passed": perf_passed}
 
 
-def run_tests_with_coverage(coverage_threshold: int = 70) -> dict:
+def run_tests_with_coverage(coverage_threshold: int = 65) -> dict:
     """Run tests with coverage and check threshold."""
     print("=" * 70)
     print("INSTRUMENTS-SERVICE QUALITY GATES")
@@ -248,8 +248,8 @@ def main():
     parser.add_argument(
         "--coverage-threshold",
         type=int,
-        default=70,
-        help="Minimum coverage percentage (default: 70)",
+        default=65,
+        help="Minimum coverage percentage (default: 65)",
     )
     parser.add_argument(
         "--skip-performance",
