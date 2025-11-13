@@ -39,12 +39,15 @@ class TestCloudDataProvider:
     @pytest.fixture
     def provider(self, mock_cloud_service, mock_cloud_target):
         """Create provider with mocked dependencies."""
-        with patch(
-            "instruments_service.app.core.cloud_data_provider.StandardizedDomainCloudService",
-            return_value=mock_cloud_service,
-        ), patch(
-            "instruments_service.app.core.cloud_data_provider.CloudTarget",
-            return_value=mock_cloud_target,
+        with (
+            patch(
+                "instruments_service.app.core.cloud_data_provider.StandardizedDomainCloudService",
+                return_value=mock_cloud_service,
+            ),
+            patch(
+                "instruments_service.app.core.cloud_data_provider.CloudTarget",
+                return_value=mock_cloud_target,
+            ),
         ):
             provider = CloudDataProvider(cloud_target=mock_cloud_target)
             provider.cloud_service = mock_cloud_service
@@ -62,12 +65,15 @@ class TestCloudDataProvider:
 
     def test_init_without_cloud_target(self, mock_cloud_service):
         """Test initialization without cloud target (uses defaults)."""
-        with patch(
-            "instruments_service.app.core.cloud_data_provider.StandardizedDomainCloudService",
-            return_value=mock_cloud_service,
-        ), patch(
-            "instruments_service.app.core.cloud_data_provider.CloudTarget"
-        ) as mock_target_class:
+        with (
+            patch(
+                "instruments_service.app.core.cloud_data_provider.StandardizedDomainCloudService",
+                return_value=mock_cloud_service,
+            ),
+            patch(
+                "instruments_service.app.core.cloud_data_provider.CloudTarget"
+            ) as mock_target_class,
+        ):
             mock_target = Mock()
             mock_target.project_id = "test-project"
             mock_target.bigquery_dataset = "test-dataset"
@@ -120,9 +126,7 @@ class TestCloudDataProvider:
 
     def test_get_instruments_from_bigquery_success(self, provider, mock_cloud_service):
         """Test getting instruments from BigQuery successfully."""
-        result = provider.get_instruments_from_bigquery(
-            venue="TEST", instrument_type="SPOT_PAIR"
-        )
+        result = provider.get_instruments_from_bigquery(venue="TEST", instrument_type="SPOT_PAIR")
 
         assert isinstance(result, pd.DataFrame)
         assert len(result) > 0
@@ -137,9 +141,7 @@ class TestCloudDataProvider:
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 0
 
-    def test_get_instruments_from_bigquery_exception(
-        self, provider, mock_cloud_service
-    ):
+    def test_get_instruments_from_bigquery_exception(self, provider, mock_cloud_service):
         """Test getting instruments from BigQuery with exception."""
         mock_cloud_service.query_bigquery.side_effect = Exception("Query error")
 

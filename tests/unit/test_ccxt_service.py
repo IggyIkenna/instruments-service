@@ -93,9 +93,7 @@ class TestCCXTService:
             symbol_id="BTCUSDT",
         )
 
-        assert (
-            "tick_size" in metadata or metadata == {}
-        )  # May be empty if symbol not found
+        assert "tick_size" in metadata or metadata == {}  # May be empty if symbol not found
 
     @patch("instruments_service.app.core.ccxt_service.CCXTService.load_markets")
     def test_get_metadata_no_cache(self, mock_load_markets, ccxt_service):

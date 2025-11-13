@@ -48,9 +48,7 @@ def get_clickup_user_ids():
             )
             if api_token:
                 api_token = api_token.strip()
-                print(
-                    f"✅ Retrieved ClickUp API key from Secret Manager (secret: {secret_name})"
-                )
+                print(f"✅ Retrieved ClickUp API key from Secret Manager (secret: {secret_name})")
         except ImportError:
             pass  # unified-cloud-services not available, continue to .env files
         except Exception as e:
@@ -120,9 +118,7 @@ def get_clickup_user_ids():
                             "name": full_name,
                         }
 
-                        print(
-                            f"   👤 {username} ({full_name}) - ID: {user_id}, Email: {email}"
-                        )
+                        print(f"   👤 {username} ({full_name}) - ID: {user_id}, Email: {email}")
 
             print()
 
@@ -205,9 +201,7 @@ def get_clickup_user_ids():
             print("clickup_user_id_harsh=")
 
         print()
-        print(
-            "💡 Copy the lines above and add them to instruments-service/.env.clickup file"
-        )
+        print("💡 Copy the lines above and add them to instruments-service/.env.clickup file")
 
         return 0
 

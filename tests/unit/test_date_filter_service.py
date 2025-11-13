@@ -45,7 +45,9 @@ class TestDateFilterService:
         assert "uniswap_v3" in date_filter_service._protocol_defaults
         assert "ethena" in date_filter_service._protocol_defaults
 
-    def test_filter_instruments_by_date_before_launch(self, date_filter_service, sample_instruments):
+    def test_filter_instruments_by_date_before_launch(
+        self, date_filter_service, sample_instruments
+    ):
         """Test filtering instruments before launch date."""
         target_date = datetime(2023, 6, 1, tzinfo=timezone.utc)
         filtered = date_filter_service.filter_instruments_by_date(
