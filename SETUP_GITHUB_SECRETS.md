@@ -102,4 +102,3 @@ Once secrets are set:
 ### "Permission denied" errors
 - Ensure the GCP service account has the necessary permissions
 - Check that the service account JSON is valid and not corrupted
-

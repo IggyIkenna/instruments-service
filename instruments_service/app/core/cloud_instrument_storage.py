@@ -11,7 +11,8 @@ from typing import Dict, Optional, Any, List
 from datetime import datetime, timezone
 import os
 
-from unified_cloud_services import (get_config,
+from unified_cloud_services import (
+    get_config,
     determine_market_category,
     get_bucket_for_category,
 )
@@ -222,21 +223,25 @@ class CloudInstrumentStorage:
                     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
             # Ensure market_category is populated for all instruments
-            logger.info(f"📊 Ensuring market_category is populated for {len(instruments_df)} instruments...")
-            if 'market_category' not in instruments_df.columns:
-                instruments_df['market_category'] = ''
+            logger.info(
+                f"📊 Ensuring market_category is populated for {len(instruments_df)} instruments..."
+            )
+            if "market_category" not in instruments_df.columns:
+                instruments_df["market_category"] = ""
             # Populate market_category for instruments that don't have it or have empty value
-            mask = (instruments_df['market_category'].isna()) | (instruments_df['market_category'] == '')
+            mask = (instruments_df["market_category"].isna()) | (
+                instruments_df["market_category"] == ""
+            )
             if mask.any():
-                instruments_df.loc[mask, 'market_category'] = instruments_df.loc[mask].apply(
+                instruments_df.loc[mask, "market_category"] = instruments_df.loc[mask].apply(
                     lambda row: determine_market_category(row.to_dict()), axis=1
                 )
-            
+
             # Group by category
-            category_groups = instruments_df.groupby('market_category')
+            category_groups = instruments_df.groupby("market_category")
             total_stored = 0
             all_successful = True
-            
+
             # Detect test mode for bucket selection
             environment = get_config("ENVIRONMENT", "development").lower()
             is_test = (
@@ -244,13 +249,13 @@ class CloudInstrumentStorage:
                 or "pytest" in os.environ.get("_", "")
                 or get_config("PYTEST_CURRENT_TEST") is not None
             )
-            
+
             # Upload each category group to its respective bucket
             for category, category_df in category_groups:
                 try:
                     # Get bucket for this category
                     category_bucket = get_bucket_for_category(category, test_mode=is_test)
-                    
+
                     # Create cloud service for this category bucket
                     category_cloud_target = CloudTarget(
                         project_id=self.cloud_target.project_id,
@@ -261,28 +266,26 @@ class CloudInstrumentStorage:
                     category_cloud_service = StandardizedDomainCloudService(
                         domain="instruments", cloud_target=category_cloud_target
                     )
-                    
+
                     # market_category is now a real field, keep it in the stored data
                     category_df_to_store = category_df.copy()
-                    
+
                     # Upload to GCS in instrument_availability/by_date structure
                     # Path format: instrument_availability/by_date/day-YYYY-MM-DD/instruments.parquet
                     gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
-                    
+
                     category_cloud_service.upload_to_gcs(
                         data=category_df_to_store, gcs_path=gcs_path, format="parquet"
                     )
-                    
+
                     logger.info(
                         f"✅ Uploaded {len(category_df)} {category} instruments to GCS: "
                         f"{category_bucket}/{gcs_path}"
                     )
                     total_stored += len(category_df)
-                    
+
                 except Exception as gcs_error:
-                    logger.error(
-                        f"❌ GCS upload failed for {category} category: {gcs_error}"
-                    )
+                    logger.error(f"❌ GCS upload failed for {category} category: {gcs_error}")
                     all_successful = False
 
             if all_successful:

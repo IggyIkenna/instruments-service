@@ -176,11 +176,11 @@ class InstrumentHandler(ModeHandler):
                 processing_warnings = result.get("warning_count", 0)
                 total_processing_errors += processing_errors
                 total_processing_warnings += processing_warnings
-                
+
                 if result.get("status") == "success":
                     total_generated += result.get("instruments_generated", 0)
                     total_dates_processed += 1
-                    
+
                     # Log if there were processing errors/warnings even though overall status is success
                     if processing_errors > 0 or processing_warnings > 0:
                         logger.info(

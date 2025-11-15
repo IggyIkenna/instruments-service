@@ -18,6 +18,7 @@ from typing import Optional
 # Load .env file if it exists (for local development)
 try:
     from dotenv import load_dotenv
+
     # Find .env file in instruments-service directory
     env_path = Path(__file__).parent.parent / ".env"
     if env_path.exists():
@@ -38,6 +39,7 @@ try:
     from unified_cloud_services import CloudTarget, get_secret_with_fallback
     from google.cloud import storage
     from google.oauth2 import service_account
+
     UNIFIED_CLOUD_SERVICES_AVAILABLE = True
 except (ImportError, AttributeError) as e:
     # If unified-cloud-services has circular import issues, mark as unavailable
@@ -141,7 +143,7 @@ def ensure_test_bucket_exists(
         if storage is None or service_account is None:
             from google.cloud import storage
             from google.oauth2 import service_account
-        
+
         # Load credentials
         credentials = service_account.Credentials.from_service_account_file(credentials_file)
         storage_client = storage.Client(project=project_id, credentials=credentials)
