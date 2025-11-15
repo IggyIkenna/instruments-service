@@ -30,6 +30,7 @@ except ImportError:
     logging.warning("unified-cloud-services not available for Secret Manager")
     # Fallback if unified-cloud-services not available
     import os
+
     get_config = os.getenv
 
 logger = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ class TardisAdapter:
     def __init__(self, api_key: Optional[str] = None, project_id: Optional[str] = None):
         """
         Initialize Tardis adapter with module-level API key caching.
-        
+
         OPTIMIZED: Reuses cached API key to avoid repeated Secret Manager calls.
 
         Args:
@@ -69,7 +70,7 @@ class TardisAdapter:
             project_id: GCP project ID for Secret Manager (defaults to GCP_PROJECT_ID env var)
         """
         global _TARDIS_API_KEY
-        
+
         # Reuse cached API key if available (avoid Secret Manager calls)
         if _TARDIS_API_KEY and not api_key:
             self.api_key = _TARDIS_API_KEY
@@ -83,7 +84,9 @@ class TardisAdapter:
                 if SECRET_MANAGER_AVAILABLE:
                     try:
                         secret_name = get_config("TARDIS_SECRET_NAME", "tardis-api-key")
-                        project_id = project_id or get_config("GCP_PROJECT_ID", "central-element-323112")
+                        project_id = project_id or get_config(
+                            "GCP_PROJECT_ID", "central-element-323112"
+                        )
 
                         self.api_key = get_secret_with_fallback(
                             project_id=project_id,
@@ -106,7 +109,7 @@ class TardisAdapter:
                     "Tardis API key required. Set TARDIS_SECRET_NAME env var (for Secret Manager), "
                     "TARDIS_API_KEY env var (fallback), or pass api_key parameter."
                 )
-            
+
             # Cache API key for future instances
             _TARDIS_API_KEY = self.api_key
 
@@ -187,7 +190,8 @@ class TardisAdapter:
             original_count = len(available_symbols)
 
             available_symbols = [
-                symbol for symbol in available_symbols
+                symbol
+                for symbol in available_symbols
                 if self._is_instrument_available_on_date(
                     symbol.get("availableSince", ""),
                     symbol.get("availableTo", ""),
@@ -195,7 +199,7 @@ class TardisAdapter:
                     symbol,
                 )
             ]
-            
+
             date_filtered_count = original_count - len(available_symbols)
 
             if date_filtered_count > 0:

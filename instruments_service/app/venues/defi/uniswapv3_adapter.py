@@ -85,10 +85,12 @@ class UniswapV3Adapter(BaseDefiAdapter):
                 subgraph_urls = {
                     "ETHEREUM": f"https://gateway.thegraph.com/api/{self.api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
                     "ARBITRUM": get_config(
-                        "THE_GRAPH_UNISWAP_V3_ARB_URL", f"https://gateway-arbitrum.network.thegraph.com/api/{self.api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
+                        "THE_GRAPH_UNISWAP_V3_ARB_URL",
+                        f"https://gateway-arbitrum.network.thegraph.com/api/{self.api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
                     ),
                     "BASE": get_config(
-                        "THE_GRAPH_UNISWAP_V3_BASE_URL", f"https://gateway.thegraph.com/api/{self.api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
+                        "THE_GRAPH_UNISWAP_V3_BASE_URL",
+                        f"https://gateway.thegraph.com/api/{self.api_key}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
                     ),
                 }
             else:
@@ -98,13 +100,16 @@ class UniswapV3Adapter(BaseDefiAdapter):
                 )
                 subgraph_urls = {
                     "ETHEREUM": get_config(
-                        "THE_GRAPH_UNISWAP_V3_URL", "https://api.studio.thegraph.com/query/50688/uniswap-v3/version/latest",
+                        "THE_GRAPH_UNISWAP_V3_URL",
+                        "https://api.studio.thegraph.com/query/50688/uniswap-v3/version/latest",
                     ),
                     "ARBITRUM": get_config(
-                        "THE_GRAPH_UNISWAP_V3_ARB_URL", "https://api.studio.thegraph.com/query/50688/uniswap-v3-arbitrum/version/latest",
+                        "THE_GRAPH_UNISWAP_V3_ARB_URL",
+                        "https://api.studio.thegraph.com/query/50688/uniswap-v3-arbitrum/version/latest",
                     ),
                     "BASE": get_config(
-                        "THE_GRAPH_UNISWAP_V3_BASE_URL", "https://api.studio.thegraph.com/query/50688/uniswap-v3-base/version/latest",
+                        "THE_GRAPH_UNISWAP_V3_BASE_URL",
+                        "https://api.studio.thegraph.com/query/50688/uniswap-v3-base/version/latest",
                     ),
                 }
             subgraph_url = subgraph_urls.get(self.chain, subgraph_urls["ETHEREUM"])

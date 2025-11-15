@@ -50,13 +50,17 @@ class TestInstrumentProcessingServiceExtended:
     # Note: fetch_exchange_instruments requires real API calls or complex mocking
     # Testing date filtering logic separately via _is_instrument_available_on_date
 
-    @pytest.mark.skip(reason="Method _is_instrument_available_on_date does not exist - date filtering handled by DateFilterService")
+    @pytest.mark.skip(
+        reason="Method _is_instrument_available_on_date does not exist - date filtering handled by DateFilterService"
+    )
     def test_is_instrument_available_on_date(self):
         """Test date availability checking."""
         # This method was removed - date filtering is now handled by DateFilterService
         pass
 
-    @pytest.mark.skip(reason="Method _is_instrument_currently_active does not exist - date filtering handled by DateFilterService")
+    @pytest.mark.skip(
+        reason="Method _is_instrument_currently_active does not exist - date filtering handled by DateFilterService"
+    )
     def test_is_instrument_currently_active(self):
         """Test currently active instrument checking."""
         # This method was removed - date filtering is now handled by DateFilterService
@@ -127,7 +131,12 @@ class TestInstrumentProcessingServiceExtended:
         assert isinstance(fields, dict)
         # If fields exist, check for option-specific fields
         if fields:
-            assert "expiry" in fields or "strike" in fields or "option_type" in fields or "ccxt_symbol" in fields
+            assert (
+                "expiry" in fields
+                or "strike" in fields
+                or "option_type" in fields
+                or "ccxt_symbol" in fields
+            )
 
     @pytest.mark.asyncio
     async def test_populate_all_derived_fields_future(self):
@@ -237,9 +246,7 @@ class TestInstrumentProcessingServiceExtended:
             },
         }
 
-        filtered = service.filter_instruments_by_exchange_config(
-            instruments, "BINANCE-FUTURES"
-        )
+        filtered = service.filter_instruments_by_exchange_config(instruments, "BINANCE-FUTURES")
         # SPOT_PAIR should be filtered out (BINANCE-FUTURES only accepts PERPETUAL, FUTURE)
         assert "BINANCE-FUTURES:PERPETUAL:BTC-USDT" in filtered or len(filtered) == 0
 
@@ -249,13 +256,17 @@ class TestInstrumentProcessingServiceExtended:
         # Session is handled internally, not exposed as attribute
         pass
 
-    @pytest.mark.skip(reason="Method _is_tardis_cache_valid does not exist - caching handled internally")
+    @pytest.mark.skip(
+        reason="Method _is_tardis_cache_valid does not exist - caching handled internally"
+    )
     def test_is_tardis_cache_valid(self):
         """Test Tardis cache validation."""
         # Cache validation is handled internally, not exposed as method
         pass
 
-    @pytest.mark.skip(reason="Method _is_ccxt_cache_valid does not exist - caching handled by CCXTService")
+    @pytest.mark.skip(
+        reason="Method _is_ccxt_cache_valid does not exist - caching handled by CCXTService"
+    )
     def test_is_ccxt_cache_valid(self):
         """Test CCXT cache validation."""
         # CCXT caching is handled by CCXTService, not InstrumentProcessingService
@@ -267,9 +278,7 @@ class TestInstrumentProcessingServiceExtended:
         service = InstrumentProcessingService(config)
 
         # New format: BTC-USD-240329-120000-CALL
-        result = service._parse_option_components(
-            "BTC-USD-240329-120000-CALL", "deribit"
-        )
+        result = service._parse_option_components("BTC-USD-240329-120000-CALL", "deribit")
         assert "strike_price" in result
         assert "option_type" in result
         assert result["option_type"] == "CALL"
@@ -369,19 +378,25 @@ class TestInstrumentProcessingServiceExtended:
         assert isinstance(result, dict)
         assert result.get("base_asset") == "PERP"
 
-    @pytest.mark.skip(reason="Method _is_instrument_available_on_date does not exist - date filtering handled by DateFilterService")
+    @pytest.mark.skip(
+        reason="Method _is_instrument_available_on_date does not exist - date filtering handled by DateFilterService"
+    )
     def test_is_instrument_available_on_date_with_expiry_future(self):
         """Test date availability with future expiry."""
         # This method was removed - date filtering is now handled by DateFilterService
         pass
 
-    @pytest.mark.skip(reason="Method _is_instrument_available_on_date does not exist - date filtering handled by DateFilterService")
+    @pytest.mark.skip(
+        reason="Method _is_instrument_available_on_date does not exist - date filtering handled by DateFilterService"
+    )
     def test_is_instrument_available_on_date_with_expiry_expired(self):
         """Test date availability with expired future."""
         # This method was removed - date filtering is now handled by DateFilterService
         pass
 
-    @pytest.mark.skip(reason="Method _is_instrument_available_on_date does not exist - date filtering handled by DateFilterService")
+    @pytest.mark.skip(
+        reason="Method _is_instrument_available_on_date does not exist - date filtering handled by DateFilterService"
+    )
     def test_is_instrument_available_on_date_parse_error(self):
         """Test date availability with parse error defaults to True."""
         # This method was removed - date filtering is now handled by DateFilterService

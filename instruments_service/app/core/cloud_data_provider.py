@@ -76,7 +76,7 @@ class CloudDataProvider:
             # If category specified, use category-specific bucket
             if category:
                 return self.get_instruments_from_category(date, category, gcs_path=gcs_path)
-            
+
             logger.info(f"📥 Loading instruments from GCS: {gcs_path}")
             df = self.cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet")
 
@@ -90,7 +90,7 @@ class CloudDataProvider:
         except Exception as e:
             logger.error(f"❌ Failed to load instruments from GCS: {e}")
             return pd.DataFrame()
-    
+
     def get_instruments_from_category(
         self, date: datetime, category: str, gcs_path: Optional[str] = None
     ) -> pd.DataFrame:
@@ -117,10 +117,10 @@ class CloudDataProvider:
                 or "pytest" in os.environ.get("_", "")
                 or get_config("PYTEST_CURRENT_TEST") is not None
             )
-            
+
             # Get bucket for category
             category_bucket = get_bucket_for_category(category, test_mode=is_test)
-            
+
             # Create cloud service for category bucket
             category_cloud_target = CloudTarget(
                 project_id=self.cloud_target.project_id,
@@ -131,16 +131,12 @@ class CloudDataProvider:
             category_cloud_service = StandardizedDomainCloudService(
                 domain="instruments", cloud_target=category_cloud_target
             )
-            
-            logger.info(
-                f"📥 Loading {category} instruments from GCS: {category_bucket}/{gcs_path}"
-            )
+
+            logger.info(f"📥 Loading {category} instruments from GCS: {category_bucket}/{gcs_path}")
             df = category_cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet")
 
             if df.empty:
-                logger.warning(
-                    f"⚠️ No {category} instruments found at {category_bucket}/{gcs_path}"
-                )
+                logger.warning(f"⚠️ No {category} instruments found at {category_bucket}/{gcs_path}")
             else:
                 logger.info(f"✅ Loaded {len(df)} {category} instruments from GCS")
 

@@ -44,7 +44,7 @@ class CCXTService:
         # Cache markets per venue
         self._markets_cache: Dict[str, Dict[str, Any]] = {}
         self._cache_timestamps: Dict[str, datetime] = {}
-        
+
         # Cache leverage tiers per venue (to avoid repeated API calls)
         self._leverage_tiers_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -322,7 +322,7 @@ class CCXTService:
     ) -> Dict[str, Any]:
         """
         Get leverage limits and risk parameters from CCXT leverage tiers.
-        
+
         Uses caching per venue to avoid repeated API calls for the same exchange.
 
         Args:
@@ -342,7 +342,7 @@ class CCXTService:
             cached_params = self._leverage_tiers_cache[venue]
             logger.debug(f"Using cached leverage tiers for {venue}")
             return cached_params.copy()  # Return copy to avoid mutation
-        
+
         ccxt_data = self.load_markets(venue)
         if not ccxt_data or not ccxt_data.get("exchange"):
             # Use fallback and cache it
@@ -408,9 +408,7 @@ class CCXTService:
             return risk_params
 
         except Exception as e:
-            logger.debug(
-                f"Error fetching leverage tiers for {venue}:{symbol_id}: {e}"
-            )
+            logger.debug(f"Error fetching leverage tiers for {venue}:{symbol_id}: {e}")
             # Try fallback and cache it
             fallback_params = self._get_leverage_limits_fallback(venue)
             if fallback_params:

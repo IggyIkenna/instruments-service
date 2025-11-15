@@ -93,7 +93,7 @@ def main() -> Dict[str, Any]:
         # Venue filters (for both generation and query modes)
         if args.venues:
             handler_kwargs["venues"] = args.venues
-        
+
         # Instrument ID filters (for both generation and query modes)
         if args.instrument_ids:
             handler_kwargs["instrument_ids"] = args.instrument_ids

@@ -22,9 +22,7 @@ class TestInstrumentBatchProcessorExtended:
         config = {"test": "config"}
         processor = InstrumentBatchProcessor(config)
 
-        estimate = processor.estimate_memory_requirements(
-            num_instruments=1000, date_range_days=1
-        )
+        estimate = processor.estimate_memory_requirements(num_instruments=1000, date_range_days=1)
         assert estimate["num_instruments"] == 1000
         assert estimate["date_range_days"] == 1
         assert estimate["estimated_mb"] > 0
@@ -34,9 +32,7 @@ class TestInstrumentBatchProcessorExtended:
         config = {"test": "config"}
         processor = InstrumentBatchProcessor(config)
 
-        estimate = processor.estimate_memory_requirements(
-            num_instruments=5000, date_range_days=31
-        )
+        estimate = processor.estimate_memory_requirements(num_instruments=5000, date_range_days=31)
         assert estimate["num_instruments"] == 5000
         assert estimate["date_range_days"] == 31
         assert estimate["estimated_mb"] > 0
