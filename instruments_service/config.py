@@ -19,6 +19,7 @@ except ImportError:
     BaseServiceConfig = None
     Field = None
     import os
+
     get_config = os.getenv
 
 
@@ -80,16 +81,37 @@ class UnifiedInstrumentConfig:
                 "XAK.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "TECH_SECTOR", "USD", "XAK"
             ),
             InstrumentDefinition(
-                "XAY.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CONSUMER_DISC_SECTOR", "USD", "XAY"
+                "XAY.FUT",
+                "CME",
+                "FUTURE",
+                "GLBX.MDP3",
+                "parent",
+                "CONSUMER_DISC_SECTOR",
+                "USD",
+                "XAY",
             ),
             InstrumentDefinition(
-                "XAP.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CONSUMER_STAPLES_SECTOR", "USD", "XAP"
+                "XAP.FUT",
+                "CME",
+                "FUTURE",
+                "GLBX.MDP3",
+                "parent",
+                "CONSUMER_STAPLES_SECTOR",
+                "USD",
+                "XAP",
             ),
             InstrumentDefinition(
                 "XAV.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "HEALTHCARE_SECTOR", "USD", "XAV"
             ),
             InstrumentDefinition(
-                "XAI.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "INDUSTRIALS_SECTOR", "USD", "XAI"
+                "XAI.FUT",
+                "CME",
+                "FUTURE",
+                "GLBX.MDP3",
+                "parent",
+                "INDUSTRIALS_SECTOR",
+                "USD",
+                "XAI",
             ),
             InstrumentDefinition(
                 "XAB.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "MATERIALS_SECTOR", "USD", "XAB"
@@ -237,16 +259,10 @@ class UnifiedInstrumentConfig:
                 "SPY.OPT", "NASDAQ", "OPTION", "DBEQ.BASIC", "raw_symbol", "SPY", "USD", "SPY"
             ),
             # Index (CBOE) - VIX volatility index (data from barchart.com, OHLCV 15m)
-            InstrumentDefinition(
-                "VIX", "CBOE", "INDEX", "BARCHART", "raw_symbol", "VIX", "USD"
-            ),
+            InstrumentDefinition("VIX", "CBOE", "INDEX", "BARCHART", "raw_symbol", "VIX", "USD"),
             # ETFs (NASDAQ) - Major ETFs
-            InstrumentDefinition(
-                "SPY", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "SPY", "USD"
-            ),
-            InstrumentDefinition(
-                "QQQ", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "QQQ", "USD"
-            ),
+            InstrumentDefinition("SPY", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "SPY", "USD"),
+            InstrumentDefinition("QQQ", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "QQQ", "USD"),
             # ICE Futures
             InstrumentDefinition(
                 "BRN.FUT", "ICE", "FUTURE", "IFEU.IMPACT", "parent", "BRENT", "USD", "BRN"
@@ -1363,15 +1379,21 @@ if BASE_SERVICE_CONFIG_AVAILABLE and BaseServiceConfig is not None:
         )
         # Category-specific buckets for independent batch processing
         gcs_bucket_cefi: str = Field(
-            default_factory=lambda: get_config("INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-central-element-323112"),
+            default_factory=lambda: get_config(
+                "INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-central-element-323112"
+            ),
             description="GCS bucket for CEFI instruments",
         )
         gcs_bucket_tradfi: str = Field(
-            default_factory=lambda: get_config("INSTRUMENTS_GCS_BUCKET_TRADFI", "instruments-store-tradfi-central-element-323112"),
+            default_factory=lambda: get_config(
+                "INSTRUMENTS_GCS_BUCKET_TRADFI", "instruments-store-tradfi-central-element-323112"
+            ),
             description="GCS bucket for TRADFI instruments",
         )
         gcs_bucket_defi: str = Field(
-            default_factory=lambda: get_config("INSTRUMENTS_GCS_BUCKET_DEFI", "instruments-store-defi-central-element-323112"),
+            default_factory=lambda: get_config(
+                "INSTRUMENTS_GCS_BUCKET_DEFI", "instruments-store-defi-central-element-323112"
+            ),
             description="GCS bucket for DEFI instruments",
         )
         bigquery_dataset: str = Field(
@@ -1382,15 +1404,15 @@ if BASE_SERVICE_CONFIG_AVAILABLE and BaseServiceConfig is not None:
         def get_cloud_target(self, category: Optional[str] = None):
             """
             Get CloudTarget for instruments service.
-            
+
             Args:
                 category: Optional market category ("CEFI", "TRADFI", "DEFI") to use category-specific bucket
-                
+
             Returns:
                 CloudTarget with appropriate bucket for category
             """
             from unified_cloud_services import CloudTarget
-            
+
             # Determine bucket based on category
             if category:
                 category_upper = category.upper()
@@ -1401,7 +1423,9 @@ if BASE_SERVICE_CONFIG_AVAILABLE and BaseServiceConfig is not None:
                 elif category_upper == "DEFI":
                     bucket = self.gcs_bucket_defi
                 else:
-                    raise ValueError(f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI")
+                    raise ValueError(
+                        f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI"
+                    )
             else:
                 bucket = self.gcs_bucket
 
