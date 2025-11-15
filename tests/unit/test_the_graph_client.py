@@ -19,8 +19,9 @@ class TestTheGraphClient:
 
     def test_init_without_url(self):
         """Test initialization without subgraph URL."""
-        with patch("unified_cloud_services.get_secret_with_fallback", return_value=None), \
-             patch("unified_cloud_services.get_config", return_value=""):
+        with (
+            patch("unified_cloud_services.get_secret_with_fallback", return_value=None),
+            patch("unified_cloud_services.get_config", return_value=""),
+        ):
             client = TheGraphClient(api_key="test-key")
             assert client.api_key == "test-key"
-

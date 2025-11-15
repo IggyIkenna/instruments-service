@@ -151,13 +151,13 @@ class InstrumentDefinition(BaseModel):
         default="off-chain",
         description="Chain identifier: 'off-chain' for CeFi/TradFi, chain name for DeFi (e.g., 'ETHEREUM', 'POLKADOT', 'HYPERLIQUID')",
     )
-    
+
     # Market category classification (CEFI, TRADFI, DEFI)
     market_category: str = Field(
         default="",
         description="Market category: 'CEFI' (databento_symbol empty AND chain off-chain), 'TRADFI' (databento_symbol filled), 'DEFI' (chain not off-chain). Auto-populated from databento_symbol and chain fields.",
     )
-    
+
     base_asset_contract_address: Optional[str] = Field(
         default=None, description="ERC-20 contract address for base asset (DeFi)"
     )

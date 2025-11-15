@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from unified_cloud_services import GenericBatchProcessor
 
-logger = logging.getLogger(__name__) # logging 
+logger = logging.getLogger(__name__)  # logging
 
 
 class InstrumentBatchProcessor(GenericBatchProcessor):
