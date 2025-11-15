@@ -116,7 +116,7 @@ class TheGraphClient:
         else:
             # Default: Try to use Studio endpoint (no API key needed, but rate-limited)
             self.subgraph_url = get_config(
-                "THE_GRAPH_UNISWAP_V3_URL", # Fallback Studio endpoint (rate-limited, for testing only)
+                "THE_GRAPH_UNISWAP_V3_URL",  # Fallback Studio endpoint (rate-limited, for testing only)
                 "https://api.studio.thegraph.com/query/50688/uniswap-v3/version/latest",
             )
 

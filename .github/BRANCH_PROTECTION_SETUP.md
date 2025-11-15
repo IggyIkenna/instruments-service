@@ -46,4 +46,3 @@ After setting up branch protection:
 - **Workflow not showing as required check**: Make sure the workflow file is in `.github/workflows/` and has been run at least once
 - **Can still push despite protection**: Check that "Do not allow bypassing" is enabled
 - **Workflow passes but shouldn't**: Check the coverage threshold in `.github/workflows/quality-gates.yml` (currently 65%)
-

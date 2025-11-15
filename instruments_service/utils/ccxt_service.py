@@ -44,7 +44,7 @@ class CCXTService:
         # Cache markets per venue
         self._markets_cache: Dict[str, Dict[str, Any]] = {}
         self._cache_timestamps: Dict[str, datetime] = {}
-        
+
         # Cache leverage tiers per venue (to avoid repeated API calls)
         self._leverage_tiers_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -216,12 +216,16 @@ class CCXTService:
                     # Also try with expiry for futures (if symbol_id contains date)
                     if instrument_type == "FUTURE" and any(char.isdigit() for char in symbol_id):
                         # Try to extract date from symbol_id (e.g., BTCUSDT241225)
-                        possible_symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}-{symbol_id}")
+                        possible_symbols.append(
+                            f"{base_asset}/{quote_asset}:{quote_asset}-{symbol_id}"
+                        )
                 # Standard formats
-                possible_symbols.extend([
-                    f"{base_asset}/{quote_asset}",  # Spot format
-                    f"{base_asset}{quote_asset}",  # Compressed: BTCUSDT
-                ])
+                possible_symbols.extend(
+                    [
+                        f"{base_asset}/{quote_asset}",  # Spot format
+                        f"{base_asset}{quote_asset}",  # Compressed: BTCUSDT
+                    ]
+                )
 
         elif venue == "OKX":
             # OKX CCXT formats (similar to Binance):
@@ -236,12 +240,16 @@ class CCXTService:
                     possible_symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}")
                     # Also try with expiry for futures
                     if instrument_type == "FUTURE" and any(char.isdigit() for char in symbol_id):
-                        possible_symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}-{symbol_id}")
+                        possible_symbols.append(
+                            f"{base_asset}/{quote_asset}:{quote_asset}-{symbol_id}"
+                        )
                 # Standard formats
-                possible_symbols.extend([
-                    f"{base_asset}/{quote_asset}",  # Spot format
-                    f"{base_asset}{quote_asset}",  # Compressed: BTCUSDT
-                ])
+                possible_symbols.extend(
+                    [
+                        f"{base_asset}/{quote_asset}",  # Spot format
+                        f"{base_asset}{quote_asset}",  # Compressed: BTCUSDT
+                    ]
+                )
 
         elif venue == "DERIBIT":
             # CRITICAL FIX: Deribit uses symbol_id directly in CCXT format
@@ -250,7 +258,7 @@ class CCXTService:
             # For perpetuals: BTC/USD:BTC-PERPETUAL
             # For options: BTC/USD:BTC-25DEC25-50000-C
             # For futures: BTC/USD:BTC-25DEC25
-            
+
             # Use instrument_type if available, otherwise check symbol_id patterns
             if instrument_type == "PERPETUAL" or "PERPETUAL" in symbol_id.upper():
                 if quote_asset == "USD":
@@ -259,15 +267,35 @@ class CCXTService:
                 elif quote_asset in ["USDC", "USDT"]:
                     # Linear perpetual: BTC/USDC:BTC-PERPETUAL
                     possible_symbols.append(f"{base_asset}/{quote_asset}:{symbol_id}")
-            elif instrument_type == "OPTION" or "-C" in symbol_id.upper() or "-P" in symbol_id.upper() or "CALL" in symbol_id.upper() or "PUT" in symbol_id.upper():
+            elif (
+                instrument_type == "OPTION"
+                or "-C" in symbol_id.upper()
+                or "-P" in symbol_id.upper()
+                or "CALL" in symbol_id.upper()
+                or "PUT" in symbol_id.upper()
+            ):
                 # Options: BTC/USD:BTC-25DEC25-50000-C
                 possible_symbols.append(f"{base_asset}/{quote_asset}:{symbol_id}")
             elif instrument_type == "FUTURE" or any(
-                month in symbol_id.upper() for month in ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
+                month in symbol_id.upper()
+                for month in [
+                    "JAN",
+                    "FEB",
+                    "MAR",
+                    "APR",
+                    "MAY",
+                    "JUN",
+                    "JUL",
+                    "AUG",
+                    "SEP",
+                    "OCT",
+                    "NOV",
+                    "DEC",
+                ]
             ):
                 # Futures: BTC/USD:BTC-25DEC25
                 possible_symbols.append(f"{base_asset}/{quote_asset}:{symbol_id}")
-            
+
             # Also try symbol_id directly (Deribit symbols are often already in CCXT format)
             possible_symbols.append(symbol_id)
 
@@ -302,19 +330,19 @@ class CCXTService:
     ) -> str:
         """
         Generate default CCXT symbol format when markets aren't available.
-        
+
         Args:
             venue: Venue identifier
             base_asset: Base asset symbol
             quote_asset: Quote asset symbol
             symbol_id: Symbol identifier
             instrument_type: Optional instrument type
-            
+
         Returns:
             Default CCXT symbol string
         """
         instrument_type = instrument_type or ""
-        
+
         if venue == "DERIBIT":
             # Deribit: Use symbol_id directly with BASE/QUOTE prefix
             # symbol_id is already in CCXT format: BTC-PERPETUAL, BTC-25DEC25-50000-C
@@ -348,7 +376,7 @@ class CCXTService:
             if instrument_type in ["PERPETUAL", "FUTURE"]:
                 return f"{base_asset}/{quote_asset}:{quote_asset}"
             return f"{base_asset}/{quote_asset}"
-        
+
         return symbol_id
 
     def get_metadata(
@@ -469,7 +497,7 @@ class CCXTService:
     ) -> Dict[str, Any]:
         """
         Get leverage limits and risk parameters from CCXT leverage tiers.
-        
+
         Uses caching per venue to avoid repeated API calls for the same exchange.
 
         Args:
@@ -490,7 +518,7 @@ class CCXTService:
             cached_params = self._leverage_tiers_cache[venue]
             logger.debug(f"Using cached leverage tiers for {venue}")
             return cached_params.copy()  # Return copy to avoid mutation
-        
+
         ccxt_data = self.load_markets(venue)
         if not ccxt_data or not ccxt_data.get("exchange"):
             # Use fallback and cache it
@@ -556,9 +584,7 @@ class CCXTService:
             return risk_params
 
         except Exception as e:
-            logger.debug(
-                f"Error fetching leverage tiers for {venue}:{symbol_id}: {e}"
-            )
+            logger.debug(f"Error fetching leverage tiers for {venue}:{symbol_id}: {e}")
             # Try fallback and cache it
             fallback_params = self._get_leverage_limits_fallback(venue)
             if fallback_params:
