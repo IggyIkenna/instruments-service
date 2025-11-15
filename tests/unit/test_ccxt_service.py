@@ -135,12 +135,12 @@ class TestCCXTService:
     def test_get_ccxt_exchange_success(self, ccxt_service):
         """Test getting CCXT exchange instance."""
         ccxt_service.venue_mapping.venue_to_ccxt = {"BINANCE-FUTURES": "binance"}
-        
+
         with patch("instruments_service.app.core.ccxt_service.ccxt") as mock_ccxt:
             mock_exchange_class = Mock()
             mock_ccxt.binance = mock_exchange_class
             mock_exchange_class.return_value = Mock()
-            
+
             exchange = ccxt_service.get_ccxt_exchange("BINANCE-FUTURES")
             assert exchange is not None
 
@@ -153,10 +153,10 @@ class TestCCXTService:
     def test_get_ccxt_exchange_not_available(self, ccxt_service):
         """Test getting CCXT exchange when exchange class not available."""
         ccxt_service.venue_mapping.venue_to_ccxt = {"TEST-VENUE": "nonexistent"}
-        
+
         with patch("instruments_service.app.core.ccxt_service.ccxt") as mock_ccxt:
             mock_ccxt.nonexistent = None
-            
+
             exchange = ccxt_service.get_ccxt_exchange("TEST-VENUE")
             assert exchange is None
 
@@ -166,14 +166,16 @@ class TestCCXTService:
         cache_key = "BINANCE-FUTURES_binance"
         ccxt_service._markets_cache[cache_key] = {"markets": {"OLD": "data"}}
         ccxt_service._cache_timestamps[cache_key] = datetime.now(timezone.utc)
-        
-        with patch("instruments_service.app.core.ccxt_service.CCXTService.get_ccxt_exchange") as mock_get_exchange:
+
+        with patch(
+            "instruments_service.app.core.ccxt_service.CCXTService.get_ccxt_exchange"
+        ) as mock_get_exchange:
             mock_exchange = Mock()
             mock_exchange.load_markets.return_value = {"BTC/USDT:USDT": {}}
             mock_get_exchange.return_value = mock_exchange
-            
+
             ccxt_service.venue_mapping.venue_to_ccxt = {"BINANCE-FUTURES": "binance"}
-            
+
             result = ccxt_service.load_markets("BINANCE-FUTURES", force_refresh=True)
             assert result is not None
             assert "BTC/USDT:USDT" in result["markets"]
@@ -181,22 +183,21 @@ class TestCCXTService:
     def test_load_markets_exception(self, ccxt_service):
         """Test load_markets when exception occurs."""
         ccxt_service.venue_mapping.venue_to_ccxt = {"BINANCE-FUTURES": "binance"}
-        
-        with patch("instruments_service.app.core.ccxt_service.CCXTService.get_ccxt_exchange") as mock_get_exchange:
+
+        with patch(
+            "instruments_service.app.core.ccxt_service.CCXTService.get_ccxt_exchange"
+        ) as mock_get_exchange:
             mock_exchange = Mock()
             mock_exchange.load_markets.side_effect = Exception("API Error")
             mock_get_exchange.return_value = mock_exchange
-            
+
             result = ccxt_service.load_markets("BINANCE-FUTURES")
             assert result is None
 
     def test_build_symbol_formats_bybit(self, ccxt_service):
         """Test building symbol formats for Bybit."""
         formats = ccxt_service._build_symbol_formats(
-            venue="BYBIT",
-            base_asset="BTC",
-            quote_asset="USDT",
-            symbol_id="BTCUSDT"
+            venue="BYBIT", base_asset="BTC", quote_asset="USDT", symbol_id="BTCUSDT"
         )
         assert len(formats) > 0
         assert "BTC/USDT:USDT" in formats
@@ -204,10 +205,7 @@ class TestCCXTService:
     def test_build_symbol_formats_hyperliquid(self, ccxt_service):
         """Test building symbol formats for Hyperliquid."""
         formats = ccxt_service._build_symbol_formats(
-            venue="HYPERLIQUID",
-            base_asset="BTC",
-            quote_asset="USDC",
-            symbol_id="BTCUSDC"
+            venue="HYPERLIQUID", base_asset="BTC", quote_asset="USDC", symbol_id="BTCUSDC"
         )
         assert len(formats) > 0
         assert "BTC/USDC:USDC" in formats
@@ -219,7 +217,7 @@ class TestCCXTService:
             base_asset="BTC",
             quote_asset="USD",
             symbol_id="BTCUSD",
-            tardis_symbol="BTC-PERPETUAL"
+            tardis_symbol="BTC-PERPETUAL",
         )
         assert len(formats) > 0
 
@@ -243,14 +241,14 @@ class TestCCXTService:
         }
         ccxt_service._cache_timestamps["BINANCE-FUTURES_binance"] = datetime.now(timezone.utc)
         ccxt_service.venue_mapping.venue_to_ccxt = {"BINANCE-FUTURES": "binance"}
-        
+
         metadata = ccxt_service.get_metadata(
             venue="BINANCE-FUTURES",
             base_asset="BTC",
             quote_asset="USDT",
             symbol_id="BTCUSDT",
         )
-        
+
         # Should have metadata if symbol format matches
         assert isinstance(metadata, dict)
         if metadata:  # If symbol was found
@@ -271,14 +269,14 @@ class TestCCXTService:
         }
         ccxt_service._cache_timestamps["TEST_binance"] = datetime.now(timezone.utc)
         ccxt_service.venue_mapping.venue_to_ccxt = {"TEST": "binance"}
-        
+
         metadata = ccxt_service.get_metadata(
             venue="TEST",
             base_asset="BTC",
             quote_asset="USDT",
             symbol_id="BTCUSDT",
         )
-        
+
         # Should have min_size from cost_min
         assert "min_size" in metadata or metadata == {}
 
@@ -287,18 +285,32 @@ class TestCCXTService:
         """Test getting leverage limits."""
         mock_exchange = Mock()
         mock_exchange.fetchMarketLeverageTiers.return_value = [
-            {"tier": 1, "minNotional": 0, "maxNotional": 1000000, "maintenanceMargin": 0.005, "maxLeverage": 125, "initialMargin": 0.008},
-            {"tier": 2, "minNotional": 1000000, "maxNotional": 5000000, "maintenanceMargin": 0.01, "maxLeverage": 100, "initialMargin": 0.01},
+            {
+                "tier": 1,
+                "minNotional": 0,
+                "maxNotional": 1000000,
+                "maintenanceMargin": 0.005,
+                "maxLeverage": 125,
+                "initialMargin": 0.008,
+            },
+            {
+                "tier": 2,
+                "minNotional": 1000000,
+                "maxNotional": 5000000,
+                "maintenanceMargin": 0.01,
+                "maxLeverage": 100,
+                "initialMargin": 0.01,
+            },
         ]
-        
+
         mock_load_markets.return_value = {
             "exchange": mock_exchange,
             "markets": {"BTC/USDT:USDT": {}},
             "exchange_id": "binance",
         }
-        
+
         ccxt_service.venue_mapping.venue_to_ccxt = {"BINANCE-FUTURES": "binance"}
-        
+
         limits = ccxt_service.get_leverage_limits(
             venue="BINANCE-FUTURES",
             symbol="BTC/USDT:USDT",
@@ -306,10 +318,14 @@ class TestCCXTService:
             quote_asset="USDT",
             symbol_id="BTCUSDT",
         )
-        
+
         assert isinstance(limits, dict)
         # Should have risk parameters
-        assert "max_leverage" in limits or "max_position_size" in limits or "initial_margin_rate" in limits
+        assert (
+            "max_leverage" in limits
+            or "max_position_size" in limits
+            or "initial_margin_rate" in limits
+        )
 
     def test_get_leverage_limits_cached(self, ccxt_service):
         """Test getting leverage limits from cache."""
@@ -320,7 +336,7 @@ class TestCCXTService:
             "maintenance_margin_rate": 0.005,
         }
         ccxt_service._leverage_tiers_cache["BINANCE-FUTURES"] = cached_params
-        
+
         limits = ccxt_service.get_leverage_limits(
             venue="BINANCE-FUTURES",
             symbol="BTC/USDT:USDT",
@@ -328,7 +344,7 @@ class TestCCXTService:
             quote_asset="USDT",
             symbol_id="BTCUSDT",
         )
-        
+
         # Should return a copy, not the same object
         assert limits == cached_params
         assert limits is not cached_params  # Should be a copy
@@ -336,12 +352,26 @@ class TestCCXTService:
     def test_extract_risk_params_from_tiers(self, ccxt_service):
         """Test extracting risk parameters from leverage tiers."""
         leverage_tiers = [
-            {"tier": 1, "minNotional": 0, "maxNotional": 1000000, "maintenanceMargin": 0.005, "maxLeverage": 125, "initialMargin": 0.008},
-            {"tier": 2, "minNotional": 1000000, "maxNotional": 5000000, "maintenanceMargin": 0.01, "maxLeverage": 100, "initialMargin": 0.01},
+            {
+                "tier": 1,
+                "minNotional": 0,
+                "maxNotional": 1000000,
+                "maintenanceMargin": 0.005,
+                "maxLeverage": 125,
+                "initialMargin": 0.008,
+            },
+            {
+                "tier": 2,
+                "minNotional": 1000000,
+                "maxNotional": 5000000,
+                "maintenanceMargin": 0.01,
+                "maxLeverage": 100,
+                "initialMargin": 0.01,
+            },
         ]
-        
+
         params = ccxt_service._extract_risk_params_from_tiers(leverage_tiers)
-        
+
         assert isinstance(params, dict)
         assert "max_leverage" in params
         assert "max_position_size" in params
@@ -370,8 +400,8 @@ class TestCCXTService:
         ccxt_service._markets_cache["DERIBIT_deribit"] = {"markets": {}}
         ccxt_service._cache_timestamps["BINANCE-FUTURES_binance"] = datetime.now(timezone.utc)
         ccxt_service._cache_timestamps["DERIBIT_deribit"] = datetime.now(timezone.utc)
-        
+
         ccxt_service.clear_cache(venue="BINANCE-FUTURES")
-        
+
         assert "BINANCE-FUTURES_binance" not in ccxt_service._markets_cache
         assert "DERIBIT_deribit" in ccxt_service._markets_cache
