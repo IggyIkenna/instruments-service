@@ -16,6 +16,7 @@ import json
 import ccxt
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
+from instruments_service.config import VenueMapping
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class CCXTService:
     - Metadata extraction (tick_size, min_size, contract_size)
     """
 
-    def __init__(self, venue_mapping: Any, cache_ttl_hours: int = 4):
+    def __init__(self, venue_mapping: VenueMapping, cache_ttl_hours: int = 4):
         """
         Initialize CCXT service.
 
