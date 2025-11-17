@@ -26,7 +26,8 @@ class TestCredentialLoading:
         }
 
         with patch(
-            "unified_cloud_services.get_secret_with_fallback", return_value="test-tardis-key"
+            "instruments_service.app.core.instrument_processing_service.get_secret_with_fallback",
+            return_value="test-tardis-key",
         ):
             service = InstrumentProcessingService(config)
             assert service.api_key == "test-tardis-key"
@@ -43,7 +44,8 @@ class TestCredentialLoading:
 
         # get_secret_with_fallback already checks env var as fallback, so we test that path
         with patch(
-            "unified_cloud_services.get_secret_with_fallback", return_value="env-tardis-key"
+            "instruments_service.app.core.instrument_processing_service.get_secret_with_fallback",
+            return_value="env-tardis-key",
         ):
             service = InstrumentProcessingService(config)
             assert service.api_key == "env-tardis-key"
@@ -59,7 +61,9 @@ class TestCredentialLoading:
             "tardis_api_key": "config-tardis-key",
         }
 
-        with patch("unified_cloud_services.get_secret_with_fallback"):
+        with patch(
+            "instruments_service.app.core.instrument_processing_service.get_secret_with_fallback"
+        ):
             service = InstrumentProcessingService(config)
             assert service.api_key == "config-tardis-key"
 
@@ -72,7 +76,6 @@ class TestCredentialLoading:
         mock_db_module.Historical.return_value = mock_client
 
         original_db = getattr(databento_adapter, "db", None)
-        original_available = databento_adapter.DATABENTO_AVAILABLE
         original_client = getattr(databento_adapter, "_DATABENTO_CLIENT", None)
         original_api_key = getattr(databento_adapter, "_DATABENTO_API_KEY", None)
 
@@ -85,19 +88,15 @@ class TestCredentialLoading:
                     "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
                 ),
                 patch(
-                    "unified_cloud_services.get_secret_with_fallback",
+                    "instruments_service.app.venues.databento.databento_adapter.get_secret_with_fallback",
                     return_value="test-databento-key",
                 ),
             ):
-                databento_adapter.db = mock_db_module
-                databento_adapter.DATABENTO_AVAILABLE = True
-
                 adapter = databento_adapter.DatabentoAdapter()
                 assert adapter.api_key == "test-databento-key"
         finally:
             if original_db is not None:
                 databento_adapter.db = original_db
-            databento_adapter.DATABENTO_AVAILABLE = original_available
             if original_client is not None:
                 databento_adapter._DATABENTO_CLIENT = original_client
             if original_api_key is not None:
@@ -114,7 +113,6 @@ class TestCredentialLoading:
         mock_db_module.Historical.return_value = mock_client
 
         original_db = getattr(databento_adapter, "db", None)
-        original_available = databento_adapter.DATABENTO_AVAILABLE
         original_client = getattr(databento_adapter, "_DATABENTO_CLIENT", None)
         original_api_key = getattr(databento_adapter, "_DATABENTO_API_KEY", None)
 
@@ -128,19 +126,15 @@ class TestCredentialLoading:
                     "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
                 ),
                 patch(
-                    "unified_cloud_services.get_secret_with_fallback",
+                    "instruments_service.app.venues.databento.databento_adapter.get_secret_with_fallback",
                     return_value="env-databento-key",
                 ),
             ):
-                databento_adapter.db = mock_db_module
-                databento_adapter.DATABENTO_AVAILABLE = True
-
                 adapter = databento_adapter.DatabentoAdapter()
                 assert adapter.api_key == "env-databento-key"
         finally:
             if original_db is not None:
                 databento_adapter.db = original_db
-            databento_adapter.DATABENTO_AVAILABLE = original_available
             if original_client is not None:
                 databento_adapter._DATABENTO_CLIENT = original_client
             if original_api_key is not None:
@@ -169,7 +163,8 @@ class TestCredentialLoading:
             tg_module._API_KEY_PROJECT_ID = None
 
             with patch(
-                "unified_cloud_services.get_secret_with_fallback", return_value="test-graph-key"
+                "instruments_service.app.venues.defi.the_graph_client.get_secret_with_fallback",
+                return_value="test-graph-key",
             ):
                 client = TheGraphClient(subgraph_url="https://test.com")
                 # The key gets stripped, so we check it equals the expected value
@@ -195,7 +190,8 @@ class TestCredentialLoading:
             tg_module._API_KEY_PROJECT_ID = None
 
             with patch(
-                "unified_cloud_services.get_secret_with_fallback", return_value="env-graph-key"
+                "instruments_service.app.venues.defi.the_graph_client.get_secret_with_fallback",
+                return_value="env-graph-key",
             ):
                 client = TheGraphClient(subgraph_url="https://test.com")
                 # The key gets stripped, so we check it equals the expected value
@@ -215,7 +211,8 @@ class TestCredentialLoading:
                 return_value=None,
             ),
             patch(
-                "unified_cloud_services.get_secret_with_fallback", return_value="test-alchemy-key"
+                "instruments_service.app.venues.defi.aave_adapter.get_secret_with_fallback",
+                return_value="test-alchemy-key",
             ),
         ):
             adapter = AaveV3Adapter.__new__(AaveV3Adapter)
@@ -225,7 +222,8 @@ class TestCredentialLoading:
 
             # Simulate the initialization that would load Alchemy key
             with patch(
-                "unified_cloud_services.get_secret_with_fallback", return_value="test-alchemy-key"
+                "instruments_service.app.venues.defi.aave_adapter.get_secret_with_fallback",
+                return_value="test-alchemy-key",
             ):
                 # The adapter loads Alchemy key lazily, so we just verify it can be loaded
                 assert True  # Test passes if no exception is raised
@@ -240,7 +238,8 @@ class TestCredentialLoading:
                 return_value=None,
             ),
             patch(
-                "unified_cloud_services.get_secret_with_fallback", return_value="test-aavescan-key"
+                "instruments_service.app.venues.defi.aave_adapter.get_secret_with_fallback",
+                return_value="test-aavescan-key",
             ),
         ):
             adapter = AaveV3Adapter.__new__(AaveV3Adapter)
@@ -264,7 +263,10 @@ class TestCredentialLoading:
         }
 
         with (
-            patch("unified_cloud_services.get_secret_with_fallback", return_value="secret-key"),
+            patch(
+                "instruments_service.app.core.instrument_processing_service.get_secret_with_fallback",
+                return_value="secret-key",
+            ),
             patch.dict(os.environ, {"TARDIS_API_KEY": "env-key"}),
         ):
             service = InstrumentProcessingService(config)
@@ -284,7 +286,8 @@ class TestCredentialLoading:
 
         # get_secret_with_fallback handles fallback internally, so we test the successful fallback path
         with patch(
-            "unified_cloud_services.get_secret_with_fallback", return_value="env-fallback-key"
+            "instruments_service.app.core.instrument_processing_service.get_secret_with_fallback",
+            return_value="env-fallback-key",
         ):
             service = InstrumentProcessingService(config)
             assert service.api_key == "env-fallback-key"
@@ -327,7 +330,10 @@ class TestCredentialLoading:
 
         # No credentials available anywhere
         with (
-            patch("unified_cloud_services.get_secret_with_fallback", return_value=None),
+            patch(
+                "instruments_service.app.core.instrument_processing_service.get_secret_with_fallback",
+                return_value=None,
+            ),
             patch.dict(os.environ, {}, clear=True),
         ):
             # Should not raise exception, just log warning

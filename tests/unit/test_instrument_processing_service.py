@@ -40,8 +40,8 @@ class TestInstrumentProcessingService:
         """Test creating service without API key succeeds (lazy-loaded)."""
         config = {"project_id": "test-project"}
         with patch(
-            "instruments_service.app.core.instrument_processing_service.SECRET_MANAGER_AVAILABLE",
-            False,
+            "instruments_service.app.core.instrument_processing_service.get_secret_with_fallback",
+            return_value=None,
         ):
             # Tardis API key is now optional - service can be created without it
             # It will only fail when CeFi instruments are requested

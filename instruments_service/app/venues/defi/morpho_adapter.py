@@ -10,6 +10,7 @@ Reference: archive/basis-strategy-v1/docs/MVP_DEFI_INSTRUMENTS.md
 import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
+from unified_cloud_services import get_secret_with_fallback, get_config
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,6 @@ class MorphoAdapter:
                 # Get RPC URL from parameter, env var, or Secret Manager
                 if not rpc_url:
                     try:
-                        from unified_cloud_services import get_secret_with_fallback, get_config
 
                         # Try to get Alchemy API key from Secret Manager
                         alchemy_key = get_secret_with_fallback(
