@@ -6,21 +6,10 @@ Unified instrument configuration with all instruments, mappings, and metadata in
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
+from pydantic import Field
 
-# Try to import BaseServiceConfig from unified-cloud-services
-try:
-    from unified_cloud_services import BaseServiceConfig, get_config
-    from pydantic import Field
-
-    BASE_SERVICE_CONFIG_AVAILABLE = True
-except ImportError:
-    BASE_SERVICE_CONFIG_AVAILABLE = False
-    # Fallback if unified-cloud-services not available
-    BaseServiceConfig = None
-    Field = None
-    import os
-
-    get_config = os.getenv
+from unified_cloud_services import BaseServiceConfig, get_config
+from unified_cloud_services import CloudTarget
 
 
 @dataclass
@@ -1351,113 +1340,83 @@ class ExchangeInstrumentConfig:
     )
 
 
-# Service-level configuration (extends BaseServiceConfig if available)
-if BASE_SERVICE_CONFIG_AVAILABLE and BaseServiceConfig is not None:
+class InstrumentsServiceConfig(BaseServiceConfig):
+    """
+    Service-level configuration for instruments-service.
 
-    class InstrumentsServiceConfig(BaseServiceConfig):
+    Extends BaseServiceConfig with instruments-specific settings.
+    """
+
+    service_name: str = Field(default="instruments-service", description="Service name")
+
+    # Instruments-specific configuration
+    enable_ccxt_integration: bool = Field(
+        default=True, description="Enable CCXT metadata enrichment"
+    )
+    enable_metadata_caching: bool = Field(default=True, description="Enable metadata caching")
+    cache_ttl_hours: int = Field(default=24, description="Cache TTL in hours")
+    max_batch_size: int = Field(default=1000, description="Maximum batch size for processing")
+    lookback_days: int = Field(default=0, description="Lookback days for batch processing")
+
+    # GCS and BigQuery defaults for instruments
+    gcs_bucket: str = Field(
+        default_factory=lambda: get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
+        description="GCS bucket for instruments (default/backwards compatibility)",
+    )
+    # Category-specific buckets for independent batch processing
+    gcs_bucket_cefi: str = Field(
+        default_factory=lambda: get_config(
+            "INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-central-element-323112"
+        ),
+        description="GCS bucket for CEFI instruments",
+    )
+    gcs_bucket_tradfi: str = Field(
+        default_factory=lambda: get_config(
+            "INSTRUMENTS_GCS_BUCKET_TRADFI", "instruments-store-tradfi-central-element-323112"
+        ),
+        description="GCS bucket for TRADFI instruments",
+    )
+    gcs_bucket_defi: str = Field(
+        default_factory=lambda: get_config(
+            "INSTRUMENTS_GCS_BUCKET_DEFI", "instruments-store-defi-central-element-323112"
+        ),
+        description="GCS bucket for DEFI instruments",
+    )
+    bigquery_dataset: str = Field(
+        default_factory=lambda: get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
+        description="BigQuery dataset for instruments",
+    )
+
+    def get_cloud_target(self, category: Optional[str] = None):
         """
-        Service-level configuration for instruments-service.
+        Get CloudTarget for instruments service.
 
-        Extends BaseServiceConfig with instruments-specific settings.
+        Args:
+            category: Optional market category ("CEFI", "TRADFI", "DEFI") to use category-specific bucket
+
+        Returns:
+            CloudTarget with appropriate bucket for category
         """
 
-        service_name: str = Field(default="instruments-service", description="Service name")
-
-        # Instruments-specific configuration
-        enable_ccxt_integration: bool = Field(
-            default=True, description="Enable CCXT metadata enrichment"
-        )
-        enable_metadata_caching: bool = Field(default=True, description="Enable metadata caching")
-        cache_ttl_hours: int = Field(default=24, description="Cache TTL in hours")
-        max_batch_size: int = Field(default=1000, description="Maximum batch size for processing")
-        lookback_days: int = Field(default=0, description="Lookback days for batch processing")
-
-        # GCS and BigQuery defaults for instruments
-        gcs_bucket: str = Field(
-            default_factory=lambda: get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
-            description="GCS bucket for instruments (default/backwards compatibility)",
-        )
-        # Category-specific buckets for independent batch processing
-        gcs_bucket_cefi: str = Field(
-            default_factory=lambda: get_config(
-                "INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-central-element-323112"
-            ),
-            description="GCS bucket for CEFI instruments",
-        )
-        gcs_bucket_tradfi: str = Field(
-            default_factory=lambda: get_config(
-                "INSTRUMENTS_GCS_BUCKET_TRADFI", "instruments-store-tradfi-central-element-323112"
-            ),
-            description="GCS bucket for TRADFI instruments",
-        )
-        gcs_bucket_defi: str = Field(
-            default_factory=lambda: get_config(
-                "INSTRUMENTS_GCS_BUCKET_DEFI", "instruments-store-defi-central-element-323112"
-            ),
-            description="GCS bucket for DEFI instruments",
-        )
-        bigquery_dataset: str = Field(
-            default_factory=lambda: get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
-            description="BigQuery dataset for instruments",
-        )
-
-        def get_cloud_target(self, category: Optional[str] = None):
-            """
-            Get CloudTarget for instruments service.
-
-            Args:
-                category: Optional market category ("CEFI", "TRADFI", "DEFI") to use category-specific bucket
-
-            Returns:
-                CloudTarget with appropriate bucket for category
-            """
-            from unified_cloud_services import CloudTarget
-
-            # Determine bucket based on category
-            if category:
-                category_upper = category.upper()
-                if category_upper == "CEFI":
-                    bucket = self.gcs_bucket_cefi
-                elif category_upper == "TRADFI":
-                    bucket = self.gcs_bucket_tradfi
-                elif category_upper == "DEFI":
-                    bucket = self.gcs_bucket_defi
-                else:
-                    raise ValueError(
-                        f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI"
-                    )
+        # Determine bucket based on category
+        if category:
+            category_upper = category.upper()
+            if category_upper == "CEFI":
+                bucket = self.gcs_bucket_cefi
+            elif category_upper == "TRADFI":
+                bucket = self.gcs_bucket_tradfi
+            elif category_upper == "DEFI":
+                bucket = self.gcs_bucket_defi
             else:
-                bucket = self.gcs_bucket
+                raise ValueError(
+                    f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI"
+                )
+        else:
+            bucket = self.gcs_bucket
 
-            return CloudTarget(
-                project_id=self.gcp_project_id,
-                gcs_bucket=bucket,
-                bigquery_dataset=self.bigquery_dataset,
-                bigquery_location=self.bigquery_location,
-            )
-
-else:
-    # Fallback if BaseServiceConfig not available
-    class InstrumentsServiceConfig:
-        """Fallback service config if BaseServiceConfig not available."""
-
-        def __init__(self, **kwargs):
-            self.service_name = kwargs.get("service_name", "instruments-service")
-            self.enable_ccxt_integration = kwargs.get("enable_ccxt_integration", True)
-            self.enable_metadata_caching = kwargs.get("enable_metadata_caching", True)
-            self.cache_ttl_hours = kwargs.get("cache_ttl_hours", 24)
-            self.max_batch_size = kwargs.get("max_batch_size", 1000)
-            self.lookback_days = kwargs.get("lookback_days", 0)
-            self.gcs_bucket = kwargs.get(
-                "gcs_bucket", get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store")
-            )
-            self.bigquery_dataset = kwargs.get(
-                "bigquery_dataset",
-                get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
-            )
-            self.gcp_project_id = kwargs.get(
-                "gcp_project_id", get_config("GCP_PROJECT_ID", "central-element-323112")
-            )
-            self.bigquery_location = kwargs.get(
-                "bigquery_location", get_config("BIGQUERY_LOCATION", "asia-northeast1")
-            )  # Default to asia-northeast1 per .env
+        return CloudTarget(
+            project_id=self.gcp_project_id,
+            gcs_bucket=bucket,
+            bigquery_dataset=self.bigquery_dataset,
+            bigquery_location=self.bigquery_location,
+        )
