@@ -23,19 +23,34 @@ import re
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
+import asyncio
 
 # Import centralized models and configs (DRY principle)
-from instruments_service.models import InstrumentDefinition
-from instruments_service.config import (
-    VenueMapping,
-    ExchangeInstrumentConfig,
-    DataTypeConfig,
+from unified_cloud_services import (
+    get_secret_with_fallback,
+    get_config,
+    SubgraphService,
+    DateFilterService,
+    determine_market_category,
 )
-from unified_cloud_services import get_secret_with_fallback, get_config
-from unified_cloud_services import SubgraphService, DateFilterService
+
+from instruments_service.models import InstrumentDefinition
+from instruments_service.config import VenueMapping, ExchangeInstrumentConfig, DataTypeConfig
 from instruments_service.utils.ccxt_service import CCXTService
-import instruments_service.app.venues.defi.the_graph_client as tgc_module
 import instruments_service.utils.subgraph_service as sg_module
+import instruments_service.app.venues.defi.the_graph_client as tgc_module
+from instruments_service.app.venues.tardis import TardisAdapter
+from instruments_service.app.venues.databento import DatabentoAdapter
+from instruments_service.app.venues.defi import (
+    UniswapV3Adapter,
+    BalancerAdapter,
+    AaveV3Adapter,
+    EtherFiAdapter,
+    LidoAdapter,
+    AsterAdapter,
+    HyperliquidAdapter,
+    MorphoAdapter,
+)
 
 # Import Secret Manager for API key retrieval
 logger = logging.getLogger(__name__)
@@ -514,7 +529,6 @@ class InstrumentProcessingService:
                     "Provide 'tardis_api_key' in config, or ensure Secret Manager access "
                     "to 'tardis-api-key' secret."
                 )
-            from instruments_service.app.venues.tardis import TardisAdapter
 
             self.tardis_adapter = TardisAdapter(
                 api_key=self.api_key, project_id=self._tardis_project_id
@@ -539,7 +553,6 @@ class InstrumentProcessingService:
         Returns:
             Tuple of (instruments_data dict, date_filtered_count)
         """
-        import asyncio
 
         target_date = target_date or datetime.now(timezone.utc)
         date_str = target_date.strftime("%Y-%m-%d")
@@ -914,7 +927,6 @@ class InstrumentProcessingService:
                                 logger.debug(f"⚠️ Could not parse expiry '{expiry_str}': {e}")
 
                     # Determine market category
-                    from unified_cloud_services import determine_market_category
 
                     instrument_dict = {
                         "databento_symbol": "",  # CeFi instruments don't have databento_symbol
@@ -2088,10 +2100,8 @@ class InstrumentProcessingService:
         Returns:
             Dictionary mapping instrument_key to InstrumentDefinition
         """
-        import asyncio
 
         try:
-            from instruments_service.app.venues.databento import DatabentoAdapter
 
             adapter = DatabentoAdapter()
             date = target_date or datetime.now(timezone.utc)
@@ -2149,19 +2159,7 @@ class InstrumentProcessingService:
             # Use cached Graph API key (retrieved at initialization)
             graph_api_key = self._graph_api_key
 
-            if protocol.lower() == "uniswap_v2":
-                from instruments_service.app.venues.defi import UniswapV2Adapter
-
-                adapter = UniswapV2Adapter(chain=chain, api_key=graph_api_key)
-                raw_instruments = adapter.fetch_pools(
-                    base_currency_list=base_currency_list,
-                    quote_currency_list=quote_currency_list,
-                    **kwargs,
-                )
-
-            elif protocol.lower() == "uniswap_v3":
-                from instruments_service.app.venues.defi import UniswapV3Adapter
-
+            if protocol.lower() == "uniswap_v3":
                 adapter = UniswapV3Adapter(chain=chain, api_key=graph_api_key)
                 raw_instruments = adapter.fetch_pools(
                     base_currency_list=base_currency_list,
@@ -2169,29 +2167,7 @@ class InstrumentProcessingService:
                     **kwargs,
                 )
 
-            elif protocol.lower() == "uniswap_v4":
-                from instruments_service.app.venues.defi import UniswapV4Adapter
-
-                adapter = UniswapV4Adapter(chain=chain, api_key=graph_api_key)
-                raw_instruments = adapter.fetch_pools(
-                    base_currency_list=base_currency_list,
-                    quote_currency_list=quote_currency_list,
-                    **kwargs,
-                )
-
-            elif protocol.lower() == "curve":
-                from instruments_service.app.venues.defi import CurveAdapter
-
-                adapter = CurveAdapter(chain=chain, api_key=graph_api_key)
-                raw_instruments = adapter.fetch_pools(
-                    base_currency_list=base_currency_list,
-                    quote_currency_list=quote_currency_list,
-                    **kwargs,
-                )
-
             elif protocol.lower() == "balancer":
-                from instruments_service.app.venues.defi import BalancerAdapter
-
                 adapter = BalancerAdapter(chain=chain)
                 raw_instruments = adapter.fetch_pools(
                     base_currency_list=base_currency_list,
@@ -2200,32 +2176,22 @@ class InstrumentProcessingService:
                 )
 
             elif protocol.lower() == "aave_v3":
-                from instruments_service.app.venues.defi import AaveV3Adapter
-
                 adapter = AaveV3Adapter(chain=chain, graph_api_key=graph_api_key)
                 raw_instruments = adapter.fetch_markets(target_date=target_date)
 
             elif protocol.lower() == "etherfi":
-                from instruments_service.app.venues.defi import EtherFiAdapter
-
                 adapter = EtherFiAdapter(chain=chain)
                 raw_instruments = adapter.fetch_lst_instruments()
 
             elif protocol.lower() == "lido":
-                from instruments_service.app.venues.defi import LidoAdapter
-
                 adapter = LidoAdapter(chain=chain)
                 raw_instruments = adapter.fetch_lst_instruments()
 
             elif protocol.lower() == "morpho":
-                from instruments_service.app.venues.defi import MorphoAdapter
-
                 adapter = MorphoAdapter(chain=chain)
                 raw_instruments = adapter.fetch_markets()
 
             elif protocol.lower() == "hyperliquid":
-                from instruments_service.app.venues.defi import HyperliquidAdapter
-
                 # Use MVP base assets from spec guide (21 trading assets), not DeFi tokens
                 hyperliquid_base_assets = self.venue_mapping.hyperliquid_aster_mvp_base_assets
                 adapter = HyperliquidAdapter(base_currency_list=hyperliquid_base_assets)
@@ -2236,8 +2202,6 @@ class InstrumentProcessingService:
                 raw_instruments = {**perpetuals, **spot_pairs}
 
             elif protocol.lower() == "aster":
-                from instruments_service.app.venues.defi import AsterAdapter
-
                 # Use MVP base assets from spec guide (21 trading assets), not DeFi tokens
                 aster_base_assets = self.venue_mapping.hyperliquid_aster_mvp_base_assets
                 adapter = AsterAdapter(base_currency_list=aster_base_assets)
@@ -2248,7 +2212,46 @@ class InstrumentProcessingService:
                 spot_pairs = adapter.fetch_spot_pairs(test_data_availability=False)
                 raw_instruments = {**perpetuals, **spot_pairs}
 
+            # Adapter not yet implemented (e.g., UniswapV2Adapter, UniswapV4Adapter, CurveAdapter, EthenaAdapter)
+            elif protocol.lower() == "uniswap_v2":
+                logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
+                return {}
+                from instruments_service.app.venues.defi import UniswapV2Adapter
+
+                adapter = UniswapV2Adapter(chain=chain, api_key=graph_api_key)
+                raw_instruments = adapter.fetch_pools(
+                    base_currency_list=base_currency_list,
+                    quote_currency_list=quote_currency_list,
+                    **kwargs,
+                )
+
+            elif protocol.lower() == "uniswap_v4":
+                logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
+                return {}
+                from instruments_service.app.venues.defi import UniswapV4Adapter
+
+                adapter = UniswapV4Adapter(chain=chain, api_key=graph_api_key)
+                raw_instruments = adapter.fetch_pools(
+                    base_currency_list=base_currency_list,
+                    quote_currency_list=quote_currency_list,
+                    **kwargs,
+                )
+
+            elif protocol.lower() == "curve":
+                logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
+                return {}
+                from instruments_service.app.venues.defi import CurveAdapter
+
+                adapter = CurveAdapter(chain=chain, api_key=graph_api_key)
+                raw_instruments = adapter.fetch_pools(
+                    base_currency_list=base_currency_list,
+                    quote_currency_list=quote_currency_list,
+                    **kwargs,
+                )
+
             elif protocol.lower() == "ethena":
+                logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
+                return {}
                 from instruments_service.app.venues.defi import EthenaAdapter
 
                 adapter = EthenaAdapter(chain=chain)
@@ -2436,10 +2439,6 @@ class InstrumentProcessingService:
             logger.info(f"✅ Fetched {len(instruments)} {protocol} instruments for {chain}")
             return instruments
 
-        except ImportError as e:
-            # Adapter not yet implemented (e.g., UniswapV2Adapter, UniswapV4Adapter, CurveAdapter, EthenaAdapter)
-            logger.debug(f"DeFi adapter not available (not yet implemented): {e}")
-            return {}
         except Exception as e:
             logger.error(f"Failed to fetch {protocol} instruments: {e}")
             return {}

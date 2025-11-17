@@ -15,6 +15,7 @@ Used by DeFi adapters that query The Graph:
 import logging
 from typing import Dict, Optional
 from datetime import datetime, timedelta, timezone
+from unified_cloud_services import get_secret_with_fallback, get_config
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +150,6 @@ class SubgraphService:
                     logger.debug("✅ Using cached Graph API key in SubgraphService")
                 else:
                     # Retrieve from Secret Manager and cache
-                    from unified_cloud_services import get_secret_with_fallback, get_config
 
                     graph_api_key = get_secret_with_fallback(
                         project_id=project_id,
