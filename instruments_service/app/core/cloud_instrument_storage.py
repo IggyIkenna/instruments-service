@@ -7,36 +7,22 @@ Uses unified-cloud-services directly for cloud operations.
 
 import pandas as pd
 import logging
-from typing import Dict, Optional, Any, List
+from typing import Optional
 from datetime import datetime, timezone
 import os
 
+from instruments_service.schemas.parquet import get_required_columns
 from unified_cloud_services import (
     get_config,
     determine_market_category,
     get_bucket_for_category,
+    StandardizedDomainCloudService,
+    CloudTarget,
+    create_sampling_service,
+    SchemaValidator,
 )
 
 logger = logging.getLogger(__name__)
-
-# Import unified-cloud-services (direct dependency)
-try:
-    from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
-
-    UNIFIED_CLOUD_SERVICES_AVAILABLE = True
-    logger.info("unified-cloud-services is available")
-except ImportError:
-    UNIFIED_CLOUD_SERVICES_AVAILABLE = False
-    logger.warning("unified-cloud-services not available")
-
-# Import centralized sampling service from unified-cloud-services
-try:
-    from unified_cloud_services import create_sampling_service
-
-    SAMPLING_SERVICE_AVAILABLE = True
-except ImportError:
-    SAMPLING_SERVICE_AVAILABLE = False
-    logger.debug("Sampling service not available")
 
 
 class CloudInstrumentStorage:
@@ -50,12 +36,6 @@ class CloudInstrumentStorage:
 
     def __init__(self, cloud_target: CloudTarget = None):
         """Initialize cloud instrument storage with unified-cloud-services."""
-        if not UNIFIED_CLOUD_SERVICES_AVAILABLE:
-            raise ImportError(
-                "unified-cloud-services not available. "
-                "Install unified-cloud-services package: "
-                "pip install -e ../unified-cloud-services"
-            )
 
         # Configure CloudTarget for market_data domain (instruments are part of market_data)
         # Use asia-northeast1 location per .env configuration (GCS: asia-northeast1-c, BigQuery: asia-northeast1)
@@ -132,11 +112,7 @@ class CloudInstrumentStorage:
         """
         try:
             # Generate CSV sample using centralized service (only in non-production)
-            if (
-                SAMPLING_SERVICE_AVAILABLE
-                and instruments_df is not None
-                and not instruments_df.empty
-            ):
+            if instruments_df is not None and not instruments_df.empty:
                 sampling_service = create_sampling_service()
                 sample_date = date if date else datetime.now(timezone.utc)
                 sampling_service.generate_csv_sample(
@@ -154,31 +130,14 @@ class CloudInstrumentStorage:
 
             # Validate schema using unified-cloud-services SchemaValidator (DRY)
             # Domain-specific schema definition provides required columns list
-            try:
-                from unified_cloud_services import SchemaValidator
-                from instruments_service.schemas.parquet import get_required_columns
+            validator = SchemaValidator()
+            required_columns = get_required_columns()
+            result = validator.validate_dataframe_schema(
+                df=instruments_df, required_columns=required_columns
+            )
 
-                validator = SchemaValidator()
-                required_columns = get_required_columns()
-                result = validator.validate_dataframe_schema(
-                    df=instruments_df, required_columns=required_columns
-                )
-
-                if not result.valid:
-                    raise ValueError(f"Schema validation failed: {result.errors}")
-            except ImportError:
-                # Fallback if schema modules not available
-                required_columns = [
-                    "instrument_key",
-                    "venue",
-                    "instrument_type",
-                    "available_from_datetime",
-                ]
-                missing_columns = [
-                    col for col in required_columns if col not in instruments_df.columns
-                ]
-                if missing_columns:
-                    raise ValueError(f"Missing required columns: {missing_columns}")
+            if not result.valid:
+                raise ValueError(f"Schema validation failed: {result.errors}")
 
             # Convert timestamp columns for GCS storage
             timestamp_columns = [
