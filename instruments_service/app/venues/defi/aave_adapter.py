@@ -12,6 +12,14 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
 
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
+from unified_cloud_services import get_secret_with_fallback, get_config
+from instruments_service.app.venues.defi.the_graph_client import (
+    _API_KEY_CACHE,
+)
+from instruments_service.utils.http_session_pool import get_http_session
+from instruments_service.utils.web3_client_pool import get_web3_client
+from web3 import Web3
+from eth_abi import decode
 
 logger = logging.getLogger(__name__)
 
@@ -106,10 +114,7 @@ class AaveV3Adapter(BaseDefiAdapter):
         # If not provided, try Secret Manager
         if not self.api_key:
             try:
-                from unified_cloud_services import get_secret_with_fallback, get_config
-
                 secret_name = get_config("AAVESCAN_SECRET_NAME", "aavescan-api-key")
-
                 self.api_key = get_secret_with_fallback(
                     project_id=self.project_id,
                     secret_name=secret_name,
@@ -120,9 +125,6 @@ class AaveV3Adapter(BaseDefiAdapter):
                     logger.info(
                         f"✅ Retrieved AaveScan API key from Secret Manager (secret: {secret_name})"
                     )
-            except ImportError:
-                logger.warning("unified-cloud-services not available, falling back to env var")
-                self.api_key = get_config("AAVESCAN_API_KEY")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
                 self.api_key = get_config("AAVESCAN_API_KEY")
@@ -135,14 +137,10 @@ class AaveV3Adapter(BaseDefiAdapter):
         if not self.graph_api_key:
             # Try module-level cache first (set by InstrumentProcessingService)
             try:
-                from instruments_service.app.venues.defi.the_graph_client import (
-                    _API_KEY_CACHE,
-                )
-
                 if _API_KEY_CACHE:
                     self.graph_api_key = _API_KEY_CACHE
                     logger.debug("✅ Using cached Graph API key in AaveV3Adapter")
-            except (ImportError, AttributeError):
+            except AttributeError:
                 pass
 
         # project_id already set by BaseDefiAdapter.__init__()
@@ -151,8 +149,6 @@ class AaveV3Adapter(BaseDefiAdapter):
         # get_secret_with_fallback now includes caching internally
         self._alchemy_api_key = None
         try:
-            from unified_cloud_services import get_secret_with_fallback, get_config
-
             self._alchemy_api_key = get_secret_with_fallback(
                 secret_name="alchemy-api-key",
                 project_id=self.project_id,
@@ -343,8 +339,6 @@ class AaveV3Adapter(BaseDefiAdapter):
                 )
 
         try:
-            from instruments_service.utils.http_session_pool import get_http_session
-
             # AaveScan Pro API uses apiKey as query parameter, not Authorization header
             # Endpoint: https://api.aavescan.com/v2/reserves/latest?market=aave-v3-ethereum&apiKey=...
             url = f"{self.base_url}/reserves/latest"
@@ -430,8 +424,6 @@ class AaveV3Adapter(BaseDefiAdapter):
             Block number or None if date is in the future or RPC unavailable
         """
         try:
-            from datetime import timezone
-
             # Ensure target_date is timezone-aware
             if target_date.tzinfo is None:
                 target_date = target_date.replace(tzinfo=timezone.utc)
@@ -461,13 +453,9 @@ class AaveV3Adapter(BaseDefiAdapter):
 
             # Try to get exact block number from RPC endpoint
             try:
-                from instruments_service.utils.http_session_pool import get_http_session
-
                 # Use cached Alchemy API key
                 alchemy_key = self._alchemy_api_key
                 if not alchemy_key:
-                    from unified_cloud_services import get_secret_with_fallback, get_config
-
                     alchemy_key = get_secret_with_fallback(
                         secret_name="alchemy-api-key",
                         project_id=self.project_id,
@@ -583,8 +571,6 @@ class AaveV3Adapter(BaseDefiAdapter):
             List of reserve dictionaries, or empty list if RPC unavailable
         """
         try:
-            from instruments_service.utils.web3_client_pool import get_web3_client
-
             # Get block number
             block_number = self._date_to_block_number(target_date)
             if not block_number:
@@ -593,8 +579,6 @@ class AaveV3Adapter(BaseDefiAdapter):
             # Use cached Alchemy API key
             alchemy_key = self._alchemy_api_key
             if not alchemy_key:
-                from unified_cloud_services import get_secret_with_fallback, get_config
-
                 alchemy_key = get_secret_with_fallback(
                     secret_name="alchemy-api-key",
                     project_id=self.project_id,
@@ -785,21 +769,15 @@ class AaveV3Adapter(BaseDefiAdapter):
             if not graph_api_key:
                 # Try module-level cache (set by InstrumentProcessingService)
                 try:
-                    from instruments_service.app.venues.defi.the_graph_client import (
-                        _API_KEY_CACHE,
-                    )
-
                     if _API_KEY_CACHE:
                         graph_api_key = _API_KEY_CACHE
                         self.graph_api_key = graph_api_key  # Cache for future use
                         logger.debug("✅ Using cached Graph API key in _fetch_reserves_from_graph")
-                except (ImportError, AttributeError):
+                except AttributeError:
                     pass
 
             # Only fetch from Secret Manager if not cached
             if not graph_api_key:
-                from unified_cloud_services import get_secret_with_fallback, get_config
-
                 graph_api_key = get_secret_with_fallback(
                     project_id=self.project_id,
                     secret_name="graph-api-key",
@@ -851,9 +829,6 @@ query GetReserves($blockNumber: Int!) {
 """.strip()
 
             variables = {"blockNumber": block_number}
-
-            from instruments_service.utils.http_session_pool import get_http_session
-
             headers = {"Content-Type": "application/json"}
             # Use pooled HTTP session
             session = get_http_session(base_url="https://gateway.thegraph.com")
@@ -1051,8 +1026,6 @@ query GetReserves($blockNumber: Int!) {
             return self._market_config_cache
 
         try:
-            from instruments_service.utils.http_session_pool import get_http_session
-
             url = f"{self.base_url}/market-configurations"
             params = {}
 
@@ -1108,23 +1081,17 @@ query GetReserves($blockNumber: Int!) {
             if not graph_api_key:
                 # Try module-level cache (set by InstrumentProcessingService)
                 try:
-                    from instruments_service.app.venues.defi.the_graph_client import (
-                        _API_KEY_CACHE,
-                    )
-
                     if _API_KEY_CACHE:
                         graph_api_key = _API_KEY_CACHE
                         self.graph_api_key = graph_api_key  # Cache for future use
                         logger.debug(
                             "✅ Using cached Graph API key in _fetch_reserve_config_from_graph"
                         )
-                except (ImportError, AttributeError):
+                except AttributeError:
                     pass
 
             # Only fetch from Secret Manager if not cached
             if not graph_api_key:
-                from unified_cloud_services import get_secret_with_fallback, get_config
-
                 graph_api_key = get_secret_with_fallback(
                     project_id=self.project_id,
                     secret_name="graph-api-key",
@@ -1215,8 +1182,6 @@ query GetReserve($underlyingAddress: Bytes!) {
     }
 }
 """.strip()
-
-            from instruments_service.utils.http_session_pool import get_http_session
 
             headers = {"Content-Type": "application/json"}
             # Use pooled HTTP session
@@ -1485,8 +1450,6 @@ query GetReserve($underlyingAddress: Bytes!) {
             eMode category ID (integer) or None
         """
         try:
-            from instruments_service.utils.web3_client_pool import get_web3_client
-
             # Get block number if target_date provided
             block_number = None
             if target_date:
@@ -1497,8 +1460,6 @@ query GetReserve($underlyingAddress: Bytes!) {
             # Use cached Alchemy API key
             alchemy_key = self._alchemy_api_key
             if not alchemy_key:
-                from unified_cloud_services import get_secret_with_fallback, get_config
-
                 alchemy_key = get_secret_with_fallback(
                     secret_name="alchemy-api-key",
                     project_id=self.project_id,
@@ -1674,8 +1635,6 @@ query GetReserve($underlyingAddress: Bytes!) {
             return cached
 
         try:
-            from instruments_service.utils.web3_client_pool import get_web3_client
-
             # Get block number if target_date provided
             block_number = None
             if target_date:
@@ -1686,8 +1645,6 @@ query GetReserve($underlyingAddress: Bytes!) {
             # Use cached Alchemy API key
             alchemy_key = self._alchemy_api_key
             if not alchemy_key:
-                from unified_cloud_services import get_secret_with_fallback, get_config
-
                 alchemy_key = get_secret_with_fallback(
                     secret_name="alchemy-api-key",
                     project_id=self.project_id,
@@ -1815,8 +1772,6 @@ query GetReserve($underlyingAddress: Bytes!) {
             else:
                 # Try eth_abi.decode (it handles offsets automatically)
                 try:
-                    from eth_abi import decode
-
                     decoded = decode(["uint16", "uint16", "uint16", "address", "string"], result)
                     (
                         ltv_raw,
@@ -1909,23 +1864,17 @@ query GetReserve($underlyingAddress: Bytes!) {
             if not graph_api_key:
                 # Try module-level cache (set by InstrumentProcessingService)
                 try:
-                    from instruments_service.app.venues.defi.the_graph_client import (
-                        _API_KEY_CACHE,
-                    )
-
                     if _API_KEY_CACHE:
                         graph_api_key = _API_KEY_CACHE
                         self.graph_api_key = graph_api_key
                         logger.debug(
                             "✅ Using cached Graph API key in _fetch_emode_category_from_graph"
                         )
-                except (ImportError, AttributeError):
+                except AttributeError:
                     pass
 
             # Only fetch from Secret Manager if not cached
             if not graph_api_key:
-                from unified_cloud_services import get_secret_with_fallback, get_config
-
                 graph_api_key = get_secret_with_fallback(
                     project_id=self.project_id,
                     secret_name="graph-api-key",
@@ -1983,8 +1932,6 @@ query GetEModeCategory($categoryId: Int!) {
     }
 }
 """.strip()
-
-            from instruments_service.utils.http_session_pool import get_http_session
 
             headers = {"Content-Type": "application/json"}
             # Use pooled HTTP session

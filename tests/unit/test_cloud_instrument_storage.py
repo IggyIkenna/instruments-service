@@ -290,9 +290,10 @@ class TestCloudInstrumentStorage:
 
     def test_init_import_error(self):
         """Test initialization when unified-cloud-services not available."""
+        # Mock the imports to simulate ImportError scenario
         with patch(
-            "instruments_service.app.core.cloud_instrument_storage.UNIFIED_CLOUD_SERVICES_AVAILABLE",
-            False,
+            "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
+            side_effect=ImportError("unified-cloud-services not available"),
         ):
             with pytest.raises(ImportError, match="unified-cloud-services not available"):
                 CloudInstrumentStorage()

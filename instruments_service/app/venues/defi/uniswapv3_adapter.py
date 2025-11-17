@@ -14,6 +14,10 @@ from datetime import datetime
 from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 from unified_cloud_services import get_config
+from instruments_service.app.venues.defi.the_graph_client import (
+    _API_KEY_CACHE,
+    _API_KEY_PROJECT_ID,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +62,6 @@ class UniswapV3Adapter(BaseDefiAdapter):
             # Check if TheGraphClient has cached it (module-level cache)
             # Import here to avoid circular dependency
             try:
-                from instruments_service.app.venues.defi.the_graph_client import (
-                    _API_KEY_CACHE,
-                    _API_KEY_PROJECT_ID,
-                )
 
                 project_id_check = self.project_id or get_config(
                     "GCP_PROJECT_ID", "central-element-323112"
