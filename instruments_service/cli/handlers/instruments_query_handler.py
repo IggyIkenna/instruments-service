@@ -6,10 +6,10 @@ Supports comprehensive filtering and analysis operations.
 """
 
 import logging
-import json
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any
 
 from instruments_service.cli.base_handler import ModeHandler
+from unified_cloud_services import create_instruments_client
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,6 @@ class InstrumentsQueryHandler(ModeHandler):
 
         # Import client (lazy to avoid circular dependencies)
         # Use unified-cloud-services domain client instead of service client
-        from unified_cloud_services import create_instruments_client
 
         # Pass config parameters to client (bucket, dataset, project_id)
         client_kwargs = {}
