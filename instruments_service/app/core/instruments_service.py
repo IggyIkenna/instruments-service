@@ -7,15 +7,16 @@ Follows unified repository structure pattern.
 
 import logging
 import pandas as pd
-import asyncio
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timezone
+from datetime import datetime
+import asyncio
 
 from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 from instruments_service.config import VenueMapping, DatabentoInstrumentConfig
 from instruments_service.app.venues.databento.databento_adapter import DatabentoAdapter
+from instruments_service.models import InstrumentDefinition
 
 logger = logging.getLogger(__name__)
 
@@ -62,11 +63,10 @@ class InstrumentsService:
                 - enable_metadata_caching: Enable metadata caching (default: True)
         """
         self.config = config
-        project_id = config.get("project_id", "central-element-323112")
 
         # Initialize processing service
         processing_config = {
-            "project_id": project_id,
+            "project_id": config.get("project_id", "central-element-323112"),
             "enable_ccxt_integration": config.get("enable_ccxt_integration", True),
             "enable_metadata_caching": config.get("enable_metadata_caching", True),
         }
@@ -95,8 +95,8 @@ class InstrumentsService:
         cefi: bool = False,
         tradfi: bool = False,
         defi: bool = False,
-        venues: Optional[List[str]] = None,
-        instrument_ids: Optional[List[str]] = None,
+        venues: Optional[List[str] | str] = None,
+        instrument_ids: Optional[List[str] | str] = None,
     ) -> Dict[str, Any]:
         """
         Generate instruments for a specific date.
@@ -269,8 +269,6 @@ class InstrumentsService:
 
             # Process CEFI (Tardis) exchanges
             if cefi:
-                import asyncio
-
                 # Use specified exchanges or all Tardis exchanges
                 if exchanges is None:
                     exchanges = self.venue_mapping.all_tardis_exchanges
@@ -371,8 +369,6 @@ class InstrumentsService:
 
             # Process TRADFI (Databento) exchanges
             if tradfi:
-                import asyncio
-
                 try:
                     databento_config = DatabentoInstrumentConfig()
 
@@ -416,8 +412,6 @@ class InstrumentsService:
                             try:
                                 if exchange == "CBOE":
                                     # CBOE only has VIX index (static definition)
-                                    from instruments_service.models import InstrumentDefinition
-
                                     # Create Databento adapter instance (reuses cached client)
                                     databento_adapter = DatabentoAdapter()
 
