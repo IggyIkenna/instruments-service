@@ -18,23 +18,13 @@ import logging
 import re
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta, timezone, time
+from zoneinfo import ZoneInfo
+
 import pandas as pd
-
-try:
-    from unified_cloud_services import get_config
-except ImportError:
-    # Fallback if unified-cloud-services not available
-    import os
-
-    get_config = os.getenv
-
-try:
-    import databento as db
-
-    DATABENTO_AVAILABLE = True
-except ImportError:
-    DATABENTO_AVAILABLE = False
-    logging.warning("databento package not available. Install with: pip install databento")
+import databento as db
+from unified_cloud_services import get_config
+from unified_cloud_services import get_secret_with_fallback
+from instruments_service.config import UnifiedInstrumentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -83,11 +73,6 @@ class DatabentoAdapter:
         """
         global _DATABENTO_CLIENT, _DATABENTO_API_KEY
 
-        if not DATABENTO_AVAILABLE:
-            raise ImportError(
-                "databento package not available. Install with: pip install databento"
-            )
-
         # Reuse cached API key if available (avoid Secret Manager calls)
         if _DATABENTO_API_KEY and not api_key:
             self.api_key = _DATABENTO_API_KEY
@@ -99,7 +84,6 @@ class DatabentoAdapter:
             # If not provided, try Secret Manager
             if not self.api_key:
                 try:
-                    from unified_cloud_services import get_secret_with_fallback
 
                     secret_name = get_config("DATABENTO_SECRET_NAME", "databento-api-key")
                     project_id = project_id or get_config(
@@ -166,7 +150,6 @@ class DatabentoAdapter:
         global _UNIFIED_CONFIG_CACHE
 
         if _UNIFIED_CONFIG_CACHE is None:
-            from instruments_service.config import UnifiedInstrumentConfig
 
             _UNIFIED_CONFIG_CACHE = UnifiedInstrumentConfig()
             logger.debug("✅ Cached UnifiedInstrumentConfig instance")
@@ -591,14 +574,9 @@ class DatabentoAdapter:
             if target_date:
                 start_date_str = target_date.strftime("%Y-%m-%d")
                 # Add one day to end_date to ensure it's after start_date
-                from datetime import timedelta
-
                 end_date = target_date + timedelta(days=1)
                 end_date_str = end_date.strftime("%Y-%m-%d")
             else:
-                # Fallback to today if no target_date provided
-                from datetime import datetime, timedelta
-
                 today = datetime.now(timezone.utc)
                 start_date_str = today.strftime("%Y-%m-%d")
                 end_date = today + timedelta(days=1)
@@ -764,8 +742,6 @@ class DatabentoAdapter:
         global _UNIFIED_CONFIG_CACHE
 
         if _UNIFIED_CONFIG_CACHE is None:
-            from instruments_service.config import UnifiedInstrumentConfig
-
             _UNIFIED_CONFIG_CACHE = UnifiedInstrumentConfig()
 
         unified_config = _UNIFIED_CONFIG_CACHE
@@ -1316,45 +1292,25 @@ class DatabentoAdapter:
                         #   - 9:00 AM CT (CST, UTC-6) = 3:00 PM UTC (winter, Nov-Mar)
                         #   - 9:00 AM CT (CDT, UTC-5) = 2:00 PM UTC (summer, Mar-Nov)
                         # ZoneInfo automatically handles DST transitions based on the expiry date
-                        try:
-                            from zoneinfo import ZoneInfo
-                        except ImportError:
-                            try:
-                                from backports.zoneinfo import ZoneInfo
-                            except ImportError:
-                                ZoneInfo = None
 
-                        if ZoneInfo:
-                            # Get the expiry date
-                            expiry_date = expiry_dt.date()
+                        # Get the expiry date
+                        expiry_date = expiry_dt.date()
 
-                            # Create 9:00 AM CT datetime for the expiry date
-                            # ZoneInfo("America/Chicago") automatically determines DST based on expiry_date
-                            ct_tz = ZoneInfo("America/Chicago")
-                            expiry_9am_ct = datetime.combine(expiry_date, time(9, 0, 0)).replace(
-                                tzinfo=ct_tz
-                            )
+                        # Create 9:00 AM CT datetime for the expiry date
+                        # ZoneInfo("America/Chicago") automatically determines DST based on expiry_date
+                        ct_tz = ZoneInfo("America/Chicago")
+                        expiry_9am_ct = datetime.combine(expiry_date, time(9, 0, 0)).replace(
+                            tzinfo=ct_tz
+                        )
 
-                            # Convert to UTC (ZoneInfo handles DST automatically)
-                            expiry_iso = expiry_9am_ct.astimezone(timezone.utc).isoformat()
+                        # Convert to UTC (ZoneInfo handles DST automatically)
+                        expiry_iso = expiry_9am_ct.astimezone(timezone.utc).isoformat()
 
-                            logger.debug(
-                                f"✅ Set CME option expiry to 9:00 AM CT for {exchange_raw_symbol}: "
-                                f"{expiry_date} -> {expiry_iso} (UTC)"
-                            )
-                        else:
-                            # Fallback: zoneinfo not available - use UTC-6 offset (standard Central Time)
-                            # Note: This doesn't handle DST, but is better than nothing
-                            expiry_date = expiry_dt.date()
-                            expiry_9am_ct = datetime.combine(expiry_date, time(9, 0, 0)).replace(
-                                tzinfo=timezone(timedelta(hours=-6))
-                            )
-                            expiry_iso = expiry_9am_ct.isoformat()
+                        logger.debug(
+                            f"✅ Set CME option expiry to 9:00 AM CT for {exchange_raw_symbol}: "
+                            f"{expiry_date} -> {expiry_iso} (UTC)"
+                        )
 
-                            logger.debug(
-                                f"✅ Set CME option expiry to 9:00 AM CT (UTC-6, no DST) for {exchange_raw_symbol}: "
-                                f"{expiry_date} -> {expiry_iso}"
-                            )
                     else:
                         # For non-CME options or non-options, leave blank if date-only
                         # Actual expiry times vary by contract type and we don't want to guess incorrectly
@@ -1500,15 +1456,6 @@ class DatabentoAdapter:
         Returns:
             Dictionary with trading hours metadata (times in UTC)
         """
-        try:
-            from zoneinfo import ZoneInfo
-        except ImportError:
-            # Fallback for Python < 3.9
-            try:
-                from backports.zoneinfo import ZoneInfo
-            except ImportError:
-                ZoneInfo = None
-
         exchange_upper = exchange.upper()
 
         # Use target_date for DST calculation, default to current date
@@ -1555,9 +1502,6 @@ class DatabentoAdapter:
         close_utc = None
 
         try:
-            if ZoneInfo is None:
-                raise ImportError("zoneinfo not available")
-
             # Get timezone object for DST-aware conversion
             exchange_tz = ZoneInfo(hours_config["timezone"])
 
@@ -1608,8 +1552,6 @@ class DatabentoAdapter:
             if open_time_of_day > close_time_of_day:
                 # Session spans UTC days: open is previous day
                 # This is the session that CLOSES on target_date
-                from datetime import timedelta
-
                 open_date = open_date - timedelta(days=1)
 
             # Create datetime objects in exchange local timezone (DST-aware)

@@ -12,7 +12,6 @@ Used by:
 """
 
 import logging
-import json
 import ccxt
 from typing import Dict, Any, Optional
 from datetime import datetime, timedelta, timezone

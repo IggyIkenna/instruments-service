@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 from instruments_service.cli.parser import parse_arguments
 from instruments_service.cli.handlers import get_handler_for_mode
-from unified_cloud_services import get_config
+from instruments_service.cli.base_handler import ModeHandler
 
 
 def main() -> Dict[str, Any]:
@@ -65,7 +65,7 @@ def main() -> Dict[str, Any]:
         }
 
         # Get handler for mode
-        handler = get_handler_for_mode(args.mode, config)
+        handler: ModeHandler = get_handler_for_mode(args.mode, config)
 
         # Prepare arguments for handler
         handler_kwargs = {}
@@ -113,8 +113,6 @@ def main() -> Dict[str, Any]:
                 handler_kwargs["symbol_pattern"] = args.symbol_pattern
             if args.instrument_id:
                 handler_kwargs["instrument_id"] = args.instrument_id
-            if args.instrument_ids:
-                handler_kwargs["instrument_ids"] = args.instrument_ids
             if args.data_type:
                 handler_kwargs["data_type"] = args.data_type
             if args.days_until_expiry:

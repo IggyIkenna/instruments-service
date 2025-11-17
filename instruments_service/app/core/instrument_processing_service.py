@@ -19,10 +19,8 @@ This service replaces functionality from:
 """
 
 import logging
-import json
-import ccxt
 import re
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
 
@@ -33,18 +31,14 @@ from instruments_service.config import (
     ExchangeInstrumentConfig,
     DataTypeConfig,
 )
+from unified_cloud_services import get_secret_with_fallback, get_config
+from unified_cloud_services import SubgraphService, DateFilterService
+from instruments_service.utils.ccxt_service import CCXTService
+import instruments_service.app.venues.defi.the_graph_client as tgc_module
+import instruments_service.utils.subgraph_service as sg_module
 
 # Import Secret Manager for API key retrieval
 logger = logging.getLogger(__name__)
-
-try:
-    from unified_cloud_services import get_secret_with_fallback, get_config
-
-    SECRET_MANAGER_AVAILABLE = True
-except ImportError:
-    SECRET_MANAGER_AVAILABLE = False
-    get_secret_with_fallback = None
-    logger.warning("unified-cloud-services not available for Secret Manager")
 
 
 @dataclass
@@ -100,12 +94,8 @@ class InstrumentProcessingService:
         self.api_key = config.get("tardis_api_key") or config.get("api_key")
 
         # If not in config, try Secret Manager (only if available)
-        if not self.api_key and SECRET_MANAGER_AVAILABLE:
+        if not self.api_key:
             try:
-
-                # Import here to avoid scoping issues
-                from unified_cloud_services import get_secret_with_fallback, get_config
-
                 secret_name = get_config("TARDIS_SECRET_NAME", "tardis-api-key")
                 logger.debug(
                     f"Attempting to retrieve Tardis API key from Secret Manager (secret: {secret_name}, project: {project_id})"
@@ -157,8 +147,6 @@ class InstrumentProcessingService:
         self._tardis_project_id = project_id
 
         # Initialize centralized services
-        from unified_cloud_services import SubgraphService, DateFilterService
-        from instruments_service.utils.ccxt_service import CCXTService
 
         self.subgraph_service = SubgraphService()
         self.date_filter_service = DateFilterService()
@@ -167,8 +155,6 @@ class InstrumentProcessingService:
         # This avoids repeated Secret Manager calls when fetching DeFi instruments
         self._graph_api_key = None
         try:
-            from unified_cloud_services import get_secret_with_fallback, get_config
-
             project_id_for_graph = get_config("GCP_PROJECT_ID", "central-element-323112")
             secret_name = get_config("GRAPH_SECRET_NAME", "graph-api-key")
             self._graph_api_key = get_secret_with_fallback(
@@ -178,14 +164,12 @@ class InstrumentProcessingService:
             )
             if self._graph_api_key:
                 self._graph_api_key = self._graph_api_key.strip()
-                # Also set it in TheGraphClient's module-level cache
-                import instruments_service.app.venues.defi.the_graph_client as tgc_module
 
+                # Also set it in TheGraphClient's module-level cache
                 tgc_module._API_KEY_CACHE = self._graph_api_key
                 tgc_module._API_KEY_PROJECT_ID = project_id_for_graph
-                # Also set it in SubgraphService's module-level cache
-                import instruments_service.utils.subgraph_service as sg_module
 
+                # Also set it in SubgraphService's module-level cache
                 sg_module._GRAPH_API_KEY_CACHE = self._graph_api_key
                 sg_module._GRAPH_API_KEY_PROJECT_ID = project_id_for_graph
                 logger.info("✅ Retrieved and cached Graph API key at initialization")

@@ -8,7 +8,7 @@ Each domain has its own bucket and dataset (instruments domain).
 import logging
 import pandas as pd
 import os
-from typing import Optional, Dict, Any
+from typing import Optional
 from datetime import datetime
 from unified_cloud_services import StandardizedDomainCloudService, CloudTarget, get_config
 
@@ -32,8 +32,6 @@ class CloudDataProvider:
             cloud_target: Optional CloudTarget configuration (auto-detects if not provided)
         """
         if cloud_target is None:
-            import os
-
             cloud_target = CloudTarget(
                 project_id=get_config("GCP_PROJECT_ID", "central-element-323112"),
                 gcs_bucket=get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
