@@ -10,8 +10,8 @@ Address: 0x90E00ACe148ca3b23Ac1bC8C240C2a7Dd9c2d9f5
 
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime
 from web3 import Web3
+from unified_cloud_services import get_secret_with_fallback, get_config
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,6 @@ class CurveRPCAdapter:
         if rpc_url:
             self.rpc_url = rpc_url
         else:
-            from unified_cloud_services import get_secret_with_fallback, get_config
 
             project_id = project_id or get_config("GCP_PROJECT_ID", "central-element-323112")
             alchemy_key = get_secret_with_fallback(
