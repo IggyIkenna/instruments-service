@@ -15,7 +15,8 @@ Used by DeFi adapters that query The Graph:
 import logging
 from typing import Dict, Optional
 from datetime import datetime, timedelta, timezone
-from unified_cloud_services import get_secret_with_fallback, get_config
+from unified_cloud_services import get_secret_with_fallback
+from instruments_service.settings import env_configs
 
 logger = logging.getLogger(__name__)
 
@@ -142,7 +143,7 @@ class SubgraphService:
 
             # Get Graph API key (use provided, cached, or retrieve from Secret Manager)
             if not api_key:
-                project_id = get_config("GCP_PROJECT_ID", "central-element-323112")
+                project_id = env_configs.gcp_project_id
 
                 # Check cache first
                 if _GRAPH_API_KEY_CACHE and _GRAPH_API_KEY_PROJECT_ID == project_id:

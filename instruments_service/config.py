@@ -6,10 +6,7 @@ Unified instrument configuration with all instruments, mappings, and metadata in
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
-from pydantic import Field
-
-from unified_cloud_services import BaseServiceConfig, get_config
-from unified_cloud_services import CloudTarget
+from instruments_service.settings import env_configs
 
 
 @dataclass
@@ -1161,7 +1158,7 @@ class VenueMapping:
 
     def get_defi_mvp_tokens(self) -> List[str]:
         """Get MVP token list, checking environment variable first."""
-        env_tokens = get_config("DEFI_MVP_TOKENS")
+        env_tokens = env_configs.defi_mvp_tokens
         if env_tokens:
             return [t.strip().upper() for t in env_tokens.split(",")]
         return self.defi_mvp_base_currencies
@@ -1338,85 +1335,3 @@ class ExchangeInstrumentConfig:
             "OKX": [],  # No symbol pattern exclusions for OKX
         }
     )
-
-
-class InstrumentsServiceConfig(BaseServiceConfig):
-    """
-    Service-level configuration for instruments-service.
-
-    Extends BaseServiceConfig with instruments-specific settings.
-    """
-
-    service_name: str = Field(default="instruments-service", description="Service name")
-
-    # Instruments-specific configuration
-    enable_ccxt_integration: bool = Field(
-        default=True, description="Enable CCXT metadata enrichment"
-    )
-    enable_metadata_caching: bool = Field(default=True, description="Enable metadata caching")
-    cache_ttl_hours: int = Field(default=24, description="Cache TTL in hours")
-    max_batch_size: int = Field(default=1000, description="Maximum batch size for processing")
-    lookback_days: int = Field(default=0, description="Lookback days for batch processing")
-
-    # GCS and BigQuery defaults for instruments
-    gcs_bucket: str = Field(
-        default_factory=lambda: get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
-        description="GCS bucket for instruments (default/backwards compatibility)",
-    )
-    # Category-specific buckets for independent batch processing
-    gcs_bucket_cefi: str = Field(
-        default_factory=lambda: get_config(
-            "INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-central-element-323112"
-        ),
-        description="GCS bucket for CEFI instruments",
-    )
-    gcs_bucket_tradfi: str = Field(
-        default_factory=lambda: get_config(
-            "INSTRUMENTS_GCS_BUCKET_TRADFI", "instruments-store-tradfi-central-element-323112"
-        ),
-        description="GCS bucket for TRADFI instruments",
-    )
-    gcs_bucket_defi: str = Field(
-        default_factory=lambda: get_config(
-            "INSTRUMENTS_GCS_BUCKET_DEFI", "instruments-store-defi-central-element-323112"
-        ),
-        description="GCS bucket for DEFI instruments",
-    )
-    bigquery_dataset: str = Field(
-        default_factory=lambda: get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
-        description="BigQuery dataset for instruments",
-    )
-
-    def get_cloud_target(self, category: Optional[str] = None):
-        """
-        Get CloudTarget for instruments service.
-
-        Args:
-            category: Optional market category ("CEFI", "TRADFI", "DEFI") to use category-specific bucket
-
-        Returns:
-            CloudTarget with appropriate bucket for category
-        """
-
-        # Determine bucket based on category
-        if category:
-            category_upper = category.upper()
-            if category_upper == "CEFI":
-                bucket = self.gcs_bucket_cefi
-            elif category_upper == "TRADFI":
-                bucket = self.gcs_bucket_tradfi
-            elif category_upper == "DEFI":
-                bucket = self.gcs_bucket_defi
-            else:
-                raise ValueError(
-                    f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI"
-                )
-        else:
-            bucket = self.gcs_bucket
-
-        return CloudTarget(
-            project_id=self.gcp_project_id,
-            gcs_bucket=bucket,
-            bigquery_dataset=self.bigquery_dataset,
-            bigquery_location=self.bigquery_location,
-        )
