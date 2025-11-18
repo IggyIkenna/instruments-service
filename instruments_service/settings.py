@@ -164,20 +164,38 @@ class InstrumentsServiceConfig(BaseSettings):
         validation_alias=AliasChoices("DEFI_MVP_TOKENS"),
         description="Comma-separated list of DeFi MVP tokens",
     )
+
+    # ClickUp Configuration
+    # User IDs for assignees
     clickup_secret_name: str = Field(
-        default="",
+        default="clickup-api-key",
         validation_alias=AliasChoices("CLICKUP_SECRET_NAME"),
-        description="Comma-separated list of DeFi MVP tokens",
+        description="ClickUp API key secret name",
     )
-    clieckup_api_token: str = Field(
-        default="",
-        validation_alias=AliasChoices("CLIECKUP_API_TOKEN"),
-        description="Comma-separated list of DeFi MVP tokens",
+    clickup_list_id: str = Field(
+        default="901517364394",
+        validation_alias=AliasChoices("clickup_list_id_instruments_service"),
+        description="ClickUp List ID",
     )
-    clickup_list_id: list[str] = Field(
-        default=[],
-        validation_alias=AliasChoices("CLICKUP_LIST_ID"),
-        description="ClickUp List ID(s) for tasks",
+    clickup_user_id_ikenna: str = Field(
+        default="254573729",
+        validation_alias=AliasChoices("clickup_user_id_ikenna"),
+        description="ClickUp User ID for Ikenna",
+    )
+    clickup_user_id_harsh: str = Field(
+        default="100698878",
+        validation_alias=AliasChoices("clickup_user_id_harsh"),
+        description="ClickUp User ID for Harsh",
+    )
+    clickup_user_id_femi: str = Field(
+        default="100698756",
+        validation_alias=AliasChoices("clickup_user_id_femi"),
+        description="ClickUp User ID for Femi",
+    )
+    clickup_user_id_daniel: str = Field(
+        default="36559682",
+        validation_alias=AliasChoices("clickup_user_id_daniel"),
+        description="ClickUp User ID for Daniel",
     )
 
     def get_cloud_target(self, category: Optional[str] = None):
