@@ -28,71 +28,58 @@ class InstrumentsServiceConfig(BaseSettings):
     service_name: str = Field(default="instruments-service", description="Service name")
     environment: str = Field(
         default="development",
-        validation_alias=AliasChoices("ENVIRONMENT", "ENV"),
+        validation_alias=AliasChoices("ENVIRONMENT"),
         description="Environment (development, test, production)",
     )
 
     # GCP configuration (common across all services)
     google_application_credentials_path: str = Field(
-        default="central-element-323112-e35fb0ddafe2.json",
-        validation_alias=AliasChoices(
-            "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_APPLICATION_CREDENTIALS_FILEPATH"
-        ),
+        validation_alias=AliasChoices("GOOGLE_APPLICATION_CREDENTIALS"),
         description="Filepath to GCP credentials JSON file",
     )
     gcp_project_id: str = Field(
-        default="central-element-323112",
-        validation_alias=AliasChoices("GOOGLE_CLOUD_PROJECT", "GCP_PROJECT_ID"),
+        validation_alias=AliasChoices("GCP_PROJECT_ID"),
         description="GCP project ID",
     )
 
     # GCS configuration
     gcs_region: str = Field(
-        default="asia-northeast1",
-        validation_alias=AliasChoices("GCS_REGION", "GOOGLE_CLOUD_REGION"),
+        validation_alias=AliasChoices("GCS_REGION"),
         description="GCS region",
     )
     gcs_location: str = Field(
-        default="asia-northeast1",
-        validation_alias=AliasChoices("GCS_LOCATION", "GOOGLE_CLOUD_LOCATION"),
+        validation_alias=AliasChoices("GCS_LOCATION"),
         description="GCS location",
     )
     gcs_bucket: str = Field(
-        default="instruments-store-central-element-323112",
-        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET", "GCS_BUCKET"),
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET"),
         description="GCS bucket for instruments",
     )
     gcs_bucket_test: str = Field(
-        default="instruments-store-test-central-element-323112",
-        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_TEST", "GCS_BUCKET_TEST"),
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_TEST"),
         description="GCS bucket for instruments",
     )
     # Category-specific buckets for independent batch processing
     gcs_bucket_cefi: str = Field(
-        default="instruments-store-cefi-central-element-323112",
-        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_CEFI", "GCS_BUCKET_CEFI"),
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_CEFI"),
         description="GCS bucket for CEFI instruments",
     )
     gcs_bucket_tradfi: str = Field(
-        default="instruments-store-tradfi-central-element-323112",
-        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_TRADFI", "GCS_BUCKET_TRADFI"),
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_TRADFI"),
         description="GCS bucket for TRADFI instruments",
     )
     gcs_bucket_defi: str = Field(
-        default="instruments-store-defi-central-element-323112",
-        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_DEFI", "GCS_BUCKET_DEFI"),
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_DEFI"),
         description="GCS bucket for DEFI instruments",
     )
 
     # BigQuery configuration
     bigquery_dataset: str = Field(
-        default="instruments",
-        validation_alias=AliasChoices("INSTRUMENTS_BIGQUERY_DATASET", "BIGQUERY_DATASET"),
+        validation_alias=AliasChoices("INSTRUMENTS_BIGQUERY_DATASET"),
         description="BigQuery dataset for instruments",
     )
     bigquery_location: str = Field(
-        default="asia-northeast1",
-        validation_alias=AliasChoices("BIGQUERY_LOCATION", "INSTRUMENTS_BIGQUERY_LOCATION"),
+        validation_alias=AliasChoices("BIGQUERY_LOCATION"),
         description="BigQuery dataset location",
     )
 
@@ -116,25 +103,31 @@ class InstrumentsServiceConfig(BaseSettings):
 
     # Secret Manager secret names (keys stored in GCP Secret Manager)
     tardis_secret_name: str = Field(
-        default="tardis-api-key", description="Tardis API key secret name"
+        validation_alias=AliasChoices("TARDIS_SECRET_NAME"),
+        description="Tardis API key secret name",
     )
     databento_secret_name: str = Field(
-        default="databento-api-key", description="Databento API key secret name"
+        validation_alias=AliasChoices("DATABENTO_SECRET_NAME"),
+        description="Databento API key secret name",
     )
     aavescan_secret_name: str = Field(
-        default="aavescan-api-key", description="Aavescan API key secret name"
+        validation_alias=AliasChoices("AAVESCAN_SECRET_NAME"),
+        description="Aavescan API key secret name",
     )
     alchemy_secret_name: str = Field(
-        default="alchemy-api-key", description="Alchemy API key secret name"
+        validation_alias=AliasChoices("ALCHEMY_SECRET_NAME"),
+        description="Alchemy API key secret name",
     )
     graph_seceret_name: str = Field(
-        default="graph-api-key", description="Graph API key secret name"
+        validation_alias=AliasChoices("GRAPH_SECRET_NAME"), description="Graph API key secret name"
     )
 
     # URLS
     ethereum_rpc_url: str = Field(
         default="",
-        validation_alias=AliasChoices("ETHEREUM_RPC_URL", "ETHEREUM_NODE_URL"),
+        validation_alias=AliasChoices(
+            "ETHEREUM_RPC_URL",
+        ),
         description="Ethereum RPC URL",
     )
     uniswap_v3_graph_url: str = Field(
@@ -168,12 +161,10 @@ class InstrumentsServiceConfig(BaseSettings):
     # ClickUp Configuration
     # User IDs for assignees
     clickup_secret_name: str = Field(
-        default="clickup-api-key",
         validation_alias=AliasChoices("CLICKUP_SECRET_NAME"),
         description="ClickUp API key secret name",
     )
-    clickup_list_id: str = Field(
-        default="901517364394",
+    clickup_list_id: Optional[str] = Field(
         validation_alias=AliasChoices("clickup_list_id_instruments_service"),
         description="ClickUp List ID",
     )
