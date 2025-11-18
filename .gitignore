@@ -59,3 +59,7 @@ Thumbs.db
 
 # Service account json files
 *.json
+
+
+dump.py
+*.ipynb

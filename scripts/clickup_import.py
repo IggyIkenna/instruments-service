@@ -21,14 +21,15 @@ Requirements:
 
 import argparse
 import json
+import os
 import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-from urllib.parse import quote
-
+from typing import Dict, List, Optional
 import requests
+from unified_cloud_services import get_secret_with_fallback
+from instruments_service.settings import env_configs
 
 
 class ClickUpRateLimiter:
@@ -182,7 +183,7 @@ class ClickUpClient:
 class StatusMdParser:
     """Parses STATUS.md to extract tasks, subtasks, and dependencies"""
 
-    def __init__(self, status_md_path: Path, service_tag: str = None):
+    def __init__(self, status_md_path: Path, service_tag: str = ""):
         self.status_md_path = status_md_path
         self.content = status_md_path.read_text()
         self.service_tag = service_tag or "instruments-service"  # Default fallback
@@ -942,11 +943,11 @@ class ClickUpImporter:
 
         # Assignee mapping (username -> will be resolved to user ID)
         self.assignee_map = {
-            "Ikenna": None,  # Will be resolved from .env.clickup or API
-            "Harsh": None,  # Will be resolved from .env.clickup or API
-            "Femi": None,  # Will be resolved from .env.clickup or API
-            "Daniel": None,  # Will be resolved from .env.clickup or API
-            "Carlos": None,  # Will be resolved from .env.clickup or API
+            "Ikenna": "",  # Will be resolved from .env.clickup or API
+            "Harsh": "",  # Will be resolved from .env.clickup or API
+            "Femi": "",  # Will be resolved from .env.clickup or API
+            "Daniel": "",  # Will be resolved from .env.clickup or API
+            "Carlos": "",  # Will be resolved from .env.clickup or API
         }
 
     def resolve_user_ids(self):
@@ -2723,10 +2724,6 @@ def main():
     )
 
     args = parser.parse_args()
-
-    # Get API token from args, env var, or .env file
-    from pathlib import Path
-
     # Check service-specific .env.clickup first, then root .env (for backwards compatibility)
     service_env_file = Path(__file__).parent.parent / ".env.clickup"
     root_env_file = Path(__file__).parent.parent.parent / ".env"
@@ -2734,14 +2731,13 @@ def main():
     api_token = args.api_token
     if not api_token:
         # Try environment variable
-        api_token = get_config("CLICKUP_API_TOKEN")
+        api_token = env_configs.clieckup_api_token
         if not api_token:
             # Try Secret Manager via unified-cloud-services
             try:
-                from unified_cloud_services import get_secret_with_fallback, get_config
 
-                project_id = get_config("GCP_PROJECT_ID", "central-element-323112")
-                secret_name = get_config("CLICKUP_SECRET_NAME", "clickup-api-key")
+                project_id = env_configs.gcp_project_id
+                secret_name = env_configs.clickup_secret_name
                 api_token = get_secret_with_fallback(
                     secret_name=secret_name,
                     project_id=project_id,
@@ -2780,7 +2776,7 @@ def main():
         return 1
 
     # Get List ID from args or env var
-    list_id = args.list_id or get_config("CLICKUP_LIST_ID")
+    list_id = args.list_id or env_configs.clickup_list_id
     if not list_id:
         # Try .env files (service-specific .env.clickup first, then root .env)
         for env_file in [service_env_file, root_env_file]:
