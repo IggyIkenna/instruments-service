@@ -12,7 +12,8 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
 
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
-from unified_cloud_services import get_secret_with_fallback, get_config
+from unified_cloud_services import get_secret_with_fallback
+from instruments_service.settings import env_configs
 from instruments_service.app.venues.defi.the_graph_client import (
     _API_KEY_CACHE,
 )
@@ -114,7 +115,7 @@ class AaveV3Adapter(BaseDefiAdapter):
         # If not provided, try Secret Manager
         if not self.api_key:
             try:
-                secret_name = get_config("AAVESCAN_SECRET_NAME", "aavescan-api-key")
+                secret_name = env_configs.aavescan_secret_name
                 self.api_key = get_secret_with_fallback(
                     project_id=self.project_id,
                     secret_name=secret_name,
@@ -127,7 +128,7 @@ class AaveV3Adapter(BaseDefiAdapter):
                     )
             except Exception as e:
                 logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                self.api_key = get_config("AAVESCAN_API_KEY")
+                self.api_key = env_configs.aavescan_secret_name
 
         if not self.api_key:
             logger.warning("AaveScan API key not found. Some features may be limited.")

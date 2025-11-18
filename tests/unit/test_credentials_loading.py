@@ -10,6 +10,8 @@ from unittest.mock import Mock, patch, MagicMock
 
 # Import get_config from conftest (avoids circular import issues)
 from tests.conftest import get_config
+from unified_cloud_services import get_secret_with_fallback
+from instruments_service.settings import env_configs
 
 
 class TestCredentialLoading:
@@ -293,23 +295,20 @@ class TestCredentialLoading:
             assert service.api_key == "env-fallback-key"
 
     @pytest.mark.skipif(
-        not get_config("GCP_PROJECT_ID")
-        and not os.path.exists(
-            os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
-        ),
+        not env_configs.gcp_project_id
+        and not os.path.exists(env_configs.google_application_credentials_path),
         reason="Requires GCP credentials for integration test",
     )
     def test_real_secret_manager_access(self):
         """Integration test: Verify Secret Manager is accessible with real credentials."""
         try:
-            from unified_cloud_services import get_secret_with_fallback, get_config
 
-            project_id = get_config("GCP_PROJECT_ID", "central-element-323112")
+            project_id = env_configs.gcp_project_id
 
             # Try to access a secret (will return None if secret doesn't exist, but should not raise exception)
             result = get_secret_with_fallback(
                 project_id=project_id,
-                secret_name="tardis-api-key",
+                secret_name=env_configs.tardis_secret_name,
                 fallback_env_var="TARDIS_API_KEY",
             )
 
