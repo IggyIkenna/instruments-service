@@ -16,7 +16,7 @@ import logging
 from typing import Dict, Optional
 from datetime import datetime, timedelta, timezone
 from unified_cloud_services import get_secret_with_fallback
-from settings import env_configs
+from instruments_service.settings import env_configs
 
 logger = logging.getLogger(__name__)
 
