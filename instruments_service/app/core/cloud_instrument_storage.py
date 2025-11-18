@@ -9,11 +9,10 @@ import pandas as pd
 import logging
 from typing import Optional
 from datetime import datetime, timezone
-import os
 
+from instruments_service.settings import env_configs
 from instruments_service.schemas.parquet import get_required_columns
 from unified_cloud_services import (
-    get_config,
     determine_market_category,
     get_bucket_for_category,
     StandardizedDomainCloudService,
@@ -41,33 +40,21 @@ class CloudInstrumentStorage:
         # Use asia-northeast1 location per .env configuration (GCS: asia-northeast1-c, BigQuery: asia-northeast1)
         # Detect test environment and use test bucket if applicable
         if cloud_target is None:
-            # Check if we're in test mode (pytest or test environment)
             # Priority: ENVIRONMENT=test > pytest detection > default to prod
-            environment = get_config("ENVIRONMENT", "development").lower()
-            test_bucket = get_config("INSTRUMENTS_GCS_BUCKET_TEST")
-            prod_bucket = get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store")
-
-            # Only use test bucket if explicitly in test environment
-            is_test = (
-                environment in ["test", "testing"]  # Explicit test environment
-                or "pytest" in os.environ.get("_", "")
-                or get_config("PYTEST_CURRENT_TEST") is not None
-            )
-
+            # Check if we're in test mode (pytest or test environment)
             # Use test bucket if in test mode, otherwise use prod bucket
-            if is_test:
-                bucket_name = test_bucket or "instruments-store-test"
+            # Only use test bucket if explicitly in test environment
+            if env_configs.is_test_environment():
+                bucket_name = env_configs.gcs_bucket_test
                 logger.info(f"🧪 Test mode detected: Using test bucket {bucket_name}")
             else:
-                bucket_name = prod_bucket
+                bucket_name = env_configs.gcs_bucket
 
             cloud_target = CloudTarget(
-                project_id=get_config("GCP_PROJECT_ID", "central-element-323112"),
+                project_id=env_configs.gcp_project_id,
                 gcs_bucket=bucket_name,
-                bigquery_dataset=get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
-                bigquery_location=get_config(
-                    "BIGQUERY_LOCATION", "asia-northeast1"
-                ),  # Default to asia-northeast1 per .env
+                bigquery_dataset=env_configs.bigquery_dataset,
+                bigquery_location=env_configs.bigquery_location,
             )
 
         # Create instruments service using direct instantiation (canonical pattern)
@@ -202,12 +189,7 @@ class CloudInstrumentStorage:
             all_successful = True
 
             # Detect test mode for bucket selection
-            environment = get_config("ENVIRONMENT", "development").lower()
-            is_test = (
-                environment in ["test", "testing"]
-                or "pytest" in os.environ.get("_", "")
-                or get_config("PYTEST_CURRENT_TEST") is not None
-            )
+            is_test = env_configs.is_test_environment()
 
             # Upload each category group to its respective bucket
             for category, category_df in category_groups:
