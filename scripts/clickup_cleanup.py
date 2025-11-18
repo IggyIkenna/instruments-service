@@ -15,13 +15,15 @@ import argparse
 import sys
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 from datetime import datetime
 
 # Add parent directory to path to import clickup_import
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.clickup_import import ClickUpClient
+from unified_cloud_services import get_secret_with_fallback
+from instruments_service.settings import env_configs
 
 
 class TasksMdParser:
@@ -324,21 +326,19 @@ def main():
     args = parser.parse_args()
 
     # Get API token from args, env var, or .env file
-    from pathlib import Path
 
     service_env_file = Path(__file__).parent.parent / ".env.clickup"
     root_env_file = Path(__file__).parent.parent.parent / ".env"
 
     api_token = args.api_token
     if not api_token:
-        api_token = get_config("CLICKUP_API_TOKEN")
+        api_token = env_configs.clieckup_api_token
         if not api_token:
             # Try Secret Manager via unified-cloud-services
             try:
-                from unified_cloud_services import get_secret_with_fallback, get_config
 
-                project_id = get_config("GCP_PROJECT_ID", "central-element-323112")
-                secret_name = get_config("CLICKUP_SECRET_NAME", "clickup-api-key")
+                project_id = env_configs.gcp_project_id
+                secret_name = env_configs.clickup_secret_name
                 api_token = get_secret_with_fallback(
                     secret_name=secret_name,
                     project_id=project_id,
@@ -373,7 +373,7 @@ def main():
         print(f"   python scripts/store_clickup_secret.py --api-key YOUR_TOKEN")
         return 1
 
-    list_id = args.list_id or get_config("CLICKUP_LIST_ID")
+    list_id = args.list_id or env_configs.clickup_list_id
     if not list_id:
         # Try .env files (service-specific .env.clickup first, then root .env)
         for env_file in [service_env_file, root_env_file]:

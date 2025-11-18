@@ -28,12 +28,12 @@ import asyncio
 # Import centralized models and configs (DRY principle)
 from unified_cloud_services import (
     get_secret_with_fallback,
-    get_config,
     SubgraphService,
     DateFilterService,
     determine_market_category,
 )
 
+from instruments_service.settings import env_configs
 from instruments_service.models import InstrumentDefinition
 from instruments_service.config import VenueMapping, ExchangeInstrumentConfig, DataTypeConfig
 from instruments_service.utils.ccxt_service import CCXTService
@@ -111,7 +111,8 @@ class InstrumentProcessingService:
         # If not in config, try Secret Manager (only if available)
         if not self.api_key:
             try:
-                secret_name = get_config("TARDIS_SECRET_NAME", "tardis-api-key")
+
+                secret_name = env_configs.tardis_secret_name
                 logger.debug(
                     f"Attempting to retrieve Tardis API key from Secret Manager (secret: {secret_name}, project: {project_id})"
                 )
@@ -170,8 +171,8 @@ class InstrumentProcessingService:
         # This avoids repeated Secret Manager calls when fetching DeFi instruments
         self._graph_api_key = None
         try:
-            project_id_for_graph = get_config("GCP_PROJECT_ID", "central-element-323112")
-            secret_name = get_config("GRAPH_SECRET_NAME", "graph-api-key")
+            project_id_for_graph = env_configs.gcp_project_id
+            secret_name = env_configs.graph_seceret_name
             self._graph_api_key = get_secret_with_fallback(
                 project_id=project_id_for_graph,
                 secret_name=secret_name,

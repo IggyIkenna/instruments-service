@@ -20,7 +20,8 @@ from datetime import datetime, timezone, timedelta, date
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from unified_cloud_services import get_secret_with_fallback, get_config
+from unified_cloud_services import get_secret_with_fallback
+from instruments_service.settings import env_configs
 
 
 logger = logging.getLogger(__name__)
@@ -72,10 +73,8 @@ class TardisAdapter:
             # If not provided, try Secret Manager
             if not self.api_key:
                 try:
-                    secret_name = get_config("TARDIS_SECRET_NAME", "tardis-api-key")
-                    project_id = project_id or get_config(
-                        "GCP_PROJECT_ID", "central-element-323112"
-                    )
+                    secret_name = env_configs.tardis_secret_name
+                    project_id = project_id or env_configs.gcp_project_id
 
                     self.api_key = get_secret_with_fallback(
                         project_id=project_id,
@@ -89,7 +88,7 @@ class TardisAdapter:
                         )
                 except Exception as e:
                     logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                    self.api_key = get_config("TARDIS_API_KEY")
+                    self.api_key = None
 
             if not self.api_key:
                 raise ValueError(

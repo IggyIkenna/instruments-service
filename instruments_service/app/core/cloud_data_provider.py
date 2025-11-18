@@ -10,9 +10,10 @@ import pandas as pd
 import os
 from typing import Optional
 from datetime import datetime
-from unified_cloud_services import StandardizedDomainCloudService, CloudTarget, get_config
-
+from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
 from unified_cloud_services import get_bucket_for_category
+
+from instruments_service.settings import env_configs
 
 logger = logging.getLogger(__name__)
 
@@ -32,14 +33,7 @@ class CloudDataProvider:
             cloud_target: Optional CloudTarget configuration (auto-detects if not provided)
         """
         if cloud_target is None:
-            cloud_target = CloudTarget(
-                project_id=get_config("GCP_PROJECT_ID", "central-element-323112"),
-                gcs_bucket=get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
-                bigquery_dataset=get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
-                bigquery_location=get_config(
-                    "BIGQUERY_LOCATION", "asia-northeast1"
-                ),  # Default to asia-northeast1 per .env
-            )
+            cloud_target = env_configs.get_cloud_target()
 
         # Create instruments service (each domain has its own bucket and dataset)
         # Direct instantiation (canonical pattern per unified architecture)
@@ -76,7 +70,9 @@ class CloudDataProvider:
                 return self.get_instruments_from_category(date, category, gcs_path=gcs_path)
 
             logger.info(f"📥 Loading instruments from GCS: {gcs_path}")
-            df = self.cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet")
+            df: pd.DataFrame = self.cloud_service.download_from_gcs(
+                gcs_path=gcs_path, format="parquet"
+            )
 
             if df.empty:
                 logger.warning(f"⚠️ No instruments found at {gcs_path}")
@@ -109,13 +105,7 @@ class CloudDataProvider:
 
         try:
             # Detect test mode
-            environment = get_config("ENVIRONMENT", "development").lower()
-            is_test = (
-                environment in ["test", "testing"]
-                or "pytest" in os.environ.get("_", "")
-                or get_config("PYTEST_CURRENT_TEST") is not None
-            )
-
+            is_test = env_configs.is_test_environment()
             # Get bucket for category
             category_bucket = get_bucket_for_category(category, test_mode=is_test)
 
