@@ -263,7 +263,7 @@ class InstrumentsServiceConfig(BaseSettings):
             bucket_name = f"GCS_BUCKET_{category_upper}"
 
         # Get bucket from environment
-        bucket = getattr(self, bucket_name)
+        bucket = getattr(self, bucket_name.lower(), None)
 
         if bucket:
             logger.debug(f"📦 Using bucket for {category_upper}: {bucket}")
