@@ -14,7 +14,7 @@ Used by:
 import logging
 import json
 import ccxt
-from typing import Dict, Any, Optional
+from typing import Any
 from datetime import datetime, timedelta, timezone
 from instruments_service.config import VenueMapping
 
@@ -43,15 +43,15 @@ class CCXTService:
         self.cache_ttl_hours = cache_ttl_hours
 
         # Cache markets per venue
-        self._markets_cache: Dict[str, Dict[str, Any]] = {}
-        self._cache_timestamps: Dict[str, datetime] = {}
+        self._markets_cache: dict[str, dict[str, Any]] = {}
+        self._cache_timestamps: dict[str, datetime] = {}
 
         # Cache leverage tiers per venue (to avoid repeated API calls)
-        self._leverage_tiers_cache: Dict[str, Dict[str, Any]] = {}
+        self._leverage_tiers_cache: dict[str, dict[str, Any]] = {}
 
         logger.info(f"✅ CCXTService initialized (cache TTL: {cache_ttl_hours}h)")
 
-    def get_ccxt_exchange(self, venue: str) -> Optional[ccxt.Exchange]:
+    def get_ccxt_exchange(self, venue: str) -> ccxt.Exchange | None:
         """
         Get CCXT exchange instance for a venue.
 
@@ -78,7 +78,7 @@ class CCXTService:
             }
         )
 
-    def load_markets(self, venue: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
+    def load_markets(self, venue: str, force_refresh: bool = False) -> dict[str, Any] | None:
         """
         Load markets for a venue with caching.
 
@@ -136,8 +136,8 @@ class CCXTService:
         base_asset: str,
         quote_asset: str,
         symbol_id: str,
-        tardis_symbol: Optional[str] = None,
-    ) -> list:
+        tardis_symbol: str | None = None,
+    ) -> list[str]:
         """
         Build possible CCXT symbol formats for a venue.
 
@@ -243,8 +243,8 @@ class CCXTService:
         base_asset: str,
         quote_asset: str,
         symbol_id: str,
-        tardis_symbol: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        tardis_symbol: str | None = None,
+    ) -> dict[str, Any]:
         """
         Get CCXT metadata (tick_size, min_size, contract_size) for an instrument.
 
@@ -319,8 +319,8 @@ class CCXTService:
         base_asset: str,
         quote_asset: str,
         symbol_id: str,
-        tardis_symbol: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        tardis_symbol: str | None = None,
+    ) -> dict[str, Any]:
         """
         Get leverage limits and risk parameters from CCXT leverage tiers.
 
@@ -416,7 +416,7 @@ class CCXTService:
                 self._leverage_tiers_cache[venue] = fallback_params
             return fallback_params
 
-    def _extract_risk_params_from_tiers(self, leverage_tiers: list) -> Dict[str, Any]:
+    def _extract_risk_params_from_tiers(self, leverage_tiers: list) -> dict[str, Any]:
         """
         Extract risk parameters from CCXT leverage tiers structure.
 
@@ -475,7 +475,7 @@ class CCXTService:
 
         return risk_params
 
-    def _get_leverage_limits_fallback(self, venue: str) -> Dict[str, Any]:
+    def _get_leverage_limits_fallback(self, venue: str) -> dict[str, Any]:
         """
         Fallback method to get exchange-specific default leverage limits.
 
@@ -531,7 +531,7 @@ class CCXTService:
         cache_age = datetime.now(timezone.utc) - self._cache_timestamps[cache_key]
         return cache_age < timedelta(hours=self.cache_ttl_hours)
 
-    def clear_cache(self, venue: Optional[str] = None):
+    def clear_cache(self, venue: str | None = None):
         """
         Clear cache for a venue or all venues.
 
