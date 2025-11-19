@@ -12,7 +12,7 @@ import logging
 import json
 from typing import Dict, Any
 
-from instruments_service.settings import env_configs
+from instruments_service.settings import instruments_config
 from instruments_service.cli.parser import parse_arguments
 from instruments_service.cli.handlers import get_handler_for_mode
 from instruments_service.cli.base_handler import ModeHandler
