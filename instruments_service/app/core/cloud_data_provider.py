@@ -7,11 +7,9 @@ Each domain has its own bucket and dataset (instruments domain).
 
 import logging
 import pandas as pd
-import os
 from typing import Optional
 from datetime import datetime
 from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
-from unified_cloud_services import get_bucket_for_category
 
 from instruments_service.settings import instruments_config
 
@@ -107,7 +105,9 @@ class CloudDataProvider:
             # Detect test mode
             is_test = instruments_config.is_test_environment()
             # Get bucket for category
-            category_bucket = get_bucket_for_category(category, test_mode=is_test)
+            category_bucket = instruments_config.get_bucket_for_category(
+                category, test_mode=is_test
+            )
 
             # Create cloud service for category bucket
             category_cloud_target = CloudTarget(
