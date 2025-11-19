@@ -14,7 +14,6 @@ from instruments_service.settings import instruments_config
 from instruments_service.schemas.parquet import get_required_columns
 from unified_cloud_services import (
     determine_market_category,
-    get_bucket_for_category,
     StandardizedDomainCloudService,
     CloudTarget,
     create_sampling_service,
@@ -195,7 +194,9 @@ class CloudInstrumentStorage:
             for category, category_df in category_groups:
                 try:
                     # Get bucket for this category
-                    category_bucket = get_bucket_for_category(category, test_mode=is_test)
+                    category_bucket = instruments_config.get_bucket_for_category(
+                        category, test_mode=is_test
+                    )
 
                     # Create cloud service for this category bucket
                     category_cloud_target = CloudTarget(

@@ -4,11 +4,13 @@ Configuration for Instruments Service
 Unified instrument configuration with all instruments, mappings, and metadata in one place.
 """
 
-from typing import Optional
+import os
 from pydantic import Field, AliasChoices
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
+import logging
 from unified_cloud_services import CloudTarget
+
+logger = logging.getLogger(__name__)
 
 
 class InstrumentsServiceConfig(BaseSettings):
@@ -94,7 +96,9 @@ class InstrumentsServiceConfig(BaseSettings):
     # CSV Sampling Configuration (only used in development mode)
     enable_csv_sampling: bool = Field(default=True, description="Enable CSV sampling")
     csv_sample_size: int = Field(default=20000, description="CSV sample size")
-    csv_sample_dir: str = Field(default="./data/samples", description="CSV sample directory")
+    csv_sample_dir: str = Field(
+        default=os.path.join("data", "samples"), description="CSV sample directory"
+    )
 
     # API Key Configuration (Secret Manager)
     # All API keys are stored in GCP Secret Manager for security
@@ -164,7 +168,8 @@ class InstrumentsServiceConfig(BaseSettings):
         validation_alias=AliasChoices("CLICKUP_SECRET_NAME"),
         description="ClickUp API key secret name",
     )
-    clickup_list_id: Optional[str] = Field(
+    clickup_list_id: str = Field(
+        default="",
         validation_alias=AliasChoices("clickup_list_id_instruments_service"),
         description="ClickUp List ID",
     )
@@ -189,7 +194,7 @@ class InstrumentsServiceConfig(BaseSettings):
         description="ClickUp User ID for Daniel",
     )
 
-    def get_cloud_target(self, category: Optional[str] = None):
+    def get_cloud_target(self, category: str | None = None):
         """
         Get CloudTarget for instruments service.
 
@@ -231,6 +236,45 @@ class InstrumentsServiceConfig(BaseSettings):
             True if environment is "test", False otherwise
         """
         return self.environment.lower() in ["test", "testing"]
+
+    def get_bucket_for_category(self, category: str, test_mode: bool = False) -> str:
+        """
+        Get the GCS bucket name for a specific market category.
+
+        Args:
+            category: Market category ("CEFI", "TRADFI", or "DEFI")
+            test_mode: Whether to use test bucket (default: False)
+
+        Returns:
+            Bucket name from environment variables
+
+        Raises:
+            ValueError: If category is invalid or bucket not configured
+        """
+        category_upper = category.upper()
+
+        if category_upper not in ["CEFI", "TRADFI", "DEFI"]:
+            raise ValueError(f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI")
+
+        # Determine environment variable name
+        if test_mode:
+            bucket_name = f"GCS_BUCKET_{category_upper}_TEST"
+        else:
+            bucket_name = f"GCS_BUCKET_{category_upper}"
+
+        # Get bucket from environment
+        bucket = getattr(self, bucket_name)
+
+        if bucket:
+            logger.debug(f"📦 Using bucket for {category_upper}: {bucket}")
+            return bucket
+
+        # Fallback to default bucket if category-specific bucket not configured
+        logger.warning(
+            f"⚠️ Category-specific bucket not configured for {category_upper}. "
+            f"Using default bucket."
+        )
+        return self.gcs_bucket_test if test_mode else self.gcs_bucket
 
 
 instruments_config = InstrumentsServiceConfig()
