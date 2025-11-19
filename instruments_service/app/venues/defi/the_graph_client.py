@@ -17,7 +17,7 @@ import os
 from typing import Dict, List, Optional, Any
 import requests
 from unified_cloud_services import get_secret_with_fallback
-from instruments_service.settings import env_configs
+from instruments_service.settings import instruments_config
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ class TheGraphClient:
             global _API_KEY_CACHE, _API_KEY_PROJECT_ID
 
             # Check if we have a cached API key for the same project
-            project_id = project_id or env_configs.gcp_project_id
+            project_id = project_id or instruments_config.gcp_project_id
 
             if _API_KEY_CACHE and _API_KEY_PROJECT_ID == project_id:
                 # Use cached API key
@@ -70,7 +70,7 @@ class TheGraphClient:
             else:
                 # Retrieve from Secret Manager and cache it
                 try:
-                    secret_name = env_configs.graph_seceret_name
+                    secret_name = instruments_config.graph_seceret_name
                     self.api_key = get_secret_with_fallback(
                         project_id=project_id,
                         secret_name=secret_name,
@@ -90,13 +90,13 @@ class TheGraphClient:
                         )
                 except ImportError:
                     logger.warning("unified-cloud-services not available, falling back to env var")
-                    self.api_key = env_configs.graph_seceret_name
+                    self.api_key = instruments_config.graph_seceret_name
                     if self.api_key:
                         _API_KEY_CACHE = self.api_key
                         _API_KEY_PROJECT_ID = project_id
                 except Exception as e:
                     logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                    self.api_key = env_configs.graph_seceret_name
+                    self.api_key = instruments_config.graph_seceret_name
                     if self.api_key:
                         _API_KEY_CACHE = self.api_key
                         _API_KEY_PROJECT_ID = project_id
@@ -105,7 +105,7 @@ class TheGraphClient:
             self.subgraph_url = subgraph_url
         else:
             # Default: Try to use Studio endpoint (no API key needed, but rate-limited)
-            self.subgraph_url = env_configs.uniswap_v3_graph_url
+            self.subgraph_url = instruments_config.uniswap_v3_graph_url
 
         logger.info(f"✅ TheGraphClient initialized with URL: {self.subgraph_url}")
         if self.api_key:

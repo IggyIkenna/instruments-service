@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.clickup_import import ClickUpClient
 from unified_cloud_services import get_secret_with_fallback
-from instruments_service.settings import env_configs
+from instruments_service.settings import instruments_config
 
 
 class TasksMdParser:
@@ -325,13 +325,13 @@ def main():
 
     args = parser.parse_args()
 
-    # Get API token from args or Secret Manager/env via env_configs
+    # Get API token from args or Secret Manager/env via instruments_config
     api_token = args.api_token
     if not api_token:
         # Try Secret Manager via unified-cloud-services
         try:
-            project_id = env_configs.gcp_project_id
-            secret_name = env_configs.clickup_secret_name
+            project_id = instruments_config.gcp_project_id
+            secret_name = instruments_config.clickup_secret_name
             api_token = get_secret_with_fallback(
                 secret_name=secret_name,
                 project_id=project_id,
@@ -345,14 +345,14 @@ def main():
 
     if not api_token:
         print("❌ API token not found. Set --api-token or CLICKUP_API_TOKEN env var")
-        print(f"   Checked: Secret Manager ({env_configs.clickup_secret_name})")
+        print(f"   Checked: Secret Manager ({instruments_config.clickup_secret_name})")
         print(f"   Checked: Environment variables via settings.py")
         print(f"\n💡 To store API key in Secret Manager, run:")
         print(f"   python scripts/store_clickup_secret.py --api-key YOUR_TOKEN")
         return 1
 
-    # Get list ID from args or env_configs
-    list_id = args.list_id or env_configs.clickup_list_id
+    # Get list ID from args or instruments_config
+    list_id = args.list_id or instruments_config.clickup_list_id
 
     # Remove "li/" prefix if present
     if list_id and list_id.startswith("li/"):
