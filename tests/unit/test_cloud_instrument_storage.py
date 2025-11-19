@@ -41,7 +41,19 @@ class TestCloudInstrumentStorage:
         mock_category_service = Mock()
         mock_category_service.upload_to_gcs = Mock(return_value=True)
 
+        # Mock sampling service
+        mock_sampling_service = Mock()
+        mock_sampling_service.generate_csv_sample = Mock()
+
+        # Mock SchemaValidator to return valid result by default
+        mock_validator = Mock()
+        mock_validation_result = Mock()
+        mock_validation_result.valid = True
+        mock_validation_result.errors = []
+        mock_validator.validate_dataframe_schema = Mock(return_value=mock_validation_result)
+
         # Create patches that will stay active
+        # Patch the imports in cloud_instrument_storage module
         patches = [
             patch(
                 "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
@@ -52,15 +64,16 @@ class TestCloudInstrumentStorage:
                 return_value=mock_cloud_target,
             ),
             patch(
-                "instruments_service.app.core.cloud_instrument_storage.get_bucket_for_category",
-                return_value="test-bucket",
-            ),
-            patch(
                 "instruments_service.app.core.cloud_instrument_storage.determine_market_category",
                 return_value="CEFI",
             ),
             patch(
                 "instruments_service.app.core.cloud_instrument_storage.create_sampling_service",
+                return_value=mock_sampling_service,
+            ),
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.SchemaValidator",
+                return_value=mock_validator,
             ),
         ]
 
@@ -71,8 +84,10 @@ class TestCloudInstrumentStorage:
         try:
             storage = CloudInstrumentStorage(cloud_target=mock_cloud_target)
             storage.cloud_service = mock_cloud_service
-            # Store reference to category service and patches for cleanup
+            # Store reference to category service, validator, and patches for cleanup
             storage._mock_category_service = mock_category_service
+            storage._mock_validator = mock_validator
+            storage._mock_validation_result = mock_validation_result
             storage._patches = patches
             yield storage
         finally:
@@ -210,6 +225,10 @@ class TestCloudInstrumentStorage:
                 # Missing required columns
             }
         )
+
+        # Configure validator to return invalid result for this test
+        storage._mock_validation_result.valid = False
+        storage._mock_validation_result.errors = ["Missing required columns"]
 
         # Storage returns False when validation fails, doesn't raise ValueError
         result = storage.store_instruments(df, table_name="instruments")

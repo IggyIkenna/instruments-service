@@ -7,7 +7,6 @@ Each domain has its own bucket and dataset (instruments domain).
 
 import logging
 import pandas as pd
-from typing import Optional
 from datetime import datetime
 from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
 
@@ -23,7 +22,7 @@ class CloudDataProvider:
     Each domain has its own bucket and dataset (instruments domain).
     """
 
-    def __init__(self, cloud_target: Optional[CloudTarget] = None):
+    def __init__(self, cloud_target: CloudTarget | None = None):
         """
         Initialize cloud data provider.
 
@@ -45,7 +44,7 @@ class CloudDataProvider:
         )
 
     def get_instruments_from_gcs(
-        self, date: datetime, gcs_path: Optional[str] = None, category: Optional[str] = None
+        self, date: datetime, gcs_path: str | None = None, category: str | None = None
     ) -> pd.DataFrame:
         """
         Get instruments from GCS for a specific date.
@@ -84,7 +83,7 @@ class CloudDataProvider:
             return pd.DataFrame()
 
     def get_instruments_from_category(
-        self, date: datetime, category: str, gcs_path: Optional[str] = None
+        self, date: datetime, category: str, gcs_path: str | None = None
     ) -> pd.DataFrame:
         """
         Get instruments from category-specific bucket for a specific date.
@@ -136,8 +135,8 @@ class CloudDataProvider:
 
     def get_instruments_from_bigquery(
         self,
-        venue: Optional[str] = None,
-        instrument_type: Optional[str] = None,
+        venue: str | None = None,
+        instrument_type: str | None = None,
         table_name: str = "instruments",
     ) -> pd.DataFrame:
         """
