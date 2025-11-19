@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import requests
 from unified_cloud_services import get_secret_with_fallback
-from instruments_service.settings import env_configs
+from instruments_service.settings import instruments_config
 
 
 class ClickUpRateLimiter:
@@ -942,27 +942,27 @@ class ClickUpImporter:
 
         # Assignee mapping (username -> will be resolved to user ID)
         self.assignee_map = {
-            "Ikenna": "",  # Will be resolved from env_configs or API
-            "Harsh": "",  # Will be resolved from env_configs or API
-            "Femi": "",  # Will be resolved from env_configs or API
-            "Daniel": "",  # Will be resolved from env_configs or API
-            "Carlos": "",  # Will be resolved from env_configs or API
+            "Ikenna": "",  # Will be resolved from instruments_config or API
+            "Harsh": "",  # Will be resolved from instruments_config or API
+            "Femi": "",  # Will be resolved from instruments_config or API
+            "Daniel": "",  # Will be resolved from instruments_config or API
+            "Carlos": "",  # Will be resolved from instruments_config or API
         }
 
     def resolve_user_ids(self):
-        """Resolve username to user IDs from env_configs or ClickUp team"""
-        # Get user IDs from env_configs (which reads from .env via Pydantic settings)
-        if env_configs.clickup_user_id_ikenna:
-            self.assignee_map["Ikenna"] = env_configs.clickup_user_id_ikenna
-        if env_configs.clickup_user_id_harsh:
-            self.assignee_map["Harsh"] = env_configs.clickup_user_id_harsh
-        if env_configs.clickup_user_id_femi:
-            self.assignee_map["Femi"] = env_configs.clickup_user_id_femi
-        if env_configs.clickup_user_id_daniel:
-            self.assignee_map["Daniel"] = env_configs.clickup_user_id_daniel
-        # Carlos user ID is not in env_configs, will be resolved from API if needed
+        """Resolve username to user IDs from instruments_config or ClickUp team"""
+        # Get user IDs from instruments_config (which reads from .env via Pydantic settings)
+        if instruments_config.clickup_user_id_ikenna:
+            self.assignee_map["Ikenna"] = instruments_config.clickup_user_id_ikenna
+        if instruments_config.clickup_user_id_harsh:
+            self.assignee_map["Harsh"] = instruments_config.clickup_user_id_harsh
+        if instruments_config.clickup_user_id_femi:
+            self.assignee_map["Femi"] = instruments_config.clickup_user_id_femi
+        if instruments_config.clickup_user_id_daniel:
+            self.assignee_map["Daniel"] = instruments_config.clickup_user_id_daniel
+        # Carlos user ID is not in instruments_config, will be resolved from API if needed
 
-        # If not found in env_configs, try API (for dry run, use fake IDs)
+        # If not found in instruments_config, try API (for dry run, use fake IDs)
         if self.dry_run:
             if not self.assignee_map.get("Ikenna"):
                 self.assignee_map["Ikenna"] = "dry-run-user-1"
@@ -974,7 +974,7 @@ class ClickUpImporter:
                 self.assignee_map["Daniel"] = "dry-run-user-4"
             if not self.assignee_map.get("Carlos"):
                 self.assignee_map["Carlos"] = "dry-run-user-5"
-            print("🔍 [DRY RUN] Using user IDs from env_configs or fake IDs")
+            print("🔍 [DRY RUN] Using user IDs from instruments_config or fake IDs")
             return
 
         # If still not found, try API
@@ -2708,13 +2708,13 @@ def main():
 
     args = parser.parse_args()
 
-    # Get API token from args or Secret Manager/env via env_configs
+    # Get API token from args or Secret Manager/env via instruments_config
     api_token = args.api_token
     if not api_token:
         # Try Secret Manager via unified-cloud-services
         try:
-            project_id = env_configs.gcp_project_id
-            secret_name = env_configs.clickup_secret_name
+            project_id = instruments_config.gcp_project_id
+            secret_name = instruments_config.clickup_secret_name
             api_token = get_secret_with_fallback(
                 secret_name=secret_name,
                 project_id=project_id,
@@ -2725,7 +2725,7 @@ def main():
                 print(f"✅ Retrieved ClickUp API key from Secret Manager (secret: {secret_name})")
             else:
                 print("❌ API token not found. Set --api-token or CLICKUP_API_TOKEN env var")
-                print(f"   Checked: Secret Manager ({env_configs.clickup_secret_name})")
+                print(f"   Checked: Secret Manager ({instruments_config.clickup_secret_name})")
                 print(f"   Checked: Environment variables via settings.py")
                 print(f"\n💡 To store API key in Secret Manager, run:")
                 print(f"   python scripts/store_clickup_secret.py --api-key YOUR_TOKEN")
@@ -2734,8 +2734,8 @@ def main():
             print(f"⚠️  Secret Manager lookup failed: {e}")
             return 1
 
-    # Get list ID from args or env_configs
-    list_id = args.list_id or env_configs.clickup_list_id
+    # Get list ID from args or instruments_config
+    list_id = args.list_id or instruments_config.clickup_list_id
 
     # Remove "li/" prefix if present
     if list_id and list_id.startswith("li/"):

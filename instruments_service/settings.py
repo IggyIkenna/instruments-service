@@ -233,4 +233,4 @@ class InstrumentsServiceConfig(BaseSettings):
         return self.environment.lower() in ["test", "testing"]
 
 
-env_configs = InstrumentsServiceConfig()
+instruments_config = InstrumentsServiceConfig()

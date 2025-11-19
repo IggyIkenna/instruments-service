@@ -10,7 +10,7 @@ import logging
 from typing import Optional
 from datetime import datetime, timezone
 
-from instruments_service.settings import env_configs
+from instruments_service.settings import instruments_config
 from instruments_service.schemas.parquet import get_required_columns
 from unified_cloud_services import (
     determine_market_category,
@@ -44,17 +44,17 @@ class CloudInstrumentStorage:
             # Check if we're in test mode (pytest or test environment)
             # Use test bucket if in test mode, otherwise use prod bucket
             # Only use test bucket if explicitly in test environment
-            if env_configs.is_test_environment():
-                bucket_name = env_configs.gcs_bucket_test
+            if instruments_config.is_test_environment():
+                bucket_name = instruments_config.gcs_bucket_test
                 logger.info(f"🧪 Test mode detected: Using test bucket {bucket_name}")
             else:
-                bucket_name = env_configs.gcs_bucket
+                bucket_name = instruments_config.gcs_bucket
 
             cloud_target = CloudTarget(
-                project_id=env_configs.gcp_project_id,
+                project_id=instruments_config.gcp_project_id,
                 gcs_bucket=bucket_name,
-                bigquery_dataset=env_configs.bigquery_dataset,
-                bigquery_location=env_configs.bigquery_location,
+                bigquery_dataset=instruments_config.bigquery_dataset,
+                bigquery_location=instruments_config.bigquery_location,
             )
 
         # Create instruments service using direct instantiation (canonical pattern)
@@ -189,7 +189,7 @@ class CloudInstrumentStorage:
             all_successful = True
 
             # Detect test mode for bucket selection
-            is_test = env_configs.is_test_environment()
+            is_test = instruments_config.is_test_environment()
 
             # Upload each category group to its respective bucket
             for category, category_df in category_groups:

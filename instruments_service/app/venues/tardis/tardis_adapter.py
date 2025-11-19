@@ -21,7 +21,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from unified_cloud_services import get_secret_with_fallback
-from instruments_service.settings import env_configs
+from instruments_service.settings import instruments_config
 
 
 logger = logging.getLogger(__name__)
@@ -73,8 +73,8 @@ class TardisAdapter:
             # If not provided, try Secret Manager
             if not self.api_key:
                 try:
-                    secret_name = env_configs.tardis_secret_name
-                    project_id = project_id or env_configs.gcp_project_id
+                    secret_name = instruments_config.tardis_secret_name
+                    project_id = project_id or instruments_config.gcp_project_id
 
                     self.api_key = get_secret_with_fallback(
                         project_id=project_id,

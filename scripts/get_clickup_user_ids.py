@@ -13,7 +13,7 @@ import sys
 import os
 from pathlib import Path
 from unified_cloud_services import get_secret_with_fallback
-from instruments_service.settings import env_configs
+from instruments_service.settings import instruments_config
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -34,14 +34,14 @@ def get_clickup_user_ids():
     api_token = None
 
     # Try environment variable first
-    api_token = env_configs.clieckup_api_token
+    api_token = instruments_config.clieckup_api_token
 
     if not api_token:
         # Try Secret Manager via unified-cloud-services
         try:
 
-            project_id = env_configs.gcp_project_id
-            secret_name = env_configs.clickup_secret_name
+            project_id = instruments_config.gcp_project_id
+            secret_name = instruments_config.clickup_secret_name
             api_token = get_secret_with_fallback(
                 secret_name=secret_name,
                 project_id=project_id,

@@ -41,7 +41,7 @@ from instruments_service.app.core.instrument_processing_service import (
     InstrumentProcessingService,
 )
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
-from instruments_service.settings import env_configs
+from instruments_service.settings import instruments_config
 from unified_cloud_services import get_secret_with_fallback
 
 # Test configuration
@@ -61,8 +61,8 @@ def test_instrument_download():
     try:
 
         api_key = get_secret_with_fallback(
-            project_id=env_configs.gcp_project_id,
-            secret_name=env_configs.tardis_secret_name,
+            project_id=instruments_config.gcp_project_id,
+            secret_name=instruments_config.tardis_secret_name,
             fallback_env_var="TARDIS_API_KEY",
         )
         if not api_key:
