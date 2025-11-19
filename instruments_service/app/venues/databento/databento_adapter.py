@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import databento as db
-from instruments_service.settings import env_configs
+from instruments_service.settings import instruments_config
 from unified_cloud_services import get_secret_with_fallback
 from instruments_service.config import UnifiedInstrumentConfig
 
@@ -84,8 +84,8 @@ class DatabentoAdapter:
             # If not provided, try Secret Manager
             if not self.api_key:
                 try:
-                    secret_name = env_configs.databento_secret_name
-                    project_id = env_configs.gcp_project_id
+                    secret_name = instruments_config.databento_secret_name
+                    project_id = instruments_config.gcp_project_id
                     self.api_key = get_secret_with_fallback(
                         project_id=project_id,
                         secret_name=secret_name,
@@ -98,7 +98,7 @@ class DatabentoAdapter:
                         )
                 except Exception as e:
                     logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                    self.api_key = env_configs.databento_secret_name
+                    self.api_key = instruments_config.databento_secret_name
 
             if not self.api_key:
                 raise ValueError(

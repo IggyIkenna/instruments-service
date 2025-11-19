@@ -11,7 +11,7 @@ This script helps you:
 import sys
 import requests
 from google.cloud import secretmanager
-from instruments_service.settings import env_configs
+from instruments_service.settings import instruments_config
 
 
 def get_envio_secret():
@@ -82,7 +82,7 @@ def main():
 
     # Check endpoint URL
     print("\n2. Checking ENVIO_API_URL environment variable...")
-    api_url = env_configs.envio_api_url
+    api_url = instruments_config.envio_api_url
     if api_url:
         print(f"✅ Endpoint URL configured: {api_url}")
 

@@ -33,7 +33,7 @@ from unified_cloud_services import (
     determine_market_category,
 )
 
-from instruments_service.settings import env_configs
+from instruments_service.settings import instruments_config
 from instruments_service.models import InstrumentDefinition
 from instruments_service.config import VenueMapping, ExchangeInstrumentConfig, DataTypeConfig
 from instruments_service.utils.ccxt_service import CCXTService
@@ -112,7 +112,7 @@ class InstrumentProcessingService:
         if not self.api_key:
             try:
 
-                secret_name = env_configs.tardis_secret_name
+                secret_name = instruments_config.tardis_secret_name
                 logger.debug(
                     f"Attempting to retrieve Tardis API key from Secret Manager (secret: {secret_name}, project: {project_id})"
                 )
@@ -171,8 +171,8 @@ class InstrumentProcessingService:
         # This avoids repeated Secret Manager calls when fetching DeFi instruments
         self._graph_api_key = None
         try:
-            project_id_for_graph = env_configs.gcp_project_id
-            secret_name = env_configs.graph_seceret_name
+            project_id_for_graph = instruments_config.gcp_project_id
+            secret_name = instruments_config.graph_seceret_name
             self._graph_api_key = get_secret_with_fallback(
                 project_id=project_id_for_graph,
                 secret_name=secret_name,

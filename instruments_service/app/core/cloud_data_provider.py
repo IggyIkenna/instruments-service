@@ -13,7 +13,7 @@ from datetime import datetime
 from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
 from unified_cloud_services import get_bucket_for_category
 
-from instruments_service.settings import env_configs
+from instruments_service.settings import instruments_config
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ class CloudDataProvider:
             cloud_target: Optional CloudTarget configuration (auto-detects if not provided)
         """
         if cloud_target is None:
-            cloud_target = env_configs.get_cloud_target()
+            cloud_target = instruments_config.get_cloud_target()
 
         # Create instruments service (each domain has its own bucket and dataset)
         # Direct instantiation (canonical pattern per unified architecture)
@@ -105,7 +105,7 @@ class CloudDataProvider:
 
         try:
             # Detect test mode
-            is_test = env_configs.is_test_environment()
+            is_test = instruments_config.is_test_environment()
             # Get bucket for category
             category_bucket = get_bucket_for_category(category, test_mode=is_test)
 

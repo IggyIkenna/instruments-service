@@ -7,7 +7,7 @@ Provides common functionality for DeFi protocol adapters.
 import logging
 from typing import Dict, Optional, Any
 
-from instruments_service.settings import env_configs
+from instruments_service.settings import instruments_config
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class BaseDefiAdapter:
         self.chain = chain.upper()
         self.api_key = api_key
         # Default to GCP_PROJECT_ID env var if not provided
-        self.project_id = project_id or env_configs.gcp_project_id
+        self.project_id = project_id or instruments_config.gcp_project_id
 
     def _validate_instrument_definition(self, inst_def: Dict[str, Any]) -> bool:
         """

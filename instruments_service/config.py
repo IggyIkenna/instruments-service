@@ -6,7 +6,7 @@ Unified instrument configuration with all instruments, mappings, and metadata in
 
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
-from instruments_service.settings import env_configs
+from instruments_service.settings import instruments_config
 
 
 @dataclass
@@ -1158,7 +1158,7 @@ class VenueMapping:
 
     def get_defi_mvp_tokens(self) -> List[str]:
         """Get MVP token list, checking environment variable first."""
-        env_tokens = env_configs.defi_mvp_tokens
+        env_tokens = instruments_config.defi_mvp_tokens
         if env_tokens:
             return [t.strip().upper() for t in env_tokens.split(",")]
         return self.defi_mvp_base_currencies
