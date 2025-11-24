@@ -19,7 +19,7 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: Checkout unified-cloud-services
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -27,7 +27,7 @@ jobs:
           # Set up SSH for git operations
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          
+
           # Add SSH private key
           if [ -n "$SSH_PRIVATE_KEY" ]; then
             echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
@@ -45,11 +45,11 @@ jobs:
               exit 1
             fi
           fi
-          
+
           # Clone unified-cloud-services to parent directory (sibling to workspace)
           # This matches the monorepo structure expected by the installation script
           cd ${{ github.workspace }}/..
-          
+
           if [ -n "$SSH_PRIVATE_KEY" ]; then
             # Use SSH
             git clone git@github.com:IggyIkenna/unified-cloud-services.git unified-cloud-services
@@ -57,15 +57,15 @@ jobs:
             # Use HTTPS with token
             git clone https://x-access-token:${AUTH_TOKEN}@github.com/IggyIkenna/unified-cloud-services.git unified-cloud-services
           fi
-          
+
           echo "✅ Checked out unified-cloud-services to ../unified-cloud-services"
-      
+
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
           cache: 'pip'
-      
+
       - name: Configure pip authentication for private packages
         env:
           PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
@@ -73,7 +73,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           python -m pip install --upgrade pip setuptools wheel
-          
+
           # Configure PyPI authentication if token is provided (for private packages)
           if [ -n "$PYPI_TOKEN" ]; then
             echo "Configuring PyPI authentication..."
@@ -84,7 +84,7 @@ jobs:
           EOF
             echo "✅ PyPI authentication configured"
           fi
-          
+
           # Configure GitHub Packages authentication if PAT or GITHUB_TOKEN is provided
           # Prefer GH_PAT if set, otherwise use GITHUB_TOKEN (automatically provided by GitHub Actions)
           AUTH_TOKEN="${GH_PAT:-${GITHUB_TOKEN}}"
@@ -102,11 +102,11 @@ jobs:
             fi
             echo "✅ GitHub Packages authentication configured"
           fi
-      
+
       # Note: unified-cloud-services installation is handled by run_quality_gates.py
       # The script will try: local monorepo > PyPI > GitHub Packages > GitHub repo
       # This ensures consistency between local development and CI/CD
-      
+
       - name: Create GCP service account credentials file
         env:
           GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
@@ -122,12 +122,12 @@ jobs:
             echo "4. Value: Paste the entire contents of central-element-323112-e35fb0ddafe2.json"
             exit 1
           fi
-          
+
           # Create credentials file from secret
           echo "$GCP_SERVICE_ACCOUNT_JSON" > central-element-323112-e35fb0ddafe2.json
           chmod 600 central-element-323112-e35fb0ddafe2.json
           echo "✅ Created GCP service account credentials file"
-      
+
       - name: Create .env file from secrets
         run: |
           # Set defaults for environment variables (use secrets if available, otherwise defaults)
@@ -145,16 +145,16 @@ jobs:
           DATABENTO_SECRET_NAME="${DATABENTO_SECRET_NAME:-databento-api-key}"
           AAVESCAN_SECRET_NAME="${AAVESCAN_SECRET_NAME:-aavescan-api-key}"
           ALCHEMY_SECRET_NAME="${ALCHEMY_SECRET_NAME:-alchemy-api-key}"
-          
+
           cat > .env << EOF
           # GCP Configuration
           GOOGLE_APPLICATION_CREDENTIALS=central-element-323112-e35fb0ddafe2.json
           GCP_PROJECT_ID=$GCP_PROJECT_ID
-          
+
           # GCS Location Configuration
           GCS_REGION=$GCS_REGION
           GCS_LOCATION=$GCS_LOCATION
-          
+
           # Instruments Service Configuration
           INSTRUMENTS_GCS_BUCKET=$INSTRUMENTS_GCS_BUCKET
           INSTRUMENTS_GCS_BUCKET_TEST=$INSTRUMENTS_GCS_BUCKET_TEST
@@ -163,13 +163,13 @@ jobs:
           INSTRUMENTS_GCS_BUCKET_DEFI=$INSTRUMENTS_GCS_BUCKET_DEFI
           INSTRUMENTS_BIGQUERY_DATASET=$INSTRUMENTS_BIGQUERY_DATASET
           BIGQUERY_LOCATION=$BIGQUERY_LOCATION
-          
+
           # Environment Settings
           ENVIRONMENT=development
           ENABLE_CSV_SAMPLING=true
           CSV_SAMPLE_SIZE=20000
           CSV_SAMPLE_DIR=./data/samples
-          
+
           # Secret Manager secret names
           TARDIS_SECRET_NAME=$TARDIS_SECRET_NAME
           DATABENTO_SECRET_NAME=$DATABENTO_SECRET_NAME
@@ -192,7 +192,7 @@ jobs:
           DATABENTO_SECRET_NAME: ${{ secrets.DATABENTO_SECRET_NAME }}
           AAVESCAN_SECRET_NAME: ${{ secrets.AAVESCAN_SECRET_NAME }}
           ALCHEMY_SECRET_NAME: ${{ secrets.ALCHEMY_SECRET_NAME }}
-      
+
       - name: Install instruments-service and run Quality Gates
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/central-element-323112-e35fb0ddafe2.json
@@ -202,7 +202,7 @@ jobs:
           # Run quality gates script - it handles installation of both packages
           # Using --use-github flag to force GitHub installation (no local monorepo in CI)
           # This matches the local test command: python scripts/run_quality_gates.py --coverage-threshold 65 --use-github
-          # 
+          #
           # IMPORTANT: GITHUB_TOKEN can only access repos in the same organization/user account.
           # For cross-repo access to unified-cloud-services, the script will use GH_PAT if available.
           # If GH_PAT is not set, GITHUB_TOKEN will be used (may fail if repos are in different orgs).
@@ -210,10 +210,10 @@ jobs:
           # This will exit with code 1 if gates fail
           # GitHub will block push/merge if this step fails (requires branch protection rules)
           python scripts/run_quality_gates.py --coverage-threshold 65 --use-github --skip-performance
-          
+
           # If we get here, quality gates passed
           echo "✅ All quality gates passed - push/merge can proceed"
-      
+
       - name: Upload coverage reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -223,11 +223,10 @@ jobs:
             coverage.json
             htmlcov/**
           retention-days: 7
-      
+
       - name: Cleanup sensitive files
         if: always()
         run: |
           # Remove credentials file (security best practice)
           rm -f central-element-323112-e35fb0ddafe2.json
           echo "✅ Cleaned up sensitive files"
-

@@ -19,32 +19,41 @@ This service replaces functionality from:
 """
 
 import logging
-import json
-import ccxt
 import re
-from datetime import datetime, timezone, timedelta, date
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
+import asyncio
 
 # Import centralized models and configs (DRY principle)
+from unified_cloud_services import (
+    get_secret_with_fallback,
+    SubgraphService,
+    DateFilterService,
+    determine_market_category,
+)
+
+from instruments_service.settings import instruments_config
 from instruments_service.models import InstrumentDefinition
-from instruments_service.config import (
-    VenueMapping,
-    ExchangeInstrumentConfig,
-    DataTypeConfig,
+from instruments_service.config import VenueMapping, ExchangeInstrumentConfig, DataTypeConfig
+from instruments_service.utils.ccxt_service import CCXTService
+import instruments_service.utils.subgraph_service as sg_module
+import instruments_service.app.venues.defi.the_graph_client as tgc_module
+from instruments_service.app.venues.tardis import TardisAdapter
+from instruments_service.app.venues.databento import DatabentoAdapter
+from instruments_service.app.venues.defi import (
+    UniswapV3Adapter,
+    BalancerAdapter,
+    AaveV3Adapter,
+    EtherFiAdapter,
+    LidoAdapter,
+    AsterAdapter,
+    HyperliquidAdapter,
+    MorphoAdapter,
 )
 
 # Import Secret Manager for API key retrieval
 logger = logging.getLogger(__name__)
-
-try:
-    from unified_cloud_services import get_secret_with_fallback, get_config
-
-    SECRET_MANAGER_AVAILABLE = True
-except ImportError:
-    SECRET_MANAGER_AVAILABLE = False
-    get_secret_with_fallback = None
-    logger.warning("unified-cloud-services not available for Secret Manager")
 
 
 @dataclass
@@ -100,13 +109,10 @@ class InstrumentProcessingService:
         self.api_key = config.get("tardis_api_key") or config.get("api_key")
 
         # If not in config, try Secret Manager (only if available)
-        if not self.api_key and SECRET_MANAGER_AVAILABLE:
+        if not self.api_key:
             try:
 
-                # Import here to avoid scoping issues
-                from unified_cloud_services import get_secret_with_fallback, get_config
-
-                secret_name = get_config("TARDIS_SECRET_NAME", "tardis-api-key")
+                secret_name = instruments_config.tardis_secret_name
                 logger.debug(
                     f"Attempting to retrieve Tardis API key from Secret Manager (secret: {secret_name}, project: {project_id})"
                 )
@@ -165,8 +171,6 @@ class InstrumentProcessingService:
         self._sports_builder = SportsInstrumentBuilder(venue="BETFAIR")
 
         # Initialize centralized services
-        from unified_cloud_services import SubgraphService, DateFilterService
-        from instruments_service.utils.ccxt_service import CCXTService
 
         self.subgraph_service = SubgraphService()
         self.date_filter_service = DateFilterService()
@@ -175,10 +179,8 @@ class InstrumentProcessingService:
         # This avoids repeated Secret Manager calls when fetching DeFi instruments
         self._graph_api_key = None
         try:
-            from unified_cloud_services import get_secret_with_fallback, get_config
-
-            project_id_for_graph = get_config("GCP_PROJECT_ID", "central-element-323112")
-            secret_name = get_config("GRAPH_SECRET_NAME", "graph-api-key")
+            project_id_for_graph = instruments_config.gcp_project_id
+            secret_name = instruments_config.graph_seceret_name
             self._graph_api_key = get_secret_with_fallback(
                 project_id=project_id_for_graph,
                 secret_name=secret_name,
@@ -186,14 +188,12 @@ class InstrumentProcessingService:
             )
             if self._graph_api_key:
                 self._graph_api_key = self._graph_api_key.strip()
-                # Also set it in TheGraphClient's module-level cache
-                import instruments_service.app.venues.defi.the_graph_client as tgc_module
 
+                # Also set it in TheGraphClient's module-level cache
                 tgc_module._API_KEY_CACHE = self._graph_api_key
                 tgc_module._API_KEY_PROJECT_ID = project_id_for_graph
-                # Also set it in SubgraphService's module-level cache
-                import instruments_service.utils.subgraph_service as sg_module
 
+                # Also set it in SubgraphService's module-level cache
                 sg_module._GRAPH_API_KEY_CACHE = self._graph_api_key
                 sg_module._GRAPH_API_KEY_PROJECT_ID = project_id_for_graph
                 logger.info("✅ Retrieved and cached Graph API key at initialization")
@@ -538,7 +538,6 @@ class InstrumentProcessingService:
                     "Provide 'tardis_api_key' in config, or ensure Secret Manager access "
                     "to 'tardis-api-key' secret."
                 )
-            from instruments_service.app.venues.tardis import TardisAdapter
 
             self.tardis_adapter = TardisAdapter(
                 api_key=self.api_key, project_id=self._tardis_project_id
@@ -550,7 +549,7 @@ class InstrumentProcessingService:
     ) -> Tuple[Dict[str, Dict[str, Any]], int]:
         """
         Fetch instrument data from Tardis API for specific exchange.
-        
+
         OPTIMIZED: Wraps synchronous Tardis API call in asyncio.to_thread for true parallelism.
 
         Replaces direct API calls scattered across handlers.
@@ -563,8 +562,7 @@ class InstrumentProcessingService:
         Returns:
             Tuple of (instruments_data dict, date_filtered_count)
         """
-        import asyncio
-        
+
         target_date = target_date or datetime.now(timezone.utc)
         date_str = target_date.strftime("%Y-%m-%d")
 
@@ -577,7 +575,7 @@ class InstrumentProcessingService:
             self._get_tardis_adapter().fetch_exchange_instruments,
             exchange=exchange,
             target_date=target_date,
-            force_refresh=force
+            force_refresh=force,
         )
         # Convert list to dict keyed by symbol_id
         available_symbols = {
@@ -821,7 +819,7 @@ class InstrumentProcessingService:
                     # Tardis provides availableTo for expired/delisted instruments (including spot pairs)
                     available_to = symbol_info.get("availableTo")
                     available_to_datetime = None
-                    
+
                     if available_to:
                         # Parse and normalize availableTo from Tardis API
                         try:
@@ -831,7 +829,11 @@ class InstrumentProcessingService:
                                     available_to_datetime = available_to
                                 else:
                                     # Add timezone if missing
-                                    available_to_datetime = available_to.replace("Z", "+00:00") if "+" not in available_to else available_to
+                                    available_to_datetime = (
+                                        available_to.replace("Z", "+00:00")
+                                        if "+" not in available_to
+                                        else available_to
+                                    )
                             else:
                                 available_to_datetime = str(available_to)
                         except Exception as e:
@@ -851,20 +853,24 @@ class InstrumentProcessingService:
                                 expiry_dt = datetime.fromisoformat(
                                     expiry_str.replace("Z", "+00:00")
                                 )
-                                
+
                                 # Get the date of expiry and add one day, then set to midnight UTC
                                 expiry_date = expiry_dt.date()
                                 day_after_expiry = expiry_date + timedelta(days=1)
                                 # Set to midnight UTC (00:00:00)
-                                available_to_datetime = datetime.combine(
-                                    day_after_expiry, datetime.min.time()
-                                ).replace(tzinfo=timezone.utc).isoformat()
-                                
+                                available_to_datetime = (
+                                    datetime.combine(day_after_expiry, datetime.min.time())
+                                    .replace(tzinfo=timezone.utc)
+                                    .isoformat()
+                                )
+
                                 logger.debug(
                                     f"✅ Set available_to_datetime for {symbol_id} to midnight after expiry: {available_to_datetime}"
                                 )
                             except Exception as e:
-                                logger.debug(f"⚠️ Could not parse expiry '{expiry_str}' for available_to_datetime: {e}")
+                                logger.debug(
+                                    f"⚠️ Could not parse expiry '{expiry_str}' for available_to_datetime: {e}"
+                                )
 
                     # CRITICAL FIX: Filter out expired instruments (ALL types, including spot)
                     # Tardis provides availableTo for expired/delisted instruments - we must respect this
@@ -876,21 +882,27 @@ class InstrumentProcessingService:
                             )
                             if available_to_dt.tzinfo is None:
                                 available_to_dt = available_to_dt.replace(tzinfo=timezone.utc)
-                            
+
                             # Get comparison date (use target_date if provided, otherwise today)
-                            comparison_date = target_date if target_date else datetime.now(timezone.utc)
+                            comparison_date = (
+                                target_date if target_date else datetime.now(timezone.utc)
+                            )
                             if comparison_date.tzinfo is None:
                                 comparison_date = comparison_date.replace(tzinfo=timezone.utc)
-                            
+
                             # Filter if instrument has expired (availableTo is in the past)
                             if comparison_date.date() > available_to_dt.date():
-                                filter_stats["expired_filtered"] = filter_stats.get("expired_filtered", 0) + 1
+                                filter_stats["expired_filtered"] = (
+                                    filter_stats.get("expired_filtered", 0) + 1
+                                )
                                 logger.debug(
                                     f"🚫 Filtered expired instrument: {symbol_id} - availableTo {available_to_dt.date()} < comparison_date {comparison_date.date()}"
                                 )
                                 continue
                         except Exception as e:
-                            logger.debug(f"⚠️ Could not parse available_to_datetime '{available_to_datetime}' for filtering: {e}")
+                            logger.debug(
+                                f"⚠️ Could not parse available_to_datetime '{available_to_datetime}' for filtering: {e}"
+                            )
 
                     # NOTE: Date filtering (availableSince/availableTo) is already done in fetch_exchange_instruments
                     # But we also check expiry for futures/options as a secondary filter
@@ -924,13 +936,13 @@ class InstrumentProcessingService:
                                 logger.debug(f"⚠️ Could not parse expiry '{expiry_str}': {e}")
 
                     # Determine market category
-                    from unified_cloud_services import determine_market_category
+
                     instrument_dict = {
-                        'databento_symbol': '',  # CeFi instruments don't have databento_symbol
-                        'chain': 'off-chain',
+                        "databento_symbol": "",  # CeFi instruments don't have databento_symbol
+                        "chain": "off-chain",
                     }
                     market_category = determine_market_category(instrument_dict)
-                    
+
                     metadata = InstrumentDefinition(
                         instrument_key=canonical_key,
                         venue=canonical_venue,
@@ -1633,11 +1645,9 @@ class InstrumentProcessingService:
             default_ccxt_symbol = (
                 f"{base_asset}/{quote_asset}:{quote_asset}"
                 if quote_asset and inst_type in ["PERPETUAL", "FUTURE"]
-                else f"{base_asset}/{quote_asset}"
-                if base_asset and quote_asset
-                else ""
+                else f"{base_asset}/{quote_asset}" if base_asset and quote_asset else ""
             )
-            
+
             if self.processing_config.enable_ccxt_integration:
                 ccxt_metadata = self.ccxt_service.get_metadata(
                     venue=venue,
@@ -1653,7 +1663,9 @@ class InstrumentProcessingService:
                     derived_fields.update(
                         {
                             "ccxt_symbol": ccxt_metadata.get("ccxt_symbol", default_ccxt_symbol),
-                            "ccxt_exchange": ccxt_metadata.get("ccxt_exchange", ccxt_exchange_id or ""),
+                            "ccxt_exchange": ccxt_metadata.get(
+                                "ccxt_exchange", ccxt_exchange_id or ""
+                            ),
                             "tick_size": ccxt_metadata.get("tick_size", ""),
                             "min_size": ccxt_metadata.get("min_size", ""),
                             "contract_size": ccxt_metadata.get("contract_size", ""),
@@ -1666,9 +1678,9 @@ class InstrumentProcessingService:
 
                 # 2b. Fetch leverage limits and risk parameters for ALL CEFI instruments
                 # CRITICAL FIX: Populate max_position_size for ALL instruments, not just PERPETUAL/FUTURE
-                # Leverage fields (max_leverage, initial_margin_rate, maintenance_margin_rate) 
+                # Leverage fields (max_leverage, initial_margin_rate, maintenance_margin_rate)
                 # are only for derivatives (PERPETUAL, FUTURE), but max_position_size applies to all
-                
+
                 # Get CCXT symbol format for leverage tiers lookup
                 ccxt_symbol_for_tiers = (
                     ccxt_metadata.get("ccxt_symbol", "") if ccxt_metadata else default_ccxt_symbol
@@ -1707,7 +1719,7 @@ class InstrumentProcessingService:
                 # CCXT integration disabled - still populate basic fields from venue mapping
                 derived_fields["ccxt_symbol"] = default_ccxt_symbol
                 derived_fields["ccxt_exchange"] = ccxt_exchange_id or ""
-                
+
                 # Still try to get leverage limits from fallback (uses hardcoded defaults)
                 leverage_limits = self.ccxt_service.get_leverage_limits(
                     venue=venue,
@@ -1718,11 +1730,11 @@ class InstrumentProcessingService:
                     tardis_symbol=None,
                     instrument_type=inst_type,  # Pass instrument_type for proper symbol matching
                 )
-                
+
                 # Populate max_position_size for ALL instruments even when CCXT disabled
                 if leverage_limits and leverage_limits.get("max_position_size") is not None:
                     derived_fields["max_position_size"] = leverage_limits["max_position_size"]
-                
+
                 # Populate leverage fields for derivatives even when CCXT disabled
                 if inst_type in ["PERPETUAL", "FUTURE"]:
                     if leverage_limits:
@@ -2086,7 +2098,7 @@ class InstrumentProcessingService:
     ) -> Dict[str, InstrumentDefinition]:
         """
         Fetch TradFi instruments from Databento.
-        
+
         OPTIMIZED: Async wrapper for Databento API calls to enable true parallelism.
 
         Args:
@@ -2097,20 +2109,15 @@ class InstrumentProcessingService:
         Returns:
             Dictionary mapping instrument_key to InstrumentDefinition
         """
-        import asyncio
-        
+
         try:
-            from instruments_service.app.venues.databento import DatabentoAdapter
 
             adapter = DatabentoAdapter()
             date = target_date or datetime.now(timezone.utc)
 
             # OPTIMIZATION: Wrap synchronous Databento API call in asyncio.to_thread for true parallelism
             raw_instruments = await asyncio.to_thread(
-                adapter.fetch_instrument_definitions,
-                exchange=exchange,
-                symbols=symbols,
-                date=date
+                adapter.fetch_instrument_definitions, exchange=exchange, symbols=symbols, date=date
             )
 
             # Convert to InstrumentDefinition objects
@@ -2161,19 +2168,7 @@ class InstrumentProcessingService:
             # Use cached Graph API key (retrieved at initialization)
             graph_api_key = self._graph_api_key
 
-            if protocol.lower() == "uniswap_v2":
-                from instruments_service.app.venues.defi import UniswapV2Adapter
-
-                adapter = UniswapV2Adapter(chain=chain, api_key=graph_api_key)
-                raw_instruments = adapter.fetch_pools(
-                    base_currency_list=base_currency_list,
-                    quote_currency_list=quote_currency_list,
-                    **kwargs,
-                )
-
-            elif protocol.lower() == "uniswap_v3":
-                from instruments_service.app.venues.defi import UniswapV3Adapter
-
+            if protocol.lower() == "uniswap_v3":
                 adapter = UniswapV3Adapter(chain=chain, api_key=graph_api_key)
                 raw_instruments = adapter.fetch_pools(
                     base_currency_list=base_currency_list,
@@ -2181,29 +2176,7 @@ class InstrumentProcessingService:
                     **kwargs,
                 )
 
-            elif protocol.lower() == "uniswap_v4":
-                from instruments_service.app.venues.defi import UniswapV4Adapter
-
-                adapter = UniswapV4Adapter(chain=chain, api_key=graph_api_key)
-                raw_instruments = adapter.fetch_pools(
-                    base_currency_list=base_currency_list,
-                    quote_currency_list=quote_currency_list,
-                    **kwargs,
-                )
-
-            elif protocol.lower() == "curve":
-                from instruments_service.app.venues.defi import CurveAdapter
-
-                adapter = CurveAdapter(chain=chain, api_key=graph_api_key)
-                raw_instruments = adapter.fetch_pools(
-                    base_currency_list=base_currency_list,
-                    quote_currency_list=quote_currency_list,
-                    **kwargs,
-                )
-
             elif protocol.lower() == "balancer":
-                from instruments_service.app.venues.defi import BalancerAdapter
-
                 adapter = BalancerAdapter(chain=chain)
                 raw_instruments = adapter.fetch_pools(
                     base_currency_list=base_currency_list,
@@ -2212,36 +2185,22 @@ class InstrumentProcessingService:
                 )
 
             elif protocol.lower() == "aave_v3":
-                from instruments_service.app.venues.defi import AaveV3Adapter
-
                 adapter = AaveV3Adapter(chain=chain, graph_api_key=graph_api_key)
                 raw_instruments = adapter.fetch_markets(target_date=target_date)
 
             elif protocol.lower() == "etherfi":
-                from instruments_service.app.venues.defi import EtherFiAdapter
-
                 adapter = EtherFiAdapter(chain=chain)
                 raw_instruments = adapter.fetch_lst_instruments()
 
             elif protocol.lower() == "lido":
-                from instruments_service.app.venues.defi import LidoAdapter
-
                 adapter = LidoAdapter(chain=chain)
                 raw_instruments = adapter.fetch_lst_instruments()
 
             elif protocol.lower() == "morpho":
-                from instruments_service.app.venues.defi import MorphoAdapter
-
                 adapter = MorphoAdapter(chain=chain)
                 raw_instruments = adapter.fetch_markets()
 
-
-
-                
-
             elif protocol.lower() == "hyperliquid":
-                from instruments_service.app.venues.defi import HyperliquidAdapter
-
                 # Use MVP base assets from spec guide (21 trading assets), not DeFi tokens
                 hyperliquid_base_assets = self.venue_mapping.hyperliquid_aster_mvp_base_assets
                 adapter = HyperliquidAdapter(base_currency_list=hyperliquid_base_assets)
@@ -2252,8 +2211,6 @@ class InstrumentProcessingService:
                 raw_instruments = {**perpetuals, **spot_pairs}
 
             elif protocol.lower() == "aster":
-                from instruments_service.app.venues.defi import AsterAdapter
-
                 # Use MVP base assets from spec guide (21 trading assets), not DeFi tokens
                 aster_base_assets = self.venue_mapping.hyperliquid_aster_mvp_base_assets
                 adapter = AsterAdapter(base_currency_list=aster_base_assets)
@@ -2264,7 +2221,46 @@ class InstrumentProcessingService:
                 spot_pairs = adapter.fetch_spot_pairs(test_data_availability=False)
                 raw_instruments = {**perpetuals, **spot_pairs}
 
+            # Adapter not yet implemented (e.g., UniswapV2Adapter, UniswapV4Adapter, CurveAdapter, EthenaAdapter)
+            elif protocol.lower() == "uniswap_v2":
+                logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
+                return {}
+                from instruments_service.app.venues.defi import UniswapV2Adapter
+
+                adapter = UniswapV2Adapter(chain=chain, api_key=graph_api_key)
+                raw_instruments = adapter.fetch_pools(
+                    base_currency_list=base_currency_list,
+                    quote_currency_list=quote_currency_list,
+                    **kwargs,
+                )
+
+            elif protocol.lower() == "uniswap_v4":
+                logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
+                return {}
+                from instruments_service.app.venues.defi import UniswapV4Adapter
+
+                adapter = UniswapV4Adapter(chain=chain, api_key=graph_api_key)
+                raw_instruments = adapter.fetch_pools(
+                    base_currency_list=base_currency_list,
+                    quote_currency_list=quote_currency_list,
+                    **kwargs,
+                )
+
+            elif protocol.lower() == "curve":
+                logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
+                return {}
+                from instruments_service.app.venues.defi import CurveAdapter
+
+                adapter = CurveAdapter(chain=chain, api_key=graph_api_key)
+                raw_instruments = adapter.fetch_pools(
+                    base_currency_list=base_currency_list,
+                    quote_currency_list=quote_currency_list,
+                    **kwargs,
+                )
+
             elif protocol.lower() == "ethena":
+                logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
+                return {}
                 from instruments_service.app.venues.defi import EthenaAdapter
 
                 adapter = EthenaAdapter(chain=chain)
@@ -2397,19 +2393,21 @@ class InstrumentProcessingService:
                             # CCXT enrichment failed - still populate ccxt_symbol and ccxt_exchange
                             # using centralized default generation (same as CEFI exchanges)
                             if not inst_def.ccxt_symbol or not inst_def.ccxt_exchange:
-                                default_ccxt_symbol = self.ccxt_service._generate_default_ccxt_symbol(
-                                    venue=venue,
-                                    base_asset=inst_def.base_asset,
-                                    quote_asset=inst_def.quote_asset,
-                                    symbol_id=inst_def.exchange_raw_symbol or inst_def.symbol,
-                                    instrument_type=inst_def.instrument_type,
+                                default_ccxt_symbol = (
+                                    self.ccxt_service._generate_default_ccxt_symbol(
+                                        venue=venue,
+                                        base_asset=inst_def.base_asset,
+                                        quote_asset=inst_def.quote_asset,
+                                        symbol_id=inst_def.exchange_raw_symbol or inst_def.symbol,
+                                        instrument_type=inst_def.instrument_type,
+                                    )
                                 )
                                 ccxt_exchange_id = self.venue_mapping.venue_to_ccxt.get(venue, "")
                                 if not inst_def.ccxt_symbol:
                                     inst_def.ccxt_symbol = default_ccxt_symbol
                                 if not inst_def.ccxt_exchange:
                                     inst_def.ccxt_exchange = ccxt_exchange_id
-                            
+
                             # Use manual fallback mappings for tick_size, min_size, contract_size
                             # These are stable values from CCXT that don't change often
                             manual_metadata = self._get_manual_ccxt_fallback(
@@ -2450,10 +2448,6 @@ class InstrumentProcessingService:
             logger.info(f"✅ Fetched {len(instruments)} {protocol} instruments for {chain}")
             return instruments
 
-        except ImportError as e:
-            # Adapter not yet implemented (e.g., UniswapV2Adapter, UniswapV4Adapter, CurveAdapter, EthenaAdapter)
-            logger.debug(f"DeFi adapter not available (not yet implemented): {e}")
-            return {}
         except Exception as e:
             logger.error(f"Failed to fetch {protocol} instruments: {e}")
             return {}

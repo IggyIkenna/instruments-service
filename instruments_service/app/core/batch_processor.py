@@ -7,10 +7,10 @@ Handles instrument downloads with lookback computation, date range calculation, 
 
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
+from typing import Any
 from unified_cloud_services import GenericBatchProcessor
 
-logger = logging.getLogger(__name__) # logging 
+logger = logging.getLogger(__name__)  # logging
 
 
 class InstrumentBatchProcessor(GenericBatchProcessor):
@@ -23,7 +23,7 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
     - Venue-specific batch orchestration
     """
 
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: dict[str, Any]):
         """
         Initialize instrument batch processor.
 
@@ -39,7 +39,7 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
         )  # Default: no lookback for instruments
 
     def calculate_date_range(
-        self, target_date: datetime, lookback_days: Optional[int] = None
+        self, target_date: datetime, lookback_days: int | None = None
     ) -> tuple[datetime, datetime]:
         """
         Calculate date range for batch processing.
@@ -66,7 +66,7 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
 
     def estimate_memory_requirements(
         self, num_instruments: int, date_range_days: int
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Estimate memory requirements for batch processing.
 
@@ -98,8 +98,8 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
         return estimate
 
     def get_required_periods(
-        self, target_date: datetime, lookback_days: Optional[int] = None
-    ) -> List[datetime]:
+        self, target_date: datetime, lookback_days: int | None = None
+    ) -> list[datetime]:
         """
         Get list of required periods (dates) for processing.
 
@@ -108,7 +108,7 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
             lookback_days: Optional override for lookback days
 
         Returns:
-            List of datetime objects for each period
+            list of datetime objects for each period
         """
         start_date, end_date = self.calculate_date_range(target_date, lookback_days)
 
@@ -124,17 +124,17 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
         return periods
 
     def process_batch(
-        self, instruments: List[Dict[str, Any]], batch_size: Optional[int] = None
-    ) -> List[List[Dict[str, Any]]]:
+        self, instruments: list[dict[str, Any]], batch_size: int | None = None
+    ) -> list[list[dict[str, Any]]]:
         """
         Split instruments into batches for processing.
 
         Args:
-            instruments: List of instrument dictionaries
+            instruments: list of instrument dictionaries
             batch_size: Optional batch size override
 
         Returns:
-            List of batches (each batch is a list of instruments)
+            list of batches (each batch is a list of instruments)
         """
         if batch_size is None:
             batch_size = self.max_batch_size

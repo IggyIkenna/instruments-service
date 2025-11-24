@@ -15,13 +15,15 @@ import argparse
 import sys
 import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 from datetime import datetime
 
 # Add parent directory to path to import clickup_import
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.clickup_import import ClickUpClient
+from unified_cloud_services import get_secret_with_fallback
+from instruments_service.settings import instruments_config
 
 
 class TasksMdParser:
@@ -323,81 +325,41 @@ def main():
 
     args = parser.parse_args()
 
-    # Get API token from args, env var, or .env file
-    from pathlib import Path
-
-    service_env_file = Path(__file__).parent.parent / ".env.clickup"
-    root_env_file = Path(__file__).parent.parent.parent / ".env"
-
+    # Get API token from args or Secret Manager/env via instruments_config
     api_token = args.api_token
     if not api_token:
-        api_token = get_config("CLICKUP_API_TOKEN")
-        if not api_token:
-            # Try Secret Manager via unified-cloud-services
-            try:
-                from unified_cloud_services import get_secret_with_fallback, get_config
-
-                project_id = get_config("GCP_PROJECT_ID", "central-element-323112")
-                secret_name = get_config("CLICKUP_SECRET_NAME", "clickup-api-key")
-                api_token = get_secret_with_fallback(
-                    secret_name=secret_name,
-                    project_id=project_id,
-                    fallback_env_var="CLICKUP_API_TOKEN",
-                )
-                if api_token:
-                    api_token = api_token.strip()
-                    print(
-                        f"✅ Retrieved ClickUp API key from Secret Manager (secret: {secret_name})"
-                    )
-            except ImportError:
-                pass  # unified-cloud-services not available, continue to .env files
-            except Exception as e:
-                print(f"⚠️  Secret Manager lookup failed: {e}")
-
-            if not api_token:
-                for env_file in [service_env_file, root_env_file]:
-                    if env_file.exists():
-                        for line in env_file.read_text().splitlines():
-                            if line.startswith("clickup_api_token="):
-                                api_token = line.split("=", 1)[1].strip()
-                                break
-                        if api_token:
-                            break
+        # Try Secret Manager via unified-cloud-services
+        try:
+            project_id = instruments_config.gcp_project_id
+            secret_name = instruments_config.clickup_secret_name
+            api_token = get_secret_with_fallback(
+                secret_name=secret_name,
+                project_id=project_id,
+                fallback_env_var="CLICKUP_API_TOKEN",
+            )
+            if api_token:
+                api_token = api_token.strip()
+                print(f"✅ Retrieved ClickUp API key from Secret Manager (secret: {secret_name})")
+        except Exception as e:
+            print(f"⚠️  Secret Manager lookup failed: {e}")
 
     if not api_token:
         print("❌ API token not found. Set --api-token or CLICKUP_API_TOKEN env var")
-        print(f"   Checked: Secret Manager (clickup-api-key)")
-        print(f"   Checked: {service_env_file}")
-        print(f"   Checked: {root_env_file}")
+        print(f"   Checked: Secret Manager ({instruments_config.clickup_secret_name})")
+        print(f"   Checked: Environment variables via settings.py")
         print(f"\n💡 To store API key in Secret Manager, run:")
         print(f"   cd ../unified-cloud-services && python scripts/store_secret.py --secret-name clickup-api-key --secret-value YOUR_TOKEN")
         return 1
 
-    list_id = args.list_id or get_config("CLICKUP_LIST_ID")
-    if not list_id:
-        # Try .env files (service-specific .env.clickup first, then root .env)
-        for env_file in [service_env_file, root_env_file]:
-            if env_file.exists():
-                for line in env_file.read_text().splitlines():
-                    if line.startswith("clickup_list_id_instruments_service="):
-                        list_id = line.split("=", 1)[1].strip()
-                        # Remove "li/" prefix if present
-                        if list_id.startswith("li/"):
-                            list_id = list_id[3:]
-                        break
-                    elif line.startswith("clickup_list_id="):
-                        list_id = line.split("=", 1)[1].strip()
-                        # Remove "li/" prefix if present
-                        if list_id.startswith("li/"):
-                            list_id = list_id[3:]
-                        break
-                if list_id:
-                    break
+    # Get list ID from args or instruments_config
+    list_id = args.list_id or instruments_config.clickup_list_id
+
+    # Remove "li/" prefix if present
+    if list_id and list_id.startswith("li/"):
+        list_id = list_id[3:]
 
     if not list_id:
-        print(
-            "❌ List ID not found. Set --list-id or CLICKUP_LIST_ID env var or add clickup_list_id_instruments_service=... to .env.clickup"
-        )
+        print("❌ List ID not found. Set --list-id or CLICKUP_LIST_ID env var")
         print("\n📋 How to find your List ID:")
         print("   1. Open your 'Instruments Service' list in ClickUp")
         print("   2. Look at the URL in your browser")

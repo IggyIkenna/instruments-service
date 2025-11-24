@@ -30,13 +30,15 @@ def parse_date(date_str: str) -> datetime:
         raise ValueError(f"Invalid date format '{date_str}'. Use YYYY-MM-DD format.") from e
 
 
-def get_date_range(start_date_str: str, end_date_str: str) -> List[datetime]:
+def get_date_range(start_date: datetime, end_date: datetime) -> List[datetime]:
     """Generate date range from start/end date strings."""
-    start_date = parse_date(start_date_str)
-    end_date = parse_date(end_date_str)
+    if isinstance(start_date, str):
+        start_date = parse_date(start_date)
+    if isinstance(end_date, str):
+        end_date = parse_date(end_date)
 
     if start_date > end_date:
-        raise ValueError(f"Start date {start_date_str} must be <= end date {end_date_str}")
+        raise ValueError(f"Start date {start_date} must be <= end date {end_date}")
 
     date_range = []
     current_date = start_date
@@ -88,7 +90,7 @@ class InstrumentHandler(ModeHandler):
             end_date = parse_date(end_date)
 
         # Generate date range
-        date_range = get_date_range(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d"))
+        date_range = get_date_range(start_date, end_date)
 
         # Observability metrics tracking
         total_generated = 0
@@ -134,7 +136,7 @@ class InstrumentHandler(ModeHandler):
             # Skip future dates
             if date.date() > today:
                 logger.warning(f"⚠️ Skipping future date: {date.strftime('%Y-%m-%d')}")
-                continue
+                break
 
             try:
                 # Direct GCS existence check
@@ -176,11 +178,11 @@ class InstrumentHandler(ModeHandler):
                 processing_warnings = result.get("warning_count", 0)
                 total_processing_errors += processing_errors
                 total_processing_warnings += processing_warnings
-                
+
                 if result.get("status") == "success":
                     total_generated += result.get("instruments_generated", 0)
                     total_dates_processed += 1
-                    
+
                     # Log if there were processing errors/warnings even though overall status is success
                     if processing_errors > 0 or processing_warnings > 0:
                         logger.info(
