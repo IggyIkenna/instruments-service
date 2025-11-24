@@ -299,20 +299,12 @@ class TestCLIMain:
         """Test __main__ entry point with success."""
         # Test the exit code logic directly without patching run_cli
         result = {"status": "success", "success": True}
-        exit_code = (
-            0
-            if result.get("success", False) or result.get("status") == "success"
-            else 1
-        )
+        exit_code = 0 if result.get("success", False) or result.get("status") == "success" else 1
         assert exit_code == 0
 
     def test_main_entry_point_failure(self):
         """Test __main__ entry point with failure."""
         # Test the exit code logic directly without patching run_cli
         result = {"status": "error", "success": False}
-        exit_code = (
-            0
-            if result.get("success", False) or result.get("status") == "success"
-            else 1
-        )
+        exit_code = 0 if result.get("success", False) or result.get("status") == "success" else 1
         assert exit_code == 1

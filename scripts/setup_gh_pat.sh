@@ -81,4 +81,3 @@ echo "You can now run:"
 echo "  python scripts/run_quality_gates.py"
 echo ""
 echo "The script will automatically use GH_PAT from your .env file."
-

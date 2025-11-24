@@ -1,6 +1,6 @@
 #!/bin/bash
 # Setup GitHub Secrets for Quality Gates Workflow
-# 
+#
 # This script helps you set up the required GitHub secrets for the quality gates workflow.
 # It requires GitHub CLI (gh) to be installed and authenticated.
 #
@@ -99,7 +99,7 @@ if [ "$SKIP_PAT" != "true" ]; then
     echo ""
     read -sp "Enter your GitHub PAT: " PAT
     echo ""
-    
+
     if [ -z "$PAT" ]; then
         echo -e "${YELLOW}⚠️  No PAT provided. Skipping GH_PAT setup.${NC}"
         echo "You can set it later manually or run this script again."
@@ -123,4 +123,3 @@ echo -e "${BLUE}Next steps:${NC}"
 echo "1. Push a commit to trigger the quality gates workflow"
 echo "2. Check the Actions tab to see if it runs successfully"
 echo ""
-

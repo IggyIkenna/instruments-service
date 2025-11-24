@@ -58,59 +58,61 @@ def test_query_handler_initialization(config):
 
 
 @pytest.mark.skipif(
-    not get_config("GCP_PROJECT_ID") and not os.path.exists(
+    not get_config("GCP_PROJECT_ID")
+    and not os.path.exists(
         os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
     ),
-    reason="Requires GCP credentials for real service testing"
+    reason="Requires GCP credentials for real service testing",
 )
 def test_instrument_handler_run(mock_instrument_handler):
     """Test instrument handler run method with real services."""
     # Use a past date to avoid future date skipping
     from datetime import datetime, timedelta, timezone
+
     past_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
-    
-    result = mock_instrument_handler.run(
-        start_date=past_date, end_date=past_date, force=False
-    )
+
+    result = mock_instrument_handler.run(start_date=past_date, end_date=past_date, force=False)
 
     assert result["status"] in ["success", "partial", "warning", "skipped"]
     assert "instruments_generated" in result or "dates_skipped" in result
 
 
 @pytest.mark.skipif(
-    not get_config("GCP_PROJECT_ID") and not os.path.exists(
+    not get_config("GCP_PROJECT_ID")
+    and not os.path.exists(
         os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
     ),
-    reason="Requires GCP credentials for real service testing"
+    reason="Requires GCP credentials for real service testing",
 )
 def test_query_handler_list_query(config):
     """Test query handler list query with real services."""
     handler = InstrumentsQueryHandler(config)
-    
+
     # Use a past date that likely has data
     from datetime import datetime, timedelta, timezone
+
     past_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
 
-    result = handler.run(
-        start_date=past_date, end_date=past_date, query_type="list"
-    )
+    result = handler.run(start_date=past_date, end_date=past_date, query_type="list")
 
     assert result["status"] in ["success", "warning"]
     assert result["query_type"] == "list"
 
 
 @pytest.mark.skipif(
-    not get_config("GCP_PROJECT_ID") and not os.path.exists(
+    not get_config("GCP_PROJECT_ID")
+    and not os.path.exists(
         os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
     ),
-    reason="Requires GCP credentials for real service testing"
+    reason="Requires GCP credentials for real service testing",
 )
 def test_query_handler_summary_query(config):
     """Test query handler summary query with real services."""
     handler = InstrumentsQueryHandler(config)
-    
+
     # Use a past date that likely has data
     from datetime import datetime, timedelta, timezone
+
     past_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
 
     result = handler.run(start_date=past_date, query_type="summary")

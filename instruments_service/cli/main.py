@@ -8,35 +8,19 @@ based on ENVIRONMENT variable (dev mode: auto-detects, production: VM service ac
 """
 
 import sys
-import os
 import logging
 import json
-from pathlib import Path
 from typing import Dict, Any
 
-# Load environment variables from .env file (if it exists)
-# This must happen BEFORE any other imports that might use environment variables
-from dotenv import load_dotenv
+from instruments_service.settings import instruments_config
+from instruments_service.cli.parser import parse_arguments
+from instruments_service.cli.handlers import get_handler_for_mode
+from instruments_service.cli.base_handler import ModeHandler
 
-# Find .env file in instruments-service directory (parent of this file)
-# Path structure: instruments_service/cli/main.py -> instruments_service -> instruments-service -> .env
-env_path = Path(__file__).parent.parent.parent / ".env"
-if env_path.exists():
-    load_dotenv(dotenv_path=env_path, override=False)
-    # Use print for early loading (before logging is configured)
-    # Use os.getenv directly here since get_config is imported later
-    if os.getenv("DEBUG", "").lower() == "true":
-        print(f"✅ Loaded environment variables from {env_path}")
-
-# Setup logging (after .env is loaded so LOG_LEVEL can be read from .env)
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-from instruments_service.cli.parser import parse_arguments
-from instruments_service.cli.handlers import get_handler_for_mode
-from unified_cloud_services import get_config
 
 
 def main() -> Dict[str, Any]:
@@ -65,7 +49,7 @@ def main() -> Dict[str, Any]:
         }
 
         # Get handler for mode
-        handler = get_handler_for_mode(args.mode, config)
+        handler: ModeHandler = get_handler_for_mode(args.mode, config)
 
         # Prepare arguments for handler
         handler_kwargs = {}
@@ -93,7 +77,7 @@ def main() -> Dict[str, Any]:
         # Venue filters (for both generation and query modes)
         if args.venues:
             handler_kwargs["venues"] = args.venues
-        
+
         # Instrument ID filters (for both generation and query modes)
         if args.instrument_ids:
             handler_kwargs["instrument_ids"] = args.instrument_ids
@@ -113,8 +97,6 @@ def main() -> Dict[str, Any]:
                 handler_kwargs["symbol_pattern"] = args.symbol_pattern
             if args.instrument_id:
                 handler_kwargs["instrument_id"] = args.instrument_id
-            if args.instrument_ids:
-                handler_kwargs["instrument_ids"] = args.instrument_ids
             if args.data_type:
                 handler_kwargs["data_type"] = args.data_type
             if args.days_until_expiry:

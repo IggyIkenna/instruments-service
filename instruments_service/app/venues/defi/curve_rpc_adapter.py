@@ -10,8 +10,9 @@ Address: 0x90E00ACe148ca3b23Ac1bC8C240C2a7Dd9c2d9f5
 
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime
 from web3 import Web3
+from unified_cloud_services import get_secret_with_fallback
+from instruments_service.settings import instruments_config
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +43,8 @@ class CurveRPCAdapter:
         if rpc_url:
             self.rpc_url = rpc_url
         else:
-            from unified_cloud_services import get_secret_with_fallback, get_config
 
-            project_id = project_id or get_config("GCP_PROJECT_ID", "central-element-323112")
+            project_id = project_id or instruments_config.gcp_project_id
             alchemy_key = get_secret_with_fallback(
                 project_id=project_id,
                 secret_name="alchemy-api-key",
@@ -54,7 +54,7 @@ class CurveRPCAdapter:
             if alchemy_key:
                 self.rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key}"
             else:
-                self.rpc_url = get_config("ETHEREUM_RPC_URL")
+                self.rpc_url = instruments_config.ethereum_rpc_url
 
         if self.rpc_url:
             try:
