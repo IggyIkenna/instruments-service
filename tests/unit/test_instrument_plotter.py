@@ -95,15 +95,3 @@ class TestInstrumentPlotter:
         assert fig is not None
         assert fig.layout.title.text == "Custom Title"
         assert fig.layout.height == 800
-
-
-
-
-
-
-
-
-
-
-
-

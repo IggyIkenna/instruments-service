@@ -41,9 +41,8 @@ from instruments_service.app.core.instrument_processing_service import (
     InstrumentProcessingService,
 )
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
-from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
-from instruments_service.models import InstrumentDefinition
-from unified_cloud_services import CloudTarget, get_config
+from instruments_service.settings import instruments_config
+from unified_cloud_services import get_secret_with_fallback
 
 # Test configuration
 TEST_DATE = datetime(2023, 5, 23, tzinfo=timezone.utc)
@@ -59,24 +58,19 @@ def test_instrument_download():
     print("=" * 60)
 
     # Get API key from environment or Secret Manager
-    api_key = get_config("TARDIS_API_KEY")
-    if not api_key:
-        # Try to get from Secret Manager
-        try:
-            from unified_cloud_services import get_secret_with_fallback
+    try:
 
-            api_key = get_secret_with_fallback(
-                project_id="central-element-323112",
-                secret_name="tardis-api-key",
-                fallback_env_var="TARDIS_API_KEY",
-            )
-        except Exception as e:
-            pass
-
-    if not api_key:
-        print("⚠️  TARDIS_API_KEY not set")
-        print("   Skipping download test - will test with existing data")
-        return False
+        api_key = get_secret_with_fallback(
+            project_id=instruments_config.gcp_project_id,
+            secret_name=instruments_config.tardis_secret_name,
+            fallback_env_var="TARDIS_API_KEY",
+        )
+        if not api_key:
+            print("⚠️  TARDIS_API_KEY not set")
+            print("   Skipping download test - will test with existing data")
+            return False
+    except Exception as e:
+        pass
 
     try:
         # Initialize service

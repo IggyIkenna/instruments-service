@@ -18,22 +18,13 @@ import logging
 import re
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta, timezone, time
+from zoneinfo import ZoneInfo
+
 import pandas as pd
-
-try:
-    from unified_cloud_services import get_config
-except ImportError:
-    # Fallback if unified-cloud-services not available
-    import os
-    get_config = os.getenv
-
-try:
-    import databento as db
-
-    DATABENTO_AVAILABLE = True
-except ImportError:
-    DATABENTO_AVAILABLE = False
-    logging.warning("databento package not available. Install with: pip install databento")
+import databento as db
+from instruments_service.settings import instruments_config
+from unified_cloud_services import get_secret_with_fallback
+from instruments_service.config import UnifiedInstrumentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +35,7 @@ logger = logging.getLogger(__name__)
 # - Reuses db.Historical client with connection pooling (like Tardis)
 # - Avoids recreating UnifiedInstrumentConfig (~500 instruments) on every fetch
 # - Estimated speedup: 5-10x for batch operations (multiple days × multiple exchanges)
-_DATABENTO_CLIENT: Optional['db.Historical'] = None
+_DATABENTO_CLIENT: Optional["db.Historical"] = None
 _DATABENTO_API_KEY: Optional[str] = None
 _UNIFIED_CONFIG_CACHE: Optional[Any] = None
 
@@ -72,7 +63,7 @@ class DatabentoAdapter:
     def __init__(self, api_key: Optional[str] = None, project_id: Optional[str] = None):
         """
         Initialize Databento adapter with module-level client reuse.
-        
+
         OPTIMIZED: Uses module-level singleton client to avoid creating new connections
         for each adapter instance (like Tardis pattern).
 
@@ -81,11 +72,6 @@ class DatabentoAdapter:
             project_id: GCP project ID for Secret Manager (defaults to GCP_PROJECT_ID env var)
         """
         global _DATABENTO_CLIENT, _DATABENTO_API_KEY
-        
-        if not DATABENTO_AVAILABLE:
-            raise ImportError(
-                "databento package not available. Install with: pip install databento"
-            )
 
         # Reuse cached API key if available (avoid Secret Manager calls)
         if _DATABENTO_API_KEY and not api_key:
@@ -98,11 +84,8 @@ class DatabentoAdapter:
             # If not provided, try Secret Manager
             if not self.api_key:
                 try:
-                    from unified_cloud_services import get_secret_with_fallback
-
-                    secret_name = get_config("DATABENTO_SECRET_NAME", "databento-api-key")
-                    project_id = project_id or get_config("GCP_PROJECT_ID", "central-element-323112")
-
+                    secret_name = instruments_config.databento_secret_name
+                    project_id = instruments_config.gcp_project_id
                     self.api_key = get_secret_with_fallback(
                         project_id=project_id,
                         secret_name=secret_name,
@@ -113,19 +96,16 @@ class DatabentoAdapter:
                         logger.info(
                             f"✅ Retrieved Databento API key from Secret Manager (secret: {secret_name})"
                         )
-                except ImportError:
-                    logger.warning("unified-cloud-services not available, falling back to env var")
-                    self.api_key = get_config("DATABENTO_API_KEY")
                 except Exception as e:
                     logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                    self.api_key = get_config("DATABENTO_API_KEY")
+                    self.api_key = instruments_config.databento_secret_name
 
             if not self.api_key:
                 raise ValueError(
                     "Databento API key required. Set DATABENTO_SECRET_NAME env var (for Secret Manager), "
                     "DATABENTO_API_KEY env var (fallback), or pass api_key parameter."
                 )
-            
+
             # Cache API key for future instances
             _DATABENTO_API_KEY = self.api_key
 
@@ -161,12 +141,12 @@ class DatabentoAdapter:
         """
         # OPTIMIZED: Reuse cached UnifiedInstrumentConfig instance
         global _UNIFIED_CONFIG_CACHE
-        
+
         if _UNIFIED_CONFIG_CACHE is None:
-            from instruments_service.config import UnifiedInstrumentConfig
+
             _UNIFIED_CONFIG_CACHE = UnifiedInstrumentConfig()
             logger.debug("✅ Cached UnifiedInstrumentConfig instance")
-        
+
         unified_config = _UNIFIED_CONFIG_CACHE
 
         # Map exchange to Databento dataset
@@ -183,7 +163,7 @@ class DatabentoAdapter:
         # Databento DEFINITION schema returns instruments available on the queried date
         # If target date is weekend/holiday, adjust query date but preserve target date for available_from_datetime
         query_date = self._get_query_date_for_databento(target_date)
-        
+
         # Query for target date specifically (not previous day)
         # This ensures we get instruments available on Nov 11th when querying for Nov 11th
         # Databento requires end_date > start_date, so use next day as end_date
@@ -268,7 +248,7 @@ class DatabentoAdapter:
                             f"📊 Filtered out {pre_filter_count - post_filter_count} {filter_reason} "
                             f"({post_filter_count} remaining) for {exchange} (stype_in={stype_in})"
                         )
-                
+
                 # Filter out calendar spreads and complex products
                 # Spreads/combos contain special characters: dash (-), colon (:), plus (+), asterisk (*), slash (/)
                 # Examples:
@@ -279,14 +259,15 @@ class DatabentoAdapter:
                     pre_spread_count = len(df)
                     # Exclude symbols with special characters indicating combos/spreads
                     # Pattern: dash (-), colon (:), plus (+), asterisk (*), slash (/)
-                    df = df[~df["raw_symbol"].astype(str).str.contains(r"[-:+*/]", regex=True, na=False)]
+                    df = df[
+                        ~df["raw_symbol"].astype(str).str.contains(r"[-:+*/]", regex=True, na=False)
+                    ]
                     post_spread_count = len(df)
                     if pre_spread_count != post_spread_count:
                         logger.info(
                             f"📊 Filtered out {pre_spread_count - post_spread_count} spreads/combos "
                             f"({post_spread_count} remaining) for {exchange} (stype_in={stype_in})"
                         )
-
 
                 # Process and merge into all_instruments
                 # Pass target_date to ensure available_from_datetime uses target date
@@ -303,20 +284,18 @@ class DatabentoAdapter:
 
         return all_instruments
 
-    def create_vix_instrument_definition(
-        self, target_date: datetime
-    ) -> Optional[Dict[str, Any]]:
+    def create_vix_instrument_definition(self, target_date: datetime) -> Optional[Dict[str, Any]]:
         """
         Create VIX index instrument definition.
-        
+
         VIX is not available via Databento, but we create it as a static instrument
         definition using CBOE trading hours (same as CBOE options).
         Data source is Barchart (OHLCV 15-minute data), but we handle it here
         to follow convention and reuse CBOE trading hours logic.
-        
+
         Args:
             target_date: Target date for trading hours calculation
-            
+
         Returns:
             VIX instrument definition dictionary or None
         """
@@ -324,16 +303,16 @@ class DatabentoAdapter:
         instrument_type = "INDEX"
         base_asset = "VIX"
         quote_asset = "USD"
-        
+
         # Build canonical symbol (VIX is an index, no expiry)
         symbol_canonical = f"{base_asset}-{quote_asset}"
-        
+
         # Build canonical instrument key
         instrument_key = f"{venue}:{instrument_type}:{symbol_canonical}"
-        
+
         # Get CBOE trading hours (same as CBOE options)
         trading_hours = self._get_exchange_trading_hours(venue, instrument_type, target_date)
-        
+
         # VIX index is calculated continuously during trading hours
         # Available from: Start of regular trading hours
         # Available to: End of regular trading hours (no expiry for index itself)
@@ -345,7 +324,7 @@ class DatabentoAdapter:
                 target_date_start = target_date_start.replace(tzinfo=timezone.utc)
             available_from = target_date_start.isoformat()
         available_to = None  # Index doesn't expire
-        
+
         return {
             "instrument_key": instrument_key,
             "venue": venue,
@@ -381,7 +360,7 @@ class DatabentoAdapter:
             "trading_hours_close": trading_hours.get("close"),
             "trading_session": trading_hours.get("session"),
             "is_trading_day": trading_hours.get("is_trading_day"),
-                "holiday_calendar": trading_hours.get("holiday_calendar"),
+            "holiday_calendar": trading_hours.get("holiday_calendar"),
         }
 
     def _get_exchange_expiry_time(
@@ -389,24 +368,24 @@ class DatabentoAdapter:
     ) -> Optional[pd.Timestamp]:
         """
         DEPRECATED: This method is no longer used.
-        
+
         We no longer apply default expiry times when Databento provides date-only expiry,
         as expiry times vary by contract type and we don't want to guess incorrectly.
-        
+
         This method is kept for reference but should not be called.
-        
+
         Args:
             exchange: Exchange name (e.g., 'CME', 'CBOE')
             instrument_type: Instrument type (e.g., 'FUTURE', 'OPTION')
             expiry_date: Expiry date (may be midnight from Databento)
-            
+
         Returns:
             None (method deprecated)
         """
         # Method deprecated - we no longer apply default expiry times
         # Better to leave expiry blank than guess incorrectly
         return None
-        
+
     def _get_dataset_for_exchange(self, exchange: str) -> str:
         """
         Map exchange name to Databento dataset ID.
@@ -428,25 +407,25 @@ class DatabentoAdapter:
     def _get_query_date_for_databento(self, target_date: datetime) -> datetime:
         """
         Get query date for Databento API based on target date.
-        
+
         Databento DEFINITION schema returns instruments available on the queried date.
         If target date is weekend, we query the previous Friday, but we preserve
         the target date for available_from_datetime to ensure correct filtering.
-        
+
         Args:
             target_date: Target date (timezone-aware)
-            
+
         Returns:
             Query date for Databento API (may differ from target_date if weekend)
         """
         # Ensure date is timezone-aware
         if target_date.tzinfo is None:
             target_date = target_date.replace(tzinfo=timezone.utc)
-        
+
         # Get date only (without time)
         target_date_only = target_date.date()
         weekday = target_date_only.weekday()
-        
+
         # If weekend, query previous Friday
         if weekday == 6:  # Sunday
             query_date = target_date - timedelta(days=2)  # Go back to Friday
@@ -455,7 +434,7 @@ class DatabentoAdapter:
         else:
             # Weekday - query target date directly
             query_date = target_date
-        
+
         return query_date
 
     def _filter_symbols(self, dataset: str, symbols: List[str]) -> List[str]:
@@ -546,7 +525,12 @@ class DatabentoAdapter:
                 exchange_raw_symbol = str(symbol) if symbol else asset
 
                 inst_def = self._convert_to_instrument_definition(
-                    row, exchange, dataset, databento_symbol, exchange_raw_symbol, target_date=target_date
+                    row,
+                    exchange,
+                    dataset,
+                    databento_symbol,
+                    exchange_raw_symbol,
+                    target_date=target_date,
                 )
                 # Skip None returns (e.g., incomplete options missing strike/option_type)
                 if inst_def is not None:
@@ -566,13 +550,13 @@ class DatabentoAdapter:
     ) -> Optional[str]:
         """
         Resolve instrument_id to raw_symbol using Databento symbology API.
-        
+
         Args:
             instrument_id: Databento instrument ID
             exchange: Exchange name
             dataset: Databento dataset ID
             target_date: Target date for symbology resolution
-            
+
         Returns:
             Raw symbol string (e.g., "ESZ0 C3620") or None if resolution fails
         """
@@ -583,23 +567,20 @@ class DatabentoAdapter:
             if target_date:
                 start_date_str = target_date.strftime("%Y-%m-%d")
                 # Add one day to end_date to ensure it's after start_date
-                from datetime import timedelta
                 end_date = target_date + timedelta(days=1)
                 end_date_str = end_date.strftime("%Y-%m-%d")
             else:
-                # Fallback to today if no target_date provided
-                from datetime import datetime, timedelta
                 today = datetime.now(timezone.utc)
                 start_date_str = today.strftime("%Y-%m-%d")
                 end_date = today + timedelta(days=1)
                 end_date_str = end_date.strftime("%Y-%m-%d")
-            
+
             logger.debug(
                 f"Calling symbology.resolve: instrument_id={instrument_id}, "
                 f"stype_in=instrument_id, stype_out=raw_symbol, dataset={dataset}, "
                 f"start_date={start_date_str}, end_date={end_date_str}"
             )
-            
+
             # Resolve instrument_id to raw_symbol
             # The API returns a mapping dict: {input_symbol: [output_symbols]}
             resolved = self.client.symbology.resolve(
@@ -610,9 +591,9 @@ class DatabentoAdapter:
                 start_date=start_date_str,
                 end_date=end_date_str,
             )
-            
+
             logger.debug(f"Symbology resolution response type: {type(resolved)}, value: {resolved}")
-            
+
             # Handle different response formats
             if resolved:
                 if isinstance(resolved, dict):
@@ -631,8 +612,8 @@ class DatabentoAdapter:
                         elif isinstance(output_symbols, dict):
                             # Databento symbology API returns dict with 'S' key for symbol, 'D0'/'D1' for dates
                             # Example: {'D0': '2023-11-09', 'D1': '2023-11-10', 'S': 'ESZ0 C3620'}
-                            if 'S' in output_symbols:
-                                symbol_value = output_symbols['S']
+                            if "S" in output_symbols:
+                                symbol_value = output_symbols["S"]
                                 if isinstance(symbol_value, str) and len(symbol_value) > 0:
                                     return symbol_value
                                 elif isinstance(symbol_value, list) and len(symbol_value) > 0:
@@ -641,7 +622,7 @@ class DatabentoAdapter:
                             if len(output_symbols) > 0:
                                 for key, value in output_symbols.items():
                                     # Skip date keys (D0, D1, etc.)
-                                    if key.startswith('D') and key[1:].isdigit():
+                                    if key.startswith("D") and key[1:].isdigit():
                                         continue
                                     # Return the first non-date value
                                     if isinstance(value, str) and len(value) > 0:
@@ -652,11 +633,15 @@ class DatabentoAdapter:
                             # Try to convert other types to string (avoid boolean evaluation)
                             try:
                                 # Check if it's a pandas Series or similar
-                                if hasattr(output_symbols, '__len__'):
+                                if hasattr(output_symbols, "__len__"):
                                     if len(output_symbols) > 0:
                                         # Try to get first element
                                         try:
-                                            first_elem = output_symbols.iloc[0] if hasattr(output_symbols, 'iloc') else output_symbols[0]
+                                            first_elem = (
+                                                output_symbols.iloc[0]
+                                                if hasattr(output_symbols, "iloc")
+                                                else output_symbols[0]
+                                            )
                                             return str(first_elem)
                                         except (KeyError, IndexError, TypeError):
                                             pass
@@ -678,8 +663,8 @@ class DatabentoAdapter:
                         elif isinstance(value, dict):
                             # Databento symbology API returns dict with 'S' key for symbol, 'D0'/'D1' for dates
                             # Example: {'D0': '2023-11-09', 'D1': '2023-11-10', 'S': 'ESZ0 C3620'}
-                            if 'S' in value:
-                                symbol_value = value['S']
+                            if "S" in value:
+                                symbol_value = value["S"]
                                 if isinstance(symbol_value, str) and len(symbol_value) > 0:
                                     return symbol_value
                                 elif isinstance(symbol_value, list) and len(symbol_value) > 0:
@@ -688,7 +673,7 @@ class DatabentoAdapter:
                             if len(value) > 0:
                                 for k, v in value.items():
                                     # Skip date keys (D0, D1, etc.)
-                                    if k.startswith('D') and k[1:].isdigit():
+                                    if k.startswith("D") and k[1:].isdigit():
                                         continue
                                     # Return the first non-date value
                                     if isinstance(v, str) and len(v) > 0:
@@ -713,14 +698,15 @@ class DatabentoAdapter:
                 else:
                     # Response is a single value (try to convert to string)
                     return str(resolved)
-            
-            logger.warning(f"Symbology resolution returned empty result for instrument_id {instrument_id}")
+
+            logger.warning(
+                f"Symbology resolution returned empty result for instrument_id {instrument_id}"
+            )
         except Exception as e:
             logger.warning(
-                f"Symbology resolution failed for instrument_id {instrument_id}: {e}",
-                exc_info=True
+                f"Symbology resolution failed for instrument_id {instrument_id}: {e}", exc_info=True
             )
-        
+
         return None
 
     def _convert_to_instrument_definition(
@@ -747,11 +733,10 @@ class DatabentoAdapter:
         """
         # OPTIMIZED: Reuse cached UnifiedInstrumentConfig instance
         global _UNIFIED_CONFIG_CACHE
-        
+
         if _UNIFIED_CONFIG_CACHE is None:
-            from instruments_service.config import UnifiedInstrumentConfig
             _UNIFIED_CONFIG_CACHE = UnifiedInstrumentConfig()
-        
+
         unified_config = _UNIFIED_CONFIG_CACHE
 
         # Extract fields from Databento schema (handle NaNs)
@@ -881,7 +866,7 @@ class DatabentoAdapter:
             # CRITICAL FIX: Use Databento's direct fields for options (including CME weeklies)
             # CME weekly options have instrument_class like "W", "M", "T", "S", "Q", "E"
             # Instead, use 'right' field (Call/Put) and 'strike_price' field directly
-            
+
             # Extract strike price from Databento's strike_price field (always present for options)
             if "strike_price" in row and pd.notna(row["strike_price"]):
                 strike_price_val = row["strike_price"]
@@ -889,7 +874,7 @@ class DatabentoAdapter:
                     strike_price = str(strike_price_val)
                 else:
                     strike_price = str(strike_price_val)
-            
+
             # Extract option type from Databento's 'right' field (Call/Put indicator)
             # 'right' field: "C" = Call, "P" = Put (reliable for all option types including weeklies)
             if "right" in row and pd.notna(row["right"]):
@@ -898,7 +883,7 @@ class DatabentoAdapter:
                     option_type = "CALL"
                 elif right_val == "P":
                     option_type = "PUT"
-            
+
             # Fallback: Try instrument_class (only for backwards compatibility)
             if not option_type and "instrument_class" in row and pd.notna(row["instrument_class"]):
                 instr_class = str(row["instrument_class"]).upper().strip()
@@ -906,7 +891,7 @@ class DatabentoAdapter:
                     option_type = "CALL"
                 elif instr_class == "P":
                     option_type = "PUT"
-            
+
             # Log what we have so far for debugging (especially for CME)
             if exchange.upper() == "CME":
                 available_fields = [k for k in row.index if pd.notna(row.get(k))]
@@ -937,13 +922,15 @@ class DatabentoAdapter:
                 if pd.isna(databento_symbol_raw) or not databento_symbol_raw:
                     # If raw_symbol not available, try exchange_raw_symbol
                     databento_symbol_raw = exchange_raw_symbol
-                
+
                 if pd.notna(databento_symbol_raw) and databento_symbol_raw:
                     symbol_str = str(databento_symbol_raw).strip().upper()
-                    
+
                     # Check if symbol_str is Databento internal format (e.g., "UD:1V: 12 2511947")
                     # This format is not parseable and should be skipped
-                    if symbol_str.startswith("UD:") or (":" in symbol_str[:5] and "UD" in symbol_str[:5]):
+                    if symbol_str.startswith("UD:") or (
+                        ":" in symbol_str[:5] and "UD" in symbol_str[:5]
+                    ):
                         logger.debug(
                             f"Skipping parsing for Databento internal format: {symbol_str} "
                             f"(exchange_raw_symbol={exchange_raw_symbol})"
@@ -963,15 +950,15 @@ class DatabentoAdapter:
                             futures_contract = cme_match.group(1)  # e.g., "ESZ0"
                             opt_char = cme_match.group(2)  # C or P
                             strike_str = cme_match.group(3)  # Strike price digits
-                            
+
                             # Parse strike price (CME strikes are typically integers)
                             if not strike_price:
                                 strike_price = strike_str
-                            
+
                             # Parse option type
                             if not option_type:
                                 option_type = "CALL" if opt_char == "C" else "PUT"
-                            
+
                             logger.debug(
                                 f"Parsed CME option from raw_symbol: {symbol_str} -> strike={strike_price}, type={option_type}"
                             )
@@ -1003,41 +990,62 @@ class DatabentoAdapter:
                                         )
                                         # Use Databento symbology resolution to get raw_symbol
                                         # This will give us the actual CME symbol like "ESZ0 C3620"
-                                        raw_symbol_resolved = self._resolve_instrument_id_to_raw_symbol(
-                                            instrument_id, exchange, dataset, target_date
+                                        raw_symbol_resolved = (
+                                            self._resolve_instrument_id_to_raw_symbol(
+                                                instrument_id, exchange, dataset, target_date
+                                            )
                                         )
                                         if raw_symbol_resolved:
                                             # Parse the resolved raw_symbol
-                                            resolved_symbol_str = str(raw_symbol_resolved).strip().upper()
+                                            resolved_symbol_str = (
+                                                str(raw_symbol_resolved).strip().upper()
+                                            )
                                             logger.info(
                                                 f"✅ Resolved instrument_id {instrument_id} to raw_symbol: {resolved_symbol_str}"
                                             )
-                                            
+
                                             # Handle case where symbology returns dict format
-                                            if isinstance(raw_symbol_resolved, dict) and 'S' in raw_symbol_resolved:
-                                                resolved_symbol_str = str(raw_symbol_resolved['S']).strip().upper()
-                                                logger.debug(f"Extracted symbol from dict 'S' key: {resolved_symbol_str}")
-                                            
+                                            if (
+                                                isinstance(raw_symbol_resolved, dict)
+                                                and "S" in raw_symbol_resolved
+                                            ):
+                                                resolved_symbol_str = (
+                                                    str(raw_symbol_resolved["S"]).strip().upper()
+                                                )
+                                                logger.debug(
+                                                    f"Extracted symbol from dict 'S' key: {resolved_symbol_str}"
+                                                )
+
                                             # Check if resolved symbol is Databento internal format (e.g., "UD:1V: 12 2502245")
                                             # This format is not parseable and indicates the symbology API couldn't resolve to actual exchange symbol
-                                            if resolved_symbol_str.startswith("UD:") or ":" in resolved_symbol_str[:5]:
+                                            if (
+                                                resolved_symbol_str.startswith("UD:")
+                                                or ":" in resolved_symbol_str[:5]
+                                            ):
                                                 logger.debug(
                                                     f"Skipping symbology resolution result - Databento internal format detected: {resolved_symbol_str}"
                                                 )
                                                 # Don't try to parse internal format - it's not useful
                                                 resolved_symbol_str = None
-                                            
+
                                             # Try CME format parsing on resolved symbol (only if not internal format)
                                             if resolved_symbol_str:
                                                 # CME format: "ESZ0 C3620" (futures contract + space + C/P + strike)
-                                                resolved_cme_match = re.search(r"([A-Z0-9]+)\s+([CP])(\d+)", resolved_symbol_str)
+                                                resolved_cme_match = re.search(
+                                                    r"([A-Z0-9]+)\s+([CP])(\d+)",
+                                                    resolved_symbol_str,
+                                                )
                                                 if resolved_cme_match:
                                                     opt_char = resolved_cme_match.group(2)  # C or P
-                                                    strike_str = resolved_cme_match.group(3)  # Strike price digits
+                                                    strike_str = resolved_cme_match.group(
+                                                        3
+                                                    )  # Strike price digits
                                                     if not strike_price:
                                                         strike_price = strike_str
                                                     if not option_type:
-                                                        option_type = "CALL" if opt_char == "C" else "PUT"
+                                                        option_type = (
+                                                            "CALL" if opt_char == "C" else "PUT"
+                                                        )
                                                     logger.info(
                                                         f"✅ Parsed CME option from resolved symbol: "
                                                         f"{resolved_symbol_str} -> strike={strike_price}, type={option_type}"
@@ -1050,14 +1058,18 @@ class DatabentoAdapter:
                                                         f"trying fallback pattern matching"
                                                     )
                                                     # Fallback: look for C/P followed by digits anywhere
-                                                    fallback_match = re.search(r"([CP])(\d+)", resolved_symbol_str)
+                                                    fallback_match = re.search(
+                                                        r"([CP])(\d+)", resolved_symbol_str
+                                                    )
                                                     if fallback_match:
                                                         opt_char = fallback_match.group(1)
                                                         strike_str = fallback_match.group(2)
                                                         if not strike_price:
                                                             strike_price = strike_str
                                                         if not option_type:
-                                                            option_type = "CALL" if opt_char == "C" else "PUT"
+                                                            option_type = (
+                                                                "CALL" if opt_char == "C" else "PUT"
+                                                            )
                                                         logger.info(
                                                             f"✅ Parsed CME option (fallback): "
                                                             f"{resolved_symbol_str} -> strike={strike_price}, type={option_type}"
@@ -1074,14 +1086,14 @@ class DatabentoAdapter:
                                     except Exception as e:
                                         logger.warning(
                                             f"❌ Failed to resolve instrument_id {instrument_id} to raw_symbol: {e}",
-                                            exc_info=True
+                                            exc_info=True,
                                         )
                                 else:
                                     logger.debug(
                                         f"No instrument_id available for symbology resolution. "
                                         f"Available fields: {list(row.index)}"
                                     )
-                            
+
                             # Fallback: Try to extract number from Databento internal format
                             # Pattern: UD:1V: VT <number> or similar
                             databento_internal_match = re.search(r":\s*VT\s+(\d+)", symbol_str)
@@ -1095,7 +1107,7 @@ class DatabentoAdapter:
                                     f"Found number in Databento internal format: {encoded_strike} "
                                     f"(likely not direct strike price for ES options)"
                                 )
-                            
+
                             # Only try fallback parsing for options, not futures
                             # Also skip if symbol_str is None (Databento internal format detected)
                             if symbol_str and instrument_type == "OPTION":
@@ -1114,7 +1126,9 @@ class DatabentoAdapter:
                                 elif not strike_price or not option_type:
                                     # Last resort: warn only if still missing strike/option_type for actual options
                                     # Double-check instrument_class to avoid false warnings for futures
-                                    instr_class = str(row.get("instrument_class", "")).upper().strip()
+                                    instr_class = (
+                                        str(row.get("instrument_class", "")).upper().strip()
+                                    )
                                     if instr_class != "F":  # Only warn if not a Future
                                         logger.warning(
                                             f"Could not parse CME option format from symbol: {symbol_str} "
@@ -1153,7 +1167,7 @@ class DatabentoAdapter:
                         if occ_match:
                             expiry_occ = occ_match.group(1)  # YYMMDD
                             opt_char = occ_match.group(2)  # C or P
-                            strike_occ = occ_match.group(3)  # 8-digit strike 
+                            strike_occ = occ_match.group(3)  # 8-digit strike
 
                             # Parse strike: 8 digits with 3 decimal places (e.g., 00480000 = 480.000)
                             # Only parse if strike_price not already extracted from Databento response
@@ -1217,7 +1231,7 @@ class DatabentoAdapter:
                     f"Skipping incomplete option: {exchange_raw_symbol} - missing strike={strike_price} or option_type={option_type}"
                 )
                 return None  # Skip creating incomplete option instruments
-            
+
             # Clean strike price: remove trailing .0 but preserve integer zeros (e.g., "440.0" -> "440", "480" -> "480")
             strike_clean = ""
             if strike_price:
@@ -1227,7 +1241,7 @@ class DatabentoAdapter:
                     if "." in strike_price
                     else strike_price
                 )
-            
+
             if strike_clean and option_type and expiry_str:
                 symbol = f"{base_asset}-{quote_asset}-{expiry_str}-{strike_clean}-{option_type}@LIN"
             else:
@@ -1260,7 +1274,7 @@ class DatabentoAdapter:
         if expiry_dt is not None:
             try:
                 # expiry_dt already parsed above using pd.to_datetime with unit="ns"
-                
+
                 # Check if expiry time is midnight (likely date-only from Databento)
                 if expiry_dt.hour == 0 and expiry_dt.minute == 0 and expiry_dt.second == 0:
                     # Databento provided date-only (midnight)
@@ -1271,47 +1285,25 @@ class DatabentoAdapter:
                         #   - 9:00 AM CT (CST, UTC-6) = 3:00 PM UTC (winter, Nov-Mar)
                         #   - 9:00 AM CT (CDT, UTC-5) = 2:00 PM UTC (summer, Mar-Nov)
                         # ZoneInfo automatically handles DST transitions based on the expiry date
-                        try:
-                            from zoneinfo import ZoneInfo
-                        except ImportError:
-                            try:
-                                from backports.zoneinfo import ZoneInfo
-                            except ImportError:
-                                ZoneInfo = None
-                        
-                        if ZoneInfo:
-                            # Get the expiry date
-                            expiry_date = expiry_dt.date()
-                            
-                            # Create 9:00 AM CT datetime for the expiry date
-                            # ZoneInfo("America/Chicago") automatically determines DST based on expiry_date
-                            ct_tz = ZoneInfo("America/Chicago")
-                            expiry_9am_ct = datetime.combine(
-                                expiry_date, 
-                                time(9, 0, 0)
-                            ).replace(tzinfo=ct_tz)
-                            
-                            # Convert to UTC (ZoneInfo handles DST automatically)
-                            expiry_iso = expiry_9am_ct.astimezone(timezone.utc).isoformat()
-                            
-                            logger.debug(
-                                f"✅ Set CME option expiry to 9:00 AM CT for {exchange_raw_symbol}: "
-                                f"{expiry_date} -> {expiry_iso} (UTC)"
-                            )
-                        else:
-                            # Fallback: zoneinfo not available - use UTC-6 offset (standard Central Time)
-                            # Note: This doesn't handle DST, but is better than nothing
-                            expiry_date = expiry_dt.date()
-                            expiry_9am_ct = datetime.combine(
-                                expiry_date,
-                                time(9, 0, 0)
-                            ).replace(tzinfo=timezone(timedelta(hours=-6)))
-                            expiry_iso = expiry_9am_ct.isoformat()
-                            
-                            logger.debug(
-                                f"✅ Set CME option expiry to 9:00 AM CT (UTC-6, no DST) for {exchange_raw_symbol}: "
-                                f"{expiry_date} -> {expiry_iso}"
-                            )
+
+                        # Get the expiry date
+                        expiry_date = expiry_dt.date()
+
+                        # Create 9:00 AM CT datetime for the expiry date
+                        # ZoneInfo("America/Chicago") automatically determines DST based on expiry_date
+                        ct_tz = ZoneInfo("America/Chicago")
+                        expiry_9am_ct = datetime.combine(expiry_date, time(9, 0, 0)).replace(
+                            tzinfo=ct_tz
+                        )
+
+                        # Convert to UTC (ZoneInfo handles DST automatically)
+                        expiry_iso = expiry_9am_ct.astimezone(timezone.utc).isoformat()
+
+                        logger.debug(
+                            f"✅ Set CME option expiry to 9:00 AM CT for {exchange_raw_symbol}: "
+                            f"{expiry_date} -> {expiry_iso} (UTC)"
+                        )
+
                     else:
                         # For non-CME options or non-options, leave blank if date-only
                         # Actual expiry times vary by contract type and we don't want to guess incorrectly
@@ -1326,15 +1318,19 @@ class DatabentoAdapter:
                     # Databento provided time, use as-is (it's the correct expiry time for this contract)
                     expiry_iso = expiry_dt.isoformat()
             except Exception as e:
-                logger.warning(f"Failed to convert expiry to ISO for {exchange} {exchange_raw_symbol}: {e}")
+                logger.warning(
+                    f"Failed to convert expiry to ISO for {exchange} {exchange_raw_symbol}: {e}"
+                )
                 expiry_iso = None
 
         # Extract trading hours metadata using exchange-specific defaults
         # Databento doesn't provide trading hours in DEFINITION schema, so we use defaults
         # Convert to UTC for consistency with other timestamps
         # This also calculates the trading session start/end times
-        trading_hours = self._get_exchange_trading_hours(exchange, instrument_type, target_date=target_date)
-        
+        trading_hours = self._get_exchange_trading_hours(
+            exchange, instrument_type, target_date=target_date
+        )
+
         # Handle available_from_datetime and available_to_datetime
         # For TradFi instruments, these should reflect the actual trading session times
         # Priority: ts_event from Databento > trading session start > target_date start
@@ -1348,7 +1344,7 @@ class DatabentoAdapter:
                     available_from = pd.to_datetime(ts_event).isoformat()
             except Exception as e:
                 logger.warning(f"Failed to parse ts_event: {e}")
-        
+
         # If ts_event not available, use trading session start time
         # For sessions that span UTC days (like CME), this will be the previous day
         if not available_from:
@@ -1361,8 +1357,10 @@ class DatabentoAdapter:
             else:
                 # Fallback to current UTC time (should not happen in normal flow)
                 available_from = datetime.now(timezone.utc).isoformat()
-                logger.warning("No target_date provided, using current UTC time for available_from_datetime")
-        
+                logger.warning(
+                    "No target_date provided, using current UTC time for available_from_datetime"
+                )
+
         # Set available_to_datetime to trading session end time
         # For sessions that span UTC days, this will be the same day (closing after midnight UTC)
         available_to = None
@@ -1451,17 +1449,8 @@ class DatabentoAdapter:
         Returns:
             Dictionary with trading hours metadata (times in UTC)
         """
-        try:
-            from zoneinfo import ZoneInfo
-        except ImportError:
-            # Fallback for Python < 3.9
-            try:
-                from backports.zoneinfo import ZoneInfo
-            except ImportError:
-                ZoneInfo = None
-
         exchange_upper = exchange.upper()
-        
+
         # Use target_date for DST calculation, default to current date
         if target_date is None:
             target_date = datetime.now(timezone.utc)
@@ -1491,7 +1480,7 @@ class DatabentoAdapter:
 
         # Get trading hours for this exchange
         hours_config = trading_hours_map.get(exchange_upper, {})
-        
+
         if not hours_config:
             return {
                 "open": None,
@@ -1504,77 +1493,99 @@ class DatabentoAdapter:
         # Convert local time to UTC
         open_utc = None
         close_utc = None
-        
+
         try:
-            if ZoneInfo is None:
-                raise ImportError("zoneinfo not available")
-            
             # Get timezone object for DST-aware conversion
-            exchange_tz = ZoneInfo(hours_config['timezone'])
-            
+            exchange_tz = ZoneInfo(hours_config["timezone"])
+
             # Extract time components from local time string (format: "HH:MM:SS-OO:OO")
-            open_time_str = hours_config['open_local']
-            close_time_str = hours_config['close_local']
-            
+            open_time_str = hours_config["open_local"]
+            close_time_str = hours_config["close_local"]
+
             # Remove timezone offset part (everything after '-' or '+')
             # Format is "HH:MM:SS-OO:OO", we want "HH:MM:SS"
-            open_time_only = open_time_str.split('-')[0] if '-' in open_time_str else open_time_str.split('+')[0]
-            close_time_only = close_time_str.split('-')[0] if '-' in close_time_str else close_time_str.split('+')[0]
-            
+            open_time_only = (
+                open_time_str.split("-")[0] if "-" in open_time_str else open_time_str.split("+")[0]
+            )
+            close_time_only = (
+                close_time_str.split("-")[0]
+                if "-" in close_time_str
+                else close_time_str.split("+")[0]
+            )
+
             # Parse time components (HH:MM:SS)
-            open_parts = open_time_only.split(':')
-            close_parts = close_time_only.split(':')
-            open_hour, open_min, open_sec = int(open_parts[0]), int(open_parts[1]), int(open_parts[2])
-            close_hour, close_min, close_sec = int(close_parts[0]), int(close_parts[1]), int(close_parts[2])
-            
+            open_parts = open_time_only.split(":")
+            close_parts = close_time_only.split(":")
+            open_hour, open_min, open_sec = (
+                int(open_parts[0]),
+                int(open_parts[1]),
+                int(open_parts[2]),
+            )
+            close_hour, close_min, close_sec = (
+                int(close_parts[0]),
+                int(close_parts[1]),
+                int(close_parts[2]),
+            )
+
             # Determine if open time is on previous day (for sessions that span UTC days)
             # CME: opens at 5pm CT previous day, closes at 4pm CT same day
             # CBOE: opens and closes same day
-            
+
             # For CME: The session that CLOSES on target_date is the one we want
             # That session STARTS on the previous day (Sunday evening for Monday's session)
             # For CBOE: Session opens and closes same day
-            
+
             # Check if open time is before close time (same day) or after (previous day)
             open_time_of_day = open_hour * 3600 + open_min * 60 + open_sec
             close_time_of_day = close_hour * 3600 + close_min * 60 + close_sec
-            
+
             # If open time is after close time, it's on the previous day
             # This means the session that CLOSES on target_date STARTED the previous day
             open_date = target_date.date()
             if open_time_of_day > close_time_of_day:
                 # Session spans UTC days: open is previous day
                 # This is the session that CLOSES on target_date
-                from datetime import timedelta
                 open_date = open_date - timedelta(days=1)
-            
+
             # Create datetime objects in exchange local timezone (DST-aware)
             # open_date is the day the session STARTS (may be previous day for CME)
             # target_date is the day the session CLOSES (the day we're querying for)
             open_local_dt = datetime(
-                open_date.year, open_date.month, open_date.day,
-                open_hour, open_min, open_sec, tzinfo=exchange_tz
+                open_date.year,
+                open_date.month,
+                open_date.day,
+                open_hour,
+                open_min,
+                open_sec,
+                tzinfo=exchange_tz,
             )
             close_local_dt = datetime(
-                target_date.year, target_date.month, target_date.day,
-                close_hour, close_min, close_sec, tzinfo=exchange_tz
+                target_date.year,
+                target_date.month,
+                target_date.day,
+                close_hour,
+                close_min,
+                close_sec,
+                tzinfo=exchange_tz,
             )
-            
+
             # Convert to UTC
             open_utc_dt = open_local_dt.astimezone(timezone.utc)
             close_utc_dt = close_local_dt.astimezone(timezone.utc)
-            
+
             # Format as "HH:MM:SS+00:00" for trading hours display
             open_utc = open_utc_dt.strftime("%H:%M:%S+00:00")
             close_utc = close_utc_dt.strftime("%H:%M:%S+00:00")
-            
+
             # Format as ISO strings for session start/end
             session_start_utc = open_utc_dt.isoformat()
             session_end_utc = close_utc_dt.isoformat()
-            
+
             # Check if it's a holiday (simplified check - can be enhanced with holiday calendar)
-            is_holiday = self._is_trading_holiday(target_date.date(), hours_config.get("holiday_calendar"))
-            
+            is_holiday = self._is_trading_holiday(
+                target_date.date(), hours_config.get("holiday_calendar")
+            )
+
             # For CME: Sunday is NOT a holiday (Sunday evening is when Monday session starts)
             # But Sunday itself is NOT a trading day - it's when Monday's session starts
             # So if target_date is Sunday, is_trading_day should be False
@@ -1584,12 +1595,12 @@ class DatabentoAdapter:
                 weekday = target_date.date().weekday()
                 if weekday == 6:  # Sunday
                     is_trading_day = False  # Sunday is not a trading day (but not a holiday)
-            
+
             # If holiday, set trading hours to "holiday"
             if is_holiday:
                 open_utc = "holiday"
                 close_utc = "holiday"
-            
+
         except Exception as e:
             logger.warning(f"Failed to convert trading hours to UTC for {exchange}: {e}")
             # Fallback to local time if conversion fails
@@ -1603,28 +1614,32 @@ class DatabentoAdapter:
             "open": open_utc,
             "close": close_utc,
             "session": hours_config.get("session", "regular"),
-            "is_trading_day": is_trading_day if 'is_trading_day' in locals() else (not is_holiday if 'is_holiday' in locals() else None),
+            "is_trading_day": (
+                is_trading_day
+                if "is_trading_day" in locals()
+                else (not is_holiday if "is_holiday" in locals() else None)
+            ),
             "holiday_calendar": hours_config.get("holiday_calendar"),
-            "session_start_utc": session_start_utc if 'session_start_utc' in locals() else None,
-            "session_end_utc": session_end_utc if 'session_end_utc' in locals() else None,
+            "session_start_utc": session_start_utc if "session_start_utc" in locals() else None,
+            "session_end_utc": session_end_utc if "session_end_utc" in locals() else None,
         }
-    
+
     def _is_trading_holiday(self, date: datetime.date, calendar: Optional[str] = None) -> bool:
         """
         Check if a date is a trading holiday.
-        
+
         For exchanges like CME that open on Sunday evening UTC (for Monday trading),
         Sunday is NOT a holiday - it's part of Monday's trading session.
-        
+
         Args:
             date: Date to check
             calendar: Holiday calendar identifier (e.g., 'CME', 'NYSE', 'NASDAQ')
-        
+
         Returns:
             True if date is a holiday, False otherwise
         """
         weekday = date.weekday()
-        
+
         # For CME: Sunday evening UTC is the START of Monday's trading session
         # So Sunday is NOT a holiday - it's part of Monday's trading day
         # The session that opens Sunday evening closes Monday evening UTC
@@ -1635,7 +1650,7 @@ class DatabentoAdapter:
             # Sunday is NOT a holiday - it's when Monday's session starts
             # Monday-Friday are trading days (unless specific holiday)
             return False
-        
+
         # For CBOE (VIX): Standard weekday trading
         # Saturday and Sunday are holidays
         if calendar == "CBOE":
@@ -1643,16 +1658,16 @@ class DatabentoAdapter:
                 return True
             # Monday-Friday are trading days (unless specific holiday)
             return False
-        
+
         # Default: weekends are holidays
         if weekday >= 5:
             return True
-        
+
         # TODO: Add specific holiday checks here
         # Example: New Year's Day, Independence Day, Christmas, etc.
         # Can be enhanced with:
         # - pandas_market_calendars library
         # - Custom holiday calendar definitions
         # - API calls to exchange holiday calendars
-        
+
         return False

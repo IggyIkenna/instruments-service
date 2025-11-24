@@ -16,21 +16,14 @@ import logging
 import os
 from typing import Dict, List, Optional, Any
 import requests
+from unified_cloud_services import get_secret_with_fallback
+from instruments_service.settings import instruments_config
 
 logger = logging.getLogger(__name__)
 
 # Module-level cache for API key to avoid repeated Secret Manager calls
 _API_KEY_CACHE: Optional[str] = None
 _API_KEY_PROJECT_ID: Optional[str] = None
-
-# Import get_config with fallback to os.getenv
-try:
-    from unified_cloud_services import get_config
-except ImportError:
-    # Fallback if unified-cloud-services is not available
-    def get_config(key: str, default: str = "") -> str:
-        """Fallback get_config using os.getenv."""
-        return os.getenv(key, default)
 
 
 class TheGraphClient:
@@ -68,7 +61,7 @@ class TheGraphClient:
             global _API_KEY_CACHE, _API_KEY_PROJECT_ID
 
             # Check if we have a cached API key for the same project
-            project_id = project_id or get_config("GCP_PROJECT_ID", "central-element-323112")
+            project_id = project_id or instruments_config.gcp_project_id
 
             if _API_KEY_CACHE and _API_KEY_PROJECT_ID == project_id:
                 # Use cached API key
@@ -77,10 +70,7 @@ class TheGraphClient:
             else:
                 # Retrieve from Secret Manager and cache it
                 try:
-                    from unified_cloud_services import get_secret_with_fallback
-
-                    secret_name = get_config("GRAPH_SECRET_NAME", "graph-api-key")
-
+                    secret_name = instruments_config.graph_seceret_name
                     self.api_key = get_secret_with_fallback(
                         project_id=project_id,
                         secret_name=secret_name,
@@ -100,13 +90,13 @@ class TheGraphClient:
                         )
                 except ImportError:
                     logger.warning("unified-cloud-services not available, falling back to env var")
-                    self.api_key = get_config("THE_GRAPH_API_KEY", "")
+                    self.api_key = instruments_config.graph_seceret_name
                     if self.api_key:
                         _API_KEY_CACHE = self.api_key
                         _API_KEY_PROJECT_ID = project_id
                 except Exception as e:
                     logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                    self.api_key = get_config("THE_GRAPH_API_KEY", "")
+                    self.api_key = instruments_config.graph_seceret_name
                     if self.api_key:
                         _API_KEY_CACHE = self.api_key
                         _API_KEY_PROJECT_ID = project_id
@@ -115,10 +105,7 @@ class TheGraphClient:
             self.subgraph_url = subgraph_url
         else:
             # Default: Try to use Studio endpoint (no API key needed, but rate-limited)
-            self.subgraph_url = get_config(
-                "THE_GRAPH_UNISWAP_V3_URL", # Fallback Studio endpoint (rate-limited, for testing only)
-                "https://api.studio.thegraph.com/query/50688/uniswap-v3/version/latest",
-            )
+            self.subgraph_url = instruments_config.uniswap_v3_graph_url
 
         logger.info(f"✅ TheGraphClient initialized with URL: {self.subgraph_url}")
         if self.api_key:

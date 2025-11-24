@@ -19,21 +19,21 @@ jobs:
     permissions:
       contents: read
       packages: write
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-      
+
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
           cache: 'pip'
-      
+
       - name: Install build tools
         run: |
           python -m pip install --upgrade pip build twine
-      
+
       - name: Determine version
         id: version
         run: |
@@ -53,18 +53,18 @@ jobs:
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "📦 Publishing version: $VERSION"
-      
+
       - name: Update version in pyproject.toml
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           # Update version in pyproject.toml using sed
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
           echo "✅ Updated pyproject.toml version to $VERSION"
-      
+
       - name: Build package
         run: |
           python -m build
-      
+
       - name: Note about GitHub Packages
         run: |
           echo "⚠️  GitHub Packages does NOT support Python/PyPI packages"
@@ -72,18 +72,17 @@ jobs:
           echo "🔗 Install with: pip install git+https://x-access-token:\$GITHUB_TOKEN@github.com/iggyikenna/instruments-service.git"
           echo ""
           echo "For more info, see: GITHUB_PACKAGES_PYTHON_LIMITATION.md"
-      
+
       - name: Create Release Artifacts
         run: |
           echo "📦 Creating release artifacts for version ${{ steps.version.outputs.version }}"
           # The built packages in dist/ can be attached to GitHub Releases manually
           # or downloaded from the workflow artifacts
           ls -lh dist/
-      
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: instruments-service-${{ steps.version.outputs.version }}
           path: dist/
           retention-days: 90
-
