@@ -46,7 +46,7 @@ cd instruments-service
    cd instruments-service
    echo "YOUR_TOKEN_HERE" | gh secret set GH_PAT --repo IggyIkenna/instruments-service
    ```
-   
+
    Or manually:
    - Go to: https://github.com/IggyIkenna/instruments-service/settings/secrets/actions
    - Click **New repository secret**
@@ -65,10 +65,10 @@ To publish `unified-cloud-services` to GitHub Packages:
 2. **Publish a version:**
    ```bash
    cd unified-cloud-services
-   
+
    # Option A: Create a GitHub release (triggers workflow automatically)
    gh release create v1.0.0 --title "v1.0.0" --notes "Initial release"
-   
+
    # Option B: Manual trigger
    gh workflow run publish-package.yml -f version=1.0.0
    ```
@@ -100,4 +100,3 @@ Once `GH_PAT` is set:
 - ✅ Publishing workflow ready for `unified-cloud-services`
 
 Once `GH_PAT` is set, the quality gates will run automatically on every push to `main`!
-

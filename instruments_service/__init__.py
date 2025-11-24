@@ -28,24 +28,40 @@ __all__ = [
 def __getattr__(name):
     """Lazy import to avoid circular dependencies."""
     if name == "InstrumentProcessingService":
-        from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
+        from instruments_service.app.core.instrument_processing_service import (
+            InstrumentProcessingService,
+        )
+
         return InstrumentProcessingService
     elif name == "CloudInstrumentStorage":
         from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
+
         return CloudInstrumentStorage
     elif name == "InstrumentBatchProcessor":
         from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
+
         return InstrumentBatchProcessor
     elif name in ("InstrumentDefinition", "InstrumentKey", "Venue", "InstrumentType"):
-        from instruments_service.models import InstrumentDefinition, InstrumentKey, Venue, InstrumentType
+        from instruments_service.models import (
+            InstrumentDefinition,
+            InstrumentKey,
+            Venue,
+            InstrumentType,
+        )
+
         return {
             "InstrumentDefinition": InstrumentDefinition,
             "InstrumentKey": InstrumentKey,
             "Venue": Venue,
             "InstrumentType": InstrumentType,
         }[name]
-    elif name in ("VenueMapping", "ExchangeInstrumentConfig", "DataTypeConfig", 
-                  "DatabentoInstrumentConfig", "UnifiedInstrumentConfig"):
+    elif name in (
+        "VenueMapping",
+        "ExchangeInstrumentConfig",
+        "DataTypeConfig",
+        "DatabentoInstrumentConfig",
+        "UnifiedInstrumentConfig",
+    ):
         from instruments_service.config import (
             VenueMapping,
             ExchangeInstrumentConfig,
@@ -53,6 +69,7 @@ def __getattr__(name):
             DatabentoInstrumentConfig,
             UnifiedInstrumentConfig,
         )
+
         return {
             "VenueMapping": VenueMapping,
             "ExchangeInstrumentConfig": ExchangeInstrumentConfig,

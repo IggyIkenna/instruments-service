@@ -25,10 +25,10 @@ import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-from urllib.parse import quote
-
+from typing import Dict, List, Optional
 import requests
+from unified_cloud_services import get_secret_with_fallback
+from instruments_service.settings import instruments_config
 
 
 class ClickUpRateLimiter:
@@ -182,7 +182,7 @@ class ClickUpClient:
 class StatusMdParser:
     """Parses STATUS.md to extract tasks, subtasks, and dependencies"""
 
-    def __init__(self, status_md_path: Path, service_tag: str = None):
+    def __init__(self, status_md_path: Path, service_tag: str = ""):
         self.status_md_path = status_md_path
         self.content = status_md_path.read_text()
         self.service_tag = service_tag or "instruments-service"  # Default fallback
@@ -942,45 +942,27 @@ class ClickUpImporter:
 
         # Assignee mapping (username -> will be resolved to user ID)
         self.assignee_map = {
-            "Ikenna": None,  # Will be resolved from .env.clickup or API
-            "Harsh": None,  # Will be resolved from .env.clickup or API
-            "Femi": None,  # Will be resolved from .env.clickup or API
-            "Daniel": None,  # Will be resolved from .env.clickup or API
-            "Carlos": None,  # Will be resolved from .env.clickup or API
+            "Ikenna": "",  # Will be resolved from instruments_config or API
+            "Harsh": "",  # Will be resolved from instruments_config or API
+            "Femi": "",  # Will be resolved from instruments_config or API
+            "Daniel": "",  # Will be resolved from instruments_config or API
+            "Carlos": "",  # Will be resolved from instruments_config or API
         }
 
     def resolve_user_ids(self):
-        """Resolve username to user IDs from .env.clickup or ClickUp team"""
-        # First, try to get from instruments-service/.env.clickup file
-        service_env_file = Path(__file__).parent.parent / ".env.clickup"
-        root_env_file = Path(__file__).parent.parent.parent / ".env"
+        """Resolve username to user IDs from instruments_config or ClickUp team"""
+        # Get user IDs from instruments_config (which reads from .env via Pydantic settings)
+        if instruments_config.clickup_user_id_ikenna:
+            self.assignee_map["Ikenna"] = instruments_config.clickup_user_id_ikenna
+        if instruments_config.clickup_user_id_harsh:
+            self.assignee_map["Harsh"] = instruments_config.clickup_user_id_harsh
+        if instruments_config.clickup_user_id_femi:
+            self.assignee_map["Femi"] = instruments_config.clickup_user_id_femi
+        if instruments_config.clickup_user_id_daniel:
+            self.assignee_map["Daniel"] = instruments_config.clickup_user_id_daniel
+        # Carlos user ID is not in instruments_config, will be resolved from API if needed
 
-        # Check service-specific .env.clickup first, then root .env (for backwards compatibility)
-        for env_file in [service_env_file, root_env_file]:
-            if env_file.exists():
-                for line in env_file.read_text().splitlines():
-                    if line.startswith("clickup_user_id_ikenna="):
-                        user_id = line.split("=", 1)[1].strip()
-                        if user_id and not self.assignee_map.get("Ikenna"):
-                            self.assignee_map["Ikenna"] = user_id
-                    elif line.startswith("clickup_user_id_harsh="):
-                        user_id = line.split("=", 1)[1].strip()
-                        if user_id and not self.assignee_map.get("Harsh"):
-                            self.assignee_map["Harsh"] = user_id
-                    elif line.startswith("clickup_user_id_femi="):
-                        user_id = line.split("=", 1)[1].strip()
-                        if user_id and not self.assignee_map.get("Femi"):
-                            self.assignee_map["Femi"] = user_id
-                    elif line.startswith("clickup_user_id_daniel="):
-                        user_id = line.split("=", 1)[1].strip()
-                        if user_id and not self.assignee_map.get("Daniel"):
-                            self.assignee_map["Daniel"] = user_id
-                    elif line.startswith("clickup_user_id_carlos="):
-                        user_id = line.split("=", 1)[1].strip()
-                        if user_id and not self.assignee_map.get("Carlos"):
-                            self.assignee_map["Carlos"] = user_id
-
-        # If not found in .env, try API (for dry run, use fake IDs)
+        # If not found in instruments_config, try API (for dry run, use fake IDs)
         if self.dry_run:
             if not self.assignee_map.get("Ikenna"):
                 self.assignee_map["Ikenna"] = "dry-run-user-1"
@@ -992,7 +974,7 @@ class ClickUpImporter:
                 self.assignee_map["Daniel"] = "dry-run-user-4"
             if not self.assignee_map.get("Carlos"):
                 self.assignee_map["Carlos"] = "dry-run-user-5"
-            print("🔍 [DRY RUN] Using user IDs from .env.clickup or fake IDs")
+            print("🔍 [DRY RUN] Using user IDs from instruments_config or fake IDs")
             return
 
         # If still not found, try API
@@ -1054,7 +1036,7 @@ class ClickUpImporter:
             print("   Tasks for missing users will be created without assignees.")
             print("   To fix this:")
             print("   1. Run: python scripts/get_clickup_user_ids.py")
-            print("   2. Add the user IDs to instruments-service/.env.clickup file:")
+            print("   2. Add the user IDs to .env file (will be loaded by settings.py):")
             print("      clickup_user_id_ikenna=YOUR_ID")
             print("      clickup_user_id_harsh=YOUR_ID")
             print("      clickup_user_id_femi=YOUR_ID")
@@ -1692,17 +1674,19 @@ class ClickUpImporter:
             if self.assignee_map.get("Ikenna"):
                 print(f"   ✅ Found Ikenna: {self.assignee_map['Ikenna']}")
             else:
-                print(f"   ⚠️  Ikenna user ID not found - check .env.clickup file")
+                print(f"   ⚠️  Ikenna user ID not found - check .env file (loaded by settings.py)")
             if self.assignee_map.get("Harsh"):
                 print(f"   ✅ Found Harsh: {self.assignee_map['Harsh']}")
             else:
-                print(f"   ⚠️  Harsh user ID not found - check .env.clickup file")
+                print(f"   ⚠️  Harsh user ID not found - check .env file (loaded by settings.py)")
             if self.assignee_map.get("Femi"):
                 print(f"   ✅ Found Femi: {self.assignee_map['Femi']}")
             else:
-                print(f"   ⚠️  Femi user ID not found - check .env.clickup file")
+                print(f"   ⚠️  Femi user ID not found - check .env file (loaded by settings.py)")
             if self.assignee_map.get("Daniel"):
                 print(f"   ✅ Found Daniel: {self.assignee_map['Daniel']}")
+            else:
+                print(f"   ⚠️  Daniel user ID not found - check .env file (loaded by settings.py)")
             if self.assignee_map.get("Carlos"):
                 print(f"   ✅ Found Carlos: {self.assignee_map['Carlos']}")
 
@@ -2455,7 +2439,7 @@ class ClickUpImporter:
                 if not assignee_id:
                     print(f"   ⚠️  Owner '{owner_name}' not found in assignee_map")
                     if owner_name == "Femi":
-                        print(f"      💡 Add clickup_user_id_femi=... to .env.clickup file")
+                        print(f"      💡 Add clickup_user_id_femi=... to .env file")
                         # Try auto-assignment based on task name as fallback
                         task_name = task_data.get("name", "")
                         if (
@@ -2724,87 +2708,41 @@ def main():
 
     args = parser.parse_args()
 
-    # Get API token from args, env var, or .env file
-    from pathlib import Path
-
-    # Check service-specific .env.clickup first, then root .env (for backwards compatibility)
-    service_env_file = Path(__file__).parent.parent / ".env.clickup"
-    root_env_file = Path(__file__).parent.parent.parent / ".env"
-
+    # Get API token from args or Secret Manager/env via instruments_config
     api_token = args.api_token
     if not api_token:
-        # Try environment variable
-        api_token = get_config("CLICKUP_API_TOKEN")
-        if not api_token:
-            # Try Secret Manager via unified-cloud-services
-            try:
-                from unified_cloud_services import get_secret_with_fallback, get_config
+        # Try Secret Manager via unified-cloud-services
+        try:
+            project_id = instruments_config.gcp_project_id
+            secret_name = instruments_config.clickup_secret_name
+            api_token = get_secret_with_fallback(
+                secret_name=secret_name,
+                project_id=project_id,
+                fallback_env_var="CLICKUP_API_TOKEN",
+            )
+            if api_token:
+                api_token = api_token.strip()
+                print(f"✅ Retrieved ClickUp API key from Secret Manager (secret: {secret_name})")
+            else:
+                print("❌ API token not found. Set --api-token or CLICKUP_API_TOKEN env var")
+                print(f"   Checked: Secret Manager ({instruments_config.clickup_secret_name})")
+                print(f"   Checked: Environment variables via settings.py")
+                print(f"\n💡 To store API key in Secret Manager, run:")
+                print(f"   python scripts/store_clickup_secret.py --api-key YOUR_TOKEN")
+                return 1
+        except Exception as e:
+            print(f"⚠️  Secret Manager lookup failed: {e}")
+            return 1
 
-                project_id = get_config("GCP_PROJECT_ID", "central-element-323112")
-                secret_name = get_config("CLICKUP_SECRET_NAME", "clickup-api-key")
-                api_token = get_secret_with_fallback(
-                    secret_name=secret_name,
-                    project_id=project_id,
-                    fallback_env_var="CLICKUP_API_TOKEN",
-                )
-                if api_token:
-                    api_token = api_token.strip()
-                    print(
-                        f"✅ Retrieved ClickUp API key from Secret Manager (secret: {secret_name})"
-                    )
-            except ImportError:
-                pass  # unified-cloud-services not available, continue to .env files
-            except Exception as e:
-                print(f"⚠️  Secret Manager lookup failed: {e}")
+    # Get list ID from args or instruments_config
+    list_id = args.list_id or instruments_config.clickup_list_id
 
-            if not api_token:
-                # Try service-specific .env.clickup file first
-                for env_file in [service_env_file, root_env_file]:
-                    if env_file.exists():
-                        for line in env_file.read_text().splitlines():
-                            if line.startswith("clickup_api_token="):
-                                api_token = line.split("=", 1)[1].strip()
-                                break
-                        if api_token:
-                            break
-
-    if not api_token:
-        print(
-            "❌ API token not found. Set --api-token or CLICKUP_API_TOKEN env var or add clickup_api_token=... to .env.clickup"
-        )
-        print(f"   Checked: Secret Manager (clickup-api-key)")
-        print(f"   Checked: {service_env_file}")
-        print(f"   Checked: {root_env_file}")
-        print(f"\n💡 To store API key in Secret Manager, run:")
-        print(f"   cd ../unified-cloud-services && python scripts/store_secret.py --secret-name clickup-api-key --secret-value YOUR_TOKEN")
-        return 1
-
-    # Get List ID from args or env var
-    list_id = args.list_id or get_config("CLICKUP_LIST_ID")
-    if not list_id:
-        # Try .env files (service-specific .env.clickup first, then root .env)
-        for env_file in [service_env_file, root_env_file]:
-            if env_file.exists():
-                for line in env_file.read_text().splitlines():
-                    if line.startswith("clickup_list_id_instruments_service="):
-                        list_id = line.split("=", 1)[1].strip()
-                        # Remove "li/" prefix if present
-                        if list_id.startswith("li/"):
-                            list_id = list_id[3:]
-                        break
-                    elif line.startswith("clickup_list_id="):
-                        list_id = line.split("=", 1)[1].strip()
-                        # Remove "li/" prefix if present
-                        if list_id.startswith("li/"):
-                            list_id = list_id[3:]
-                        break
-                if list_id:
-                    break
+    # Remove "li/" prefix if present
+    if list_id and list_id.startswith("li/"):
+        list_id = list_id[3:]
 
     if not list_id:
-        print(
-            "❌ List ID not found. Set --list-id or CLICKUP_LIST_ID env var or add clickup_list_id_instruments_service=... to .env.clickup"
-        )
+        print("❌ List ID not found. Set --list-id or CLICKUP_LIST_ID env var")
         print("\n📋 How to find your List ID:")
         print("   1. Open your 'Instruments Service' list in ClickUp")
         print("   2. Look at the URL in your browser")
