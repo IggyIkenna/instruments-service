@@ -187,7 +187,7 @@ class TestInstrumentsServiceExtended:
             return_value={"TEST:SPOT_PAIR:BTC-USDT": mock_instrument}
         )
         service.venue_mapping.all_tardis_exchanges = ["binance"]
-        service.cloud_storage.store_instruments = AsyncMock(return_value=True)
+        service.cloud_storage.store_instruments = Mock(return_value=True)
         
         result = await service.generate_instruments_for_date(
             date=target_date,
@@ -215,7 +215,7 @@ class TestInstrumentsServiceExtended:
         service.processing_service.process_exchange_instruments = AsyncMock(
             return_value={"TEST:SPOT_PAIR:BTC-USDT": mock_instrument}
         )
-        service.cloud_storage.store_instruments = AsyncMock(return_value=True)
+        service.cloud_storage.store_instruments = Mock(return_value=True)
         
         result = await service.generate_instruments_for_date(
             date=target_date,
@@ -282,7 +282,7 @@ class TestInstrumentsServiceExtended:
             service.processing_service.fetch_databento_instruments = AsyncMock(
                 return_value={"CME:FUTURE:ES": mock_instrument}
             )
-            service.cloud_storage.store_instruments = AsyncMock(return_value=True)
+            service.cloud_storage.store_instruments = Mock(return_value=True)
             
             result = await service.generate_instruments_for_date(
                 date=target_date,
@@ -320,7 +320,7 @@ class TestInstrumentsServiceExtended:
             mock_vix_inst.model_dump.return_value = {"instrument_key": "CBOE:INDEX:VIX"}
             mock_inst_def.return_value = mock_vix_inst
             
-            service.cloud_storage.store_instruments = AsyncMock(return_value=True)
+            service.cloud_storage.store_instruments = Mock(return_value=True)
             
             result = await service.generate_instruments_for_date(
                 date=target_date,
@@ -364,7 +364,7 @@ class TestInstrumentsServiceExtended:
         service.processing_service.fetch_defi_instruments = Mock(
             return_value={"UNISWAPV3-ETH:POOL:TEST": mock_instrument}
         )
-        service.cloud_storage.store_instruments = AsyncMock(return_value=True)
+        service.cloud_storage.store_instruments = Mock(return_value=True)
         
         result = await service.generate_instruments_for_date(
             date=target_date,
@@ -406,7 +406,7 @@ class TestInstrumentsServiceExtended:
         service.processing_service.fetch_defi_instruments = Mock(
             return_value={"HYPERLIQUID:PERPETUAL:TEST": mock_instrument}
         )
-        service.cloud_storage.store_instruments = AsyncMock(return_value=True)
+        service.cloud_storage.store_instruments = Mock(return_value=True)
         
         result = await service.generate_instruments_for_date(
             date=target_date,
@@ -429,7 +429,7 @@ class TestInstrumentsServiceExtended:
         service.processing_service.fetch_defi_instruments = Mock(
             return_value={"ASTER:PERPETUAL:TEST": mock_instrument}
         )
-        service.cloud_storage.store_instruments = AsyncMock(return_value=True)
+        service.cloud_storage.store_instruments = Mock(return_value=True)
         
         result = await service.generate_instruments_for_date(
             date=target_date,
@@ -452,7 +452,7 @@ class TestInstrumentsServiceExtended:
         service.processing_service.fetch_databento_instruments = AsyncMock(return_value={})
         service.processing_service.fetch_defi_instruments = Mock(return_value={})
         service.venue_mapping.all_tardis_exchanges = []
-        service.cloud_storage.store_instruments = AsyncMock(return_value=True)
+        service.cloud_storage.store_instruments = Mock(return_value=True)
         
         result = await service.generate_instruments_for_date(
             date=target_date,
@@ -541,7 +541,7 @@ class TestInstrumentsServiceExtended:
             return_value={"TEST:SPOT_PAIR:BTC-USDT": {"instrument_key": "TEST:SPOT_PAIR:BTC-USDT"}}
         )
         service.venue_mapping.all_tardis_exchanges = ["binance"]
-        service.cloud_storage.store_instruments = AsyncMock(return_value=True)
+        service.cloud_storage.store_instruments = Mock(return_value=True)
         
         result = await service.generate_instruments_for_date(
             date=target_date,
