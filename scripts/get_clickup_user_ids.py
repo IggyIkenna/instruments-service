@@ -72,7 +72,7 @@ def get_clickup_user_ids():
         print(f"   Checked: {service_env_file}")
         print(f"   Checked: {root_env_file}")
         print(f"\n💡 To store API key in Secret Manager, run:")
-        print(f"   python scripts/store_clickup_secret.py --api-key YOUR_TOKEN")
+        print(f"   cd ../unified-cloud-services && python scripts/store_secret.py --secret-name clickup-api-key --secret-value YOUR_TOKEN")
         return 1
 
     print(f"✅ Using API token: {api_token[:20]}...")
