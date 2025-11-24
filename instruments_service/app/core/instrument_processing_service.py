@@ -156,6 +156,14 @@ class InstrumentProcessingService:
         self.tardis_adapter = None
         self._tardis_project_id = project_id
 
+        # Sports betting adapters - lazy-loaded only when needed
+        self._betfair_adapter = None
+        self._api_football_adapter = None
+        
+        # Sports instrument builder
+        from instruments_service.app.core.sports_instruments_builder import SportsInstrumentBuilder
+        self._sports_builder = SportsInstrumentBuilder(venue="BETFAIR")
+
         # Initialize centralized services
         from unified_cloud_services import SubgraphService, DateFilterService
         from instruments_service.utils.ccxt_service import CCXTService
@@ -2450,6 +2458,171 @@ class InstrumentProcessingService:
             logger.error(f"Failed to fetch {protocol} instruments: {e}")
             return {}
 
+    def _get_betfair_adapter(self):
+        """Lazy-load Betfair adapter only when needed."""
+        if self._betfair_adapter is None:
+            from instruments_service.app.venues.sports_betting import BetfairAdapter
+            self._betfair_adapter = BetfairAdapter()
+        return self._betfair_adapter
+    
+    async def _get_api_football_adapter(self):
+        """Lazy-load API-Football adapter only when needed."""
+        if self._api_football_adapter is None:
+            from instruments_service.app.venues.sports_betting import APIFootballAdapter
+            self._api_football_adapter = APIFootballAdapter()
+        return self._api_football_adapter
+    
+    async def process_sports_instruments_for_date_range(
+        self,
+        league_code: str,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> Dict[str, InstrumentDefinition]:
+        """
+        Generate sports instruments (football markets) for a league
+        over a date range, using API-Football + Betfair.
+        
+        Follows same pattern as process_exchange_instruments() for crypto.
+        
+        Args:
+            league_code: Internal league code (e.g., "ENG-PREMIER_LEAGUE")
+            start_date: Start date (UTC)
+            end_date: End date (UTC)
+            
+        Returns:
+            Dictionary of instrument_key -> InstrumentDefinition
+        """
+        # 1. Get league config from VenueMapping
+        league_cfg = self.venue_mapping.get_sports_league_config(league_code)
+        if not league_cfg:
+            raise ValueError(f"Unknown sports league_code={league_code}")
+        
+        # 2. Initialize adapters
+        api_football = await self._get_api_football_adapter()
+        betfair = self._get_betfair_adapter()
+        
+        instruments: Dict[str, InstrumentDefinition] = {}
+        
+        # 3. Determine seasons to fetch (all seasons overlapping date range)
+        seasons_to_fetch: List[int] = []
+        for year in range(league_cfg.api_football_season_from, datetime.now().year + 1):
+            seasons_to_fetch.append(year)
+        
+        # 4. Fetch fixtures from API-Football for each season
+        all_fixtures: List[Dict[str, Any]] = []
+        for season in seasons_to_fetch:
+            try:
+                fixtures = await api_football.get_fixtures_for_league_season(
+                    league_id=league_cfg.api_football_league_id,
+                    season=season,
+                    from_date=start_date,
+                    to_date=end_date,
+                )
+                all_fixtures.extend(fixtures)
+                logger.info(
+                    f"Processing {len(fixtures)} fixtures for {league_code} season={season}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to fetch fixtures for {league_code} season={season}: {e}")
+                continue
+        
+        if not all_fixtures:
+            logger.warning(f"No fixtures found for {league_code} between {start_date} and {end_date}")
+            return instruments
+        
+        # 5. Fetch Betfair events for date range
+        try:
+            bf_events = betfair.list_events_for_date_range(
+                competition_ids=league_cfg.betfair_competition_ids,
+                from_utc=start_date,
+                to_utc=end_date,
+            )
+        except Exception as e:
+            logger.error(f"Failed to fetch Betfair events: {e}")
+            return instruments
+        
+        # 6. Build map from (home_name, away_name, kickoff_day) → eventId
+        event_index: Dict[tuple, str] = {}
+        for ev in bf_events:
+            event = ev.get("event", {})
+            ev_name = event.get("name", "")
+            ev_id = event.get("id")
+            ev_open_date = event.get("openDate")
+            if not (ev_name and ev_id and ev_open_date):
+                continue
+            
+            try:
+                ev_dt = datetime.fromisoformat(ev_open_date.replace("Z", "+00:00")).astimezone(timezone.utc)
+            except Exception:
+                continue
+            
+            day_key = ev_dt.date().isoformat()
+            # Crude split: "Home v Away" or "Home vs Away"
+            parts = re.split(r"\s+v(?:s\.)?\s+", ev_name, flags=re.IGNORECASE)
+            if len(parts) == 2:
+                home_ev, away_ev = parts
+                event_index[(home_ev.strip().upper(), away_ev.strip().upper(), day_key)] = ev_id
+        
+        # 7. Match fixtures → events and build instruments
+        for fixture in all_fixtures:
+            fixture_info = fixture.get("fixture", {})
+            teams_info = fixture.get("teams", {})
+            home_name = (teams_info.get("home", {}) or {}).get("name") or ""
+            away_name = (teams_info.get("away", {}) or {}).get("name") or ""
+            kickoff_raw = fixture_info.get("date")
+            if not kickoff_raw:
+                continue
+            
+            try:
+                kts = datetime.fromisoformat(kickoff_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+                day_key = kts.date().isoformat()
+            except Exception:
+                continue
+            
+            # Try to match fixture to Betfair event
+            key_variants = [
+                (home_name.upper(), away_name.upper(), day_key),
+            ]
+            event_id = None
+            for k in key_variants:
+                event_id = event_index.get(k)
+                if event_id:
+                    break
+            
+            if not event_id:
+                logger.debug(f"No Betfair event found for fixture {home_name} vs {away_name} on {day_key}")
+                continue
+            
+            # Fetch Betfair markets for event
+            try:
+                bf_markets = betfair.list_market_catalogue_for_event(
+                    event_id=event_id,
+                    market_type_codes=["MATCH_ODDS", "OVER_UNDER_25", "BOTH_TEAMS_TO_SCORE"],
+                )
+            except Exception as e:
+                logger.warning(f"Failed to fetch Betfair markets for event {event_id}: {e}")
+                continue
+            
+            # Build instruments using SportsInstrumentBuilder
+            try:
+                built = self._sports_builder.build_instruments_for_match(
+                    league=league_cfg,
+                    fixture=fixture,
+                    betfair_markets=bf_markets,
+                )
+                
+                for inst in built:
+                    instruments[inst.instrument_key] = inst
+            except Exception as e:
+                logger.warning(f"Failed to build instruments for fixture {fixture_info.get('id')}: {e}")
+                continue
+        
+        logger.info(
+            f"Sports instruments built for {league_code} between {start_date} and {end_date}: "
+            f"{len(instruments)} instruments"
+        )
+        return instruments
+
     def cleanup(self):
         """Cleanup resources and close connections"""
         # Cleanup Tardis adapter (handles its own session)
@@ -2463,6 +2636,12 @@ class InstrumentProcessingService:
         # Cleanup subgraph service cache
         if hasattr(self, "subgraph_service") and self.subgraph_service:
             self.subgraph_service.clear_cache()
+
+        # Cleanup sports betting adapters
+        if hasattr(self, "_betfair_adapter") and self._betfair_adapter is not None:
+            self._betfair_adapter.cleanup()
+        # Note: API-Football adapter cleanup (aclose) should be called explicitly if needed
+        # Since cleanup() is synchronous, we skip async cleanup here
 
         # Clear metadata cache
         self._metadata_cache.clear()

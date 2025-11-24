@@ -633,11 +633,13 @@ class TestDataTypeConfigExtended:
 class TestInstrumentsServiceConfig:
     """Tests for InstrumentsServiceConfig."""
 
-    def test_instruments_service_config_with_base_config(self):
+    def test_instruments_service_config_with_base_config(self, monkeypatch):
         """Test InstrumentsServiceConfig when BaseServiceConfig is available."""
         # This tests the if branch when BASE_SERVICE_CONFIG_AVAILABLE is True
         from instruments_service.config import InstrumentsServiceConfig
 
+        # Clear GCP_PROJECT_ID env var to ensure constructor argument takes precedence
+        monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
         config = InstrumentsServiceConfig(
             service_name="test-service",
             enable_ccxt_integration=True,
@@ -654,10 +656,12 @@ class TestInstrumentsServiceConfig:
         assert config.gcp_project_id == "test-project"
         assert config.bigquery_location == "asia-northeast1"
 
-    def test_instruments_service_config_all_fields(self):
+    def test_instruments_service_config_all_fields(self, monkeypatch):
         """Test InstrumentsServiceConfig with all fields."""
         from instruments_service.config import InstrumentsServiceConfig
 
+        # Clear GCP_PROJECT_ID env var to ensure constructor argument takes precedence
+        monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
         config = InstrumentsServiceConfig(
             service_name="test-service",
             enable_ccxt_integration=False,
@@ -682,10 +686,12 @@ class TestInstrumentsServiceConfig:
         assert config.gcp_project_id == "test-project"
         assert config.bigquery_location == "us-central1"
 
-    def test_instruments_service_config_get_cloud_target(self):
+    def test_instruments_service_config_get_cloud_target(self, monkeypatch):
         """Test get_cloud_target method."""
         from instruments_service.config import InstrumentsServiceConfig
 
+        # Clear GCP_PROJECT_ID env var to ensure constructor argument takes precedence
+        monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
         config = InstrumentsServiceConfig(
             gcp_project_id="test-project",
             gcs_bucket="test-bucket",

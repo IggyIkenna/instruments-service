@@ -279,6 +279,88 @@ class InstrumentDefinition(BaseModel):
         description="Exchange holiday calendar identifier (e.g., 'NYSE', 'CME', 'NASDAQ'). Only populated for TradFi instruments.",
     )
 
+    # SPORTS / SPORTS-BETTING FIELDS
+    sport: Optional[str] = Field(
+        default=None,
+        description="Sport category (e.g., 'FOOTBALL', 'TENNIS').",
+    )
+    competition_code: Optional[str] = Field(
+        default=None,
+        description="Internal competition code (e.g., 'ENG-PREMIER_LEAGUE', 'GER-BUNDESLIGA').",
+    )
+    season: Optional[str] = Field(
+        default=None,
+        description="Season identifier (e.g., '2024-2025').",
+    )
+    match_id: Optional[str] = Field(
+        default=None,
+        description="Canonical match/fixture identifier (e.g., API-FOOTBALL fixture id).",
+    )
+    match_slug: Optional[str] = Field(
+        default=None,
+        description="Human-friendly slug for match (e.g., 'ARSENAL-LIVERPOOL-20250315').",
+    )
+    market_group: Optional[str] = Field(
+        default=None,
+        description="Market group (e.g., 'MATCH_WINNER', 'TOTAL_GOALS', 'BTTS').",
+    )
+    market_param: Optional[str] = Field(
+        default=None,
+        description="Market parameter where applicable (e.g., '2.5' for OU 2.5).",
+    )
+    market_outcomes: Optional[str] = Field(
+        default=None,
+        description="Comma-separated list of available outcomes (e.g., 'HOME,DRAW,AWAY', 'OVER,UNDER').",
+    )
+    sport_home_team_id: Optional[str] = Field(
+        default=None,
+        description="Home team id from canonical sports provider (e.g., API-FOOTBALL team id).",
+    )
+    sport_away_team_id: Optional[str] = Field(
+        default=None,
+        description="Away team id from canonical sports provider.",
+    )
+    sport_home_team_name: Optional[str] = Field(
+        default=None,
+        description="Home team display name.",
+    )
+    sport_away_team_name: Optional[str] = Field(
+        default=None,
+        description="Away team display name.",
+    )
+    kickoff_ts_utc: Optional[datetime] = Field(
+        default=None,
+        description="Match kick-off time in UTC (from fixture data).",
+    )
+    kickoff_inferred_from_odds: Optional[datetime] = Field(
+        default=None,
+        description="Kick-off time inferred from odds data transitions (what prices believe).",
+    )
+    kickoff_fixture_time: Optional[datetime] = Field(
+        default=None,
+        description="Official kick-off time from API-Football fixture data.",
+    )
+    kickoff_delta_minutes: Optional[float] = Field(
+        default=None,
+        description="Difference between inferred and fixture kickoff times (minutes). Large deltas indicate data quality issues.",
+    )
+    pre_match_open_ts_utc: Optional[datetime] = Field(
+        default=None,
+        description="Time the pre-match market opened (UTC) if known.",
+    )
+    settle_ts_utc: Optional[datetime] = Field(
+        default=None,
+        description="Time the market settled (UTC).",
+    )
+    in_play_supported: Optional[bool] = Field(
+        default=None,
+        description="True if market supports in-play trading.",
+    )
+    max_hours_after_kickoff: Optional[float] = Field(
+        default=None,
+        description="Maximum hours after kickoff to consider valid data (configurable per competition, defaults to 2.0 for regular matches).",
+    )
+
     # Note: validation_warnings removed to avoid circular reference issues
 
     @field_validator("instrument_key")

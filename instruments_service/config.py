@@ -10,7 +10,7 @@ from typing import List, Dict, Optional, Tuple
 # Try to import BaseServiceConfig from unified-cloud-services
 try:
     from unified_cloud_services import BaseServiceConfig, get_config
-    from pydantic import Field
+    from pydantic import Field, AliasChoices
 
     BASE_SERVICE_CONFIG_AVAILABLE = True
 except ImportError:
@@ -978,6 +978,18 @@ class DatabentoInstrumentConfig:
 
 
 @dataclass
+class SportsLeagueConfig:
+    """Configuration for a sports league."""
+    league_code: str  # e.g., "ENG-PREMIER_LEAGUE"
+    api_football_league_id: int  # e.g., 39 for Premier League
+    api_football_season_from: int  # earliest season to backfill
+    betfair_event_type_id: int  # usually 1 for Soccer
+    betfair_competition_ids: List[int]  # Betfair competition IDs
+    timezone: str = "Europe/London"  # for kick-off → UTC conversion
+    max_hours_after_kickoff: float = 2.0  # Maximum hours after kickoff to consider valid data (default 2.0 for regular matches, higher for ET/pens)
+
+
+@dataclass
 class VenueMapping:
     """CANONICAL venue to exchange API mappings (centralized business logic)"""
 
@@ -1142,6 +1154,28 @@ class VenueMapping:
         ]
     )
 
+    # Sports betting leagues configuration
+    sports_leagues: Dict[str, SportsLeagueConfig] = field(
+        default_factory=lambda: {
+            "ENG-PREMIER_LEAGUE": SportsLeagueConfig(
+                league_code="ENG-PREMIER_LEAGUE",
+                api_football_league_id=39,
+                api_football_season_from=2019,
+                betfair_event_type_id=1,
+                betfair_competition_ids=[10932509],  # Update with real ID
+                timezone="Europe/London",
+            ),
+            "GER-BUNDESLIGA": SportsLeagueConfig(
+                league_code="GER-BUNDESLIGA",
+                api_football_league_id=78,
+                api_football_season_from=2019,
+                betfair_event_type_id=1,
+                betfair_competition_ids=[117],  # Update with real ID
+                timezone="Europe/Berlin",
+            ),
+        }
+    )
+
     def is_databento_venue(self, venue: str) -> bool:
         """Check if venue uses Databento (canonical venue name)."""
         return venue in self.all_databento_venues
@@ -1156,7 +1190,7 @@ class VenueMapping:
 
     def get_defi_mvp_tokens(self) -> List[str]:
         """Get MVP token list, checking environment variable first."""
-        env_tokens = get_config("DEFI_MVP_TOKENS")
+        env_tokens = get_config("DEFI_MVP_TOKENS", "")
         if env_tokens:
             return [t.strip().upper() for t in env_tokens.split(",")]
         return self.defi_mvp_base_currencies
@@ -1164,6 +1198,10 @@ class VenueMapping:
     def get_databento_exchange_id(self, venue: str) -> Optional[str]:
         """Get Databento exchange identifier for canonical venue."""
         return self.venue_to_databento.get(venue)
+
+    def get_sports_league_config(self, league_code: str) -> Optional[SportsLeagueConfig]:
+        """Get sports league configuration."""
+        return self.sports_leagues.get(league_code)
 
     # CRITICAL: Map venue+instrument_type → Tardis exchange endpoint
     # Note: HYPERLIQUID and ASTER use direct APIs, not Tardis
@@ -1344,6 +1382,18 @@ if BASE_SERVICE_CONFIG_AVAILABLE and BaseServiceConfig is not None:
 
         Extends BaseServiceConfig with instruments-specific settings.
         """
+
+        # Override gcp_project_id and bigquery_location without validation_alias 
+        # to allow constructor override. This ensures constructor arguments take 
+        # precedence over environment variables.
+        gcp_project_id: str = Field(
+            default="",
+            description="GCP project ID (can be overridden via constructor)",
+        )
+        bigquery_location: str = Field(
+            default="asia-northeast1",
+            description="BigQuery dataset location (can be overridden via constructor)",
+        )
 
         service_name: str = Field(default="instruments-service", description="Service name")
 

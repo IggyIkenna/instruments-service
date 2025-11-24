@@ -115,7 +115,7 @@ class CloudDataProvider:
             is_test = (
                 environment in ["test", "testing"]
                 or "pytest" in os.environ.get("_", "")
-                or get_config("PYTEST_CURRENT_TEST") is not None
+                or get_config("PYTEST_CURRENT_TEST", "") != ""
             )
             
             # Get bucket for category
