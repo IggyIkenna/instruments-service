@@ -63,14 +63,14 @@ class CloudInstrumentStorage:
             # Check if we're in test mode (pytest or test environment)
             # Priority: ENVIRONMENT=test > pytest detection > default to prod
             environment = get_config("ENVIRONMENT", "development").lower()
-            test_bucket = get_config("INSTRUMENTS_GCS_BUCKET_TEST")
+            test_bucket = get_config("INSTRUMENTS_GCS_BUCKET_TEST", "")
             prod_bucket = get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store")
 
             # Only use test bucket if explicitly in test environment
             is_test = (
                 environment in ["test", "testing"]  # Explicit test environment
                 or "pytest" in os.environ.get("_", "")
-                or get_config("PYTEST_CURRENT_TEST") is not None
+                or get_config("PYTEST_CURRENT_TEST", "") != ""
             )
 
             # Use test bucket if in test mode, otherwise use prod bucket
@@ -242,7 +242,7 @@ class CloudInstrumentStorage:
             is_test = (
                 environment in ["test", "testing"]
                 or "pytest" in os.environ.get("_", "")
-                or get_config("PYTEST_CURRENT_TEST") is not None
+                or get_config("PYTEST_CURRENT_TEST", "") != ""
             )
             
             # Upload each category group to its respective bucket
