@@ -26,10 +26,14 @@ This document provides the complete specification for canonical instrument IDs u
 **Grammar (BNF-style)**:
 
 ```
-<instrument-id> ::= <venue> ":" <type> ":" <payload> ["@" <chain>]
+<instrument-id> ::= [<asset-class> ":"] <venue> ":" <type> ":" <payload> ["@" <chain>]
+
+<asset-class>  ::= FOOTBALL | CEFI | DEFI | COMMODITIES | EQUITY-INDEX | EQUITY | BOND | FX
+                  # Optional prefix to categorize instrument by asset class
+                  # If omitted, defaults based on venue/type (backward compatible)
 
 <venue>        ::= UPPER_ALNUM_DASH
-<type>         ::= SPOT_ASSET | SPOT_PAIR | PERPETUAL | FUTURE | OPTION | POOL | LST | A_TOKEN | DEBT_TOKEN | EQUITY | INDEX
+<type>         ::= SPOT_ASSET | SPOT_PAIR | PERPETUAL | FUTURE | OPTION | POOL | LST | A_TOKEN | DEBT_TOKEN | EQUITY | INDEX | MATCH_WINNER | TOTAL_GOALS | BTTS
 
 # SPOT_ASSET payloads (actual positions held)
 <payload-SPOT_ASSET> ::= <asset>
@@ -65,7 +69,8 @@ This document provides the complete specification for canonical instrument IDs u
 **Format**: `VENUE:SPOT_ASSET:ASSET`
 
 **Examples**:
-- `BINANCE-SPOT:SPOT_ASSET:BTC` (actual BTC position on Binance)
+- `CEFI:BINANCE-SPOT:SPOT_ASSET:BTC` (actual BTC position on Binance, with asset class prefix)
+- `BINANCE-SPOT:SPOT_ASSET:BTC` (backward compatible, no prefix)
 - `WALLET:SPOT_ASSET:ETH` (ETH held in wallet)
 - `WALLET:SPOT_ASSET:USDT` (USDT held in wallet)
 
@@ -78,8 +83,9 @@ This document provides the complete specification for canonical instrument IDs u
 **Format**: `VENUE:SPOT_PAIR:BASE-QUOTE`
 
 **Examples**:
-- `BINANCE-SPOT:SPOT_PAIR:BTC-USDT` (trading route, never stored as position)
-- `UNISWAPV3-ETH:SPOT_PAIR:USDC-ETH@ETHEREUM` (DEX trading route)
+- `CEFI:BINANCE-SPOT:SPOT_PAIR:BTC-USDT` (trading route, never stored as position, with asset class prefix)
+- `BINANCE-SPOT:SPOT_PAIR:BTC-USDT` (backward compatible, no prefix)
+- `DEFI:UNISWAPV3-ETH:SPOT_PAIR:USDC-ETH@ETHEREUM` (DEX trading route, with asset class prefix)
 
 **Key Principle**: SPOT_PAIR is routing-only, never stored as a position. Trades result in SPOT_ASSET deltas.
 
@@ -194,6 +200,40 @@ This document provides the complete specification for canonical instrument IDs u
 **Examples**:
 - `CME:INDEX:ES` (S&P 500 index)
 
+### MATCH_WINNER
+
+**Purpose**: Sports betting match winner market (1X2)
+
+**Format**: `FOOTBALL:VENUE:MATCH_WINNER:COMPETITION:YYYYMMDDTHHMM:HOME-AWAY`
+
+**Examples**:
+- `FOOTBALL:BETFAIR:MATCH_WINNER:ENG-PREMIER_LEAGUE:20250315T1500:ARSENAL-LIVERPOOL` (Premier League match)
+- `FOOTBALL:BETFAIR:MATCH_WINNER:GER-BUNDESLIGA:20250316T1430:BAYERN-MUNICH-BORUSSIA-DORTMUND` (Bundesliga match)
+
+**Key Principle**: Uses `FOOTBALL:` asset class prefix. Payload includes competition code, kickoff time, and team slugs.
+
+### TOTAL_GOALS_OU_2_5
+
+**Purpose**: Over/Under 2.5 goals market
+
+**Format**: `FOOTBALL:VENUE:TOTAL_GOALS_OU_2_5:COMPETITION:YYYYMMDDTHHMM:HOME-AWAY@2.5`
+
+**Examples**:
+- `FOOTBALL:BETFAIR:TOTAL_GOALS_OU_2_5:ENG-PREMIER_LEAGUE:20250315T1500:ARSENAL-LIVERPOOL@2.5`
+
+**Key Principle**: Line parameter (e.g., `@2.5`) specifies the over/under threshold.
+
+### BTTS
+
+**Purpose**: Both Teams To Score market
+
+**Format**: `FOOTBALL:VENUE:BTTS:COMPETITION:YYYYMMDDTHHMM:HOME-AWAY`
+
+**Examples**:
+- `FOOTBALL:BETFAIR:BTTS:ENG-PREMIER_LEAGUE:20250315T1500:ARSENAL-LIVERPOOL`
+
+**Key Principle**: Binary market (YES/NO) for whether both teams score.
+
 ## Chain Attribute
 
 All instrument definitions include a `chain` attribute that clarifies which blockchain (if any) the instrument operates on:
@@ -232,6 +272,9 @@ For DeFi instruments on specific chains, the chain is included in the instrument
 | **LST** | `ASSET` | `WEETH`, `STETH`, `WSTETH` |
 | **A_TOKEN** | `TOKEN` | `AUSDT`, `AWETH` |
 | **DEBT_TOKEN** | `TOKEN` | `DEBTWETH` |
+| **MATCH_WINNER** | `COMPETITION:YYYYMMDDTHHMM:HOME-AWAY` | `ENG-PREMIER_LEAGUE:20250315T1500:ARSENAL-LIVERPOOL` |
+| **TOTAL_GOALS_OU_2_5** | `COMPETITION:YYYYMMDDTHHMM:HOME-AWAY@LINE` | `ENG-PREMIER_LEAGUE:20250315T1500:ARSENAL-LIVERPOOL@2.5` |
+| **BTTS** | `COMPETITION:YYYYMMDDTHHMM:HOME-AWAY` | `ENG-PREMIER_LEAGUE:20250315T1500:ARSENAL-LIVERPOOL` |
 
 ## Venue Names
 
@@ -249,6 +292,9 @@ Venue names follow the pattern `VENUE` or `VENUE-CHAIN`:
 - `CURVE-ETH`, `BALANCER-ETH`
 - `AAVE_V3_ETH`, `ETHERFI`, `LIDO`
 - `MORPHO-ETHEREUM`
+
+**Sports Betting Venues**:
+- `BETFAIR` - Betfair exchange
 
 **Special Venues**:
 - `WALLET` - For on-chain wallet positions
