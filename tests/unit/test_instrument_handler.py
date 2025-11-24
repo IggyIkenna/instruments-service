@@ -75,12 +75,15 @@ class TestInstrumentHandler:
     @pytest.fixture
     def handler(self, mock_instrument_service, mock_cloud_storage, mock_data_provider):
         """Create handler with mocked dependencies."""
-        with patch(
-            "instruments_service.cli.handlers.instrument_handler.InstrumentsService",
-            return_value=mock_instrument_service,
-        ), patch(
-            "instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage",
-            return_value=mock_cloud_storage,
+        with (
+            patch(
+                "instruments_service.cli.handlers.instrument_handler.InstrumentsService",
+                return_value=mock_instrument_service,
+            ),
+            patch(
+                "instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage",
+                return_value=mock_cloud_storage,
+            ),
         ):
 
             config = {"project_id": "test-project"}
@@ -93,12 +96,15 @@ class TestInstrumentHandler:
 
     def test_init(self, mock_instrument_service, mock_cloud_storage):
         """Test handler initialization."""
-        with patch(
-            "instruments_service.cli.handlers.instrument_handler.InstrumentsService",
-            return_value=mock_instrument_service,
-        ), patch(
-            "instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage",
-            return_value=mock_cloud_storage,
+        with (
+            patch(
+                "instruments_service.cli.handlers.instrument_handler.InstrumentsService",
+                return_value=mock_instrument_service,
+            ),
+            patch(
+                "instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage",
+                return_value=mock_cloud_storage,
+            ),
         ):
             config = {"project_id": "test-project"}
             handler = InstrumentHandler(config)
@@ -130,9 +136,7 @@ class TestInstrumentHandler:
         test_date = today - timedelta(days=1)
 
         # Patch CloudDataProvider where it's imported (inside the method)
-        with patch(
-            "instruments_service.app.core.cloud_data_provider.CloudDataProvider"
-        ):
+        with patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
@@ -153,9 +157,7 @@ class TestInstrumentHandler:
         # Should skip future date
         assert result["dates_skipped"] >= 0
 
-    def test_execute_instrument_generation_skip_existing(
-        self, handler, mock_data_provider
-    ):
+    def test_execute_instrument_generation_skip_existing(self, handler, mock_data_provider):
         """Test skipping existing instruments when force=False."""
         # Patch CloudDataProvider where it's imported (inside the method)
         with patch(
@@ -176,9 +178,7 @@ class TestInstrumentHandler:
             # Should skip if exists
             assert result["dates_skipped"] >= 0
 
-    def test_execute_instrument_generation_force_mode(
-        self, handler, mock_data_provider
-    ):
+    def test_execute_instrument_generation_force_mode(self, handler, mock_data_provider):
         """Test force mode doesn't skip existing."""
         # Patch CloudDataProvider where it's imported (inside the method)
         with patch(
@@ -207,9 +207,7 @@ class TestInstrumentHandler:
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
 
-        with patch(
-            "instruments_service.app.core.cloud_data_provider.CloudDataProvider"
-        ):
+        with patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
@@ -218,9 +216,7 @@ class TestInstrumentHandler:
 
             assert result["instruments_generated"] == 0
 
-    def test_execute_instrument_generation_storage_failure(
-        self, handler, mock_cloud_storage
-    ):
+    def test_execute_instrument_generation_storage_failure(self, handler, mock_cloud_storage):
         """Test handling storage failure."""
         handler.instruments_service.generate_instruments_for_date = AsyncMock(
             return_value={"status": "success", "instruments_generated": 10}
@@ -229,9 +225,7 @@ class TestInstrumentHandler:
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
 
-        with patch(
-            "instruments_service.app.core.cloud_data_provider.CloudDataProvider"
-        ):
+        with patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
@@ -248,9 +242,7 @@ class TestInstrumentHandler:
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
 
-        with patch(
-            "instruments_service.app.core.cloud_data_provider.CloudDataProvider"
-        ):
+        with patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
@@ -267,22 +259,18 @@ class TestInstrumentHandler:
 
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
-        
-        with patch(
-            "instruments_service.app.core.cloud_data_provider.CloudDataProvider"
-        ):
+
+        with patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
                 force=True,
-                exchanges=["binance"]
+                exchanges=["binance"],
             )
 
             assert result["instruments_generated"] >= 0
 
-    def test_generate_instruments_for_date_all_exchanges(
-        self, handler, mock_instrument_service
-    ):
+    def test_generate_instruments_for_date_all_exchanges(self, handler, mock_instrument_service):
         """Test generating instruments for all exchanges."""
         mock_instrument_service.generate_instruments_for_date = AsyncMock(
             return_value={"status": "success", "instruments_generated": 10}
@@ -290,10 +278,8 @@ class TestInstrumentHandler:
 
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
-        
-        with patch(
-            "instruments_service.app.core.cloud_data_provider.CloudDataProvider"
-        ):
+
+        with patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
@@ -302,9 +288,7 @@ class TestInstrumentHandler:
 
             assert result is not None
 
-    def test_generate_instruments_for_date_exchange_error(
-        self, handler, mock_instrument_service
-    ):
+    def test_generate_instruments_for_date_exchange_error(self, handler, mock_instrument_service):
         """Test handling exchange processing errors."""
         mock_instrument_service.generate_instruments_for_date = AsyncMock(
             side_effect=Exception("Exchange error")
@@ -312,10 +296,8 @@ class TestInstrumentHandler:
 
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
-        
-        with patch(
-            "instruments_service.app.core.cloud_data_provider.CloudDataProvider"
-        ):
+
+        with patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),

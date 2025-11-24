@@ -40,8 +40,20 @@ class TestCloudInstrumentStorage:
         # This handles the category-based service creation inside store_instruments
         mock_category_service = Mock()
         mock_category_service.upload_to_gcs = Mock(return_value=True)
-        
+
+        # Mock sampling service
+        mock_sampling_service = Mock()
+        mock_sampling_service.generate_csv_sample = Mock()
+
+        # Mock SchemaValidator to return valid result by default
+        mock_validator = Mock()
+        mock_validation_result = Mock()
+        mock_validation_result.valid = True
+        mock_validation_result.errors = []
+        mock_validator.validate_dataframe_schema = Mock(return_value=mock_validation_result)
+
         # Create patches that will stay active
+        # Patch the imports in cloud_instrument_storage module
         patches = [
             patch(
                 "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
@@ -52,27 +64,30 @@ class TestCloudInstrumentStorage:
                 return_value=mock_cloud_target,
             ),
             patch(
-                "instruments_service.app.core.cloud_instrument_storage.get_bucket_for_category",
-                return_value="test-bucket",
-            ),
-            patch(
                 "instruments_service.app.core.cloud_instrument_storage.determine_market_category",
                 return_value="CEFI",
             ),
             patch(
                 "instruments_service.app.core.cloud_instrument_storage.create_sampling_service",
+                return_value=mock_sampling_service,
+            ),
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.SchemaValidator",
+                return_value=mock_validator,
             ),
         ]
-        
+
         # Start all patches
         for p in patches:
             p.start()
-        
+
         try:
             storage = CloudInstrumentStorage(cloud_target=mock_cloud_target)
             storage.cloud_service = mock_cloud_service
-            # Store reference to category service and patches for cleanup
+            # Store reference to category service, validator, and patches for cleanup
             storage._mock_category_service = mock_category_service
+            storage._mock_validator = mock_validator
+            storage._mock_validation_result = mock_validation_result
             storage._patches = patches
             yield storage
         finally:
@@ -92,12 +107,15 @@ class TestCloudInstrumentStorage:
 
     def test_init_without_cloud_target(self, mock_cloud_service):
         """Test initialization without cloud target (uses defaults)."""
-        with patch(
-            "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
-            return_value=mock_cloud_service,
-        ), patch(
-            "instruments_service.app.core.cloud_instrument_storage.CloudTarget"
-        ) as mock_target_class:
+        with (
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
+                return_value=mock_cloud_service,
+            ),
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.CloudTarget"
+            ) as mock_target_class,
+        ):
             mock_target = Mock()
             mock_target.project_id = "test-project"
             mock_target.gcs_bucket = "test-bucket"
@@ -110,14 +128,18 @@ class TestCloudInstrumentStorage:
 
     def test_init_test_mode(self, mock_cloud_service):
         """Test initialization in test mode."""
-        with patch(
-            "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
-            return_value=mock_cloud_service,
-        ), patch(
-            "instruments_service.app.core.cloud_instrument_storage.CloudTarget"
-        ) as mock_target_class, patch.dict(
-            "os.environ",
-            {"ENVIRONMENT": "test", "INSTRUMENTS_GCS_BUCKET_TEST": "test-bucket"},
+        with (
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
+                return_value=mock_cloud_service,
+            ),
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.CloudTarget"
+            ) as mock_target_class,
+            patch.dict(
+                "os.environ",
+                {"ENVIRONMENT": "test", "INSTRUMENTS_GCS_BUCKET_TEST": "test-bucket"},
+            ),
         ):
             mock_target = Mock()
             mock_target_class.return_value = mock_target
@@ -204,6 +226,10 @@ class TestCloudInstrumentStorage:
             }
         )
 
+        # Configure validator to return invalid result for this test
+        storage._mock_validation_result.valid = False
+        storage._mock_validation_result.errors = ["Missing required columns"]
+
         # Storage returns False when validation fails, doesn't raise ValueError
         result = storage.store_instruments(df, table_name="instruments")
         assert result is False
@@ -226,9 +252,7 @@ class TestCloudInstrumentStorage:
 
         assert result is False
 
-    def test_store_instruments_extract_date_from_available_from(
-        self, storage, mock_cloud_service
-    ):
+    def test_store_instruments_extract_date_from_available_from(self, storage, mock_cloud_service):
         """Test storing instruments extracting date from available_from_datetime."""
         df = pd.DataFrame(
             {
@@ -254,12 +278,8 @@ class TestCloudInstrumentStorage:
                 "venue": ["TEST"],
                 "instrument_type": ["SPOT_PAIR"],
                 "symbol": ["BTC-USDT"],
-                "available_from_datetime": [
-                    pd.Timestamp("2024-01-01T00:00:00Z", tz="UTC")
-                ],
-                "available_to_datetime": [
-                    pd.Timestamp("2024-12-31T00:00:00Z", tz="UTC")
-                ],
+                "available_from_datetime": [pd.Timestamp("2024-01-01T00:00:00Z", tz="UTC")],
+                "available_to_datetime": [pd.Timestamp("2024-12-31T00:00:00Z", tz="UTC")],
                 "expiry": [pd.Timestamp("2024-12-31T00:00:00Z", tz="UTC")],
             }
         )
@@ -289,18 +309,15 @@ class TestCloudInstrumentStorage:
 
     def test_init_import_error(self):
         """Test initialization when unified-cloud-services not available."""
+        # Mock the imports to simulate ImportError scenario
         with patch(
-            "instruments_service.app.core.cloud_instrument_storage.UNIFIED_CLOUD_SERVICES_AVAILABLE",
-            False,
+            "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
+            side_effect=ImportError("unified-cloud-services not available"),
         ):
-            with pytest.raises(
-                ImportError, match="unified-cloud-services not available"
-            ):
+            with pytest.raises(ImportError, match="unified-cloud-services not available"):
                 CloudInstrumentStorage()
 
-    def test_store_instruments_date_extraction_fallback(
-        self, storage, mock_cloud_service
-    ):
+    def test_store_instruments_date_extraction_fallback(self, storage, mock_cloud_service):
         """Test storing instruments with date extraction fallback."""
         df = pd.DataFrame(
             {
@@ -308,9 +325,7 @@ class TestCloudInstrumentStorage:
                 "venue": ["TEST"],
                 "instrument_type": ["SPOT_PAIR"],
                 "symbol": ["BTC-USDT"],
-                "available_from_datetime": [
-                    "invalid-date"
-                ],  # Invalid date, should fallback
+                "available_from_datetime": ["invalid-date"],  # Invalid date, should fallback
             }
         )
 
@@ -320,9 +335,7 @@ class TestCloudInstrumentStorage:
         assert result is True
         storage._mock_category_service.upload_to_gcs.assert_called()
 
-    def test_store_instruments_no_available_from_datetime_column(
-        self, storage, mock_cloud_service
-    ):
+    def test_store_instruments_no_available_from_datetime_column(self, storage, mock_cloud_service):
         """Test storing instruments when available_from_datetime extraction fails."""
         # Create df without available_from_datetime for date extraction
         df = pd.DataFrame(
@@ -342,9 +355,7 @@ class TestCloudInstrumentStorage:
         assert result is True
         storage._mock_category_service.upload_to_gcs.assert_called()
 
-    def test_store_instruments_timestamp_parsing_error(
-        self, storage, mock_cloud_service
-    ):
+    def test_store_instruments_timestamp_parsing_error(self, storage, mock_cloud_service):
         """Test storing instruments with timestamp parsing error."""
         df = pd.DataFrame(
             {

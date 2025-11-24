@@ -6,6 +6,9 @@ Registry for CLI mode handlers.
 
 from typing import Dict, Any
 import logging
+from .instrument_handler import InstrumentHandler
+from .instruments_query_handler import InstrumentsQueryHandler
+from instruments_service.cli.base_handler import ModeHandler
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +22,7 @@ def register_handler(mode: str, handler_class):
     logger.debug(f"Registered handler for mode: {mode}")
 
 
-def get_handler_for_mode(mode: str, config: Dict[str, Any]):
+def get_handler_for_mode(mode: str, config: Dict[str, Any]) -> ModeHandler:
     """
     Get handler instance for a specific mode.
 
@@ -33,12 +36,8 @@ def get_handler_for_mode(mode: str, config: Dict[str, Any]):
     Raises:
         ValueError: If mode is not supported
     """
-    # Lazy import to avoid circular dependencies
     if not _handler_registry:
         try:
-            from .instrument_handler import InstrumentHandler
-            from .instruments_query_handler import InstrumentsQueryHandler
-
             register_handler("instruments", InstrumentHandler)
             logger.debug(f"Registered 'instruments' handler: {InstrumentHandler}")
             register_handler("instruments-query", InstrumentsQueryHandler)

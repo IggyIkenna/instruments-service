@@ -15,6 +15,8 @@ Used by DeFi adapters that query The Graph:
 import logging
 from typing import Dict, Optional
 from datetime import datetime, timedelta, timezone
+from unified_cloud_services import get_secret_with_fallback
+from instruments_service.settings import instruments_config
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +50,7 @@ class SubgraphService:
 
         # Fallback hardcoded URLs (used if Context7 unavailable)
         # These are well-known subgraph URLs that don't change often
-        self._fallback_urls: Dict[str, Dict[str, str]] = {
+        self._fallback_urls: Dict[str, Dict[str, str | None]] = {
             "uniswap_v2": {
                 "ETHEREUM": "https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v2",
             },
@@ -141,7 +143,7 @@ class SubgraphService:
 
             # Get Graph API key (use provided, cached, or retrieve from Secret Manager)
             if not api_key:
-                project_id = get_config("GCP_PROJECT_ID", "central-element-323112")
+                project_id = instruments_config.gcp_project_id
 
                 # Check cache first
                 if _GRAPH_API_KEY_CACHE and _GRAPH_API_KEY_PROJECT_ID == project_id:
@@ -149,7 +151,6 @@ class SubgraphService:
                     logger.debug("✅ Using cached Graph API key in SubgraphService")
                 else:
                     # Retrieve from Secret Manager and cache
-                    from unified_cloud_services import get_secret_with_fallback, get_config
 
                     graph_api_key = get_secret_with_fallback(
                         project_id=project_id,
