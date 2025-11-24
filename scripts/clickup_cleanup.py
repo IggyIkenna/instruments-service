@@ -370,7 +370,7 @@ def main():
         print(f"   Checked: {service_env_file}")
         print(f"   Checked: {root_env_file}")
         print(f"\n💡 To store API key in Secret Manager, run:")
-        print(f"   python scripts/store_clickup_secret.py --api-key YOUR_TOKEN")
+        print(f"   cd ../unified-cloud-services && python scripts/store_secret.py --secret-name clickup-api-key --secret-value YOUR_TOKEN")
         return 1
 
     list_id = args.list_id or get_config("CLICKUP_LIST_ID")
