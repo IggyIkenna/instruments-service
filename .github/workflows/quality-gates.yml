@@ -1,5 +1,10 @@
 name: Quality Gates
 
+# This workflow retrieves the GitHub token from Google Secret Manager instead of GitHub Secrets.
+# The token is stored in Secret Manager using: python scripts/store_secret.py --secret-name github-token --secret-value TOKEN --use-adc
+# This allows safe committing of .env files without exposing the token.
+# The workflow falls back to GitHub Secrets (GH_PAT or GITHUB_TOKEN) if Secret Manager retrieval fails.
+
 on:
   push:
     branches:
@@ -15,14 +20,42 @@ jobs:
       contents: read
       # GITHUB_TOKEN needs contents:read to access other private repos
       # However, GITHUB_TOKEN can only access repos in the same organization
-      # For cross-repo access, use GH_PAT secret instead of GITHUB_TOKEN
+      # For cross-repo access, we retrieve GH_PAT from Secret Manager or use GitHub Secrets fallback
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Create GCP service account credentials file
+        env:
+          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -z "$GCP_SERVICE_ACCOUNT_JSON" ]; then
+            echo "❌ GCP_SERVICE_ACCOUNT_JSON secret is not set"
+            echo "Please add the service account JSON as a GitHub secret"
+            echo ""
+            echo "To add the secret:"
+            echo "1. Go to repository Settings → Secrets and variables → Actions"
+            echo "2. Click 'New repository secret'"
+            echo "3. Name: GCP_SERVICE_ACCOUNT_JSON"
+            echo "4. Value: Paste the entire contents of central-element-323112-e35fb0ddafe2.json"
+            exit 1
+          fi
+
+          # Create credentials file from secret
+          echo "$GCP_SERVICE_ACCOUNT_JSON" > central-element-323112-e35fb0ddafe2.json
+          chmod 600 central-element-323112-e35fb0ddafe2.json
+          echo "✅ Created GCP service account credentials file"
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
       - name: Checkout unified-cloud-services
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          GH_PAT: ${{ env.GH_PAT || secrets.GH_PAT || github.token }}
         run: |
           # Set up SSH for git operations
           mkdir -p ~/.ssh
@@ -36,8 +69,7 @@ jobs:
             echo "✅ SSH key configured"
           else
             echo "⚠️  SSH_PRIVATE_KEY secret not set, falling back to HTTPS with token"
-            # Fallback to HTTPS with token
-            GH_PAT="${{ secrets.GH_PAT }}"
+            # Use token from Secret Manager (env.GH_PAT) or GitHub Secrets fallback
             GITHUB_TOKEN="${{ github.token }}"
             AUTH_TOKEN="${GH_PAT:-${GITHUB_TOKEN}}"
             if [ -z "$AUTH_TOKEN" ]; then
@@ -54,22 +86,16 @@ jobs:
             # Use SSH
             git clone git@github.com:IggyIkenna/unified-cloud-services.git unified-cloud-services
           else
-            # Use HTTPS with token
+            # Use HTTPS with token (from Secret Manager or GitHub Secrets)
             git clone https://x-access-token:${AUTH_TOKEN}@github.com/IggyIkenna/unified-cloud-services.git unified-cloud-services
           fi
 
           echo "✅ Checked out unified-cloud-services to ../unified-cloud-services"
 
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-          cache: 'pip'
-
       - name: Configure pip authentication for private packages
         env:
           PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_PAT: ${{ env.GH_PAT || secrets.GH_PAT || github.token }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           python -m pip install --upgrade pip setuptools wheel
@@ -107,26 +133,50 @@ jobs:
       # The script will try: local monorepo > PyPI > GitHub Packages > GitHub repo
       # This ensures consistency between local development and CI/CD
 
-      - name: Create GCP service account credentials file
+      - name: Retrieve GitHub token from Secret Manager
         env:
-          GCP_SERVICE_ACCOUNT_JSON: ${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/central-element-323112-e35fb0ddafe2.json
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID || 'central-element-323112' }}
         run: |
-          if [ -z "$GCP_SERVICE_ACCOUNT_JSON" ]; then
-            echo "❌ GCP_SERVICE_ACCOUNT_JSON secret is not set"
-            echo "Please add the service account JSON as a GitHub secret"
-            echo ""
-            echo "To add the secret:"
-            echo "1. Go to repository Settings → Secrets and variables → Actions"
-            echo "2. Click 'New repository secret'"
-            echo "3. Name: GCP_SERVICE_ACCOUNT_JSON"
-            echo "4. Value: Paste the entire contents of central-element-323112-e35fb0ddafe2.json"
-            exit 1
-          fi
-
-          # Create credentials file from secret
-          echo "$GCP_SERVICE_ACCOUNT_JSON" > central-element-323112-e35fb0ddafe2.json
-          chmod 600 central-element-323112-e35fb0ddafe2.json
-          echo "✅ Created GCP service account credentials file"
+          # Now that unified-cloud-services is checked out, install it and retrieve GitHub token from Secret Manager
+          # The token is stored in Secret Manager (stored via: python scripts/store_secret.py --secret-name github-token --secret-value TOKEN --use-adc)
+          # This allows us to use the token for pip authentication and quality gates without storing it in GitHub Secrets
+          pip install -e ../unified-cloud-services || pip install unified-cloud-services
+          
+          # Retrieve GitHub token from Secret Manager
+          # This will be used for pip authentication and quality gates script
+          # Falls back to GitHub Secrets (GH_PAT or GITHUB_TOKEN) if Secret Manager retrieval fails
+          python3 << 'PYTHON_SCRIPT'
+          import os
+          import sys
+          
+          try:
+              from unified_cloud_services import get_secret_with_fallback
+              
+              project_id = os.environ.get('GCP_PROJECT_ID', 'central-element-323112')
+              github_token = get_secret_with_fallback(
+                  'github-token',
+                  project_id,
+                  'GITHUB_TOKEN'
+              )
+              
+              if github_token:
+                  # Write to GITHUB_ENV for use in subsequent steps
+                  github_env = os.environ.get('GITHUB_ENV', '/dev/stdout')
+                  with open(github_env, 'a') as f:
+                      f.write(f'GH_PAT={github_token}\n')
+                  print('✅ Retrieved GitHub token from Secret Manager')
+                  sys.exit(0)
+              else:
+                  print('⚠️  GitHub token not found in Secret Manager, will use GitHub Secrets fallback')
+                  sys.exit(1)
+          except Exception as e:
+              print(f'⚠️  Failed to retrieve from Secret Manager: {e}')
+              print('Will use GitHub Secrets fallback (GH_PAT or GITHUB_TOKEN)')
+              sys.exit(1)
+          PYTHON_SCRIPT
+          
+          # Note: If retrieval fails, workflow continues with GitHub Secrets fallback
 
       - name: Create .env file from secrets
         run: |
@@ -196,7 +246,7 @@ jobs:
       - name: Install instruments-service and run Quality Gates
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/central-element-323112-e35fb0ddafe2.json
-          GH_PAT: ${{ secrets.GH_PAT }}
+          GH_PAT: ${{ env.GH_PAT || secrets.GH_PAT || github.token }}
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           # Run quality gates script - it handles installation of both packages

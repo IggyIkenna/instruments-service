@@ -46,6 +46,7 @@ class TestCloudInstrumentStorage:
         mock_sampling_service.generate_csv_sample = Mock()
 
         # Mock SchemaValidator to return valid result by default
+        # SchemaValidator is imported inside store_instruments method, so patch it at unified_cloud_services level
         mock_validator = Mock()
         mock_validation_result = Mock()
         mock_validation_result.valid = True
@@ -71,9 +72,15 @@ class TestCloudInstrumentStorage:
                 "instruments_service.app.core.cloud_instrument_storage.create_sampling_service",
                 return_value=mock_sampling_service,
             ),
+            # SchemaValidator is imported inside store_instruments, patch at unified_cloud_services level
             patch(
-                "instruments_service.app.core.cloud_instrument_storage.SchemaValidator",
+                "unified_cloud_services.SchemaValidator",
                 return_value=mock_validator,
+            ),
+            # Mock get_bucket_for_category to return a simple bucket name
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.get_bucket_for_category",
+                return_value="test-bucket",
             ),
         ]
 
