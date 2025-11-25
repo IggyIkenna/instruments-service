@@ -3,7 +3,7 @@ Comprehensive unit tests for CLI main module to increase coverage to 80%+.
 """
 
 import pytest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 import instruments_service.cli.main as cli_main_module
 from instruments_service.cli.main import main, run_cli
 
@@ -19,25 +19,12 @@ class TestCLIMain:
         handler.cleanup = Mock()
         return handler
 
-    def test_main_success(self, mock_handler, mocker):
+    def test_main_success(self, mock_handler):
         """Test successful main execution."""
-        # Best practice: patch where it's defined, then update function's globals
-        # Since parse_arguments is imported with 'from .parser import', the function
-        # closure references the module's globals, so we update those
-        mock_parse = mocker.patch("instruments_service.cli.parser.parse_arguments")
-        mock_get_handler = mocker.patch(
-            "instruments_service.cli.handlers.get_handler_for_mode",
-            return_value=mock_handler,
-        )
-
-        # Update the function's globals to use the patched versions
-        # main.__globals__ is a reference to the module's globals dictionary
-        original_parse = main.__globals__.get("parse_arguments")
-        original_get_handler = main.__globals__.get("get_handler_for_mode")
-        main.__globals__["parse_arguments"] = mock_parse
-        main.__globals__["get_handler_for_mode"] = mock_get_handler
-
-        try:
+        # Patch imports directly in the main module
+        with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
+             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler) as mock_get_handler:
+            
             mock_args = Mock()
             mock_args.mode = "instruments"
             mock_args.log_level = "INFO"
@@ -48,6 +35,13 @@ class TestCLIMain:
             mock_args.bigquery_dataset = "test-dataset"
             mock_args.force = False
             mock_args.exchanges = None
+            # Default values for other args
+            mock_args.CEFI = False
+            mock_args.TRADFI = False
+            mock_args.DEFI = False
+            mock_args.venues = None
+            mock_args.instrument_ids = None
+            
             mock_parse.return_value = mock_args
 
             result = main()
@@ -56,27 +50,12 @@ class TestCLIMain:
             assert result["success"] is True
             mock_handler.run.assert_called_once()
             mock_handler.cleanup.assert_called_once()
-        finally:
-            # Restore originals
-            if original_parse is not None:
-                main.__globals__["parse_arguments"] = original_parse
-            if original_get_handler is not None:
-                main.__globals__["get_handler_for_mode"] = original_get_handler
 
-    def test_main_with_query_mode(self, mock_handler, mocker):
+    def test_main_with_query_mode(self, mock_handler):
         """Test main with instruments mode."""
-        mock_parse = mocker.patch("instruments_service.cli.parser.parse_arguments")
-        mock_get_handler = mocker.patch(
-            "instruments_service.cli.handlers.get_handler_for_mode",
-            return_value=mock_handler,
-        )
+        with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
+             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler) as mock_get_handler:
 
-        original_parse = main.__globals__.get("parse_arguments")
-        original_get_handler = main.__globals__.get("get_handler_for_mode")
-        main.__globals__["parse_arguments"] = mock_parse
-        main.__globals__["get_handler_for_mode"] = mock_get_handler
-
-        try:
             mock_args = Mock()
             mock_args.mode = "instruments"
             mock_args.log_level = "INFO"
@@ -100,30 +79,22 @@ class TestCLIMain:
             mock_args.output_format = None
             mock_args.output_file = None
             mock_args.limit = None
+            mock_args.CEFI = False
+            mock_args.TRADFI = False
+            mock_args.DEFI = False
+            
             mock_parse.return_value = mock_args
 
             result = main()
 
             assert result["status"] == "success"
             mock_handler.run.assert_called_once()
-        finally:
-            if original_parse is not None:
-                main.__globals__["parse_arguments"] = original_parse
 
-    def test_main_with_all_query_args(self, mock_handler, mocker):
+    def test_main_with_all_query_args(self, mock_handler):
         """Test main with all query arguments."""
-        mock_parse = mocker.patch("instruments_service.cli.parser.parse_arguments")
-        mock_get_handler = mocker.patch(
-            "instruments_service.cli.handlers.get_handler_for_mode",
-            return_value=mock_handler,
-        )
+        with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
+             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler) as mock_get_handler:
 
-        original_parse = main.__globals__.get("parse_arguments")
-        original_get_handler = main.__globals__.get("get_handler_for_mode")
-        main.__globals__["parse_arguments"] = mock_parse
-        main.__globals__["get_handler_for_mode"] = mock_get_handler
-
-        try:
             mock_args = Mock()
             mock_args.mode = "instruments-query"  # Use correct mode for query args
             mock_args.log_level = "INFO"
@@ -150,6 +121,7 @@ class TestCLIMain:
             mock_args.CEFI = False
             mock_args.TRADFI = False
             mock_args.DEFI = False
+            
             mock_parse.return_value = mock_args
 
             result = main()
@@ -159,24 +131,12 @@ class TestCLIMain:
             call_kwargs = mock_handler.run.call_args[1]
             assert "query_type" in call_kwargs
             assert "venues" in call_kwargs
-        finally:
-            if original_parse is not None:
-                main.__globals__["parse_arguments"] = original_parse
 
-    def test_main_failure_status(self, mock_handler, mocker):
+    def test_main_failure_status(self, mock_handler):
         """Test main with failure status."""
-        mock_parse = mocker.patch("instruments_service.cli.parser.parse_arguments")
-        mock_get_handler = mocker.patch(
-            "instruments_service.cli.handlers.get_handler_for_mode",
-            return_value=mock_handler,
-        )
+        with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
+             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler) as mock_get_handler:
 
-        original_parse = main.__globals__.get("parse_arguments")
-        original_get_handler = main.__globals__.get("get_handler_for_mode")
-        main.__globals__["parse_arguments"] = mock_parse
-        main.__globals__["get_handler_for_mode"] = mock_get_handler
-
-        try:
             mock_args = Mock()
             mock_args.mode = "instruments"
             mock_args.log_level = "INFO"
@@ -187,6 +147,13 @@ class TestCLIMain:
             mock_args.bigquery_dataset = "test-dataset"
             mock_args.force = False
             mock_args.exchanges = None
+            # Default values
+            mock_args.CEFI = False
+            mock_args.TRADFI = False
+            mock_args.DEFI = False
+            mock_args.venues = None
+            mock_args.instrument_ids = None
+            
             mock_parse.return_value = mock_args
             mock_handler.run.return_value = {"status": "error", "success": False}
 
@@ -194,45 +161,23 @@ class TestCLIMain:
 
             assert result["status"] == "error"
             assert result["success"] is False
-        finally:
-            if original_parse is not None:
-                main.__globals__["parse_arguments"] = original_parse
 
-    def test_main_exception_handling(self, mocker):
+    def test_main_exception_handling(self):
         """Test main exception handling."""
-        mock_parse = mocker.patch("instruments_service.cli.parser.parse_arguments")
-        mock_parse.side_effect = Exception("Parse error")
+        with patch("instruments_service.cli.main.parse_arguments") as mock_parse:
+            mock_parse.side_effect = Exception("Parse error")
 
-        original_parse = main.__globals__.get("parse_arguments")
-        main.__globals__["parse_arguments"] = mock_parse
-
-        try:
             result = main()
 
             assert result["success"] is False
             assert result["status"] == "error"
             assert "error" in result
-        finally:
-            if original_parse is not None:
-                main.__globals__["parse_arguments"] = original_parse
 
-    def test_run_cli_success(self, mock_handler, mocker):
+    def test_run_cli_success(self, mock_handler):
         """Test run_cli with success - tests that run_cli calls main and returns result."""
-        # Since run_cli just calls main() and returns the result, we test the integration
-        # by ensuring main() works correctly (tested in other tests)
-        # This test verifies the run_cli wrapper logic
-        mock_parse = mocker.patch("instruments_service.cli.parser.parse_arguments")
-        mock_get_handler = mocker.patch(
-            "instruments_service.cli.handlers.get_handler_for_mode",
-            return_value=mock_handler,
-        )
+        with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
+             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler) as mock_get_handler:
 
-        original_parse = main.__globals__.get("parse_arguments")
-        original_get_handler = main.__globals__.get("get_handler_for_mode")
-        main.__globals__["parse_arguments"] = mock_parse
-        main.__globals__["get_handler_for_mode"] = mock_get_handler
-
-        try:
             mock_args = Mock()
             mock_args.mode = "instruments"
             mock_args.log_level = "INFO"
@@ -243,14 +188,18 @@ class TestCLIMain:
             mock_args.bigquery_dataset = "test-dataset"
             mock_args.force = False
             mock_args.exchanges = None
+            # Default values
+            mock_args.CEFI = False
+            mock_args.TRADFI = False
+            mock_args.DEFI = False
+            mock_args.venues = None
+            mock_args.instrument_ids = None
+            
             mock_parse.return_value = mock_args
 
             # Test run_cli which calls main()
             result = run_cli()
             assert result["status"] == "success"
-        finally:
-            if original_parse is not None:
-                main.__globals__["parse_arguments"] = original_parse
 
     def test_run_cli_keyboard_interrupt(self):
         """Test run_cli handles KeyboardInterrupt correctly."""

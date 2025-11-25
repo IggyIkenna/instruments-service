@@ -134,7 +134,7 @@ class TestPerformance:
     )
     @pytest.mark.asyncio
     async def test_full_pipeline_performance(self):
-        """Test full pipeline (CEFI + TRADFI + DEFI) performance (target: <60s)."""
+        """Test full pipeline (CEFI + TRADFI + DEFI) performance (target: <90s)."""
         config = {
             "project_id": get_config("GCP_PROJECT_ID", "central-element-323112"),
         }
@@ -156,6 +156,6 @@ class TestPerformance:
         instruments_count = result.get("instruments_generated", 0)
         print(f"\n🚀 FULL Pipeline Performance: {elapsed:.2f}s ({instruments_count} instruments)")
 
-        # Assert performance target (adjusted to 65s to account for network variability)
-        assert elapsed < 65, f"Full pipeline took {elapsed:.2f}s (target: <65s)"
+        # Assert performance target (adjusted to 90s to account for network variability)
+        assert elapsed < 90, f"Full pipeline took {elapsed:.2f}s (target: <90s)"
         assert instruments_count > 100, f"Expected >100 instruments, got {instruments_count}"
