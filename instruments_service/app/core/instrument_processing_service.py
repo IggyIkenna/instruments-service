@@ -180,7 +180,7 @@ class InstrumentProcessingService:
         self._graph_api_key = None
         try:
             project_id_for_graph = instruments_config.gcp_project_id
-            secret_name = instruments_config.graph_seceret_name
+            secret_name = instruments_config.graph_secret_name
             self._graph_api_key = get_secret_with_fallback(
                 project_id=project_id_for_graph,
                 secret_name=secret_name,

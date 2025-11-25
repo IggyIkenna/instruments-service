@@ -70,7 +70,7 @@ class TheGraphClient:
             else:
                 # Retrieve from Secret Manager and cache it
                 try:
-                    secret_name = instruments_config.graph_seceret_name
+                    secret_name = instruments_config.graph_secret_name
                     self.api_key = get_secret_with_fallback(
                         project_id=project_id,
                         secret_name=secret_name,
@@ -90,13 +90,13 @@ class TheGraphClient:
                         )
                 except ImportError:
                     logger.warning("unified-cloud-services not available, falling back to env var")
-                    self.api_key = instruments_config.graph_seceret_name
+                    self.api_key = instruments_config.graph_secret_name
                     if self.api_key:
                         _API_KEY_CACHE = self.api_key
                         _API_KEY_PROJECT_ID = project_id
                 except Exception as e:
                     logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                    self.api_key = instruments_config.graph_seceret_name
+                    self.api_key = instruments_config.graph_secret_name
                     if self.api_key:
                         _API_KEY_CACHE = self.api_key
                         _API_KEY_PROJECT_ID = project_id
