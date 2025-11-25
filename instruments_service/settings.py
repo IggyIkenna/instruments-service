@@ -107,23 +107,29 @@ class InstrumentsServiceConfig(BaseSettings):
 
     # Secret Manager secret names (keys stored in GCP Secret Manager)
     tardis_secret_name: str = Field(
+        default="tardis-api-key",
         validation_alias=AliasChoices("TARDIS_SECRET_NAME"),
         description="Tardis API key secret name",
     )
     databento_secret_name: str = Field(
+        default="databento-api-key",
         validation_alias=AliasChoices("DATABENTO_SECRET_NAME"),
         description="Databento API key secret name",
     )
     aavescan_secret_name: str = Field(
+        default="aavescan-api-key",
         validation_alias=AliasChoices("AAVESCAN_SECRET_NAME"),
         description="Aavescan API key secret name",
     )
     alchemy_secret_name: str = Field(
+        default="alchemy-api-key",
         validation_alias=AliasChoices("ALCHEMY_SECRET_NAME"),
         description="Alchemy API key secret name",
     )
-    graph_seceret_name: str = Field(
-        validation_alias=AliasChoices("GRAPH_SECRET_NAME"), description="Graph API key secret name"
+    graph_secret_name: str = Field(
+        default="graph-api-key",
+        validation_alias=AliasChoices("GRAPH_SECRET_NAME"),
+        description="Graph API key secret name",
     )
 
     # URLS
@@ -165,6 +171,7 @@ class InstrumentsServiceConfig(BaseSettings):
     # ClickUp Configuration
     # User IDs for assignees
     clickup_secret_name: str = Field(
+        default="clickup-api-key",
         validation_alias=AliasChoices("CLICKUP_SECRET_NAME"),
         description="ClickUp API key secret name",
     )
