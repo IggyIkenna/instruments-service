@@ -50,22 +50,6 @@ class TestInstrumentProcessingServiceExtended:
     # Note: fetch_exchange_instruments requires real API calls or complex mocking
     # Testing date filtering logic separately via _is_instrument_available_on_date
 
-    @pytest.mark.skip(
-        reason="Method _is_instrument_available_on_date does not exist - date filtering handled by DateFilterService"
-    )
-    def test_is_instrument_available_on_date(self):
-        """Test date availability checking."""
-        # This method was removed - date filtering is now handled by DateFilterService
-        pass
-
-    @pytest.mark.skip(
-        reason="Method _is_instrument_currently_active does not exist - date filtering handled by DateFilterService"
-    )
-    def test_is_instrument_currently_active(self):
-        """Test currently active instrument checking."""
-        # This method was removed - date filtering is now handled by DateFilterService
-        pass
-
     def test_parse_symbol_components_binance(self):
         """Test symbol parsing for Binance."""
         config = {"tardis_api_key": "test-key"}
@@ -250,28 +234,6 @@ class TestInstrumentProcessingServiceExtended:
         # SPOT_PAIR should be filtered out (BINANCE-FUTURES only accepts PERPETUAL, FUTURE)
         assert "BINANCE-FUTURES:PERPETUAL:BTC-USDT" in filtered or len(filtered) == 0
 
-    @pytest.mark.skip(reason="session attribute does not exist - HTTP session handled internally")
-    def test_setup_http_session(self):
-        """Test HTTP session setup."""
-        # Session is handled internally, not exposed as attribute
-        pass
-
-    @pytest.mark.skip(
-        reason="Method _is_tardis_cache_valid does not exist - caching handled internally"
-    )
-    def test_is_tardis_cache_valid(self):
-        """Test Tardis cache validation."""
-        # Cache validation is handled internally, not exposed as method
-        pass
-
-    @pytest.mark.skip(
-        reason="Method _is_ccxt_cache_valid does not exist - caching handled by CCXTService"
-    )
-    def test_is_ccxt_cache_valid(self):
-        """Test CCXT cache validation."""
-        # CCXT caching is handled by CCXTService, not InstrumentProcessingService
-        pass
-
     def test_parse_option_components_deribit_new_format(self):
         """Test parsing Deribit option components with new format."""
         config = {"tardis_api_key": "test-key"}
@@ -377,30 +339,6 @@ class TestInstrumentProcessingServiceExtended:
         result = service._parse_symbol_components("PERP-USDT", "okx")
         assert isinstance(result, dict)
         assert result.get("base_asset") == "PERP"
-
-    @pytest.mark.skip(
-        reason="Method _is_instrument_available_on_date does not exist - date filtering handled by DateFilterService"
-    )
-    def test_is_instrument_available_on_date_with_expiry_future(self):
-        """Test date availability with future expiry."""
-        # This method was removed - date filtering is now handled by DateFilterService
-        pass
-
-    @pytest.mark.skip(
-        reason="Method _is_instrument_available_on_date does not exist - date filtering handled by DateFilterService"
-    )
-    def test_is_instrument_available_on_date_with_expiry_expired(self):
-        """Test date availability with expired future."""
-        # This method was removed - date filtering is now handled by DateFilterService
-        pass
-
-    @pytest.mark.skip(
-        reason="Method _is_instrument_available_on_date does not exist - date filtering handled by DateFilterService"
-    )
-    def test_is_instrument_available_on_date_parse_error(self):
-        """Test date availability with parse error defaults to True."""
-        # This method was removed - date filtering is now handled by DateFilterService
-        pass
 
     def test_convert_to_tardis_symbol_okx(self):
         """Test converting OKX symbol to Tardis format."""
