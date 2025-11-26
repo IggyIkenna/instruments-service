@@ -298,33 +298,14 @@ def setup_test_environment(gcp_credentials, test_bucket_name):
     if "ENABLE_CSV_SAMPLING" not in os.environ:
         os.environ["ENABLE_CSV_SAMPLING"] = "true"
     
-    # Patch get_bucket_for_category to handle missing attributes gracefully
-    # In test mode, use the general test bucket instead of category-specific test buckets
-    # (category-specific test buckets may not exist)
+    # Patch unified_config in unified_cloud_services to use instruments_config
+    # This ensures that get_bucket_for_category() uses the correct bucket configuration
+    # from instruments-service (which has the category-specific properties)
+    # instead of the default BaseServiceConfig
     from unittest.mock import patch
     
-    def patched_get_bucket(category: str, test_mode: bool = False) -> str:
-        """Patched version that falls back to general test bucket in test mode."""
-        category_upper = category.upper()
-        if category_upper not in ["CEFI", "TRADFI", "DEFI"]:
-            raise ValueError(f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI")
-        
-        # In test mode, always use the general test bucket (category-specific test buckets may not exist)
-        if test_mode:
-            return os.getenv("INSTRUMENTS_GCS_BUCKET_TEST", test_bucket_name)
-        
-        # In non-test mode, try category-specific bucket, fallback to general bucket
-        env_var = f"INSTRUMENTS_GCS_BUCKET_{category_upper}"
-        bucket = os.getenv(env_var)
-        if not bucket:
-            bucket = os.getenv("INSTRUMENTS_GCS_BUCKET", "instruments-store")
-        
-        return bucket
-    
-    # Apply patch
-    with patch("unified_cloud_services.core.market_category.get_bucket_for_category", patched_get_bucket):
-        with patch("instruments_service.app.core.cloud_instrument_storage.get_bucket_for_category", patched_get_bucket):
-            yield
+    with patch("unified_cloud_services.core.market_category.unified_config", instruments_config):
+        yield
     
     # Cleanup if needed
     pass
