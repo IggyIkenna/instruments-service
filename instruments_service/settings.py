@@ -75,6 +75,23 @@ class InstrumentsServiceConfig(BaseSettings):
         description="GCS bucket for DEFI instruments",
     )
 
+    # Category-specific TEST buckets
+    gcs_bucket_cefi_test: str = Field(
+        default="",
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_CEFI_TEST"),
+        description="Test GCS bucket for CEFI instruments",
+    )
+    gcs_bucket_tradfi_test: str = Field(
+        default="",
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_TRADFI_TEST"),
+        description="Test GCS bucket for TRADFI instruments",
+    )
+    gcs_bucket_defi_test: str = Field(
+        default="",
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_DEFI_TEST"),
+        description="Test GCS bucket for DEFI instruments",
+    )
+
     # BigQuery configuration
     bigquery_dataset: str = Field(
         validation_alias=AliasChoices("INSTRUMENTS_BIGQUERY_DATASET"),
@@ -243,6 +260,39 @@ class InstrumentsServiceConfig(BaseSettings):
             True if environment is "test", False otherwise
         """
         return self.environment.lower() in ["test", "testing"]
+
+    # Properties to expose bucket names with uppercase attributes (for compatibility with unified-cloud-services)
+    @property
+    def INSTRUMENTS_GCS_BUCKET_CEFI(self) -> str:
+        return self.gcs_bucket_cefi
+
+    @property
+    def INSTRUMENTS_GCS_BUCKET_TRADFI(self) -> str:
+        return self.gcs_bucket_tradfi
+
+    @property
+    def INSTRUMENTS_GCS_BUCKET_DEFI(self) -> str:
+        return self.gcs_bucket_defi
+
+    @property
+    def INSTRUMENTS_GCS_BUCKET_CEFI_TEST(self) -> str:
+        return self.gcs_bucket_cefi_test or f"{self.gcs_bucket_cefi}-test"
+
+    @property
+    def INSTRUMENTS_GCS_BUCKET_TRADFI_TEST(self) -> str:
+        return self.gcs_bucket_tradfi_test or f"{self.gcs_bucket_tradfi}-test"
+
+    @property
+    def INSTRUMENTS_GCS_BUCKET_DEFI_TEST(self) -> str:
+        return self.gcs_bucket_defi_test or f"{self.gcs_bucket_defi}-test"
+
+    @property
+    def INSTRUMENTS_GCS_BUCKET(self) -> str:
+        return self.gcs_bucket
+
+    @property
+    def INSTRUMENTS_GCS_BUCKET_TEST(self) -> str:
+        return self.gcs_bucket_test
 
     def get_bucket_for_category(self, category: str, test_mode: bool = False) -> str:
         """
