@@ -78,7 +78,9 @@ class CloudDataProvider:
                 return self.get_instruments_from_category(date, category, gcs_path=gcs_path)
             
             logger.info(f"📥 Loading instruments from GCS: {gcs_path}")
-            df = self.cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet")
+            df = self.cloud_service.download_from_gcs(
+                gcs_path=gcs_path, format="parquet", log_errors=False
+            )
 
             if df.empty:
                 logger.warning(f"⚠️ No instruments found at {gcs_path}")
@@ -88,6 +90,12 @@ class CloudDataProvider:
             return df
 
         except Exception as e:
+            error_msg = str(e)
+            # Handle 404/Not Found gracefully - this is an expected state when data hasn't been generated yet
+            if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
+                logger.info(f"ℹ️ No instruments found (404): {gcs_path}")
+                return pd.DataFrame()
+
             logger.error(f"❌ Failed to load instruments from GCS: {e}")
             return pd.DataFrame()
     
@@ -135,7 +143,9 @@ class CloudDataProvider:
             logger.info(
                 f"📥 Loading {category} instruments from GCS: {category_bucket}/{gcs_path}"
             )
-            df = category_cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet")
+            df = category_cloud_service.download_from_gcs(
+                gcs_path=gcs_path, format="parquet", log_errors=False
+            )
 
             if df.empty:
                 logger.warning(
@@ -147,6 +157,12 @@ class CloudDataProvider:
             return df
 
         except Exception as e:
+            error_msg = str(e)
+            # Handle 404/Not Found gracefully - this is an expected state when data hasn't been generated yet
+            if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
+                logger.info(f"ℹ️ No {category} instruments found (404): {category_bucket}/{gcs_path}")
+                return pd.DataFrame()
+
             logger.error(f"❌ Failed to load {category} instruments from GCS: {e}")
             return pd.DataFrame()
 

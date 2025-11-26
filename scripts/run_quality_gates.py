@@ -532,6 +532,21 @@ def main():
         print("\n❌ Failed to install required packages. Exiting.")
         sys.exit(1)
 
+    # Ensure test buckets exist (fixes "The specified bucket does not exist" errors)
+    print("\n" + "=" * 70)
+    print("ENSURING TEST BUCKETS")
+    print("=" * 70)
+    try:
+        ensure_buckets_script = project_root / "scripts" / "ensure_test_buckets.py"
+        if ensure_buckets_script.exists():
+            print(f"Running: {sys.executable} scripts/ensure_test_buckets.py")
+            subprocess.run([sys.executable, str(ensure_buckets_script)], cwd=project_root, check=True)
+        else:
+            print("⚠️  Warning: scripts/ensure_test_buckets.py not found")
+    except subprocess.CalledProcessError as e:
+        print(f"⚠️  Warning: Failed to ensure test buckets: {e}")
+        print("   Tests may fail if buckets don't exist.")
+
     # Check dependencies before running tests
     if not check_dependencies():
         print("\n❌ Required dependencies are missing. Exiting.")
