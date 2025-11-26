@@ -200,6 +200,8 @@ class CloudDataProvider:
     def check_instruments_exist(self, date: datetime) -> bool:
         """
         Check if instruments exist for a specific date.
+        Checks all category buckets (CEFI, TRADFI, DEFI).
+        Returns True if instruments exist in ANY category.
 
         Args:
             date: Target date
@@ -210,11 +212,22 @@ class CloudDataProvider:
         date_str = date.strftime("%Y-%m-%d")
         gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
 
-        try:
-            # Try to download to check existence
-            df = self.cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet")
-            exists = df is not None and not df.empty
-            logger.debug(f"📊 Instruments exist check for {date_str}: {exists}")
-            return exists
-        except Exception:
-            return False
+        # Check all categories
+        categories = ["CEFI", "TRADFI", "DEFI"]
+        
+        for category in categories:
+            try:
+                # Use get_instruments_from_category which handles bucket selection (test vs prod)
+                # and uses the correct category-specific bucket
+                df = self.get_instruments_from_category(date, category, gcs_path=gcs_path)
+                
+                if df is not None and not df.empty:
+                    logger.debug(f"📊 Instruments found in {category} for {date_str}")
+                    return True
+            except Exception as e:
+                # Log but continue checking other categories
+                logger.debug(f"Could not check {category} for {date_str}: {e}")
+                continue
+                
+        logger.debug(f"📊 No instruments found for {date_str} in any category")
+        return False
