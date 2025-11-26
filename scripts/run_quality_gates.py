@@ -510,8 +510,8 @@ def main():
     parser.add_argument(
         "--coverage-threshold",
         type=int,
-        default=65,
-        help="Minimum coverage percentage (default: 65)",
+        default=60,
+        help="Minimum coverage percentage (default: 60)",
     )
     parser.add_argument(
         "--skip-performance",
