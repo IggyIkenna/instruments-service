@@ -20,18 +20,19 @@ classifiers = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "pydantic>=2.12.4",
+    "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
-    "pandas>=2.2.0",
-    "numpy>=2.1.0,<3.0.0",  # pandas 2.2.x requires numpy<2 for Python 3.12+
+    "pandas>=2.3.3",
+    "numpy>=2.3.5",  # Latest numpy 2.x (compatible with pandas 2.3.x and Python 3.13)
     "python-dateutil>=2.8.0",
     "python-dotenv>=1.0.0",  # For loading .env files
     "requests>=2.32.5",
-    "ccxt>=4.5.18",
+    "ccxt>=4.5.24",
     "plotly>=6.4.0",
     "web3>=6.0.0",
     "eth-abi>=4.0.0",  # ABI encoding/decoding for web3
     "databento>=0.20.0",  # TradFi instruments (CME, NASDAQ, NYSE)
+    "exchange-calendars>=4.5.0",  # Trading calendars for holiday detection (NYSE, NASDAQ, CME)
     "boto3>=1.40.70",
     # Unified cloud services (infrastructure)
     # For local development: pip install -e ../unified-cloud-services
@@ -41,13 +42,13 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=9.0.0",
+    "pytest>=9.0.1",
     "pytest-cov>=7.0.0",
     "pytest-asyncio>=0.25.0",
     "pytest-mock>=3.14.0",
     "black>=25.11.0",
     "isort>=7.0.0",
-    "mypy>=1.18.2",
+    "mypy>=1.19.0",
     "pre-commit>=4.4.0",
 ]
 
