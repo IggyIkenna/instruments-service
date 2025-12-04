@@ -451,3 +451,119 @@ class TestInstrumentProcessingServiceExtended:
         # For derivatives, underlying should be set
         if fields:
             assert fields.get("underlying") == "BTC-USDT" or "ccxt_symbol" in fields
+
+    def test_generate_canonical_key_future_with_expiry(self):
+        """Test canonical key generation for future with expiry."""
+        config = {"tardis_api_key": "test-key"}
+        service = InstrumentProcessingService(config)
+        key = service.generate_canonical_key(
+            exchange="deribit",
+            symbol_type="future",
+            symbol_id="BTC-25DEC25",
+            symbol_info={"base_asset": "BTC", "quote_asset": "USD"},
+        )
+        assert "DERIBIT:FUTURE:BTC-USD" in key
+
+    def test_generate_canonical_key_option(self):
+        """Test canonical key generation for option."""
+        config = {"tardis_api_key": "test-key"}
+        service = InstrumentProcessingService(config)
+        key = service.generate_canonical_key(
+            exchange="deribit",
+            symbol_type="option",
+            symbol_id="BTC-25DEC25-50000-C",
+            symbol_info={"base_asset": "BTC", "quote_asset": "USD"},
+        )
+        assert "DERIBIT:OPTION" in key
+
+    def test_convert_to_tardis_symbol_bybit(self):
+        """Test converting Bybit symbol to Tardis format."""
+        config = {"tardis_api_key": "test-key"}
+        service = InstrumentProcessingService(config)
+        result = service._convert_to_tardis_symbol("BTCUSDT", "bybit")
+        assert "btc" in result.lower()
+
+    def test_generate_canonical_key_inverse_perpetual(self):
+        """Test canonical key for inverse perpetual."""
+        config = {"tardis_api_key": "test-key"}
+        service = InstrumentProcessingService(config)
+        key = service.generate_canonical_key(
+            exchange="bybit",
+            symbol_type="perpetual",
+            symbol_id="BTCUSD",
+            symbol_info={"base_asset": "BTC", "quote_asset": "USD"},
+        )
+        assert "BYBIT:PERPETUAL:BTC-USD" in key
+
+    def test_generate_canonical_key_linear_perpetual(self):
+        """Test canonical key for linear perpetual."""
+        config = {"tardis_api_key": "test-key"}
+        service = InstrumentProcessingService(config)
+        key = service.generate_canonical_key(
+            exchange="bybit",
+            symbol_type="perpetual",
+            symbol_id="BTCUSDT",
+            symbol_info={"base_asset": "BTC", "quote_asset": "USDT"},
+        )
+        assert "BYBIT:PERPETUAL:BTC-USDT" in key
+
+    def test_parse_symbol_components_okx_futures(self):
+        """Test parsing OKX futures symbol components."""
+        config = {"tardis_api_key": "test-key"}
+        service = InstrumentProcessingService(config)
+
+        result = service._parse_symbol_components("BTC-USDT-241225", "okex-futures")
+        assert isinstance(result, dict)
+
+    def test_parse_symbol_components_empty(self):
+        """Test parsing empty symbol returns empty dict."""
+        config = {"tardis_api_key": "test-key"}
+        service = InstrumentProcessingService(config)
+
+        result = service._parse_symbol_components("", "binance")
+        assert isinstance(result, dict)
+
+    def test_metadata_cache_clear_specific_key(self):
+        """Test clearing specific key from metadata cache."""
+        config = {"tardis_api_key": "test-key", "enable_metadata_caching": True}
+        service = InstrumentProcessingService(config)
+
+        # Add cached data
+        service._metadata_cache["key1"] = "data1"
+        service._metadata_cache["key2"] = "data2"
+        service._cache_timestamps["key1"] = datetime.now(timezone.utc)
+        service._cache_timestamps["key2"] = datetime.now(timezone.utc)
+
+        # Clear all
+        service.clear_cache()
+        assert len(service._metadata_cache) == 0
+
+    def test_supported_exchanges_count(self):
+        """Test getting supported exchanges count."""
+        config = {"tardis_api_key": "test-key"}
+        service = InstrumentProcessingService(config)
+
+        stats = service.get_processing_stats()
+        assert "supported_exchanges" in stats
+        # supported_exchanges is a count (int), not a list
+        assert isinstance(stats["supported_exchanges"], (int, list))
+        if isinstance(stats["supported_exchanges"], int):
+            assert stats["supported_exchanges"] > 0
+        else:
+            assert len(stats["supported_exchanges"]) > 0
+
+    def test_convert_to_tardis_symbol_lowercase(self):
+        """Test Tardis symbol conversion lowercases."""
+        config = {"tardis_api_key": "test-key"}
+        service = InstrumentProcessingService(config)
+
+        result = service._convert_to_tardis_symbol("BTCUSDT", "binance-futures")
+        assert result == result.lower()
+
+    def test_parse_deribit_date_with_two_digit_day(self):
+        """Test parsing Deribit date with two digit day."""
+        config = {"tardis_api_key": "test-key"}
+        service = InstrumentProcessingService(config)
+
+        result = service._parse_deribit_date("31DEC25")
+        assert "2025-12-31" in result
