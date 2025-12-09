@@ -10,6 +10,11 @@ This example shows:
 - Configuration setup
 - Error handling
 - Progress tracking
+
+Note: For production batch processing, use the CLI instead:
+    python -m instruments_service --mode instruments \
+        --start-date 2023-05-23 --end-date 2023-05-24 \
+        --CEFI --force
 """
 
 import asyncio
@@ -23,7 +28,7 @@ from instruments_service import (
     CloudInstrumentStorage,
     InstrumentBatchProcessor,
 )
-from instruments_service.config import VenueMapping
+from unified_cloud_services import VenueMapping
 
 # Setup logging
 logging.basicConfig(
@@ -48,11 +53,9 @@ async def generate_instruments_batch(
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d")
 
-    # Configuration
+    # Configuration for InstrumentProcessingService
     config: Dict[str, Any] = {
-        "project_id": "central-element-323112",  # Or use env var
-        "gcs_bucket": "instruments-store",  # Or use env var
-        "bigquery_dataset": "instruments",  # Or use env var
+        "project_id": "central-element-323112",  # Or use env var GCP_PROJECT_ID
         "max_batch_size": 1000,
         "lookback_days": 0,
     }
@@ -60,7 +63,7 @@ async def generate_instruments_batch(
     # Initialize services
     logger.info("🚀 Initializing instruments-service...")
     processing_service = InstrumentProcessingService(config)
-    storage_service = CloudInstrumentStorage(config)
+    storage_service = CloudInstrumentStorage()  # Uses default config from env
     batch_processor = InstrumentBatchProcessor(config)
 
     # Determine exchanges to process

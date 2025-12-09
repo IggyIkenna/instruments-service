@@ -41,7 +41,7 @@ from instruments_service.app.core.instrument_processing_service import (
     InstrumentProcessingService,
 )
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
-from instruments_service.settings import instruments_config
+from instruments_service.config import instruments_config
 from unified_cloud_services import get_secret_with_fallback
 
 # Test configuration

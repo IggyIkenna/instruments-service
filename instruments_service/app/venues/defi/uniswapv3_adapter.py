@@ -13,7 +13,7 @@ from datetime import datetime
 
 from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
-from instruments_service.settings import instruments_config
+from instruments_service.config import instruments_config
 from instruments_service.app.venues.defi.the_graph_client import (
     _API_KEY_CACHE,
     _API_KEY_PROJECT_ID,
@@ -337,7 +337,7 @@ class UniswapV3Adapter(BaseDefiAdapter):
             "ccxt_exchange": "",
             "available_from_datetime": available_from,
             "available_to_datetime": None,  # Pools don't expire
-            "data_types": "trades",  # DEX pools have trade data
+            "data_types": "swaps",  # DEX pool swap events from The Graph subgraph
             "inverse": False,
             "contract_size": None,
             "tick_size": "",  # Uniswap V3 uses tick spacing

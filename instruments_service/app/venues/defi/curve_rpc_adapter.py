@@ -12,12 +12,13 @@ import logging
 from typing import Dict, List, Optional, Any
 from web3 import Web3
 from unified_cloud_services import get_secret_with_fallback
-from instruments_service.settings import instruments_config
+from instruments_service.config import instruments_config
+from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 
 logger = logging.getLogger(__name__)
 
 
-class CurveRPCAdapter:
+class CurveRPCAdapter(BaseDefiAdapter):
     """
     RPC-based adapter for fetching Curve pools directly from contracts.
 
@@ -28,6 +29,8 @@ class CurveRPCAdapter:
         self,
         rpc_url: Optional[str] = None,
         project_id: Optional[str] = None,
+        chain: str = "ETHEREUM",
+        api_key: Optional[str] = None,
     ):
         """
         Initialize Curve RPC adapter.
@@ -35,8 +38,10 @@ class CurveRPCAdapter:
         Args:
             rpc_url: Optional Ethereum RPC URL (uses Alchemy if not provided)
             project_id: GCP project ID for Secret Manager
+            chain: Chain identifier (default: 'ETHEREUM')
+            api_key: Optional API key (not used by Curve but required by base class)
         """
-        self.project_id = project_id
+        super().__init__(chain=chain, api_key=api_key, project_id=project_id)
         self.w3 = None
 
         # Get RPC URL
@@ -70,6 +75,7 @@ class CurveRPCAdapter:
 
         # Curve Registry contract address (Ethereum mainnet)
         self.registry_address = "0x90E00ACe148ca3b23Ac1bC8C240C2a7Dd9c2d9f5"
+        self.venue = "CURVE"
 
         # Minimal Registry ABI for get_pool_list()
         self.registry_abi = [
@@ -95,6 +101,33 @@ class CurveRPCAdapter:
                 "type": "function",
             },
         ]
+
+    async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
+        """
+        Get instrument metadata for Curve.
+        
+        Returns:
+            List of instrument definition dictionaries
+        """
+        pools = self.fetch_pools()
+        # Convert pools to instrument definitions
+        instruments = []
+        for pool in pools:
+            instrument_key = self._build_instrument_key(
+                venue="CURVE",
+                instrument_type="POOL",
+                symbol=pool.get("name", pool.get("id", "")[:10])
+            )
+            instruments.append({
+                "instrument_key": instrument_key,
+                "venue": "CURVE",
+                "instrument_type": "POOL",
+                "pool_address": pool.get("id"),
+                "pool_name": pool.get("name"),
+                "coins": pool.get("coins", []),
+                "chain": self.chain,
+            })
+        return instruments
 
     def fetch_pools(
         self,

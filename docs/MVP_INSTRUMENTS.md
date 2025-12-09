@@ -49,12 +49,15 @@ To manage GCS and BigQuery storage costs during MVP development, we focus on a c
 - **Binance** (`BINANCE-SPOT`, `BINANCE-FUTURES`)
 - **OKX** (`OKX`)
 - **Bybit** (`BYBIT`)
+- **Upbit** (`UPBIT`) - Korean exchange, spot only (KRW quote) - for kimchi premium
+- **Coinbase** (`COINBASE`) - Spot only (USD quote) - for coinbase premium
 
 ### Instrument Count
 
 - **Perpetuals**: 63 instruments (21 assets × 3 exchanges)
-- **Spot Pairs**: 63 instruments (21 assets × 3 exchanges)
-- **Total**: 126 instruments
+- **Spot Pairs (USDT)**: 63 instruments (21 assets × 3 exchanges)
+- **Spot Pairs (Premium)**: 42 instruments (21 assets × 2 exchanges: Upbit KRW, Coinbase USD)
+- **Total**: 168 instruments
 
 ### Example Instrument IDs
 
@@ -69,6 +72,16 @@ To manage GCS and BigQuery storage costs during MVP development, we focus on a c
 
 **Bybit Spot**:
 - `BYBIT:SPOT_PAIR:ETH-USDT`
+
+**Upbit Spot** (Korean Won - for kimchi premium):
+- `UPBIT:SPOT_PAIR:BTC-KRW`
+- `UPBIT:SPOT_PAIR:ETH-KRW`
+- `UPBIT:SPOT_PAIR:SOL-KRW`
+
+**Coinbase Spot** (USD - for coinbase premium):
+- `COINBASE:SPOT_PAIR:BTC-USD`
+- `COINBASE:SPOT_PAIR:ETH-USD`
+- `COINBASE:SPOT_PAIR:SOL-USD`
 
 ## DeFi MVP Instruments
 
@@ -111,6 +124,58 @@ To manage GCS and BigQuery storage costs during MVP development, we focus on a c
 **Total DeFi Instruments**: 16 position instruments + 4 trading instruments = 20 instruments
 
 ## TradFi MVP Instruments
+
+### Default TradFi Exchanges
+
+When running `--TRADFI` without specifying exchanges, the following are processed:
+- **CME** - Futures and options (via Databento GLBX.MDP3)
+- **CBOE** - VIX index (static definition)
+- **NASDAQ** - Bitcoin ETFs and equities (via Databento DBEQ.BASIC)
+- **NYSE** - S&P 500 equities (via Databento DBEQ.BASIC)
+- **YAHOO_FINANCE** - KRW/USD forex pair (for kimchi premium calculations)
+
+### Bitcoin ETFs (via Databento DBEQ.BASIC)
+
+Bitcoin ETFs track the price of Bitcoin and trade on US stock exchanges.
+
+| ETF | Name | Instrument Key |
+|-----|------|----------------|
+| **IBIT** | BlackRock iShares Bitcoin Trust | `NASDAQ:ETF:IBIT-USD` |
+| **FBTC** | Fidelity Wise Origin Bitcoin Fund | `NASDAQ:ETF:FBTC-USD` |
+| **ARKB** | ARK 21Shares Bitcoin ETF | `NASDAQ:ETF:ARKB-USD` |
+
+- **Data Provider**: Databento (DBEQ.BASIC dataset)
+- **Data Types**: OHLCV 1-minute
+- **Trading Hours**: 9:30 AM - 4:00 PM ET (converted to UTC)
+- **Underlying**: BTC
+- **Available From**: January 2024 (ETF launch date)
+
+### NASDAQ/NYSE Equities (via Databento DBEQ.BASIC)
+
+S&P 500 **historical constituents (2020-2025)** are automatically generated from `sp500_tickers.json`:
+
+**Universe Scope**:
+- **Period**: 2020-2025 (all stocks that appeared in S&P 500 during this time)
+- **Includes Removed**: Yes - stocks removed from index since 2020 are included for basket/historical analysis
+- **Total Tickers**: ~603 (current + historical constituents)
+- **Future Enhancements**: Can add weights, adjust for dividends/corporate actions later
+
+**NASDAQ Stocks (~102 tech stocks)**:
+- Major tech: AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, NFLX, ADBE
+- Semiconductors: AVGO, AMD, QCOM, TXN, AMAT, MU, LRCX, KLAC, INTC
+- Software/SaaS: CRM, NOW, WDAY, PANW, CRWD, FTNT, DDOG
+- And ~80 more NASDAQ-listed S&P 500 stocks
+
+**NYSE Stocks (~501 stocks)**:
+- All other S&P 500 constituents (current and historical)
+- Includes stocks removed due to acquisitions (e.g., ATVI→MSFT, ALXN→AZN)
+- Includes stocks removed due to market cap changes
+
+**ETFs (classified as EQUITY by Databento)**:
+- SPY (S&P 500 ETF)
+- QQQ (NASDAQ-100 ETF)
+
+**Note**: ~40 historical tickers are delisted/acquired and won't appear in current Databento data (e.g., ATVI, CERN, XLNX, FRC). These require historical date queries.
 
 ### CME Futures (via Databento GLBX.MDP3)
 
@@ -202,9 +267,40 @@ To manage GCS and BigQuery storage costs during MVP development, we focus on a c
 - **Hours**: 9:30 AM - 4:15 PM ET (weekdays only)
 - **Data Source**: Barchart (15-minute OHLCV data)
 
+**NASDAQ/NYSE Equities & ETFs**: Regular trading hours
+- **Hours**: 9:30 AM - 4:00 PM ET (weekdays only)
+- **UTC Conversion**: Hours are automatically converted to UTC (DST-aware)
+  - Winter (EST): 14:30 - 21:00 UTC
+  - Summer (EDT): 13:30 - 20:00 UTC
+
+**Yahoo Finance KRW/USD**: 24/7 forex market
+- **Hours**: Continuous (forex market)
+- **Data Type**: Daily OHLCV (ohlcv_24h)
+
+### Holiday Detection (via exchange_calendars)
+
+The system uses the `exchange_calendars` library to accurately detect US market holidays:
+
+- **New Year's Day** - January 1
+- **Martin Luther King Jr. Day** - Third Monday of January
+- **Presidents' Day** - Third Monday of February
+- **Good Friday** - Friday before Easter
+- **Memorial Day** - Last Monday of May
+- **Juneteenth** - June 19 (since 2022)
+- **Independence Day** - July 4
+- **Labor Day** - First Monday of September
+- **Thanksgiving** - Fourth Thursday of November
+- **Christmas** - December 25
+
+When a holiday is detected:
+- `is_trading_day: False`
+- `trading_hours_open: holiday`
+- `trading_hours_close: holiday`
+- Log message: `📅 No data for NASDAQ on 2025-01-01 - US market holiday (New Year's Day). This is expected behavior.`
+
 ### Instrument Count
 
-- **CME Futures**: 42 instruments
+- **CME Futures**: ~958 contracts (42 parent symbols with multiple expiries)
   - Equity Indices: 5
   - Sector Futures: 8
   - Treasuries: 4
@@ -213,11 +309,16 @@ To manage GCS and BigQuery storage costs during MVP development, we focus on a c
   - Metals: 3
   - Agriculture: 6
   - FX: 10
-- **CME Options**: 6 parent symbols (ES.OPT + EW1-5.OPT) → thousands of individual option contracts
+- **CME Options**: 6 parent symbols (ES.OPT + EW1-5.OPT) → ~9,428 individual option contracts
 - **CBOE**: 1 index (VIX)
-- **Total TradFi**: 49 instruments (excluding individual option contracts)
+- **NASDAQ**: ~105 instruments
+  - Bitcoin ETFs: 3 (IBIT, FBTC, ARKB)
+  - Equities: ~102 NASDAQ-listed S&P 500 stocks (current + historical 2020-2025)
+- **NYSE**: ~501 S&P 500 equities (current + historical 2020-2025)
+- **Yahoo Finance**: 1 (KRW-USD forex pair)
+- **Total TradFi**: ~10,891 instruments per day
 
-**Status**: ✅ Implemented (Databento GLBX.MDP3 + Barchart integration)
+**Status**: ✅ Implemented (Databento GLBX.MDP3 + DBEQ.BASIC + Yahoo Finance)
 
 ## Performance Benchmarks
 
@@ -269,8 +370,9 @@ To manage GCS and BigQuery storage costs during MVP development, we focus on a c
 
 **Crypto Instruments** (1-minute OHLCV):
 - **Per Instrument**: ~1,440 candles per day
-- **Daily Total**: ~181,440 candles (126 crypto instruments × 1,440)
-- **Monthly Storage**: ~5.4M candles (~2-3 GB BigQuery storage)
+- **Daily Total**: ~241,920 candles (168 crypto instruments × 1,440)
+- **Monthly Storage**: ~7.2M candles (~3-4 GB BigQuery storage)
+- **Premium Data**: 42 additional instruments for kimchi/coinbase premium calculations
 
 **TradFi Instruments**:
 - **CME Futures** (1-minute OHLCV via Databento): ~1,440 candles per day per contract
@@ -308,17 +410,25 @@ python -m instruments_service --mode instruments \
     --end-date 2023-05-23 \
     --defi
 
-# Generate TradFi instruments (CME + VIX)
+# Generate TradFi instruments (CME + CBOE + NASDAQ + NYSE + Yahoo Finance)
 python -m instruments_service --mode instruments \
-    --start-date 2023-05-23 \
-    --end-date 2023-05-23 \
-    --tradfi
+    --start-date 2025-03-17 \
+    --end-date 2025-03-17 \
+    --TRADFI
+
+# Generate NASDAQ instruments only (Bitcoin ETFs + stocks)
+python -m instruments_service --mode instruments \
+    --start-date 2025-03-17 \
+    --end-date 2025-03-17 \
+    --exchanges NASDAQ \
+    --TRADFI
 
 # Generate CME instruments only
 python -m instruments_service --mode instruments \
-    --start-date 2023-05-23 \
-    --end-date 2023-05-23 \
-    --venues CME
+    --start-date 2025-03-17 \
+    --end-date 2025-03-17 \
+    --exchanges CME \
+    --TRADFI
 ```
 
 ### Query MVP Instruments
@@ -365,6 +475,18 @@ python -m instruments_service --mode instruments \
     --start-date 2023-05-23 \
     --venues CME \
     --instrument-types OPTION
+
+# Query Upbit spot pairs (Korean exchange - for kimchi premium)
+python -m instruments_service --mode instruments \
+    --start-date 2023-05-23 \
+    --exchanges upbit \
+    --cefi
+
+# Query Coinbase spot pairs (for coinbase premium)
+python -m instruments_service --mode instruments \
+    --start-date 2023-05-23 \
+    --exchanges coinbase \
+    --cefi
 ```
 
 ## Related Documentation

@@ -11,7 +11,7 @@ This script helps you:
 import sys
 import requests
 from google.cloud import secretmanager
-from instruments_service.settings import instruments_config
+from instruments_service.config import instruments_config
 
 
 def get_envio_secret():

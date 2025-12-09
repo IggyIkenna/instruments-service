@@ -8,7 +8,7 @@ and configuration, preventing 'BaseServiceConfig' object has no attribute errors
 import os
 import pytest
 from unittest.mock import patch, MagicMock
-from instruments_service.settings import InstrumentsServiceConfig
+from instruments_service.config import InstrumentsServiceConfig
 from unified_cloud_services import get_bucket_for_category
 from instruments_service.app.core.cloud_data_provider import CloudDataProvider
 
@@ -55,18 +55,21 @@ class TestBucketConfiguration:
 
     def test_get_bucket_for_category_resolution(self):
         """Test that get_bucket_for_category resolves correctly."""
-        # We need to patch unified_config in unified_cloud_services to use InstrumentsServiceConfig
-        # or ensure it has the attributes
+        # We need to patch get_config in unified_cloud_services to return our test values
+        # get_config converts env vars to snake_case and uses getattr on unified_config
         
-        # Create a mock config that mimics InstrumentsServiceConfig
-        mock_config = MagicMock()
-        # getattr matches case-sensitive, get_bucket_for_category uses uppercase
-        mock_config.INSTRUMENTS_GCS_BUCKET_CEFI = "test-bucket-cefi"
-        mock_config.INSTRUMENTS_GCS_BUCKET_TRADFI = "test-bucket-tradfi"
-        mock_config.INSTRUMENTS_GCS_BUCKET_DEFI = "test-bucket-defi"
-        mock_config.INSTRUMENTS_GCS_BUCKET = "test-bucket"
+        def mock_get_config(key, default=""):
+            """Mock get_config that returns test bucket values."""
+            key_upper = key.upper()
+            config_map = {
+                "INSTRUMENTS_GCS_BUCKET_CEFI": "test-bucket-cefi",
+                "INSTRUMENTS_GCS_BUCKET_TRADFI": "test-bucket-tradfi",
+                "INSTRUMENTS_GCS_BUCKET_DEFI": "test-bucket-defi",
+                "INSTRUMENTS_GCS_BUCKET": "test-bucket",
+            }
+            return config_map.get(key_upper, default)
         
-        with patch("unified_cloud_services.core.market_category.unified_config", mock_config):
+        with patch("unified_cloud_services.core.market_category.get_config", mock_get_config):
             bucket_cefi = get_bucket_for_category("CEFI", test_mode=False)
             assert bucket_cefi == "test-bucket-cefi"
             

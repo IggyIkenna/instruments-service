@@ -33,11 +33,11 @@ from unified_cloud_services import (
     determine_market_category,
 )
 
-from instruments_service.settings import instruments_config
+from instruments_service.config import instruments_config
 from instruments_service.models import InstrumentDefinition
-from instruments_service.config import VenueMapping, ExchangeInstrumentConfig, DataTypeConfig
+from unified_cloud_services import VenueMapping, ExchangeInstrumentConfig, DataTypeConfig
 from instruments_service.utils.ccxt_service import CCXTService
-import instruments_service.utils.subgraph_service as sg_module
+import unified_cloud_services.core.subgraph_service as sg_module
 import instruments_service.app.venues.defi.the_graph_client as tgc_module
 from instruments_service.app.venues.tardis import TardisAdapter
 from instruments_service.app.venues.databento import DatabentoAdapter
@@ -162,14 +162,6 @@ class InstrumentProcessingService:
         self.tardis_adapter = None
         self._tardis_project_id = project_id
 
-        # Sports betting adapters - lazy-loaded only when needed
-        self._betfair_adapter = None
-        self._api_football_adapter = None
-        
-        # Sports instrument builder
-        from instruments_service.app.core.sports_instruments_builder import SportsInstrumentBuilder
-        self._sports_builder = SportsInstrumentBuilder(venue="BETFAIR")
-
         # Initialize centralized services
 
         self.subgraph_service = SubgraphService()
@@ -206,6 +198,18 @@ class InstrumentProcessingService:
                 venue_mapping=self.venue_mapping,
                 cache_ttl_hours=config.get("cache_ttl_hours", 4),
             )
+             # PERFORMANCE: Pre-load CCXT markets in parallel at startup
+            # This saves ~5s by loading all exchanges concurrently instead of sequentially
+            if config.get("preload_ccxt_markets", True):
+                # Get unique CCXT exchange IDs to pre-load
+                venues_to_preload = [
+                    v for v in self.venue_mapping.all_tardis_exchanges
+                    if self.venue_mapping.venue_to_ccxt.get(v.upper())
+                ]
+                self.ccxt_service.preload_markets_parallel(
+                    venues=[v.upper() for v in venues_to_preload],
+                    max_workers=4
+                )
         else:
             self.ccxt_service = None
 
@@ -524,6 +528,9 @@ class InstrumentProcessingService:
     def _get_tardis_adapter(self):
         """
         Lazy-load Tardis adapter only when needed for CeFi instruments.
+        
+        Note: Warmup is handled automatically by TardisBaseClient in unified-cloud-services
+        when the session is first created.
 
         Returns:
             TardisAdapter instance
@@ -542,6 +549,8 @@ class InstrumentProcessingService:
             self.tardis_adapter = TardisAdapter(
                 api_key=self.api_key, project_id=self._tardis_project_id
             )
+            # Note: TardisBaseClient auto-warms up on first request
+                
         return self.tardis_adapter
 
     async def fetch_exchange_instruments(
@@ -700,6 +709,35 @@ class InstrumentProcessingService:
         )
         instruments_data = pre_filtered
 
+        # MVP base asset filtering for specific venues (e.g., UPBIT, COINBASE)
+        # These venues only include instruments for the 21 MVP base assets (for premium calculations)
+        if canonical_venue in self.venue_mapping.spot_mvp_filtered_venues:
+            mvp_base_assets = {
+                b.upper() for b in self.venue_mapping.hyperliquid_aster_mvp_base_assets
+            }
+            mvp_filtered = {}
+            for symbol_id, symbol_info in instruments_data.items():
+                # Parse base asset from symbol_id
+                parsed_components = self._parse_symbol_components(symbol_id, exchange)
+                if isinstance(parsed_components, dict):
+                    base_asset = parsed_components.get("base_asset", "").upper()
+                else:
+                    base_asset, _ = parsed_components if parsed_components else ("", "")
+                    base_asset = base_asset.upper() if base_asset else ""
+
+                # Only include if base asset is in MVP list
+                if base_asset in mvp_base_assets:
+                    mvp_filtered[symbol_id] = symbol_info
+                else:
+                    logger.debug(
+                        f"🚫 MVP filter: {symbol_id} excluded (base '{base_asset}' not in MVP list)"
+                    )
+
+            logger.info(
+                f"🔍 MVP base asset filter: {len(mvp_filtered)}/{len(instruments_data)} instruments for {canonical_venue} (21 MVP coins)"
+            )
+            instruments_data = mvp_filtered
+
         # Track filtering statistics for debugging
         # Include date_filtered from fetch_exchange_instruments
         filter_stats = {
@@ -792,12 +830,12 @@ class InstrumentProcessingService:
                         symbol_info.get("type", "")
                     )
 
-                    # CRITICAL: Set data_types based on venue first, then instrument_type using config
-                    # Deribit: All instruments use only 'options_chain' per documentation
-                    if canonical_venue == "DERIBIT":
+                    # CRITICAL: Set data_types based on venue AND instrument_type
+                    # Deribit OPTIONS use 'options_chain', but PERPETUALS use standard data types
+                    if canonical_venue == "DERIBIT" and normalized_instrument_type == "OPTION":
                         config_data_types = ["options_chain"]
                     else:
-                        # Other venues: Use instrument_type-based config
+                        # Other venues and DERIBIT PERPETUALS: Use instrument_type-based config
                         config_data_types = self.data_config.instrument_data_types.get(
                             normalized_instrument_type or "SPOT_PAIR",
                             ["trades", "book_snapshot_5"],
@@ -1558,6 +1596,36 @@ class InstrumentProcessingService:
                 logger.debug(f"⚠️ Bybit parsing fallback for: {symbol_id}")
                 return {"base_asset": clean_symbol, "quote_asset": "USDT"}
 
+            # UPBIT PARSING (Korean exchange - uses QUOTE-BASE format: KRW-SOL)
+            elif exchange == "upbit":
+                # Upbit uses QUOTE-BASE format: KRW-BTC, KRW-SOL, KRW-ETH
+                if "-" in symbol_id:
+                    parts = symbol_id.upper().split("-")
+                    if len(parts) == 2:
+                        quote_asset = parts[0]  # KRW is the quote (first position)
+                        base_asset = parts[1]  # SOL is the base (second position)
+                        logger.debug(
+                            f"✅ Upbit QUOTE-BASE format: {symbol_id} → '{base_asset}' + '{quote_asset}'"
+                        )
+                        return {"base_asset": base_asset, "quote_asset": quote_asset}
+                # Fallback for non-standard symbols
+                return {"base_asset": symbol_id, "quote_asset": "KRW"}
+
+            # COINBASE PARSING (standard BASE-QUOTE format: SOL-USD)
+            elif exchange == "coinbase":
+                # Coinbase uses BASE-QUOTE format with dash: BTC-USD, SOL-USD, ETH-USD
+                if "-" in symbol_id:
+                    parts = symbol_id.upper().split("-")
+                    if len(parts) == 2:
+                        base_asset = parts[0]  # BTC is the base (first position)
+                        quote_asset = parts[1]  # USD is the quote (second position)
+                        logger.debug(
+                            f"✅ Coinbase BASE-QUOTE format: {symbol_id} → '{base_asset}' + '{quote_asset}'"
+                        )
+                        return {"base_asset": base_asset, "quote_asset": quote_asset}
+                # Fallback for non-standard symbols
+                return {"base_asset": symbol_id, "quote_asset": "USD"}
+
             # OKX ENHANCED PARSING (all OKX variants)
             elif exchange in ["okx", "okex", "okex-futures", "okex-swap"]:
                 # Handle specific OKX patterns: PERP-USDT, PERP-USDC
@@ -1954,11 +2022,11 @@ class InstrumentProcessingService:
         """Convert symbol_id to proper Tardis API format.
 
         Args:
-            symbol_id: Raw symbol from Tardis API (e.g., 'BTCUSDT', 'BTC-USDT', etc.)
-            exchange: Exchange name (e.g., 'binance-futures')
+            symbol_id: Raw symbol from Tardis API (e.g., 'BTCUSDT', 'BTC-USDT', 'KRW-VET')
+            exchange: Exchange name (e.g., 'binance-futures', 'upbit', 'coinbase')
 
         Returns:
-            str: Tardis-formatted symbol (e.g., 'btcusdt')
+            str: Tardis-formatted symbol (e.g., 'btcusdt', 'KRW-VET', 'SOL-USD')
         """
         try:
             # For Binance exchanges, symbols should be lowercase and concatenated
@@ -1969,6 +2037,10 @@ class InstrumentProcessingService:
             # For Deribit, keep original format but lowercase
             elif exchange == "deribit":
                 return symbol_id.lower()
+
+            # For Upbit and Coinbase, keep uppercase (Tardis expects uppercase for these)
+            elif exchange in ["upbit", "coinbase"]:
+                return symbol_id.upper()
 
             # For other exchanges, use lowercase
             else:
@@ -2259,12 +2331,10 @@ class InstrumentProcessingService:
                 )
 
             elif protocol.lower() == "ethena":
-                logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
-                return {}
                 from instruments_service.app.venues.defi import EthenaAdapter
 
                 adapter = EthenaAdapter(chain=chain)
-                raw_instruments = adapter.fetch_instruments()
+                raw_instruments = adapter.fetch_yield_bearing_instruments()
 
             else:
                 # Protocol is listed but not yet implemented (e.g., euler_plasma, fluid_plasma, aave_plasma)
@@ -2309,6 +2379,11 @@ class InstrumentProcessingService:
                 }
                 # Hyperliquid and Aster use USDC as quote currency
                 mvp_quotes = {"USDC"}
+            elif protocol.lower() == "ethena":
+                # Ethena uses USDE as the base asset - special case for yield-bearing tokens
+                # sUSDe represents staked USDE, so USDE is the underlying
+                mvp_bases = {"USDE", "SUSDE"}
+                mvp_quotes = {""}  # No quote currency for yield-bearing tokens
             else:
                 mvp_quotes = {q.upper() for q in quote_currency_list}
                 mvp_bases = {b.upper() for b in base_currency_list}
@@ -2452,171 +2527,6 @@ class InstrumentProcessingService:
             logger.error(f"Failed to fetch {protocol} instruments: {e}")
             return {}
 
-    def _get_betfair_adapter(self):
-        """Lazy-load Betfair adapter only when needed."""
-        if self._betfair_adapter is None:
-            from instruments_service.app.venues.sports_betting import BetfairAdapter
-            self._betfair_adapter = BetfairAdapter()
-        return self._betfair_adapter
-    
-    async def _get_api_football_adapter(self):
-        """Lazy-load API-Football adapter only when needed."""
-        if self._api_football_adapter is None:
-            from instruments_service.app.venues.sports_betting import APIFootballAdapter
-            self._api_football_adapter = APIFootballAdapter()
-        return self._api_football_adapter
-    
-    async def process_sports_instruments_for_date_range(
-        self,
-        league_code: str,
-        start_date: datetime,
-        end_date: datetime,
-    ) -> Dict[str, InstrumentDefinition]:
-        """
-        Generate sports instruments (football markets) for a league
-        over a date range, using API-Football + Betfair.
-        
-        Follows same pattern as process_exchange_instruments() for crypto.
-        
-        Args:
-            league_code: Internal league code (e.g., "ENG-PREMIER_LEAGUE")
-            start_date: Start date (UTC)
-            end_date: End date (UTC)
-            
-        Returns:
-            Dictionary of instrument_key -> InstrumentDefinition
-        """
-        # 1. Get league config from VenueMapping
-        league_cfg = self.venue_mapping.get_sports_league_config(league_code)
-        if not league_cfg:
-            raise ValueError(f"Unknown sports league_code={league_code}")
-        
-        # 2. Initialize adapters
-        api_football = await self._get_api_football_adapter()
-        betfair = self._get_betfair_adapter()
-        
-        instruments: Dict[str, InstrumentDefinition] = {}
-        
-        # 3. Determine seasons to fetch (all seasons overlapping date range)
-        seasons_to_fetch: List[int] = []
-        for year in range(league_cfg.api_football_season_from, datetime.now().year + 1):
-            seasons_to_fetch.append(year)
-        
-        # 4. Fetch fixtures from API-Football for each season
-        all_fixtures: List[Dict[str, Any]] = []
-        for season in seasons_to_fetch:
-            try:
-                fixtures = await api_football.get_fixtures_for_league_season(
-                    league_id=league_cfg.api_football_league_id,
-                    season=season,
-                    from_date=start_date,
-                    to_date=end_date,
-                )
-                all_fixtures.extend(fixtures)
-                logger.info(
-                    f"Processing {len(fixtures)} fixtures for {league_code} season={season}"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to fetch fixtures for {league_code} season={season}: {e}")
-                continue
-        
-        if not all_fixtures:
-            logger.warning(f"No fixtures found for {league_code} between {start_date} and {end_date}")
-            return instruments
-        
-        # 5. Fetch Betfair events for date range
-        try:
-            bf_events = betfair.list_events_for_date_range(
-                competition_ids=league_cfg.betfair_competition_ids,
-                from_utc=start_date,
-                to_utc=end_date,
-            )
-        except Exception as e:
-            logger.error(f"Failed to fetch Betfair events: {e}")
-            return instruments
-        
-        # 6. Build map from (home_name, away_name, kickoff_day) → eventId
-        event_index: Dict[tuple, str] = {}
-        for ev in bf_events:
-            event = ev.get("event", {})
-            ev_name = event.get("name", "")
-            ev_id = event.get("id")
-            ev_open_date = event.get("openDate")
-            if not (ev_name and ev_id and ev_open_date):
-                continue
-            
-            try:
-                ev_dt = datetime.fromisoformat(ev_open_date.replace("Z", "+00:00")).astimezone(timezone.utc)
-            except Exception:
-                continue
-            
-            day_key = ev_dt.date().isoformat()
-            # Crude split: "Home v Away" or "Home vs Away"
-            parts = re.split(r"\s+v(?:s\.)?\s+", ev_name, flags=re.IGNORECASE)
-            if len(parts) == 2:
-                home_ev, away_ev = parts
-                event_index[(home_ev.strip().upper(), away_ev.strip().upper(), day_key)] = ev_id
-        
-        # 7. Match fixtures → events and build instruments
-        for fixture in all_fixtures:
-            fixture_info = fixture.get("fixture", {})
-            teams_info = fixture.get("teams", {})
-            home_name = (teams_info.get("home", {}) or {}).get("name") or ""
-            away_name = (teams_info.get("away", {}) or {}).get("name") or ""
-            kickoff_raw = fixture_info.get("date")
-            if not kickoff_raw:
-                continue
-            
-            try:
-                kts = datetime.fromisoformat(kickoff_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
-                day_key = kts.date().isoformat()
-            except Exception:
-                continue
-            
-            # Try to match fixture to Betfair event
-            key_variants = [
-                (home_name.upper(), away_name.upper(), day_key),
-            ]
-            event_id = None
-            for k in key_variants:
-                event_id = event_index.get(k)
-                if event_id:
-                    break
-            
-            if not event_id:
-                logger.debug(f"No Betfair event found for fixture {home_name} vs {away_name} on {day_key}")
-                continue
-            
-            # Fetch Betfair markets for event
-            try:
-                bf_markets = betfair.list_market_catalogue_for_event(
-                    event_id=event_id,
-                    market_type_codes=["MATCH_ODDS", "OVER_UNDER_25", "BOTH_TEAMS_TO_SCORE"],
-                )
-            except Exception as e:
-                logger.warning(f"Failed to fetch Betfair markets for event {event_id}: {e}")
-                continue
-            
-            # Build instruments using SportsInstrumentBuilder
-            try:
-                built = self._sports_builder.build_instruments_for_match(
-                    league=league_cfg,
-                    fixture=fixture,
-                    betfair_markets=bf_markets,
-                )
-                
-                for inst in built:
-                    instruments[inst.instrument_key] = inst
-            except Exception as e:
-                logger.warning(f"Failed to build instruments for fixture {fixture_info.get('id')}: {e}")
-                continue
-        
-        logger.info(
-            f"Sports instruments built for {league_code} between {start_date} and {end_date}: "
-            f"{len(instruments)} instruments"
-        )
-        return instruments
-
     def cleanup(self):
         """Cleanup resources and close connections"""
         # Cleanup Tardis adapter (handles its own session)
@@ -2630,12 +2540,6 @@ class InstrumentProcessingService:
         # Cleanup subgraph service cache
         if hasattr(self, "subgraph_service") and self.subgraph_service:
             self.subgraph_service.clear_cache()
-
-        # Cleanup sports betting adapters
-        if hasattr(self, "_betfair_adapter") and self._betfair_adapter is not None:
-            self._betfair_adapter.cleanup()
-        # Note: API-Football adapter cleanup (aclose) should be called explicitly if needed
-        # Since cleanup() is synchronous, we skip async cleanup here
 
         # Clear metadata cache
         self._metadata_cache.clear()
