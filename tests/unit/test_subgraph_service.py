@@ -8,7 +8,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from instruments_service.app.core.subgraph_service import SubgraphService
+from instruments_service.utils.subgraph_service import SubgraphService
 
 
 class TestSubgraphService:

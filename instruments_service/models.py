@@ -1,66 +1,26 @@
 """
 Data Models for Instruments Service
 
-This module defines all data models following the INSTRUMENT_KEY_SPEC.md format
-with proper expiry, call/put, and margin currency support.
+This module defines the InstrumentDefinition Pydantic model following the 
+INSTRUMENT_KEY_SPEC.md format with proper expiry, call/put, and margin currency support.
+
+Note: InstrumentKey is imported from unified-cloud-services (shared across services).
 """
 
-from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, List, Union
-from datetime import datetime, timezone
-from decimal import Decimal
-from pydantic import BaseModel, Field, field_validator, model_validator
+from typing import Optional, Dict, Any, List
+from datetime import datetime
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 import logging
 import pandas as pd
 
-# Import shared enums from unified-cloud-services
-from unified_cloud_services.models.instrument import (
-    Venue,
-    InstrumentType,
-)
+# Import shared types from unified-cloud-services
+from unified_cloud_services.models.instrument import Venue, InstrumentType
+from unified_cloud_services.models.schemas import InstrumentKey  # Shared InstrumentKey
 
 logger = logging.getLogger(__name__)
 
-
-@dataclass
-class InstrumentKey:
-    """Instrument key following venue:instrument_type:symbol format"""
-
-    venue: Venue
-    instrument_type: InstrumentType
-    symbol: str
-    expiry: Optional[str] = None  # For futures/options
-    option_type: Optional[str] = None  # C or P for options
-
-    def __str__(self) -> str:
-        """Format: venue:type:symbol:expiry:option_type"""
-        parts = [self.venue.value, self.instrument_type.value, self.symbol]
-        if self.expiry:
-            parts.append(self.expiry)
-        if self.option_type:
-            parts.append(self.option_type)
-        return ":".join(parts)
-
-    @classmethod
-    def from_string(cls, instrument_key_str: str) -> "InstrumentKey":
-        """Parse instrument key from string"""
-        parts = instrument_key_str.split(":")
-        if len(parts) < 3:
-            raise ValueError(f"Invalid instrument key format: {instrument_key_str}")
-
-        venue = Venue(parts[0])
-        instrument_type = InstrumentType(parts[1])
-        symbol = parts[2]
-        expiry = parts[3] if len(parts) > 3 else None
-        option_type = parts[4] if len(parts) > 4 else None
-
-        return cls(
-            venue=venue,
-            instrument_type=instrument_type,
-            symbol=symbol,
-            expiry=expiry,
-            option_type=option_type,
-        )
+# Re-export for backward compatibility
+__all__ = ["InstrumentKey", "InstrumentDefinition", "Venue", "InstrumentType"]
 
 
 class InstrumentDefinition(BaseModel):
@@ -279,88 +239,6 @@ class InstrumentDefinition(BaseModel):
         description="Exchange holiday calendar identifier (e.g., 'NYSE', 'CME', 'NASDAQ'). Only populated for TradFi instruments.",
     )
 
-    # SPORTS / SPORTS-BETTING FIELDS
-    sport: Optional[str] = Field(
-        default=None,
-        description="Sport category (e.g., 'FOOTBALL', 'TENNIS').",
-    )
-    competition_code: Optional[str] = Field(
-        default=None,
-        description="Internal competition code (e.g., 'ENG-PREMIER_LEAGUE', 'GER-BUNDESLIGA').",
-    )
-    season: Optional[str] = Field(
-        default=None,
-        description="Season identifier (e.g., '2024-2025').",
-    )
-    match_id: Optional[str] = Field(
-        default=None,
-        description="Canonical match/fixture identifier (e.g., API-FOOTBALL fixture id).",
-    )
-    match_slug: Optional[str] = Field(
-        default=None,
-        description="Human-friendly slug for match (e.g., 'ARSENAL-LIVERPOOL-20250315').",
-    )
-    market_group: Optional[str] = Field(
-        default=None,
-        description="Market group (e.g., 'MATCH_WINNER', 'TOTAL_GOALS', 'BTTS').",
-    )
-    market_param: Optional[str] = Field(
-        default=None,
-        description="Market parameter where applicable (e.g., '2.5' for OU 2.5).",
-    )
-    market_outcomes: Optional[str] = Field(
-        default=None,
-        description="Comma-separated list of available outcomes (e.g., 'HOME,DRAW,AWAY', 'OVER,UNDER').",
-    )
-    sport_home_team_id: Optional[str] = Field(
-        default=None,
-        description="Home team id from canonical sports provider (e.g., API-FOOTBALL team id).",
-    )
-    sport_away_team_id: Optional[str] = Field(
-        default=None,
-        description="Away team id from canonical sports provider.",
-    )
-    sport_home_team_name: Optional[str] = Field(
-        default=None,
-        description="Home team display name.",
-    )
-    sport_away_team_name: Optional[str] = Field(
-        default=None,
-        description="Away team display name.",
-    )
-    kickoff_ts_utc: Optional[datetime] = Field(
-        default=None,
-        description="Match kick-off time in UTC (from fixture data).",
-    )
-    kickoff_inferred_from_odds: Optional[datetime] = Field(
-        default=None,
-        description="Kick-off time inferred from odds data transitions (what prices believe).",
-    )
-    kickoff_fixture_time: Optional[datetime] = Field(
-        default=None,
-        description="Official kick-off time from API-Football fixture data.",
-    )
-    kickoff_delta_minutes: Optional[float] = Field(
-        default=None,
-        description="Difference between inferred and fixture kickoff times (minutes). Large deltas indicate data quality issues.",
-    )
-    pre_match_open_ts_utc: Optional[datetime] = Field(
-        default=None,
-        description="Time the pre-match market opened (UTC) if known.",
-    )
-    settle_ts_utc: Optional[datetime] = Field(
-        default=None,
-        description="Time the market settled (UTC).",
-    )
-    in_play_supported: Optional[bool] = Field(
-        default=None,
-        description="True if market supports in-play trading.",
-    )
-    max_hours_after_kickoff: Optional[float] = Field(
-        default=None,
-        description="Maximum hours after kickoff to consider valid data (configurable per competition, defaults to 2.0 for regular matches).",
-    )
-
     # Note: validation_warnings removed to avoid circular reference issues
 
     @field_validator("instrument_key")
@@ -441,6 +319,7 @@ class InstrumentDefinition(BaseModel):
             "quotes",  # TradFi quotes (Databento) - note: actual fetching uses OHLCV for cost efficiency
             "ohlcv_1m",  # 1-minute OHLCV candles (Databento TradFi)
             "ohlcv_15m",  # 15-minute OHLCV candles (Barchart, Databento TradFi)
+            "ohlcv_24h",  # 24-hour OHLCV candles (AAVE daily historical data)
         ]
         types = [t.strip() for t in v.split(",")]
 
@@ -550,6 +429,12 @@ class InstrumentDefinition(BaseModel):
                 "ohlcv_1m",  # 1-minute OHLCV candles (Databento TradFi, Hyperliquid, Aster)
                 "ohlcv_15m",  # 15-minute OHLCV candles (Barchart, Databento TradFi)
                 "ohlcv_1h",  # 1-hour OHLCV candles (fallback for Hyperliquid, Aster)
+                "ohlcv_24h",  # 24-hour OHLCV candles (FX pairs like USD/KRW)
+                # DeFi-specific data types
+                "swaps",  # DEX pool swap events (Uniswap, Balancer)
+                "rate_indices",  # Lending protocol indices (Aave, Morpho) for APY calculation
+                "utilization",  # Lending pool utilization rate
+                "oracle_prices",  # Protocol oracle price feeds (LSTs, sUSDe yield calculation)
             ]
             types = [t.strip() for t in self.data_types.split(",")]
             for data_type in types:
@@ -813,13 +698,12 @@ class InstrumentDefinition(BaseModel):
             logger.debug(f"Failed to parse date {date_str}: {e}")
             return ""
 
-    class Config:
-        """Pydantic configuration"""
-
-        validate_assignment = True
-        use_enum_values = True
-        extra = "ignore"  # Allow extra fields to prevent validation errors
-        json_encoders = {datetime: lambda v: v.isoformat(), Decimal: lambda v: float(v)}
+    # Pydantic V2 configuration (replaces class Config)
+    model_config = ConfigDict(
+        validate_assignment=True,
+        use_enum_values=True,
+        extra="ignore",  # Allow extra fields to prevent validation errors
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for DataFrame creation"""

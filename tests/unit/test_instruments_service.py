@@ -214,7 +214,7 @@ class TestGenerateInstrumentsSingleDate:
             result = await service.generate_instruments_for_date(date=date, tradfi=True)
 
             assert result["status"] == "success"
-            # Should process CME, NASDAQ, NYSE, ICE, CBOE
+            # Should process CME, NASDAQ, NYSE, ICE, CBOE, YAHOO_FINANCE
             # But NASDAQ/NYSE share DBEQ.BASIC, so NYSE is skipped
             assert mock_proc.fetch_databento_instruments.call_count >= 1
 
@@ -700,3 +700,119 @@ class TestCleanup:
 
             # Should not raise exception
             service.cleanup()
+
+
+class TestUpbitCoinbaseIntegration:
+    """Tests for Upbit and Coinbase spot venues (kimchi/coinbase premium)."""
+
+    @pytest.mark.asyncio
+    async def test_generate_cefi_mode_with_upbit(self):
+        """Test generating instruments in CeFi mode with Upbit exchange."""
+        with (
+            patch(
+                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
+            ) as mock_proc_class,
+            patch(
+                "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
+            ) as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
+        ):
+            # Setup mocks
+            mock_proc = Mock()
+            mock_proc.process_exchange_instruments = AsyncMock(
+                return_value={
+                    "UPBIT:SPOT_PAIR:BTC-KRW": Mock(
+                        model_dump=lambda: {
+                            "instrument_key": "UPBIT:SPOT_PAIR:BTC-KRW",
+                            "venue": "UPBIT",
+                        }
+                    )
+                }
+            )
+            mock_proc_class.return_value = mock_proc
+
+            mock_storage = Mock()
+            mock_storage.store_instruments = Mock(return_value=True)
+            mock_storage_class.return_value = mock_storage
+
+            config = {"project_id": "test-project"}
+            service = InstrumentsService(config)
+
+            # Test CeFi mode with Upbit
+            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            result = await service.generate_instruments_for_date(
+                date=date, exchanges=["upbit"], cefi=True
+            )
+
+            assert result["status"] == "success"
+            assert result["instruments_generated"] == 1
+            mock_proc.process_exchange_instruments.assert_called_once_with(
+                exchange="upbit", target_date=date, force=False
+            )
+
+    @pytest.mark.asyncio
+    async def test_generate_cefi_mode_with_coinbase(self):
+        """Test generating instruments in CeFi mode with Coinbase exchange."""
+        with (
+            patch(
+                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
+            ) as mock_proc_class,
+            patch(
+                "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
+            ) as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
+        ):
+            # Setup mocks
+            mock_proc = Mock()
+            mock_proc.process_exchange_instruments = AsyncMock(
+                return_value={
+                    "COINBASE:SPOT_PAIR:BTC-USD": Mock(
+                        model_dump=lambda: {
+                            "instrument_key": "COINBASE:SPOT_PAIR:BTC-USD",
+                            "venue": "COINBASE",
+                        }
+                    )
+                }
+            )
+            mock_proc_class.return_value = mock_proc
+
+            mock_storage = Mock()
+            mock_storage.store_instruments = Mock(return_value=True)
+            mock_storage_class.return_value = mock_storage
+
+            config = {"project_id": "test-project"}
+            service = InstrumentsService(config)
+
+            # Test CeFi mode with Coinbase
+            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            result = await service.generate_instruments_for_date(
+                date=date, exchanges=["coinbase"], cefi=True
+            )
+
+            assert result["status"] == "success"
+            assert result["instruments_generated"] == 1
+            mock_proc.process_exchange_instruments.assert_called_once_with(
+                exchange="coinbase", target_date=date, force=False
+            )
+
+    def test_venue_mapping_includes_upbit_coinbase(self):
+        """Test venue mapping includes Upbit and Coinbase in Tardis exchanges."""
+        with (
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService"),
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage"),
+            patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
+        ):
+            config = {"project_id": "test-project"}
+            service = InstrumentsService(config)
+
+            # Verify Upbit and Coinbase are in all_tardis_exchanges
+            assert "upbit" in service.venue_mapping.all_tardis_exchanges
+            assert "coinbase" in service.venue_mapping.all_tardis_exchanges
+
+            # Verify they map to correct venues
+            assert service.venue_mapping.tardis_to_venue.get("upbit") == "UPBIT"
+            assert service.venue_mapping.tardis_to_venue.get("coinbase") == "COINBASE"
+
+            # Verify they are in spot_mvp_filtered_venues
+            assert "UPBIT" in service.venue_mapping.spot_mvp_filtered_venues
+            assert "COINBASE" in service.venue_mapping.spot_mvp_filtered_venues

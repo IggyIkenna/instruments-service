@@ -1,21 +1,87 @@
 # Setup Guide
 
+Complete setup and installation guide for instruments-service.
+
 > **Related Documentation**:
-> - [`QUICK_START.md`](./QUICK_START.md) - Quick start guide
+> - [`SECRETS_SETUP.md`](./SECRETS_SETUP.md) - API keys and secrets setup
 > - [`ARCHITECTURE.md`](./ARCHITECTURE.md) - Service overview and architecture
 > - [`USAGE_GUIDE.md`](./USAGE_GUIDE.md) - Usage examples after setup
 > - [`TESTING.md`](./TESTING.md) - Testing guide
-> - [`API_REFERENCE.md`](./API_REFERENCE.md) - Complete API documentation
 
 ---
 
-## Prerequisites
+## Quick Start (5 minutes)
+
+### Prerequisites
 
 - Python 3.9+
 - GCP project access
-- Access to Secret Manager (for Tardis API key)
+- Access to Secret Manager (for API keys)
 
-## Directory Structure
+### Installation
+
+```bash
+# 1. Clone repositories (as siblings)
+git clone <instruments-service-repo-url> instruments-service
+git clone <unified-cloud-services-repo-url> unified-cloud-services
+
+# 2. Create virtual environment
+cd instruments-service
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# 3. Install unified-cloud-services first (required)
+pip install -e ../unified-cloud-services
+
+# 4. Install instruments-service
+pip install -e .
+```
+
+### Credentials Setup
+
+**Automatic**: Place your GCP credentials file (`central-element-323112-e35fb0ddafe2.json`) in:
+- Current directory
+- Parent directory
+- Grandparent directory (unified-trading-system-repos root)
+- Home directory
+
+The service will automatically detect it in development mode.
+
+**Manual**: Set environment variable:
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
+```
+
+### Quick Test
+
+```bash
+# Test import
+python -c "from instruments_service import InstrumentProcessingService; print('✅ Import successful')"
+
+# Test Secret Manager access
+python -c "from unified_cloud_services import get_secret_with_fallback; key = get_secret_with_fallback('central-element-323112', 'tardis-api-key'); print('✅ Secret Manager works' if key else '❌ Secret Manager failed')"
+```
+
+### Generate Instruments
+
+```bash
+# Generate instruments for a date range
+python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-24
+
+# With force flag (regenerate even if exists)
+python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-24 --force
+
+# Filter by category
+python -m instruments_service --mode instruments --start-date 2023-05-23 --CEFI
+python -m instruments_service --mode instruments --start-date 2023-05-23 --TRADFI
+python -m instruments_service --mode instruments --start-date 2023-05-23 --DEFI
+```
+
+---
+
+## Detailed Setup
+
+### Directory Structure
 
 Both repositories should be cloned as siblings:
 
@@ -32,16 +98,14 @@ Both repositories should be cloned as siblings:
 
 **Note**: The root directory name doesn't matter. What matters is that both repos are siblings.
 
-## Installation Steps
-
-### 1. Clone Repositories
+### Step 1: Clone Repositories
 
 ```bash
 git clone <instruments-service-repo-url> instruments-service
 git clone <unified-cloud-services-repo-url> unified-cloud-services
 ```
 
-### 2. Create Virtual Environment
+### Step 2: Create Virtual Environment
 
 ```bash
 cd instruments-service
@@ -49,7 +113,7 @@ python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-### 3. Install unified-cloud-services (Required First)
+### Step 3: Install unified-cloud-services (Required First)
 
 **IMPORTANT**: `unified-cloud-services` must be installed before `instruments-service`:
 
@@ -66,7 +130,7 @@ pip install -e ../unified-cloud-services
 pip install -e ../unified-cloud-services --force-reinstall
 ```
 
-### 4. Install instruments-service
+### Step 4: Install instruments-service
 
 ```bash
 pip install -e .
@@ -74,42 +138,7 @@ pip install -e .
 
 This will automatically install all dependencies from `requirements.txt` and `setup.py`.
 
-**Note**: The `setup.py` includes a note about the `unified-cloud-services` dependency. Make sure to install it first as shown in step 3.
-
-## Credentials Setup
-
-### Automatic Credentials Detection ✅
-
-**Credentials are automatically handled by `unified-cloud-services`** based on the `ENVIRONMENT` variable:
-
-- **Development mode** (`ENVIRONMENT=development`): Auto-detects credentials files in common locations
-- **Production mode** (`ENVIRONMENT=production`): Uses VM service account (no credentials file needed)
-
-**Development Mode Auto-Detection**:
-The service searches for credentials files in these locations (in order of preference):
-
-1. **Current directory** (where you run the command)
-2. **Parent directory**
-3. **Grandparent directory** (unified-trading-system-repos root)
-4. **Home directory**
-
-It looks for these filenames:
-- `central-element-323112-e35fb0ddafe2.json` (project-specific)
-- `credentials.json`
-- `gcp-credentials.json`
-- `service-account.json`
-
-**Simply place your credentials file in any of these locations and the service will find it automatically in development mode!**
-
-### Manual Credentials Setup (Optional)
-
-If you prefer to set credentials manually:
-
-```bash
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/central-element-323112-e35fb0ddafe2.json
-```
-
-Or add to `.env` file (see below).
+---
 
 ## Environment Configuration
 
@@ -123,10 +152,10 @@ GOOGLE_APPLICATION_CREDENTIALS=../central-element-323112-e35fb0ddafe2.json
 GCP_PROJECT_ID=central-element-323112
 
 # Instruments Service Configuration
-INSTRUMENTS_GCS_BUCKET=market-data-tick
-INSTRUMENTS_GCS_BUCKET_TEST=market-data-tick-test
-INSTRUMENTS_BIGQUERY_DATASET=market_data_hft
-BIGQUERY_LOCATION=US
+INSTRUMENTS_GCS_BUCKET=instruments-store-central-element-323112
+INSTRUMENTS_GCS_BUCKET_TEST=instruments-store-test-central-element-323112
+INSTRUMENTS_BIGQUERY_DATASET=instruments
+BIGQUERY_LOCATION=asia-northeast1
 
 # Development Settings
 ENVIRONMENT=development
@@ -134,15 +163,19 @@ ENABLE_CSV_SAMPLING=true
 CSV_SAMPLE_DIR=./data/samples
 ```
 
-**Note**: `TARDIS_API_KEY` is NOT needed - the service uses Secret Manager automatically.
+**Note**: API keys are NOT stored in `.env` - the service uses Secret Manager automatically.
 
-## Secret Manager Setup
+### Secret Manager Setup
 
-The service automatically retrieves the Tardis API key from Secret Manager. Ensure:
+The service automatically retrieves API keys from Secret Manager. Ensure:
 
 1. GCP credentials have Secret Manager access
-2. Secret `tardis-api-key` exists in your GCP project
+2. Required secrets exist in your GCP project
 3. Service account has `Secret Manager Secret Accessor` role
+
+See [`SECRETS_SETUP.md`](./SECRETS_SETUP.md) for complete secrets configuration.
+
+---
 
 ## Verification
 
@@ -164,6 +197,55 @@ python -c "from unified_cloud_services import get_secret_with_fallback; key = ge
 pytest tests/unit/ -v
 ```
 
-## Quick Start
+---
 
-Once setup is complete, see `examples/` directory for usage examples and [`QUICK_START.md`](./QUICK_START.md) for a quick overview.
+## Query Instruments
+
+### Using CLI (Recommended)
+
+```bash
+# List instruments for a date (default: summary format)
+python -m instruments_service --mode instruments-query --start-date 2023-05-23
+
+# Filter by venue and instrument type
+python -m instruments_service --mode instruments-query --start-date 2023-05-23 \
+    --venues BINANCE-FUTURES --instrument-types PERPETUAL
+
+# Get instrument details
+python -m instruments_service --mode instruments-query --start-date 2023-05-23 \
+    --query-type details --instrument-id BINANCE-FUTURES:PERPETUAL:BTC-USDT
+
+# Export to JSON (prints to stdout)
+python -m instruments_service --mode instruments-query --start-date 2023-05-23 \
+    --output-format json
+
+# Export to CSV file
+python -m instruments_service --mode instruments-query --start-date 2023-05-23 \
+    --output-format csv --output-file instruments.csv
+```
+
+### Using Python
+
+```python
+from unified_cloud_services import create_instruments_client
+
+client = create_instruments_client()
+instruments_df = client.get_instruments_for_date(
+    date='2023-05-23',
+    venue='BINANCE-FUTURES',
+    instrument_type='PERPETUAL'
+)
+```
+
+---
+
+## Next Steps
+
+- **[USAGE_GUIDE.md](./USAGE_GUIDE.md)** - Comprehensive usage guide
+- **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Architecture documentation
+- **[API_REFERENCE.md](./API_REFERENCE.md)** - Complete API reference
+- **[SECRETS_SETUP.md](./SECRETS_SETUP.md)** - API keys and secrets setup
+
+---
+
+*Last Updated: December 2025*

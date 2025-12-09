@@ -213,23 +213,34 @@ class CloudDataProvider:
             logger.error(f"❌ Failed to query instruments from BigQuery: {e}")
             return pd.DataFrame()
 
-    def check_instruments_exist(self, date: datetime) -> bool:
+    def check_instruments_exist(
+        self, 
+        date: datetime, 
+        categories: Optional[list] = None
+    ) -> bool:
         """
         Check if instruments exist for a specific date.
-        Checks all category buckets (CEFI, TRADFI, DEFI).
-        Returns True if instruments exist in ANY category.
-
+        
         Args:
             date: Target date
+            categories: Optional list of categories to check (e.g., ["CEFI", "TRADFI"]).
+                       If None, checks ALL categories and returns True if ANY exist.
+                       If specified, returns True only if ALL specified categories exist.
 
         Returns:
-            True if instruments exist, False otherwise
+            True if instruments exist (logic depends on categories parameter)
         """
         date_str = date.strftime("%Y-%m-%d")
         gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
 
-        # Check all categories
-        categories = ["CEFI", "TRADFI", "DEFI"]
+        # Default: check all categories
+        if categories is None:
+            categories = ["CEFI", "TRADFI", "DEFI"]
+            check_all = False  # Return True if ANY exist (legacy behavior)
+        else:
+            check_all = True  # Return True only if ALL specified categories exist
+        
+        found_categories = []
         
         for category in categories:
             try:
@@ -239,11 +250,23 @@ class CloudDataProvider:
                 
                 if df is not None and not df.empty:
                     logger.debug(f"📊 Instruments found in {category} for {date_str}")
-                    return True
+                    found_categories.append(category)
+                    
+                    # Legacy behavior: return True on first find
+                    if not check_all:
+                        return True
             except Exception as e:
                 # Log but continue checking other categories
                 logger.debug(f"Could not check {category} for {date_str}: {e}")
                 continue
+        
+        if check_all:
+            # Only return True if ALL specified categories were found
+            all_found = len(found_categories) == len(categories)
+            if not all_found:
+                missing = set(categories) - set(found_categories)
+                logger.debug(f"📊 Missing categories for {date_str}: {missing}")
+            return all_found
                 
         logger.debug(f"📊 No instruments found for {date_str} in any category")
         return False

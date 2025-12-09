@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch, MagicMock
 # Import get_config from conftest (avoids circular import issues)
 from tests.conftest import get_config
 from unified_cloud_services import get_secret_with_fallback
-from instruments_service.settings import instruments_config
+from instruments_service.config import instruments_config
 
 
 class TestCredentialLoading:
@@ -70,57 +70,50 @@ class TestCredentialLoading:
             assert service.api_key == "config-tardis-key"
 
     def test_databento_api_key_loading(self):
-        """Test Databento API key can be loaded from Secret Manager."""
+        """Test Databento API key can be loaded from Secret Manager via DatabentoBaseClient."""
         from instruments_service.app.venues.databento import databento_adapter
+        from unified_cloud_services.clients import databento_base_client
 
         mock_db_module = MagicMock()
         mock_client = Mock()
         mock_db_module.Historical.return_value = mock_client
 
-        original_db = getattr(databento_adapter, "db", None)
-        original_client = getattr(databento_adapter, "_DATABENTO_CLIENT", None)
-        original_api_key = getattr(databento_adapter, "_DATABENTO_API_KEY", None)
-
         try:
-            databento_adapter._DATABENTO_CLIENT = None
-            databento_adapter._DATABENTO_API_KEY = None
+            # Clear cache
+            databento_base_client.clear_databento_client_cache()
+            databento_base_client.clear_databento_api_key_cache()
 
             with (
                 patch(
                     "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
                 ),
                 patch(
-                    "instruments_service.app.venues.databento.databento_adapter.get_secret_with_fallback",
+                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
+                ),
+                patch(
+                    "unified_cloud_services.clients.databento_base_client.get_secret_with_fallback",
                     return_value="test-databento-key",
                 ),
             ):
                 adapter = databento_adapter.DatabentoAdapter()
                 assert adapter.api_key == "test-databento-key"
         finally:
-            if original_db is not None:
-                databento_adapter.db = original_db
-            if original_client is not None:
-                databento_adapter._DATABENTO_CLIENT = original_client
-            if original_api_key is not None:
-                databento_adapter._DATABENTO_API_KEY = original_api_key
-            else:
-                databento_adapter._DATABENTO_API_KEY = None
+            databento_base_client.clear_databento_client_cache()
+            databento_base_client.clear_databento_api_key_cache()
 
     def test_databento_api_key_from_env(self):
-        """Test Databento API key can be loaded from environment variable."""
+        """Test Databento API key can be loaded from environment variable via DatabentoBaseClient."""
         from instruments_service.app.venues.databento import databento_adapter
+        from unified_cloud_services.clients import databento_base_client
 
         mock_db_module = MagicMock()
         mock_client = Mock()
         mock_db_module.Historical.return_value = mock_client
 
-        original_db = getattr(databento_adapter, "db", None)
-        original_client = getattr(databento_adapter, "_DATABENTO_CLIENT", None)
-        original_api_key = getattr(databento_adapter, "_DATABENTO_API_KEY", None)
-
         try:
-            databento_adapter._DATABENTO_CLIENT = None
-            databento_adapter._DATABENTO_API_KEY = None
+            # Clear cache
+            databento_base_client.clear_databento_client_cache()
+            databento_base_client.clear_databento_api_key_cache()
 
             # get_secret_with_fallback checks env var as fallback, so we test that path
             with (
@@ -128,80 +121,56 @@ class TestCredentialLoading:
                     "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
                 ),
                 patch(
-                    "instruments_service.app.venues.databento.databento_adapter.get_secret_with_fallback",
+                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
+                ),
+                patch(
+                    "unified_cloud_services.clients.databento_base_client.get_secret_with_fallback",
                     return_value="env-databento-key",
                 ),
             ):
                 adapter = databento_adapter.DatabentoAdapter()
                 assert adapter.api_key == "env-databento-key"
         finally:
-            if original_db is not None:
-                databento_adapter.db = original_db
-            if original_client is not None:
-                databento_adapter._DATABENTO_CLIENT = original_client
-            if original_api_key is not None:
-                databento_adapter._DATABENTO_API_KEY = original_api_key
-            else:
-                databento_adapter._DATABENTO_API_KEY = None
+            databento_base_client.clear_databento_client_cache()
+            databento_base_client.clear_databento_api_key_cache()
 
     def test_the_graph_api_key_loading(self):
-        """Test The Graph API key can be loaded from Secret Manager."""
+        """Test The Graph API key can be loaded from Secret Manager via TheGraphBaseClient."""
         from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
-
-        # Clear cache to ensure fresh load
-        from instruments_service.app.venues.defi.the_graph_client import (
-            _API_KEY_CACHE,
-            _API_KEY_PROJECT_ID,
-        )
-
-        original_cache = _API_KEY_CACHE
-        original_project = _API_KEY_PROJECT_ID
+        from unified_cloud_services.clients import thegraph_base_client
 
         try:
             # Clear cache
-            import instruments_service.app.venues.defi.the_graph_client as tg_module
+            thegraph_base_client.clear_thegraph_api_key_cache()
 
-            tg_module._API_KEY_CACHE = None
-            tg_module._API_KEY_PROJECT_ID = None
-
+            # Patch at centralized client level
             with patch(
-                "instruments_service.app.venues.defi.the_graph_client.get_secret_with_fallback",
+                "unified_cloud_services.clients.thegraph_base_client.get_secret_with_fallback",
                 return_value="test-graph-key",
             ):
                 client = TheGraphClient(subgraph_url="https://test.com")
-                # The key gets stripped, so we check it equals the expected value
                 assert client.api_key == "test-graph-key"
         finally:
-            # Restore cache
-            tg_module._API_KEY_CACHE = original_cache
-            tg_module._API_KEY_PROJECT_ID = original_project
+            thegraph_base_client.clear_thegraph_api_key_cache()
 
     def test_the_graph_api_key_from_env(self):
-        """Test The Graph API key can be loaded from environment variable."""
+        """Test The Graph API key can be loaded from environment variable via TheGraphBaseClient."""
         from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
-
-        # Clear cache to ensure fresh load
-        import instruments_service.app.venues.defi.the_graph_client as tg_module
-
-        original_cache = tg_module._API_KEY_CACHE
-        original_project = tg_module._API_KEY_PROJECT_ID
+        from unified_cloud_services.clients import thegraph_base_client
 
         try:
             # Clear cache
-            tg_module._API_KEY_CACHE = None
-            tg_module._API_KEY_PROJECT_ID = None
+            thegraph_base_client.clear_thegraph_api_key_cache()
 
+            # Patch at centralized client level
             with patch(
-                "instruments_service.app.venues.defi.the_graph_client.get_secret_with_fallback",
+                "unified_cloud_services.clients.thegraph_base_client.get_secret_with_fallback",
                 return_value="env-graph-key",
             ):
                 client = TheGraphClient(subgraph_url="https://test.com")
-                # The key gets stripped, so we check it equals the expected value
                 assert client.api_key == "env-graph-key"
         finally:
-            # Restore cache
-            tg_module._API_KEY_CACHE = original_cache
-            tg_module._API_KEY_PROJECT_ID = original_project
+            thegraph_base_client.clear_thegraph_api_key_cache()
 
     def test_alchemy_api_key_loading(self):
         """Test Alchemy API key can be loaded from Secret Manager."""

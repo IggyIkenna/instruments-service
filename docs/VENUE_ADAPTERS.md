@@ -97,12 +97,15 @@ defi_instruments = service.fetch_defi_instruments(
 - **Bybit** (`BYBIT`)
 - **OKX** (`OKX`)
 - **Deribit** (`DERIBIT`)
+- **Upbit** (`UPBIT`) - Korean exchange, spot only (KRW quote) - for kimchi premium
+- **Coinbase** (`COINBASE`) - Spot only (USD quote) - for coinbase premium
 
 **Features**:
 - HTTP session management with retries
 - TTL-based caching (1 hour)
 - Date availability filtering
 - Secret Manager integration
+- MVP base asset filtering for Upbit/Coinbase (21 coins only)
 
 **Usage**:
 ```python
@@ -121,45 +124,83 @@ symbols, filtered_count = adapter.fetch_exchange_instruments(
 - `FUTURE` (dated futures)
 - `OPTION` (options contracts)
 
+**Premium Calculation Venues** (spot only, MVP coins):
+- **Upbit** (`UPBIT`): Korean Won (KRW) quotes - for kimchi premium calculations
+- **Coinbase** (`COINBASE`): US Dollar (USD) quotes - for coinbase premium calculations
+
+These venues are filtered to only include the 21 MVP base assets (BTC, ETH, SOL, etc.)
+
 ### TradFi Exchanges (Databento)
 
 **Adapter**: `DatabentoAdapter` (`venues/databento/databento_adapter.py`)
 
 **Supported Exchanges**:
-- **CME** (Chicago Mercantile Exchange) - Futures, commodities
-- **NASDAQ** - Equities
-- **NYSE** - Equities
-- **ICE** - Intercontinental Exchange
+- **CME** (Chicago Mercantile Exchange) - Futures, options, commodities (GLBX.MDP3)
+- **NASDAQ** - Equities, ETFs including Bitcoin ETFs (DBEQ.BASIC)
+- **NYSE** - S&P 500 equities (DBEQ.BASIC)
+- **CBOE** - VIX index (static definition)
+- **YAHOO_FINANCE** - KRW/USD forex pair (static definition)
+- **ICE** - Intercontinental Exchange (IFEU.IMPACT)
+
+**S&P 500 Historical Universe (2020-2025)**:
+- **Period**: 2020-2025 (all stocks that appeared in S&P 500 during this time)
+- **Includes Removed**: Yes - stocks removed from index since 2020 are included for basket/historical analysis
+- **Total Tickers**: ~603 (NASDAQ: ~102, NYSE: ~501)
+- **Future Enhancements**: Can add weights, adjust for dividends/corporate actions later
 
 **Features**:
 - Exchange-to-dataset mapping
 - Weekend date adjustment
-- Symbol filtering
-- Liquidity-based selection (prefer micro/mini futures/ETFs)
-- Secret Manager integration
+- Symbol filtering by `security_type`:
+  - CME: `FUT` (Future), `OOF` (Options on Futures), `STK` (Stock), `ETF` (ETF)
+  - DBEQ: `E` (Equity/ETF), `C` (Common Stock), `O` (Ordinary shares), `""` (Class B shares like BRK.B)
+- Holiday detection via `exchange_calendars` library
+- DST-aware UTC trading hours conversion
+- Secret Manager integration for API keys
+
+**Static Instrument Definitions**:
+- `create_vix_instrument_definition()` - CBOE VIX index
+- `create_krwusd_instrument_definition()` - Yahoo Finance KRW/USD
+- `create_bitcoin_etf_instrument_definition()` - NASDAQ Bitcoin ETFs (IBIT, FBTC, ARKB)
 
 **Usage**:
 ```python
 from instruments_service.app.venues.databento import DatabentoAdapter
 
 adapter = DatabentoAdapter()  # Uses Secret Manager automatically
+
+# Fetch CME futures
 instruments = adapter.fetch_instrument_definitions(
     exchange='CME',
-    symbols=['ES', 'NQ'],
+    symbols=['ES.FUT', 'NQ.FUT'],
     date=datetime.now()
 )
+
+# Create Bitcoin ETF (static definition)
+etf_def = adapter.create_bitcoin_etf_instrument_definition('IBIT', datetime.now())
+
+# Check if date is a US market holiday
+is_holiday, holiday_name = adapter.is_us_market_holiday(date(2025, 1, 1))
+# Returns: (True, "New Year's Day")
 ```
 
 **Instrument Format**:
-- **Futures**: `CME:FUTURE:ES-USD-250125`
+- **Futures**: `CME:FUTURE:SP500-USD-250321@LIN`
+- **Options**: `CME:OPTION:SP500-USD-250321-5000-CALL@LIN`
 - **Equities**: `NASDAQ:EQUITY:AAPL-USD`
+- **Bitcoin ETFs**: `NASDAQ:ETF:IBIT-USD`
+- **VIX Index**: `CBOE:INDEX:VIX-USD`
+- **Forex**: `YAHOO_FINANCE:SPOT_PAIR:KRW-USD`
 
 **Translation Logic**:
-- Maps Databento `security_type` to canonical `InstrumentType`
+- Maps Databento `security_type` to canonical `InstrumentType`:
+  - CME: `FUT` → FUTURE, `OOF` → OPTION
+  - DBEQ: `E` → EQUITY, `C` → EQUITY, `O` → EQUITY, `""` → EQUITY (Class B shares)
+- Equity symbols (E, C, O, "") keep original ticker names (CL=Colgate, ES=Eversource, MSI=Motorola)
+- CME futures codes (ES, CL, etc.) are converted to human-readable names (SP500, CRUDE, etc.)
+- Filters by `security_type` (excludes spreads, settlement-only)
 - Handles contract size classification (normal/mini/micro)
-- Selects most liquid variants (prefer micro/mini futures or ETFs)
-- Filters by `instrument_class != "S"` (exclude settlement-only)
-- Filters by `publisher_id == 39` for DBEQ.BASIC (NASDAQ/NYSE)
+- US market holiday detection via `exchange_calendars`
 
 ### DeFi DEX Protocols
 
@@ -475,7 +516,7 @@ If adapters fail to import:
 
 ### ✅ Complete
 
-- **TardisAdapter**: Crypto exchanges (Binance, Bybit, OKX, Deribit)
+- **TardisAdapter**: Crypto exchanges (Binance, Bybit, OKX, Deribit, Upbit, Coinbase)
 - **DatabentoAdapter**: TradFi exchanges (CME, NASDAQ, NYSE)
 - **UniswapV2Adapter**: Uniswap V2 pools (The Graph)
 - **UniswapV3Adapter**: Uniswap V3 pools (The Graph)

@@ -418,5 +418,5 @@ class BalancerAdapter(BaseDefiAdapter):
             "ccxt_exchange": "",
             "available_from_datetime": available_from,  # Pool creation date or protocol launch (2021-05-03)
             "available_to_datetime": None,
-            "data_types": "trades",  # DEX pools have swap transactions (use 'trades' as valid data type)
+            "data_types": "swaps",  # DEX pool swap events from Balancer subgraph
         }

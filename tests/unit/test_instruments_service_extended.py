@@ -267,6 +267,14 @@ class TestInstrumentsServiceExtended:
                 "instrument_type": "INDEX",
                 "symbol": "VIX",
             }
+            mock_adapter.create_krwusd_instrument_definition.return_value = {
+                "instrument_key": "YAHOO_FINANCE:SPOT_PAIR:KRW-USD",
+                "venue": "YAHOO_FINANCE",
+                "instrument_type": "SPOT_PAIR",
+                "symbol": "KRW-USD",
+                "exchange_raw_symbol": "KRWUSD=X",
+                "data_provider": "yahoo_finance",
+            }
             mock_adapter_class.return_value = mock_adapter
             
             mock_config = Mock()
@@ -308,6 +316,12 @@ class TestInstrumentsServiceExtended:
                 "venue": "CBOE",
                 "instrument_type": "INDEX",
                 "symbol": "VIX",
+            }
+            mock_adapter.create_krwusd_instrument_definition.return_value = {
+                "instrument_key": "YAHOO_FINANCE:SPOT_PAIR:KRW-USD",
+                "venue": "YAHOO_FINANCE",
+                "instrument_type": "SPOT_PAIR",
+                "symbol": "KRW-USD",
             }
             mock_adapter_class.return_value = mock_adapter
             
