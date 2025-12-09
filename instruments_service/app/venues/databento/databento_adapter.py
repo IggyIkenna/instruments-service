@@ -1,15 +1,15 @@
 """
-Databento Venue Adapter - OPTIMIZED
+Databento Venue Adapter - REFACTORED
 
 Fetches TradFi instrument definitions from Databento API.
 Supports CME + VIX with performance optimizations:
 
-OPTIMIZATIONS:
-- Module-level singleton adapter with cached API key
-- Single db.Historical client reuse across all calls (like Tardis)
+ARCHITECTURE:
+- Uses DatabentoBaseClient from unified-cloud-services (centralized network layer)
+- This adapter handles domain-specific logic (instrument parsing, trading hours)
+- Network concerns (sessions, retries, API keys) are handled by DatabentoBaseClient
 - Cached UnifiedInstrumentConfig instance
 - Parallel symbol group queries (asyncio.gather)
-- Connection pooling via Databento SDK
 
 Reference: archive/genConfig/instrumentDefinitionConfig/dataBentoInstrumentSelection.py
 """
@@ -22,102 +22,94 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import databento as db
-from instruments_service.settings import instruments_config
-from unified_cloud_services import get_secret_with_fallback
+import exchange_calendars as xcals
+from instruments_service.config import instruments_config
+from unified_cloud_services import DatabentoBaseClient, DatabentoClientConfig
 from instruments_service.config import UnifiedInstrumentConfig
 
 logger = logging.getLogger(__name__)
 
-# Module-level caching for performance (like Tardis)
-# OPTIMIZATION: Reuse client, API key, and config across all adapter instances
-# Benefits:
-# - Eliminates repeated Secret Manager API calls (API key cached)
-# - Reuses db.Historical client with connection pooling (like Tardis)
-# - Avoids recreating UnifiedInstrumentConfig (~500 instruments) on every fetch
-# - Estimated speedup: 5-10x for batch operations (multiple days × multiple exchanges)
-_DATABENTO_CLIENT: Optional["db.Historical"] = None
-_DATABENTO_API_KEY: Optional[str] = None
+# Unified config cache (domain-specific, not network-related)
 _UNIFIED_CONFIG_CACHE: Optional[Any] = None
+
+# Exchange calendar cache for holiday detection
+# Maps our calendar names to exchange_calendars calendar codes
+_EXCHANGE_CALENDAR_MAPPING = {
+    "NASDAQ": "XNAS",  # NASDAQ Stock Market
+    "NYSE": "XNYS",    # New York Stock Exchange
+    "CME": "CMES",     # CME (uses same calendar as NYSE with some variations)
+    "CBOE": "XNYS",    # CBOE uses NYSE calendar for equity products
+    "ICE": "XNYS",     # ICE US uses NYSE calendar
+}
+_EXCHANGE_CALENDARS_CACHE: Dict[str, Any] = {}
 
 
 def clear_databento_cache():
     """Clear module-level cache (useful for testing or credential rotation)"""
-    global _DATABENTO_CLIENT, _DATABENTO_API_KEY, _UNIFIED_CONFIG_CACHE
-    _DATABENTO_CLIENT = None
-    _DATABENTO_API_KEY = None
+    global _UNIFIED_CONFIG_CACHE, _EXCHANGE_CALENDARS_CACHE
+    from unified_cloud_services import clear_databento_api_key_cache, clear_databento_client_cache
+    clear_databento_api_key_cache()
+    clear_databento_client_cache()
     _UNIFIED_CONFIG_CACHE = None
-    logger.info("🧹 Cleared Databento module-level cache")
+    _EXCHANGE_CALENDARS_CACHE.clear()
+    logger.info("🧹 Cleared Databento module-level cache (including exchange calendars)")
 
 
 class DatabentoAdapter:
     """
     Adapter for fetching TradFi instrument definitions from Databento.
 
+    Uses DatabentoBaseClient for network management (sessions, retries, API keys).
+    This adapter focuses on domain-specific logic:
+    - Instrument definition fetching
+    - Trading hours calculation
+    - Holiday detection
+    - VIX index generation
+
     Supports:
     - CME (futures, commodities)
     - NASDAQ (equities)
     - NYSE (equities)
+    - CBOE (VIX index)
     - Other TradFi exchanges
     """
 
     def __init__(self, api_key: Optional[str] = None, project_id: Optional[str] = None):
         """
-        Initialize Databento adapter with module-level client reuse.
-
-        OPTIMIZED: Uses module-level singleton client to avoid creating new connections
-        for each adapter instance (like Tardis pattern).
+        Initialize Databento adapter using centralized DatabentoBaseClient.
 
         Args:
-            api_key: Databento API key (optional, uses cached or Secret Manager)
+            api_key: Databento API key (optional, DatabentoBaseClient handles Secret Manager)
             project_id: GCP project ID for Secret Manager (defaults to GCP_PROJECT_ID env var)
         """
-        global _DATABENTO_CLIENT, _DATABENTO_API_KEY
+        # Create config with instruments-service specific settings
+        config = DatabentoClientConfig(
+            secret_name=instruments_config.databento_secret_name,
+            fallback_env_var="DATABENTO_API_KEY",
+            reuse_client=True,  # Enable module-level client caching
+        )
+        
+        # Initialize centralized base client
+        self._base_client = DatabentoBaseClient(
+            config=config,
+            api_key=api_key,
+            project_id=project_id or instruments_config.gcp_project_id,
+        )
+        
+        # Initialize session
+        self._base_client.initialize_session()
+        
+        logger.info("✅ DatabentoAdapter initialized (using DatabentoBaseClient)")
 
-        # Reuse cached API key if available (avoid Secret Manager calls)
-        if _DATABENTO_API_KEY and not api_key:
-            self.api_key = _DATABENTO_API_KEY
-            logger.debug("✅ Reusing cached Databento API key")
-        else:
-            # Try provided API key first
-            self.api_key = api_key
+    @property
+    def client(self) -> db.Historical:
+        """Get the underlying Databento Historical client."""
+        return self._base_client.client
 
-            # If not provided, try Secret Manager
-            if not self.api_key:
-                try:
-                    secret_name = instruments_config.databento_secret_name
-                    project_id = instruments_config.gcp_project_id
-                    self.api_key = get_secret_with_fallback(
-                        project_id=project_id,
-                        secret_name=secret_name,
-                        fallback_env_var="DATABENTO_API_KEY",
-                    )
-
-                    if self.api_key:
-                        logger.info(
-                            f"✅ Retrieved Databento API key from Secret Manager (secret: {secret_name})"
-                        )
-                except Exception as e:
-                    logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                    self.api_key = instruments_config.databento_secret_name
-
-            if not self.api_key:
-                raise ValueError(
-                    "Databento API key required. Set DATABENTO_SECRET_NAME env var (for Secret Manager), "
-                    "DATABENTO_API_KEY env var (fallback), or pass api_key parameter."
-                )
-
-            # Cache API key for future instances
-            _DATABENTO_API_KEY = self.api_key
-
-        # Reuse module-level client if available (OPTIMIZATION)
-        if _DATABENTO_CLIENT is not None:
-            self.client = _DATABENTO_CLIENT
-            logger.debug("✅ Reusing module-level Databento client (connection pooling)")
-        else:
-            # Create new client and cache it
-            self.client = db.Historical(self.api_key)
-            _DATABENTO_CLIENT = self.client
-            logger.info("✅ Created new Databento client (will be reused for batch operations)")
+    @property
+    def api_key(self) -> str:
+        """Get the API key."""
+        return self._base_client.api_key
 
     def fetch_instrument_definitions(
         self,
@@ -227,21 +219,33 @@ class DatabentoAdapter:
                 df = zipped_data.to_df()
 
                 if df.empty:
-                    logger.warning(
-                        f"No instrument definitions found for {exchange} {symbol_group} (stype_in={stype_in}) on {start_date_str}"
-                    )
+                    # Check if this is a US market holiday for better user feedback
+                    is_holiday, holiday_name = self.is_us_market_holiday(date.date() if hasattr(date, 'date') else date)
+                    if is_holiday:
+                        logger.info(
+                            f"📅 No data for {exchange} on {start_date_str} - US market holiday ({holiday_name}). "
+                            f"This is expected behavior."
+                        )
+                    else:
+                        logger.warning(
+                            f"No instrument definitions found for {exchange} {symbol_group} (stype_in={stype_in}) on {start_date_str}"
+                        )
                     continue
 
                 # Filter out non-trading instruments
                 # Use security_type for reliable filtering instead of instrument_class
-                # security_type: "OOF" = Options on Futures, "FUT" = Future, "STK" = Stock, "ETF" = ETF
+                # CME security_type: "OOF" = Options on Futures, "FUT" = Future, "STK" = Stock, "ETF" = ETF
+                # DBEQ security_type: "E" = Equity/ETF, "C" = Common Stock, "O" = Ordinary shares
+                # DBEQ may also have empty string "" for some Class B shares (e.g., BRK.B, BF.B)
                 # CME weekly options use various instrument_class values: "W", "M", "T", "S", "Q", "E"
                 if "security_type" in df.columns:
                     pre_filter_count = len(df)
-                    # Keep only tradeable instruments: Options (OOF), Futures (FUT), Stocks (STK), ETFs (ETF)
+                    # Keep only tradeable instruments:
+                    # CME: Options (OOF), Futures (FUT), Stocks (STK), ETFs (ETF)
+                    # DBEQ: Equity/ETF (E), Common Stock (C), Ordinary shares (O), Class B shares ("")
                     # Exclude: Settlement-only and spreads
-                    df = df[df["security_type"].isin(["OOF", "FUT", "STK", "ETF"])]
-                    filter_reason = "non-tradeable instruments (keeping OOF=Options, FUT=Futures, STK=Stocks, ETF=ETFs)"
+                    df = df[df["security_type"].isin(["OOF", "FUT", "STK", "ETF", "E", "C", "O", ""])]
+                    filter_reason = "non-tradeable instruments (keeping OOF=Options, FUT=Futures, STK=Stocks, ETF=ETFs, E=Equity, C=Common, O=Ordinary)"
                     post_filter_count = len(df)
                     if pre_filter_count != post_filter_count:
                         logger.info(
@@ -356,6 +360,327 @@ class DatabentoAdapter:
             "strike": "",  # Not an option
             "option_type": "",  # Not an option
             # Trading hours metadata (CBOE) - reuse from existing CBOE instruments
+            "trading_hours_open": trading_hours.get("open"),
+            "trading_hours_close": trading_hours.get("close"),
+            "trading_session": trading_hours.get("session"),
+            "is_trading_day": trading_hours.get("is_trading_day"),
+            "holiday_calendar": trading_hours.get("holiday_calendar"),
+        }
+
+    def create_krwusd_instrument_definition(self, target_date: datetime) -> Optional[Dict[str, Any]]:
+        """
+        Create KRW/USD currency pair instrument definition.
+
+        KRW/USD is not available via Databento, but we create it as a static instrument
+        definition using Yahoo Finance as the data provider.
+        Yahoo Finance provides daily historical data going back many years (free).
+
+        Args:
+            target_date: Target date for availability window (not used for forex, but kept for consistency)
+
+        Returns:
+            KRW/USD instrument definition dictionary or None
+        """
+        venue = "YAHOO_FINANCE"
+        instrument_type = "SPOT_PAIR"
+        base_asset = "KRW"
+        quote_asset = "USD"
+
+        # Build canonical symbol
+        symbol_canonical = f"{base_asset}-{quote_asset}"
+
+        # Build canonical instrument key
+        instrument_key = f"{venue}:{instrument_type}:{symbol_canonical}"
+
+        # Currency pairs trade 24/7 (forex market)
+        # Available from: 2020-01-01 (as requested)
+        available_from = datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat()
+        available_to = None  # Currency pairs don't expire
+
+        return {
+            # ============================================================================
+            # REQUIRED CORE FIELDS
+            # ============================================================================
+            "instrument_key": instrument_key,
+            "venue": venue,
+            "instrument_type": instrument_type,
+            "symbol": symbol_canonical,
+            "available_from_datetime": available_from,
+            
+            # ============================================================================
+            # METADATA FIELDS (with defaults)
+            # ============================================================================
+            "venue_type": "exchange",
+            "tardis_exchange": "",
+            "data_provider": "yahoo_finance",  # Data source is Yahoo Finance
+            "asset_class": "traditional",
+            
+            # ============================================================================
+            # AVAILABILITY WINDOWS
+            # ============================================================================
+            "available_to_datetime": available_to,  # Currency pairs don't expire
+            
+            # ============================================================================
+            # DATA TYPES
+            # ============================================================================
+            "data_types": "ohlcv_24h",  # Yahoo Finance provides daily OHLCV data (free historical from 2020)
+            
+            # ============================================================================
+            # ASSET INFORMATION
+            # ============================================================================
+            "base_asset": base_asset,
+            "quote_asset": quote_asset,
+            "settle_asset": quote_asset,
+            
+            # ============================================================================
+            # EXCHANGE-SPECIFIC IDENTIFIERS
+            # ============================================================================
+            "exchange_raw_symbol": "KRWUSD=X",  # Yahoo Finance ticker symbol format
+            "databento_symbol": "",  # Not available via Databento
+            "tardis_symbol": "",
+            
+            # ============================================================================
+            # TRADING PARAMETERS
+            # ============================================================================
+            "inverse": False,
+            "tick_size": "",  # Not a trading instrument, irrelevant for data-only
+            "min_size": "",  # Not a trading instrument, irrelevant for data-only
+            
+            # ============================================================================
+            # OPTION-SPECIFIC FIELDS (not applicable for forex)
+            # ============================================================================
+            "strike": "",
+            "option_type": "",
+            
+            # ============================================================================
+            # CONTRACT-SPECIFIC FIELDS (not applicable for forex spot)
+            # ============================================================================
+            "expiry": None,  # Not applicable for forex spot
+            "contract_size": None,  # Not applicable for forex spot
+            "underlying": "",  # Not applicable for forex spot
+            
+            # ============================================================================
+            # CCXT INTEGRATION FIELDS
+            # ============================================================================
+            "ccxt_symbol": "",  # Not using CCXT for Yahoo Finance
+            "ccxt_exchange": "",
+            
+            # ============================================================================
+            # DEFI-SPECIFIC FIELDS (not applicable for forex)
+            # ============================================================================
+            "base_asset_contract_address": None,
+            "quote_asset_contract_address": None,
+            "pool_address": None,
+            "pool_fee_tier": None,
+            
+            # ============================================================================
+            # LENDING PROTOCOL-SPECIFIC FIELDS (not applicable for forex)
+            # ============================================================================
+            "flash_loan_providers": None,
+            "instadapp_routing": None,
+            "ltv": None,
+            "liquidation_threshold": None,
+            "liquidation_bonus": None,
+            "reserve_factor": None,
+            "emode_category_id": None,
+            "emode_label": None,
+            "emode_underlying": None,
+            "emode_liquidation_threshold": None,
+            "emode_liquidation_bonus": None,
+            "optimal_utilization_rate": None,
+            "base_variable_borrow_rate": None,
+            "variable_rate_slope1": None,
+            "variable_rate_slope2": None,
+            
+            # ============================================================================
+            # CEFI RISK PARAMETERS (not applicable for forex spot)
+            # ============================================================================
+            "max_position_size": None,
+            "max_leverage": None,
+            "initial_margin_rate": None,
+            "maintenance_margin_rate": None,
+            "leverage_tiers_json": None,
+            
+            # ============================================================================
+            # TRADING HOURS METADATA (forex trades 24/7)
+            # ============================================================================
+            "trading_hours_open": None,  # Forex trades 24/7, no specific open time
+            "trading_hours_close": None,  # Forex trades 24/7, no specific close time
+            "trading_session": "24/7",  # Forex market trades continuously
+            "is_trading_day": True,  # Forex trades every day (including weekends)
+            "holiday_calendar": None,  # No holidays for forex market
+            
+            # ============================================================================
+            # ADDITIONAL METADATA
+            # ============================================================================
+            "chain": "off-chain",  # Forex is off-chain (traditional finance)
+            "market_category": "TRADFI",  # Forex is TradFi
+        }
+
+    def create_bitcoin_etf_instrument_definition(
+        self, ticker: str, target_date: datetime
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Create Bitcoin ETF instrument definition with full metadata.
+
+        Bitcoin ETFs (IBIT, FBTC, ARKB) are TradFi ETFs that track Bitcoin price.
+        They trade on US stock exchanges (NASDAQ, NYSE) with standard equity trading hours.
+        
+        Follows the VIX/KRW-USD pattern for complete instrument definitions with
+        canonical instrument keys in the format: VENUE:ETF:TICKER-USD
+
+        Args:
+            ticker: ETF ticker symbol (e.g., "IBIT", "FBTC", "ARKB")
+            target_date: Target date for trading hours calculation
+
+        Returns:
+            Bitcoin ETF instrument definition dictionary or None if ticker not recognized
+        """
+        # ETF venue mapping - Bitcoin ETFs accessible via Databento DBEQ.BASIC
+        # All use NASDAQ for consistency (same trading hours as all US equity exchanges)
+        etf_venues = {
+            "IBIT": "NASDAQ",  # BlackRock iShares Bitcoin Trust
+            "FBTC": "NASDAQ",  # Fidelity Wise Origin Bitcoin Fund
+            "ARKB": "NASDAQ",  # ARK 21Shares Bitcoin ETF
+        }
+        
+        venue = etf_venues.get(ticker.upper())
+        if not venue:
+            logger.warning(f"Unknown Bitcoin ETF ticker: {ticker}")
+            return None
+        
+        ticker_upper = ticker.upper()
+        instrument_type = "ETF"
+        base_asset = ticker_upper  # The ETF ticker is the base asset (IBIT, FBTC, ARKB)
+        quote_asset = "USD"
+
+        # Build canonical symbol (ETF-USD pattern following VIX-USD convention)
+        symbol_canonical = f"{base_asset}-{quote_asset}"
+
+        # Build canonical instrument key: VENUE:ETF:TICKER-USD
+        instrument_key = f"{venue}:{instrument_type}:{symbol_canonical}"
+
+        # Get NASDAQ/NYSE trading hours (converted to UTC via existing logic)
+        trading_hours = self._get_exchange_trading_hours(venue, instrument_type, target_date)
+
+        # Bitcoin ETFs started trading in January 2024
+        # Use trading session start for available_from_datetime
+        available_from = trading_hours.get("session_start_utc")
+        if not available_from:
+            # Fallback to target date start (00:00:00 UTC) if trading hours not available
+            target_date_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            if target_date_start.tzinfo is None:
+                target_date_start = target_date_start.replace(tzinfo=timezone.utc)
+            available_from = target_date_start.isoformat()
+        
+        # ETFs don't expire - use session end for available_to_datetime
+        available_to = trading_hours.get("session_end_utc")
+
+        return {
+            # ============================================================================
+            # REQUIRED CORE FIELDS
+            # ============================================================================
+            "instrument_key": instrument_key,  # e.g., NASDAQ:ETF:IBIT-USD
+            "venue": venue,
+            "instrument_type": instrument_type,
+            "symbol": symbol_canonical,
+            "available_from_datetime": available_from,
+            
+            # ============================================================================
+            # ASSET INFORMATION
+            # ============================================================================
+            "base_asset": base_asset,  # ETF ticker (IBIT, FBTC, ARKB)
+            "quote_asset": quote_asset,
+            "settle_asset": quote_asset,
+            "underlying": "BTC",  # Bitcoin is the underlying asset for all Bitcoin ETFs
+            
+            # ============================================================================
+            # METADATA FIELDS
+            # ============================================================================
+            "asset_class": "traditional",
+            "venue_type": "exchange",
+            "chain": "off-chain",  # TradFi exchanges are off-chain
+            "market_category": "TRADFI",  # Bitcoin ETFs are TradFi instruments
+            
+            # ============================================================================
+            # DATA PROVIDER
+            # ============================================================================
+            "data_provider": "databento",
+            "databento_symbol": ticker_upper,
+            "exchange_raw_symbol": ticker_upper,
+            "tardis_exchange": "",
+            "tardis_symbol": "",
+            
+            # ============================================================================
+            # DATA TYPES
+            # ============================================================================
+            "data_types": "ohlcv_1m",  # Databento provides OHLCV 1-minute data
+            
+            # ============================================================================
+            # AVAILABILITY WINDOWS
+            # ============================================================================
+            "available_to_datetime": available_to,
+            
+            # ============================================================================
+            # TRADING PARAMETERS
+            # ============================================================================
+            "tick_size": "0.01",  # ETFs are quoted to 2 decimal places
+            "min_size": "1",  # Minimum 1 share
+            "inverse": False,
+            
+            # ============================================================================
+            # CONTRACT-SPECIFIC FIELDS (not applicable for ETFs)
+            # ============================================================================
+            "expiry": None,  # ETFs don't expire
+            "contract_size": None,
+            "strike": "",
+            "option_type": "",
+            
+            # ============================================================================
+            # CCXT INTEGRATION FIELDS (not applicable for TradFi ETFs)
+            # ============================================================================
+            "ccxt_symbol": "",
+            "ccxt_exchange": "",
+            
+            # ============================================================================
+            # DEFI-SPECIFIC FIELDS (not applicable for TradFi ETFs)
+            # ============================================================================
+            "base_asset_contract_address": None,
+            "quote_asset_contract_address": None,
+            "pool_address": None,
+            "pool_fee_tier": None,
+            
+            # ============================================================================
+            # LENDING PROTOCOL-SPECIFIC FIELDS (not applicable for ETFs)
+            # ============================================================================
+            "flash_loan_providers": None,
+            "instadapp_routing": None,
+            "ltv": None,
+            "liquidation_threshold": None,
+            "liquidation_bonus": None,
+            "reserve_factor": None,
+            "emode_category_id": None,
+            "emode_label": None,
+            "emode_underlying": None,
+            "emode_liquidation_threshold": None,
+            "emode_liquidation_bonus": None,
+            "optimal_utilization_rate": None,
+            "base_variable_borrow_rate": None,
+            "variable_rate_slope1": None,
+            "variable_rate_slope2": None,
+            
+            # ============================================================================
+            # CEFI RISK PARAMETERS (not applicable for spot ETFs)
+            # ============================================================================
+            "max_position_size": None,
+            "max_leverage": None,
+            "initial_margin_rate": None,
+            "maintenance_margin_rate": None,
+            "leverage_tiers_json": None,
+            
+            # ============================================================================
+            # TRADING HOURS METADATA (UTC converted)
+            # ============================================================================
             "trading_hours_open": trading_hours.get("open"),
             "trading_hours_close": trading_hours.get("close"),
             "trading_session": trading_hours.get("session"),
@@ -817,16 +1142,20 @@ class DatabentoAdapter:
 
         # Convert to human-readable names using unified config
         # For equities/ETFs, asset is already human-readable (AAPL, SPY, etc.), only convert futures codes
-        if security_type in ["STK", "ETF"] or (
+        # CME security_type: "STK" = Stock, "ETF" = ETF, "FUT" = Future, "OOF" = Options on Futures
+        # DBEQ security_type: "E" = Equity/ETF, "C" = Common Stock, "O" = Ordinary shares, "" = Class B shares
+        if security_type in ["STK", "ETF", "E", "C", "O", ""] or (
             not security_type and underlying_asset and len(underlying_asset) <= 5
         ):
             # Equities/ETFs are already human-readable, don't convert
+            # Includes DBEQ types: E (Equity), C (Common Stock), O (Ordinary), "" (Class B like BRK.B)
             base_asset = underlying_asset if underlying_asset else exchange_raw_symbol
         elif instrument_type == "OPTION":
             # Options: use underlying asset (already human-readable like SPY)
             base_asset = underlying_asset if underlying_asset else ""
         else:
-            # Futures: convert exchange codes to human-readable names
+            # Futures only: convert exchange codes to human-readable names
+            # This applies to CME futures (FUT, OOF) where codes like "ES" should become "SP500"
             base_asset = (
                 unified_config.get_human_readable_name(underlying_asset) if underlying_asset else ""
             )
@@ -1476,6 +1805,20 @@ class DatabentoAdapter:
                 "session": "regular",
                 "holiday_calendar": "CBOE",
             },
+            "NASDAQ": {
+                "open_local": "09:30:00-05:00",  # 9:30 AM ET
+                "close_local": "16:00:00-05:00",  # 4:00 PM ET
+                "timezone": "America/New_York",  # Eastern Time (DST-aware)
+                "session": "regular",
+                "holiday_calendar": "NASDAQ",
+            },
+            "NYSE": {
+                "open_local": "09:30:00-05:00",  # 9:30 AM ET
+                "close_local": "16:00:00-05:00",  # 4:00 PM ET
+                "timezone": "America/New_York",  # Eastern Time (DST-aware)
+                "session": "regular",
+                "holiday_calendar": "NYSE",
+            },
         }
 
         # Get trading hours for this exchange
@@ -1624,9 +1967,55 @@ class DatabentoAdapter:
             "session_end_utc": session_end_utc if "session_end_utc" in locals() else None,
         }
 
+    def _get_exchange_calendar(self, calendar_name: str) -> Optional[Any]:
+        """
+        Get exchange calendar instance (cached for performance).
+
+        Uses the exchange_calendars library which provides accurate holiday
+        schedules for major exchanges including NYSE, NASDAQ, CME.
+
+        Args:
+            calendar_name: Our calendar identifier (e.g., 'NYSE', 'NASDAQ', 'CME')
+
+        Returns:
+            Exchange calendar instance or None if not found
+        """
+        global _EXCHANGE_CALENDARS_CACHE
+
+        if calendar_name in _EXCHANGE_CALENDARS_CACHE:
+            return _EXCHANGE_CALENDARS_CACHE[calendar_name]
+
+        # Map our calendar name to exchange_calendars code
+        xcal_code = _EXCHANGE_CALENDAR_MAPPING.get(calendar_name)
+        if not xcal_code:
+            logger.warning(f"No exchange calendar mapping for: {calendar_name}")
+            return None
+
+        try:
+            # Get the calendar (cached by exchange_calendars internally too)
+            cal = xcals.get_calendar(xcal_code)
+            _EXCHANGE_CALENDARS_CACHE[calendar_name] = cal
+            logger.debug(f"✅ Loaded exchange calendar: {calendar_name} -> {xcal_code}")
+            return cal
+        except Exception as e:
+            logger.warning(f"Failed to load exchange calendar {xcal_code}: {e}")
+            return None
+
     def _is_trading_holiday(self, date: datetime.date, calendar: Optional[str] = None) -> bool:
         """
-        Check if a date is a trading holiday.
+        Check if a date is a trading holiday using exchange_calendars library.
+
+        Provides accurate holiday detection for US markets including:
+        - New Year's Day
+        - Martin Luther King Jr. Day
+        - Presidents' Day
+        - Good Friday
+        - Memorial Day
+        - Juneteenth (since 2022)
+        - Independence Day
+        - Labor Day
+        - Thanksgiving
+        - Christmas
 
         For exchanges like CME that open on Sunday evening UTC (for Monday trading),
         Sunday is NOT a holiday - it's part of Monday's trading session.
@@ -1636,38 +2025,103 @@ class DatabentoAdapter:
             calendar: Holiday calendar identifier (e.g., 'CME', 'NYSE', 'NASDAQ')
 
         Returns:
-            True if date is a holiday, False otherwise
+            True if date is a holiday (market closed), False otherwise (market open)
         """
         weekday = date.weekday()
 
-        # For CME: Sunday evening UTC is the START of Monday's trading session
-        # So Sunday is NOT a holiday - it's part of Monday's trading day
-        # The session that opens Sunday evening closes Monday evening UTC
-        if calendar == "CME":
-            # Saturday is always a holiday for CME
-            if weekday == 5:  # Saturday
-                return True
-            # Sunday is NOT a holiday - it's when Monday's session starts
-            # Monday-Friday are trading days (unless specific holiday)
+        # Special handling for CME: Sunday evening UTC starts Monday's session
+        # Sunday itself is NOT a trading day, but it's also not a "holiday"
+        # The is_trading_day logic in _get_exchange_trading_hours handles this
+        if calendar == "CME" and weekday == 6:  # Sunday
+            # Sunday is part of Monday's session for CME
+            # Return False (not a holiday) - the session check handles this
             return False
 
-        # For CBOE (VIX): Standard weekday trading
-        # Saturday and Sunday are holidays
-        if calendar == "CBOE":
-            if weekday >= 5:  # Saturday (5) or Sunday (6)
-                return True
-            # Monday-Friday are trading days (unless specific holiday)
-            return False
+        # Get exchange calendar for accurate holiday detection
+        xcal = self._get_exchange_calendar(calendar) if calendar else None
 
-        # Default: weekends are holidays
-        if weekday >= 5:
+        if xcal:
+            try:
+                # Convert date to pandas Timestamp for exchange_calendars
+                ts = pd.Timestamp(date)
+                
+                # Check if this date is a valid trading session
+                # exchange_calendars.is_session returns True if market is OPEN
+                is_open = xcal.is_session(ts)
+                
+                # If market is closed and it's a weekday, it's a holiday
+                if not is_open:
+                    if weekday < 5:  # Monday-Friday
+                        # Log the holiday for debugging
+                        logger.debug(f"📅 {date} is a US market holiday (calendar: {calendar})")
+                    return True  # Closed (holiday or weekend)
+                return False  # Open (trading day)
+                
+            except Exception as e:
+                logger.warning(f"Exchange calendar check failed for {date}: {e}")
+                # Fall through to default logic
+
+        # Fallback: weekends are always closed
+        if weekday >= 5:  # Saturday (5) or Sunday (6)
             return True
 
-        # TODO: Add specific holiday checks here
-        # Example: New Year's Day, Independence Day, Christmas, etc.
-        # Can be enhanced with:
-        # - pandas_market_calendars library
-        # - Custom holiday calendar definitions
-        # - API calls to exchange holiday calendars
-
+        # If no calendar available and it's a weekday, assume open
         return False
+
+    def is_us_market_holiday(self, date: datetime.date) -> tuple[bool, Optional[str]]:
+        """
+        Check if a date is a US market holiday and return holiday name if known.
+
+        Useful for logging and user feedback when no data is returned.
+
+        Args:
+            date: Date to check
+
+        Returns:
+            Tuple of (is_holiday, holiday_name or None)
+        """
+        xcal = self._get_exchange_calendar("NYSE")
+        if not xcal:
+            return (False, None)
+
+        try:
+            ts = pd.Timestamp(date)
+            is_open = xcal.is_session(ts)
+            
+            if not is_open and date.weekday() < 5:
+                # It's a weekday but market is closed - find the holiday name
+                # Check common US holidays
+                month, day = date.month, date.day
+                year = date.year
+                
+                # Fixed holidays (approximate - some shift for weekends)
+                if month == 1 and day == 1:
+                    return (True, "New Year's Day")
+                if month == 7 and day in [3, 4, 5]:  # July 4 or observed
+                    return (True, "Independence Day")
+                if month == 12 and day in [24, 25, 26]:  # Dec 25 or observed
+                    return (True, "Christmas")
+                if month == 6 and day == 19:
+                    return (True, "Juneteenth")
+                
+                # Variable holidays (use approximations)
+                if month == 1 and 15 <= day <= 21 and date.weekday() == 0:
+                    return (True, "Martin Luther King Jr. Day")
+                if month == 2 and 15 <= day <= 21 and date.weekday() == 0:
+                    return (True, "Presidents' Day")
+                if month == 5 and 25 <= day <= 31 and date.weekday() == 0:
+                    return (True, "Memorial Day")
+                if month == 9 and 1 <= day <= 7 and date.weekday() == 0:
+                    return (True, "Labor Day")
+                if month == 11 and 22 <= day <= 28 and date.weekday() == 3:
+                    return (True, "Thanksgiving")
+                if month in [3, 4]:  # Good Friday is in March or April
+                    return (True, "Good Friday")
+                
+                return (True, "US Market Holiday")
+            
+            return (False, None)
+            
+        except Exception as e:
+            logger.warning(f"Holiday name lookup failed: {e}")
+            return (False, None)

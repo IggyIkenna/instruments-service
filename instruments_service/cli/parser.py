@@ -3,6 +3,9 @@ CLI Argument Parser
 
 Argument parsing utilities for instruments-service CLI.
 Provides comprehensive CLI argument parsing with validation.
+
+Note: Query functionality has been moved to unified-cloud-services.
+Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 """
 
 import argparse
@@ -24,29 +27,29 @@ def parse_arguments() -> argparse.Namespace:
         >>> print(f"Date range: {args.start_date} to {args.end_date}")
     """
     parser = argparse.ArgumentParser(
-        description="Instruments Service - Generate and query canonical instrument definitions",
+        description="Instruments Service - Generate canonical instrument definitions",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_get_examples_text(),
     )
 
-    # Mode selection
+    # Mode selection (only instruments generation now, query moved to unified-cloud-services)
     parser.add_argument(
         "--mode",
-        choices=["instruments", "instruments-query"],
+        choices=["instruments"],
         required=True,
-        help="Operation mode: instruments (generate) or instruments-query (query)",
+        help="Operation mode: instruments (generate instrument definitions)",
     )
 
-    # Date range (required for instruments mode, optional for query)
+    # Date range (required for instruments mode)
     parser.add_argument(
         "--start-date",
         type=str,
-        help="Start date in YYYY-MM-DD format (required for instruments mode)",
+        help="Start date in YYYY-MM-DD format (required)",
     )
     parser.add_argument(
         "--end-date",
         type=str,
-        help="End date in YYYY-MM-DD format (required for instruments mode, optional for query)",
+        help="End date in YYYY-MM-DD format (defaults to start-date if not provided)",
     )
 
     # Configuration
@@ -98,66 +101,6 @@ def parse_arguments() -> argparse.Namespace:
         help="Include DeFi (Decentralized Finance) protocols via The Graph (uniswap_v3, curve, aave_v3, etc.). Default: Process all market types if no flags specified.",
     )
 
-    # Instruments query specific arguments
-    parser.add_argument(
-        "--query-type",
-        choices=[
-            "list",
-            "summary",
-            "details",
-            "trading-params",
-            "data-types",
-            "expiring",
-        ],
-        default="list",
-        help="Type of instruments query to perform",
-    )
-    parser.add_argument(
-        "--venues",
-        nargs="+",
-        help="Filter by venues (BINANCE, BINANCE-FUTURES, DERIBIT, BYBIT, OKX, etc.)",
-    )
-    parser.add_argument(
-        "--instrument-types",
-        nargs="+",
-        help="Filter by instrument types (SPOT_PAIR, PERPETUAL, FUTURE, OPTION, etc.)",
-    )
-    parser.add_argument("--base-currency", help="Filter by base currency (BTC, ETH, SOL, etc.)")
-    parser.add_argument("--quote-currency", help="Filter by quote currency (USDT, USD, USDC, etc.)")
-    parser.add_argument(
-        "--symbol-pattern", help="Regex pattern to match symbols (e.g., BTC.*, .*USDT)"
-    )
-    parser.add_argument(
-        "--instrument-id",
-        help="Specific instrument ID for details/trading-params queries",
-    )
-    parser.add_argument(
-        "--instrument-ids", nargs="+", help="List of specific instrument IDs to include"
-    )
-    parser.add_argument(
-        "--data-type",
-        help="Data type to filter by (trades, book_snapshot_5, derivative_ticker, etc.)",
-    )
-    parser.add_argument(
-        "--days-until-expiry",
-        type=int,
-        default=30,
-        help="Days ahead to look for expiring instruments",
-    )
-    parser.add_argument(
-        "--output-format",
-        choices=["summary", "json", "csv"],
-        default="summary",
-        help="Output format for instruments query results",
-    )
-    parser.add_argument("--output-file", help="Output file path for CSV format")
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=1000,
-        help="Maximum number of instruments to return",
-    )
-
     # Logging
     parser.add_argument(
         "--log-level",
@@ -197,13 +140,6 @@ def validate_arguments(args: argparse.Namespace) -> None:
     # If none specified, all will be processed by default
     # No validation needed - flags are additive
 
-    # Validate query-specific arguments
-    if args.mode == "instruments-query":
-        if args.query_type in ["details", "trading-params"] and not args.instrument_id:
-            raise ValueError(f"--instrument-id is required for query-type={args.query_type}")
-        if args.query_type == "data-types" and not args.data_type:
-            raise ValueError("--data-type is required for query-type=data-types")
-
 
 def _get_examples_text() -> str:
     """Get help text with usage examples."""
@@ -228,18 +164,10 @@ Examples:
   # Generate instruments with force flag
   python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --force
 
-  # Query instruments for a specific date
-  python -m instruments_service --mode instruments-query --start-date 2023-05-23
+Query Instruments (use unified-cloud-services):
 
-  # Query instruments with filters
-  python -m instruments_service --mode instruments-query --start-date 2023-05-23 \\
-      --venues BINANCE-FUTURES --instrument-types PERPETUAL --base-currency BTC
-
-  # Get instrument details
-  python -m instruments_service --mode instruments-query --start-date 2023-05-23 \\
-      --query-type details --instrument-id BINANCE-FUTURES:PERPETUAL:BTC-USDT@LIN
-
-  # Export instruments to CSV
-  python -m instruments_service --mode instruments-query --start-date 2023-05-23 \\
-      --output-format csv --output-file instruments.csv
+  # Query instruments from Python
+  from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
+  service = StandardizedDomainCloudService(domain='instruments', cloud_target=CloudTarget(...))
+  df = service.download_from_gcs(gcs_path='CEFI/by_date/day-2023-05-23/instruments.parquet')
 """

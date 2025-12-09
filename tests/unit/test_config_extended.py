@@ -107,7 +107,8 @@ class TestUnifiedInstrumentConfig:
         options = config.get_symbols_by_type("OPTION")
 
         assert len(options) > 0
-        assert "SPY.OPT" in options
+        # Verify options have .OPT suffix
+        assert all(opt.endswith(".OPT") for opt in options)
 
     def test_get_symbols_by_type_case_insensitive(self):
         """Test instrument type lookup is case-insensitive."""
@@ -472,10 +473,68 @@ class TestVenueMappingExtended:
             "okex",
             "okex-futures",
             "okex-swap",
+            "upbit",
+            "coinbase",
         ]
 
         for exchange in expected_exchanges:
             assert exchange in mapping.all_tardis_exchanges
+
+    def test_is_tardis_exchange_upbit_coinbase(self):
+        """Test is_tardis_exchange returns True for Upbit and Coinbase."""
+        mapping = VenueMapping()
+
+        assert mapping.is_tardis_exchange("upbit") is True
+        assert mapping.is_tardis_exchange("coinbase") is True
+
+    def test_tardis_to_venue_upbit_coinbase(self):
+        """Test Tardis to venue mapping for Upbit and Coinbase."""
+        mapping = VenueMapping()
+
+        assert mapping.tardis_to_venue.get("upbit") == "UPBIT"
+        assert mapping.tardis_to_venue.get("coinbase") == "COINBASE"
+
+    def test_venue_to_ccxt_upbit_coinbase(self):
+        """Test venue to CCXT mapping for Upbit and Coinbase."""
+        mapping = VenueMapping()
+
+        assert mapping.venue_to_ccxt.get("UPBIT") == "upbit"
+        assert mapping.venue_to_ccxt.get("COINBASE") == "coinbase"
+
+    def test_venue_instrument_type_to_tardis_upbit_coinbase(self):
+        """Test venue+instrument_type to Tardis mapping for Upbit and Coinbase."""
+        mapping = VenueMapping()
+
+        # Upbit (spot only)
+        assert mapping.venue_instrument_type_to_tardis.get(("UPBIT", "SPOT_PAIR")) == "upbit"
+
+        # Coinbase (spot only)
+        assert mapping.venue_instrument_type_to_tardis.get(("COINBASE", "SPOT_PAIR")) == "coinbase"
+
+    def test_tardis_exchange_instrument_types_upbit_coinbase(self):
+        """Test Tardis exchange to instrument types for Upbit and Coinbase."""
+        mapping = VenueMapping()
+
+        # Both should be spot only
+        assert mapping.tardis_exchange_instrument_types.get("upbit") == ["SPOT_PAIR"]
+        assert mapping.tardis_exchange_instrument_types.get("coinbase") == ["SPOT_PAIR"]
+
+    def test_spot_mvp_filtered_venues(self):
+        """Test spot_mvp_filtered_venues includes Upbit and Coinbase."""
+        mapping = VenueMapping()
+
+        assert "UPBIT" in mapping.spot_mvp_filtered_venues
+        assert "COINBASE" in mapping.spot_mvp_filtered_venues
+        # Should not include other Tardis venues
+        assert "BINANCE-SPOT" not in mapping.spot_mvp_filtered_venues
+        assert "OKX" not in mapping.spot_mvp_filtered_venues
+
+    def test_get_data_provider_upbit_coinbase(self):
+        """Test get_data_provider returns 'tardis' for Upbit and Coinbase."""
+        mapping = VenueMapping()
+
+        assert mapping.get_data_provider("UPBIT") == "tardis"
+        assert mapping.get_data_provider("COINBASE") == "tardis"
 
     def test_venue_to_ccxt_all_venues(self):
         """Test venue to CCXT mapping for all venues."""
@@ -531,6 +590,65 @@ class TestVenueMappingExtended:
                 mapping.venue_instrument_type_to_tardis.get((venue, inst_type)) == expected_tardis
             )
 
+    def test_get_venue_to_tardis_exchanges(self):
+        """Test get_venue_to_tardis_exchanges returns correct reverse mapping."""
+        mapping = VenueMapping()
+        venue_to_exchanges = mapping.get_venue_to_tardis_exchanges()
+
+        # UPBIT should map to ['upbit']
+        assert "UPBIT" in venue_to_exchanges
+        assert "upbit" in venue_to_exchanges["UPBIT"]
+
+        # COINBASE should map to ['coinbase']
+        assert "COINBASE" in venue_to_exchanges
+        assert "coinbase" in venue_to_exchanges["COINBASE"]
+
+        # OKX should map to multiple exchanges
+        assert "OKX" in venue_to_exchanges
+        assert set(venue_to_exchanges["OKX"]) == {"okex", "okex-futures", "okex-swap"}
+
+    def test_get_tardis_exchange_for_venue_simple(self):
+        """Test get_tardis_exchange_for_venue for simple venues."""
+        mapping = VenueMapping()
+
+        # UPBIT -> upbit
+        assert mapping.get_tardis_exchange_for_venue("UPBIT") == "upbit"
+
+        # COINBASE -> coinbase
+        assert mapping.get_tardis_exchange_for_venue("COINBASE") == "coinbase"
+
+        # Unknown venue -> None
+        assert mapping.get_tardis_exchange_for_venue("UNKNOWN") is None
+
+    def test_convert_to_tardis_exchange_canonical_venues(self):
+        """Test convert_to_tardis_exchange converts canonical venue names."""
+        mapping = VenueMapping()
+
+        # Canonical venue names (uppercase) -> Tardis names (lowercase)
+        assert mapping.convert_to_tardis_exchange("UPBIT") == "upbit"
+        assert mapping.convert_to_tardis_exchange("COINBASE") == "coinbase"
+        assert mapping.convert_to_tardis_exchange("BINANCE-SPOT") == "binance"
+        assert mapping.convert_to_tardis_exchange("DERIBIT") == "deribit"
+
+    def test_convert_to_tardis_exchange_already_lowercase(self):
+        """Test convert_to_tardis_exchange handles already lowercase names."""
+        mapping = VenueMapping()
+
+        # Already lowercase Tardis names should pass through
+        assert mapping.convert_to_tardis_exchange("upbit") == "upbit"
+        assert mapping.convert_to_tardis_exchange("coinbase") == "coinbase"
+        assert mapping.convert_to_tardis_exchange("binance") == "binance"
+        assert mapping.convert_to_tardis_exchange("deribit") == "deribit"
+
+    def test_convert_to_tardis_exchange_mixed_case(self):
+        """Test convert_to_tardis_exchange handles mixed case input."""
+        mapping = VenueMapping()
+
+        # Mixed case should be normalized
+        assert mapping.convert_to_tardis_exchange("Upbit") == "upbit"
+        assert mapping.convert_to_tardis_exchange("Coinbase") == "coinbase"
+        assert mapping.convert_to_tardis_exchange("BINANCE-futures") == "binance-futures"
+
 
 class TestExchangeInstrumentConfigExtended:
     """Extended tests for ExchangeInstrumentConfig."""
@@ -572,6 +690,30 @@ class TestExchangeInstrumentConfigExtended:
         expected_derivatives = ["DERIBIT", "BINANCE-FUTURES", "OKX", "BYBIT"]
         for exchange in expected_derivatives:
             assert exchange in config.derivative_exchanges
+
+    def test_exchange_instrument_types_upbit_coinbase(self):
+        """Test instrument types for Upbit and Coinbase (spot only)."""
+        config = ExchangeInstrumentConfig()
+
+        # Both should be spot only
+        assert config.exchange_instrument_types.get("UPBIT") == ["SPOT_PAIR"]
+        assert config.exchange_instrument_types.get("COINBASE") == ["SPOT_PAIR"]
+
+    def test_valid_quote_currencies_upbit_coinbase(self):
+        """Test valid quote currencies for Upbit and Coinbase."""
+        config = ExchangeInstrumentConfig()
+
+        # Upbit uses KRW (Korean Won) for kimchi premium
+        assert config.valid_quote_currencies.get("UPBIT") == ["KRW"]
+        # Coinbase uses USD for coinbase premium
+        assert config.valid_quote_currencies.get("COINBASE") == ["USD"]
+
+    def test_upbit_coinbase_not_in_derivative_exchanges(self):
+        """Test Upbit and Coinbase are not in derivative exchanges (spot only)."""
+        config = ExchangeInstrumentConfig()
+
+        assert "UPBIT" not in config.derivative_exchanges
+        assert "COINBASE" not in config.derivative_exchanges
 
 
 class TestDataTypeConfigExtended:
@@ -631,116 +773,81 @@ class TestDataTypeConfigExtended:
 
 
 class TestInstrumentsServiceConfig:
-    """Tests for InstrumentsServiceConfig."""
+    """Tests for InstrumentsServiceConfig (Pydantic BaseSettings)."""
 
-    def test_instruments_service_config_with_base_config(self, monkeypatch):
-        """Test InstrumentsServiceConfig when BaseServiceConfig is available."""
-        # This tests the if branch when BASE_SERVICE_CONFIG_AVAILABLE is True
-        from instruments_service.config import InstrumentsServiceConfig
+    def test_instruments_service_config_singleton(self):
+        """Test that instruments_config singleton is loaded."""
+        from instruments_service.config import instruments_config
 
-        # Clear GCP_PROJECT_ID env var to ensure constructor argument takes precedence
-        monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
-        config = InstrumentsServiceConfig(
-            service_name="test-service",
-            enable_ccxt_integration=True,
-            gcs_bucket="test-bucket",
-            bigquery_dataset="test-dataset",
-            gcp_project_id="test-project",
-            bigquery_location="asia-northeast1",
-        )
+        assert instruments_config is not None
+        assert instruments_config.service_name == "instruments-service"
 
-        assert config.service_name == "test-service"
-        assert config.enable_ccxt_integration is True
-        assert config.gcs_bucket == "test-bucket"
-        assert config.bigquery_dataset == "test-dataset"
-        assert config.gcp_project_id == "test-project"
-        assert config.bigquery_location == "asia-northeast1"
+    def test_instruments_service_config_default_values(self):
+        """Test InstrumentsServiceConfig has expected default values."""
+        from instruments_service.config import instruments_config
 
-    def test_instruments_service_config_all_fields(self, monkeypatch):
-        """Test InstrumentsServiceConfig with all fields."""
-        from instruments_service.config import InstrumentsServiceConfig
+        assert instruments_config.enable_ccxt_integration is True
+        assert instruments_config.enable_metadata_caching is True
+        assert instruments_config.cache_ttl_hours == 24
+        assert instruments_config.max_batch_size == 1000
+        assert instruments_config.lookback_days == 0
 
-        # Clear GCP_PROJECT_ID env var to ensure constructor argument takes precedence
-        monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
-        config = InstrumentsServiceConfig(
-            service_name="test-service",
-            enable_ccxt_integration=False,
-            enable_metadata_caching=False,
-            cache_ttl_hours=12,
-            max_batch_size=500,
-            lookback_days=7,
-            gcs_bucket="test-bucket",
-            bigquery_dataset="test-dataset",
-            gcp_project_id="test-project",
-            bigquery_location="us-central1",
-        )
+    def test_instruments_service_config_gcs_buckets(self):
+        """Test that GCS bucket properties exist."""
+        from instruments_service.config import instruments_config
 
-        assert config.service_name == "test-service"
-        assert config.enable_ccxt_integration is False
-        assert config.enable_metadata_caching is False
-        assert config.cache_ttl_hours == 12
-        assert config.max_batch_size == 500
-        assert config.lookback_days == 7
-        assert config.gcs_bucket == "test-bucket"
-        assert config.bigquery_dataset == "test-dataset"
-        assert config.gcp_project_id == "test-project"
-        assert config.bigquery_location == "us-central1"
+        # Test that bucket properties are accessible
+        assert instruments_config.gcs_bucket is not None
+        assert hasattr(instruments_config, 'gcs_bucket_cefi')
+        assert hasattr(instruments_config, 'gcs_bucket_tradfi')
+        assert hasattr(instruments_config, 'gcs_bucket_defi')
 
-    def test_instruments_service_config_get_cloud_target(self, monkeypatch):
+    def test_instruments_service_config_get_cloud_target(self):
         """Test get_cloud_target method."""
-        from instruments_service.config import InstrumentsServiceConfig
+        from instruments_service.config import instruments_config
 
-        # Clear GCP_PROJECT_ID env var to ensure constructor argument takes precedence
-        monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
-        config = InstrumentsServiceConfig(
-            gcp_project_id="test-project",
-            gcs_bucket="test-bucket",
-            bigquery_dataset="test-dataset",
-            bigquery_location="asia-northeast1",
-        )
-
-        cloud_target = config.get_cloud_target()
+        cloud_target = instruments_config.get_cloud_target()
         assert cloud_target is not None
-        assert cloud_target.project_id == "test-project"
-        assert cloud_target.gcs_bucket == "test-bucket"
-        assert cloud_target.bigquery_dataset == "test-dataset"
-        assert cloud_target.bigquery_location == "asia-northeast1"
+        assert cloud_target.gcs_bucket is not None
+        assert cloud_target.bigquery_dataset is not None
 
-    def test_instruments_service_config_fallback_class(self):
-        """Test InstrumentsServiceConfig fallback class when BaseServiceConfig not available."""
-        # This tests the else branch (fallback config)
-        # We can't easily test this without mocking, so we'll test the fallback behavior
-        from instruments_service.config import InstrumentsServiceConfig
+    def test_instruments_service_config_get_cloud_target_with_category(self):
+        """Test get_cloud_target with category."""
+        from instruments_service.config import instruments_config
 
-        config = InstrumentsServiceConfig(
-            service_name="test-service",
-            enable_ccxt_integration=False,
-            cache_ttl_hours=12,
-            max_batch_size=500,
-            lookback_days=7,
-        )
+        cefi_target = instruments_config.get_cloud_target(category="CEFI")
+        tradfi_target = instruments_config.get_cloud_target(category="TRADFI")
+        defi_target = instruments_config.get_cloud_target(category="DEFI")
 
-        assert config.service_name == "test-service"
-        assert config.enable_ccxt_integration is False
-        assert config.cache_ttl_hours == 12
-        assert config.max_batch_size == 500
-        assert config.lookback_days == 7
+        assert cefi_target is not None
+        assert tradfi_target is not None
+        assert defi_target is not None
 
-    def test_instruments_service_config_fallback_defaults(self):
-        """Test InstrumentsServiceConfig fallback class with default values."""
-        from instruments_service.config import InstrumentsServiceConfig
+    def test_instruments_service_config_is_test_environment(self):
+        """Test is_test_environment method."""
+        from instruments_service.config import instruments_config
 
-        # Test with minimal args to exercise default logic
-        config = InstrumentsServiceConfig()
+        # Default should not be test environment in most cases
+        assert isinstance(instruments_config.is_test_environment(), bool)
 
-        assert config.service_name == "instruments-service"
-        assert config.enable_ccxt_integration is True
-        assert config.enable_metadata_caching is True
-        assert config.cache_ttl_hours == 24
-        assert config.max_batch_size == 1000
-        assert config.lookback_days == 0
-        # Just check that defaults are set (can be env or hardcoded)
-        assert config.gcs_bucket is not None
-        assert config.bigquery_dataset is not None
-        assert config.gcp_project_id is not None
-        assert config.bigquery_location is not None
+    def test_instruments_service_config_get_bucket_for_category(self):
+        """Test get_bucket_for_category method."""
+        from instruments_service.config import instruments_config
+
+        cefi_bucket = instruments_config.get_bucket_for_category("CEFI")
+        tradfi_bucket = instruments_config.get_bucket_for_category("TRADFI")
+        defi_bucket = instruments_config.get_bucket_for_category("DEFI")
+
+        assert cefi_bucket is not None
+        assert tradfi_bucket is not None
+        assert defi_bucket is not None
+
+    def test_instruments_service_config_uppercase_properties(self):
+        """Test uppercase property aliases for bucket names."""
+        from instruments_service.config import instruments_config
+
+        # Test uppercase properties exist and are accessible
+        assert instruments_config.INSTRUMENTS_GCS_BUCKET is not None
+        assert instruments_config.INSTRUMENTS_GCS_BUCKET_CEFI is not None
+        assert instruments_config.INSTRUMENTS_GCS_BUCKET_TRADFI is not None
+        assert instruments_config.INSTRUMENTS_GCS_BUCKET_DEFI is not None

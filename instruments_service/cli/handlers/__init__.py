@@ -2,12 +2,14 @@
 CLI Handlers
 
 Registry for CLI mode handlers.
+
+Note: Query functionality has been moved to unified-cloud-services.
+Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 """
 
 from typing import Dict, Any
 import logging
 from .instrument_handler import InstrumentHandler
-from .instruments_query_handler import InstrumentsQueryHandler
 from instruments_service.cli.base_handler import ModeHandler
 
 logger = logging.getLogger(__name__)
@@ -27,7 +29,7 @@ def get_handler_for_mode(mode: str, config: Dict[str, Any]) -> ModeHandler:
     Get handler instance for a specific mode.
 
     Args:
-        mode: Operation mode (e.g., 'instruments', 'instruments-query')
+        mode: Operation mode (e.g., 'instruments')
         config: Configuration dictionary
 
     Returns:
@@ -40,8 +42,6 @@ def get_handler_for_mode(mode: str, config: Dict[str, Any]) -> ModeHandler:
         try:
             register_handler("instruments", InstrumentHandler)
             logger.debug(f"Registered 'instruments' handler: {InstrumentHandler}")
-            register_handler("instruments-query", InstrumentsQueryHandler)
-            logger.debug(f"Registered 'instruments-query' handler: {InstrumentsQueryHandler}")
             logger.debug(f"Final registry: {_handler_registry}")
         except Exception as e:
             logger.error(f"Error registering handlers: {e}", exc_info=True)

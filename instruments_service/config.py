@@ -2,29 +2,111 @@
 Configuration for Instruments Service
 
 Unified instrument configuration with all instruments, mappings, and metadata in one place.
+Includes both domain-specific instrument definitions and service-level runtime configuration.
+
+Note: For InstrumentDefinition Pydantic model (with full validation), use instruments_service.models.
+This file contains TradFiInstrument dataclass for static TradFi instrument configuration.
 """
 
+import os
+import json
+import logging
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
+from pathlib import Path
 
-# Try to import BaseServiceConfig from unified-cloud-services
-try:
-    from unified_cloud_services import BaseServiceConfig, get_config
-    from pydantic import Field, AliasChoices
+from pydantic import Field, AliasChoices
+from pydantic_settings import SettingsConfigDict
 
-    BASE_SERVICE_CONFIG_AVAILABLE = True
-except ImportError:
-    BASE_SERVICE_CONFIG_AVAILABLE = False
-    # Fallback if unified-cloud-services not available
-    BaseServiceConfig = None
-    Field = None
-    import os
-    get_config = os.getenv
+# Import from unified-cloud-services (required dependency)
+from unified_cloud_services import (
+    UnifiedCloudServicesConfig,
+    VenueMapping,
+    DataTypeConfig,
+    ExchangeInstrumentConfig,
+    CloudTarget,
+)
+
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# DATA LOADING FROM JSON FILES
+# ============================================================================
+
+# Caches for loaded data
+_sp500_tickers_cache: Optional[List[str]] = None
+_nasdaq_tickers_cache: Optional[List[str]] = None
+_tradfi_instruments_cache: Optional[List[Dict]] = None
+_exchange_code_to_name_cache: Optional[Dict[str, str]] = None
+
+
+def _get_data_dir() -> Path:
+    """Get the data directory path."""
+    return Path(__file__).parent / "data"
+
+
+def _load_sp500_tickers() -> Tuple[List[str], List[str]]:
+    """Load S&P 500 tickers from JSON file."""
+    global _sp500_tickers_cache, _nasdaq_tickers_cache
+    
+    if _sp500_tickers_cache is not None:
+        return _sp500_tickers_cache, _nasdaq_tickers_cache or []
+    
+    try:
+        data_file = _get_data_dir() / "sp500_tickers.json"
+        if data_file.exists():
+            with open(data_file, "r") as f:
+                data = json.load(f)
+                _sp500_tickers_cache = data.get("tickers", [])
+                _nasdaq_tickers_cache = data.get("nasdaq_tickers", [])
+                logger.debug(f"Loaded {len(_sp500_tickers_cache)} S&P 500 tickers from {data_file}")
+        else:
+            logger.warning(f"S&P 500 tickers file not found: {data_file}")
+            _sp500_tickers_cache = []
+            _nasdaq_tickers_cache = []
+    except Exception as e:
+        logger.error(f"Failed to load S&P 500 tickers: {e}")
+        _sp500_tickers_cache = []
+        _nasdaq_tickers_cache = []
+    
+    return _sp500_tickers_cache, _nasdaq_tickers_cache
+
+
+def _load_tradfi_instruments() -> Tuple[List[Dict], Dict[str, str]]:
+    """Load TradFi instruments and exchange code mappings from JSON file."""
+    global _tradfi_instruments_cache, _exchange_code_to_name_cache
+    
+    if _tradfi_instruments_cache is not None:
+        return _tradfi_instruments_cache, _exchange_code_to_name_cache or {}
+    
+    try:
+        data_file = _get_data_dir() / "tradfi_instruments.json"
+        if data_file.exists():
+            with open(data_file, "r") as f:
+                data = json.load(f)
+                _tradfi_instruments_cache = data.get("instruments", [])
+                _exchange_code_to_name_cache = data.get("exchange_code_to_name", {})
+                logger.debug(f"Loaded {len(_tradfi_instruments_cache)} TradFi instruments from {data_file}")
+        else:
+            logger.warning(f"TradFi instruments file not found: {data_file}")
+            _tradfi_instruments_cache = []
+            _exchange_code_to_name_cache = {}
+    except Exception as e:
+        logger.error(f"Failed to load TradFi instruments: {e}")
+        _tradfi_instruments_cache = []
+        _exchange_code_to_name_cache = {}
+    
+    return _tradfi_instruments_cache, _exchange_code_to_name_cache
 
 
 @dataclass
-class InstrumentDefinition:
-    """Single instrument definition with all metadata"""
+class TradFiInstrument:
+    """
+    Single TradFi instrument definition with metadata.
+    
+    Note: This is different from instruments_service.models.InstrumentDefinition (Pydantic model).
+    This dataclass is for static TradFi instrument configuration (Databento symbols).
+    """
 
     symbol: str  # Databento symbol (e.g., "ES.FUT", "SPY", "BRN.FUT", "SPY.OPT")
     venue: str  # Canonical venue (e.g., "CME", "NASDAQ", "ICE")
@@ -34,309 +116,67 @@ class InstrumentDefinition:
     base_asset: Optional[str] = None  # Human-readable base asset name
     quote_asset: str = "USD"  # Quote currency (default USD for TradFi)
     exchange_code: Optional[str] = None  # Databento exchange code (e.g., "ES", "CL")
+    underlying: Optional[str] = None  # Underlying asset (e.g., "BTC" for Bitcoin ETFs)
+
+
+# Backward compatibility alias
+InstrumentDefinition = TradFiInstrument
 
 
 @dataclass
 class UnifiedInstrumentConfig:
     """
-    Unified instrument configuration - single source of truth for all instruments.
-
-    All TradFi instruments are defined here with their metadata. No duplication.
-    Options are handled explicitly via instrument_type="OPTION".
+    Unified instrument configuration - single source of truth for all TradFi instruments.
+    
+    Loads instruments and exchange code mappings from external JSON files.
+    All TradFi instruments are loaded from data/tradfi_instruments.json.
     """
 
-    # Single unified list of all TradFi instruments
-    # Symbols are in Databento API format: [ROOT].FUT for futures, [ROOT].OPT for options, raw symbols for equities
-    instruments: List[InstrumentDefinition] = field(
-        default_factory=lambda: [
-            # Equity Index Futures (CME) - use .FUT suffix for parent symbology
-            InstrumentDefinition(
-                "ES.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SP500", "USD", "ES"
-            ),
-            InstrumentDefinition(
-                "NQ.FUT",
-                "CME",
-                "FUTURE",
-                "GLBX.MDP3",
-                "parent",
-                "NASDAQ100",
-                "USD",
-                "NQ",
-            ),
-            InstrumentDefinition(
-                "RTY.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "RUSSELL2000", "USD", "RTY"
-            ),
-            InstrumentDefinition(
-                "YM.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "DOW", "USD", "YM"
-            ),
-            InstrumentDefinition(
-                "NKD.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "NIKKEI225", "USD", "NKD"
-            ),
-            # Sector Futures (CME) - SPDR Sector ETF Futures
-            InstrumentDefinition(
-                "XAF.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "ENERGY_SECTOR", "USD", "XAF"
-            ),
-            InstrumentDefinition(
-                "XAK.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "TECH_SECTOR", "USD", "XAK"
-            ),
-            InstrumentDefinition(
-                "XAY.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CONSUMER_DISC_SECTOR", "USD", "XAY"
-            ),
-            InstrumentDefinition(
-                "XAP.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CONSUMER_STAPLES_SECTOR", "USD", "XAP"
-            ),
-            InstrumentDefinition(
-                "XAV.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "HEALTHCARE_SECTOR", "USD", "XAV"
-            ),
-            InstrumentDefinition(
-                "XAI.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "INDUSTRIALS_SECTOR", "USD", "XAI"
-            ),
-            InstrumentDefinition(
-                "XAB.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "MATERIALS_SECTOR", "USD", "XAB"
-            ),
-            InstrumentDefinition(
-                "XAU.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "UTILITIES_SECTOR", "USD", "XAU"
-            ),
-            # Treasury Futures (CME/CBOT) - use .FUT suffix for parent symbology
-            InstrumentDefinition(
-                "ZT.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "TREASURY_2Y", "USD", "ZT"
-            ),
-            InstrumentDefinition(
-                "ZF.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "TREASURY_5Y", "USD", "ZF"
-            ),
-            InstrumentDefinition(
-                "ZN.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "TREASURY_10Y", "USD", "ZN"
-            ),
-            InstrumentDefinition(
-                "ZB.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "TREASURY_30Y", "USD", "ZB"
-            ),
-            # Crypto Futures (CME) - use .FUT suffix
-            InstrumentDefinition(
-                "BTC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "BTC", "USD", "BTC"
-            ),
-            InstrumentDefinition(
-                "ETH.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "ETH", "USD", "ETH"
-            ),
-            # Commodities (CME) - use .FUT suffix
-            InstrumentDefinition(
-                "GC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "GOLD", "USD", "GC"
-            ),
-            InstrumentDefinition(
-                "CL.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CRUDE", "USD", "CL"
-            ),
-            InstrumentDefinition(
-                "NG.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "NATGAS", "USD", "NG"
-            ),
-            InstrumentDefinition(
-                "HO.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "HEATING_OIL", "USD", "HO"
-            ),
-            InstrumentDefinition(
-                "RB.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "GASOLINE", "USD", "RB"
-            ),
-            InstrumentDefinition(
-                "SI.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "SILVER", "USD", "SI"
-            ),
-            InstrumentDefinition(
-                "HG.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "COPPER", "USD", "HG"
-            ),
-            InstrumentDefinition(
-                "CT.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "COTTON", "USD", "CT"
-            ),
-            InstrumentDefinition(
-                "ZS.FUT",
-                "CME",
-                "FUTURE",
-                "GLBX.MDP3",
-                "parent",
-                "SOYBEANS",
-                "USD",
-                "ZS",
-            ),
-            InstrumentDefinition(
-                "ZC.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CORN", "USD", "ZC"
-            ),
-            InstrumentDefinition(
-                "ZW.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "WHEAT", "USD", "ZW"
-            ),
-            InstrumentDefinition(
-                "ZL.FUT",
-                "CME",
-                "FUTURE",
-                "GLBX.MDP3",
-                "parent",
-                "SOYBEAN_OIL",
-                "USD",
-                "ZL",
-            ),
-            InstrumentDefinition(
-                "ZM.FUT",
-                "CME",
-                "FUTURE",
-                "GLBX.MDP3",
-                "parent",
-                "SOYBEAN_MEAL",
-                "USD",
-                "ZM",
-            ),
-            # FX Futures (CME) - use .FUT suffix
-            InstrumentDefinition(
-                "6E.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "EUR", "USD", "6E"
-            ),
-            InstrumentDefinition(
-                "6B.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "GBP", "USD", "6B"
-            ),
-            InstrumentDefinition(
-                "6J.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "JPY", "USD", "6J"
-            ),
-            InstrumentDefinition(
-                "6A.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "AUD", "USD", "6A"
-            ),
-            InstrumentDefinition(
-                "6C.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CAD", "USD", "6C"
-            ),
-            InstrumentDefinition(
-                "6N.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "NZD", "USD", "6N"
-            ),
-            InstrumentDefinition(
-                "6S.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "CHF", "USD", "6S"
-            ),
-            InstrumentDefinition(
-                "6M.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "MXN", "USD", "6M"
-            ),
-            InstrumentDefinition(
-                "6Z.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "ZAR", "USD", "6Z"
-            ),
-            InstrumentDefinition(
-                "6L.FUT", "CME", "FUTURE", "GLBX.MDP3", "parent", "BRL", "USD", "6L"
-            ),
-            # Options (CME) - use .OPT suffix for parent symbology
-            # Per Databento docs: ES.OPT returns standard monthly/quarterly options
-            # Weekly and daily options require separate parent symbols (EW1.OPT, EW2.OPT, etc.)
-            InstrumentDefinition(
-                "ES.OPT", "CME", "OPTION", "GLBX.MDP3", "parent", "SP500", "USD", "ES"
-            ),
-            # ES Weekly Options - Per Databento docs, each week has its own parent symbol
-            # EW1 = 1st week, EW2 = 2nd week, EW3 = 3rd week, EW4 = 4th week, EW5 = 5th week
-            InstrumentDefinition(
-                "EW1.OPT", "CME", "OPTION", "GLBX.MDP3", "parent", "SP500", "USD", "EW1"
-            ),
-            InstrumentDefinition(
-                "EW2.OPT", "CME", "OPTION", "GLBX.MDP3", "parent", "SP500", "USD", "EW2"
-            ),
-            InstrumentDefinition(
-                "EW3.OPT", "CME", "OPTION", "GLBX.MDP3", "parent", "SP500", "USD", "EW3"
-            ),
-            InstrumentDefinition(
-                "EW4.OPT", "CME", "OPTION", "GLBX.MDP3", "parent", "SP500", "USD", "EW4"
-            ),
-            InstrumentDefinition(
-                "EW5.OPT", "CME", "OPTION", "GLBX.MDP3", "parent", "SP500", "USD", "EW5"
-            ),
-            # ETF Options (NASDAQ) - SPY options
-            InstrumentDefinition(
-                "SPY.OPT", "NASDAQ", "OPTION", "DBEQ.BASIC", "raw_symbol", "SPY", "USD", "SPY"
-            ),
-            # Index (CBOE) - VIX volatility index (data from barchart.com, OHLCV 15m)
-            InstrumentDefinition(
-                "VIX", "CBOE", "INDEX", "BARCHART", "raw_symbol", "VIX", "USD"
-            ),
-            # ETFs (NASDAQ) - Major ETFs
-            InstrumentDefinition(
-                "SPY", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "SPY", "USD"
-            ),
-            InstrumentDefinition(
-                "QQQ", "NASDAQ", "ETF", "DBEQ.BASIC", "raw_symbol", "QQQ", "USD"
-            ),
-            # ICE Futures
-            InstrumentDefinition(
-                "BRN.FUT", "ICE", "FUTURE", "IFEU.IMPACT", "parent", "BRENT", "USD", "BRN"
-            ),
-            InstrumentDefinition(
-                "G.FUT", "ICE", "FUTURE", "IFEU.IMPACT", "parent", "GASOIL", "USD", "G"
-            ),
-        ]
-    )
+    # Cached instruments loaded from JSON (initialized lazily)
+    _instruments: Optional[List[TradFiInstrument]] = field(default=None, repr=False)
+    _exchange_code_to_name: Optional[Dict[str, str]] = field(default=None, repr=False)
 
-    # Exchange code to human-readable name mapping (for canonical symbols)
-    exchange_code_to_name: Dict[str, str] = field(
-        default_factory=lambda: {
-            # FX Futures
-            "6A": "AUD",
-            "M6A": "AUD",
-            "6B": "GBP",
-            "M6B": "GBP",
-            "6E": "EUR",
-            "M6E": "EUR",
-            "6J": "JPY",
-            "M6J": "JPY",
-            "6C": "CAD",
-            "M6C": "CAD",
-            "6N": "NZD",
-            "M6N": "NZD",
-            "6S": "CHF",
-            "M6S": "CHF",
-            "6M": "MXN",
-            "6Z": "ZAR",
-            "6L": "BRL",
-            # Commodities
-            "CL": "CRUDE",
-            "MCL": "CRUDE",
-            "GC": "GOLD",
-            "MGC": "GOLD",
-            "NG": "NATGAS",
-            "MNG": "NATGAS",
-            "HO": "HEATING_OIL",
-            "RB": "GASOLINE",
-            "SI": "SILVER",
-            "MSI": "SILVER",
-            "HG": "COPPER",
-            "MHG": "COPPER",
-            "CT": "COTTON",
-            "ZS": "SOYBEANS",
-            "ZC": "CORN",
-            "ZW": "WHEAT",
-            "ZL": "SOYBEAN_OIL",
-            "ZM": "SOYBEAN_MEAL",
-            # ICE Futures
-            "BRN": "BRENT",
-            "G": "GASOIL",
-            # Crypto Futures (CME)
-            "BTC": "BTC",
-            "ETH": "ETH",
-            # Equity Index Futures
-            "ES": "SP500",
-            "MES": "SP500",
-            "NQ": "NASDAQ100",
-            "MNQ": "NASDAQ100",
-            "RTY": "RUSSELL2000",
-            "M2K": "RUSSELL2000",  # Micro Russell 2000
-            "YM": "DOW",
-            "MYM": "DOW",  # Micro Dow
-            "NKD": "NIKKEI225",
-            # Sector Futures (CME SPDR Sector ETF Futures)
-            "XAF": "ENERGY_SECTOR",
-            "XAK": "TECH_SECTOR",
-            "XAY": "CONSUMER_DISC_SECTOR",
-            "XAP": "CONSUMER_STAPLES_SECTOR",
-            "XAV": "HEALTHCARE_SECTOR",
-            "XAI": "INDUSTRIALS_SECTOR",
-            "XAB": "MATERIALS_SECTOR",
-            "XAU": "UTILITIES_SECTOR",
-            # Treasury Futures
-            "ZT": "TREASURY_2Y",
-            "ZF": "TREASURY_5Y",
-            "ZN": "TREASURY_10Y",
-            "ZB": "TREASURY_30Y",
-            # S&P 500 Index
-            "SPX": "SP500",
-            # ES Weekly Options
-            "EW1": "SP500",  # 1st week options
-            "EW2": "SP500",  # 2nd week options
-            "EW3": "SP500",  # 3rd week options
-            "EW4": "SP500",  # 4th week options
-            "EW5": "SP500",  # 5th week options
-        }
-    )
+    def __post_init__(self):
+        """Load instruments from JSON on first access."""
+        self._load_data()
+
+    def _load_data(self) -> None:
+        """Load TradFi instruments and exchange mappings from JSON file."""
+        if self._instruments is not None:
+            return
+            
+        raw_instruments, exchange_mappings = _load_tradfi_instruments()
+        
+        # Convert raw JSON to TradFiInstrument objects
+        self._instruments = []
+        for inst in raw_instruments:
+            self._instruments.append(TradFiInstrument(
+                symbol=inst["symbol"],
+                venue=inst["venue"],
+                instrument_type=inst["type"],
+                dataset=inst["dataset"],
+                stype_in=inst["stype"],
+                base_asset=inst.get("base"),
+                quote_asset="USD",
+                exchange_code=inst.get("code"),
+                underlying=inst.get("underlying"),
+            ))
+        
+        self._exchange_code_to_name = exchange_mappings
+
+    @property
+    def instruments(self) -> List[TradFiInstrument]:
+        """Get base TradFi instruments (futures, options, ETFs)."""
+        if self._instruments is None:
+            self._load_data()
+        return self._instruments or []
+
+    @property
+    def exchange_code_to_name(self) -> Dict[str, str]:
+        """Get exchange code to human-readable name mapping."""
+        if self._exchange_code_to_name is None:
+            self._load_data()
+        return self._exchange_code_to_name or {}
 
     def get_symbols_for_venue(self, venue: str) -> List[str]:
         """Get all symbols for a venue (e.g., 'CME', 'NASDAQ', 'ICE')"""
@@ -385,545 +225,26 @@ class UnifiedInstrumentConfig:
                 return self.exchange_code_to_name[base_code]
         return exchange_code
 
-    def _get_sp500_equities(self) -> List[InstrumentDefinition]:
-        """Generate S&P 500 equity instrument definitions dynamically"""
-        # Complete S&P 500 list (503 stocks as of 2024)
-        # Source: Standard & Poor's S&P 500 Index constituents (via GitHub datasets)
-        # Fetched from: https://github.com/datasets/s-and-p-500-companies
-        sp500_tickers = [
-            "MMM",
-            "AOS",
-            "ABT",
-            "ABBV",
-            "ACN",
-            "ADBE",
-            "AMD",
-            "AES",
-            "AFL",
-            "A",
-            "APD",
-            "ABNB",
-            "AKAM",
-            "ALB",
-            "ARE",
-            "ALGN",
-            "ALLE",
-            "LNT",
-            "ALL",
-            "GOOGL",
-            "GOOG",
-            "MO",
-            "AMZN",
-            "AMCR",
-            "AEE",
-            "AEP",
-            "AXP",
-            "AIG",
-            "AMT",
-            "AWK",
-            "AMP",
-            "AME",
-            "AMGN",
-            "APH",
-            "ADI",
-            "AON",
-            "APA",
-            "APO",
-            "AAPL",
-            "AMAT",
-            "APTV",
-            "ACGL",
-            "ADM",
-            "ANET",
-            "AJG",
-            "AIZ",
-            "T",
-            "ATO",
-            "ADSK",
-            "ADP",
-            "AZO",
-            "AVB",
-            "AVY",
-            "AXON",
-            "BKR",
-            "BALL",
-            "BAC",
-            "BAX",
-            "BDX",
-            "BRK.B",
-            "BBY",
-            "TECH",
-            "BIIB",
-            "BLK",
-            "BX",
-            "XYZ",
-            "BK",
-            "BA",
-            "BKNG",
-            "BSX",
-            "BMY",
-            "AVGO",
-            "BR",
-            "BRO",
-            "BF.B",
-            "BLDR",
-            "BG",
-            "BXP",
-            "CHRW",
-            "CDNS",
-            "CZR",
-            "CPT",
-            "CPB",
-            "COF",
-            "CAH",
-            "KMX",
-            "CCL",
-            "CARR",
-            "CAT",
-            "CBOE",
-            "CBRE",
-            "CDW",
-            "COR",
-            "CNC",
-            "CNP",
-            "CF",
-            "CRL",
-            "SCHW",
-            "CHTR",
-            "CVX",
-            "CMG",
-            "CB",
-            "CHD",
-            "CI",
-            "CINF",
-            "CTAS",
-            "CSCO",
-            "C",
-            "CFG",
-            "CLX",
-            "CME",
-            "CMS",
-            "KO",
-            "CTSH",
-            "COIN",
-            "CL",
-            "CMCSA",
-            "CAG",
-            "COP",
-            "ED",
-            "STZ",
-            "CEG",
-            "COO",
-            "CPRT",
-            "GLW",
-            "CPAY",
-            "CTVA",
-            "CSGP",
-            "COST",
-            "CTRA",
-            "CRWD",
-            "CCI",
-            "CSX",
-            "CMI",
-            "CVS",
-            "DHR",
-            "DRI",
-            "DDOG",
-            "DVA",
-            "DAY",
-            "DECK",
-            "DE",
-            "DELL",
-            "DAL",
-            "DVN",
-            "DXCM",
-            "FANG",
-            "DLR",
-            "DG",
-            "DLTR",
-            "D",
-            "DPZ",
-            "DASH",
-            "DOV",
-            "DOW",
-            "DHI",
-            "DTE",
-            "DUK",
-            "DD",
-            "EMN",
-            "ETN",
-            "EBAY",
-            "ECL",
-            "EIX",
-            "EW",
-            "EA",
-            "ELV",
-            "EMR",
-            "ENPH",
-            "ETR",
-            "EOG",
-            "EPAM",
-            "EQT",
-            "EFX",
-            "EQIX",
-            "EQR",
-            "ERIE",
-            "ESS",
-            "EL",
-            "EG",
-            "EVRG",
-            "ES",
-            "EXC",
-            "EXE",
-            "EXPE",
-            "EXPD",
-            "EXR",
-            "XOM",
-            "FFIV",
-            "FDS",
-            "FICO",
-            "FAST",
-            "FRT",
-            "FDX",
-            "FIS",
-            "FITB",
-            "FSLR",
-            "FE",
-            "FI",
-            "F",
-            "FTNT",
-            "FTV",
-            "FOXA",
-            "FOX",
-            "BEN",
-            "FCX",
-            "GRMN",
-            "IT",
-            "GE",
-            "GEHC",
-            "GEV",
-            "GEN",
-            "GNRC",
-            "GD",
-            "GIS",
-            "GM",
-            "GPC",
-            "GILD",
-            "GPN",
-            "GL",
-            "GDDY",
-            "GS",
-            "HAL",
-            "HIG",
-            "HAS",
-            "HCA",
-            "DOC",
-            "HSIC",
-            "HSY",
-            "HPE",
-            "HLT",
-            "HOLX",
-            "HD",
-            "HON",
-            "HRL",
-            "HST",
-            "HWM",
-            "HPQ",
-            "HUBB",
-            "HUM",
-            "HBAN",
-            "HII",
-            "IBM",
-            "IEX",
-            "IDXX",
-            "ITW",
-            "INCY",
-            "IR",
-            "PODD",
-            "INTC",
-            "ICE",
-            "IFF",
-            "IP",
-            "IPG",
-            "INTU",
-            "ISRG",
-            "IVZ",
-            "INVH",
-            "IQV",
-            "IRM",
-            "JBHT",
-            "JBL",
-            "JKHY",
-            "J",
-            "JNJ",
-            "JCI",
-            "JPM",
-            "K",
-            "KVUE",
-            "KDP",
-            "KEY",
-            "KEYS",
-            "KMB",
-            "KIM",
-            "KMI",
-            "KKR",
-            "KLAC",
-            "KHC",
-            "KR",
-            "LHX",
-            "LH",
-            "LRCX",
-            "LW",
-            "LVS",
-            "LDOS",
-            "LEN",
-            "LII",
-            "LLY",
-            "LIN",
-            "LYV",
-            "LKQ",
-            "LMT",
-            "L",
-            "LOW",
-            "LULU",
-            "LYB",
-            "MTB",
-            "MPC",
-            "MKTX",
-            "MAR",
-            "MMC",
-            "MLM",
-            "MAS",
-            "MA",
-            "MTCH",
-            "MKC",
-            "MCD",
-            "MCK",
-            "MDT",
-            "MRK",
-            "META",
-            "MET",
-            "MTD",
-            "MGM",
-            "MCHP",
-            "MU",
-            "MSFT",
-            "MAA",
-            "MRNA",
-            "MHK",
-            "MOH",
-            "TAP",
-            "MDLZ",
-            "MPWR",
-            "MNST",
-            "MCO",
-            "MS",
-            "MOS",
-            "MSI",
-            "MSCI",
-            "NDAQ",
-            "NTAP",
-            "NFLX",
-            "NEM",
-            "NWSA",
-            "NWS",
-            "NEE",
-            "NKE",
-            "NI",
-            "NDSN",
-            "NSC",
-            "NTRS",
-            "NOC",
-            "NCLH",
-            "NRG",
-            "NUE",
-            "NVDA",
-            "NVR",
-            "NXPI",
-            "ORLY",
-            "OXY",
-            "ODFL",
-            "OMC",
-            "ON",
-            "OKE",
-            "ORCL",
-            "OTIS",
-            "PCAR",
-            "PKG",
-            "PLTR",
-            "PANW",
-            "PSKY",
-            "PH",
-            "PAYX",
-            "PAYC",
-            "PYPL",
-            "PNR",
-            "PEP",
-            "PFE",
-            "PCG",
-            "PM",
-            "PSX",
-            "PNW",
-            "PNC",
-            "POOL",
-            "PPG",
-            "PPL",
-            "PFG",
-            "PG",
-            "PGR",
-            "PLD",
-            "PRU",
-            "PEG",
-            "PTC",
-            "PSA",
-            "PHM",
-            "PWR",
-            "QCOM",
-            "DGX",
-            "RL",
-            "RJF",
-            "RTX",
-            "O",
-            "REG",
-            "REGN",
-            "RF",
-            "RSG",
-            "RMD",
-            "RVTY",
-            "ROK",
-            "ROL",
-            "ROP",
-            "ROST",
-            "RCL",
-            "SPGI",
-            "CRM",
-            "SBAC",
-            "SLB",
-            "STX",
-            "SRE",
-            "NOW",
-            "SHW",
-            "SPG",
-            "SWKS",
-            "SJM",
-            "SW",
-            "SNA",
-            "SOLV",
-            "SO",
-            "LUV",
-            "SWK",
-            "SBUX",
-            "STT",
-            "STLD",
-            "STE",
-            "SYK",
-            "SMCI",
-            "SYF",
-            "SNPS",
-            "SYY",
-            "TMUS",
-            "TROW",
-            "TTWO",
-            "TPR",
-            "TRGP",
-            "TGT",
-            "TEL",
-            "TDY",
-            "TER",
-            "TSLA",
-            "TXN",
-            "TPL",
-            "TXT",
-            "TMO",
-            "TJX",
-            "TKO",
-            "TTD",
-            "TSCO",
-            "TT",
-            "TDG",
-            "TRV",
-            "TRMB",
-            "TFC",
-            "TYL",
-            "TSN",
-            "USB",
-            "UBER",
-            "UDR",
-            "ULTA",
-            "UNP",
-            "UAL",
-            "UPS",
-            "URI",
-            "UNH",
-            "UHS",
-            "VLO",
-            "VTR",
-            "VLTO",
-            "VRSN",
-            "VRSK",
-            "VZ",
-            "VRTX",
-            "VTRS",
-            "VICI",
-            "V",
-            "VST",
-            "VMC",
-            "WRB",
-            "GWW",
-            "WAB",
-            "WBA",
-            "WMT",
-            "DIS",
-            "WBD",
-            "WM",
-            "WAT",
-            "WEC",
-            "WFC",
-            "WELL",
-            "WST",
-            "WDC",
-            "WY",
-            "WSM",
-            "WMB",
-            "WTW",
-            "WDAY",
-            "WYNN",
-            "XEL",
-            "XYL",
-            "YUM",
-            "ZBRA",
-            "ZBH",
-            "ZTS",
-        ]
+    def _get_sp500_equities(self) -> List[TradFiInstrument]:
+        """Generate S&P 500 equity instrument definitions from external data file."""
+        sp500_tickers, nasdaq_tickers = _load_sp500_tickers()
+        
+        if not sp500_tickers:
+            logger.warning("No S&P 500 tickers loaded - returning empty list")
+            return []
 
         equities = []
         for ticker in sp500_tickers:
-            # Determine venue (most S&P 500 are on NYSE, some on NASDAQ)
-            # For now, default to NASDAQ for most tech stocks, NYSE for others
-            venue = (
-                "NASDAQ"
-                if ticker
-                in [
-                    "AAPL",
-                    "MSFT",
-                    "GOOGL",
-                    "AMZN",
-                    "NVDA",
-                    "META",
-                    "TSLA",
-                    "NFLX",
-                    "ADBE",
-                ]
-                else "NYSE"
-            )
+            # Determine venue (NASDAQ for known tech stocks, NYSE for others)
+            venue = "NASDAQ" if ticker in nasdaq_tickers else "NYSE"
             equities.append(
-                InstrumentDefinition(
+                TradFiInstrument(
                     ticker, venue, "EQUITY", "DBEQ.BASIC", "raw_symbol", ticker, "USD"
                 )
             )
         return equities
 
-    def get_all_instruments(self) -> List[InstrumentDefinition]:
+    def get_all_instruments(self) -> List[TradFiInstrument]:
         """Get all instruments (base instruments + dynamically generated S&P 500 equities)"""
         # Combine base instruments with dynamically generated S&P 500 equities
         all_insts = list(self.instruments)
@@ -977,513 +298,289 @@ class DatabentoInstrumentConfig:
         return self._unified.get_symbols_for_venue(venue)
 
 
-@dataclass
-class SportsLeagueConfig:
-    """Configuration for a sports league."""
-    league_code: str  # e.g., "ENG-PREMIER_LEAGUE"
-    api_football_league_id: int  # e.g., 39 for Premier League
-    api_football_season_from: int  # earliest season to backfill
-    betfair_event_type_id: int  # usually 1 for Soccer
-    betfair_competition_ids: List[int]  # Betfair competition IDs
-    timezone: str = "Europe/London"  # for kick-off → UTC conversion
-    max_hours_after_kickoff: float = 2.0  # Maximum hours after kickoff to consider valid data (default 2.0 for regular matches, higher for ET/pens)
+# ============================================================================
+# SERVICE-LEVEL CONFIGURATION (Pydantic BaseSettings)
+# VenueMapping, DataTypeConfig, ExchangeInstrumentConfig
+# are imported from unified_cloud_services (see imports at top of file)
+# ============================================================================
 
 
-@dataclass
-class VenueMapping:
-    """CANONICAL venue to exchange API mappings (centralized business logic)"""
+class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
+    """
+    Service-level configuration for instruments-service.
 
-    # ALL possible Tardis exchange endpoints (we'll call each to get complete data)
-    all_tardis_exchanges: List[str] = field(
-        default_factory=lambda: [
-            "binance",
-            "binance-futures",  # BINANCE split
-            "deribit",  # DERIBIT unified
-            "bybit",
-            "bybit-spot",  # BYBIT unified
-            "okex",
-            "okex-futures",
-            "okex-swap",  # OKX needs all endpoints for complete data
-        ]
+    Extends UnifiedCloudServicesConfig with instruments-specific settings.
+    Inherited from parent: gcp_project_id, google_application_credentials_path,
+    gcs_region, gcs_location, bigquery_location, tardis_secret_name,
+    databento_secret_name, alchemy_secret_name, aavescan_secret_name,
+    enable_csv_sampling, csv_sample_size, csv_sample_dir, log_level, etc.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+        extra="ignore",  # Ignore extra fields from .env
     )
 
-    # Canonical TradFi venues (user-friendly names, not data source names)
-    all_databento_venues: List[str] = field(
-        default_factory=lambda: [
-            "CME",  # Chicago Mercantile Exchange (futures, options, treasuries)
-            "CBOE",  # Cboe Global Markets (VIX index only - special treatment)
-            "NASDAQ",  # NASDAQ Stock Market (equities, ETFs)
-            "NYSE",  # New York Stock Exchange (equities, ETFs)
-            "ICE",  # Intercontinental Exchange (futures, options)
-        ]
+    # =========================================================================
+    # SERVICE IDENTIFICATION (override parent default)
+    # =========================================================================
+    service_name: str = Field(default="instruments-service", description="Service name")
+
+    # =========================================================================
+    # INSTRUMENTS-SPECIFIC GCS BUCKETS
+    # These override the parent's generic bucket with instruments-specific env vars
+    # =========================================================================
+    gcs_bucket: str = Field(
+        default="",
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET"),
+        description="Primary GCS bucket for instruments",
+    )
+    gcs_bucket_test: str = Field(
+        default="",
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_TEST"),
+        description="Test GCS bucket for instruments",
+    )
+    # Category-specific buckets for independent batch processing
+    gcs_bucket_cefi: str = Field(
+        default="",
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_CEFI"),
+        description="GCS bucket for CEFI instruments",
+    )
+    gcs_bucket_tradfi: str = Field(
+        default="",
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_TRADFI"),
+        description="GCS bucket for TRADFI instruments",
+    )
+    gcs_bucket_defi: str = Field(
+        default="",
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_DEFI"),
+        description="GCS bucket for DEFI instruments",
+    )
+    # Category-specific TEST buckets
+    gcs_bucket_cefi_test: str = Field(
+        default="",
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_CEFI_TEST"),
+        description="Test GCS bucket for CEFI instruments",
+    )
+    gcs_bucket_tradfi_test: str = Field(
+        default="",
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_TRADFI_TEST"),
+        description="Test GCS bucket for TRADFI instruments",
+    )
+    gcs_bucket_defi_test: str = Field(
+        default="",
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_DEFI_TEST"),
+        description="Test GCS bucket for DEFI instruments",
     )
 
-    # DeFi venues (multi-chain support: Ethereum, Plasma, Hyperliquid)
-    all_defi_venues: List[str] = field(
-        default_factory=lambda: [
-            # Ethereum DEX protocols
-            "UNISWAPV2-ETH",  # Uniswap V2 Ethereum
-            "UNISWAPV3-ETH",  # Uniswap V3 Ethereum
-            "UNISWAPV4-ETH",  # Uniswap V4 Ethereum (launched January 31, 2025)
-            "CURVE-ETH",  # Curve Ethereum
-            "BALANCER-ETH",  # Balancer V2 Ethereum
-            "AAVE_V3_ETH",  # AAVE V3 Ethereum
-            "ETHERFI",  # EtherFi LST (Ethereum)
-            "LIDO",  # Lido LST (Ethereum)
-            "ETHENA",  # Ethena synthetic dollars (Ethereum)
-            "MORPHO-ETHEREUM",  # Morpho lending protocol (Ethereum)
-            # Plasma lending protocols
-            "EULER-PLASMA",  # Euler lending (Plasma)
-            "FLUID-PLASMA",  # Fluid lending (Plasma)
-            "AAVE-PLASMA",  # AAVE Plasma market (Plasma)
-            # Perpetual futures DEX
-            "HYPERLIQUID",  # Hyperliquid perpetual futures (HyperEVM)
-            "ASTER",  # Aster perpetual futures exchange
-        ]
+    # =========================================================================
+    # INSTRUMENTS-SPECIFIC BIGQUERY (override parent with instruments-specific env var)
+    # =========================================================================
+    bigquery_dataset: str = Field(
+        default="instruments",
+        validation_alias=AliasChoices("INSTRUMENTS_BIGQUERY_DATASET", "BIGQUERY_DATASET"),
+        description="BigQuery dataset for instruments",
     )
 
-    # All exchanges (computed from above - no duplication)
-    @property
-    def all_exchanges(self) -> List[str]:
-        """All exchanges (Tardis + Databento + DeFi)"""
-        return self.all_tardis_exchanges + self.all_databento_venues + self.all_defi_venues
+    # =========================================================================
+    # INSTRUMENTS-SPECIFIC PROCESSING CONFIGURATION
+    # =========================================================================
+    enable_ccxt_integration: bool = Field(
+        default=True, description="Enable CCXT metadata enrichment"
+    )
+    enable_metadata_caching: bool = Field(default=True, description="Enable metadata caching")
+    cache_ttl_hours: int = Field(default=24, description="Cache TTL in hours")
+    max_batch_size: int = Field(default=1000, description="Maximum batch size for processing")
+    lookback_days: int = Field(default=0, description="Lookback days for batch processing")
 
-    # Map canonical venues to Databento dataset identifiers
-    venue_to_databento: Dict[str, str] = field(
-        default_factory=lambda: {
-            "CME": "GLBX.MDP3",  # CME Globex Market Data Platform 3.0
-            "CBOE": "BARCHART",  # VIX index only (not via Databento OPRA.PILLAR)
-            "NASDAQ": "DBEQ.BASIC",  # NASDAQ equities via Databento DBEQ.BASIC
-            "NYSE": "DBEQ.BASIC",  # NYSE equities via Databento DBEQ.BASIC
-            "ICE": "IFEU.IMPACT",  # ICE futures via Databento IFEU.IMPACT
-        }
+    # =========================================================================
+    # THE GRAPH SECRET NAME (different name than parent's thegraph_secret_name)
+    # =========================================================================
+    graph_secret_name: str = Field(
+        default="graph-api-key",
+        validation_alias=AliasChoices("GRAPH_SECRET_NAME"),
+        description="Graph API key secret name",
     )
 
-    # Canonical venues to CCXT exchange IDs
-    venue_to_ccxt: Dict[str, str] = field(
-        default_factory=lambda: {
-            "BINANCE-SPOT": "binance",
-            "BINANCE-FUTURES": "binance",  # Same CCXT class, different market types
-            "DERIBIT": "deribit",
-            "BYBIT": "bybit",  # Unified
-            "OKX": "okx",  # Unified
-            "HYPERLIQUID": "hyperliquid",  # CCXT supports Hyperliquid
-            # Note: ASTER not in CCXT yet
-        }
+    # =========================================================================
+    # DEFI URLS (instruments-specific)
+    # =========================================================================
+    ethereum_rpc_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("ETHEREUM_RPC_URL"),
+        description="Ethereum RPC URL",
+    )
+    uniswap_v3_graph_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("UNISWAP_V3_GRAPH_URL"),
+        description="Uniswap V3 Graph URL",
+    )
+    uniswap_v3_graph_arb_url: str = Field(
+        default="https://api.studio.thegraph.com/query/50688/uniswap-v3-arbitrum/version/latest",
+        validation_alias=AliasChoices("UNISWAP_V3_GRAPH_ARB_URL"),
+        description="The Graph Uniswap V3 URL for Arbitrum",
+    )
+    uniswap_v3_graph_base_url: str = Field(
+        default="https://api.studio.thegraph.com/query/50688/uniswap-v3-base/version/latest",
+        validation_alias=AliasChoices("UNISWAP_V3_GRAPH_BASE_URL"),
+        description="The Graph Uniswap V3 URL for Base",
+    )
+    envio_api_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("ENVIO_API_URL"),
+        description="Envio API URL",
     )
 
-    # Reverse mapping for imports
-    tardis_to_venue: Dict[str, str] = field(
-        default_factory=lambda: {
-            "binance": "BINANCE-SPOT",  # Fixed: binance spot should be BINANCE-SPOT
-            "binance-futures": "BINANCE-FUTURES",
-            "deribit": "DERIBIT",
-            "bybit": "BYBIT",
-            "bybit-spot": "BYBIT",
-            "okex": "OKX",
-            "okex-futures": "OKX",
-            "okex-swap": "OKX",
-        }
+    # DeFi MVP tokens configuration
+    defi_mvp_tokens: str = Field(
+        default="",
+        validation_alias=AliasChoices("DEFI_MVP_TOKENS"),
+        description="Comma-separated list of DeFi MVP tokens",
     )
 
-    # Map venues to their data providers (for non-Tardis venues)
-    venue_to_data_provider: Dict[str, str] = field(
-        default_factory=lambda: {
-            # DeFi venues with direct API integration
-            "HYPERLIQUID": "hyperliquid_api",  # Hyperliquid REST/WebSocket API + S3 archive
-            "ASTER": "aster_api",  # Aster REST API
-            # DeFi venues using The Graph
-            "UNISWAPV2-ETH": "the_graph",
-            "UNISWAPV3-ETH": "the_graph",
-            "UNISWAPV4-ETH": "the_graph",
-            "CURVE-ETH": "the_graph",
-            "BALANCER-ETH": "the_graph",
-            # DeFi venues using protocol SDKs
-            "AAVE_V3_ETH": "protocol_sdk",
-            "MORPHO-ETHEREUM": "protocol_sdk",
-            "EULER-PLASMA": "protocol_sdk",
-            "FLUID-PLASMA": "protocol_sdk",
-            "AAVE-PLASMA": "protocol_sdk",
-            "ETHERFI": "protocol_sdk",
-            "LIDO": "protocol_sdk",
-            "ETHENA": "protocol_sdk",
-        }
+    # ClickUp Configuration
+    clickup_secret_name: str = Field(
+        default="clickup-api-key",
+        validation_alias=AliasChoices("CLICKUP_SECRET_NAME"),
+        description="ClickUp API key secret name",
+    )
+    clickup_list_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("clickup_list_id_instruments_service"),
+        description="ClickUp List ID",
+    )
+    clickup_user_id_ikenna: str = Field(
+        default="254573729",
+        validation_alias=AliasChoices("clickup_user_id_ikenna"),
+        description="ClickUp User ID for Ikenna",
+    )
+    clickup_user_id_harsh: str = Field(
+        default="100698878",
+        validation_alias=AliasChoices("clickup_user_id_harsh"),
+        description="ClickUp User ID for Harsh",
+    )
+    clickup_user_id_femi: str = Field(
+        default="100698756",
+        validation_alias=AliasChoices("clickup_user_id_femi"),
+        description="ClickUp User ID for Femi",
+    )
+    clickup_user_id_daniel: str = Field(
+        default="36559682",
+        validation_alias=AliasChoices("clickup_user_id_daniel"),
+        description="ClickUp User ID for Daniel",
     )
 
-    # MVP token list for DeFi pool discovery (configurable)
-    defi_mvp_base_currencies: List[str] = field(
-        default_factory=lambda: [
-            "ETH",  # Native Ethereum
-            "WETH",  # Wrapped ETH
-            "BTC",  # Bitcoin (WBTC on Ethereum)
-            "WBTC",  # Wrapped Bitcoin (explicitly include WBTC)
-            "USDT",  # Tether
-            "USDC",  # USD Coin
-            "DAI",  # Dai stablecoin
-            "weETH",  # EtherFi LST (Wrapped eETH) - non-rebasing, contract: 0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee
-            "WSTETH",  # Lido LST (non-rebasing, wrapped version)
-            # STETH removed - rebasing token, not supported by AAVE
-        ]
-    )
-
-    # MVP base assets for Hyperliquid and Aster perpetuals (from INSTRUMENT_SPECIFICATION_GUIDE.md)
-    # These are the 21 trading assets used for CeFi/TradFi MVP, not DeFi-specific tokens
-    hyperliquid_aster_mvp_base_assets: List[str] = field(
-        default_factory=lambda: [
-            "SOL",  # Solana
-            "BTC",  # Bitcoin
-            "ETH",  # Ethereum
-            "AVAX",  # Avalanche
-            "ADA",  # Cardano
-            "SUSHI",  # SushiSwap
-            "CAKE",  # PancakeSwap
-            "XRP",  # Ripple
-            "DOGE",  # Dogecoin
-            "XLM",  # Stellar
-            "LTC",  # Litecoin
-            "ALGO",  # Algorand
-            "FIL",  # Filecoin
-            "TRX",  # Tron
-            "BNB",  # Binance Coin
-            "LINK",  # Chainlink
-            "MATIC",  # Polygon
-            "APT",  # Aptos
-            "VET",  # VeChain
-            "ATOM",  # Cosmos
-            "NEAR",  # Near Protocol
-        ]
-    )
-
-    # Sports betting leagues configuration
-    sports_leagues: Dict[str, SportsLeagueConfig] = field(
-        default_factory=lambda: {
-            "ENG-PREMIER_LEAGUE": SportsLeagueConfig(
-                league_code="ENG-PREMIER_LEAGUE",
-                api_football_league_id=39,
-                api_football_season_from=2019,
-                betfair_event_type_id=1,
-                betfair_competition_ids=[10932509],  # Update with real ID
-                timezone="Europe/London",
-            ),
-            "GER-BUNDESLIGA": SportsLeagueConfig(
-                league_code="GER-BUNDESLIGA",
-                api_football_league_id=78,
-                api_football_season_from=2019,
-                betfair_event_type_id=1,
-                betfair_competition_ids=[117],  # Update with real ID
-                timezone="Europe/Berlin",
-            ),
-        }
-    )
-
-    def is_databento_venue(self, venue: str) -> bool:
-        """Check if venue uses Databento (canonical venue name)."""
-        return venue in self.all_databento_venues
-
-    def is_tardis_exchange(self, exchange: str) -> bool:
-        """Check if exchange uses Tardis (API endpoint name)."""
-        return exchange in self.all_tardis_exchanges
-
-    def is_defi_venue(self, venue: str) -> bool:
-        """Check if venue is a DeFi protocol."""
-        return venue in self.all_defi_venues
-
-    def get_defi_mvp_tokens(self) -> List[str]:
-        """Get MVP token list, checking environment variable first."""
-        env_tokens = get_config("DEFI_MVP_TOKENS", "")
-        if env_tokens:
-            return [t.strip().upper() for t in env_tokens.split(",")]
-        return self.defi_mvp_base_currencies
-
-    def get_databento_exchange_id(self, venue: str) -> Optional[str]:
-        """Get Databento exchange identifier for canonical venue."""
-        return self.venue_to_databento.get(venue)
-
-    def get_sports_league_config(self, league_code: str) -> Optional[SportsLeagueConfig]:
-        """Get sports league configuration."""
-        return self.sports_leagues.get(league_code)
-
-    # CRITICAL: Map venue+instrument_type → Tardis exchange endpoint
-    # Note: HYPERLIQUID and ASTER use direct APIs, not Tardis
-    venue_instrument_type_to_tardis: Dict[tuple, str] = field(
-        default_factory=lambda: {
-            # Binance mappings
-            ("BINANCE-SPOT", "SPOT_PAIR"): "binance",
-            ("BINANCE-FUTURES", "PERPETUAL"): "binance-futures",
-            ("BINANCE-FUTURES", "FUTURE"): "binance-futures",
-            # OKX mappings (CRITICAL: instrument_type determines endpoint)
-            ("OKX", "SPOT_PAIR"): "okex",
-            ("OKX", "PERPETUAL"): "okex-swap",
-            ("OKX", "FUTURE"): "okex-futures",
-            # Bybit mappings
-            ("BYBIT", "SPOT_PAIR"): "bybit-spot",
-            ("BYBIT", "PERPETUAL"): "bybit",
-            ("BYBIT", "FUTURE"): "bybit",
-            # Deribit (unified endpoint)
-            ("DERIBIT", "SPOT_PAIR"): "deribit",
-            ("DERIBIT", "PERPETUAL"): "deribit",
-            ("DERIBIT", "FUTURE"): "deribit",
-            ("DERIBIT", "OPTION"): "deribit",
-        }
-    )
-
-    # Which Tardis exchanges map to which instrument types (for filtering)
-    tardis_exchange_instrument_types: Dict[str, List[str]] = field(
-        default_factory=lambda: {
-            "binance": ["SPOT_PAIR"],
-            "binance-futures": ["PERPETUAL", "FUTURE"],
-            "okex": ["SPOT_PAIR"],
-            "okex-swap": ["PERPETUAL"],
-            "okex-futures": ["FUTURE"],
-            "bybit": ["PERPETUAL", "FUTURE"],
-            "bybit-spot": ["SPOT_PAIR"],
-            "deribit": ["SPOT_PAIR", "PERPETUAL", "FUTURE", "OPTION"],
-        }
-    )
-
-    def get_data_provider(self, venue: str) -> Optional[str]:
-        """Get data provider for a venue (tardis, databento, hyperliquid_api, aster_api, the_graph, protocol_sdk)."""
-        # Check if it's a Tardis venue
-        if venue in self.tardis_to_venue.values() or any(
-            venue == v for v in self.tardis_to_venue.values()
-        ):
-            return "tardis"
-        # Check if it's a Databento venue
-        if venue in self.all_databento_venues:
-            return "databento"
-        # Check venue_to_data_provider mapping
-        return self.venue_to_data_provider.get(venue)
-
-
-@dataclass
-class DataTypeConfig:
-    """CRITICAL: Data types per instrument type (fixes 66% false positives)"""
-
-    instrument_data_types: Dict[str, List[str]] = field(
-        default_factory=lambda: {
-            "SPOT_PAIR": ["trades", "book_snapshot_5"],
-            "PERPETUAL": [
-                "trades",
-                "book_snapshot_5",
-                "derivative_ticker",
-                "liquidations",
-            ],
-            "FUTURE": [
-                "trades",
-                "book_snapshot_5",
-                "derivative_ticker",
-                "liquidations",
-            ],
-            "OPTION": ["options_chain"],
-        }
-    )
-
-    default_data_types: List[str] = field(
-        default_factory=lambda: [
-            "trades",
-            "book_snapshot_5",
-            "derivative_ticker",
-            "liquidations",
-            "options_chain",
-        ]
-    )
-
-    # Instrument type filters (exclude complex types we don't want to process)
-    excluded_instrument_types: List[str] = field(
-        default_factory=lambda: ["combo"]  # Exclude Deribit combo strategies
-    )
-
-    # Complex option strategy filters (Deribit specific - exclude complex strategies)
-    excluded_deribit_strategies: List[str] = field(
-        default_factory=lambda: [
-            "PS-",
-            "STRG-",
-            "CBUT-",
-            "CCOND-",
-            "PDIAG-",
-            "PBUT-",
-            "ICOND-",
-            "BOX-",
-            "FS-",
-            "RR-",
-            "CSR12-",
-            "PSR12-",
-            "CSR13-",
-            "PSR13-",
-            "CCAL-",
-            "CDIAG-",
-        ]
-    )
-
-
-@dataclass
-class ExchangeInstrumentConfig:
-    """Valid instrument types and quote currencies per exchange (CORRECTED canonical venues)"""
-
-    exchange_instrument_types: Dict[str, List[str]] = field(
-        default_factory=lambda: {
-            "BINANCE-SPOT": ["SPOT_PAIR"],  # Spot only (fixed: BINANCE -> BINANCE-SPOT)
-            "BINANCE-FUTURES": ["PERPETUAL", "FUTURE"],  # Derivatives only (keep split)
-            "DERIBIT": ["PERPETUAL", "FUTURE", "OPTION"],  # Full derivatives exchange
-            "BYBIT": ["SPOT_PAIR", "PERPETUAL"],  # Combined (no split per user)
-            "OKX": ["SPOT_PAIR", "PERPETUAL", "FUTURE"],  # Combined (no split per user)
-        }
-    )
-
-    valid_quote_currencies: Dict[str, List[str]] = field(
-        default_factory=lambda: {
-            "BINANCE-SPOT": [
-                "USDT"
-            ],  # STRICT: Only USDT (no BNB, ETH, BTC quotes) (fixed: BINANCE -> BINANCE-SPOT)
-            "BINANCE-FUTURES": ["USDT"],  # STRICT: Only USDT
-            "DERIBIT": ["USD", "USDC"],  # Options exchange (verified real data)
-            "BYBIT": ["USDT"],  # STRICT: Only USDT
-            "OKX": ["USDT"],  # STRICT: Only USDT (filter out USD quotes)
-        }
-    )
-
-    derivative_exchanges: List[str] = field(
-        default_factory=lambda: [
-            "DERIBIT",
-            "BINANCE-FUTURES",
-            "OKX",
-            "BYBIT",
-        ]
-    )
-
-    # Excluded base currencies per exchange (e.g., deprecated tokens, leveraged products)
-    excluded_base_currencies: Dict[str, List[str]] = field(
-        default_factory=lambda: {
-            "OKX": ["USTC"],  # USTC (Terra Classic) deprecated, no longer needed
-            "BYBIT": [],  # No base currency exclusions for BYBIT (handled by symbol patterns)
-        }
-    )
-
-    # Excluded symbol patterns per exchange (e.g., leveraged products, deprecated instruments)
-    excluded_symbol_patterns: Dict[str, List[str]] = field(
-        default_factory=lambda: {
-            "BYBIT": [
-                "3L",  # 3x leveraged LONG products (no longer exist)
-                "2L",  # 2x leveraged LONG products (no longer exist)
-                "3S",  # 3S (3x leveraged SHORT products)
-                "2S",  # 2S (2x leveraged SHORT products)
-            ],
-            "OKX": [],  # No symbol pattern exclusions for OKX
-        }
-    )
-
-
-# Service-level configuration (extends BaseServiceConfig if available)
-if BASE_SERVICE_CONFIG_AVAILABLE and BaseServiceConfig is not None:
-
-    class InstrumentsServiceConfig(BaseServiceConfig):
+    def get_cloud_target(self, category: str | None = None) -> CloudTarget:
         """
-        Service-level configuration for instruments-service.
+        Get CloudTarget for instruments service.
 
-        Extends BaseServiceConfig with instruments-specific settings.
+        Args:
+            category: Optional market category ("CEFI", "TRADFI", "DEFI") to use category-specific bucket
+
+        Returns:
+            CloudTarget with appropriate bucket for category
         """
-
-        # Override gcp_project_id and bigquery_location without validation_alias 
-        # to allow constructor override. This ensures constructor arguments take 
-        # precedence over environment variables.
-        gcp_project_id: str = Field(
-            default="",
-            description="GCP project ID (can be overridden via constructor)",
-        )
-        bigquery_location: str = Field(
-            default="asia-northeast1",
-            description="BigQuery dataset location (can be overridden via constructor)",
-        )
-
-        service_name: str = Field(default="instruments-service", description="Service name")
-
-        # Instruments-specific configuration
-        enable_ccxt_integration: bool = Field(
-            default=True, description="Enable CCXT metadata enrichment"
-        )
-        enable_metadata_caching: bool = Field(default=True, description="Enable metadata caching")
-        cache_ttl_hours: int = Field(default=24, description="Cache TTL in hours")
-        max_batch_size: int = Field(default=1000, description="Maximum batch size for processing")
-        lookback_days: int = Field(default=0, description="Lookback days for batch processing")
-
-        # GCS and BigQuery defaults for instruments
-        gcs_bucket: str = Field(
-            default_factory=lambda: get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
-            description="GCS bucket for instruments (default/backwards compatibility)",
-        )
-        # Category-specific buckets for independent batch processing
-        gcs_bucket_cefi: str = Field(
-            default_factory=lambda: get_config("INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-central-element-323112"),
-            description="GCS bucket for CEFI instruments",
-        )
-        gcs_bucket_tradfi: str = Field(
-            default_factory=lambda: get_config("INSTRUMENTS_GCS_BUCKET_TRADFI", "instruments-store-tradfi-central-element-323112"),
-            description="GCS bucket for TRADFI instruments",
-        )
-        gcs_bucket_defi: str = Field(
-            default_factory=lambda: get_config("INSTRUMENTS_GCS_BUCKET_DEFI", "instruments-store-defi-central-element-323112"),
-            description="GCS bucket for DEFI instruments",
-        )
-        bigquery_dataset: str = Field(
-            default_factory=lambda: get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
-            description="BigQuery dataset for instruments",
-        )
-
-        def get_cloud_target(self, category: Optional[str] = None):
-            """
-            Get CloudTarget for instruments service.
-            
-            Args:
-                category: Optional market category ("CEFI", "TRADFI", "DEFI") to use category-specific bucket
-                
-            Returns:
-                CloudTarget with appropriate bucket for category
-            """
-            from unified_cloud_services import CloudTarget
-            
-            # Determine bucket based on category
-            if category:
-                category_upper = category.upper()
-                if category_upper == "CEFI":
-                    bucket = self.gcs_bucket_cefi
-                elif category_upper == "TRADFI":
-                    bucket = self.gcs_bucket_tradfi
-                elif category_upper == "DEFI":
-                    bucket = self.gcs_bucket_defi
-                else:
-                    raise ValueError(f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI")
+        # Determine bucket based on category
+        if category:
+            category_upper = category.upper()
+            if category_upper == "CEFI":
+                bucket = self.gcs_bucket_cefi
+            elif category_upper == "TRADFI":
+                bucket = self.gcs_bucket_tradfi
+            elif category_upper == "DEFI":
+                bucket = self.gcs_bucket_defi
             else:
-                bucket = self.gcs_bucket
+                raise ValueError(
+                    f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI"
+                )
+        else:
+            bucket = self.gcs_bucket
 
-            return CloudTarget(
-                project_id=self.gcp_project_id,
-                gcs_bucket=bucket,
-                bigquery_dataset=self.bigquery_dataset,
-                bigquery_location=self.bigquery_location,
-            )
+        return CloudTarget(
+            project_id=self.gcp_project_id,
+            gcs_bucket=bucket,
+            bigquery_dataset=self.bigquery_dataset,
+            bigquery_location=self.bigquery_location,
+        )
 
-else:
-    # Fallback if BaseServiceConfig not available
-    class InstrumentsServiceConfig:
-        """Fallback service config if BaseServiceConfig not available."""
+    def is_test_environment(self) -> bool:
+        """Check if the current environment is a test environment."""
+        return self.environment.lower() in ["test", "testing"]
 
-        def __init__(self, **kwargs):
-            self.service_name = kwargs.get("service_name", "instruments-service")
-            self.enable_ccxt_integration = kwargs.get("enable_ccxt_integration", True)
-            self.enable_metadata_caching = kwargs.get("enable_metadata_caching", True)
-            self.cache_ttl_hours = kwargs.get("cache_ttl_hours", 24)
-            self.max_batch_size = kwargs.get("max_batch_size", 1000)
-            self.lookback_days = kwargs.get("lookback_days", 0)
-            self.gcs_bucket = kwargs.get(
-                "gcs_bucket", get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store")
-            )
-            self.bigquery_dataset = kwargs.get(
-                "bigquery_dataset",
-                get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
-            )
-            self.gcp_project_id = kwargs.get(
-                "gcp_project_id", get_config("GCP_PROJECT_ID", "central-element-323112")
-            )
-            self.bigquery_location = kwargs.get(
-                "bigquery_location", get_config("BIGQUERY_LOCATION", "asia-northeast1")
-            )  # Default to asia-northeast1 per .env
+    # Properties for uppercase bucket names (compatibility with unified-cloud-services)
+    @property
+    def INSTRUMENTS_GCS_BUCKET_CEFI(self) -> str:
+        return self.gcs_bucket_cefi
+
+    @property
+    def INSTRUMENTS_GCS_BUCKET_TRADFI(self) -> str:
+        return self.gcs_bucket_tradfi
+
+    @property
+    def INSTRUMENTS_GCS_BUCKET_DEFI(self) -> str:
+        return self.gcs_bucket_defi
+
+    @property
+    def INSTRUMENTS_GCS_BUCKET_CEFI_TEST(self) -> str:
+        return self.gcs_bucket_cefi_test or f"{self.gcs_bucket_cefi}-test"
+
+    @property
+    def INSTRUMENTS_GCS_BUCKET_TRADFI_TEST(self) -> str:
+        return self.gcs_bucket_tradfi_test or f"{self.gcs_bucket_tradfi}-test"
+
+    @property
+    def INSTRUMENTS_GCS_BUCKET_DEFI_TEST(self) -> str:
+        return self.gcs_bucket_defi_test or f"{self.gcs_bucket_defi}-test"
+
+    @property
+    def INSTRUMENTS_GCS_BUCKET(self) -> str:
+        return self.gcs_bucket
+
+    @property
+    def INSTRUMENTS_GCS_BUCKET_TEST(self) -> str:
+        return self.gcs_bucket_test
+
+    def get_bucket_for_category(self, category: str, test_mode: bool = False) -> str:
+        """
+        Get the GCS bucket name for a specific market category.
+
+        Args:
+            category: Market category ("CEFI", "TRADFI", or "DEFI")
+            test_mode: Whether to use test bucket (default: False)
+
+        Returns:
+            Bucket name from environment variables
+
+        Raises:
+            ValueError: If category is invalid or bucket not configured
+        """
+        category_upper = category.upper()
+
+        if category_upper not in ["CEFI", "TRADFI", "DEFI"]:
+            raise ValueError(f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI")
+
+        # Determine environment variable name
+        if test_mode:
+            bucket_name = f"gcs_bucket_{category_upper.lower()}_test"
+        else:
+            bucket_name = f"gcs_bucket_{category_upper.lower()}"
+
+        # Get bucket from attribute
+        bucket = getattr(self, bucket_name, None)
+
+        if bucket:
+            logger.debug(f"📦 Using bucket for {category_upper}: {bucket}")
+            return bucket
+
+        # Fallback to default bucket if category-specific bucket not configured
+        logger.warning(
+            f"⚠️ Category-specific bucket not configured for {category_upper}. "
+            f"Using default bucket."
+        )
+        return self.gcs_bucket_test if test_mode else self.gcs_bucket
+
+
+# Create singleton instance
+instruments_config = InstrumentsServiceConfig()

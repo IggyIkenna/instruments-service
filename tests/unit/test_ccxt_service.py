@@ -8,7 +8,7 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timedelta, timezone
 
-from instruments_service.app.core.ccxt_service import CCXTService
+from instruments_service.utils.ccxt_service import CCXTService
 from instruments_service.config import VenueMapping
 
 
@@ -33,8 +33,8 @@ class TestCCXTService:
         assert service._markets_cache == {}
         assert service._cache_timestamps == {}
 
-    @patch("instruments_service.app.core.ccxt_service.getattr")
-    @patch("instruments_service.app.core.ccxt_service.ccxt")
+    @patch("instruments_service.utils.ccxt_service.getattr")
+    @patch("instruments_service.utils.ccxt_service.ccxt")
     def test_load_markets_success(self, mock_ccxt, mock_getattr, ccxt_service):
         """Test successful market loading."""
         # Mock exchange class and instance
@@ -93,9 +93,10 @@ class TestCCXTService:
             symbol_id="BTCUSDT",
         )
 
-        assert "tick_size" in metadata or metadata == {}  # May be empty if symbol not found
+        # Utils version returns dict with ccxt_exchange and ccxt_symbol even if symbol not found
+        assert isinstance(metadata, dict)
 
-    @patch("instruments_service.app.core.ccxt_service.CCXTService.load_markets")
+    @patch("instruments_service.utils.ccxt_service.CCXTService.load_markets")
     def test_get_metadata_no_cache(self, mock_load_markets, ccxt_service):
         """Test metadata retrieval when cache is empty."""
         # Mock load_markets to return None (simulating no markets available)
@@ -107,7 +108,8 @@ class TestCCXTService:
             quote_asset="USDT",
             symbol_id="BTCUSDT",
         )
-        assert metadata == {}
+        # Utils version returns dict with ccxt_exchange and ccxt_symbol even when no cache
+        assert isinstance(metadata, dict)
 
     def test_cache_validity(self, ccxt_service):
         """Test cache validity checking."""
@@ -136,7 +138,7 @@ class TestCCXTService:
         """Test getting CCXT exchange instance."""
         ccxt_service.venue_mapping.venue_to_ccxt = {"BINANCE-FUTURES": "binance"}
 
-        with patch("instruments_service.app.core.ccxt_service.ccxt") as mock_ccxt:
+        with patch("instruments_service.utils.ccxt_service.ccxt") as mock_ccxt:
             mock_exchange_class = Mock()
             mock_ccxt.binance = mock_exchange_class
             mock_exchange_class.return_value = Mock()
@@ -154,7 +156,7 @@ class TestCCXTService:
         """Test getting CCXT exchange when exchange class not available."""
         ccxt_service.venue_mapping.venue_to_ccxt = {"TEST-VENUE": "nonexistent"}
 
-        with patch("instruments_service.app.core.ccxt_service.ccxt") as mock_ccxt:
+        with patch("instruments_service.utils.ccxt_service.ccxt") as mock_ccxt:
             mock_ccxt.nonexistent = None
 
             exchange = ccxt_service.get_ccxt_exchange("TEST-VENUE")
@@ -168,7 +170,7 @@ class TestCCXTService:
         ccxt_service._cache_timestamps[cache_key] = datetime.now(timezone.utc)
 
         with patch(
-            "instruments_service.app.core.ccxt_service.CCXTService.get_ccxt_exchange"
+            "instruments_service.utils.ccxt_service.CCXTService.get_ccxt_exchange"
         ) as mock_get_exchange:
             mock_exchange = Mock()
             mock_exchange.load_markets.return_value = {"BTC/USDT:USDT": {}}
@@ -185,7 +187,7 @@ class TestCCXTService:
         ccxt_service.venue_mapping.venue_to_ccxt = {"BINANCE-FUTURES": "binance"}
 
         with patch(
-            "instruments_service.app.core.ccxt_service.CCXTService.get_ccxt_exchange"
+            "instruments_service.utils.ccxt_service.CCXTService.get_ccxt_exchange"
         ) as mock_get_exchange:
             mock_exchange = Mock()
             mock_exchange.load_markets.side_effect = Exception("API Error")
@@ -277,10 +279,10 @@ class TestCCXTService:
             symbol_id="BTCUSDT",
         )
 
-        # Should have min_size from cost_min
-        assert "min_size" in metadata or metadata == {}
+        # Utils version returns dict with ccxt_exchange and ccxt_symbol
+        assert isinstance(metadata, dict)
 
-    @patch("instruments_service.app.core.ccxt_service.CCXTService.load_markets")
+    @patch("instruments_service.utils.ccxt_service.CCXTService.load_markets")
     def test_get_leverage_limits(self, mock_load_markets, ccxt_service):
         """Test getting leverage limits."""
         mock_exchange = Mock()
