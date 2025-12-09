@@ -9,13 +9,41 @@ Reference: https://hyperliquid.gitbook.io/hyperliquid-docs/
 
 import logging
 import requests
-from typing import Dict, List, Optional, Any
-from datetime import datetime
+from typing import Dict, List, Optional, Any, Tuple
+from datetime import datetime, timezone, timedelta
+
+from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 
 logger = logging.getLogger(__name__)
 
+# Module-level cache for Hyperliquid API responses (instrument lists rarely change)
+# Format: {cache_key: (data, timestamp)}
+_HYPERLIQUID_CACHE: Dict[str, Tuple[Any, datetime]] = {}
+_HYPERLIQUID_CACHE_TTL = timedelta(hours=4)  # 4 hour TTL
 
-class HyperliquidAdapter:
+
+def _get_cached_response(cache_key: str) -> Optional[Any]:
+    """Get cached API response if still valid."""
+    if cache_key in _HYPERLIQUID_CACHE:
+        data, timestamp = _HYPERLIQUID_CACHE[cache_key]
+        if datetime.now(timezone.utc) - timestamp < _HYPERLIQUID_CACHE_TTL:
+            return data
+    return None
+
+
+def _set_cached_response(cache_key: str, data: Any):
+    """Cache an API response."""
+    _HYPERLIQUID_CACHE[cache_key] = (data, datetime.now(timezone.utc))
+
+
+def clear_hyperliquid_cache():
+    """Clear all Hyperliquid caches."""
+    global _HYPERLIQUID_CACHE
+    _HYPERLIQUID_CACHE.clear()
+    logger.info("🧹 Cleared Hyperliquid cache")
+
+
+class HyperliquidAdapter(BaseDefiAdapter):
     """
     Adapter for fetching Hyperliquid perpetual futures instruments.
 
@@ -28,6 +56,9 @@ class HyperliquidAdapter:
         api_base_url: Optional[str] = None,
         base_currency_list: Optional[List[str]] = None,
         mvp_only: bool = True,
+        chain: str = "HYPERLIQUID",
+        api_key: Optional[str] = None,
+        project_id: Optional[str] = None,
     ):
         """
         Initialize Hyperliquid adapter.
@@ -36,7 +67,11 @@ class HyperliquidAdapter:
             api_base_url: Optional custom API base URL (defaults to https://api.hyperliquid.xyz)
             base_currency_list: List of MVP base currencies from config (defaults to None, uses all if not provided)
             mvp_only: If True, only include MVP coins (default: True)
+            chain: Chain identifier (default: 'HYPERLIQUID')
+            api_key: Optional API key (not used by Hyperliquid but required by base class)
+            project_id: GCP project ID for Secret Manager
         """
+        super().__init__(chain=chain, api_key=api_key, project_id=project_id)
         self.venue = "HYPERLIQUID"
         self.api_base_url = api_base_url or "https://api.hyperliquid.xyz"
         self.mvp_only = mvp_only
@@ -47,6 +82,17 @@ class HyperliquidAdapter:
         logger.info(
             f"✅ HyperliquidAdapter initialized (MVP only: {mvp_only}, base currencies: {len(self.mvp_base_currencies) if self.mvp_base_currencies else 'all'})"
         )
+
+    async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
+        """
+        Get instrument metadata for Hyperliquid.
+        
+        Returns:
+            List of instrument definition dictionaries
+        """
+        instruments = self.fetch_perpetuals()
+        instruments.update(self.fetch_spot_pairs())
+        return list(instruments.values())
 
     def fetch_perpetuals(self, test_data_availability: bool = False) -> Dict[str, Dict[str, Any]]:
         """
@@ -59,15 +105,24 @@ class HyperliquidAdapter:
             Dictionary mapping instrument_key to instrument definition
         """
         try:
-            # Get perpetual metadata (use "meta" not "perpetualMetadata")
-            response = requests.post(
-                f"{self.api_base_url}/info",
-                json={"type": "meta"},
-                headers={"Content-Type": "application/json"},
-                timeout=30,
-            )
-            response.raise_for_status()
-            metadata = response.json()
+            # Check cache first (instrument lists rarely change)
+            cache_key = "hyperliquid_perp_meta"
+            cached_metadata = _get_cached_response(cache_key)
+            
+            if cached_metadata is not None:
+                logger.info("📋 Using cached Hyperliquid perpetual metadata")
+                metadata = cached_metadata
+            else:
+                # Get perpetual metadata (use "meta" not "perpetualMetadata")
+                response = requests.post(
+                    f"{self.api_base_url}/info",
+                    json={"type": "meta"},
+                    headers={"Content-Type": "application/json"},
+                    timeout=30,
+                )
+                response.raise_for_status()
+                metadata = response.json()
+                _set_cached_response(cache_key, metadata)
 
             instruments = {}
             universe = metadata.get("universe", [])
@@ -90,8 +145,8 @@ class HyperliquidAdapter:
                     inst_def = self._convert_asset_to_instrument(asset)
                     if inst_def:
                         # Set default data types - actual data fetching happens in market tick data handler
-                        # Hyperliquid supports 1m candles + funding rates (derivative_ticker)
-                        inst_def["data_types"] = "ohlcv_1m,derivative_ticker"
+                        # Hyperliquid supports 1m candles, funding rates (derivative_ticker), and liquidations
+                        inst_def["data_types"] = "ohlcv_1m,derivative_ticker,liquidations"
 
                         instruments[inst_def["instrument_key"]] = inst_def
                 except Exception as e:
@@ -116,15 +171,24 @@ class HyperliquidAdapter:
             Dictionary mapping instrument_key to instrument definition
         """
         try:
-            # Get perpetual metadata (same endpoint, but we'll create SPOT_PAIR instruments)
-            response = requests.post(
-                f"{self.api_base_url}/info",
-                json={"type": "meta"},
-                headers={"Content-Type": "application/json"},
-                timeout=30,
-            )
-            response.raise_for_status()
-            metadata = response.json()
+            # Check cache first (reuses same metadata as perpetuals)
+            cache_key = "hyperliquid_perp_meta"
+            cached_metadata = _get_cached_response(cache_key)
+            
+            if cached_metadata is not None:
+                logger.debug("📋 Using cached Hyperliquid metadata for spot pairs")
+                metadata = cached_metadata
+            else:
+                # Get perpetual metadata (same endpoint, but we'll create SPOT_PAIR instruments)
+                response = requests.post(
+                    f"{self.api_base_url}/info",
+                    json={"type": "meta"},
+                    headers={"Content-Type": "application/json"},
+                    timeout=30,
+                )
+                response.raise_for_status()
+                metadata = response.json()
+                _set_cached_response(cache_key, metadata)
 
             instruments = {}
             universe = metadata.get("universe", [])

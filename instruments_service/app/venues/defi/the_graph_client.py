@@ -1,42 +1,51 @@
 """
-The Graph Client for DeFi DEX Pools
+The Graph Client for DeFi DEX Pools - REFACTORED
 
-Fetches DEX pool information from The Graph subgraphs.
-Supports Uniswap V3, Curve, and other DEX protocols.
+Uses TheGraphBaseClient from unified-cloud-services for network management.
+This module provides domain-specific query methods for DEX protocols.
 
-Reference: The Graph Protocol documentation
-The Graph has moved from hosted service (api.thegraph.com) to:
-- Subgraph Studio: https://api.studio.thegraph.com/query/<ID>/<SUBGRAPH_NAME>/<VERSION>
-- The Graph Network: https://gateway.thegraph.com/api/<API_KEY>/subgraphs/id/<SUBGRAPH_ID>
-
-For production use, use The Graph Network endpoints with API keys.
+ARCHITECTURE:
+- Uses TheGraphBaseClient (unified-cloud-services) for API key, session, retries
+- This client provides DEX-specific GraphQL queries (pools, pairs)
 """
 
 import logging
-import os
 from typing import Dict, List, Optional, Any
-import requests
-from unified_cloud_services import get_secret_with_fallback
-from instruments_service.settings import instruments_config
+
+from unified_cloud_services import (
+    TheGraphBaseClient,
+    TheGraphClientConfig,
+    clear_thegraph_api_key_cache,
+)
 
 logger = logging.getLogger(__name__)
 
-# Module-level cache for API key to avoid repeated Secret Manager calls
-_API_KEY_CACHE: Optional[str] = None
-_API_KEY_PROJECT_ID: Optional[str] = None
+# Re-export for backward compatibility
+clear_api_key_cache = clear_thegraph_api_key_cache
+
+# Module-level cache references (for backward compatibility)
+_API_KEY_CACHE = None  # Managed by TheGraphBaseClient
+_API_KEY_PROJECT_ID = None  # Managed by TheGraphBaseClient
+
+# Default subgraph URLs
+DEFAULT_UNISWAP_V3_URL = "https://api.studio.thegraph.com/query/48211/uniswap-v3-mainnet/version/latest"
 
 
 class TheGraphClient:
     """
     Client for querying The Graph subgraphs.
 
+    Uses TheGraphBaseClient for network management (sessions, retries, API keys).
+    This client provides domain-specific methods:
+    - query_pools: Uniswap V3 pool queries
+    - query_pairs: Uniswap V2 pair queries
+    - query_pools_by_base_currency: Filter pools by token
+
     Supports:
     - Uniswap V3 pools
+    - Uniswap V2 pairs
     - Curve pools
     - Other DEX subgraphs
-
-    Uses The Graph Network endpoints (gateway.thegraph.com) with API keys.
-    Falls back to Studio endpoints if no API key is provided (rate-limited).
     """
 
     def __init__(
@@ -44,74 +53,52 @@ class TheGraphClient:
         subgraph_url: Optional[str] = None,
         api_key: Optional[str] = None,
         project_id: Optional[str] = None,
+        secret_name: str = "THE_GRAPH_API_KEY",
     ):
         """
-        Initialize The Graph client.
+        Initialize The Graph client using centralized TheGraphBaseClient.
 
         Args:
-            subgraph_url: Subgraph URL (if provided, used directly)
-            api_key: Optional API key for The Graph Network endpoints (uses Secret Manager if not provided)
-            project_id: GCP project ID for Secret Manager (defaults to GCP_PROJECT_ID env var)
+            subgraph_url: Subgraph URL (uses default if not provided)
+            api_key: Optional API key (TheGraphBaseClient handles Secret Manager)
+            project_id: GCP project ID for Secret Manager
+            secret_name: Secret name for API key
         """
-        # Try provided API key first
-        self.api_key = api_key
+        # Create config with custom secret name if provided
+        config = TheGraphClientConfig(
+            secret_name=secret_name,
+            default_uniswap_v3_url=subgraph_url or DEFAULT_UNISWAP_V3_URL,
+        )
 
-        # If not provided, try cached API key or Secret Manager
-        if not self.api_key:
-            global _API_KEY_CACHE, _API_KEY_PROJECT_ID
+        # Initialize centralized base client
+        self._base_client = TheGraphBaseClient(
+            config=config,
+            api_key=api_key,
+            subgraph_url=subgraph_url,
+            project_id=project_id,
+        )
 
-            # Check if we have a cached API key for the same project
-            project_id = project_id or instruments_config.gcp_project_id
-
-            if _API_KEY_CACHE and _API_KEY_PROJECT_ID == project_id:
-                # Use cached API key
-                self.api_key = _API_KEY_CACHE
-                logger.debug("✅ Using cached The Graph API key")
-            else:
-                # Retrieve from Secret Manager and cache it
-                try:
-                    secret_name = instruments_config.graph_secret_name
-                    self.api_key = get_secret_with_fallback(
-                        project_id=project_id,
-                        secret_name=secret_name,
-                        fallback_env_var="THE_GRAPH_API_KEY",
-                    )
-
-                    # Strip whitespace/newlines from API key (common issue when piping to gcloud)
-                    if self.api_key:
-                        self.api_key = self.api_key.strip()
-                        # Cache the API key
-                        _API_KEY_CACHE = self.api_key
-                        _API_KEY_PROJECT_ID = project_id
-
-                    if self.api_key:
-                        logger.info(
-                            f"✅ Retrieved The Graph API key from Secret Manager (secret: {secret_name})"
-                        )
-                except ImportError:
-                    logger.warning("unified-cloud-services not available, falling back to env var")
-                    self.api_key = instruments_config.graph_secret_name
-                    if self.api_key:
-                        _API_KEY_CACHE = self.api_key
-                        _API_KEY_PROJECT_ID = project_id
-                except Exception as e:
-                    logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                    self.api_key = instruments_config.graph_secret_name
-                    if self.api_key:
-                        _API_KEY_CACHE = self.api_key
-                        _API_KEY_PROJECT_ID = project_id
-
-        if subgraph_url:
-            self.subgraph_url = subgraph_url
+        logger.info(f"✅ TheGraphClient initialized (using TheGraphBaseClient)")
+        logger.info(f"   Subgraph URL: {self._base_client.subgraph_url}")
+        if self._base_client.api_key:
+            logger.info("   Using The Graph API key for authenticated requests")
         else:
-            # Default: Try to use Studio endpoint (no API key needed, but rate-limited)
-            self.subgraph_url = instruments_config.uniswap_v3_graph_url
+            logger.warning("   No API key - using Studio endpoint (rate-limited)")
 
-        logger.info(f"✅ TheGraphClient initialized with URL: {self.subgraph_url}")
-        if self.api_key:
-            logger.info("✅ Using The Graph API key for authenticated requests")
-        else:
-            logger.warning("⚠️ No API key provided - using Studio endpoint (rate-limited)")
+    @property
+    def api_key(self) -> Optional[str]:
+        """Get API key."""
+        return self._base_client.api_key
+
+    @property
+    def subgraph_url(self) -> str:
+        """Get subgraph URL."""
+        return self._base_client.subgraph_url
+
+    @subgraph_url.setter
+    def subgraph_url(self, url: str):
+        """Set subgraph URL."""
+        self._base_client.subgraph_url = url
 
     def query_pools(
         self,
@@ -170,42 +157,10 @@ class TheGraphClient:
         }}
         """
 
-        try:
-            headers = {"Content-Type": "application/json"}
-
-            # Note: The Graph Network endpoints embed API key in URL, not headers
-            # API key is already in the URL if using gateway.thegraph.com format
-
-            response = requests.post(
-                self.subgraph_url,
-                json={"query": query},
-                headers=headers,
-                timeout=30,
-            )
-            response.raise_for_status()
-
-            data = response.json()
-            if "errors" in data:
-                errors = data.get("errors", [])
-                # Check if endpoint has been removed (deprecated endpoints)
-                error_messages = [str(e.get("message", "")).lower() for e in errors]
-                if any(
-                    "removed" in msg or "deprecated" in msg or "endpoint" in msg
-                    for msg in error_messages
-                ):
-                    logger.debug(f"The Graph endpoint deprecated: {self.subgraph_url}")
-                    return []
-                else:
-                    logger.error(f"The Graph query errors: {errors}")
-                    return []
-
-            pools = data.get("data", {}).get("pools", [])
-            logger.info(f"✅ Fetched {len(pools)} pools from The Graph")
-            return pools
-
-        except Exception as e:
-            logger.error(f"Failed to query The Graph: {e}")
-            return []
+        result = self._base_client.execute_query(query)
+        pools = result.get("data", {}).get("pools", [])
+        logger.info(f"Fetched {len(pools)} pools from The Graph")
+        return pools
 
     def query_pools_by_base_currency(
         self, base_currency: str, limit: int = 100
@@ -220,7 +175,6 @@ class TheGraphClient:
         Returns:
             List of pool dictionaries
         """
-        # Query pools where token0 or token1 matches base currency
         query = f"""
         {{
             pools(
@@ -253,42 +207,10 @@ class TheGraphClient:
         }}
         """
 
-        try:
-            headers = {"Content-Type": "application/json"}
-
-            # Note: The Graph Network endpoints embed API key in URL, not headers
-            # API key is already in the URL if using gateway.thegraph.com format
-
-            response = requests.post(
-                self.subgraph_url,
-                json={"query": query},
-                headers=headers,
-                timeout=30,
-            )
-            response.raise_for_status()
-
-            data = response.json()
-            if "errors" in data:
-                errors = data.get("errors", [])
-                # Check if endpoint has been removed (deprecated endpoints)
-                error_messages = [str(e.get("message", "")).lower() for e in errors]
-                if any(
-                    "removed" in msg or "deprecated" in msg or "endpoint" in msg
-                    for msg in error_messages
-                ):
-                    logger.debug(f"The Graph endpoint deprecated: {self.subgraph_url}")
-                    return []
-                else:
-                    logger.error(f"The Graph query errors: {errors}")
-                    return []
-
-            pools = data.get("data", {}).get("pools", [])
-            logger.info(f"✅ Fetched {len(pools)} pools for {base_currency} from The Graph")
-            return pools
-
-        except Exception as e:
-            logger.error(f"Failed to query The Graph for {base_currency}: {e}")
-            return []
+        result = self._base_client.execute_query(query)
+        pools = result.get("data", {}).get("pools", [])
+        logger.info(f"Fetched {len(pools)} pools for {base_currency} from The Graph")
+        return pools
 
     def query_pairs(
         self,
@@ -305,7 +227,6 @@ class TheGraphClient:
         Returns:
             List of pair dictionaries
         """
-        # Build GraphQL query for Uniswap V2 pairs
         where_clause = []
         if min_liquidity:
             where_clause.append(f'reserveUSD_gte: "{min_liquidity}"')
@@ -337,115 +258,10 @@ class TheGraphClient:
         }}
         """
 
-        try:
-            headers = {"Content-Type": "application/json"}
-            response = requests.post(
-                self.subgraph_url,
-                json={"query": query},
-                headers=headers,
-                timeout=30,
-            )
-            response.raise_for_status()
-
-            data = response.json()
-            if "errors" in data:
-                errors = data.get("errors", [])
-                # Check if endpoint has been removed (deprecated endpoints)
-                error_messages = [str(e.get("message", "")).lower() for e in errors]
-                if any(
-                    "removed" in msg or "deprecated" in msg or "endpoint" in msg
-                    for msg in error_messages
-                ):
-                    logger.debug(f"The Graph endpoint deprecated: {self.subgraph_url}")
-                    return []
-                else:
-                    logger.error(f"The Graph query errors: {errors}")
-                    return []
-
-            pairs = data.get("data", {}).get("pairs", [])
-            logger.info(f"✅ Fetched {len(pairs)} pairs from The Graph")
-            return pairs
-
-        except Exception as e:
-            logger.error(f"Failed to query The Graph: {e}")
-            return []
-
-    def query_pairs_by_base_currency(
-        self, base_currency: str, limit: int = 100
-    ) -> List[Dict[str, Any]]:
-        """
-        Query pairs containing a specific base currency (Uniswap V2).
-
-        Args:
-            base_currency: Base currency symbol (e.g., 'ETH', 'BTC')
-            limit: Maximum number of pairs to return
-
-        Returns:
-            List of pair dictionaries
-        """
-        # Query pairs where token0 or token1 matches base currency
-        query = f"""
-        {{
-            pairs(
-                first: {limit}
-                where: {{
-                    or: [
-                        {{ token0_: {{ symbol: "{base_currency}" }} }}
-                        {{ token1_: {{ symbol: "{base_currency}" }} }}
-                    ]
-                }}
-                orderBy: reserveUSD
-                orderDirection: desc
-            ) {{
-                id
-                token0 {{
-                    id
-                    symbol
-                    decimals
-                }}
-                token1 {{
-                    id
-                    symbol
-                    decimals
-                }}
-                reserveUSD
-                createdAtTimestamp
-            }}
-        }}
-        """
-
-        try:
-            headers = {"Content-Type": "application/json"}
-            response = requests.post(
-                self.subgraph_url,
-                json={"query": query},
-                headers=headers,
-                timeout=30,
-            )
-            response.raise_for_status()
-
-            data = response.json()
-            if "errors" in data:
-                errors = data.get("errors", [])
-                # Check if endpoint has been removed (deprecated endpoints)
-                error_messages = [str(e.get("message", "")).lower() for e in errors]
-                if any(
-                    "removed" in msg or "deprecated" in msg or "endpoint" in msg
-                    for msg in error_messages
-                ):
-                    logger.debug(f"The Graph endpoint deprecated: {self.subgraph_url}")
-                    return []
-                else:
-                    logger.error(f"The Graph query errors: {errors}")
-                    return []
-
-            pairs = data.get("data", {}).get("pairs", [])
-            logger.info(f"✅ Fetched {len(pairs)} pairs for {base_currency} from The Graph")
-            return pairs
-
-        except Exception as e:
-            logger.error(f"Failed to query The Graph for {base_currency}: {e}")
-            return []
+        result = self._base_client.execute_query(query)
+        pairs = result.get("data", {}).get("pairs", [])
+        logger.info(f"Fetched {len(pairs)} pairs from The Graph")
+        return pairs
 
     def execute_query_sync(self, query: str) -> Dict[str, Any]:
         """
@@ -457,33 +273,8 @@ class TheGraphClient:
         Returns:
             Dictionary with 'data' and 'errors' keys
         """
-        try:
-            headers = {"Content-Type": "application/json"}
-            response = requests.post(
-                self.subgraph_url,
-                json={"query": query},
-                headers=headers,
-                timeout=30,
-            )
-            response.raise_for_status()
+        return self._base_client.execute_query(query)
 
-            data = response.json()
-            if "errors" in data:
-                errors = data.get("errors", [])
-                # Check if endpoint has been removed (deprecated endpoints)
-                error_messages = [str(e.get("message", "")).lower() for e in errors]
-                if any(
-                    "removed" in msg or "deprecated" in msg or "endpoint" in msg
-                    for msg in error_messages
-                ):
-                    logger.debug(f"The Graph endpoint deprecated: {self.subgraph_url}")
-                    return {"data": {}, "errors": errors}
-                else:
-                    logger.error(f"The Graph query errors: {errors}")
-                    return {"data": {}, "errors": errors}
-
-            return data
-
-        except Exception as e:
-            logger.error(f"Failed to execute GraphQL query: {e}")
-            return {"data": {}, "errors": [str(e)]}
+    def cleanup(self):
+        """Cleanup resources."""
+        self._base_client.cleanup()

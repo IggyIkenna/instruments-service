@@ -101,7 +101,7 @@ class TestCloudDataProvider:
 
         assert isinstance(result, pd.DataFrame)
         mock_cloud_service.download_from_gcs.assert_called_with(
-            gcs_path=custom_path, format="parquet"
+            gcs_path=custom_path, format="parquet", log_errors=False
         )
 
     def test_get_instruments_from_gcs_empty(self, provider, mock_cloud_service):
@@ -152,15 +152,17 @@ class TestCloudDataProvider:
 
     def test_check_instruments_exist_true(self, provider, mock_cloud_service):
         """Test checking if instruments exist when they do."""
-        mock_cloud_service.download_from_gcs.return_value = pd.DataFrame(
-            {"instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"]}
-        )
         date = datetime(2024, 1, 1, tzinfo=timezone.utc)
-
-        result = provider.check_instruments_exist(date)
-
-        assert result is True
-        mock_cloud_service.download_from_gcs.assert_called()
+        
+        # Mock get_instruments_from_category since check_instruments_exist creates
+        # new cloud services for each category, bypassing the fixture mock
+        with patch.object(
+            provider,
+            "get_instruments_from_category",
+            return_value=pd.DataFrame({"instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"]})
+        ):
+            result = provider.check_instruments_exist(date)
+            assert result is True
 
     def test_check_instruments_exist_false(self, provider, mock_cloud_service):
         """Test checking if instruments exist when they don't."""
