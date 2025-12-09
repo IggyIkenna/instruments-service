@@ -8,13 +8,15 @@ Reference: archive/basis-strategy-v1/docs/MVP_DEFI_INSTRUMENTS.md
 """
 
 import logging
-from typing import Dict, Any
+from typing import Dict, List, Optional, Any
 from datetime import datetime
+
+from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 
 logger = logging.getLogger(__name__)
 
 
-class EtherFiAdapter:
+class EtherFiAdapter(BaseDefiAdapter):
     """
     Adapter for fetching EtherFi LST instruments.
 
@@ -22,16 +24,33 @@ class EtherFiAdapter:
     ETHERFI:LST:WEETH@ETHEREUM
     """
 
-    def __init__(self, chain: str = "ETHEREUM"):
+    def __init__(
+        self, 
+        chain: str = "ETHEREUM",
+        api_key: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ):
         """
         Initialize EtherFi adapter.
 
         Args:
             chain: Chain identifier (default: 'ETHEREUM')
+            api_key: Optional API key (not used by EtherFi but required by base class)
+            project_id: GCP project ID for Secret Manager
         """
-        self.chain = chain.upper()
+        super().__init__(chain=chain, api_key=api_key, project_id=project_id)
         self.venue = "ETHERFI"
         logger.info(f"✅ EtherFiAdapter initialized for chain: {self.chain}")
+
+    async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
+        """
+        Get instrument metadata for EtherFi.
+        
+        Returns:
+            List of instrument definition dictionaries
+        """
+        instruments = self.fetch_lst_instruments()
+        return list(instruments.values())
 
     def fetch_lst_instruments(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -106,7 +125,7 @@ class EtherFiAdapter:
                 2024, 2, 1
             ).isoformat(),  # EtherFi weETH launch date (Feb 2024)
             "available_to_datetime": None,
-            "data_types": "trades,book_snapshot_5",  # LST tokens trade on DEXes
+            "data_types": "oracle_prices",  # LST price from Aave oracle (weETH/ETH ratio for yield calculation)
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
@@ -115,7 +134,7 @@ class EtherFiAdapter:
         }
 
 
-class LidoAdapter:
+class LidoAdapter(BaseDefiAdapter):
     """
     Adapter for fetching Lido LST instruments.
 
@@ -124,16 +143,33 @@ class LidoAdapter:
     LIDO:LST:WSTETH@ETHEREUM
     """
 
-    def __init__(self, chain: str = "ETHEREUM"):
+    def __init__(
+        self, 
+        chain: str = "ETHEREUM",
+        api_key: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ):
         """
         Initialize Lido adapter.
 
         Args:
             chain: Chain identifier (default: 'ETHEREUM')
+            api_key: Optional API key (not used by Lido but required by base class)
+            project_id: GCP project ID for Secret Manager
         """
-        self.chain = chain.upper()
+        super().__init__(chain=chain, api_key=api_key, project_id=project_id)
         self.venue = "LIDO"
         logger.info(f"✅ LidoAdapter initialized for chain: {self.chain}")
+
+    async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
+        """
+        Get instrument metadata for Lido.
+        
+        Returns:
+            List of instrument definition dictionaries
+        """
+        instruments = self.fetch_lst_instruments()
+        return list(instruments.values())
 
     def fetch_lst_instruments(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -215,7 +251,7 @@ class LidoAdapter:
                 2020, 12, 18
             ).isoformat(),  # Lido stETH launch date (Dec 18, 2020)
             "available_to_datetime": None,
-            "data_types": "trades,book_snapshot_5",  # LST tokens trade on DEXes
+            "data_types": "oracle_prices",  # LST price from Aave oracle (wstETH/ETH ratio for yield calculation)
             "inverse": False,
             "contract_size": None,
             "tick_size": "",

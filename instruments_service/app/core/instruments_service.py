@@ -14,7 +14,8 @@ import asyncio
 from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
-from instruments_service.config import VenueMapping, DatabentoInstrumentConfig
+from unified_cloud_services import VenueMapping
+from instruments_service.config import DatabentoInstrumentConfig
 from instruments_service.app.venues.databento.databento_adapter import DatabentoAdapter
 from instruments_service.models import InstrumentDefinition
 
@@ -97,6 +98,7 @@ class InstrumentsService:
         defi: bool = False,
         venues: Optional[List[str] | str] = None,
         instrument_ids: Optional[List[str] | str] = None,
+        tradfi_venues: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Generate instruments for a specific date.
@@ -110,6 +112,7 @@ class InstrumentsService:
             defi: Process DeFi protocols
             venues: Optional venue filter (applies to all market types)
             instrument_ids: Optional list of specific instrument IDs to include
+            tradfi_venues: Optional list of specific TradFi venues to process (e.g., ["NASDAQ", "NYSE"])
 
         Returns:
             Dictionary with generation results including error_count and warning_count
@@ -284,16 +287,9 @@ class InstrumentsService:
                     ]
 
                     if cefi_venues:
-                        # Build reverse mapping: canonical venue -> list of raw exchange names
+                        # Use centralized reverse mapping: canonical venue -> list of Tardis exchange names
                         # Note: One canonical venue can map to multiple raw exchanges (e.g., OKX -> okex, okex-futures, okex-swap)
-                        venue_to_exchanges = {}
-                        for (
-                            raw_exchange,
-                            canonical_venue,
-                        ) in self.venue_mapping.tardis_to_venue.items():
-                            if canonical_venue not in venue_to_exchanges:
-                                venue_to_exchanges[canonical_venue] = []
-                            venue_to_exchanges[canonical_venue].append(raw_exchange)
+                        venue_to_exchanges = self.venue_mapping.get_venue_to_tardis_exchanges()
 
                         # Filter exchanges by canonical venues
                         filtered_exchanges = []
@@ -378,16 +374,29 @@ class InstrumentsService:
                     all_databento_exchanges = self.venue_mapping.all_databento_venues
 
                     # Apply venue filtering for TRADFI
-                    # venues_filter contains canonical venues, which match all_databento_venues directly
+                    # Priority: tradfi_venues parameter > venues_filter > defaults
                     # Note: Invalid venues have already been rejected in validation above
-                    if venues_filter:
-                        # Filter to only TRADFI venues (venues were validated above)
-                        tradfi_venues = [v for v in venues_filter if v in all_databento_exchanges]
-
-                        if tradfi_venues:
-                            databento_exchanges = tradfi_venues
+                    if tradfi_venues:
+                        # Use explicit tradfi_venues parameter (from --exchanges NASDAQ etc.)
+                        filtered_tradfi_venues = [v for v in tradfi_venues if v in all_databento_exchanges]
+                        if filtered_tradfi_venues:
+                            databento_exchanges = filtered_tradfi_venues
                             logger.info(
-                                f"🔍 Filtered TRADFI exchanges by canonical venues {tradfi_venues}: {databento_exchanges}"
+                                f"🔍 Processing specified TradFi venues: {databento_exchanges}"
+                            )
+                        else:
+                            logger.warning(
+                                f"⚠️ No valid TradFi venues in tradfi_venues={tradfi_venues}, skipping TRADFI processing"
+                            )
+                            databento_exchanges = []
+                    elif venues_filter:
+                        # Filter to only TRADFI venues (venues were validated above)
+                        filtered_tradfi_venues = [v for v in venues_filter if v in all_databento_exchanges]
+
+                        if filtered_tradfi_venues:
+                            databento_exchanges = filtered_tradfi_venues
+                            logger.info(
+                                f"🔍 Filtered TRADFI exchanges by canonical venues {filtered_tradfi_venues}: {databento_exchanges}"
                             )
                         else:
                             # No TRADFI venues in filter, don't process TRADFI
@@ -396,8 +405,8 @@ class InstrumentsService:
                             )
                             databento_exchanges = []
                     else:
-                        # Default: Simplified TradFi exchanges (CME + VIX only)
-                        databento_exchanges = ["CME", "CBOE"]
+                        # Default: All TradFi exchanges (CME futures/options, CBOE VIX, NASDAQ/NYSE equities, Yahoo Finance FX)
+                        databento_exchanges = ["CME", "CBOE", "NASDAQ", "NYSE", "YAHOO_FINANCE"]
                         logger.info(
                             f"🔍 No venue filter specified, processing default TRADFI exchanges: {databento_exchanges}"
                         )
@@ -407,7 +416,7 @@ class InstrumentsService:
                     else:
                         logger.info(f"🚀 Processing {len(databento_exchanges)} TradFi venues...")
 
-                        # OPTIMIZATION: Process CME and VIX in parallel
+                        # OPTIMIZATION: Process CME, VIX, Yahoo Finance, and NASDAQ/NYSE in parallel
                         async def process_databento_exchange(exchange: str):
                             try:
                                 if exchange == "CBOE":
@@ -424,8 +433,64 @@ class InstrumentsService:
                                         logger.info(f"✅ Created VIX: {vix_def.instrument_key}")
                                         return {vix_def.instrument_key: vix_def}
                                     return {}
+                                elif exchange == "YAHOO_FINANCE":
+                                    # Yahoo Finance only has KRW/USD (static definition)
+                                    # Create Databento adapter instance (reuses cached client)
+                                    databento_adapter = DatabentoAdapter()
+
+                                    # Create KRW/USD instrument definition
+                                    krwusd_def_dict = (
+                                        databento_adapter.create_krwusd_instrument_definition(date)
+                                    )
+                                    if krwusd_def_dict:
+                                        krwusd_def = InstrumentDefinition(**krwusd_def_dict)
+                                        logger.info(f"✅ Created KRW/USD: {krwusd_def.instrument_key}")
+                                        return {krwusd_def.instrument_key: krwusd_def}
+                                    return {}
+                                elif exchange in ["NASDAQ", "NYSE"]:
+                                    # NASDAQ/NYSE: Process ETFs including Bitcoin ETFs
+                                    # Create Databento adapter instance (reuses cached client)
+                                    databento_adapter = DatabentoAdapter()
+                                    instruments = {}
+                                    
+                                    # Get ETF symbols for this venue from config
+                                    symbols = databento_config.get_symbols_for_venue(exchange)
+                                    
+                                    # Process Bitcoin ETFs using static definitions
+                                    # (more reliable for new ETFs like IBIT, FBTC, ARKB)
+                                    bitcoin_etf_tickers = ["IBIT", "FBTC", "ARKB"]
+                                    for ticker in bitcoin_etf_tickers:
+                                        # Check if this ticker is in the symbols for this venue
+                                        if ticker in symbols:
+                                            etf_def_dict = databento_adapter.create_bitcoin_etf_instrument_definition(
+                                                ticker, date
+                                            )
+                                            if etf_def_dict:
+                                                etf_def = InstrumentDefinition(**etf_def_dict)
+                                                instruments[etf_def.instrument_key] = etf_def
+                                                logger.info(f"✅ Created Bitcoin ETF: {etf_def.instrument_key}")
+                                    
+                                    # Also fetch any other symbols via Databento API
+                                    non_btc_etf_symbols = [s for s in symbols if s not in bitcoin_etf_tickers]
+                                    if non_btc_etf_symbols:
+                                        databento_instruments = (
+                                            await self.processing_service.fetch_databento_instruments(
+                                                exchange=exchange,
+                                                symbols=non_btc_etf_symbols,
+                                                target_date=date,
+                                            )
+                                        )
+                                        if databento_instruments:
+                                            instruments.update(databento_instruments)
+                                            logger.info(
+                                                f"✅ Processed {len(databento_instruments)} additional instruments from {exchange}"
+                                            )
+                                    
+                                    if instruments:
+                                        logger.info(f"✅ Processed {len(instruments)} total instruments from {exchange}")
+                                    return instruments
                                 else:
-                                    # Get symbols for CME from config
+                                    # Get symbols for CME/ICE from config
                                     symbols = databento_config.get_symbols_for_venue(exchange)
 
                                     if not symbols:

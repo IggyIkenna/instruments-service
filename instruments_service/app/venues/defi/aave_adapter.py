@@ -1,8 +1,13 @@
 """
-AAVE V3 Adapter
+AAVE V3 Adapter - REFACTORED
 
 Fetches AAVE V3 market instruments (aTokens, debtTokens) using AaveScan API or AAVE SDK.
 Generates canonical instrument keys for AAVE positions.
+
+ARCHITECTURE:
+- Uses AlchemyBaseClient (unified-cloud-services) for on-chain RPC calls
+- Uses TheGraphBaseClient (unified-cloud-services) for subgraph queries
+- Uses get_http_session for HTTP calls (AaveScan API)
 
 Reference: archive/basis-strategy-v1/docs/MVP_DEFI_INSTRUMENTS.md
 """
@@ -12,13 +17,15 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
 
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
-from unified_cloud_services import get_secret_with_fallback
-from instruments_service.settings import instruments_config
-from instruments_service.app.venues.defi.the_graph_client import (
-    _API_KEY_CACHE,
+from unified_cloud_services import (
+    get_secret_with_fallback,
+    AlchemyBaseClient,
+    AlchemyClientConfig,
+    TheGraphBaseClient,
+    TheGraphClientConfig,
+    get_http_session,  # Centralized HTTP session pool
 )
-from instruments_service.utils.http_session_pool import get_http_session
-from instruments_service.utils.web3_client_pool import get_web3_client
+from instruments_service.config import instruments_config
 from web3 import Web3
 from eth_abi import decode
 
@@ -34,10 +41,16 @@ class AaveV3Adapter(BaseDefiAdapter):
     AAVE_V3_ETH:DEBT_TOKEN:DEBTWETH@ETHEREUM
 
     OPTIMIZATION: Uses static risk parameters as fallback when RPC/Graph unavailable.
+
+    TODO: Replace static risk parameters with actual AAVE-generated parameters.
+    Currently using STATIC_RISK_PARAMS for eMode and standard risk parameters.
+    Should fetch these dynamically from AAVE contracts via RPC or The Graph subgraph.
+    See instruments-service/issues/aave-dynamic-params.md for details.
     """
 
     # Static risk parameters from archive/basis-strategy-v1/data/protocol_data/aave/risk_params/aave_v3_risk_parameters.json
     # Used as fallback when RPC/Graph queries fail
+    # TODO: Replace with dynamic fetching from AAVE contracts - see instruments-service/issues/aave-dynamic-params.md
     STATIC_RISK_PARAMS = {
         "emode": {
             "ltv_limits": {
@@ -133,32 +146,21 @@ class AaveV3Adapter(BaseDefiAdapter):
         if not self.api_key:
             logger.warning("AaveScan API key not found. Some features may be limited.")
 
-        # Store Graph API key (use provided, cached, or fetch once)
+        # Store Graph API key (use provided or centralized client handles it)
         self.graph_api_key = graph_api_key
-        if not self.graph_api_key:
-            # Try module-level cache first (set by InstrumentProcessingService)
-            try:
-                if _API_KEY_CACHE:
-                    self.graph_api_key = _API_KEY_CACHE
-                    logger.debug("✅ Using cached Graph API key in AaveV3Adapter")
-            except AttributeError:
-                pass
-
-        # project_id already set by BaseDefiAdapter.__init__()
-
-        # Cache Alchemy API key at initialization to avoid repeated Secret Manager calls
-        # get_secret_with_fallback now includes caching internally
-        self._alchemy_api_key = None
-        try:
-            self._alchemy_api_key = get_secret_with_fallback(
-                secret_name="alchemy-api-key",
-                project_id=self.project_id,
-                fallback_env_var="ALCHEMY_API_KEY",
-            )
-            if self._alchemy_api_key:
-                self._alchemy_api_key = self._alchemy_api_key.strip()
-        except Exception as e:
-            logger.debug(f"Could not cache Alchemy API key: {e}")
+        
+        # Initialize centralized Alchemy client for on-chain RPC calls
+        self._alchemy_client = AlchemyBaseClient(
+            chain=self.chain,
+            project_id=self.project_id,
+        )
+        
+        # Initialize centralized The Graph client for subgraph queries
+        self._thegraph_client = TheGraphBaseClient(
+            project_id=self.project_id,
+        )
+        if graph_api_key:
+            self._thegraph_client._api_key = graph_api_key
 
         # AaveScan Pro API uses v2 endpoint with apiKey query parameter
         # Base URL: https://api.aavescan.com/v2
@@ -339,6 +341,7 @@ class AaveV3Adapter(BaseDefiAdapter):
                     f"Using current data from AaveScan API."
                 )
 
+        logger.info("🔍 [METHOD_TRACE] _fetch_reserves calling AaveScan API (primary method)")
         try:
             # AaveScan Pro API uses apiKey as query parameter, not Authorization header
             # Endpoint: https://api.aavescan.com/v2/reserves/latest?market=aave-v3-ethereum&apiKey=...
@@ -400,6 +403,7 @@ class AaveV3Adapter(BaseDefiAdapter):
 
         except Exception as e:
             logger.error(f"Failed to fetch reserves from AaveScan: {e}")
+            logger.info("🔍 [METHOD_TRACE] Falling back to _get_fallback_reserves (static reserves)")
             # Fallback: return empty list or use hardcoded known reserves
             fallback_reserves = self._get_fallback_reserves()
 
@@ -454,22 +458,11 @@ class AaveV3Adapter(BaseDefiAdapter):
 
             # Try to get exact block number from RPC endpoint
             try:
-                # Use cached Alchemy API key
-                alchemy_key = self._alchemy_api_key
-                if not alchemy_key:
-                    alchemy_key = get_secret_with_fallback(
-                        secret_name="alchemy-api-key",
-                        project_id=self.project_id,
-                        fallback_env_var="ALCHEMY_API_KEY",
-                    )
-                    if alchemy_key:
-                        self._alchemy_api_key = alchemy_key.strip()
-                        alchemy_key = self._alchemy_api_key
-
-                if alchemy_key:
-                    # Use Alchemy's getBlockByNumber with timestamp estimation
-                    rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key}"
-                    timestamp = int(target_date.timestamp())
+                # Use centralized Alchemy client for RPC URL
+                rpc_url = self._alchemy_client.get_rpc_url()
+                timestamp = int(target_date.timestamp())
+                
+                if rpc_url:
 
                     # Use pooled HTTP session
                     session = get_http_session(base_url=rpc_url)
@@ -558,182 +551,6 @@ class AaveV3Adapter(BaseDefiAdapter):
             self._block_conversion_failed.add(date_key)
             return None
 
-    def _fetch_reserves_from_rpc(self, target_date: datetime) -> List[Dict[str, Any]]:
-        """
-        Fetch reserves directly from AAVE contracts via RPC (bypasses The Graph indexers).
-
-        This method queries AAVE Pool contract directly at a specific block number,
-        avoiding dependency on The Graph indexer sync status.
-
-        Args:
-            target_date: Target date for historical query
-
-        Returns:
-            List of reserve dictionaries, or empty list if RPC unavailable
-        """
-        try:
-            # Get block number
-            block_number = self._date_to_block_number(target_date)
-            if not block_number:
-                return []
-
-            # Use cached Alchemy API key
-            alchemy_key = self._alchemy_api_key
-            if not alchemy_key:
-                alchemy_key = get_secret_with_fallback(
-                    secret_name="alchemy-api-key",
-                    project_id=self.project_id,
-                    fallback_env_var="ALCHEMY_API_KEY",
-                )
-                if alchemy_key:
-                    self._alchemy_api_key = alchemy_key.strip()
-                    alchemy_key = self._alchemy_api_key
-
-            if not alchemy_key:
-                logger.debug("No Alchemy API key found for RPC queries")
-                return []
-
-            rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key}"
-            # Use pooled Web3 client
-            w3 = get_web3_client(rpc_url)
-
-            if not w3 or not w3.is_connected():
-                logger.debug("Failed to connect to Ethereum RPC")
-                return []
-
-            # AAVE V3 Pool contract address: 0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2
-            pool_address = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2"
-
-            # Minimal ABI for getReservesList() - returns list of reserve addresses
-            pool_abi = [
-                {
-                    "inputs": [],
-                    "name": "getReservesList",
-                    "outputs": [{"internalType": "address[]", "name": "", "type": "address[]"}],
-                    "stateMutability": "view",
-                    "type": "function",
-                },
-                {
-                    "inputs": [{"internalType": "address", "name": "asset", "type": "address"}],
-                    "name": "getReserveData",
-                    "outputs": [
-                        {
-                            "internalType": "tuple",
-                            "name": "",
-                            "type": "tuple",
-                            "components": [
-                                {
-                                    "internalType": "uint256",
-                                    "name": "configuration",
-                                    "type": "uint256",
-                                },
-                                {
-                                    "internalType": "uint128",
-                                    "name": "liquidityIndex",
-                                    "type": "uint128",
-                                },
-                                {
-                                    "internalType": "uint128",
-                                    "name": "currentLiquidityRate",
-                                    "type": "uint128",
-                                },
-                                {
-                                    "internalType": "uint128",
-                                    "name": "variableBorrowIndex",
-                                    "type": "uint128",
-                                },
-                                {
-                                    "internalType": "uint128",
-                                    "name": "currentVariableBorrowRate",
-                                    "type": "uint128",
-                                },
-                                {
-                                    "internalType": "uint128",
-                                    "name": "currentStableBorrowRate",
-                                    "type": "uint128",
-                                },
-                                {
-                                    "internalType": "uint40",
-                                    "name": "lastUpdateTimestamp",
-                                    "type": "uint40",
-                                },
-                                {
-                                    "internalType": "uint16",
-                                    "name": "id",
-                                    "type": "uint16",
-                                },
-                                {
-                                    "internalType": "address",
-                                    "name": "aTokenAddress",
-                                    "type": "address",
-                                },
-                                {
-                                    "internalType": "address",
-                                    "name": "stableDebtTokenAddress",
-                                    "type": "address",
-                                },
-                                {
-                                    "internalType": "address",
-                                    "name": "variableDebtTokenAddress",
-                                    "type": "address",
-                                },
-                                {
-                                    "internalType": "address",
-                                    "name": "interestRateStrategyAddress",
-                                    "type": "address",
-                                },
-                                {
-                                    "internalType": "uint128",
-                                    "name": "accruedToTreasury",
-                                    "type": "uint128",
-                                },
-                                {
-                                    "internalType": "uint128",
-                                    "name": "unbacked",
-                                    "type": "uint128",
-                                },
-                                {
-                                    "internalType": "uint128",
-                                    "name": "isolationModeTotalDebt",
-                                    "type": "uint128",
-                                },
-                            ],
-                        }
-                    ],
-                    "stateMutability": "view",
-                    "type": "function",
-                },
-            ]
-
-            pool_contract = w3.eth.contract(
-                address=Web3.to_checksum_address(pool_address), abi=pool_abi
-            )
-
-            # Get list of reserves at the target block
-            reserves_list = pool_contract.functions.getReservesList().call(
-                block_identifier=block_number
-            )
-
-            if not reserves_list:
-                logger.debug(f"No reserves found via RPC at block {block_number}")
-                return []
-
-            logger.info(
-                f"✅ Fetched {len(reserves_list)} reserves from AAVE contracts via RPC at block {block_number:,}"
-            )
-
-            # For now, return basic reserve info - full implementation would fetch all reserve data
-            # This is a placeholder - full implementation would require fetching token metadata, etc.
-            # For MVP, we'll use AaveScan API for current data and RPC only for block number verification
-            logger.info(
-                "RPC direct contract queries implemented - using AaveScan API for full reserve data"
-            )
-            return []  # Return empty to trigger fallback to AaveScan API
-
-        except Exception as e:
-            logger.debug(f"RPC direct query failed: {e}")
-            return []
-
     def _fetch_reserves_from_graph(self, target_date: datetime) -> List[Dict[str, Any]]:
         """
         Fetch reserves from The Graph subgraph for historical data (one-time attempt).
@@ -747,6 +564,7 @@ class AaveV3Adapter(BaseDefiAdapter):
         Returns:
             List of reserve dictionaries, or empty list if failed (will trigger AaveScan fallback)
         """
+        logger.info(f"🔍 [METHOD_TRACE] _fetch_reserves_from_graph called for {target_date}")
         date_key = target_date.isoformat()
 
         # Check failure cache first - if we already know historical queries fail for this date/block, skip
@@ -769,24 +587,11 @@ class AaveV3Adapter(BaseDefiAdapter):
             graph_api_key = self.graph_api_key
             if not graph_api_key:
                 # Try module-level cache (set by InstrumentProcessingService)
-                try:
-                    if _API_KEY_CACHE:
-                        graph_api_key = _API_KEY_CACHE
-                        self.graph_api_key = graph_api_key  # Cache for future use
-                        logger.debug("✅ Using cached Graph API key in _fetch_reserves_from_graph")
-                except AttributeError:
-                    pass
-
-            # Only fetch from Secret Manager if not cached
-            if not graph_api_key:
-                graph_api_key = get_secret_with_fallback(
-                    project_id=self.project_id,
-                    secret_name="graph-api-key",
-                    fallback_env_var="THE_GRAPH_API_KEY",
-                )
+                # Use centralized TheGraph client's API key
+                graph_api_key = self._thegraph_client.api_key
                 if graph_api_key:
-                    self.graph_api_key = graph_api_key  # Cache for future use
-                    logger.debug("✅ Retrieved Graph API key from Secret Manager (first time)")
+                    self.graph_api_key = graph_api_key
+                    logger.debug("✅ Using Graph API key from centralized client")
 
             if not graph_api_key:
                 logger.warning("⚠️ No The Graph API key found - will use AaveScan current data")
@@ -1024,8 +829,10 @@ query GetReserves($blockNumber: Int!) {
             Dictionary mapping reserve addresses to their interest rate model configurations
         """
         if self._market_config_cache is not None:
+            logger.debug("🔍 [METHOD_TRACE] _fetch_market_configurations using cache")
             return self._market_config_cache
 
+        logger.info("🔍 [METHOD_TRACE] _fetch_market_configurations calling AaveScan API")
         try:
             url = f"{self.base_url}/market-configurations"
             params = {}
@@ -1063,6 +870,7 @@ query GetReserves($blockNumber: Int!) {
         Returns:
             Reserve configuration dictionary or None
         """
+        logger.info(f"🔍 [METHOD_TRACE] _fetch_reserve_config_from_graph called for {underlying_address}, target_date={target_date}")
         # Check failure cache first for historical queries
         if target_date:
             date_key = target_date.isoformat()
@@ -1077,36 +885,14 @@ query GetReserves($blockNumber: Int!) {
             return self._reserve_config_cache[cache_key]
 
         try:
-            # Get The Graph API key (use cached instance variable or module-level cache)
-            graph_api_key = self.graph_api_key
-            if not graph_api_key:
-                # Try module-level cache (set by InstrumentProcessingService)
-                try:
-                    if _API_KEY_CACHE:
-                        graph_api_key = _API_KEY_CACHE
-                        self.graph_api_key = graph_api_key  # Cache for future use
-                        logger.debug(
-                            "✅ Using cached Graph API key in _fetch_reserve_config_from_graph"
-                        )
-                except AttributeError:
-                    pass
-
-            # Only fetch from Secret Manager if not cached
-            if not graph_api_key:
-                graph_api_key = get_secret_with_fallback(
-                    project_id=self.project_id,
-                    secret_name="graph-api-key",
-                    fallback_env_var="THE_GRAPH_API_KEY",
-                )
-                if graph_api_key:
-                    self.graph_api_key = graph_api_key  # Cache for future use
-                    logger.debug("✅ Retrieved Graph API key from Secret Manager (first time)")
-
+            # Get The Graph API key from centralized client
+            graph_api_key = self.graph_api_key or self._thegraph_client.api_key
             if not graph_api_key:
                 logger.warning("⚠️ No The Graph API key found - skipping subgraph query")
                 return None
-
+            
             graph_api_key = graph_api_key.strip()
+            self.graph_api_key = graph_api_key  # Cache for future use
 
             # Build GraphQL query for Aave V3 reserves
             # Aave V3 Ethereum subgraph endpoint
@@ -1394,16 +1180,16 @@ query GetReserve($underlyingAddress: Bytes!) {
                 emode_price_source = None
                 emode_oracle_id = None
 
+                # TODO: Fetch eMode category details dynamically from AAVE contracts
+                # Currently using STATIC_RISK_PARAMS instead - see instruments-service/issues/aave-dynamic-params.md
                 if emode_category_id:
-                    emode_category = self._fetch_emode_category_from_graph(
-                        emode_category_id, target_date=target_date
-                    )
-                    if emode_category:
-                        emode_label = emode_category.get("label")
-                        emode_liquidation_threshold = emode_category.get("liquidation_threshold")
-                        emode_liquidation_bonus = emode_category.get("liquidation_bonus")
-                        emode_price_source = emode_category.get("price_source")
-                        emode_oracle_id = emode_category.get("oracle_id")
+                    # eMode category details are now fetched from STATIC_RISK_PARAMS in _extract_lending_metadata
+                    # This code path is no longer used but kept for reference
+                    emode_label = None
+                    emode_liquidation_threshold = None
+                    emode_liquidation_bonus = None
+                    emode_price_source = None
+                    emode_oracle_id = None
 
                 config = {
                     "ltv": ltv,
@@ -1450,6 +1236,7 @@ query GetReserve($underlyingAddress: Bytes!) {
         Returns:
             eMode category ID (integer) or None
         """
+        logger.info(f"🔍 [METHOD_TRACE] _fetch_reserve_emode_from_rpc called for {underlying_address}, target_date={target_date}")
         try:
             # Get block number if target_date provided
             block_number = None
@@ -1458,26 +1245,12 @@ query GetReserve($underlyingAddress: Bytes!) {
                 if not block_number:
                     return None
 
-            # Use cached Alchemy API key
-            alchemy_key = self._alchemy_api_key
-            if not alchemy_key:
-                alchemy_key = get_secret_with_fallback(
-                    secret_name="alchemy-api-key",
-                    project_id=self.project_id,
-                    fallback_env_var="ALCHEMY_API_KEY",
-                )
-                if alchemy_key:
-                    self._alchemy_api_key = alchemy_key.strip()
-                    alchemy_key = self._alchemy_api_key
-
-            if not alchemy_key:
-                logger.debug("No Alchemy API key found for RPC eMode queries")
+            # Use centralized Alchemy client for Web3 provider
+            try:
+                w3 = self._alchemy_client.get_web3()
+            except ValueError as e:
+                logger.debug(f"No Alchemy API key found for RPC eMode queries: {e}")
                 return None
-
-            rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key}"
-
-            # Use pooled Web3 client
-            w3 = get_web3_client(rpc_url)
             if not w3:
                 logger.debug("Failed to connect to Ethereum RPC for eMode query")
                 return None
@@ -1607,414 +1380,6 @@ query GetReserve($underlyingAddress: Bytes!) {
             logger.debug(f"Failed to fetch eMode category ID from RPC: {e}")
             return None
 
-    def _fetch_emode_category_from_rpc(
-        self, category_id: int, target_date: Optional[datetime] = None
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Fetch eMode category details directly from AAVE contracts via RPC.
-
-        Args:
-            category_id: EMode category ID (integer)
-            target_date: Optional target date for historical queries
-
-        Returns:
-            EModeCategory dictionary with details or None
-        """
-        # Convert category_id to int if it's a string
-        try:
-            category_id_int = int(category_id) if category_id is not None else None
-        except (ValueError, TypeError):
-            logger.warning(f"⚠️ Invalid eMode category ID: {category_id}")
-            return None
-
-        if category_id_int is None or category_id_int == 0:
-            return None
-
-        # Check cache first (for current data only - historical data may differ)
-        if not target_date and category_id_int in self._emode_category_cache:
-            cached = self._emode_category_cache[category_id_int]
-            return cached
-
-        try:
-            # Get block number if target_date provided
-            block_number = None
-            if target_date:
-                block_number = self._date_to_block_number(target_date)
-                if not block_number:
-                    return None
-
-            # Use cached Alchemy API key
-            alchemy_key = self._alchemy_api_key
-            if not alchemy_key:
-                alchemy_key = get_secret_with_fallback(
-                    secret_name="alchemy-api-key",
-                    project_id=self.project_id,
-                    fallback_env_var="ALCHEMY_API_KEY",
-                )
-                if alchemy_key:
-                    self._alchemy_api_key = alchemy_key.strip()
-                    alchemy_key = self._alchemy_api_key
-
-            if not alchemy_key:
-                logger.debug("No Alchemy API key found for RPC eMode category query")
-                return None
-
-            rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key}"
-
-            # Use pooled Web3 client
-            w3 = get_web3_client(rpc_url)
-            if not w3:
-                logger.debug("Failed to connect to Ethereum RPC for eMode category query")
-                return None
-
-            # AAVE V3 Pool contract address
-            pool_address = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2"
-
-            # ABI for getEModeCategoryData
-            # Returns: (uint16 ltv, uint16 liquidationThreshold, uint16 liquidationBonus, address priceSource, string label)
-            pool_abi = [
-                {
-                    "inputs": [{"internalType": "uint8", "name": "id", "type": "uint8"}],
-                    "name": "getEModeCategoryData",
-                    "outputs": [
-                        {"internalType": "uint16", "name": "ltv", "type": "uint16"},
-                        {
-                            "internalType": "uint16",
-                            "name": "liquidationThreshold",
-                            "type": "uint16",
-                        },
-                        {
-                            "internalType": "uint16",
-                            "name": "liquidationBonus",
-                            "type": "uint16",
-                        },
-                        {
-                            "internalType": "address",
-                            "name": "priceSource",
-                            "type": "address",
-                        },
-                        {"internalType": "string", "name": "label", "type": "string"},
-                    ],
-                    "stateMutability": "view",
-                    "type": "function",
-                }
-            ]
-
-            pool_contract = w3.eth.contract(
-                address=Web3.to_checksum_address(pool_address), abi=pool_abi
-            )
-
-            # Call getEModeCategoryData using raw call to handle string return type
-            function_abi = pool_abi[0]  # getEModeCategoryData is the first function in our ABI
-            function = pool_contract.functions.getEModeCategoryData(category_id_int)
-
-            if block_number:
-                call_data = function._encode_transaction_data()
-                result = w3.eth.call(
-                    {"to": pool_address, "data": call_data},
-                    block_identifier=block_number,
-                )
-            else:
-                call_data = function._encode_transaction_data()
-                result = w3.eth.call({"to": pool_address, "data": call_data})
-
-            # Decode the raw return data
-            # Solidity ABI encoding for tuples includes an offset to the actual data
-            # First 32 bytes: offset to actual data (usually 0x20 = 32 bytes)
-            if len(result) < 32:
-                logger.debug(f"Insufficient return data: {len(result)} bytes")
-                return None
-
-            # Check if first 32 bytes is an offset (common in tuple returns)
-            data_offset = int.from_bytes(result[0:32], byteorder="big")
-            if data_offset == 32 and len(result) >= 32 + data_offset:
-                # Data starts at offset 32
-                # Structure: [offset(32), ltv(32), liquidationThreshold(32), liquidationBonus(32), priceSource(32), string_offset(32), string_length(32), string_data(variable)]
-                # Each value is padded to 32 bytes in ABI encoding
-                ltv_raw = int.from_bytes(result[32:64], byteorder="big")
-                liquidation_threshold_raw = int.from_bytes(result[64:96], byteorder="big")
-                liquidation_bonus_raw = int.from_bytes(result[96:128], byteorder="big")
-                price_source_bytes = result[128:148]  # Address is 20 bytes
-                price_source = "0x" + price_source_bytes.hex()
-
-                # String offset is at bytes 160-192 (after priceSource)
-                # The offset is relative to the start of the data (byte 32), not absolute
-                if len(result) >= 192:
-                    string_offset_from_data = int.from_bytes(result[160:192], byteorder="big")
-                    data_start = 32  # Data starts after the initial offset
-                    string_metadata_start = data_start + string_offset_from_data
-
-                    # String length is at the string_metadata_start position
-                    if string_metadata_start > 0 and len(result) >= string_metadata_start + 32:
-                        string_length = int.from_bytes(
-                            result[string_metadata_start : string_metadata_start + 32],
-                            byteorder="big",
-                        )
-                        # String data starts 32 bytes after the length
-                        if (
-                            string_length > 0
-                            and string_length < 256
-                            and len(result) >= string_metadata_start + 32 + string_length
-                        ):
-                            string_data = result[
-                                string_metadata_start
-                                + 32 : string_metadata_start
-                                + 32
-                                + string_length
-                            ]
-                            label = string_data.decode("utf-8", errors="ignore").rstrip("\x00")
-                            logger.debug(f"✅ Extracted eMode category label: {label}")
-                        else:
-                            label = ""
-                    else:
-                        label = ""
-                else:
-                    label = ""
-            else:
-                # Try eth_abi.decode (it handles offsets automatically)
-                try:
-                    decoded = decode(["uint16", "uint16", "uint16", "address", "string"], result)
-                    (
-                        ltv_raw,
-                        liquidation_threshold_raw,
-                        liquidation_bonus_raw,
-                        price_source,
-                        label,
-                    ) = decoded
-                    logger.debug(
-                        f"✅ Successfully decoded eMode category {category_id_int} data using eth_abi"
-                    )
-                except Exception as decode_error:
-                    logger.debug(
-                        f"Failed to decode with eth_abi: {decode_error}, result length: {len(result)}"
-                    )
-                    return None
-
-            # Convert from basis points (bps) to decimal
-            ltv = float(ltv_raw) / 10000.0 if ltv_raw else None
-            liquidation_threshold = (
-                float(liquidation_threshold_raw) / 10000.0 if liquidation_threshold_raw else None
-            )
-            liquidation_bonus = (
-                float(liquidation_bonus_raw) / 10000.0 if liquidation_bonus_raw else None
-            )
-
-            category_data = {
-                "id": category_id_int,
-                "label": label if label else None,
-                "liquidation_threshold": liquidation_threshold,
-                "liquidation_bonus": liquidation_bonus,
-                "price_source": (
-                    price_source
-                    if price_source != "0x0000000000000000000000000000000000000000"
-                    else None
-                ),
-                "oracle_id": None,  # Oracle ID not directly available from this function
-            }
-
-            # Cache the result (only for current data to avoid stale historical data)
-            if not target_date:
-                self._emode_category_cache[category_id_int] = category_data
-
-            logger.debug(f"✅ Fetched eMode category {category_id_int} from RPC: {label or 'N/A'}")
-            return category_data
-
-        except Exception as e:
-            logger.debug(f"Failed to fetch eMode category from RPC: {e}")
-            return None
-
-    def _fetch_emode_category_from_graph(
-        self, category_id: int, target_date: Optional[datetime] = None
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Fetch EModeCategory details from The Graph subgraph for Aave V3.
-
-        Args:
-            category_id: EMode category ID (integer or string that can be converted to int)
-            target_date: Optional target date for historical queries
-
-        Returns:
-            EModeCategory dictionary with details or None
-        """
-        # Check failure cache first for historical queries
-        if target_date:
-            date_key = target_date.isoformat()
-            if date_key in self._historical_query_failed:
-                logger.debug(
-                    f"⏭️ Skipping historical Graph eMode query for {date_key} - already failed"
-                )
-                return None
-
-        # Convert category_id to int if it's a string
-        try:
-            category_id_int = int(category_id) if category_id is not None else None
-        except (ValueError, TypeError):
-            logger.warning(f"⚠️ Invalid eMode category ID: {category_id}")
-            return None
-
-        if category_id_int is None:
-            return None
-
-        # Check cache first
-        if category_id_int in self._emode_category_cache:
-            return self._emode_category_cache[category_id_int]
-
-        try:
-            # Get The Graph API key (use cached instance variable or module-level cache)
-            graph_api_key = self.graph_api_key
-            if not graph_api_key:
-                # Try module-level cache (set by InstrumentProcessingService)
-                try:
-                    if _API_KEY_CACHE:
-                        graph_api_key = _API_KEY_CACHE
-                        self.graph_api_key = graph_api_key
-                        logger.debug(
-                            "✅ Using cached Graph API key in _fetch_emode_category_from_graph"
-                        )
-                except AttributeError:
-                    pass
-
-            # Only fetch from Secret Manager if not cached
-            if not graph_api_key:
-                graph_api_key = get_secret_with_fallback(
-                    project_id=self.project_id,
-                    secret_name="graph-api-key",
-                    fallback_env_var="THE_GRAPH_API_KEY",
-                )
-                if graph_api_key:
-                    self.graph_api_key = graph_api_key
-                    logger.debug("✅ Retrieved Graph API key from Secret Manager")
-
-            if not graph_api_key:
-                logger.warning("⚠️ No The Graph API key found - skipping eMode category query")
-                return None
-
-            graph_api_key = graph_api_key.strip()
-
-            # Build GraphQL query for EModeCategory
-            subgraph_url = f"https://gateway.thegraph.com/api/{graph_api_key}/subgraphs/id/{self.aave_subgraph_id}"
-
-            # Convert target_date to block number if provided
-            block_number = None
-            if target_date:
-                block_number = self._date_to_block_number(target_date)
-
-            variables = {"categoryId": category_id_int}
-            block_clause = ""
-
-            if block_number:
-                block_clause = ", block: {number: $blockNumber}"
-                variables["blockNumber"] = block_number
-
-            # Query EModeCategory type (note: field name might be eModeCategories or emodeCategories)
-            if block_number:
-                query = f"""
-query GetEModeCategory($categoryId: Int!, $blockNumber: Int!) {{
-    eModeCategories(where: {{ id: $categoryId }}{block_clause}) {{
-        id
-        label
-        liquidationThreshold
-        liquidationBonus
-        priceSource
-        oracleId
-    }}
-}}
-""".strip()
-            else:
-                query = """
-query GetEModeCategory($categoryId: Int!) {
-    eModeCategories(where: { id: $categoryId }) {
-        id
-        label
-        liquidationThreshold
-        liquidationBonus
-        priceSource
-        oracleId
-    }
-}
-""".strip()
-
-            headers = {"Content-Type": "application/json"}
-            # Use pooled HTTP session
-            session = get_http_session(base_url="https://gateway.thegraph.com")
-            response = session.post(
-                subgraph_url,
-                json={"query": query, "variables": variables},
-                headers=headers,
-                timeout=30,
-            )
-            response.raise_for_status()
-
-            data = response.json()
-            if "errors" in data:
-                errors = data["errors"]
-                error_messages = [str(e.get("message", "")) for e in errors]
-                has_missing_block_error = any(
-                    "missing block" in msg.lower()
-                    or "unavailable" in msg.lower()
-                    or "bad indexers" in msg.lower()
-                    for msg in error_messages
-                )
-
-                if has_missing_block_error and block_number:
-                    logger.debug(
-                        f"⚠️ The Graph doesn't have eMode category data for block {block_number}, caching failure"
-                    )
-                    # Cache the failure - don't retry
-                    if target_date:
-                        self._historical_query_failed.add(target_date.isoformat())
-                    self._historical_query_failed.add(str(block_number))
-                    return None
-                else:
-                    logger.warning(f"⚠️ GraphQL query errors for eMode category: {errors}")
-                    # Cache the failure
-                    if target_date:
-                        self._historical_query_failed.add(target_date.isoformat())
-                    return None
-
-            categories = data.get("data", {}).get("eModeCategories", [])
-            if categories:
-                category = categories[0]  # Should only be one match
-                # Convert liquidationThreshold and liquidationBonus from basis points to decimal
-                liquidation_threshold_raw = category.get("liquidationThreshold")
-                liquidation_threshold = (
-                    float(liquidation_threshold_raw) / 10000.0
-                    if liquidation_threshold_raw is not None
-                    else None
-                )
-
-                liquidation_bonus_raw = category.get("liquidationBonus")
-                liquidation_bonus = (
-                    float(liquidation_bonus_raw) / 10000.0
-                    if liquidation_bonus_raw is not None
-                    else None
-                )
-
-                category_data = {
-                    "id": category.get("id"),
-                    "label": category.get("label"),
-                    "liquidation_threshold": liquidation_threshold,
-                    "liquidation_bonus": liquidation_bonus,
-                    "price_source": category.get("priceSource"),
-                    "oracle_id": category.get("oracleId"),
-                }
-
-                # Cache the result
-                self._emode_category_cache[category_id_int] = category_data
-                logger.debug(
-                    f"✅ Fetched eMode category {category_id_int} from The Graph: {category.get('label', 'N/A')}"
-                )
-                return category_data
-
-            return None
-
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to fetch eMode category from The Graph: {e}")
-            # Cache the failure for historical queries
-            if target_date:
-                self._historical_query_failed.add(target_date.isoformat())
-            return None
-
     def _extract_lending_metadata(
         self, reserve: Dict[str, Any], target_date: Optional[datetime] = None
     ) -> Dict[str, Any]:
@@ -2032,6 +1397,10 @@ query GetEModeCategory($categoryId: Int!) {
 
         Returns:
             Dictionary with lending protocol metadata fields including reserve_mode and emode
+
+        TODO: Currently uses STATIC_RISK_PARAMS for eMode and standard risk parameters.
+        Should be replaced with dynamic fetching from AAVE contracts via RPC or The Graph.
+        See instruments-service/issues/aave-dynamic-params.md for implementation plan.
         """
         asset = reserve.get("asset", {})
         underlying_address = reserve.get("reserve", "") or asset.get("address", "")
@@ -2228,6 +1597,7 @@ query GetEModeCategory($categoryId: Int!) {
 
         # OPTIMIZATION: Skip RPC/Graph calls (always fail) - use STATIC_RISK_PARAMS immediately
         # This saves ~1 second per reserve (RPC + Graph timeout/retry) × 4 reserves = ~4 seconds
+        logger.info("🔍 [METHOD_TRACE] _extract_lending_metadata using STATIC_RISK_PARAMS (skipping RPC/Graph calls)")
         if emode_category_id:
             # Use static emode params from JSON immediately
             symbol = reserve.get("asset", {}).get("symbol", "")
@@ -2464,7 +1834,7 @@ query GetEModeCategory($categoryId: Int!) {
                 2023, 1, 27
             ).isoformat(),  # AAVE V3 Ethereum launch date
             "available_to_datetime": None,
-            "data_types": "trades,book_snapshot_5",  # Use default - protocol tokens don't have market data but need valid data_types
+            "data_types": "rate_indices,utilization",  # Raw data: supplyIndex, liquidityIndex, utilization rate
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
@@ -2531,7 +1901,7 @@ query GetEModeCategory($categoryId: Int!) {
                 2023, 1, 27
             ).isoformat(),  # AAVE V3 Ethereum launch date
             "available_to_datetime": None,
-            "data_types": "trades,book_snapshot_5",  # Use default - protocol tokens don't have market data but need valid data_types
+            "data_types": "rate_indices,utilization",  # Raw data: borrowIndex, utilization rate
             "inverse": False,
             "contract_size": None,
             "tick_size": "",

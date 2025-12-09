@@ -98,9 +98,8 @@ instruments_df = client.get_instruments_for_date(
      - `INSTRUMENTS_BIGQUERY_DATASET` (default: instruments)
 
 3. **Set up infrastructure**:
-   - GCS bucket: `instruments-store`
-   - BigQuery dataset: `instruments`
-   - See `docs/INSTRUMENTS_BUCKET_SETUP.md` for details
+   - GCS bucket: `instruments-store-central-element-323112` (CEFI/TRADFI/DEFI variants)
+   - See `docs/SETUP_GUIDE.md` for infrastructure details
 
 ## Quick Start
 
@@ -148,13 +147,9 @@ client = create_instruments_client()
 instruments_df = client.get_instruments_for_date(date='2023-05-23')
 ```
 
-See `../docs/DATA_ACCESS_PATTERNS.md` for more details on the three-tier data access pattern.
-
 ## Related Documentation
 
 - `docs/USAGE_GUIDE.md` - Comprehensive usage guide
 - `docs/API_REFERENCE.md` - API reference
-- `docs/SETUP_GUIDE.md` - Setup instructions
-- `docs/INSTRUMENTS_BUCKET_SETUP.md` - Infrastructure setup
-- `../docs/DATA_ACCESS_PATTERNS.md` - Data access patterns architecture
-- `../docs/EXAMPLES_VS_CLIENTS_ARCHITECTURE.md` - Examples vs clients architecture
+- `docs/SETUP_GUIDE.md` - Setup and infrastructure instructions
+- `docs/ARCHITECTURE.md` - Service architecture

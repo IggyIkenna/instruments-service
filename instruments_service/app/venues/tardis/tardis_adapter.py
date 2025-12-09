@@ -1,14 +1,13 @@
 """
-Tardis Venue Adapter - OPTIMIZED
+Tardis Venue Adapter - REFACTORED
 
 Fetches crypto exchange instrument definitions from Tardis API.
-Supports Binance, Bybit, OKX, Deribit, and other crypto exchanges.
+Supports Binance, Bybit, OKX, Deribit, Upbit, Coinbase, and other crypto exchanges.
 
-OPTIMIZATIONS:
-- Module-level API key caching (avoid repeated Secret Manager calls)
-- Session reuse with connection pooling (HTTP Keep-Alive)
-- List comprehension for filtering (faster than for loops)
-- Cached instrument data (1-hour TTL per exchange)
+ARCHITECTURE:
+- Uses TardisBaseClient from unified-cloud-services (centralized network layer)
+- This adapter handles domain-specific logic (instrument parsing, date filtering)
+- Network concerns (sessions, retries, API keys) are handled by TardisBaseClient
 
 This adapter abstracts Tardis-specific logic from InstrumentProcessingService,
 making the architecture consistent with Databento and DeFi adapters.
@@ -17,24 +16,24 @@ making the architecture consistent with Databento and DeFi adapters.
 import logging
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timezone, timedelta, date
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-from unified_cloud_services import get_secret_with_fallback
-from instruments_service.settings import instruments_config
+
+from unified_cloud_services import TardisBaseClient, TardisClientConfig
+from unified_cloud_services.clients.tardis_base_client import (
+    get_cached_instruments,
+    set_cached_instruments,
+    clear_instruments_cache,
+    clear_tardis_api_key_cache,
+)
+from instruments_service.config import instruments_config
 
 
 logger = logging.getLogger(__name__)
 
-# Module-level caching for performance (like Databento)
-# OPTIMIZATION: Cache API key to avoid repeated Secret Manager calls
-_TARDIS_API_KEY: Optional[str] = None
-
 
 def clear_tardis_cache():
     """Clear module-level cache (useful for testing or credential rotation)"""
-    global _TARDIS_API_KEY
-    _TARDIS_API_KEY = None
+    clear_tardis_api_key_cache()
+    clear_instruments_cache()
     logger.info("🧹 Cleared Tardis module-level cache")
 
 
@@ -42,82 +41,58 @@ class TardisAdapter:
     """
     Adapter for fetching crypto exchange instrument definitions from Tardis API.
 
+    Uses TardisBaseClient for network management (sessions, retries, API keys).
+    This adapter focuses on domain-specific logic:
+    - Instrument parsing
+    - Date availability filtering
+    - Response caching (1-hour TTL)
+
     Supports:
     - Binance (spot, futures)
     - Bybit (spot, perpetuals)
     - OKX (spot, futures, swaps)
     - Deribit (futures, options)
+    - Upbit (spot) - Korean exchange
+    - Coinbase (spot)
     - Other crypto exchanges via Tardis
     """
 
     def __init__(self, api_key: Optional[str] = None, project_id: Optional[str] = None):
         """
-        Initialize Tardis adapter with module-level API key caching.
-
-        OPTIMIZED: Reuses cached API key to avoid repeated Secret Manager calls.
+        Initialize Tardis adapter using centralized TardisBaseClient.
 
         Args:
-            api_key: Tardis API key (optional, uses cached or Secret Manager)
+            api_key: Tardis API key (optional, TardisBaseClient handles Secret Manager)
             project_id: GCP project ID for Secret Manager (defaults to GCP_PROJECT_ID env var)
         """
-        global _TARDIS_API_KEY
-
-        # Reuse cached API key if available (avoid Secret Manager calls)
-        if _TARDIS_API_KEY and not api_key:
-            self.api_key = _TARDIS_API_KEY
-            logger.debug("✅ Reusing cached Tardis API key")
-        else:
-            # Try provided API key first
-            self.api_key = api_key
-
-            # If not provided, try Secret Manager
-            if not self.api_key:
-                try:
-                    secret_name = instruments_config.tardis_secret_name
-                    project_id = project_id or instruments_config.gcp_project_id
-
-                    self.api_key = get_secret_with_fallback(
-                        project_id=project_id,
-                        secret_name=secret_name,
-                        fallback_env_var="TARDIS_API_KEY",
-                    )
-
-                    if self.api_key:
-                        logger.info(
-                            f"✅ Retrieved Tardis API key from Secret Manager (secret: {secret_name})"
-                        )
-                except Exception as e:
-                    logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                    self.api_key = None
-
-            if not self.api_key:
-                raise ValueError(
-                    "Tardis API key required. Set TARDIS_SECRET_NAME env var (for Secret Manager), "
-                    "TARDIS_API_KEY env var (fallback), or pass api_key parameter."
-                )
-
-            # Cache API key for future instances
-            _TARDIS_API_KEY = self.api_key
-
-        # Setup HTTP session with retries
-        self.session = requests.Session()
-        retry_strategy = Retry(
-            total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504]
+        # Create config with instruments-service specific settings
+        config = TardisClientConfig(
+            secret_name=instruments_config.tardis_secret_name,
+            fallback_env_var="TARDIS_API_KEY",
         )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        self.session.mount("https://", adapter)
-
-        self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
+        
+        # Initialize centralized base client
+        self._base_client = TardisBaseClient(
+            config=config,
+            api_key=api_key,
+            project_id=project_id or instruments_config.gcp_project_id,
+        )
 
         # Cache for exchange instruments (TTL: 1 hour)
         self._cache: Dict[str, List[Dict]] = {}
         self._cache_timestamps: Dict[str, datetime] = {}
         self._cache_ttl = timedelta(hours=1)
 
-        logger.info("✅ TardisAdapter initialized")
+        logger.info("✅ TardisAdapter initialized (using TardisBaseClient)")
+
+    def warmup(self) -> bool:
+        """
+        Warmup connection by making a lightweight request.
+        
+        Returns:
+            bool: True if warmup successful
+        """
+        return self._base_client.sync_warmup()
 
     def fetch_exchange_instruments(
         self,
@@ -129,7 +104,7 @@ class TardisAdapter:
         Fetch instrument data from Tardis API for specific exchange.
 
         Args:
-            exchange: Exchange name (e.g., 'binance-futures', 'bybit', 'okx')
+            exchange: Exchange name (e.g., 'binance-futures', 'bybit', 'okx', 'upbit', 'coinbase')
             target_date: Target date for instrument availability filtering
             force_refresh: If True, bypass cache and fetch fresh data
 
@@ -139,28 +114,45 @@ class TardisAdapter:
         target_date = target_date or datetime.now(timezone.utc)
         date_str = target_date.strftime("%Y-%m-%d")
 
-        # Check cache first
-        cache_key = f"{exchange}_instruments"
+        # CRITICAL: Tardis API expects lowercase exchange names
+        # Convert to lowercase to handle cases where canonical venue names (UPBIT, COINBASE) are passed
+        exchange = exchange.lower()
 
-        if not force_refresh and self._is_cache_valid(cache_key):
-            logger.info(f"📋 Using cached Tardis data for {exchange}")
-            available_symbols = self._cache[cache_key]
+        # Check MODULE-LEVEL cache first (persists across days/runs)
+        # This saves ~1-2s per exchange by avoiding repeated Tardis API calls
+        if not force_refresh:
+            cached = get_cached_instruments(exchange)
+            if cached is not None:
+                logger.info(f"📋 Using module-level cached Tardis data for {exchange} ({len(cached)} instruments)")
+                available_symbols = cached
+            else:
+                available_symbols = None
         else:
-            # Fetch fresh data from Tardis API
-            url = f"https://api.tardis.dev/v1/exchanges/{exchange}"
+            available_symbols = None
+
+        # Also check instance-level cache (for current session)
+        cache_key = f"{exchange}_instruments"
+        if available_symbols is None and not force_refresh and self._is_cache_valid(cache_key):
+            logger.info(f"📋 Using instance-cached Tardis data for {exchange}")
+            available_symbols = self._cache[cache_key]
+
+        if available_symbols is None:
+            # Fetch fresh data from Tardis API using centralized client
+            url = f"{self._base_client.config.api_base_url}/exchanges/{exchange}"
 
             try:
                 logger.info(f"🔍 Fetching instruments from Tardis API: {exchange}")
 
-                response = self.session.get(url, headers=self.headers, timeout=60)
+                response = self._base_client.sync_get(url, timeout=60)
                 response.raise_for_status()
 
                 exchange_info = response.json()
                 available_symbols = exchange_info.get("availableSymbols", [])
 
-                # Cache the results
+                # Cache at both levels for performance
                 self._cache[cache_key] = available_symbols
                 self._cache_timestamps[cache_key] = datetime.now(timezone.utc)
+                set_cached_instruments(exchange, available_symbols)
 
                 logger.info(
                     f"✅ Fetched & cached {len(available_symbols)} instruments from {exchange}"
@@ -297,7 +289,6 @@ class TardisAdapter:
 
     def cleanup(self):
         """Cleanup resources and close connections."""
-        if hasattr(self, "session"):
-            self.session.close()
+        self._base_client.cleanup()
         self.clear_cache()
         logger.info("🧹 TardisAdapter cleanup completed")

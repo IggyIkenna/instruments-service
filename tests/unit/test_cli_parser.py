@@ -1,5 +1,8 @@
 """
 Unit tests for CLI parser.
+
+Note: Query functionality has been moved to unified-cloud-services.
+Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 """
 
 import pytest
@@ -29,25 +32,24 @@ def test_parse_arguments_instruments_mode():
         assert args.force is True
 
 
-def test_parse_arguments_query_mode():
-    """Test parsing arguments for query mode."""
+def test_parse_arguments_instruments_mode_with_categories():
+    """Test parsing arguments for instruments mode with market categories."""
     test_args = [
         "--mode",
         "instruments",
         "--start-date",
         "2023-05-23",
-        "--query-type",
-        "details",
-        "--instrument-id",
-        "TEST:SPOT_PAIR:BTC-USDT",
+        "--CEFI",
+        "--TRADFI",
     ]
 
     with patch.object(sys, "argv", ["parser"] + test_args):
         args = parse_arguments()
         assert args.mode == "instruments"
         assert args.start_date == "2023-05-23"
-        assert args.query_type == "details"
-        assert args.instrument_id == "TEST:SPOT_PAIR:BTC-USDT"
+        assert args.CEFI is True
+        assert args.TRADFI is True
+        assert args.DEFI is False
 
 
 def test_validate_arguments_instruments_mode():
@@ -64,23 +66,10 @@ def test_validate_arguments_instruments_mode():
         validate_arguments(args)
 
 
-def test_validate_arguments_query_mode():
-    """Test validation for query mode."""
+def test_validate_arguments_default_end_date():
+    """Test that end_date defaults to start_date if not provided."""
     from argparse import Namespace
 
-    # Valid arguments for instruments mode
-    args = Namespace(
-        mode="instruments", start_date="2023-05-23", end_date="2023-05-23", query_type="list"
-    )
-    validate_arguments(args)  # Should not raise
-
-    # Missing instrument_id for details query in instruments-query mode
-    args = Namespace(
-        mode="instruments-query",
-        start_date=None,
-        end_date=None,
-        query_type="details",
-        instrument_id=None,
-    )
-    with pytest.raises(ValueError, match="--instrument-id is required"):
-        validate_arguments(args)
+    args = Namespace(mode="instruments", start_date="2023-05-23", end_date=None)
+    validate_arguments(args)
+    assert args.end_date == "2023-05-23"

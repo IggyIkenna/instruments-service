@@ -60,7 +60,7 @@ from google.oauth2 import service_account
 from google.cloud import storage
 from google.oauth2 import service_account
 from unified_cloud_services import CloudTarget, get_secret_with_fallback
-from instruments_service.settings import instruments_config
+from instruments_service.config import instruments_config
 
 
 def get_config(key: str, default: Optional[str] = None) -> Optional[str]:

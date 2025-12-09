@@ -399,39 +399,6 @@
 - TradFi options instrument definitions ARE in GCS for batch processing.
 - S&P 500 simple premium-based model complete (covered calls and picking strikes).
 
-### Sports Betting Strategy
-
-**Support Level**: `Must Support`
-**Status**: `Not Started` (Code) / `Not Deployed` (Deployment)
-**Code Completion Date**: `TBD`
-**Deployment Status**: `Not Started`
-
-**Features/Instruments Supported**:
-- **Sports Betting Instrument Metadata (Betfair)**: ⏳ Planned
-- **Venues**: Betfair API
-- **Coverage**: Instrument metadata for classifying sports betting instruments
-
-**Data Sources Required**:
-- Betfair API (for instrument metadata)
-
-**Implementation Requirements**:
-- Betfair venue adapter (`app/venues/sports_betting/betfair_adapter.py`)
-- Instrument metadata extraction and classification
-- Canonical instrument ID generation for sports betting instruments
-
-**Data Completion**:
-- **Date From**: `TBD`
-- **Date To**: `TBD`
-- **Coverage**: `0%` (Not started)
-
-**Batch Completion Date**: `TBD` (Code) / `N/A` (Deployment)
-**Live Completion Date**: `N/A` (Not needed - instrument definitions are static)
-
-**Notes**:
-- Sports betting strategy is planned but not yet implemented.
-- Will involve grabbing instrument metadata from Betfair API to classify instruments.
-- Tasks are vague right now - will be refined as implementation progresses.
-
 ---
 
 ## Data Completion
@@ -470,11 +437,6 @@
 - **Date To**: `2025-11-11`
 - **Coverage**: `100%` (TradFi options - S&P 500 simple premium-based model)
 
-**Sports Betting**:
-- **Date From**: `TBD`
-- **Date To**: `TBD`
-- **Coverage**: `0%` (Not started - Betfair API integration planned)
-
 ### Data Catalogue
 
 | Data Type | Strategy | Date From | Date To | Status | Notes |
@@ -494,7 +456,6 @@
 | Other Venues | DeFi | 2023-05-23 | 2025-11-11 | Partial | ASTER ✅, HYPERLIQUID ✅ |
 | Wallet Positions (SPOT_ASSET) | DeFi | N/A | N/A | Missing | WALLET venue not implemented |
 | DEX Swap Routes (SPOT_PAIR) | DeFi | N/A | N/A | Missing | For execution routing, not implemented |
-| Sports Betting Instruments (Betfair) | Sports Betting | TBD | TBD | Missing | Betfair API integration planned - instrument metadata for classification |
 
 ---
 
@@ -664,8 +625,6 @@
 | **TradFi Strategy Live** | 2026-02-06 | N/A | ⏳ Planned | After migration completes - Sequential with 1 week gaps |
 | **Crypto Options Strategy Live** | 2026-02-13 | N/A | ⏳ Planned | Sequential with 1 week gap after TradFi Live |
 | **TradFi Options Strategy Live** | 2026-02-20 | N/A | ⏳ Planned | Sequential with 1 week gap after Crypto Options Live |
-| **Sports Betting Strategy Backtest** | 2026-03-06 | N/A | ⏳ Planned | 2 weeks after TradFi Options Strategy Live - Betfair API integration |
-| **Sports Betting Strategy Live** | 2026-03-20 | N/A | ⏳ Planned | 2 weeks after Sports Betting Strategy Backtest |
 | **Deployment UI Tracker (instruments-service)** | 2025-11-20 | N/A | ⏳ Planned | Final stage of deployment pipeline - dashboard showing data catalogue and process status |
 
 **Code Completion Sub-Milestones** (per strategy):
@@ -676,7 +635,6 @@
 | **DeFi** | MVP Instruments | Full Instruments/Sub-Strategy Universe (Extra Pools/Chains) | MVP ⏳ Partial (~60% - structure complete, missing Curve, Uniswap V2/V4, AAVE validation, Plasma protocols) |
 | **Crypto Options** | ETH and BTC Simple Premium-Based Model (Covered Calls and Picking Strikes) | Full Proprietary SVI Curve Fitting and Adjustment Framework | MVP ✅ Complete |
 | **TradFi Options** | S&P 500 Simple Premium-Based Model (Covered Calls and Picking Strikes) | Full Proprietary SVI Curve Fitting and Adjustment Framework | MVP ✅ Complete |
-| **Sports Betting** | Betfair Instrument Metadata (Classification) | Full Sports Betting Instrument Universe | MVP ⏳ Not Started |
 
 **Deployment Readiness Sub-Milestones** (all strategies):
 
@@ -687,7 +645,6 @@
 | **TradFi** | ✅ Complete | ❌ Not Deployed | ⏳ Planned | ⏳ Planned |
 | **Crypto Options** | ✅ Complete | ❌ Not Deployed | ⏳ Planned | ⏳ Planned |
 | **TradFi Options** | ✅ Complete | ❌ Not Deployed | ⏳ Planned | ⏳ Planned |
-| **Sports Betting** | ❌ Not Started | ❌ Not Deployed | ⏳ Planned | ⏳ Planned |
 
 **Completed Milestones**:
 
@@ -845,7 +802,6 @@
 - **Service Status Guide**: `docs/SERVICE_STATUS_GUIDE.md` - Guide for STATUS.md structure and format
 - **Instrument Key Specification**: `docs/INSTRUMENT_VENUE_SPECIFICATION.md`
 - **DeFi Instruments Specification**: `docs/MVP_DEFI_INSTRUMENTS.md`
-- **Sports Betting Strategy**: `docs/SPORTS_BETTING_STRATEGY.md` - Sports betting strategy overview and requirements
 - **Dependency Chains**: `docs/DEPENDENCY_CHAINS.md`
 - **Domain Data Flows**: `docs/DOMAIN_DATA_FLOWS.md`
 - **ClickUp API Import Script**: `scripts/clickup_import.py` - Python script to automatically import STATUS.md to ClickUp via API

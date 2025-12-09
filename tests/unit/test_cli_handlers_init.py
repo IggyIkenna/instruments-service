@@ -1,5 +1,8 @@
 """
 Tests for CLI handlers __init__.py to increase coverage.
+
+Note: Query functionality has been moved to unified-cloud-services.
+Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 """
 
 import pytest
@@ -33,27 +36,6 @@ class TestCLIHandlersInit:
         # Mock InstrumentHandler to avoid API key requirements
         with patch(
             "instruments_service.cli.handlers.instrument_handler.InstrumentHandler"
-        ) as mock_handler_class:
-            mock_handler = Mock()
-            mock_handler_class.return_value = mock_handler
-
-            handler = get_handler_for_mode("instruments", config)
-
-            assert handler is not None
-            assert "instruments" in _handler_registry
-
-    def test_get_handler_for_mode_instruments_query(self):
-        """Test getting instruments handler."""
-        config = {"project_id": "test-project", "gcs_bucket": "test-bucket"}
-
-        # Clear registry first to ensure fresh state
-        from instruments_service.cli.handlers import _handler_registry
-
-        _handler_registry.clear()
-
-        # Mock InstrumentsQueryHandler to avoid client initialization issues
-        with patch(
-            "instruments_service.cli.handlers.instruments_query_handler.InstrumentsQueryHandler"
         ) as mock_handler_class:
             mock_handler = Mock()
             mock_handler_class.return_value = mock_handler
@@ -99,7 +81,6 @@ class TestCLIHandlersInit:
 
             assert handler is not None
             # Verify registry was populated
-            assert "instruments" in _handler_registry
             assert "instruments" in _handler_registry
 
         # Restore original registry

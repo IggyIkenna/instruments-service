@@ -1,8 +1,7 @@
 # Instruments Service Architecture
 
 > **Related Documentation**:
-> - [`QUICK_START.md`](./QUICK_START.md) - Quick start guide
-> - [`SETUP_GUIDE.md`](./SETUP_GUIDE.md) - Setup and installation instructions
+> - [`SETUP_GUIDE.md`](./SETUP_GUIDE.md) - Setup, installation, and quick start guide
 > - [`INSTRUMENT_SPECIFICATION.md`](./INSTRUMENT_SPECIFICATION.md) - Complete instrument ID specification
 > - [`VENUE_ADAPTERS.md`](./VENUE_ADAPTERS.md) - Venue adapter pattern and data sources
 > - [`USAGE_GUIDE.md`](./USAGE_GUIDE.md) - Usage examples
@@ -136,6 +135,62 @@ Handles batch processing:
 ```
 
 ## Key Design Decisions
+
+### Centralized Configuration (`config.py`)
+
+All environment variables are accessed through `instruments_service/config.py` rather than scattered `os.getenv()` calls:
+
+```python
+# ✅ DO: Import from config.py
+from instruments_service.config import instruments_config
+bucket = instruments_config.gcs_bucket
+
+# ❌ DON'T: Use os.getenv directly in code
+import os
+bucket = os.getenv("INSTRUMENTS_GCS_BUCKET")  # Avoid this pattern
+```
+
+**Why centralize configuration?**
+- **Single Source of Truth**: All environment variable names defined in one place
+- **Easy Refactoring**: Rename env vars or change defaults in one file
+- **Environment-Aware**: Logic for test vs production routing handled centrally
+- **Type Safety**: Pydantic BaseSettings provides validation and type coercion
+- **Documentation**: All config options visible in one file with docstrings
+
+**Key Config Classes**:
+- `InstrumentsServiceConfig`: Service-level settings (buckets, project ID, secrets)
+- `UnifiedInstrumentConfig`: Domain-specific instrument definitions loaded from JSON
+
+### Static Data Abstraction (`data/` directory)
+
+Static data (instrument definitions, ticker lists) is externalized to JSON files in `instruments_service/data/`:
+
+```
+instruments_service/data/
+├── sp500_tickers.json      # S&P 500 equity ticker list
+└── tradfi_instruments.json # TradFi instrument definitions + exchange mappings
+```
+
+**Why externalize static data?**
+- **Testability**: Tests can exclude data files or mock them easily
+- **Maintainability**: Update instrument definitions without modifying Python code
+- **Separation of Concerns**: Data vs logic clearly separated
+- **Version Control**: JSON changes are easy to review in PRs
+- **Reduced File Size**: `config.py` reduced from 829 to 618 lines after externalization
+
+**Loading Pattern**:
+```python
+# Data loaded lazily with caching
+_TRADFI_INSTRUMENTS_CACHE = None
+
+def _load_tradfi_instruments():
+    global _TRADFI_INSTRUMENTS_CACHE
+    if _TRADFI_INSTRUMENTS_CACHE is None:
+        data_dir = Path(__file__).parent / "data"
+        with open(data_dir / "tradfi_instruments.json") as f:
+            _TRADFI_INSTRUMENTS_CACHE = json.load(f)
+    return _TRADFI_INSTRUMENTS_CACHE
+```
 
 ### Venue Adapter Pattern
 
