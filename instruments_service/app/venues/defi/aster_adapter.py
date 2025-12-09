@@ -9,13 +9,41 @@ Reference: https://github.com/asterdex/api-docs
 
 import logging
 import requests
-from typing import Dict, List, Optional, Any
-from datetime import datetime
+from typing import Dict, List, Optional, Any, Tuple
+from datetime import datetime, timezone, timedelta
+
+from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 
 logger = logging.getLogger(__name__)
 
+# Module-level cache for Aster API responses (instrument lists rarely change)
+# Format: {cache_key: (data, timestamp)}
+_ASTER_CACHE: Dict[str, Tuple[Any, datetime]] = {}
+_ASTER_CACHE_TTL = timedelta(hours=4)  # 4 hour TTL
 
-class AsterAdapter:
+
+def _get_cached_response(cache_key: str) -> Optional[Any]:
+    """Get cached API response if still valid."""
+    if cache_key in _ASTER_CACHE:
+        data, timestamp = _ASTER_CACHE[cache_key]
+        if datetime.now(timezone.utc) - timestamp < _ASTER_CACHE_TTL:
+            return data
+    return None
+
+
+def _set_cached_response(cache_key: str, data: Any):
+    """Cache an API response."""
+    _ASTER_CACHE[cache_key] = (data, datetime.now(timezone.utc))
+
+
+def clear_aster_cache():
+    """Clear all Aster caches."""
+    global _ASTER_CACHE
+    _ASTER_CACHE.clear()
+    logger.info("🧹 Cleared Aster cache")
+
+
+class AsterAdapter(BaseDefiAdapter):
     """
     Adapter for fetching Aster perpetual futures instruments.
 
@@ -29,6 +57,9 @@ class AsterAdapter:
         spot_api_base_url: Optional[str] = None,
         base_currency_list: Optional[List[str]] = None,
         mvp_only: bool = True,
+        chain: str = "ASTER",
+        api_key: Optional[str] = None,
+        project_id: Optional[str] = None,
     ):
         """
         Initialize Aster adapter.
@@ -37,13 +68,17 @@ class AsterAdapter:
             futures_api_base_url: Optional custom futures API base URL
                 (defaults to https://fapi.asterdex.com)
             spot_api_base_url: Optional custom spot API base URL
-                (defaults to https://api.asterdex.com)
+                (defaults to https://sapi.asterdex.com for spot trading)
             base_currency_list: List of MVP base currencies from config (defaults to None, uses all if not provided)
             mvp_only: If True, only include MVP coins (default: True)
+            chain: Chain identifier (default: 'ASTER' - Aster DEX proprietary chain)
+            api_key: Optional API key (not used by Aster but required by base class)
+            project_id: GCP project ID for Secret Manager
         """
+        super().__init__(chain=chain, api_key=api_key, project_id=project_id)
         self.venue = "ASTER"
         self.futures_api_base_url = futures_api_base_url or "https://fapi.asterdex.com"
-        self.spot_api_base_url = spot_api_base_url or "https://api.asterdex.com"
+        self.spot_api_base_url = spot_api_base_url or "https://sapi.asterdex.com"
         self.mvp_only = mvp_only
         # Use provided base_currency_list or empty set (no filtering)
         self.mvp_base_currencies = (
@@ -52,6 +87,17 @@ class AsterAdapter:
         logger.info(
             f"✅ AsterAdapter initialized (MVP only: {mvp_only}, base currencies: {len(self.mvp_base_currencies) if self.mvp_base_currencies else 'all'})"
         )
+
+    async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
+        """
+        Get instrument metadata for Aster.
+        
+        Returns:
+            List of instrument definition dictionaries
+        """
+        instruments = self.fetch_perpetuals()
+        instruments.update(self.fetch_spot_pairs())
+        return list(instruments.values())
 
     def fetch_perpetuals(self, test_data_availability: bool = False) -> Dict[str, Dict[str, Any]]:
         """
@@ -64,10 +110,19 @@ class AsterAdapter:
             Dictionary mapping instrument_key to instrument definition
         """
         try:
-            # Get exchange info to get all symbols
-            response = requests.get(f"{self.futures_api_base_url}/fapi/v1/exchangeInfo", timeout=30)
-            response.raise_for_status()
-            exchange_info = response.json()
+            # Check cache first (instrument lists rarely change)
+            cache_key = "aster_futures_exchange_info"
+            cached_data = _get_cached_response(cache_key)
+            
+            if cached_data is not None:
+                logger.info("📋 Using cached Aster perpetual exchange info")
+                exchange_info = cached_data
+            else:
+                # Get exchange info to get all symbols
+                response = requests.get(f"{self.futures_api_base_url}/fapi/v1/exchangeInfo", timeout=30)
+                response.raise_for_status()
+                exchange_info = response.json()
+                _set_cached_response(cache_key, exchange_info)
 
             instruments = {}
             symbols = exchange_info.get("symbols", [])
@@ -89,8 +144,8 @@ class AsterAdapter:
                         inst_def = self._convert_symbol_to_instrument(symbol_info)
                         if inst_def:
                             # Set default data types - actual data fetching happens in market tick data handler
-                            # Aster supports 1m candles + funding rates (derivative_ticker)
-                            inst_def["data_types"] = "ohlcv_1m,derivative_ticker"
+                            # Aster supports 1m candles, funding rates (derivative_ticker), and liquidations
+                            inst_def["data_types"] = "ohlcv_1m,derivative_ticker,liquidations"
 
                             instruments[inst_def["instrument_key"]] = inst_def
                 except Exception as e:
@@ -120,11 +175,20 @@ class AsterAdapter:
             Dictionary mapping instrument_key to instrument definition (empty if spot API unavailable)
         """
         try:
-            # Get exchange info from spot API
-            # Note: Aster spot API endpoint may not be publicly accessible or may have DNS issues
-            response = requests.get(f"{self.spot_api_base_url}/api/v3/exchangeInfo", timeout=30)
-            response.raise_for_status()
-            exchange_info = response.json()
+            # Check cache first
+            cache_key = "aster_spot_exchange_info"
+            cached_data = _get_cached_response(cache_key)
+            
+            if cached_data is not None:
+                logger.debug("📋 Using cached Aster spot exchange info")
+                exchange_info = cached_data
+            else:
+                # Get exchange info from spot API (sapi.asterdex.com)
+                # Note: Aster spot API uses /api/v1/exchangeInfo endpoint
+                response = requests.get(f"{self.spot_api_base_url}/api/v1/exchangeInfo", timeout=30)
+                response.raise_for_status()
+                exchange_info = response.json()
+                _set_cached_response(cache_key, exchange_info)
 
             instruments = {}
             symbols = exchange_info.get("symbols", [])
@@ -210,8 +274,8 @@ class AsterAdapter:
 
         # Build canonical instrument key with chain suffix
         # Format: VENUE:INSTRUMENT_TYPE:SYMBOL@CHAIN
-        # Aster is on POLKADOT chain
-        instrument_key = f"{self.venue}:SPOT_PAIR:{canonical_symbol}@POLKADOT"
+        # Aster is on ASTER chain
+        instrument_key = f"{self.venue}:SPOT_PAIR:{canonical_symbol}@ASTER"
 
         # Use conservative default date
         available_from = datetime(2021, 8, 1).isoformat()
@@ -235,7 +299,7 @@ class AsterAdapter:
             "base_asset": base_asset,
             "quote_asset": quote_asset,
             "settle_asset": quote_asset,
-            "chain": "POLKADOT",  # Aster is on Polkadot chain
+            "chain": "ASTER",  # Aster DEX proprietary chain
             "asset_class": "crypto",
             "venue_type": "exchange",  # Aster is an exchange, not a protocol
             "data_provider": "aster_api",
@@ -297,8 +361,8 @@ class AsterAdapter:
 
         # Build canonical instrument key with chain suffix
         # Format: VENUE:INSTRUMENT_TYPE:SYMBOL@CHAIN
-        # Aster is on POLKADOT chain
-        instrument_key = f"{self.venue}:PERPETUAL:{canonical_symbol}@POLKADOT"
+        # Aster is on ASTER chain
+        instrument_key = f"{self.venue}:PERPETUAL:{canonical_symbol}@ASTER"
 
         # Use conservative default date - funding rate fetching is handled by market tick data handler service
         # Aster launched in 2021, but use a conservative default (2021-08-01) to avoid filtering out instruments incorrectly
@@ -323,7 +387,7 @@ class AsterAdapter:
             "base_asset": base_asset,
             "quote_asset": quote_asset,
             "settle_asset": quote_asset,
-            "chain": "POLKADOT",  # Aster is on Polkadot chain
+            "chain": "ASTER",  # Aster DEX proprietary chain
             "asset_class": "crypto",
             "venue_type": "exchange",  # Aster is an exchange, not a protocol
             "data_provider": "aster_api",

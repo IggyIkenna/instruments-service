@@ -16,7 +16,7 @@ from pathlib import Path
 from instruments_service.cli.base_handler import ModeHandler
 from instruments_service.app.core.instruments_service import InstrumentsService
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
-from instruments_service.config import VenueMapping, DatabentoInstrumentConfig
+from unified_cloud_services import VenueMapping
 from instruments_service.app.core.cloud_data_provider import CloudDataProvider
 
 logger = logging.getLogger(__name__)
@@ -72,9 +72,6 @@ class InstrumentHandler(ModeHandler):
         # Venue mapping (for CLI-specific operations)
         self.venue_mapping = VenueMapping()
 
-        # Databento instrument config (kept for compatibility, but InstrumentsService handles TradFi)
-        self.databento_config = DatabentoInstrumentConfig()
-
         logger.debug("✅ InstrumentHandler initialized")
 
     def run(self, start_date, end_date, force=False, **kwargs) -> Dict[str, Any]:
@@ -127,10 +124,40 @@ class InstrumentHandler(ModeHandler):
             logger.info(f"🔍 Processing market types: {', '.join(market_types)}")
 
         # Set exchanges for CEFI processing
+        # Also track TradFi venues for --tradfi flag processing
+        tradfi_venues_to_process = []
         if cefi:
-            exchanges_to_process = kwargs.get("exchanges", self.venue_mapping.all_tardis_exchanges)
+            user_exchanges = kwargs.get("exchanges")
+            if user_exchanges:
+                # Convert canonical venue names (UPBIT, COINBASE) to Tardis exchange names (upbit, coinbase)
+                # Use centralized conversion method from VenueMapping
+                exchanges_to_process = []
+                for ex in user_exchanges:
+                    tardis_name = self.venue_mapping.convert_to_tardis_exchange(ex)
+                    if tardis_name in self.venue_mapping.all_tardis_exchanges:
+                        exchanges_to_process.append(tardis_name)
+                        logger.debug(f"Mapped exchange {ex} -> Tardis exchange {tardis_name}")
+                    elif ex.upper() in self.venue_mapping.all_databento_venues:
+                        # User passed a TradFi venue (NASDAQ, NYSE, CME, etc.) with --cefi flag
+                        # Add to TradFi venues and enable TradFi processing
+                        tradfi_venues_to_process.append(ex.upper())
+                        if not tradfi:
+                            logger.info(f"📊 {ex} is a TradFi venue - enabling TradFi processing")
+                            tradfi = True
+                    else:
+                        logger.warning(f"⚠️ Unknown exchange: {ex} - skipping")
+            else:
+                exchanges_to_process = self.venue_mapping.all_tardis_exchanges
         else:
             exchanges_to_process = []
+        
+        # Also check for TradFi venues passed via --exchanges when --tradfi is set
+        if tradfi and not tradfi_venues_to_process:
+            user_exchanges = kwargs.get("exchanges")
+            if user_exchanges:
+                for ex in user_exchanges:
+                    if ex.upper() in self.venue_mapping.all_databento_venues:
+                        tradfi_venues_to_process.append(ex.upper())
 
         for date in date_range:
             # Skip future dates
@@ -145,11 +172,20 @@ class InstrumentHandler(ModeHandler):
                 # Check if file exists (using cloud service)
                 if not force:
                     try:
-                        # Use cloud_data_provider to check existence
+                        # Build list of categories to check based on flags
+                        categories_to_check = []
+                        if cefi:
+                            categories_to_check.append("CEFI")
+                        if tradfi:
+                            categories_to_check.append("TRADFI")
+                        if defi:
+                            categories_to_check.append("DEFI")
+                        
+                        # Use cloud_data_provider to check existence for specific categories
                         data_provider = CloudDataProvider()
-                        if data_provider.check_instruments_exist(date):
+                        if data_provider.check_instruments_exist(date, categories=categories_to_check):
                             logger.info(
-                                f"⏭️ Skipping {date.strftime('%Y-%m-%d')} - instruments exist"
+                                f"⏭️ Skipping {date.strftime('%Y-%m-%d')} - instruments exist for {categories_to_check}"
                             )
                             total_skipped += 1
                             continue
@@ -160,6 +196,7 @@ class InstrumentHandler(ModeHandler):
                 logger.info(f"📅 Processing {date.strftime('%Y-%m-%d')}")
 
                 # Delegate to InstrumentsService for orchestration
+                # Pass tradfi_venues if specific TradFi venues were requested
                 result = asyncio.run(
                     self.instruments_service.generate_instruments_for_date(
                         date=date,
@@ -170,6 +207,7 @@ class InstrumentHandler(ModeHandler):
                         defi=defi,
                         venues=kwargs.get("venues"),
                         instrument_ids=kwargs.get("instrument_ids"),
+                        tradfi_venues=tradfi_venues_to_process if tradfi_venues_to_process else None,
                     )
                 )
 

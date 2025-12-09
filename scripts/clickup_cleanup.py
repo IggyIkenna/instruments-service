@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scripts.clickup_import import ClickUpClient
 from unified_cloud_services import get_secret_with_fallback
-from instruments_service.settings import instruments_config
+from instruments_service.config import instruments_config
 
 
 class TasksMdParser:

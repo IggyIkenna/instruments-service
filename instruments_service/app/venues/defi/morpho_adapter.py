@@ -11,7 +11,8 @@ import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 from unified_cloud_services import get_secret_with_fallback
-from instruments_service.settings import instruments_config
+from instruments_service.config import instruments_config
+from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,7 @@ except ImportError:
     logger.warning("⚠️ web3 not available - Morpho contract interaction disabled")
 
 
-class MorphoAdapter:
+class MorphoAdapter(BaseDefiAdapter):
     """
     Adapter for fetching Morpho lending market instruments.
 
@@ -34,15 +35,23 @@ class MorphoAdapter:
     MORPHO-ETHEREUM:DEBT_TOKEN:DEBTWETH@ETHEREUM
     """
 
-    def __init__(self, chain: str = "ETHEREUM", rpc_url: Optional[str] = None):
+    def __init__(
+        self, 
+        chain: str = "ETHEREUM", 
+        rpc_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ):
         """
         Initialize Morpho adapter.
 
         Args:
             chain: Chain identifier (default: 'ETHEREUM')
             rpc_url: Optional RPC URL for contract interaction (defaults to env var or Secret Manager)
+            api_key: Optional API key (not used by Morpho but required by base class)
+            project_id: GCP project ID for Secret Manager
         """
-        self.chain = chain.upper()
+        super().__init__(chain=chain, api_key=api_key, project_id=project_id)
         self.venue = "MORPHO-ETHEREUM"  # Per config.py
 
         # Initialize web3 provider for contract interaction
@@ -92,6 +101,16 @@ class MorphoAdapter:
         self._market_config_cache: Dict[str, Dict[str, Any]] = {}
 
         logger.info(f"✅ MorphoAdapter initialized for chain: {self.chain}")
+
+    async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
+        """
+        Get instrument metadata for Morpho.
+        
+        Returns:
+            List of instrument definition dictionaries
+        """
+        instruments = self.fetch_markets()
+        return list(instruments.values())
 
     def fetch_markets(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -348,7 +367,7 @@ class MorphoAdapter:
                 2023, 6, 1
             ).isoformat(),  # Morpho launch date (June 2023)
             "available_to_datetime": None,
-            "data_types": "trades,book_snapshot_5",  # Protocol positions - no market data but need valid data_types
+            "data_types": "rate_indices,utilization",  # Raw data: supplyIndex, utilization rate
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
@@ -407,7 +426,7 @@ class MorphoAdapter:
                 2023, 6, 1
             ).isoformat(),  # Morpho launch date (June 2023)
             "available_to_datetime": None,
-            "data_types": "trades,book_snapshot_5",  # Protocol positions - no market data but need valid data_types
+            "data_types": "rate_indices,utilization",  # Raw data: borrowIndex, utilization rate
             "inverse": False,
             "contract_size": None,
             "tick_size": "",

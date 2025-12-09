@@ -1,5 +1,8 @@
 """
 Comprehensive unit tests for CLI main module to increase coverage to 80%+.
+
+Note: Query functionality has been moved to unified-cloud-services.
+Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 """
 
 import pytest
@@ -21,7 +24,6 @@ class TestCLIMain:
 
     def test_main_success(self, mock_handler):
         """Test successful main execution."""
-        # Patch imports directly in the main module
         with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
              patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler) as mock_get_handler:
             
@@ -35,7 +37,6 @@ class TestCLIMain:
             mock_args.bigquery_dataset = "test-dataset"
             mock_args.force = False
             mock_args.exchanges = None
-            # Default values for other args
             mock_args.CEFI = False
             mock_args.TRADFI = False
             mock_args.DEFI = False
@@ -51,8 +52,8 @@ class TestCLIMain:
             mock_handler.run.assert_called_once()
             mock_handler.cleanup.assert_called_once()
 
-    def test_main_with_query_mode(self, mock_handler):
-        """Test main with instruments mode."""
+    def test_main_with_categories(self, mock_handler):
+        """Test main with market category flags."""
         with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
              patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler) as mock_get_handler:
 
@@ -60,28 +61,17 @@ class TestCLIMain:
             mock_args.mode = "instruments"
             mock_args.log_level = "INFO"
             mock_args.start_date = "2024-01-01"
-            mock_args.end_date = None
+            mock_args.end_date = "2024-01-01"
             mock_args.project_id = "test-project"
             mock_args.gcs_bucket = "test-bucket"
             mock_args.bigquery_dataset = "test-dataset"
-            mock_args.force = False
+            mock_args.force = True
             mock_args.exchanges = None
-            mock_args.query_type = "list"
-            mock_args.venues = None
-            mock_args.instrument_types = None
-            mock_args.base_currency = None
-            mock_args.quote_currency = None
-            mock_args.symbol_pattern = None
-            mock_args.instrument_id = None
-            mock_args.instrument_ids = None
-            mock_args.data_type = None
-            mock_args.days_until_expiry = None
-            mock_args.output_format = None
-            mock_args.output_file = None
-            mock_args.limit = None
-            mock_args.CEFI = False
-            mock_args.TRADFI = False
+            mock_args.CEFI = True
+            mock_args.TRADFI = True
             mock_args.DEFI = False
+            mock_args.venues = None
+            mock_args.instrument_ids = None
             
             mock_parse.return_value = mock_args
 
@@ -89,48 +79,12 @@ class TestCLIMain:
 
             assert result["status"] == "success"
             mock_handler.run.assert_called_once()
-
-    def test_main_with_all_query_args(self, mock_handler):
-        """Test main with all query arguments."""
-        with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
-             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler) as mock_get_handler:
-
-            mock_args = Mock()
-            mock_args.mode = "instruments-query"  # Use correct mode for query args
-            mock_args.log_level = "INFO"
-            mock_args.start_date = "2024-01-01"
-            mock_args.end_date = "2024-01-02"
-            mock_args.project_id = "test-project"
-            mock_args.gcs_bucket = "test-bucket"
-            mock_args.bigquery_dataset = "test-dataset"
-            mock_args.force = False
-            mock_args.exchanges = None
-            mock_args.query_type = "details"
-            mock_args.venues = ["BINANCE-SPOT"]
-            mock_args.instrument_types = ["SPOT_PAIR"]
-            mock_args.base_currency = "BTC"
-            mock_args.quote_currency = "USDT"
-            mock_args.symbol_pattern = "BTC.*"
-            mock_args.instrument_id = "TEST:SPOT_PAIR:BTC-USDT"
-            mock_args.instrument_ids = ["TEST:SPOT_PAIR:BTC-USDT"]
-            mock_args.data_type = "trades"
-            mock_args.days_until_expiry = 30
-            mock_args.output_format = "json"
-            mock_args.output_file = "output.json"
-            mock_args.limit = 100
-            mock_args.CEFI = False
-            mock_args.TRADFI = False
-            mock_args.DEFI = False
-            
-            mock_parse.return_value = mock_args
-
-            result = main()
-
-            assert result["status"] == "success"
-            # Verify all kwargs were passed
+            # Verify category flags were passed (only True flags are passed)
             call_kwargs = mock_handler.run.call_args[1]
-            assert "query_type" in call_kwargs
-            assert "venues" in call_kwargs
+            assert call_kwargs.get("cefi") is True
+            assert call_kwargs.get("tradfi") is True
+            # False flags are not passed to handler, so they're None
+            assert "defi" not in call_kwargs
 
     def test_main_failure_status(self, mock_handler):
         """Test main with failure status."""
@@ -147,7 +101,6 @@ class TestCLIMain:
             mock_args.bigquery_dataset = "test-dataset"
             mock_args.force = False
             mock_args.exchanges = None
-            # Default values
             mock_args.CEFI = False
             mock_args.TRADFI = False
             mock_args.DEFI = False
@@ -188,7 +141,6 @@ class TestCLIMain:
             mock_args.bigquery_dataset = "test-dataset"
             mock_args.force = False
             mock_args.exchanges = None
-            # Default values
             mock_args.CEFI = False
             mock_args.TRADFI = False
             mock_args.DEFI = False
@@ -203,9 +155,7 @@ class TestCLIMain:
 
     def test_run_cli_keyboard_interrupt(self):
         """Test run_cli handles KeyboardInterrupt correctly."""
-
         # Test the exception handling logic that run_cli implements
-        # This verifies the exception handling path without complex patching
         def simulate_run_cli_with_interrupt():
             try:
                 raise KeyboardInterrupt()
@@ -225,7 +175,6 @@ class TestCLIMain:
 
     def test_run_cli_exception(self):
         """Test run_cli handles general exceptions correctly."""
-
         # Test the exception handling logic that run_cli implements
         def simulate_run_cli_with_exception():
             try:

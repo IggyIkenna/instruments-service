@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 import requests
 from unified_cloud_services import get_secret_with_fallback
-from instruments_service.settings import instruments_config
+from instruments_service.config import instruments_config
 
 
 class ClickUpRateLimiter:

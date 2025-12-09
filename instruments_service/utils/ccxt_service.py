@@ -13,7 +13,7 @@ Used by:
 
 import logging
 import ccxt
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,63 @@ class CCXTService:
 
         logger.info(f"✅ CCXTService initialized (cache TTL: {cache_ttl_hours}h)")
 
+    def preload_markets_parallel(self, venues: List[str], max_workers: int = 4) -> Dict[str, bool]:
+        """
+        Pre-load CCXT markets for multiple venues in parallel.
+
+        PERFORMANCE: Loads markets from different CCXT exchanges concurrently,
+        reducing total load time from O(n*latency) to O(latency).
+
+        Args:
+            venues: List of venue identifiers to pre-load
+            max_workers: Maximum parallel threads (default: 4)
+
+        Returns:
+            Dictionary mapping ccxt_exchange_id to success status
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # Get unique CCXT exchange IDs (avoid loading same exchange multiple times)
+        ccxt_exchange_ids = set()
+        for venue in venues:
+            ccxt_id = self.venue_mapping.venue_to_ccxt.get(venue)
+            if ccxt_id:
+                ccxt_exchange_ids.add((venue, ccxt_id))
+
+        # Filter out already-cached exchanges and spot-only exchanges
+        spot_only_exchanges = {"upbit", "coinbase"}
+        to_load = [
+            (v, cid) for v, cid in ccxt_exchange_ids
+            if cid not in self._markets_cache and cid.lower() not in spot_only_exchanges
+        ]
+
+        if not to_load:
+            logger.info("📋 All CCXT markets already cached or skipped (spot-only)")
+            return {}
+
+        logger.info(f"⚡ Pre-loading {len(to_load)} CCXT exchanges in parallel (max_workers={max_workers})...")
+
+        results = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self.load_markets, venue): (venue, ccxt_id)
+                for venue, ccxt_id in to_load
+            }
+            for future in as_completed(futures):
+                venue, ccxt_id = futures[future]
+                try:
+                    result = future.result()
+                    results[ccxt_id] = result is not None
+                    if result:
+                        logger.debug(f"✅ Pre-loaded {ccxt_id} markets")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to pre-load {ccxt_id}: {e}")
+                    results[ccxt_id] = False
+
+        success_count = sum(1 for v in results.values() if v)
+        logger.info(f"✅ Pre-loaded {success_count}/{len(to_load)} CCXT exchanges")
+        return results
+
     def get_ccxt_exchange(self, venue: str) -> Optional[ccxt.Exchange]:
         """
         Get CCXT exchange instance for a venue.
@@ -80,7 +137,11 @@ class CCXTService:
         """
         Load markets for a venue with caching.
 
-        Args:
+        PERFORMANCE: Uses ccxt_exchange_id as cache key so that venues sharing
+        the same CCXT exchange (e.g., BINANCE-SPOT and BINANCE-FUTURES both use
+        'binance') share the same cached markets data.
+
+         Args:
             venue: Venue identifier
             force_refresh: If True, bypass cache and reload
 
@@ -92,11 +153,13 @@ class CCXTService:
             logger.debug(f"No CCXT mapping for venue: {venue}")
             return None
 
-        # Check cache
-        cache_key = f"{venue}_{ccxt_exchange_id}"
+        # PERFORMANCE FIX: Use ccxt_exchange_id as cache key (not venue)
+        # This allows BINANCE-SPOT and BINANCE-FUTURES to share cached markets
+        cache_key = ccxt_exchange_id
         if not force_refresh and self._is_cache_valid(cache_key):
             logger.debug(
-                f"📋 Using cached CCXT markets for {venue} ({len(self._markets_cache[cache_key]['markets'])} markets)"
+                f"📋 Using cached CCXT markets for {venue} via {ccxt_exchange_id} "
+                f"({len(self._markets_cache[cache_key]['markets'])} markets)"
             )
             return self._markets_cache[cache_key]
 
@@ -106,13 +169,13 @@ class CCXTService:
             return None
 
         try:
-            # Load markets ONCE per exchange (major performance optimization)
+            # Load markets ONCE per CCXT exchange (major performance optimization)
             markets = exchange.load_markets()
             logger.info(
-                f"⚡ Loaded {len(markets)} CCXT markets for {venue} ({ccxt_exchange_id}) - CACHED for reuse"
+                f"⚡ Loaded {len(markets)} CCXT markets for {ccxt_exchange_id} - CACHED for all venues using this exchange"
             )
 
-            # Cache the results
+            # Cache the results by ccxt_exchange_id
             ccxt_data = {
                 "exchange": exchange,
                 "markets": markets,
@@ -401,6 +464,19 @@ class CCXTService:
         Returns:
             Dictionary with metadata fields or empty dict (but ccxt_symbol should always be set)
         """
+        # Skip slow CCXT market loading for spot-only exchanges
+        # Just return default symbol format (Tardis provides the actual market data)
+        spot_only_exchanges = {"UPBIT", "COINBASE"}
+        if venue.upper() in spot_only_exchanges:
+            logger.debug(f"⏭️ Skipping CCXT market load for {venue} (spot-only exchange)")
+            default_symbol = self._generate_default_ccxt_symbol(
+                venue, base_asset, quote_asset, symbol_id, instrument_type
+            )
+            return {
+                "ccxt_symbol": default_symbol,
+                "ccxt_exchange": self.venue_mapping.venue_to_ccxt.get(venue, ""),
+            }
+
         ccxt_data = self.load_markets(venue)
         markets = ccxt_data.get("markets") if ccxt_data else None
 
@@ -517,6 +593,19 @@ class CCXTService:
             cached_params = self._leverage_tiers_cache[venue]
             logger.debug(f"Using cached leverage tiers for {venue}")
             return cached_params.copy()  # Return copy to avoid mutation
+
+        # Skip CCXT for spot-only instruments and exchanges (no leverage needed)
+        # This avoids slow/hanging API calls to exchanges like Coinbase
+        spot_only_exchanges = {"UPBIT", "COINBASE"}
+        if instrument_type == "SPOT_PAIR" or venue.upper() in spot_only_exchanges:
+            logger.debug(
+                f"⏭️ Skipping CCXT leverage lookup for {venue}:{symbol_id} "
+                f"(instrument_type={instrument_type}, spot-only exchange)"
+            )
+            fallback_params = self._get_leverage_limits_fallback(venue)
+            if fallback_params:
+                self._leverage_tiers_cache[venue] = fallback_params
+            return fallback_params or {}
 
         ccxt_data = self.load_markets(venue)
         if not ccxt_data or not ccxt_data.get("exchange"):
