@@ -245,44 +245,59 @@ class CloudInstrumentStorage:
                 or get_config("PYTEST_CURRENT_TEST", "") != ""
             )
             
-            # Upload each category group to its respective bucket
+            # Group uploads by bucket to use batch upload per bucket
+            # (each bucket needs its own cloud service)
+            bucket_uploads: dict[str, list[tuple[str, Any, str]]] = {}  # bucket -> [(gcs_path, df, category)]
+            
             for category, category_df in category_groups:
+                category_bucket = get_bucket_for_category(category, test_mode=is_test)
+                gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
+                category_df_to_store = category_df.copy()
+                
+                if category_bucket not in bucket_uploads:
+                    bucket_uploads[category_bucket] = []
+                bucket_uploads[category_bucket].append((gcs_path, category_df_to_store, category))
+            
+            # Upload to each bucket using batch upload (thread-safe)
+            for bucket_name, uploads_list in bucket_uploads.items():
                 try:
-                    # Get bucket for this category
-                    category_bucket = get_bucket_for_category(category, test_mode=is_test)
-                    
-                    # Create cloud service for this category bucket
-                    category_cloud_target = CloudTarget(
+                    # Create cloud service for this bucket
+                    bucket_cloud_target = CloudTarget(
                         project_id=self.cloud_target.project_id,
-                        gcs_bucket=category_bucket,
+                        gcs_bucket=bucket_name,
                         bigquery_dataset=self.cloud_target.bigquery_dataset,
                         bigquery_location=self.cloud_target.bigquery_location,
                     )
-                    category_cloud_service = StandardizedDomainCloudService(
-                        domain="instruments", cloud_target=category_cloud_target
+                    bucket_cloud_service = StandardizedDomainCloudService(
+                        domain="instruments", cloud_target=bucket_cloud_target
                     )
                     
-                    # market_category is now a real field, keep it in the stored data
-                    category_df_to_store = category_df.copy()
+                    # Prepare batch upload
+                    batch_uploads = [
+                        {"data": df, "gcs_path": gcs_path, "format": "parquet"}
+                        for gcs_path, df, _ in uploads_list
+                    ]
                     
-                    # Upload to GCS in instrument_availability/by_date structure
-                    # Path format: instrument_availability/by_date/day-YYYY-MM-DD/instruments.parquet
-                    gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
+                    # Use thread-safe batch upload
+                    results = bucket_cloud_service.upload_to_gcs_batch(batch_uploads, show_progress=False)
                     
-                    category_cloud_service.upload_to_gcs(
-                        data=category_df_to_store, gcs_path=gcs_path, format="parquet"
-                    )
-                    
-                    logger.info(
-                        f"✅ Uploaded {len(category_df)} {category} instruments to GCS: "
-                        f"{category_bucket}/{gcs_path}"
-                    )
-                    total_stored += len(category_df)
+                    # Process results
+                    for i, result in enumerate(results):
+                        gcs_path, df, category = uploads_list[i]
+                        if result.get("success"):
+                            logger.info(
+                                f"✅ Uploaded {len(df)} {category} instruments to GCS: "
+                                f"{bucket_name}/{gcs_path}"
+                            )
+                            total_stored += len(df)
+                        else:
+                            logger.error(
+                                f"❌ GCS upload failed for {category} category: {result.get('error')}"
+                            )
+                            all_successful = False
                     
                 except Exception as gcs_error:
-                    logger.error(
-                        f"❌ GCS upload failed for {category} category: {gcs_error}"
-                    )
+                    logger.error(f"❌ GCS upload failed for bucket {bucket_name}: {gcs_error}")
                     all_successful = False
 
             if all_successful:
