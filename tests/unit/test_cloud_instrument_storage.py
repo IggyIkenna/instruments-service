@@ -40,6 +40,10 @@ class TestCloudInstrumentStorage:
         # This handles the category-based service creation inside store_instruments
         mock_category_service = Mock()
         mock_category_service.upload_to_gcs = Mock(return_value=True)
+        # Mock batch upload to return success for each upload
+        mock_category_service.upload_to_gcs_batch = Mock(
+            side_effect=lambda uploads, **kwargs: [{"success": True, "gcs_path": u["gcs_path"]} for u in uploads]
+        )
 
         # Mock sampling service
         mock_sampling_service = Mock()
@@ -171,8 +175,8 @@ class TestCloudInstrumentStorage:
         result = storage.store_instruments(df, table_name="instruments", date=date)
 
         assert result is True
-        # Check that category service was called
-        storage._mock_category_service.upload_to_gcs.assert_called()
+        # Check that category service batch upload was called
+        storage._mock_category_service.upload_to_gcs_batch.assert_called()
 
     def test_store_instruments_no_date(self, storage, mock_cloud_service):
         """Test storing instruments without date."""
@@ -189,7 +193,7 @@ class TestCloudInstrumentStorage:
         result = storage.store_instruments(df, table_name="instruments")
 
         assert result is True
-        storage._mock_category_service.upload_to_gcs.assert_called()
+        storage._mock_category_service.upload_to_gcs_batch.assert_called()
 
     def test_store_instruments_failure(self, storage, mock_cloud_service):
         """Test storing instruments with failure."""
@@ -202,7 +206,7 @@ class TestCloudInstrumentStorage:
                 "available_from_datetime": ["2024-01-01T00:00:00Z"],
             }
         )
-        storage._mock_category_service.upload_to_gcs = Mock(side_effect=Exception("Upload failed"))
+        storage._mock_category_service.upload_to_gcs_batch = Mock(side_effect=Exception("Upload failed"))
 
         result = storage.store_instruments(df, table_name="instruments")
 
@@ -253,7 +257,7 @@ class TestCloudInstrumentStorage:
             }
         )
 
-        storage._mock_category_service.upload_to_gcs = Mock(side_effect=Exception("Storage error"))
+        storage._mock_category_service.upload_to_gcs_batch = Mock(side_effect=Exception("Storage error"))
 
         result = storage.store_instruments(df, table_name="instruments")
 
@@ -275,7 +279,7 @@ class TestCloudInstrumentStorage:
 
         assert result is True
         # Should extract date from available_from_datetime
-        storage._mock_category_service.upload_to_gcs.assert_called()
+        storage._mock_category_service.upload_to_gcs_batch.assert_called()
 
     def test_store_instruments_timestamp_conversion(self, storage, mock_cloud_service):
         """Test timestamp column conversion."""
@@ -294,7 +298,7 @@ class TestCloudInstrumentStorage:
         result = storage.store_instruments(df, table_name="instruments")
 
         assert result is True
-        storage._mock_category_service.upload_to_gcs.assert_called()
+        storage._mock_category_service.upload_to_gcs_batch.assert_called()
 
     def test_store_instruments_string_timestamp(self, storage, mock_cloud_service):
         """Test storing instruments with string timestamps."""
@@ -312,7 +316,7 @@ class TestCloudInstrumentStorage:
         result = storage.store_instruments(df, table_name="instruments")
 
         assert result is True
-        storage._mock_category_service.upload_to_gcs.assert_called()
+        storage._mock_category_service.upload_to_gcs_batch.assert_called()
 
     def test_init_import_error(self):
         """Test initialization when unified-cloud-services not available."""
@@ -340,7 +344,7 @@ class TestCloudInstrumentStorage:
 
         # Should still succeed with fallback to current date
         assert result is True
-        storage._mock_category_service.upload_to_gcs.assert_called()
+        storage._mock_category_service.upload_to_gcs_batch.assert_called()
 
     def test_store_instruments_no_available_from_datetime_column(self, storage, mock_cloud_service):
         """Test storing instruments when available_from_datetime extraction fails."""
@@ -360,7 +364,7 @@ class TestCloudInstrumentStorage:
         result = storage.store_instruments(df, table_name="instruments", date=None)
 
         assert result is True
-        storage._mock_category_service.upload_to_gcs.assert_called()
+        storage._mock_category_service.upload_to_gcs_batch.assert_called()
 
     def test_store_instruments_timestamp_parsing_error(self, storage, mock_cloud_service):
         """Test storing instruments with timestamp parsing error."""
@@ -379,4 +383,4 @@ class TestCloudInstrumentStorage:
         result = storage.store_instruments(df, table_name="instruments")
 
         assert result is True
-        storage._mock_category_service.upload_to_gcs.assert_called()
+        storage._mock_category_service.upload_to_gcs_batch.assert_called()
