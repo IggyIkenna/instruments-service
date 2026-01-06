@@ -104,22 +104,22 @@ cp .env.example .env
 ### CLI Usage
 
 ```bash
-# Generate instruments for a date range
+# Generate instruments for all domains (CeFi + TradFi + DeFi)
 python -m instruments_service --mode instruments \
-    --start-date 2023-05-23 \
-    --end-date 2023-05-24
+    --start-date 2025-01-06 --end-date 2025-01-06 \
+    --CEFI --TRADFI --DEFI --force
 
-# Query instruments
+# Generate CeFi only (Binance, Deribit, Bybit, OKX via Tardis)
 python -m instruments_service --mode instruments \
-    --start-date 2023-05-23 \
-    --venues BINANCE-FUTURES \
-    --instrument-types PERPETUAL
+    --start-date 2025-01-06 --CEFI --force
 
-# Get instrument details
+# Generate TradFi only (CME, NASDAQ, NYSE via Databento)
 python -m instruments_service --mode instruments \
-    --start-date 2023-05-23 \
-    --query-type details \
-    --instrument-id BINANCE-FUTURES:PERPETUAL:BTC-USDT
+    --start-date 2025-01-06 --TRADFI --force
+
+# Generate DeFi only (Uniswap, Aave, Curve via The Graph)
+python -m instruments_service --mode instruments \
+    --start-date 2025-01-06 --DEFI --force
 ```
 
 ### Programmatic Usage
