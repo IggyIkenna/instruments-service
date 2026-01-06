@@ -1,0 +1,355 @@
+# Instruments Service - Deployment Guide (Femi)
+
+**Last Updated:** January 6, 2026  
+**Owner:** Femi  
+**Service:** `instruments-service`
+
+---
+
+## Overview
+
+This guide covers deploying `instruments-service` to GCP for batch historical backfill and T+1 daily updates.
+
+---
+
+## Success Criteria
+
+| Criteria | Target | Notes |
+|----------|--------|-------|
+| **CeFi Mode** | All dates from **Nov 17, 2019** to today | Tardis.dev started recording late 2019 |
+| **TradFi Mode** | All dates from **Jan 1, 2020** to today | Databento API - historical equity/futures data |
+| **DeFi Mode** | All dates from **Dec 18, 2020** to today | Most DeFi protocols launched 2020-2021 |
+| **GCS Output** | Data in correct buckets | See bucket paths below |
+| **T+1 Scheduler** | Running after 8am UTC daily | Cloud Scheduler configured |
+
+**Note:** You CAN try running from Jan 1, 2019 but expect empty results for dates before the data sources have coverage. The system will handle missing data gracefully.
+
+---
+
+## Data Availability by Domain
+
+### CeFi (via Tardis.dev)
+
+| Exchange | Launch Date | Tardis Recording Start | Notes |
+|----------|-------------|------------------------|-------|
+| **Binance** | July 2017 | **Nov 2019** | Tardis.dev started recording late 2019 |
+| **Binance Futures** | Sept 2019 | **Nov 2019** | Available from Tardis start |
+| **OKX (OKEx)** | 2017 | **Nov 2019** | Available from Tardis start |
+| **Bybit** | March 2018 | **Nov 2019** | Available from Tardis start |
+| **Deribit** | 2016 | **Nov 2019** | Options exchange |
+
+**Earliest CeFi data in GCS:** `day-2019-11-17`
+
+### TradFi (via Databento)
+
+| Asset Class | Availability | Notes |
+|-------------|--------------|-------|
+| **Equities (NYSE, NASDAQ)** | 2000+ | Historical data available |
+| **Futures (CME, CBOT)** | 2000+ | E-mini S&P, commodities |
+| **Micro Futures** | 2019+ | Micro E-mini launched May 2019 |
+| **Bitcoin Futures (CME)** | Dec 2017+ | BTC futures launched Dec 2017 |
+| **Bitcoin ETFs (IBIT, etc.)** | **Jan 2024** | Spot Bitcoin ETFs approved Jan 10, 2024 |
+| **Bitcoin Futures ETF (BITO)** | Oct 2021+ | First futures-based BTC ETF |
+
+**Earliest TradFi data in GCS:** `day-2020-01-01`
+
+### DeFi (via The Graph / Protocol SDKs)
+
+| Protocol | Launch Date | Notes |
+|----------|-------------|-------|
+| **Uniswap V2** | May 2020 | First major DEX |
+| **Uniswap V3** | May 2021 | Concentrated liquidity |
+| **Lido (stETH)** | **Dec 2020** | Liquid staking |
+| **AAVE V2** | Dec 2020 | Lending protocol |
+| **AAVE V3** | March 2022 | Multi-chain |
+| **Curve** | Aug 2020 | Stablecoin DEX |
+| **Balancer** | March 2020 | Weighted pools |
+| **EtherFi** | 2023 | Restaking |
+| **Ethena (USDe)** | **2024** | Synthetic dollar |
+| **Morpho** | 2022 | Lending optimizer |
+
+**Earliest DeFi data in GCS:** `day-2020-12-18`
+
+---
+
+## Prerequisites
+
+### 1. GCP Access
+
+```bash
+# Service account with:
+# - Storage Admin (for GCS writes)
+# - Secret Manager Accessor (for API keys)
+# - Compute Instance Admin (for VM deployment)
+
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+export GCS_PROJECT_ID=central-element-323112
+```
+
+### 2. API Keys (in Secret Manager)
+
+| Secret Name | Purpose |
+|-------------|---------|
+| `tardis-api-key` | CeFi crypto exchange data |
+| `databento-api-key` | TradFi equity/futures data |
+| `alchemy-api-key` | DeFi on-chain data |
+| `the-graph-api-key` | DeFi DEX pool enumeration |
+
+### 3. Python Environment
+
+```bash
+# On VM
+python3 -m venv venv
+source venv/bin/activate
+pip install -e .
+pip install git+https://github.com/IggyIkenna/unified-cloud-services.git
+```
+
+---
+
+## GCS Bucket Structure
+
+### Output Buckets
+
+| Domain | Bucket | Path Pattern |
+|--------|--------|--------------|
+| **CeFi** | `gs://instruments-store-cefi-central-element-323112/` | `instrument_availability/by_date/day-{YYYY-MM-DD}/instruments.parquet` |
+| **TradFi** | `gs://instruments-store-tradfi-central-element-323112/` | `instrument_availability/by_date/day-{YYYY-MM-DD}/instruments.parquet` |
+| **DeFi** | `gs://instruments-store-defi-central-element-323112/` | `instrument_availability/by_date/day-{YYYY-MM-DD}/instruments.parquet` |
+
+### Expected File Sizes (Benchmark: June 3, 2024)
+
+| Domain | Actual Size | Notes |
+|--------|-------------|-------|
+| **CeFi** | **~35 KB** | 34.9 KiB on 2024-06-03 |
+| **TradFi** | **~289 KB** | 288.52 KiB on 2024-06-03 (includes all equity/futures) |
+| **DeFi** | **~45 KB** | 44.83 KiB on 2024-06-03 |
+
+**Note:** File sizes may vary by date. Earlier dates will be smaller (fewer instruments existed). Recent dates may be slightly larger as new instruments are added.
+
+---
+
+## CLI Commands
+
+### Single Day Run
+
+```bash
+# CeFi mode only (with --force to regenerate)
+python -m instruments_service --mode instruments --start-date 2024-06-03 --CEFI --force
+
+# TradFi mode only
+python -m instruments_service --mode instruments --start-date 2024-06-03 --TRADFI --force
+
+# DeFi mode only
+python -m instruments_service --mode instruments --start-date 2024-06-03 --DEFI --force
+
+# All modes (default - no domain flags needed)
+python -m instruments_service --mode instruments --start-date 2024-06-03 --force
+```
+
+### Date Range Run (Historical Backfill)
+
+**IMPORTANT:** Always use `--force` to wipe existing data and ensure latest code is used.
+
+```bash
+# CeFi backfill (from Tardis start date Nov 2019) until Jan 5, 2026
+python -m instruments_service --mode instruments \
+  --start-date 2019-11-17 \
+  --end-date 2026-01-05 \
+  --CEFI --force
+
+# TradFi backfill (from Jan 2020) until Jan 5, 2026
+python -m instruments_service --mode instruments \
+  --start-date 2020-01-01 \
+  --end-date 2026-01-05 \
+  --TRADFI --force
+
+# DeFi backfill (from Dec 2020) until Jan 5, 2026
+python -m instruments_service --mode instruments \
+  --start-date 2020-12-18 \
+  --end-date 2026-01-05 \
+  --DEFI --force
+
+# OR all domains at once (from Jan 1, 2019 - will have empty results for early dates)
+python -m instruments_service --mode instruments \
+  --start-date 2019-01-01 \
+  --end-date 2026-01-05 \
+  --force
+```
+
+**Note:** 
+- Backfill ends on **Jan 5, 2026** (yesterday)
+- T+1 scheduler starts from **Jan 6, 2026** (today)
+- Always use `--force` to ensure data is regenerated with latest code
+
+### T+1 Daily Run (Starts Jan 6, 2026)
+
+```bash
+# Single day for yesterday (get yesterday's date first)
+YESTERDAY=$(date -d "yesterday" +%Y-%m-%d 2>/dev/null || date -v-1d +%Y-%m-%d)
+python -m instruments_service --mode instruments --start-date $YESTERDAY --force
+```
+
+**Note:** T+1 scheduler should start running from **Jan 6, 2026** onwards (after backfill completes up to Jan 5, 2026).
+
+---
+
+## VM Deployment
+
+### 1. Create VM
+
+```bash
+# Use asia-northeast1 (Tokyo) - same region as other UTS resources
+gcloud compute instances create instruments-service-vm \
+  --zone=asia-northeast1-c \
+  --machine-type=e2-medium \
+  --image-family=debian-11 \
+  --image-project=debian-cloud \
+  --boot-disk-size=50GB \
+  --service-account=instruments-service@central-element-323112.iam.gserviceaccount.com \
+  --scopes=cloud-platform
+```
+
+**Note:** Use `asia-northeast1-c` (Tokyo) to match other UTS infrastructure and minimize GCS egress costs.
+
+### 2. SSH and Setup
+
+```bash
+gcloud compute ssh instruments-service-vm --zone=asia-northeast1-c
+
+# Install Python 3.11+
+sudo apt update && sudo apt install -y python3.11 python3.11-venv git
+
+# Clone and install
+git clone https://github.com/IggyIkenna/instruments-service.git
+cd instruments-service
+python3.11 -m venv venv
+source venv/bin/activate
+pip install -e .
+pip install git+https://github.com/IggyIkenna/unified-cloud-services.git
+```
+
+### 3. Run Backfill
+
+```bash
+# Screen session for long-running backfill
+screen -S backfill
+
+# Run CeFi backfill (may take hours)
+python -m instruments_service.cli.main --mode cefi \
+  --start-date 2019-01-01 \
+  --end-date 2026-01-06
+
+# Detach: Ctrl+A, D
+# Reattach: screen -r backfill
+```
+
+---
+
+## Cloud Scheduler (T+1 Daily)
+
+### Create Scheduler Job
+
+```bash
+# Create Cloud Scheduler job for daily T+1 run
+# Use asia-northeast1 to match VM region
+gcloud scheduler jobs create http instruments-daily-t1 \
+  --location=asia-northeast1 \
+  --schedule="0 9 * * *" \
+  --time-zone="UTC" \
+  --uri="https://asia-northeast1-central-element-323112.cloudfunctions.net/instruments-t1" \
+  --http-method=POST \
+  --message-body='{"mode": "instruments", "start_date": "yesterday"}'
+```
+
+### Alternative: VM-based Cron
+
+```bash
+# On VM, add to crontab
+crontab -e
+
+# Add line for 9am UTC daily
+0 9 * * * /home/user/instruments-service/venv/bin/python -m instruments_service.cli.main --mode all --date yesterday >> /var/log/instruments-t1.log 2>&1
+```
+
+---
+
+## Verification
+
+### Check GCS Output
+
+```bash
+# List CeFi output files
+gsutil ls "gs://instruments-store-cefi-central-element-323112/instrument_availability/by_date/" | head -20
+
+# Check specific date
+gsutil cat "gs://instruments-store-cefi-central-element-323112/instrument_availability/by_date/day-2024-01-15/instruments.parquet" | head
+
+# Count files
+gsutil ls "gs://instruments-store-cefi-central-element-323112/instrument_availability/by_date/" | wc -l
+```
+
+### Expected Output
+
+After successful backfill:
+
+| Domain | Expected Days | Start Date | Notes |
+|--------|---------------|------------|-------|
+| **CeFi** | ~1,880+ | **2019-11-17** | Tardis.dev recording start |
+| **TradFi** | ~2,190+ | **2020-01-01** | Databento historical data |
+| **DeFi** | ~1,480+ | **2020-12-18** | Most protocols launched 2020-2021 |
+
+**Total storage estimate:** ~600 MB (CeFi) + ~600 MB (TradFi) + ~65 MB (DeFi) = ~1.3 GB
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+| Issue | Cause | Solution |
+|-------|-------|----------|
+| `TARDIS_API_KEY not found` | Secret not in Secret Manager | Add via `gcloud secrets create` |
+| `Permission denied on GCS` | Missing Storage Admin role | Update service account IAM |
+| `Rate limit exceeded` | API throttling | Add retry logic or slow down |
+| `No instruments found` | Date before exchange existed | Expected - log and continue |
+
+### Logs
+
+```bash
+# Check logs
+tail -f /var/log/instruments-t1.log
+
+# Check for errors
+grep -i error /var/log/instruments-t1.log
+```
+
+---
+
+## Milestones (Femi Contract)
+
+| Milestone | Description | Due | Payment |
+|-----------|-------------|-----|---------|
+| **B2** | instruments-service batch deployed + T+1 | Jan 2 | Part of $625 |
+
+### Acceptance Criteria for B2
+
+1. ✅ VM deployment working in `asia-northeast1-c`
+2. ✅ CeFi mode: **Nov 17, 2019 - Jan 5, 2026** populated in GCS (with `--force`)
+3. ✅ TradFi mode: **Jan 1, 2020 - Jan 5, 2026** populated in GCS (with `--force`)
+4. ✅ DeFi mode: **Dec 18, 2020 - Jan 5, 2026** populated in GCS (with `--force`)
+5. ✅ T+1 scheduler starts **Jan 6, 2026** running at 9am UTC daily
+6. ✅ Ikenna has verified sample outputs in GCS (check June 3, 2024: ~35KB CeFi, ~289KB TradFi, ~45KB DeFi)
+
+---
+
+## Contact
+
+- **Technical Questions:** Ikenna (code/specs)
+- **Deployment Issues:** Femi (VM/scheduler)
+- **Progress Tracking:** Julian (ClickUp)
+
+---
+
+*Last updated: January 6, 2026*
+
