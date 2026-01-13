@@ -156,7 +156,9 @@ class AaveV3Adapter(BaseDefiAdapter):
         )
         
         # Initialize centralized The Graph client for subgraph queries
+        graph_config = TheGraphClientConfig(secret_name=instruments_config.graph_secret_name)
         self._thegraph_client = TheGraphBaseClient(
+            config=graph_config,
             project_id=self.project_id,
         )
         if graph_api_key:
