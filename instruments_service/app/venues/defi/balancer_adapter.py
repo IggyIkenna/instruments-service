@@ -13,6 +13,7 @@ from datetime import datetime
 
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
+from instruments_service.config import instruments_config
 
 logger = logging.getLogger(__name__)
 
@@ -64,9 +65,13 @@ class BalancerAdapter(BaseDefiAdapter):
                 subgraph_url = "https://api-v3.balancer.fi/graphql"
 
         # Use TheGraphClient for GraphQL queries (works with any GraphQL endpoint)
+        # Pass secret_name from config so it uses the correct Secret Manager secret
         self.graph_client = TheGraphClient(
-            subgraph_url, api_key=None, project_id=project_id
-        )  # Balancer API doesn't need API key
+            subgraph_url=subgraph_url, 
+            api_key=None, 
+            project_id=project_id,
+            secret_name=instruments_config.graph_secret_name
+        )  # Balancer API doesn't need API key, but we still want correct secret name for consistency
         logger.info(
             f"✅ BalancerAdapter initialized for chain: {self.chain} (using Balancer API v3)"
         )
