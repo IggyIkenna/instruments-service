@@ -99,8 +99,12 @@ class UniswapV3Adapter(BaseDefiAdapter):
                 }
             subgraph_url = subgraph_urls.get(self.chain, subgraph_urls["ETHEREUM"])
 
+        # Pass secret_name from config so it uses the correct Secret Manager secret
         self.graph_client = TheGraphClient(
-            subgraph_url=subgraph_url, api_key=self.api_key, project_id=self.project_id
+            subgraph_url=subgraph_url, 
+            api_key=self.api_key, 
+            project_id=self.project_id,
+            secret_name=instruments_config.graph_secret_name
         )
         logger.info(f"✅ UniswapV3Adapter initialized for chain: {self.chain}")
 

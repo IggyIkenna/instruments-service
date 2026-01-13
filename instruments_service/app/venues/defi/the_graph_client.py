@@ -53,7 +53,7 @@ class TheGraphClient:
         subgraph_url: Optional[str] = None,
         api_key: Optional[str] = None,
         project_id: Optional[str] = None,
-        secret_name: str = "THE_GRAPH_API_KEY",
+        secret_name: Optional[str] = None,
     ):
         """
         Initialize The Graph client using centralized TheGraphBaseClient.
@@ -62,8 +62,13 @@ class TheGraphClient:
             subgraph_url: Subgraph URL (uses default if not provided)
             api_key: Optional API key (TheGraphBaseClient handles Secret Manager)
             project_id: GCP project ID for Secret Manager
-            secret_name: Secret name for API key
+            secret_name: Secret name for API key (defaults to config value)
         """
+        # Get secret name from config if not provided
+        if secret_name is None:
+            from instruments_service.config import instruments_config
+            secret_name = instruments_config.graph_secret_name
+        
         # Create config with custom secret name if provided
         config = TheGraphClientConfig(
             secret_name=secret_name,
