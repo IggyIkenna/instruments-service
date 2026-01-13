@@ -24,6 +24,30 @@ This guide covers deploying `instruments-service` to GCP for batch historical ba
 
 **Note:** You CAN try running from Jan 1, 2019 but expect empty results for dates before the data sources have coverage. The system will handle missing data gracefully.
 
+### Success Criteria Command
+
+The deployment should be verified using the following command:
+
+```bash
+python -m instruments_service --mode instruments \
+    --start-date 2020-01-01 \
+    --end-date 2026-01-12 \
+    --CEFI --TRADFI --DEFI --force
+```
+
+**Litmus Test Date: May 23rd, 2023**
+
+May 23rd, 2023 is used as the benchmark/litmus test date to verify the system is running properly. This date was chosen because it represents a period when most products across all domains (CeFi, TradFi, and DeFi) were active and operational.
+
+**Expected Gaps:**
+
+- **DeFi and CeFi:** Gaps are expected for dates before product launch dates, especially for DeFi and CeFi domains, as some products hadn't launched yet. For example:
+  - Many DeFi protocols launched in 2020-2021 (see Data Availability section below)
+  - Some CeFi exchanges may have limited historical coverage
+  - The system handles missing data gracefully and will skip dates/products that don't exist yet
+
+- **Verification:** Use May 23rd, 2023 as the primary verification date to confirm the system is working correctly, as this date should have comprehensive coverage across all domains. See the benchmark data in the "Expected File Sizes & Row Counts" section below for expected results on this date.
+
 ---
 
 ## Data Availability by Domain
