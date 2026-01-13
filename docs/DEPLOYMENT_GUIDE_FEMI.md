@@ -117,7 +117,19 @@ pip install git+https://github.com/IggyIkenna/unified-cloud-services.git
 | **TradFi** | `gs://instruments-store-tradfi-central-element-323112/` | `instrument_availability/by_date/day-{YYYY-MM-DD}/instruments.parquet` |
 | **DeFi** | `gs://instruments-store-defi-central-element-323112/` | `instrument_availability/by_date/day-{YYYY-MM-DD}/instruments.parquet` |
 
-### Expected File Sizes (Benchmark: June 3, 2024)
+### Expected File Sizes & Row Counts (Benchmarks)
+
+#### Benchmark: May 23, 2023 (Historical Reference Date)
+
+| Domain | File Size | Rows | Columns | Notes |
+|--------|-----------|------|---------|-------|
+| **CeFi** | **168.73 KB** (0.16 MB) | **2,905** | 59 | Crypto exchanges (Binance, OKX, Bybit, Deribit) |
+| **TradFi** | **310.19 KB** (0.30 MB) | **9,577** | 59 | Equities, futures, options (NYSE, NASDAQ, CME) |
+| **DeFi** | **45.77 KB** (0.04 MB) | **116** | 59 | DEX pools, lending protocols (Uniswap, AAVE, Curve) |
+
+**Total for 2023-05-23:** ~525 KB, **12,598 instruments**
+
+#### Benchmark: June 3, 2024 (Recent Date)
 
 | Domain | Actual Size | Notes |
 |--------|-------------|-------|
@@ -125,7 +137,19 @@ pip install git+https://github.com/IggyIkenna/unified-cloud-services.git
 | **TradFi** | **~289 KB** | 288.52 KiB on 2024-06-03 (includes all equity/futures) |
 | **DeFi** | **~45 KB** | 44.83 KiB on 2024-06-03 |
 
-**Note:** File sizes may vary by date. Earlier dates will be smaller (fewer instruments existed). Recent dates may be slightly larger as new instruments are added.
+**Note:** 
+- File sizes and row counts vary by date based on:
+  - **Earlier dates (2020-2023):** Fewer instruments existed (new exchanges/protocols launched over time)
+  - **Recent dates (2024+):** More instruments as new assets, exchanges, and protocols are added
+  - **TradFi:** Largest domain due to thousands of equity tickers and futures contracts
+  - **CeFi:** Moderate size with major crypto exchanges
+  - **DeFi:** Smallest domain with curated protocol instruments
+
+**Success Criteria for Deployment:**
+- Verify files exist in GCS for target dates
+- Check file sizes are within expected ranges (see benchmarks above)
+- Confirm row counts match expected instrument counts per domain
+- All files should have 59 columns (standard instrument definition schema)
 
 ---
 
@@ -301,6 +325,39 @@ After successful backfill:
 
 **Total storage estimate:** ~600 MB (CeFi) + ~600 MB (TradFi) + ~65 MB (DeFi) = ~1.3 GB
 
+### Verification Commands
+
+```bash
+# Check specific date (2023-05-23 benchmark)
+gsutil ls gs://instruments-store-cefi-central-element-323112/instrument_availability/by_date/day-2023-05-23/
+gsutil ls gs://instruments-store-tradfi-central-element-323112/instrument_availability/by_date/day-2023-05-23/
+gsutil ls gs://instruments-store-defi-central-element-323112/instrument_availability/by_date/day-2023-05-23/
+
+# Download and verify file sizes and row counts
+gsutil cp gs://instruments-store-cefi-central-element-323112/instrument_availability/by_date/day-2023-05-23/instruments.parquet /tmp/cefi.parquet
+gsutil cp gs://instruments-store-tradfi-central-element-323112/instrument_availability/by_date/day-2023-05-23/instruments.parquet /tmp/tradfi.parquet
+gsutil cp gs://instruments-store-defi-central-element-323112/instrument_availability/by_date/day-2023-05-23/instruments.parquet /tmp/defi.parquet
+
+# Check file sizes
+ls -lh /tmp/*.parquet
+
+# Count rows (requires pandas)
+python3 -c "
+import pandas as pd
+import os
+for domain in ['cefi', 'tradfi', 'defi']:
+    file_path = f'/tmp/{domain}.parquet'
+    df = pd.read_parquet(file_path)
+    size_kb = os.path.getsize(file_path) / 1024
+    print(f'{domain.upper()}: {len(df):,} rows, {size_kb:.2f} KB')
+"
+```
+
+**Expected Results for 2023-05-23:**
+- CeFi: ~2,905 rows, ~169 KB
+- TradFi: ~9,577 rows, ~310 KB
+- DeFi: ~116 rows, ~46 KB
+
 ---
 
 ## Troubleshooting
@@ -339,7 +396,10 @@ grep -i error /var/log/instruments-t1.log
 3. ✅ TradFi mode: **Jan 1, 2020 - Jan 5, 2026** populated in GCS (with `--force`)
 4. ✅ DeFi mode: **Dec 18, 2020 - Jan 5, 2026** populated in GCS (with `--force`)
 5. ✅ T+1 scheduler starts **Jan 6, 2026** running at 9am UTC daily
-6. ✅ Ikenna has verified sample outputs in GCS (check June 3, 2024: ~35KB CeFi, ~289KB TradFi, ~45KB DeFi)
+6. ✅ Ikenna has verified sample outputs in GCS:
+   - **2023-05-23 benchmark:** CeFi ~169KB (2,905 rows), TradFi ~310KB (9,577 rows), DeFi ~46KB (116 rows)
+   - **2024-06-03 reference:** CeFi ~35KB, TradFi ~289KB, DeFi ~45KB
+   - All files have 59 columns (standard schema)
 
 ---
 
