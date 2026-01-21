@@ -275,33 +275,6 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
     return deleted_count
 
 
-def import_from_tasks_md(
-    client: ClickUpClient, list_id: str, tasks_md_path: Path, dry_run: bool = False
-):
-    """Import tasks from tasks.md (DEPRECATED - tasks.md merged into STATUS.md)"""
-    print(f"\n⚠️  Note: tasks.md has been merged into STATUS.md")
-    print(f"   Use --source STATUS.md instead to import from STATUS.md")
-    print(f"   This function is kept for backwards compatibility but will use STATUS.md parser")
-
-    # Redirect to STATUS.md import
-    status_md_path = tasks_md_path.parent.parent / "docs" / "STATUS.md"
-    if status_md_path.exists():
-        print(f"\n📥 Redirecting to STATUS.md import...")
-        from scripts.clickup_import import ClickUpImporter
-
-        sprint_start = "2025-11-07"  # Default sprint start
-        importer = ClickUpImporter(
-            client.api_token,
-            list_id,
-            dry_run=dry_run,
-            sprint_start_date=sprint_start,
-            clean_orphaned=False,
-        )
-        importer.import_from_status_md(status_md_path)
-    else:
-        print(f"   ⚠️  STATUS.md not found at {status_md_path}")
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="Delete all ClickUp tasks with 'instruments-service' tag and re-import"
