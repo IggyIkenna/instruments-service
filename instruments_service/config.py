@@ -253,51 +253,6 @@ class UnifiedInstrumentConfig:
         return all_insts
 
 
-# Legacy compatibility: Keep DatabentoInstrumentConfig as a wrapper
-@dataclass
-class DatabentoInstrumentConfig:
-    """
-    Legacy wrapper for UnifiedInstrumentConfig.
-
-    Maintains backward compatibility while using unified config internally.
-    """
-
-    def __init__(self):
-        self._unified = UnifiedInstrumentConfig()
-
-    @property
-    def extended_symbols(self) -> List[str]:
-        """All symbols (for backward compatibility)"""
-        return [inst.symbol for inst in self._unified.instruments]
-
-    @property
-    def sp500_stocks(self) -> List[str]:
-        """S&P 500 stocks (subset of equities)"""
-        return self._unified.get_symbols_by_type("EQUITY")
-
-    def get_dataset_and_stype(self, symbol: str) -> Tuple[str, str]:
-        """Get dataset and stype_in for a symbol"""
-        result = self._unified.get_dataset_and_stype(symbol)
-        if result:
-            return result
-        # Default fallback
-        if symbol.endswith(".FUT") or any(
-            inst.symbol == symbol.replace(".FUT", "")
-            for inst in self._unified.instruments
-            if inst.instrument_type == "FUTURE"
-        ):
-            return ("GLBX.MDP3", "parent")
-        return ("DBEQ.BASIC", "raw_symbol")
-
-    def get_human_readable_name(self, exchange_code: str) -> str:
-        """Convert exchange code to human-readable name"""
-        return self._unified.get_human_readable_name(exchange_code)
-
-    def get_symbols_for_venue(self, venue: str) -> List[str]:
-        """Get all symbols for a venue (e.g., 'CME', 'NASDAQ', 'ICE')"""
-        return self._unified.get_symbols_for_venue(venue)
-
-
 # ============================================================================
 # SERVICE-LEVEL CONFIGURATION (Pydantic BaseSettings)
 # VenueMapping, DataTypeConfig, ExchangeInstrumentConfig

@@ -20,7 +20,6 @@ __all__ = [
     "VenueMapping",
     "ExchangeInstrumentConfig",
     "DataTypeConfig",
-    "DatabentoInstrumentConfig",
     "UnifiedInstrumentConfig",
 ]
 
@@ -59,14 +58,12 @@ def __getattr__(name):
         "VenueMapping",
         "ExchangeInstrumentConfig",
         "DataTypeConfig",
-        "DatabentoInstrumentConfig",
         "UnifiedInstrumentConfig",
     ):
         from instruments_service.config import (
             VenueMapping,
             ExchangeInstrumentConfig,
             DataTypeConfig,
-            DatabentoInstrumentConfig,
             UnifiedInstrumentConfig,
         )
 
@@ -74,7 +71,6 @@ def __getattr__(name):
             "VenueMapping": VenueMapping,
             "ExchangeInstrumentConfig": ExchangeInstrumentConfig,
             "DataTypeConfig": DataTypeConfig,
-            "DatabentoInstrumentConfig": DatabentoInstrumentConfig,
             "UnifiedInstrumentConfig": UnifiedInstrumentConfig,
         }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
