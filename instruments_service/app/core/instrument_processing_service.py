@@ -832,16 +832,12 @@ class InstrumentProcessingService:
                         symbol_info.get("type", "")
                     )
 
-                    # CRITICAL: Set data_types based on venue AND instrument_type
-                    # Deribit OPTIONS use 'options_chain', but PERPETUALS use standard data types
-                    if canonical_venue == "DERIBIT" and normalized_instrument_type == "OPTION":
-                        config_data_types = ["options_chain"]
-                    else:
-                        # Other venues and DERIBIT PERPETUALS: Use instrument_type-based config
-                        config_data_types = self.data_config.instrument_data_types.get(
-                            normalized_instrument_type or "SPOT_PAIR",
-                            ["trades", "book_snapshot_5"],
-                        )
+                    # CRITICAL: Set data_types based on instrument_type from config
+                    # All instrument types (including OPTION) now use config-based data types
+                    config_data_types = self.data_config.instrument_data_types.get(
+                        normalized_instrument_type or "SPOT_PAIR",
+                        ["trades", "book_snapshot_5"],
+                    )
                     data_types_str = ",".join(config_data_types)
 
                     # CRITICAL: Set tardis_exchange based on venue+instrument_type mapping
@@ -1175,16 +1171,12 @@ class InstrumentProcessingService:
             inst_data["venue_type"] = "spot"
             inst_data["underlying"] = ""  # Not applicable for spot
 
-        # Data types based on venue first, then instrument type
-        # Deribit: All instruments use only 'options_chain' per documentation
-        venue = inst_data.get("venue", "")
-        if venue == "DERIBIT":
-            inst_data["data_types"] = "options_chain"
-        else:
-            inst_type = inst_data.get("instrument_type", "SPOT_PAIR")
-            inst_data["data_types"] = ",".join(
-                self.data_config.instrument_data_types.get(inst_type, ["trades", "book_snapshot_5"])
-            )
+        # Data types based on instrument type from config
+        # All instrument types (including OPTION) now use config-based data types
+        inst_type = inst_data.get("instrument_type", "SPOT_PAIR")
+        inst_data["data_types"] = ",".join(
+            self.data_config.instrument_data_types.get(inst_type, ["trades", "book_snapshot_5"])
+        )
 
         return inst_data
 
