@@ -15,7 +15,7 @@ from instruments_service.app.core.instrument_processing_service import Instrumen
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 from unified_cloud_services import VenueMapping
-from instruments_service.config import DatabentoInstrumentConfig
+from instruments_service.config import UnifiedInstrumentConfig
 from instruments_service.app.venues.databento.databento_adapter import DatabentoAdapter
 from instruments_service.models import InstrumentDefinition
 
@@ -366,7 +366,7 @@ class InstrumentsService:
             # Process TRADFI (Databento) exchanges
             if tradfi:
                 try:
-                    databento_config = DatabentoInstrumentConfig()
+                    databento_config = UnifiedInstrumentConfig()
 
                     # Get all available TradFi exchanges (canonical venues)
                     # Note: all_databento_venues contains canonical venue names (e.g., "CME", "CBOE", "NASDAQ", "NYSE")
