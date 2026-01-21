@@ -1723,7 +1723,9 @@ class DatabentoAdapter:
             "ccxt_exchange": "",
             "available_from_datetime": available_from,
             "available_to_datetime": available_to,  # Trading session end time (or expiry if no session)
-            "data_types": "ohlcv_1m",  # We fetch OHLCV 1m candles from Databento
+            # Data types: OPTIONS use trades (OHLCV not available for options in Databento)
+            # See: https://databento.com/docs/examples/options/equity-options-introduction
+            "data_types": "trades" if instrument_type == "OPTION" else "ohlcv_1m",
             "inverse": False,
             "contract_size": (
                 row.get("contract_size", None) if pd.notna(row.get("contract_size")) else None
