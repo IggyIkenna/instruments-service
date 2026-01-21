@@ -405,8 +405,8 @@ class InstrumentsService:
                             )
                             databento_exchanges = []
                     else:
-                        # Default: All TradFi exchanges (CME futures/options, CBOE VIX, NASDAQ/NYSE equities, Yahoo Finance FX)
-                        databento_exchanges = ["CME", "CBOE", "NASDAQ", "NYSE", "YAHOO_FINANCE"]
+                        # Default: All TradFi exchanges (CME, ICE, CBOE VIX, NASDAQ/NYSE equities, Yahoo Finance FX)
+                        databento_exchanges = ["CME", "ICE", "CBOE", "NASDAQ", "NYSE", "YAHOO_FINANCE"]
                         logger.info(
                             f"🔍 No venue filter specified, processing default TRADFI exchanges: {databento_exchanges}"
                         )
