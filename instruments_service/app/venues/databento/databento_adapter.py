@@ -722,8 +722,12 @@ class DatabentoAdapter:
             Databento dataset ID
         """
         dataset_mapping = {
-            "CME": "GLBX.MDP3",
+            "CME": "GLBX.MDP3",  # CME Globex (ES, NQ, CL, NG, GC, etc.)
+            "ICE": "IFUS.IMPACT",  # ICE Futures US (Cotton CT, Coffee KC, Sugar SB, Cocoa CC, OJ, DX)
+            "ICE-EU": "IFEU.IMPACT",  # ICE Europe (Brent, Gas Oil)
             "CBOE": "BARCHART",  # VIX only (handled separately, not via Databento)
+            "NASDAQ": "DBEQ.BASIC",  # NASDAQ equities
+            "NYSE": "DBEQ.BASIC",  # NYSE equities
         }
 
         exchange_upper = exchange.upper()
@@ -1757,7 +1761,11 @@ class DatabentoAdapter:
         """
         venue_mapping = {
             "CME": "CME",
+            "ICE": "ICE",
+            "ICE-EU": "ICE-EU",
             "CBOE": "CBOE",
+            "NASDAQ": "NASDAQ",
+            "NYSE": "NYSE",
         }
 
         exchange_upper = exchange.upper()
