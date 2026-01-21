@@ -86,6 +86,12 @@ def parse_arguments() -> argparse.Namespace:
 
     # Market type filters (can be combined, default is ALL if none specified)
     parser.add_argument(
+        "--category",
+        nargs="+",
+        choices=["CEFI", "TRADFI", "DEFI"],
+        help="Market categories to process (can specify multiple: --category CEFI TRADFI). Alternative to --CEFI --TRADFI --DEFI flags.",
+    )
+    parser.add_argument(
         "--CEFI",
         action="store_true",
         help="Include CEFI (Centralized Finance) exchanges via Tardis (binance, deribit, bybit, okx, etc.). Default: Process all market types if no flags specified.",
@@ -158,8 +164,9 @@ Examples:
   # Generate DEFI instruments only (The Graph: uniswap_v3, curve, aave_v3, etc.)
   python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --DEFI --force
 
-  # Generate CEFI and TRADFI (combine flags)
+  # Generate CEFI and TRADFI (combine flags OR use --category)
   python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --CEFI --TRADFI --force
+  python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --category CEFI TRADFI --force
 
   # Generate instruments with force flag
   python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --force
