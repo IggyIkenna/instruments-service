@@ -45,6 +45,65 @@ def _get_data_dir() -> Path:
     return Path(__file__).parent / "data"
 
 
+# ============================================================================
+# TRADFI INSTRUMENTS CONFIG (Inline - no external JSON file needed)
+# ============================================================================
+# This maps Databento symbols to venues and datasets for TradFi instruments.
+# ICE Futures US (IFUS.IMPACT): Cotton, Coffee, Sugar, Cocoa, OJ, Dollar Index
+# CME Globex (GLBX.MDP3): ES, NQ, CL, NG, GC, SI, HG, ZC, ZW, ZS, currencies
+
+TRADFI_INSTRUMENTS_CONFIG: List[Dict] = [
+    # CME Futures (GLBX.MDP3)
+    {"symbol": "ES.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SP500", "code": "ES"},
+    {"symbol": "NQ.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "NASDAQ100", "code": "NQ"},
+    {"symbol": "CL.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "CRUDE", "code": "CL"},
+    {"symbol": "NG.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "NATGAS", "code": "NG"},
+    {"symbol": "GC.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "GOLD", "code": "GC"},
+    {"symbol": "SI.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SILVER", "code": "SI"},
+    {"symbol": "HG.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "COPPER", "code": "HG"},
+    {"symbol": "ZC.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "CORN", "code": "ZC"},
+    {"symbol": "ZW.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "WHEAT", "code": "ZW"},
+    {"symbol": "ZS.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SOYBEAN", "code": "ZS"},
+    {"symbol": "6E.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "EUR", "code": "6E"},
+    {"symbol": "6J.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "JPY", "code": "6J"},
+    {"symbol": "6B.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "GBP", "code": "6B"},
+    {"symbol": "6C.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "CAD", "code": "6C"},
+    {"symbol": "6A.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "AUD", "code": "6A"},
+    {"symbol": "6S.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "CHF", "code": "6S"},
+    {"symbol": "6L.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "BRL", "code": "6L"},
+    {"symbol": "6N.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "NZD", "code": "6N"},
+    {"symbol": "6Z.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "ZAR", "code": "6Z"},
+    {"symbol": "RB.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "GASOLINE", "code": "RB"},
+    {"symbol": "HO.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "HEATINGOIL", "code": "HO"},
+    # CME Options (GLBX.MDP3)
+    {"symbol": "ES.OPT", "venue": "CME", "type": "OPTION", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SP500", "code": "ES"},
+    {"symbol": "EW1.OPT", "venue": "CME", "type": "OPTION", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SP500", "code": "EW1", "underlying": "ES"},
+    {"symbol": "EW2.OPT", "venue": "CME", "type": "OPTION", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SP500", "code": "EW2", "underlying": "ES"},
+    {"symbol": "EW3.OPT", "venue": "CME", "type": "OPTION", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SP500", "code": "EW3", "underlying": "ES"},
+    {"symbol": "EW4.OPT", "venue": "CME", "type": "OPTION", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SP500", "code": "EW4", "underlying": "ES"},
+    # ICE Futures US (IFUS.IMPACT) - Soft commodities and Dollar Index
+    {"symbol": "CT.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "COTTON", "code": "CT"},
+    {"symbol": "CC.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "COCOA", "code": "CC"},
+    {"symbol": "KC.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "COFFEE", "code": "KC"},
+    {"symbol": "SB.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "SUGAR", "code": "SB"},
+    {"symbol": "OJ.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "ORANGEJUICE", "code": "OJ"},
+    {"symbol": "DX.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "DOLLARINDEX", "code": "DX"},
+]
+
+EXCHANGE_CODE_TO_NAME: Dict[str, str] = {
+    # CME
+    "ES": "SP500", "NQ": "NASDAQ100", "CL": "CRUDE", "NG": "NATGAS",
+    "GC": "GOLD", "SI": "SILVER", "HG": "COPPER", "ZC": "CORN",
+    "ZW": "WHEAT", "ZS": "SOYBEAN", "6E": "EUR", "6J": "JPY",
+    "6B": "GBP", "6C": "CAD", "6A": "AUD", "6S": "CHF",
+    "6L": "BRL", "6N": "NZD", "6Z": "ZAR", "RB": "GASOLINE", "HO": "HEATINGOIL",
+    "EW1": "SP500", "EW2": "SP500", "EW3": "SP500", "EW4": "SP500",
+    # ICE
+    "CT": "COTTON", "CC": "COCOA", "KC": "COFFEE", "SB": "SUGAR",
+    "OJ": "ORANGEJUICE", "DX": "DOLLARINDEX",
+}
+
+
 def _load_sp500_tickers() -> Tuple[List[str], List[str]]:
     """Load S&P 500 tickers from JSON file."""
     global _sp500_tickers_cache, _nasdaq_tickers_cache
@@ -73,28 +132,20 @@ def _load_sp500_tickers() -> Tuple[List[str], List[str]]:
 
 
 def _load_tradfi_instruments() -> Tuple[List[Dict], Dict[str, str]]:
-    """Load TradFi instruments and exchange code mappings from JSON file."""
+    """Load TradFi instruments and exchange code mappings from inline config.
+    
+    Previously loaded from data/tradfi_instruments.json, now uses inline
+    TRADFI_INSTRUMENTS_CONFIG and EXCHANGE_CODE_TO_NAME for version control.
+    """
     global _tradfi_instruments_cache, _exchange_code_to_name_cache
     
     if _tradfi_instruments_cache is not None:
         return _tradfi_instruments_cache, _exchange_code_to_name_cache or {}
     
-    try:
-        data_file = _get_data_dir() / "tradfi_instruments.json"
-        if data_file.exists():
-            with open(data_file, "r") as f:
-                data = json.load(f)
-                _tradfi_instruments_cache = data.get("instruments", [])
-                _exchange_code_to_name_cache = data.get("exchange_code_to_name", {})
-                logger.debug(f"Loaded {len(_tradfi_instruments_cache)} TradFi instruments from {data_file}")
-        else:
-            logger.warning(f"TradFi instruments file not found: {data_file}")
-            _tradfi_instruments_cache = []
-            _exchange_code_to_name_cache = {}
-    except Exception as e:
-        logger.error(f"Failed to load TradFi instruments: {e}")
-        _tradfi_instruments_cache = []
-        _exchange_code_to_name_cache = {}
+    # Use inline config instead of external JSON file
+    _tradfi_instruments_cache = TRADFI_INSTRUMENTS_CONFIG
+    _exchange_code_to_name_cache = EXCHANGE_CODE_TO_NAME
+    logger.debug(f"Loaded {len(_tradfi_instruments_cache)} TradFi instruments from inline config")
     
     return _tradfi_instruments_cache, _exchange_code_to_name_cache
 
