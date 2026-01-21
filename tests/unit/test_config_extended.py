@@ -737,7 +737,7 @@ class TestDataTypeConfigExtended:
                 "derivative_ticker",
                 "liquidations",
             ],
-            "OPTION": ["options_chain"],
+            "OPTION": ["options_chain", "trades", "book_snapshot_5", "liquidations"],
         }
 
         for inst_type, expected_types in test_cases.items():
