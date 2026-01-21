@@ -200,6 +200,31 @@ This date shows the expanded universe after Bitcoin ETF launches and additional 
 
 ---
 
+## Expected Runtime
+
+### Performance Benchmarks
+
+**Runtime per day**: ~2 minutes per day (for all domains: CeFi, TradFi, DeFi combined)
+
+**Notes**:
+- Runtime is consistent across dates (processes all domains in single run)
+- Runtime may vary slightly based on:
+  - Number of instruments discovered per domain
+  - API response times (Tardis, Databento, The Graph)
+  - Network latency
+- For historical backfill of multiple years, runtime scales linearly:
+  - 1 year (~365 days) ≈ ~12 hours
+  - 2 years (~730 days) ≈ ~24 hours
+  - 5 years (~1,825 days) ≈ ~61 hours (~2.5 days)
+
+**Example Runtime Estimates**:
+- Single day (2023-05-23): ~2 minutes
+- One month (May 2023): ~60 minutes (~1 hour)
+- One year (2023): ~12 hours
+- Full historical backfill (2019-2026): ~3-4 days (depending on start date)
+
+---
+
 ## CLI Commands
 
 ### Single Day Run

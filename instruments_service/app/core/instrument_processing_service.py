@@ -43,6 +43,8 @@ from instruments_service.app.venues.tardis import TardisAdapter
 from instruments_service.app.venues.databento import DatabentoAdapter
 from instruments_service.app.venues.defi import (
     UniswapV3Adapter,
+    UniswapV2Adapter,
+    UniswapV4Adapter,
     BalancerAdapter,
     AaveV3Adapter,
     EtherFiAdapter,
@@ -50,6 +52,8 @@ from instruments_service.app.venues.defi import (
     AsterAdapter,
     HyperliquidAdapter,
     MorphoAdapter,
+    CurveAdapter,
+    EthenaAdapter,
 )
 
 # Import Secret Manager for API key retrieval
@@ -2297,8 +2301,6 @@ class InstrumentProcessingService:
             elif protocol.lower() == "uniswap_v2":
                 logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
                 return {}
-                from instruments_service.app.venues.defi import UniswapV2Adapter
-
                 adapter = UniswapV2Adapter(chain=chain, api_key=graph_api_key)
                 raw_instruments = adapter.fetch_pools(
                     base_currency_list=base_currency_list,
@@ -2309,8 +2311,6 @@ class InstrumentProcessingService:
             elif protocol.lower() == "uniswap_v4":
                 logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
                 return {}
-                from instruments_service.app.venues.defi import UniswapV4Adapter
-
                 adapter = UniswapV4Adapter(chain=chain, api_key=graph_api_key)
                 raw_instruments = adapter.fetch_pools(
                     base_currency_list=base_currency_list,
@@ -2321,8 +2321,6 @@ class InstrumentProcessingService:
             elif protocol.lower() == "curve":
                 logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
                 return {}
-                from instruments_service.app.venues.defi import CurveAdapter
-
                 adapter = CurveAdapter(chain=chain, api_key=graph_api_key)
                 raw_instruments = adapter.fetch_pools(
                     base_currency_list=base_currency_list,
@@ -2331,8 +2329,6 @@ class InstrumentProcessingService:
                 )
 
             elif protocol.lower() == "ethena":
-                from instruments_service.app.venues.defi import EthenaAdapter
-
                 adapter = EthenaAdapter(chain=chain)
                 raw_instruments = adapter.fetch_yield_bearing_instruments()
 
