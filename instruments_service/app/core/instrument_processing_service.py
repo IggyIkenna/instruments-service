@@ -43,8 +43,6 @@ from instruments_service.app.venues.tardis import TardisAdapter
 from instruments_service.app.venues.databento import DatabentoAdapter
 from instruments_service.app.venues.defi import (
     UniswapV3Adapter,
-    UniswapV2Adapter,
-    UniswapV4Adapter,
     BalancerAdapter,
     AaveV3Adapter,
     EtherFiAdapter,
@@ -52,7 +50,7 @@ from instruments_service.app.venues.defi import (
     AsterAdapter,
     HyperliquidAdapter,
     MorphoAdapter,
-    CurveAdapter,
+    CurveRPCAdapter,
     EthenaAdapter,
 )
 
