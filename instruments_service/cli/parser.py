@@ -62,8 +62,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--gcs-bucket",
         type=str,
-        default="instruments-store-central-element-323112",
-        help="GCS bucket name (default: instruments-store-central-element-323112)",
+        default=None,  # Category-specific buckets are used automatically
+        help="GCS bucket name (default: uses category-specific buckets from .env)",
     )
     parser.add_argument(
         "--bigquery-dataset",
