@@ -34,9 +34,11 @@ class CloudDataProvider:
         if cloud_target is None:
             import os
 
+            # NOTE: This default is only used when no category is specified.
+            # Production flow should always use category-specific buckets via get_bucket_for_category()
             cloud_target = CloudTarget(
                 project_id=get_config("GCP_PROJECT_ID", "central-element-323112"),
-                gcs_bucket=get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
+                gcs_bucket=get_config("INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-central-element-323112"),
                 bigquery_dataset=get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
                 bigquery_location=get_config(
                     "BIGQUERY_LOCATION", "asia-northeast1"
