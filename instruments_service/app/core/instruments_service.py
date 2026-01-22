@@ -497,12 +497,16 @@ class InstrumentsService:
                                         logger.info(f"✅ Processed {len(instruments)} total instruments from {exchange}")
                                     return instruments
                                 elif exchange == "ICE":
-                                    # ICE datasets (IFEU.IMPACT, IFUS.IMPACT) were added to Databento in October 2024
-                                    # Skip ICE for dates before the datasets were available
-                                    ice_dataset_launch = datetime(2024, 10, 1, tzinfo=timezone.utc)
-                                    if date < ice_dataset_launch:
+                                    # ICE datasets have different availability dates:
+                                    # - IFUS.IMPACT (ICE US - Cotton, Coffee, Sugar, etc.): Dec 23, 2018
+                                    # - IFEU.IMPACT (ICE Europe - Brent, Gasoil, WTI): Oct 1, 2024
+                                    # 
+                                    # Since we can't filter per-symbol here, we use the earliest date (IFUS)
+                                    # The individual symbol downloads will handle IFEU date filtering
+                                    ice_us_launch = datetime(2018, 12, 23, tzinfo=timezone.utc)
+                                    if date < ice_us_launch:
                                         logger.info(
-                                            f"⏭️ Skipping ICE - date {date.strftime('%Y-%m-%d')} is before ICE dataset launch (2024-10-01)"
+                                            f"⏭️ Skipping ICE - date {date.strftime('%Y-%m-%d')} is before ICE US dataset launch (2018-12-23)"
                                         )
                                         return {}
                                     
