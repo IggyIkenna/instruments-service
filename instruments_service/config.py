@@ -49,21 +49,48 @@ def _get_data_dir() -> Path:
 # TRADFI INSTRUMENTS CONFIG (Inline - no external JSON file needed)
 # ============================================================================
 # This maps Databento symbols to venues and datasets for TradFi instruments.
-# ICE Futures US (IFUS.IMPACT): Cotton, Coffee, Sugar, Cocoa, OJ, Dollar Index
-# CME Globex (GLBX.MDP3): ES, NQ, CL, NG, GC, SI, HG, ZC, ZW, ZS, currencies
+# 
+# DATASETS:
+# - GLBX.MDP3: CME Globex (ES, NQ, CL, NG, GC, SI, HG, ZC, ZW, ZS, currencies)
+# - IFUS.IMPACT: ICE Futures US (Cotton, Coffee, Sugar, Cocoa, OJ, Dollar Index)
+# - IFEU.IMPACT: ICE Futures Europe (Brent Crude, Gasoil, etc.)
+# - NDEX.IMPACT: ICE Endex (European natural gas)
+# - OPRA.PILLAR: US Options (equities, indices)
+# - DBEQ.BASIC: US Equities
+#
+# PARENT SYMBOLOGY: Use [ROOT].FUT for futures, [ROOT].OPT for options
+# See: https://databento.com/docs/standards-and-conventions/symbology
 
 TRADFI_INSTRUMENTS_CONFIG: List[Dict] = [
-    # CME Futures (GLBX.MDP3)
+    # =========================================================================
+    # CME Globex Futures (GLBX.MDP3) - Index, Energy, Metals, Grains, Currencies
+    # =========================================================================
     {"symbol": "ES.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SP500", "code": "ES"},
     {"symbol": "NQ.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "NASDAQ100", "code": "NQ"},
+    {"symbol": "RTY.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "RUSSELL2000", "code": "RTY"},
+    {"symbol": "YM.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "DOW", "code": "YM"},
+    # Energy (CME/NYMEX)
     {"symbol": "CL.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "CRUDE", "code": "CL"},
     {"symbol": "NG.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "NATGAS", "code": "NG"},
+    {"symbol": "RB.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "GASOLINE", "code": "RB"},
+    {"symbol": "HO.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "HEATINGOIL", "code": "HO"},
+    # Metals (CME/COMEX)
     {"symbol": "GC.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "GOLD", "code": "GC"},
     {"symbol": "SI.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SILVER", "code": "SI"},
     {"symbol": "HG.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "COPPER", "code": "HG"},
+    {"symbol": "PL.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "PLATINUM", "code": "PL"},
+    # Grains (CME/CBOT)
     {"symbol": "ZC.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "CORN", "code": "ZC"},
     {"symbol": "ZW.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "WHEAT", "code": "ZW"},
     {"symbol": "ZS.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SOYBEAN", "code": "ZS"},
+    {"symbol": "ZM.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SOYMEAL", "code": "ZM"},
+    {"symbol": "ZL.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SOYOIL", "code": "ZL"},
+    # Interest Rates (CME/CBOT)
+    {"symbol": "ZB.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "TBOND", "code": "ZB"},
+    {"symbol": "ZN.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "TNOTE10Y", "code": "ZN"},
+    {"symbol": "ZF.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "TNOTE5Y", "code": "ZF"},
+    {"symbol": "ZT.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "TNOTE2Y", "code": "ZT"},
+    # Currencies (CME)
     {"symbol": "6E.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "EUR", "code": "6E"},
     {"symbol": "6J.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "JPY", "code": "6J"},
     {"symbol": "6B.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "GBP", "code": "6B"},
@@ -73,34 +100,165 @@ TRADFI_INSTRUMENTS_CONFIG: List[Dict] = [
     {"symbol": "6L.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "BRL", "code": "6L"},
     {"symbol": "6N.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "NZD", "code": "6N"},
     {"symbol": "6Z.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "ZAR", "code": "6Z"},
-    {"symbol": "RB.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "GASOLINE", "code": "RB"},
-    {"symbol": "HO.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "HEATINGOIL", "code": "HO"},
+    {"symbol": "6M.FUT", "venue": "CME", "type": "FUTURE", "dataset": "GLBX.MDP3", "stype": "parent", "base": "MXN", "code": "6M"},
+    # =========================================================================
     # CME Options (GLBX.MDP3)
+    # =========================================================================
     {"symbol": "ES.OPT", "venue": "CME", "type": "OPTION", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SP500", "code": "ES"},
+    {"symbol": "NQ.OPT", "venue": "CME", "type": "OPTION", "dataset": "GLBX.MDP3", "stype": "parent", "base": "NASDAQ100", "code": "NQ"},
+    {"symbol": "CL.OPT", "venue": "CME", "type": "OPTION", "dataset": "GLBX.MDP3", "stype": "parent", "base": "CRUDE", "code": "CL"},
+    {"symbol": "GC.OPT", "venue": "CME", "type": "OPTION", "dataset": "GLBX.MDP3", "stype": "parent", "base": "GOLD", "code": "GC"},
+    # Weekly ES options (EW1-EW4)
     {"symbol": "EW1.OPT", "venue": "CME", "type": "OPTION", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SP500", "code": "EW1", "underlying": "ES"},
     {"symbol": "EW2.OPT", "venue": "CME", "type": "OPTION", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SP500", "code": "EW2", "underlying": "ES"},
     {"symbol": "EW3.OPT", "venue": "CME", "type": "OPTION", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SP500", "code": "EW3", "underlying": "ES"},
     {"symbol": "EW4.OPT", "venue": "CME", "type": "OPTION", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SP500", "code": "EW4", "underlying": "ES"},
+    # =========================================================================
     # ICE Futures US (IFUS.IMPACT) - Soft commodities and Dollar Index
+    # =========================================================================
     {"symbol": "CT.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "COTTON", "code": "CT"},
     {"symbol": "CC.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "COCOA", "code": "CC"},
     {"symbol": "KC.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "COFFEE", "code": "KC"},
     {"symbol": "SB.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "SUGAR", "code": "SB"},
     {"symbol": "OJ.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "ORANGEJUICE", "code": "OJ"},
     {"symbol": "DX.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "DOLLARINDEX", "code": "DX"},
+    # =========================================================================
+    # ICE Futures Europe (IFEU.IMPACT) - Energy commodities
+    # NOTE: Brent crude symbol on ICE Europe is "B", not "BRN"
+    # =========================================================================
+    {"symbol": "B.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFEU.IMPACT", "stype": "parent", "base": "BRENT", "code": "B"},
+    {"symbol": "G.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFEU.IMPACT", "stype": "parent", "base": "GASOIL", "code": "G"},
+    {"symbol": "T.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFEU.IMPACT", "stype": "parent", "base": "WTI", "code": "T"},
 ]
 
+# ============================================================================
+# VALID DATABENTO PARENT SYMBOLS - Used for validation in market-tick-data-handler
+# ============================================================================
+# Maps canonical underlying -> (databento_parent_symbol, dataset)
+# Only symbols in this map are valid for parent symbology downloads
+DATABENTO_VALID_PARENT_SYMBOLS: Dict[str, Tuple[str, str]] = {
+    # CME Index Futures
+    "ES": ("ES.FUT", "GLBX.MDP3"),
+    "SP500": ("ES.FUT", "GLBX.MDP3"),
+    "NQ": ("NQ.FUT", "GLBX.MDP3"),
+    "NASDAQ100": ("NQ.FUT", "GLBX.MDP3"),
+    "RTY": ("RTY.FUT", "GLBX.MDP3"),
+    "RUSSELL2000": ("RTY.FUT", "GLBX.MDP3"),
+    "YM": ("YM.FUT", "GLBX.MDP3"),
+    "DOW": ("YM.FUT", "GLBX.MDP3"),
+    # CME Energy
+    "CL": ("CL.FUT", "GLBX.MDP3"),
+    "CRUDE": ("CL.FUT", "GLBX.MDP3"),
+    "NG": ("NG.FUT", "GLBX.MDP3"),
+    "NATGAS": ("NG.FUT", "GLBX.MDP3"),
+    "RB": ("RB.FUT", "GLBX.MDP3"),
+    "GASOLINE": ("RB.FUT", "GLBX.MDP3"),
+    "HO": ("HO.FUT", "GLBX.MDP3"),
+    "HEATINGOIL": ("HO.FUT", "GLBX.MDP3"),
+    # CME Metals
+    "GC": ("GC.FUT", "GLBX.MDP3"),
+    "GOLD": ("GC.FUT", "GLBX.MDP3"),
+    "SI": ("SI.FUT", "GLBX.MDP3"),
+    "SILVER": ("SI.FUT", "GLBX.MDP3"),
+    "HG": ("HG.FUT", "GLBX.MDP3"),
+    "COPPER": ("HG.FUT", "GLBX.MDP3"),
+    "PL": ("PL.FUT", "GLBX.MDP3"),
+    "PLATINUM": ("PL.FUT", "GLBX.MDP3"),
+    # CME Grains
+    "ZC": ("ZC.FUT", "GLBX.MDP3"),
+    "CORN": ("ZC.FUT", "GLBX.MDP3"),
+    "ZW": ("ZW.FUT", "GLBX.MDP3"),
+    "WHEAT": ("ZW.FUT", "GLBX.MDP3"),
+    "ZS": ("ZS.FUT", "GLBX.MDP3"),
+    "SOYBEAN": ("ZS.FUT", "GLBX.MDP3"),
+    "ZM": ("ZM.FUT", "GLBX.MDP3"),
+    "SOYMEAL": ("ZM.FUT", "GLBX.MDP3"),
+    "ZL": ("ZL.FUT", "GLBX.MDP3"),
+    "SOYOIL": ("ZL.FUT", "GLBX.MDP3"),
+    # CME Interest Rates
+    "ZB": ("ZB.FUT", "GLBX.MDP3"),
+    "TBOND": ("ZB.FUT", "GLBX.MDP3"),
+    "ZN": ("ZN.FUT", "GLBX.MDP3"),
+    "TNOTE10Y": ("ZN.FUT", "GLBX.MDP3"),
+    "ZF": ("ZF.FUT", "GLBX.MDP3"),
+    "TNOTE5Y": ("ZF.FUT", "GLBX.MDP3"),
+    "ZT": ("ZT.FUT", "GLBX.MDP3"),
+    "TNOTE2Y": ("ZT.FUT", "GLBX.MDP3"),
+    # CME Currencies
+    "6E": ("6E.FUT", "GLBX.MDP3"),
+    "EUR": ("6E.FUT", "GLBX.MDP3"),
+    "6J": ("6J.FUT", "GLBX.MDP3"),
+    "JPY": ("6J.FUT", "GLBX.MDP3"),
+    "6B": ("6B.FUT", "GLBX.MDP3"),
+    "GBP": ("6B.FUT", "GLBX.MDP3"),
+    "6C": ("6C.FUT", "GLBX.MDP3"),
+    "CAD": ("6C.FUT", "GLBX.MDP3"),
+    "6A": ("6A.FUT", "GLBX.MDP3"),
+    "AUD": ("6A.FUT", "GLBX.MDP3"),
+    "6S": ("6S.FUT", "GLBX.MDP3"),
+    "CHF": ("6S.FUT", "GLBX.MDP3"),
+    "6M": ("6M.FUT", "GLBX.MDP3"),
+    "MXN": ("6M.FUT", "GLBX.MDP3"),
+    "6N": ("6N.FUT", "GLBX.MDP3"),
+    "NZD": ("6N.FUT", "GLBX.MDP3"),
+    "6L": ("6L.FUT", "GLBX.MDP3"),
+    "BRL": ("6L.FUT", "GLBX.MDP3"),
+    "6Z": ("6Z.FUT", "GLBX.MDP3"),
+    "ZAR": ("6Z.FUT", "GLBX.MDP3"),
+    # ICE Futures US - Softs
+    "CT": ("CT.FUT", "IFUS.IMPACT"),
+    "COTTON": ("CT.FUT", "IFUS.IMPACT"),
+    "CC": ("CC.FUT", "IFUS.IMPACT"),
+    "COCOA": ("CC.FUT", "IFUS.IMPACT"),
+    "KC": ("KC.FUT", "IFUS.IMPACT"),
+    "COFFEE": ("KC.FUT", "IFUS.IMPACT"),
+    "SB": ("SB.FUT", "IFUS.IMPACT"),
+    "SUGAR": ("SB.FUT", "IFUS.IMPACT"),
+    "OJ": ("OJ.FUT", "IFUS.IMPACT"),
+    "ORANGEJUICE": ("OJ.FUT", "IFUS.IMPACT"),
+    "DX": ("DX.FUT", "IFUS.IMPACT"),
+    "DOLLARINDEX": ("DX.FUT", "IFUS.IMPACT"),
+    # ICE Futures Europe - Energy
+    "B": ("B.FUT", "IFEU.IMPACT"),
+    "BRENT": ("B.FUT", "IFEU.IMPACT"),
+    "BRN": ("B.FUT", "IFEU.IMPACT"),  # Common alias for Brent
+    "G": ("G.FUT", "IFEU.IMPACT"),
+    "GASOIL": ("G.FUT", "IFEU.IMPACT"),
+}
+
+# Options parent symbol mapping
+DATABENTO_VALID_OPTIONS_SYMBOLS: Dict[str, Tuple[str, str]] = {
+    "ES": ("ES.OPT", "GLBX.MDP3"),
+    "SP500": ("ES.OPT", "GLBX.MDP3"),
+    "NQ": ("NQ.OPT", "GLBX.MDP3"),
+    "NASDAQ100": ("NQ.OPT", "GLBX.MDP3"),
+    "CL": ("CL.OPT", "GLBX.MDP3"),
+    "CRUDE": ("CL.OPT", "GLBX.MDP3"),
+    "GC": ("GC.OPT", "GLBX.MDP3"),
+    "GOLD": ("GC.OPT", "GLBX.MDP3"),
+}
+
 EXCHANGE_CODE_TO_NAME: Dict[str, str] = {
-    # CME
-    "ES": "SP500", "NQ": "NASDAQ100", "CL": "CRUDE", "NG": "NATGAS",
-    "GC": "GOLD", "SI": "SILVER", "HG": "COPPER", "ZC": "CORN",
-    "ZW": "WHEAT", "ZS": "SOYBEAN", "6E": "EUR", "6J": "JPY",
-    "6B": "GBP", "6C": "CAD", "6A": "AUD", "6S": "CHF",
-    "6L": "BRL", "6N": "NZD", "6Z": "ZAR", "RB": "GASOLINE", "HO": "HEATINGOIL",
+    # CME Index
+    "ES": "SP500", "NQ": "NASDAQ100", "RTY": "RUSSELL2000", "YM": "DOW",
+    # CME Energy
+    "CL": "CRUDE", "NG": "NATGAS", "RB": "GASOLINE", "HO": "HEATINGOIL",
+    # CME Metals
+    "GC": "GOLD", "SI": "SILVER", "HG": "COPPER", "PL": "PLATINUM",
+    # CME Grains
+    "ZC": "CORN", "ZW": "WHEAT", "ZS": "SOYBEAN", "ZM": "SOYMEAL", "ZL": "SOYOIL",
+    # CME Interest Rates
+    "ZB": "TBOND", "ZN": "TNOTE10Y", "ZF": "TNOTE5Y", "ZT": "TNOTE2Y",
+    # CME Currencies
+    "6E": "EUR", "6J": "JPY", "6B": "GBP", "6C": "CAD", "6A": "AUD", "6S": "CHF",
+    "6L": "BRL", "6N": "NZD", "6Z": "ZAR", "6M": "MXN",
+    # CME Options (weekly)
     "EW1": "SP500", "EW2": "SP500", "EW3": "SP500", "EW4": "SP500",
-    # ICE
+    # ICE US
     "CT": "COTTON", "CC": "COCOA", "KC": "COFFEE", "SB": "SUGAR",
     "OJ": "ORANGEJUICE", "DX": "DOLLARINDEX",
+    # ICE Europe
+    "B": "BRENT", "G": "GASOIL", "T": "WTI",
 }
 
 
