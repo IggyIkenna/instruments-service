@@ -1400,6 +1400,7 @@ class DatabentoAdapter:
         # Per INSTRUMENT_KEY.md: stocks/equities use USD as quote currency
         if security_type in ["STK", "ETF", "OPT", "FUT"] or instrument_type in [
             "EQUITY",
+            "ETF",
             "OPTION",
             "FUTURE",
         ]:
