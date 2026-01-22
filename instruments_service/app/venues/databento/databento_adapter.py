@@ -396,15 +396,15 @@ class DatabentoAdapter:
                     )
                 else:
                     # Legacy streaming API (bills every request)
-                    zipped_data = self.client.timeseries.get_range(
+                zipped_data = self.client.timeseries.get_range(
                         dataset=symbol_dataset,
-                        schema=db.Schema.DEFINITION,
-                        symbols=symbol_group,
-                        stype_in=stype_in,
-                        stype_out="instrument_id",
-                        start=start_date_str,
-                        end=end_date_str,
-                    )
+                    schema=db.Schema.DEFINITION,
+                    symbols=symbol_group,
+                    stype_in=stype_in,
+                    stype_out="instrument_id",
+                    start=start_date_str,
+                    end=end_date_str,
+                )
 
                 # Convert to DataFrame
                 df = zipped_data.to_df()
@@ -1051,8 +1051,8 @@ class DatabentoAdapter:
                     elif security_type == "OOF":
                         # This is an option on futures - use options mapping
                         databento_symbol = asset_to_opt_symbol.get(
-                            asset, query_symbols[0] if query_symbols else ""
-                        )
+                        asset, query_symbols[0] if query_symbols else ""
+                    )
                     else:
                         # Unknown type - try futures first, then options
                         databento_symbol = asset_to_fut_symbol.get(
@@ -1413,6 +1413,16 @@ class DatabentoAdapter:
         expiry_time = None
         expiry_str = ""
         expiry_dt = None
+        
+        # Debug: Log all relevant expiry fields for ICE futures
+        if exchange.upper() == "ICE" and instrument_type == "FUTURE":
+            logger.debug(
+                f"🔍 ICE Future debug - raw_symbol: {exchange_raw_symbol}, "
+                f"expiration field: {row.get('expiration', 'NOT_FOUND')}, "
+                f"asset: {row.get('asset', 'NOT_FOUND')}, "
+                f"instrument_class: {row.get('instrument_class', 'NOT_FOUND')}"
+            )
+        
         if "expiration" in row and pd.notna(row["expiration"]):
             expiry_time = row["expiration"]
             # Format expiry as YYMMDD
@@ -1430,11 +1440,18 @@ class DatabentoAdapter:
                     expiry_dt = None
                     expiry_str = ""
                 else:
-                    expiry_str = expiry_dt.strftime("%y%m%d")
+                expiry_str = expiry_dt.strftime("%y%m%d")
+                    logger.debug(
+                        f"✅ Parsed expiry from Databento field for {exchange_raw_symbol}: {expiry_time} -> {expiry_str}"
+                    )
             except Exception as e:
                 logger.warning(f"Failed to parse expiry {expiry_time}: {e}")
                 expiry_dt = None
                 expiry_str = ""
+        elif exchange.upper() == "ICE" and instrument_type == "FUTURE":
+            logger.debug(
+                f"⚠️ ICE Future {exchange_raw_symbol} has no expiration field or it's NaN"
+            )
         
         # If expiry is still missing for ICE/CME futures, try parsing from raw_symbol
         # ICE Europe format: BRNM25 (product + month code + 2-digit year)
@@ -1994,7 +2011,7 @@ class DatabentoAdapter:
                             # - WTI (T): 19:30 London
                             if product_code == "G":
                                 expiry_hour, expiry_minute = 12, 0  # Gasoil
-                            else:
+                    else:
                                 expiry_hour, expiry_minute = 19, 30  # Brent, WTI, others
                             
                             # London timezone handles GMT/BST automatically
@@ -2003,7 +2020,7 @@ class DatabentoAdapter:
                                 expiry_date, time(expiry_hour, expiry_minute, 0)
                             ).replace(tzinfo=london_tz)
                             expiry_iso = expiry_local.astimezone(timezone.utc).isoformat()
-                            logger.debug(
+                        logger.debug(
                                 f"✅ Set ICE Europe expiry to {expiry_hour}:{expiry_minute:02d} London for "
                                 f"{exchange_raw_symbol}: {expiry_date} -> {expiry_iso} (UTC)"
                             )
