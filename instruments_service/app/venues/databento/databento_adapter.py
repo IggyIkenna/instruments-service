@@ -1320,6 +1320,22 @@ class DatabentoAdapter:
             instrument_type = "EQUITY"
         else:
             instrument_type = "EQUITY"  # Default
+        
+        # Override: Known ETFs that Databento returns as STK (Stock)
+        # SPY, QQQ, IVV, etc. are ETFs but security_type="STK" from Databento
+        KNOWN_ETFS = {
+            'SPY', 'QQQ', 'IVV', 'VOO', 'VTI', 'DIA', 'IWM', 'EEM', 'VEA', 'VWO',
+            'GLD', 'SLV', 'USO', 'UNG', 'TLT', 'IEF', 'SHY', 'LQD', 'HYG', 'JNK',
+            'XLF', 'XLE', 'XLK', 'XLV', 'XLI', 'XLY', 'XLP', 'XLB', 'XLU', 'XLRE',
+            'VNQ', 'IBB', 'SMH', 'IBIT', 'FBTC', 'ARKB', 'GBTC', 'BITO'
+        }
+        # Check if symbol (without -USD suffix) is a known ETF
+        symbol_clean = asset_raw.replace('-USD', '').upper() if asset_raw else ''
+        if not symbol_clean and exchange_raw_symbol:
+            symbol_clean = exchange_raw_symbol.replace('-USD', '').upper()
+        if symbol_clean in KNOWN_ETFS:
+            instrument_type = "ETF"
+            logger.debug(f"Overriding {symbol_clean} from STK to ETF (known ETF)")
 
         # exchange_raw_symbol is the actual Databento symbol (contract symbol) passed in
         # This is what the exchange uses internally:
