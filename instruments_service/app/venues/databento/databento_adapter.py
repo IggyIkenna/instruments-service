@@ -1638,15 +1638,18 @@ class DatabentoAdapter:
                         )
 
                     else:
-                        # For non-CME options or non-options, leave blank if date-only
-                        # Actual expiry times vary by contract type and we don't want to guess incorrectly
-                        logger.debug(
-                            f"Databento provided date-only expiry (midnight) for {exchange} {instrument_type} "
-                            f"symbol {exchange_raw_symbol}: {expiry_dt.date()}. "
-                            f"Leaving expiry blank to avoid incorrect expiry time. "
-                            f"Expiry times vary by contract type."
+                        # For non-CME instruments with date-only expiry, use midnight UTC
+                        # This preserves the expiry DATE even if exact time is unknown
+                        # ICE Europe futures, etc. - at least we have the correct expiry date
+                        expiry_date = expiry_dt.date()
+                        expiry_midnight_utc = datetime.combine(
+                            expiry_date, time(0, 0, 0), tzinfo=timezone.utc
                         )
-                        expiry_iso = None  # Leave blank - better than incorrect time
+                        expiry_iso = expiry_midnight_utc.isoformat()
+                        logger.debug(
+                            f"Using midnight UTC for {exchange} {instrument_type} "
+                            f"symbol {exchange_raw_symbol}: {expiry_date} -> {expiry_iso}"
+                        )
                 else:
                     # Databento provided time, use as-is (it's the correct expiry time for this contract)
                     expiry_iso = expiry_dt.isoformat()
