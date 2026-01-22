@@ -267,7 +267,11 @@ EXCHANGE_CODE_TO_NAME: Dict[str, str] = {
 
 
 def _load_sp500_tickers() -> Tuple[List[str], List[str]]:
-    """Load S&P 500 tickers from JSON file."""
+    """Load S&P 500 tickers and ETF tickers from JSON file.
+    
+    Returns both regular tickers and ETF tickers (including Bitcoin ETFs like IBIT, FBTC)
+    combined into a single list for instrument generation.
+    """
     global _sp500_tickers_cache, _nasdaq_tickers_cache
     
     if _sp500_tickers_cache is not None:
@@ -278,9 +282,19 @@ def _load_sp500_tickers() -> Tuple[List[str], List[str]]:
         if data_file.exists():
             with open(data_file, "r") as f:
                 data = json.load(f)
-                _sp500_tickers_cache = data.get("tickers", [])
+                base_tickers = data.get("tickers", [])
+                etf_tickers = data.get("etf_tickers", [])  # Includes Bitcoin ETFs (IBIT, FBTC, etc.)
                 _nasdaq_tickers_cache = data.get("nasdaq_tickers", [])
-                logger.debug(f"Loaded {len(_sp500_tickers_cache)} S&P 500 tickers from {data_file}")
+                
+                # Combine tickers and ETF tickers, avoiding duplicates
+                # ETFs like IBIT, FBTC, ARKB, GBTC, BITO need to be included for Bitcoin ETF support
+                all_tickers = list(base_tickers)
+                for etf in etf_tickers:
+                    if etf not in all_tickers:
+                        all_tickers.append(etf)
+                
+                _sp500_tickers_cache = all_tickers
+                logger.debug(f"Loaded {len(base_tickers)} base tickers + {len(etf_tickers)} ETF tickers = {len(_sp500_tickers_cache)} total from {data_file}")
         else:
             logger.warning(f"S&P 500 tickers file not found: {data_file}")
             _sp500_tickers_cache = []
