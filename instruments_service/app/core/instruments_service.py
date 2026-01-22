@@ -8,14 +8,14 @@ Follows unified repository structure pattern.
 import logging
 import pandas as pd
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import asyncio
 
 from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 from unified_cloud_services import VenueMapping
-from instruments_service.config import DatabentoInstrumentConfig
+from instruments_service.config import UnifiedInstrumentConfig
 from instruments_service.app.venues.databento.databento_adapter import DatabentoAdapter
 from instruments_service.models import InstrumentDefinition
 
@@ -366,7 +366,7 @@ class InstrumentsService:
             # Process TRADFI (Databento) exchanges
             if tradfi:
                 try:
-                    databento_config = DatabentoInstrumentConfig()
+                    databento_config = UnifiedInstrumentConfig()
 
                     # Get all available TradFi exchanges (canonical venues)
                     # Note: all_databento_venues contains canonical venue names (e.g., "CME", "CBOE", "NASDAQ", "NYSE")
@@ -405,8 +405,8 @@ class InstrumentsService:
                             )
                             databento_exchanges = []
                     else:
-                        # Default: All TradFi exchanges (CME futures/options, CBOE VIX, NASDAQ/NYSE equities, Yahoo Finance FX)
-                        databento_exchanges = ["CME", "CBOE", "NASDAQ", "NYSE", "YAHOO_FINANCE"]
+                        # Default: All TradFi exchanges (CME, ICE, CBOE VIX, NASDAQ/NYSE equities, Yahoo Finance FX)
+                        databento_exchanges = ["CME", "ICE", "CBOE", "NASDAQ", "NYSE", "YAHOO_FINANCE"]
                         logger.info(
                             f"🔍 No venue filter specified, processing default TRADFI exchanges: {databento_exchanges}"
                         )
@@ -458,17 +458,24 @@ class InstrumentsService:
                                     
                                     # Process Bitcoin ETFs using static definitions
                                     # (more reliable for new ETFs like IBIT, FBTC, ARKB)
+                                    # IMPORTANT: Bitcoin ETFs launched January 11, 2024 - skip for earlier dates
+                                    bitcoin_etf_launch_date = datetime(2024, 1, 11, tzinfo=timezone.utc)
                                     bitcoin_etf_tickers = ["IBIT", "FBTC", "ARKB"]
-                                    for ticker in bitcoin_etf_tickers:
-                                        # Check if this ticker is in the symbols for this venue
-                                        if ticker in symbols:
-                                            etf_def_dict = databento_adapter.create_bitcoin_etf_instrument_definition(
-                                                ticker, date
-                                            )
-                                            if etf_def_dict:
-                                                etf_def = InstrumentDefinition(**etf_def_dict)
-                                                instruments[etf_def.instrument_key] = etf_def
-                                                logger.info(f"✅ Created Bitcoin ETF: {etf_def.instrument_key}")
+                                    
+                                    # Only process Bitcoin ETFs if date is on or after launch date
+                                    if date >= bitcoin_etf_launch_date:
+                                        for ticker in bitcoin_etf_tickers:
+                                            # Check if this ticker is in the symbols for this venue
+                                            if ticker in symbols:
+                                                etf_def_dict = databento_adapter.create_bitcoin_etf_instrument_definition(
+                                                    ticker, date
+                                                )
+                                                if etf_def_dict:
+                                                    etf_def = InstrumentDefinition(**etf_def_dict)
+                                                    instruments[etf_def.instrument_key] = etf_def
+                                                    logger.info(f"✅ Created Bitcoin ETF: {etf_def.instrument_key}")
+                                    else:
+                                        logger.debug(f"⏭️ Skipping Bitcoin ETFs - date {date.strftime('%Y-%m-%d')} is before launch (2024-01-11)")
                                     
                                     # Also fetch any other symbols via Databento API
                                     non_btc_etf_symbols = [s for s in symbols if s not in bitcoin_etf_tickers]
@@ -489,8 +496,43 @@ class InstrumentsService:
                                     if instruments:
                                         logger.info(f"✅ Processed {len(instruments)} total instruments from {exchange}")
                                     return instruments
+                                elif exchange == "ICE":
+                                    # ICE datasets have different availability dates:
+                                    # - IFUS.IMPACT (ICE US - Cotton, Coffee, Sugar, etc.): Dec 23, 2018
+                                    # - IFEU.IMPACT (ICE Europe - Brent, Gasoil, WTI): Oct 1, 2024
+                                    # 
+                                    # Since we can't filter per-symbol here, we use the earliest date (IFUS)
+                                    # The individual symbol downloads will handle IFEU date filtering
+                                    ice_us_launch = datetime(2018, 12, 23, tzinfo=timezone.utc)
+                                    if date < ice_us_launch:
+                                        logger.info(
+                                            f"⏭️ Skipping ICE - date {date.strftime('%Y-%m-%d')} is before ICE US dataset launch (2018-12-23)"
+                                        )
+                                        return {}
+                                    
+                                    # Get symbols for ICE from config
+                                    symbols = databento_config.get_symbols_for_venue(exchange)
+                                    
+                                    if not symbols:
+                                        logger.warning(f"⚠️ No symbols configured for {exchange}")
+                                        return {}
+                                    
+                                    # Fetch Databento instruments
+                                    databento_instruments = (
+                                        await self.processing_service.fetch_databento_instruments(
+                                            exchange=exchange,
+                                            symbols=symbols,
+                                            target_date=date,
+                                        )
+                                    )
+                                    
+                                    if databento_instruments:
+                                        logger.info(
+                                            f"✅ Processed {len(databento_instruments)} ICE instruments"
+                                        )
+                                    return databento_instruments or {}
                                 else:
-                                    # Get symbols for CME/ICE from config
+                                    # Get symbols for CME from config
                                     symbols = databento_config.get_symbols_for_venue(exchange)
 
                                     if not symbols:

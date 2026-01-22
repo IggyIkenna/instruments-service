@@ -24,7 +24,7 @@ import pandas as pd
 import databento as db
 import exchange_calendars as xcals
 from instruments_service.config import instruments_config
-from unified_cloud_services import DatabentoBaseClient, DatabentoClientConfig
+from unified_cloud_services import DatabentoBaseClient, DatabentoClientConfig, get_config
 from instruments_service.config import UnifiedInstrumentConfig
 
 logger = logging.getLogger(__name__)
@@ -110,6 +110,183 @@ class DatabentoAdapter:
     def api_key(self) -> str:
         """Get the API key."""
         return self._base_client.api_key
+
+    # ============================================================================
+    # BATCH API - Re-downloads within 30 days are FREE!
+    # ============================================================================
+    
+    def _fetch_with_batch_api(
+        self,
+        dataset: str,
+        schema: str,
+        symbols: List[str],
+        stype_in: str,
+        start: str,
+        end: str,
+    ) -> Any:
+        """
+        Fetch data using Databento's Batch Jobs API.
+        
+        KEY BENEFIT: Re-downloading the same data within 30 days is FREE!
+        Unlike Historical Streaming which bills every request.
+        
+        Args:
+            dataset: Databento dataset ID
+            schema: Schema name ('definition', 'trades', etc.)
+            symbols: List of symbols
+            stype_in: Symbol type input
+            start: Start date string
+            end: End date string
+            
+        Returns:
+            DBNStore object with the data
+        """
+        import os
+        import tempfile
+        from pathlib import Path
+        
+        logger.info(f"📦 Using BATCH API for {dataset} {schema} ({len(symbols)} symbols) - FREE re-download within 30 days!")
+        
+        try:
+            # Step 1: Check for existing batch job (free re-download!)
+            existing_job = self._find_matching_batch_job(
+                dataset=dataset,
+                schema=schema,
+                symbols=symbols,
+                stype_in=stype_in,
+                start=start,
+                end=end,
+            )
+            
+            if existing_job:
+                job_id = existing_job['id']
+                logger.info(f"   ♻️ Found existing batch job {job_id} - FREE re-download!")
+            else:
+                # Step 2: Submit new batch job
+                job = self.client.batch.submit_job(
+                    dataset=dataset,
+                    schema=schema,
+                    symbols=symbols,
+                    stype_in=stype_in,
+                    stype_out="instrument_id",
+                    start=start,
+                    end=end,
+                    encoding='dbn',
+                    compression='zstd',
+                    delivery='download',
+                )
+                job_id = job['id']
+                logger.info(f"   📤 Submitted new batch job: {job_id}")
+                
+                # Step 3: Wait for job completion
+                self._wait_for_batch_job(job_id)
+            
+            # Step 4: Download to temp directory
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                downloaded_files = self.client.batch.download(
+                    job_id=job_id,
+                    output_dir=tmp_dir,
+                )
+                
+                if not downloaded_files:
+                    logger.warning(f"⚠️ No files downloaded for batch job {job_id}")
+                    # Return empty DBNStore-like object
+                    return type('EmptyData', (), {'to_df': lambda: pd.DataFrame()})()
+                
+                # Find the data file (not metadata files)
+                data_file = None
+                for f in downloaded_files:
+                    if str(f).endswith('.dbn.zst') or str(f).endswith('.dbn'):
+                        data_file = f
+                        break
+                
+                if data_file:
+                    # Load and return DBNStore
+                    return db.DBNStore.from_file(str(data_file))
+                else:
+                    logger.warning(f"⚠️ No .dbn data file found in batch download")
+                    return type('EmptyData', (), {'to_df': lambda: pd.DataFrame()})()
+                    
+        except Exception as e:
+            logger.warning(f"⚠️ Batch API failed, falling back to streaming: {e}")
+            # Fallback to streaming API
+            return self.client.timeseries.get_range(
+                dataset=dataset,
+                schema=db.Schema.DEFINITION if schema == 'definition' else schema,
+                symbols=symbols,
+                stype_in=stype_in,
+                stype_out="instrument_id",
+                start=start,
+                end=end,
+            )
+    
+    def _find_matching_batch_job(
+        self,
+        dataset: str,
+        schema: str,
+        symbols: List[str],
+        stype_in: str,
+        start: str,
+        end: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Find an existing batch job matching the query parameters."""
+        try:
+            # List recent batch jobs (last 30 days are downloadable)
+            jobs = self.client.batch.list_jobs(states=['done'])
+            
+            # Match job parameters
+            symbols_set = set(symbols)
+            for job in jobs:
+                if (job.get('dataset') == dataset and
+                    job.get('schema') == schema and
+                    job.get('stype_in') == stype_in and
+                    str(job.get('start', '')).startswith(start) and
+                    str(job.get('end', '')).startswith(end)):
+                    # Check symbols match
+                    job_symbols = job.get('symbols', '')
+                    if isinstance(job_symbols, str):
+                        job_symbols_set = set(job_symbols.split(','))
+                    else:
+                        job_symbols_set = set(job_symbols) if job_symbols else set()
+                    
+                    if symbols_set == job_symbols_set or symbols_set.issubset(job_symbols_set):
+                        return job
+            
+            return None
+        except Exception as e:
+            logger.debug(f"No matching batch job found: {e}")
+            return None
+    
+    def _wait_for_batch_job(self, job_id: str, timeout_minutes: int = 30) -> None:
+        """Wait for a batch job to complete."""
+        import time
+        
+        poll_interval = 5  # seconds
+        max_polls = (timeout_minutes * 60) // poll_interval
+        
+        for i in range(max_polls):
+            jobs = self.client.batch.list_jobs()
+            
+            # Find our job
+            job = next((j for j in jobs if j['id'] == job_id), None)
+            
+            if not job:
+                raise RuntimeError(f"Batch job {job_id} not found")
+            
+            state = job.get('state', 'unknown')
+            progress = job.get('progress', 0)
+            
+            if state == 'done':
+                logger.info(f"   ✅ Batch job {job_id} completed!")
+                return
+            elif state in ('expired', 'failed'):
+                raise RuntimeError(f"Batch job {job_id} {state}")
+            else:
+                if i % 6 == 0:  # Log every 30 seconds
+                    logger.info(f"   ⏳ Batch job {job_id}: {state} ({progress}%)")
+                time.sleep(poll_interval)
+        
+        raise TimeoutError(f"Batch job {job_id} timed out after {timeout_minutes} minutes")
 
     def fetch_instrument_definitions(
         self,
@@ -198,6 +375,9 @@ class DatabentoAdapter:
             return {}
 
         # Fetch instruments for each (dataset, stype_in) group
+        # Use BATCH API if configured (re-downloads within 30 days are FREE!)
+        use_batch_api = get_config("DATABENTO_USE_BATCH_API", "true").lower() == "true"
+        
         all_instruments = {}
         for (
             symbol_dataset,
@@ -205,15 +385,26 @@ class DatabentoAdapter:
         ), symbol_group in symbols_by_dataset_and_stype.items():
             try:
                 # Fetch instrument definitions for this dataset/stype_in group
-                zipped_data = self.client.timeseries.get_range(
-                    dataset=symbol_dataset,  # Use dataset from instrument definition
-                    schema=db.Schema.DEFINITION,
-                    symbols=symbol_group,
-                    stype_in=stype_in,
-                    stype_out="instrument_id",
-                    start=start_date_str,
-                    end=end_date_str,
-                )
+                if use_batch_api:
+                    zipped_data = self._fetch_with_batch_api(
+                        dataset=symbol_dataset,
+                        schema="definition",
+                        symbols=symbol_group,
+                        stype_in=stype_in,
+                        start=start_date_str,
+                        end=end_date_str,
+                    )
+                else:
+                    # Legacy streaming API (bills every request)
+                    zipped_data = self.client.timeseries.get_range(
+                        dataset=symbol_dataset,
+                        schema=db.Schema.DEFINITION,
+                        symbols=symbol_group,
+                        stype_in=stype_in,
+                        stype_out="instrument_id",
+                        start=start_date_str,
+                        end=end_date_str,
+                    )
 
                 # Convert to DataFrame
                 df = zipped_data.to_df()
@@ -722,8 +913,12 @@ class DatabentoAdapter:
             Databento dataset ID
         """
         dataset_mapping = {
-            "CME": "GLBX.MDP3",
+            "CME": "GLBX.MDP3",  # CME Globex (ES, NQ, CL, NG, GC, etc.)
+            "ICE": "IFUS.IMPACT",  # ICE Futures US (Cotton CT, Coffee KC, Sugar SB, Cocoa CC, OJ, DX)
+            "ICE-EU": "IFEU.IMPACT",  # ICE Europe (Brent, Gas Oil)
             "CBOE": "BARCHART",  # VIX only (handled separately, not via Databento)
+            "NASDAQ": "DBEQ.BASIC",  # NASDAQ equities
+            "NYSE": "DBEQ.BASIC",  # NYSE equities
         }
 
         exchange_upper = exchange.upper()
@@ -801,20 +996,23 @@ class DatabentoAdapter:
         """
         instruments = {}
 
-        # Create mapping from asset to query symbol for futures/options
-        # For parent symbology, we need to map asset (e.g., 'ES') back to query symbol (e.g., 'ES.FUT')
-        asset_to_query_symbol = {}
+        # Create SEPARATE mappings for futures and options to avoid collisions
+        # When querying both ES.FUT and ES.OPT, we need to know which one to use
+        # based on the actual instrument type from Databento
+        asset_to_fut_symbol = {}
+        asset_to_opt_symbol = {}
+        asset_to_raw_symbol = {}  # For equities (raw_symbol stype_in)
         for query_sym in query_symbols:
             # Extract base asset from query symbol
             if query_sym.endswith(".FUT"):
                 base_asset = query_sym[:-4]  # Remove '.FUT'
-                asset_to_query_symbol[base_asset] = query_sym
+                asset_to_fut_symbol[base_asset] = query_sym
             elif query_sym.endswith(".OPT"):
                 base_asset = query_sym[:-4]  # Remove '.OPT'
-                asset_to_query_symbol[base_asset] = query_sym
+                asset_to_opt_symbol[base_asset] = query_sym
             else:
                 # For raw_symbol (equities), the query symbol IS the asset
-                asset_to_query_symbol[query_sym] = query_sym
+                asset_to_raw_symbol[query_sym] = query_sym
 
         # Group by raw_symbol and aggregate
         # Databento uses 'raw_symbol' in definition schema (v0.13.1+)
@@ -833,16 +1031,38 @@ class DatabentoAdapter:
                 # Get the query symbol used for this instrument
                 asset = row.get("asset", "")
                 asset = "" if pd.isna(asset) else str(asset)
+                
+                # Get security_type to determine if this is a future or option
+                # CME security_type: "FUT" = Future, "OOF" = Options on Futures
+                security_type = row.get("security_type", "")
+                security_type = "" if pd.isna(security_type) else str(security_type)
 
                 # Determine databento_symbol (the query symbol we used)
+                # CRITICAL: Use separate mappings for futures vs options to avoid collision
+                # When querying both ES.FUT and ES.OPT, futures should map to ES.FUT
+                # and options should map to ES.OPT
                 if stype_in == "parent":
-                    # For parent symbology, map asset back to query symbol
-                    databento_symbol = asset_to_query_symbol.get(
-                        asset, query_symbols[0] if query_symbols else ""
-                    )
+                    # For parent symbology, use security_type to choose correct mapping
+                    if security_type == "FUT":
+                        # This is a future - use futures mapping
+                        databento_symbol = asset_to_fut_symbol.get(
+                            asset, query_symbols[0] if query_symbols else ""
+                        )
+                    elif security_type == "OOF":
+                        # This is an option on futures - use options mapping
+                        databento_symbol = asset_to_opt_symbol.get(
+                            asset, query_symbols[0] if query_symbols else ""
+                        )
+                    else:
+                        # Unknown type - try futures first, then options
+                        databento_symbol = asset_to_fut_symbol.get(
+                            asset, asset_to_opt_symbol.get(
+                                asset, query_symbols[0] if query_symbols else ""
+                            )
+                        )
                 else:
                     # For raw_symbol, the asset IS the query symbol
-                    databento_symbol = asset_to_query_symbol.get(asset, asset)
+                    databento_symbol = asset_to_raw_symbol.get(asset, asset)
 
                 # exchange_raw_symbol should be the actual Databento symbol (contract symbol)
                 # This is what the exchange uses internally, not the asset/base
@@ -1633,16 +1853,93 @@ class DatabentoAdapter:
                             f"{expiry_date} -> {expiry_iso} (UTC)"
                         )
 
-                    else:
-                        # For non-CME options or non-options, leave blank if date-only
-                        # Actual expiry times vary by contract type and we don't want to guess incorrectly
-                        logger.debug(
-                            f"Databento provided date-only expiry (midnight) for {exchange} {instrument_type} "
-                            f"symbol {exchange_raw_symbol}: {expiry_dt.date()}. "
-                            f"Leaving expiry blank to avoid incorrect expiry time. "
-                            f"Expiry times vary by contract type."
+                    elif exchange.upper() == "CME" and instrument_type == "FUTURE":
+                        # CME futures expire at end of trading day, typically 4:00 PM CT
+                        # Reference: CME Group - most equity index futures (ES, NQ, RTY, YM) settle at 4:00 PM CT
+                        # Some products like agricultural (ZC, ZW, ZS) have different times but 4 PM CT is reasonable default
+                        expiry_date = expiry_dt.date()
+                        ct_tz = ZoneInfo("America/Chicago")
+                        expiry_4pm_ct = datetime.combine(expiry_date, time(16, 0, 0)).replace(
+                            tzinfo=ct_tz
                         )
-                        expiry_iso = None  # Leave blank - better than incorrect time
+                        expiry_iso = expiry_4pm_ct.astimezone(timezone.utc).isoformat()
+                        logger.debug(
+                            f"✅ Set CME future expiry to 4:00 PM CT for {exchange_raw_symbol}: "
+                            f"{expiry_date} -> {expiry_iso} (UTC)"
+                        )
+
+                    elif exchange.upper() in ("ICE", "IFEU"):
+                        # ICE Europe futures have specific expiry times in London time
+                        # Reference: ICE Futures Europe Contract Specifications
+                        # - Brent Crude (B): 19:30 London
+                        # - Gasoil (G): 12:00 London
+                        # - WTI (T): 19:30 London
+                        # Default to 19:30 London if we can't determine the specific product
+                        expiry_date = expiry_dt.date()
+                        
+                        # Determine expiry time based on product code (first part of raw_symbol)
+                        product_code = exchange_raw_symbol[:1].upper() if exchange_raw_symbol else ""
+                        if product_code == "G":
+                            # Gasoil expires at 12:00 London
+                            expiry_hour, expiry_minute = 12, 0
+                        else:
+                            # Brent (B), WTI (T), and others typically expire at 19:30 London
+                            expiry_hour, expiry_minute = 19, 30
+                        
+                        # London timezone handles GMT/BST automatically
+                        london_tz = ZoneInfo("Europe/London")
+                        expiry_london = datetime.combine(
+                            expiry_date, time(expiry_hour, expiry_minute, 0)
+                        ).replace(tzinfo=london_tz)
+                        
+                        # Convert to UTC
+                        expiry_iso = expiry_london.astimezone(timezone.utc).isoformat()
+                        logger.debug(
+                            f"✅ Set ICE Europe expiry to {expiry_hour}:{expiry_minute:02d} London for "
+                            f"{exchange_raw_symbol}: {expiry_date} -> {expiry_iso} (UTC)"
+                        )
+
+                    elif exchange.upper() == "CBOE" and instrument_type == "OPTION":
+                        # CBOE options (SPX, VIX options) expire at 4:15 PM ET
+                        # Reference: CBOE - options get 15 extra minutes after market close for exercise
+                        expiry_date = expiry_dt.date()
+                        et_tz = ZoneInfo("America/New_York")
+                        expiry_415pm_et = datetime.combine(expiry_date, time(16, 15, 0)).replace(
+                            tzinfo=et_tz
+                        )
+                        expiry_iso = expiry_415pm_et.astimezone(timezone.utc).isoformat()
+                        logger.debug(
+                            f"✅ Set CBOE option expiry to 4:15 PM ET for {exchange_raw_symbol}: "
+                            f"{expiry_date} -> {expiry_iso} (UTC)"
+                        )
+
+                    elif exchange.upper() in ("OPRA", "NYSE", "NASDAQ", "AMEX", "ARCA", "BATS", "IEX") and instrument_type == "OPTION":
+                        # US equity options (OPRA) expire at 4:00 PM ET
+                        # Reference: OCC - standard US equity options expire at market close
+                        expiry_date = expiry_dt.date()
+                        et_tz = ZoneInfo("America/New_York")
+                        expiry_4pm_et = datetime.combine(expiry_date, time(16, 0, 0)).replace(
+                            tzinfo=et_tz
+                        )
+                        expiry_iso = expiry_4pm_et.astimezone(timezone.utc).isoformat()
+                        logger.debug(
+                            f"✅ Set US equity option expiry to 4:00 PM ET for {exchange_raw_symbol}: "
+                            f"{expiry_date} -> {expiry_iso} (UTC)"
+                        )
+
+                    else:
+                        # For other exchanges with date-only expiry, use 4:00 PM ET as reasonable US default
+                        # Most US trading ends around this time
+                        expiry_date = expiry_dt.date()
+                        et_tz = ZoneInfo("America/New_York")
+                        expiry_4pm_et = datetime.combine(expiry_date, time(16, 0, 0)).replace(
+                            tzinfo=et_tz
+                        )
+                        expiry_iso = expiry_4pm_et.astimezone(timezone.utc).isoformat()
+                        logger.debug(
+                            f"Using 4:00 PM ET default for {exchange} {instrument_type} "
+                            f"symbol {exchange_raw_symbol}: {expiry_date} -> {expiry_iso} (UTC)"
+                        )
                 else:
                     # Databento provided time, use as-is (it's the correct expiry time for this contract)
                     expiry_iso = expiry_dt.isoformat()
@@ -1723,7 +2020,9 @@ class DatabentoAdapter:
             "ccxt_exchange": "",
             "available_from_datetime": available_from,
             "available_to_datetime": available_to,  # Trading session end time (or expiry if no session)
-            "data_types": "ohlcv_1m",  # We fetch OHLCV 1m candles from Databento
+            # Data types: OPTIONS use trades (OHLCV not available for options in Databento)
+            # See: https://databento.com/docs/examples/options/equity-options-introduction
+            "data_types": "trades" if instrument_type == "OPTION" else "ohlcv_1m",
             "inverse": False,
             "contract_size": (
                 row.get("contract_size", None) if pd.notna(row.get("contract_size")) else None
@@ -1755,7 +2054,11 @@ class DatabentoAdapter:
         """
         venue_mapping = {
             "CME": "CME",
+            "ICE": "ICE",
+            "ICE-EU": "ICE-EU",
             "CBOE": "CBOE",
+            "NASDAQ": "NASDAQ",
+            "NYSE": "NYSE",
         }
 
         exchange_upper = exchange.upper()
