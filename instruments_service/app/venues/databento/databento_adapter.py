@@ -443,24 +443,51 @@ class DatabentoAdapter:
                             f"📊 Filtered out {pre_filter_count - post_filter_count} {filter_reason} "
                             f"({post_filter_count} remaining) for {exchange} (stype_in={stype_in})"
                         )
+                
+                # For futures parent symbology (.FUT), filter by instrument_class to exclude spreads
+                # Databento's instrument_class field distinguishes:
+                # - "F" = Outright Future (what we want)
+                # - "S" = Future Spread (exclude)
+                # - "C"/"P" = Call/Put option
+                # This is the recommended approach per Databento docs for filtering spreads
+                if "instrument_class" in df.columns and any(s.endswith(".FUT") for s in symbol_group if isinstance(s, str)):
+                    pre_class_count = len(df)
+                    # Keep only outright futures (instrument_class == "F")
+                    # Note: For options (.OPT), we keep C (Call) and P (Put)
+                    # This filter only applies when querying with .FUT parent symbology
+                    df = df[df["instrument_class"].astype(str).str.upper().isin(["F", "C", "P", ""])]
+                    post_class_count = len(df)
+                    if pre_class_count != post_class_count:
+                        logger.info(
+                            f"📊 Filtered out {pre_class_count - post_class_count} futures spreads "
+                            f"(instrument_class != F) ({post_class_count} remaining) for {exchange}"
+                        )
 
-                # Filter out calendar spreads and complex products
-                # Spreads/combos contain special characters: dash (-), colon (:), plus (+), asterisk (*), slash (/)
+                # Filter out calendar spreads, complex products, and internal IDs
+                # Spreads/combos contain special characters: dash (-), colon (:), plus (+), asterisk (*), slash (/), period (.)
+                # ICE spreads specifically use period notation: "BRN FQF0024.H0024" (quarter spread)
                 # Examples:
                 # - Calendar spreads: "ESH6-ESM6" (dash between contracts)
+                # - ICE calendar spreads: "BRN FQF0024.H0024", "G   FSN0025.Z0025" (period between legs)
+                # - ICE internal IDs: "BRN 142   7377732", "G     3  30451873" (numbered format - not tradeable)
                 # - Average price products: "CL:SA 02M F6" (colon separator)
                 # - Ratio spreads: "CL*NG" (asterisk for ratio)
                 if "raw_symbol" in df.columns:
                     pre_spread_count = len(df)
                     # Exclude symbols with special characters indicating combos/spreads
-                    # Pattern: dash (-), colon (:), plus (+), asterisk (*), slash (/)
+                    # Pattern: dash (-), colon (:), plus (+), asterisk (*), slash (/), period (.)
                     df = df[
-                        ~df["raw_symbol"].astype(str).str.contains(r"[-:+*/]", regex=True, na=False)
+                        ~df["raw_symbol"].astype(str).str.contains(r"[-:+*/.]", regex=True, na=False)
+                    ]
+                    # Also filter out ICE internal/numbered formats (e.g., "BRN 142   7377732")
+                    # These have a number sequence after the product code followed by a long ID
+                    df = df[
+                        ~df["raw_symbol"].astype(str).str.match(r"^[A-Z]+\s+\d+\s+\d+$", na=False)
                     ]
                     post_spread_count = len(df)
                     if pre_spread_count != post_spread_count:
                         logger.info(
-                            f"📊 Filtered out {pre_spread_count - post_spread_count} spreads/combos "
+                            f"📊 Filtered out {pre_spread_count - post_spread_count} spreads/combos/internal-IDs "
                             f"({post_spread_count} remaining) for {exchange} (stype_in={stype_in})"
                         )
 
