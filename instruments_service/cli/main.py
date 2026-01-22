@@ -102,12 +102,24 @@ def main() -> Dict[str, Any]:
             handler_kwargs["exchanges"] = args.exchanges
 
         # Market type filters
-        if args.CEFI:
-            handler_kwargs["cefi"] = True
-        if args.TRADFI:
-            handler_kwargs["tradfi"] = True
-        if args.DEFI:
-            handler_kwargs["defi"] = True
+        # Priority: --category flag takes precedence, then individual flags
+        if hasattr(args, 'category') and args.category:
+            # --category can be a list (e.g., --category CEFI TRADFI)
+            for cat in args.category:
+                if cat.upper() == "CEFI":
+                    handler_kwargs["cefi"] = True
+                elif cat.upper() == "TRADFI":
+                    handler_kwargs["tradfi"] = True
+                elif cat.upper() == "DEFI":
+                    handler_kwargs["defi"] = True
+        else:
+            # Fallback to individual flags
+            if args.CEFI:
+                handler_kwargs["cefi"] = True
+            if args.TRADFI:
+                handler_kwargs["tradfi"] = True
+            if args.DEFI:
+                handler_kwargs["defi"] = True
 
         # Execute handler
         result = handler.run(**handler_kwargs)
