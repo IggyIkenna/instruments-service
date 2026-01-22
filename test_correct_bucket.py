@@ -5,7 +5,7 @@ from unified_cloud_services import create_instruments_client
 import pandas as pd
 
 print("=" * 70)
-print("TEST: Query Methods with Correct Bucket (instruments-store-central-element-323112)")
+print("TEST: Query Methods with Category-Specific Buckets")
 print("=" * 70)
 
 # Test date that has data

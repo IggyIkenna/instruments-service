@@ -64,7 +64,9 @@ class CloudInstrumentStorage:
             # Priority: ENVIRONMENT=test > pytest detection > default to prod
             environment = get_config("ENVIRONMENT", "development").lower()
             test_bucket = get_config("INSTRUMENTS_GCS_BUCKET_TEST", "")
-            prod_bucket = get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store")
+            # NOTE: This default is only used when no category is specified.
+            # Production flow should always use category-specific buckets via get_bucket_for_category()
+            prod_bucket = get_config("INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-central-element-323112")
 
             # Only use test bucket if explicitly in test environment
             is_test = (
