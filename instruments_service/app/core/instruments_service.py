@@ -8,7 +8,7 @@ Follows unified repository structure pattern.
 import logging
 import pandas as pd
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import asyncio
 
 from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
