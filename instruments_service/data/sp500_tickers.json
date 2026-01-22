@@ -660,7 +660,12 @@
     "VRTX",
     "WBD",
     "WDAY",
-    "WYNN"
+    "WYNN",
+    "IBIT",
+    "FBTC",
+    "ARKB",
+    "GBTC",
+    "BITO"
   ],
   "etf_tickers": [
     "SPY",
