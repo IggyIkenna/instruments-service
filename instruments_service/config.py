@@ -114,19 +114,16 @@ TRADFI_INSTRUMENTS_CONFIG: List[Dict] = [
     {"symbol": "EW3.OPT", "venue": "CME", "type": "OPTION", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SP500", "code": "EW3", "underlying": "ES"},
     {"symbol": "EW4.OPT", "venue": "CME", "type": "OPTION", "dataset": "GLBX.MDP3", "stype": "parent", "base": "SP500", "code": "EW4", "underlying": "ES"},
     # =========================================================================
-    # ICE Futures US - NOT AVAILABLE ON DATABENTO
+    # ICE Futures US (IFUS.IMPACT) - Soft Commodities & Dollar Index
+    # Available from: December 23, 2018 (historical coverage start)
+    # https://databento.com/blog/introducing-ice-futures-us
     # =========================================================================
-    # NOTE: Databento does NOT have IFUS.IMPACT dataset (ICE US futures).
-    # Only IFEU.IMPACT (ICE Europe) and NDEX.IMPACT (ICE Endex) are available.
-    # ICE US products like Cotton, Coffee, Sugar, Cocoa, OJ, Dollar Index
-    # cannot be downloaded from Databento as of 2025.
-    # These are commented out to prevent download attempts:
-    # {"symbol": "CT.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "COTTON", "code": "CT"},
-    # {"symbol": "CC.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "COCOA", "code": "CC"},
-    # {"symbol": "KC.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "COFFEE", "code": "KC"},
-    # {"symbol": "SB.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "SUGAR", "code": "SB"},
-    # {"symbol": "OJ.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "ORANGEJUICE", "code": "OJ"},
-    # {"symbol": "DX.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "DOLLARINDEX", "code": "DX"},
+    {"symbol": "CT.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "COTTON", "code": "CT"},
+    {"symbol": "CC.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "COCOA", "code": "CC"},
+    {"symbol": "KC.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "COFFEE", "code": "KC"},
+    {"symbol": "SB.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "SUGAR", "code": "SB"},
+    {"symbol": "OJ.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "ORANGEJUICE", "code": "OJ"},
+    {"symbol": "DX.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "DOLLARINDEX", "code": "DX"},
     # =========================================================================
     # ICE Futures Europe (IFEU.IMPACT) - Energy commodities
     # NOTE: Brent crude symbol on ICE Europe is "B", not "BRN"
@@ -210,20 +207,19 @@ DATABENTO_VALID_PARENT_SYMBOLS: Dict[str, Tuple[str, str]] = {
     "BRL": ("6L.FUT", "GLBX.MDP3"),
     "6Z": ("6Z.FUT", "GLBX.MDP3"),
     "ZAR": ("6Z.FUT", "GLBX.MDP3"),
-    # ICE Futures US - NOT AVAILABLE ON DATABENTO
-    # Databento does not have IFUS.IMPACT dataset. These symbols cannot be downloaded.
-    # "CT": ("CT.FUT", "IFUS.IMPACT"),   # Cotton - NOT AVAILABLE
-    # "COTTON": ("CT.FUT", "IFUS.IMPACT"),
-    # "CC": ("CC.FUT", "IFUS.IMPACT"),   # Cocoa - NOT AVAILABLE
-    # "COCOA": ("CC.FUT", "IFUS.IMPACT"),
-    # "KC": ("KC.FUT", "IFUS.IMPACT"),   # Coffee - NOT AVAILABLE
-    # "COFFEE": ("KC.FUT", "IFUS.IMPACT"),
-    # "SB": ("SB.FUT", "IFUS.IMPACT"),   # Sugar - NOT AVAILABLE
-    # "SUGAR": ("SB.FUT", "IFUS.IMPACT"),
-    # "OJ": ("OJ.FUT", "IFUS.IMPACT"),   # Orange Juice - NOT AVAILABLE
-    # "ORANGEJUICE": ("OJ.FUT", "IFUS.IMPACT"),
-    # "DX": ("DX.FUT", "IFUS.IMPACT"),   # Dollar Index - NOT AVAILABLE
-    # "DOLLARINDEX": ("DX.FUT", "IFUS.IMPACT"),
+    # ICE Futures US (IFUS.IMPACT) - Available from 2018-12-23
+    "CT": ("CT.FUT", "IFUS.IMPACT"),
+    "COTTON": ("CT.FUT", "IFUS.IMPACT"),
+    "CC": ("CC.FUT", "IFUS.IMPACT"),
+    "COCOA": ("CC.FUT", "IFUS.IMPACT"),
+    "KC": ("KC.FUT", "IFUS.IMPACT"),
+    "COFFEE": ("KC.FUT", "IFUS.IMPACT"),
+    "SB": ("SB.FUT", "IFUS.IMPACT"),
+    "SUGAR": ("SB.FUT", "IFUS.IMPACT"),
+    "OJ": ("OJ.FUT", "IFUS.IMPACT"),
+    "ORANGEJUICE": ("OJ.FUT", "IFUS.IMPACT"),
+    "DX": ("DX.FUT", "IFUS.IMPACT"),
+    "DOLLARINDEX": ("DX.FUT", "IFUS.IMPACT"),
     # ICE Futures Europe - Energy
     "B": ("B.FUT", "IFEU.IMPACT"),
     "BRENT": ("B.FUT", "IFEU.IMPACT"),
