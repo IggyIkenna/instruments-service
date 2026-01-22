@@ -496,8 +496,39 @@ class InstrumentsService:
                                     if instruments:
                                         logger.info(f"✅ Processed {len(instruments)} total instruments from {exchange}")
                                     return instruments
+                                elif exchange == "ICE":
+                                    # ICE datasets (IFEU.IMPACT, IFUS.IMPACT) were added to Databento in October 2024
+                                    # Skip ICE for dates before the datasets were available
+                                    ice_dataset_launch = datetime(2024, 10, 1, tzinfo=timezone.utc)
+                                    if date < ice_dataset_launch:
+                                        logger.info(
+                                            f"⏭️ Skipping ICE - date {date.strftime('%Y-%m-%d')} is before ICE dataset launch (2024-10-01)"
+                                        )
+                                        return {}
+                                    
+                                    # Get symbols for ICE from config
+                                    symbols = databento_config.get_symbols_for_venue(exchange)
+                                    
+                                    if not symbols:
+                                        logger.warning(f"⚠️ No symbols configured for {exchange}")
+                                        return {}
+                                    
+                                    # Fetch Databento instruments
+                                    databento_instruments = (
+                                        await self.processing_service.fetch_databento_instruments(
+                                            exchange=exchange,
+                                            symbols=symbols,
+                                            target_date=date,
+                                        )
+                                    )
+                                    
+                                    if databento_instruments:
+                                        logger.info(
+                                            f"✅ Processed {len(databento_instruments)} ICE instruments"
+                                        )
+                                    return databento_instruments or {}
                                 else:
-                                    # Get symbols for CME/ICE from config
+                                    # Get symbols for CME from config
                                     symbols = databento_config.get_symbols_for_venue(exchange)
 
                                     if not symbols:
