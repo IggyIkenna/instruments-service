@@ -1637,17 +1637,46 @@ class DatabentoAdapter:
                             f"{expiry_date} -> {expiry_iso} (UTC)"
                         )
 
-                    else:
-                        # For non-CME instruments with date-only expiry, use midnight UTC
-                        # This preserves the expiry DATE even if exact time is unknown
-                        # ICE Europe futures, etc. - at least we have the correct expiry date
+                    elif exchange.upper() in ("ICE", "IFEU"):
+                        # ICE Europe futures have specific expiry times in London time
+                        # Reference: ICE Futures Europe Contract Specifications
+                        # - Brent Crude (B): 19:30 London
+                        # - Gasoil (G): 12:00 London
+                        # - WTI (T): 19:30 London
+                        # Default to 19:30 London if we can't determine the specific product
                         expiry_date = expiry_dt.date()
-                        expiry_midnight_utc = datetime.combine(
-                            expiry_date, time(0, 0, 0), tzinfo=timezone.utc
-                        )
-                        expiry_iso = expiry_midnight_utc.isoformat()
+                        
+                        # Determine expiry time based on product code (first part of raw_symbol)
+                        product_code = exchange_raw_symbol[:1].upper() if exchange_raw_symbol else ""
+                        if product_code == "G":
+                            # Gasoil expires at 12:00 London
+                            expiry_hour, expiry_minute = 12, 0
+                        else:
+                            # Brent (B), WTI (T), and others typically expire at 19:30 London
+                            expiry_hour, expiry_minute = 19, 30
+                        
+                        # London timezone handles GMT/BST automatically
+                        london_tz = ZoneInfo("Europe/London")
+                        expiry_london = datetime.combine(
+                            expiry_date, time(expiry_hour, expiry_minute, 0)
+                        ).replace(tzinfo=london_tz)
+                        
+                        # Convert to UTC
+                        expiry_iso = expiry_london.astimezone(timezone.utc).isoformat()
                         logger.debug(
-                            f"Using midnight UTC for {exchange} {instrument_type} "
+                            f"✅ Set ICE Europe expiry to {expiry_hour}:{expiry_minute:02d} London for "
+                            f"{exchange_raw_symbol}: {expiry_date} -> {expiry_iso} (UTC)"
+                        )
+                    else:
+                        # For other exchanges with date-only expiry, use end of trading day (typically 16:00 local)
+                        # This is a reasonable default when we don't have specific knowledge
+                        expiry_date = expiry_dt.date()
+                        expiry_eod_utc = datetime.combine(
+                            expiry_date, time(21, 0, 0), tzinfo=timezone.utc  # ~5PM ET / 4PM CT in UTC
+                        )
+                        expiry_iso = expiry_eod_utc.isoformat()
+                        logger.debug(
+                            f"Using 21:00 UTC default for {exchange} {instrument_type} "
                             f"symbol {exchange_raw_symbol}: {expiry_date} -> {expiry_iso}"
                         )
                 else:
