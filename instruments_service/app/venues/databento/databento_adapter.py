@@ -805,20 +805,23 @@ class DatabentoAdapter:
         """
         instruments = {}
 
-        # Create mapping from asset to query symbol for futures/options
-        # For parent symbology, we need to map asset (e.g., 'ES') back to query symbol (e.g., 'ES.FUT')
-        asset_to_query_symbol = {}
+        # Create SEPARATE mappings for futures and options to avoid collisions
+        # When querying both ES.FUT and ES.OPT, we need to know which one to use
+        # based on the actual instrument type from Databento
+        asset_to_fut_symbol = {}
+        asset_to_opt_symbol = {}
+        asset_to_raw_symbol = {}  # For equities (raw_symbol stype_in)
         for query_sym in query_symbols:
             # Extract base asset from query symbol
             if query_sym.endswith(".FUT"):
                 base_asset = query_sym[:-4]  # Remove '.FUT'
-                asset_to_query_symbol[base_asset] = query_sym
+                asset_to_fut_symbol[base_asset] = query_sym
             elif query_sym.endswith(".OPT"):
                 base_asset = query_sym[:-4]  # Remove '.OPT'
-                asset_to_query_symbol[base_asset] = query_sym
+                asset_to_opt_symbol[base_asset] = query_sym
             else:
                 # For raw_symbol (equities), the query symbol IS the asset
-                asset_to_query_symbol[query_sym] = query_sym
+                asset_to_raw_symbol[query_sym] = query_sym
 
         # Group by raw_symbol and aggregate
         # Databento uses 'raw_symbol' in definition schema (v0.13.1+)
@@ -837,16 +840,38 @@ class DatabentoAdapter:
                 # Get the query symbol used for this instrument
                 asset = row.get("asset", "")
                 asset = "" if pd.isna(asset) else str(asset)
+                
+                # Get security_type to determine if this is a future or option
+                # CME security_type: "FUT" = Future, "OOF" = Options on Futures
+                security_type = row.get("security_type", "")
+                security_type = "" if pd.isna(security_type) else str(security_type)
 
                 # Determine databento_symbol (the query symbol we used)
+                # CRITICAL: Use separate mappings for futures vs options to avoid collision
+                # When querying both ES.FUT and ES.OPT, futures should map to ES.FUT
+                # and options should map to ES.OPT
                 if stype_in == "parent":
-                    # For parent symbology, map asset back to query symbol
-                    databento_symbol = asset_to_query_symbol.get(
-                        asset, query_symbols[0] if query_symbols else ""
-                    )
+                    # For parent symbology, use security_type to choose correct mapping
+                    if security_type == "FUT":
+                        # This is a future - use futures mapping
+                        databento_symbol = asset_to_fut_symbol.get(
+                            asset, query_symbols[0] if query_symbols else ""
+                        )
+                    elif security_type == "OOF":
+                        # This is an option on futures - use options mapping
+                        databento_symbol = asset_to_opt_symbol.get(
+                            asset, query_symbols[0] if query_symbols else ""
+                        )
+                    else:
+                        # Unknown type - try futures first, then options
+                        databento_symbol = asset_to_fut_symbol.get(
+                            asset, asset_to_opt_symbol.get(
+                                asset, query_symbols[0] if query_symbols else ""
+                            )
+                        )
                 else:
                     # For raw_symbol, the asset IS the query symbol
-                    databento_symbol = asset_to_query_symbol.get(asset, asset)
+                    databento_symbol = asset_to_raw_symbol.get(asset, asset)
 
                 # exchange_raw_symbol should be the actual Databento symbol (contract symbol)
                 # This is what the exchange uses internally, not the asset/base
