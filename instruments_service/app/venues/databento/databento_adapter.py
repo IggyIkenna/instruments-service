@@ -396,7 +396,7 @@ class DatabentoAdapter:
                     )
                 else:
                     # Legacy streaming API (bills every request)
-                zipped_data = self.client.timeseries.get_range(
+                    zipped_data = self.client.timeseries.get_range(
                         dataset=symbol_dataset,
                     schema=db.Schema.DEFINITION,
                     symbols=symbol_group,
@@ -1440,7 +1440,7 @@ class DatabentoAdapter:
                     expiry_dt = None
                     expiry_str = ""
                 else:
-                expiry_str = expiry_dt.strftime("%y%m%d")
+                    expiry_str = expiry_dt.strftime("%y%m%d")
                     logger.debug(
                         f"✅ Parsed expiry from Databento field for {exchange_raw_symbol}: {expiry_time} -> {expiry_str}"
                     )
@@ -2011,7 +2011,7 @@ class DatabentoAdapter:
                             # - WTI (T): 19:30 London
                             if product_code == "G":
                                 expiry_hour, expiry_minute = 12, 0  # Gasoil
-                    else:
+                            else:
                                 expiry_hour, expiry_minute = 19, 30  # Brent, WTI, others
                             
                             # London timezone handles GMT/BST automatically
@@ -2020,7 +2020,7 @@ class DatabentoAdapter:
                                 expiry_date, time(expiry_hour, expiry_minute, 0)
                             ).replace(tzinfo=london_tz)
                             expiry_iso = expiry_local.astimezone(timezone.utc).isoformat()
-                        logger.debug(
+                            logger.debug(
                                 f"✅ Set ICE Europe expiry to {expiry_hour}:{expiry_minute:02d} London for "
                                 f"{exchange_raw_symbol}: {expiry_date} -> {expiry_iso} (UTC)"
                             )
