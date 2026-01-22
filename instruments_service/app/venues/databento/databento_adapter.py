@@ -1418,11 +1418,64 @@ class DatabentoAdapter:
             try:
                 # Always use pd.to_datetime with unit="ns" to handle nanosecond integers
                 expiry_dt = pd.to_datetime(expiry_time, unit="ns", utc=True)
-                expiry_str = expiry_dt.strftime("%y%m%d")
+                
+                # Validate: check for epoch timestamp (1970-01-01) which indicates missing/invalid expiry
+                # Also check for dates before 1980 as a sanity check
+                if expiry_dt.year < 1980:
+                    logger.debug(
+                        f"Skipping invalid expiry {expiry_time} -> {expiry_dt} for {exchange_raw_symbol} "
+                        f"(epoch or pre-1980 date)"
+                    )
+                    expiry_dt = None
+                    expiry_str = ""
+                else:
+                    expiry_str = expiry_dt.strftime("%y%m%d")
             except Exception as e:
                 logger.warning(f"Failed to parse expiry {expiry_time}: {e}")
                 expiry_dt = None
                 expiry_str = ""
+        
+        # If expiry is still missing for ICE/CME futures, try parsing from raw_symbol
+        # ICE Europe format: BRNM25 (product + month code + 2-digit year)
+        # CME format: ESM25 (product + month code + 2-digit year)
+        # Month codes: F=Jan, G=Feb, H=Mar, J=Apr, K=May, M=Jun, N=Jul, Q=Aug, U=Sep, V=Oct, X=Nov, Z=Dec
+        if not expiry_dt and exchange_raw_symbol and instrument_type == "FUTURE":
+            month_codes = {
+                'F': 1, 'G': 2, 'H': 3, 'J': 4, 'K': 5, 'M': 6,
+                'N': 7, 'Q': 8, 'U': 9, 'V': 10, 'X': 11, 'Z': 12
+            }
+            # Pattern: [A-Z]+[FGHJKMNQUVXZ][0-9]{1,2} (e.g., BRNM25, ESZ4, NGF26)
+            match = re.match(r'^([A-Z]+)([FGHJKMNQUVXZ])(\d{1,2})$', exchange_raw_symbol.upper())
+            if match:
+                product_code = match.group(1)  # e.g., "BRN", "ES", "NG"
+                month_code = match.group(2)    # e.g., "M", "Z"
+                year_digits = match.group(3)   # e.g., "25", "4"
+                
+                month = month_codes.get(month_code)
+                if month:
+                    # Handle 1 or 2 digit year
+                    if len(year_digits) == 1:
+                        # Single digit means 202X (e.g., "4" = 2024)
+                        year = 2020 + int(year_digits)
+                    else:
+                        # Two digits: assume 20XX for now (e.g., "25" = 2025)
+                        year = 2000 + int(year_digits)
+                    
+                    # For futures, expiry is typically last trading day of the month
+                    # We'll use the last day of the expiry month as approximation
+                    # The exact expiry time will be set later based on exchange rules
+                    import calendar
+                    last_day = calendar.monthrange(year, month)[1]
+                    
+                    try:
+                        expiry_dt = datetime(year, month, last_day, 0, 0, 0, tzinfo=timezone.utc)
+                        expiry_str = expiry_dt.strftime("%y%m%d")
+                        logger.debug(
+                            f"✅ Parsed expiry from raw_symbol {exchange_raw_symbol}: "
+                            f"{product_code} {month_code}{year_digits} -> {expiry_str}"
+                        )
+                    except ValueError as e:
+                        logger.debug(f"Failed to construct date from raw_symbol {exchange_raw_symbol}: {e}")
 
         # Extract option-specific fields
         strike_price = ""
@@ -1884,36 +1937,65 @@ class DatabentoAdapter:
                             f"{expiry_date} -> {expiry_iso} (UTC)"
                         )
 
-                    elif exchange.upper() in ("ICE", "IFEU"):
-                        # ICE Europe futures have specific expiry times in London time
-                        # Reference: ICE Futures Europe Contract Specifications
-                        # - Brent Crude (B): 19:30 London
-                        # - Gasoil (G): 12:00 London
-                        # - WTI (T): 19:30 London
-                        # Default to 19:30 London if we can't determine the specific product
+                    elif exchange.upper() in ("ICE", "IFEU", "IFUS"):
+                        # ICE futures have specific expiry times
+                        # ICE Europe (IFEU) - Brent, Gasoil, WTI Europe - use London time
+                        # ICE US (IFUS) - Cotton, Coffee, Sugar, Cocoa, OJ, Dollar Index - use New York time
                         expiry_date = expiry_dt.date()
                         
-                        # Determine expiry time based on product code (first part of raw_symbol)
+                        # Determine expiry time based on product code and dataset
                         product_code = exchange_raw_symbol[:1].upper() if exchange_raw_symbol else ""
-                        if product_code == "G":
-                            # Gasoil expires at 12:00 London
-                            expiry_hour, expiry_minute = 12, 0
+                        
+                        # Check dataset to determine if ICE Europe or ICE US
+                        is_ice_europe = dataset and "IFEU" in dataset.upper()
+                        is_ice_us = dataset and "IFUS" in dataset.upper()
+                        
+                        if is_ice_europe:
+                            # ICE Europe (London time) - Brent, Gasoil, WTI
+                            # Reference: ICE Futures Europe Contract Specifications
+                            # - Brent Crude (BRN): 19:30 London
+                            # - Gasoil (G): 12:00 London
+                            # - WTI (T): 19:30 London
+                            if product_code == "G":
+                                expiry_hour, expiry_minute = 12, 0  # Gasoil
+                            else:
+                                expiry_hour, expiry_minute = 19, 30  # Brent, WTI, others
+                            
+                            # London timezone handles GMT/BST automatically
+                            london_tz = ZoneInfo("Europe/London")
+                            expiry_local = datetime.combine(
+                                expiry_date, time(expiry_hour, expiry_minute, 0)
+                            ).replace(tzinfo=london_tz)
+                            expiry_iso = expiry_local.astimezone(timezone.utc).isoformat()
+                            logger.debug(
+                                f"✅ Set ICE Europe expiry to {expiry_hour}:{expiry_minute:02d} London for "
+                                f"{exchange_raw_symbol}: {expiry_date} -> {expiry_iso} (UTC)"
+                            )
+                        elif is_ice_us:
+                            # ICE US (New York time) - Soft commodities, Dollar Index
+                            # Reference: ICE Futures US Contract Specifications
+                            # Most ICE US futures expire between 12:00 PM and 3:00 PM ET
+                            # Using 2:30 PM ET as reasonable default (many soft commodities)
+                            et_tz = ZoneInfo("America/New_York")
+                            expiry_local = datetime.combine(
+                                expiry_date, time(14, 30, 0)  # 2:30 PM ET
+                            ).replace(tzinfo=et_tz)
+                            expiry_iso = expiry_local.astimezone(timezone.utc).isoformat()
+                            logger.debug(
+                                f"✅ Set ICE US expiry to 2:30 PM ET for "
+                                f"{exchange_raw_symbol}: {expiry_date} -> {expiry_iso} (UTC)"
+                            )
                         else:
-                            # Brent (B), WTI (T), and others typically expire at 19:30 London
-                            expiry_hour, expiry_minute = 19, 30
-                        
-                        # London timezone handles GMT/BST automatically
-                        london_tz = ZoneInfo("Europe/London")
-                        expiry_london = datetime.combine(
-                            expiry_date, time(expiry_hour, expiry_minute, 0)
-                        ).replace(tzinfo=london_tz)
-                        
-                        # Convert to UTC
-                        expiry_iso = expiry_london.astimezone(timezone.utc).isoformat()
-                        logger.debug(
-                            f"✅ Set ICE Europe expiry to {expiry_hour}:{expiry_minute:02d} London for "
-                            f"{exchange_raw_symbol}: {expiry_date} -> {expiry_iso} (UTC)"
-                        )
+                            # Fallback for generic ICE - use 4:00 PM ET (safe US default)
+                            et_tz = ZoneInfo("America/New_York")
+                            expiry_local = datetime.combine(
+                                expiry_date, time(16, 0, 0)
+                            ).replace(tzinfo=et_tz)
+                            expiry_iso = expiry_local.astimezone(timezone.utc).isoformat()
+                            logger.debug(
+                                f"✅ Set ICE (unknown dataset) expiry to 4:00 PM ET for "
+                                f"{exchange_raw_symbol}: {expiry_date} -> {expiry_iso} (UTC)"
+                            )
 
                     elif exchange.upper() == "CBOE" and instrument_type == "OPTION":
                         # CBOE options (SPX, VIX options) expire at 4:15 PM ET
