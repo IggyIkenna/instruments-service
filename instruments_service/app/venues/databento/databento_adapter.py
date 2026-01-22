@@ -1441,12 +1441,28 @@ class DatabentoAdapter:
         # CME format: ESM25 (product + month code + 2-digit year)
         # Month codes: F=Jan, G=Feb, H=Mar, J=Apr, K=May, M=Jun, N=Jul, Q=Aug, U=Sep, V=Oct, X=Nov, Z=Dec
         if not expiry_dt and exchange_raw_symbol and instrument_type == "FUTURE":
+            import calendar
             month_codes = {
                 'F': 1, 'G': 2, 'H': 3, 'J': 4, 'K': 5, 'M': 6,
                 'N': 7, 'Q': 8, 'U': 9, 'V': 10, 'X': 11, 'Z': 12
             }
-            # Pattern: [A-Z]+[FGHJKMNQUVXZ][0-9]{1,2} (e.g., BRNM25, ESZ4, NGF26)
-            match = re.match(r'^([A-Z]+)([FGHJKMNQUVXZ])(\d{1,2})$', exchange_raw_symbol.upper())
+            
+            raw_upper = exchange_raw_symbol.upper().strip()
+            
+            # Pattern 1: Standard format [A-Z]+[FGHJKMNQUVXZ][0-9]{1,2} (e.g., BRNM25, ESZ4, NGF26)
+            match = re.match(r'^([A-Z]+)([FGHJKMNQUVXZ])(\d{1,2})$', raw_upper)
+            
+            # Pattern 2: Space-separated format (e.g., "BRN M25", "ES Z4")
+            if not match:
+                match = re.match(r'^([A-Z]+)\s+([FGHJKMNQUVXZ])(\d{1,2})$', raw_upper)
+            
+            # Pattern 3: ICE continuous contract format (just product code, no expiry)
+            # For continuous contracts, skip expiry - they don't have one
+            if not match and re.match(r'^[A-Z]{1,4}$', raw_upper):
+                logger.debug(
+                    f"⏭️ Skipping expiry parsing for continuous contract: {exchange_raw_symbol}"
+                )
+            
             if match:
                 product_code = match.group(1)  # e.g., "BRN", "ES", "NG"
                 month_code = match.group(2)    # e.g., "M", "Z"
@@ -1465,7 +1481,6 @@ class DatabentoAdapter:
                     # For futures, expiry is typically last trading day of the month
                     # We'll use the last day of the expiry month as approximation
                     # The exact expiry time will be set later based on exchange rules
-                    import calendar
                     last_day = calendar.monthrange(year, month)[1]
                     
                     try:
@@ -1477,6 +1492,20 @@ class DatabentoAdapter:
                         )
                     except ValueError as e:
                         logger.debug(f"Failed to construct date from raw_symbol {exchange_raw_symbol}: {e}")
+            elif not re.match(r'^[A-Z]{1,4}$', raw_upper):
+                # Log a warning if we couldn't parse and it's not a known continuous contract format
+                logger.warning(
+                    f"⚠️ Could not parse expiry from raw_symbol '{exchange_raw_symbol}' for {instrument_type} "
+                    f"(expected format like BRNM25, ESZ4, or 'BRN M25') - exchange={exchange}, dataset={dataset}"
+                )
+        
+        # Final debug logging if expiry is still missing for futures
+        if instrument_type == "FUTURE" and not expiry_dt:
+            logger.debug(
+                f"📋 ICE/CME Future expiry debug: raw_symbol='{exchange_raw_symbol}', "
+                f"expiration_field={row.get('expiration', 'N/A')}, "
+                f"asset={row.get('asset', 'N/A')}, exchange={exchange}, dataset={dataset}"
+            )
 
         # Extract option-specific fields
         strike_price = ""
@@ -1874,6 +1903,12 @@ class DatabentoAdapter:
             if expiry_str:
                 symbol = f"{base_asset}-{quote_asset}-{expiry_str}@LIN"
             else:
+                # Missing expiry for futures - log debug info to help diagnose
+                logger.debug(
+                    f"⚠️ Future without expiry_str: exchange={exchange}, dataset={dataset}, "
+                    f"raw_symbol={exchange_raw_symbol}, base_asset={base_asset}, "
+                    f"expiry_time={expiry_time}, expiry_dt={expiry_dt}"
+                )
                 symbol = f"{base_asset}-{quote_asset}@LIN"
         elif expiry_str:
             symbol = f"{base_asset}-{quote_asset}-{expiry_str}"
