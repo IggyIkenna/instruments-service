@@ -89,6 +89,7 @@ def parse_arguments() -> argparse.Namespace:
         "--category",
         nargs="+",
         choices=["CEFI", "TRADFI", "DEFI"],
+        type=str.upper,  # Accept any case (tradfi -> TRADFI)
         help="Market categories to process (can specify multiple: --category CEFI TRADFI). Alternative to --CEFI --TRADFI --DEFI flags.",
     )
     parser.add_argument(
