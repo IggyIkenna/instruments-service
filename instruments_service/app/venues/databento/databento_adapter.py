@@ -24,7 +24,7 @@ import pandas as pd
 import databento as db
 import exchange_calendars as xcals
 from instruments_service.config import instruments_config
-from unified_cloud_services import DatabentoBaseClient, DatabentoClientConfig
+from unified_cloud_services import DatabentoBaseClient, DatabentoClientConfig, get_config
 from instruments_service.config import UnifiedInstrumentConfig
 
 logger = logging.getLogger(__name__)
@@ -110,6 +110,183 @@ class DatabentoAdapter:
     def api_key(self) -> str:
         """Get the API key."""
         return self._base_client.api_key
+
+    # ============================================================================
+    # BATCH API - Re-downloads within 30 days are FREE!
+    # ============================================================================
+    
+    def _fetch_with_batch_api(
+        self,
+        dataset: str,
+        schema: str,
+        symbols: List[str],
+        stype_in: str,
+        start: str,
+        end: str,
+    ) -> Any:
+        """
+        Fetch data using Databento's Batch Jobs API.
+        
+        KEY BENEFIT: Re-downloading the same data within 30 days is FREE!
+        Unlike Historical Streaming which bills every request.
+        
+        Args:
+            dataset: Databento dataset ID
+            schema: Schema name ('definition', 'trades', etc.)
+            symbols: List of symbols
+            stype_in: Symbol type input
+            start: Start date string
+            end: End date string
+            
+        Returns:
+            DBNStore object with the data
+        """
+        import os
+        import tempfile
+        from pathlib import Path
+        
+        logger.info(f"📦 Using BATCH API for {dataset} {schema} ({len(symbols)} symbols) - FREE re-download within 30 days!")
+        
+        try:
+            # Step 1: Check for existing batch job (free re-download!)
+            existing_job = self._find_matching_batch_job(
+                dataset=dataset,
+                schema=schema,
+                symbols=symbols,
+                stype_in=stype_in,
+                start=start,
+                end=end,
+            )
+            
+            if existing_job:
+                job_id = existing_job['id']
+                logger.info(f"   ♻️ Found existing batch job {job_id} - FREE re-download!")
+            else:
+                # Step 2: Submit new batch job
+                job = self.client.batch.submit_job(
+                    dataset=dataset,
+                    schema=schema,
+                    symbols=symbols,
+                    stype_in=stype_in,
+                    stype_out="instrument_id",
+                    start=start,
+                    end=end,
+                    encoding='dbn',
+                    compression='zstd',
+                    delivery='download',
+                )
+                job_id = job['id']
+                logger.info(f"   📤 Submitted new batch job: {job_id}")
+                
+                # Step 3: Wait for job completion
+                self._wait_for_batch_job(job_id)
+            
+            # Step 4: Download to temp directory
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                downloaded_files = self.client.batch.download(
+                    job_id=job_id,
+                    output_dir=tmp_dir,
+                )
+                
+                if not downloaded_files:
+                    logger.warning(f"⚠️ No files downloaded for batch job {job_id}")
+                    # Return empty DBNStore-like object
+                    return type('EmptyData', (), {'to_df': lambda: pd.DataFrame()})()
+                
+                # Find the data file (not metadata files)
+                data_file = None
+                for f in downloaded_files:
+                    if str(f).endswith('.dbn.zst') or str(f).endswith('.dbn'):
+                        data_file = f
+                        break
+                
+                if data_file:
+                    # Load and return DBNStore
+                    return db.DBNStore.from_file(str(data_file))
+                else:
+                    logger.warning(f"⚠️ No .dbn data file found in batch download")
+                    return type('EmptyData', (), {'to_df': lambda: pd.DataFrame()})()
+                    
+        except Exception as e:
+            logger.warning(f"⚠️ Batch API failed, falling back to streaming: {e}")
+            # Fallback to streaming API
+            return self.client.timeseries.get_range(
+                dataset=dataset,
+                schema=db.Schema.DEFINITION if schema == 'definition' else schema,
+                symbols=symbols,
+                stype_in=stype_in,
+                stype_out="instrument_id",
+                start=start,
+                end=end,
+            )
+    
+    def _find_matching_batch_job(
+        self,
+        dataset: str,
+        schema: str,
+        symbols: List[str],
+        stype_in: str,
+        start: str,
+        end: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Find an existing batch job matching the query parameters."""
+        try:
+            # List recent batch jobs (last 30 days are downloadable)
+            jobs = self.client.batch.list_jobs(states=['done'])
+            
+            # Match job parameters
+            symbols_set = set(symbols)
+            for job in jobs:
+                if (job.get('dataset') == dataset and
+                    job.get('schema') == schema and
+                    job.get('stype_in') == stype_in and
+                    str(job.get('start', '')).startswith(start) and
+                    str(job.get('end', '')).startswith(end)):
+                    # Check symbols match
+                    job_symbols = job.get('symbols', '')
+                    if isinstance(job_symbols, str):
+                        job_symbols_set = set(job_symbols.split(','))
+                    else:
+                        job_symbols_set = set(job_symbols) if job_symbols else set()
+                    
+                    if symbols_set == job_symbols_set or symbols_set.issubset(job_symbols_set):
+                        return job
+            
+            return None
+        except Exception as e:
+            logger.debug(f"No matching batch job found: {e}")
+            return None
+    
+    def _wait_for_batch_job(self, job_id: str, timeout_minutes: int = 30) -> None:
+        """Wait for a batch job to complete."""
+        import time
+        
+        poll_interval = 5  # seconds
+        max_polls = (timeout_minutes * 60) // poll_interval
+        
+        for i in range(max_polls):
+            jobs = self.client.batch.list_jobs()
+            
+            # Find our job
+            job = next((j for j in jobs if j['id'] == job_id), None)
+            
+            if not job:
+                raise RuntimeError(f"Batch job {job_id} not found")
+            
+            state = job.get('state', 'unknown')
+            progress = job.get('progress', 0)
+            
+            if state == 'done':
+                logger.info(f"   ✅ Batch job {job_id} completed!")
+                return
+            elif state in ('expired', 'failed'):
+                raise RuntimeError(f"Batch job {job_id} {state}")
+            else:
+                if i % 6 == 0:  # Log every 30 seconds
+                    logger.info(f"   ⏳ Batch job {job_id}: {state} ({progress}%)")
+                time.sleep(poll_interval)
+        
+        raise TimeoutError(f"Batch job {job_id} timed out after {timeout_minutes} minutes")
 
     def fetch_instrument_definitions(
         self,
@@ -198,6 +375,9 @@ class DatabentoAdapter:
             return {}
 
         # Fetch instruments for each (dataset, stype_in) group
+        # Use BATCH API if configured (re-downloads within 30 days are FREE!)
+        use_batch_api = get_config("DATABENTO_USE_BATCH_API", "true").lower() == "true"
+        
         all_instruments = {}
         for (
             symbol_dataset,
@@ -205,15 +385,26 @@ class DatabentoAdapter:
         ), symbol_group in symbols_by_dataset_and_stype.items():
             try:
                 # Fetch instrument definitions for this dataset/stype_in group
-                zipped_data = self.client.timeseries.get_range(
-                    dataset=symbol_dataset,  # Use dataset from instrument definition
-                    schema=db.Schema.DEFINITION,
-                    symbols=symbol_group,
-                    stype_in=stype_in,
-                    stype_out="instrument_id",
-                    start=start_date_str,
-                    end=end_date_str,
-                )
+                if use_batch_api:
+                    zipped_data = self._fetch_with_batch_api(
+                        dataset=symbol_dataset,
+                        schema="definition",
+                        symbols=symbol_group,
+                        stype_in=stype_in,
+                        start=start_date_str,
+                        end=end_date_str,
+                    )
+                else:
+                    # Legacy streaming API (bills every request)
+                    zipped_data = self.client.timeseries.get_range(
+                        dataset=symbol_dataset,
+                        schema=db.Schema.DEFINITION,
+                        symbols=symbol_group,
+                        stype_in=stype_in,
+                        stype_out="instrument_id",
+                        start=start_date_str,
+                        end=end_date_str,
+                    )
 
                 # Convert to DataFrame
                 df = zipped_data.to_df()
