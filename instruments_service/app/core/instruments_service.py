@@ -458,17 +458,24 @@ class InstrumentsService:
                                     
                                     # Process Bitcoin ETFs using static definitions
                                     # (more reliable for new ETFs like IBIT, FBTC, ARKB)
+                                    # IMPORTANT: Bitcoin ETFs launched January 11, 2024 - skip for earlier dates
+                                    bitcoin_etf_launch_date = datetime(2024, 1, 11, tzinfo=timezone.utc)
                                     bitcoin_etf_tickers = ["IBIT", "FBTC", "ARKB"]
-                                    for ticker in bitcoin_etf_tickers:
-                                        # Check if this ticker is in the symbols for this venue
-                                        if ticker in symbols:
-                                            etf_def_dict = databento_adapter.create_bitcoin_etf_instrument_definition(
-                                                ticker, date
-                                            )
-                                            if etf_def_dict:
-                                                etf_def = InstrumentDefinition(**etf_def_dict)
-                                                instruments[etf_def.instrument_key] = etf_def
-                                                logger.info(f"✅ Created Bitcoin ETF: {etf_def.instrument_key}")
+                                    
+                                    # Only process Bitcoin ETFs if date is on or after launch date
+                                    if date >= bitcoin_etf_launch_date:
+                                        for ticker in bitcoin_etf_tickers:
+                                            # Check if this ticker is in the symbols for this venue
+                                            if ticker in symbols:
+                                                etf_def_dict = databento_adapter.create_bitcoin_etf_instrument_definition(
+                                                    ticker, date
+                                                )
+                                                if etf_def_dict:
+                                                    etf_def = InstrumentDefinition(**etf_def_dict)
+                                                    instruments[etf_def.instrument_key] = etf_def
+                                                    logger.info(f"✅ Created Bitcoin ETF: {etf_def.instrument_key}")
+                                    else:
+                                        logger.debug(f"⏭️ Skipping Bitcoin ETFs - date {date.strftime('%Y-%m-%d')} is before launch (2024-01-11)")
                                     
                                     # Also fetch any other symbols via Databento API
                                     non_btc_etf_symbols = [s for s in symbols if s not in bitcoin_etf_tickers]
