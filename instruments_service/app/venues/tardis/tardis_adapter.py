@@ -30,6 +30,32 @@ from instruments_service.config import instruments_config
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# MANUAL METADATA OVERRIDES
+# =============================================================================
+# Some instruments have incorrect metadata in Tardis API (e.g., missing availableTo
+# for delisted tokens). We manually correct these based on known events.
+#
+# Format: {exchange: {symbol_id: {"availableTo": "ISO_DATE"}}}
+# 
+# FTT (FTX Token) - FTX collapsed November 8-11, 2022. Trading halted on most
+# exchanges by November 16, 2022. Tardis incorrectly reports availableTo=None
+# for fttusdt on binance, even though no data exists after the collapse.
+# =============================================================================
+TARDIS_METADATA_OVERRIDES: Dict[str, Dict[str, Dict[str, str]]] = {
+    "binance": {
+        "fttusdt": {"availableTo": "2022-11-16T00:00:00.000Z"},
+    },
+    "bybit": {
+        "fttusdt": {"availableTo": "2022-11-16T00:00:00.000Z"},
+    },
+    "okx": {
+        "ftt-usdt": {"availableTo": "2022-11-16T00:00:00.000Z"},
+        "ftt-usdt-swap": {"availableTo": "2022-11-16T00:00:00.000Z"},
+    },
+}
+
+
 def clear_tardis_cache():
     """Clear module-level cache (useful for testing or credential rotation)"""
     clear_tardis_api_key_cache()
@@ -85,6 +111,40 @@ class TardisAdapter:
 
         logger.info("✅ TardisAdapter initialized (using TardisBaseClient)")
 
+    def _apply_metadata_overrides(
+        self, exchange: str, symbols: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Apply manual metadata corrections for instruments with known Tardis API issues.
+        
+        Args:
+            exchange: Exchange name (lowercase)
+            symbols: List of symbol dicts from Tardis API
+            
+        Returns:
+            Updated symbols list with corrected metadata
+        """
+        overrides = TARDIS_METADATA_OVERRIDES.get(exchange, {})
+        if not overrides:
+            return symbols
+        
+        corrected_count = 0
+        for symbol in symbols:
+            symbol_id = symbol.get("id", "").lower()
+            if symbol_id in overrides:
+                for key, value in overrides[symbol_id].items():
+                    old_value = symbol.get(key)
+                    symbol[key] = value
+                    corrected_count += 1
+                    logger.info(
+                        f"🔧 Manual override: {exchange}:{symbol_id} {key}: {old_value} → {value}"
+                    )
+        
+        if corrected_count > 0:
+            logger.info(f"📝 Applied {corrected_count} manual metadata corrections for {exchange}")
+        
+        return symbols
+
     def warmup(self) -> bool:
         """
         Warmup connection by making a lightweight request.
@@ -124,7 +184,8 @@ class TardisAdapter:
             cached = get_cached_instruments(exchange)
             if cached is not None:
                 logger.info(f"📋 Using module-level cached Tardis data for {exchange} ({len(cached)} instruments)")
-                available_symbols = cached
+                # Apply overrides to cached data (in case cache was populated before fix)
+                available_symbols = self._apply_metadata_overrides(exchange, cached)
             else:
                 available_symbols = None
         else:
@@ -134,7 +195,8 @@ class TardisAdapter:
         cache_key = f"{exchange}_instruments"
         if available_symbols is None and not force_refresh and self._is_cache_valid(cache_key):
             logger.info(f"📋 Using instance-cached Tardis data for {exchange}")
-            available_symbols = self._cache[cache_key]
+            # Apply overrides to cached data (in case cache was populated before fix)
+            available_symbols = self._apply_metadata_overrides(exchange, self._cache[cache_key])
 
         if available_symbols is None:
             # Fetch fresh data from Tardis API using centralized client
@@ -149,7 +211,10 @@ class TardisAdapter:
                 exchange_info = response.json()
                 available_symbols = exchange_info.get("availableSymbols", [])
 
-                # Cache at both levels for performance
+                # Apply manual metadata corrections for known Tardis API issues
+                available_symbols = self._apply_metadata_overrides(exchange, available_symbols)
+
+                # Cache at both levels for performance (with corrections applied)
                 self._cache[cache_key] = available_symbols
                 self._cache_timestamps[cache_key] = datetime.now(timezone.utc)
                 set_cached_instruments(exchange, available_symbols)

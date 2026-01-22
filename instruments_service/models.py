@@ -311,15 +311,19 @@ class InstrumentDefinition(BaseModel):
             raise ValueError("Data types cannot be empty")
 
         valid_data_types = [
+            # CeFi data types (Tardis)
             "trades",
             "book_snapshot_5",
             "derivative_ticker",
             "options_chain",
             "liquidations",
-            "quotes",  # TradFi quotes (Databento) - note: actual fetching uses OHLCV for cost efficiency
-            "ohlcv_1m",  # 1-minute OHLCV candles (Databento TradFi)
-            "ohlcv_15m",  # 15-minute OHLCV candles (Barchart, Databento TradFi)
-            "ohlcv_24h",  # 24-hour OHLCV candles (AAVE daily historical data)
+            # TradFi data types (Databento) - ALLOWED: trades, ohlcv_1m, tbbo
+            "quotes",       # TradFi quotes (Databento)
+            "ohlcv_1m",     # 1-minute OHLCV candles (Databento TradFi)
+            "tbbo",         # Top of book best bid/offer (Databento TradFi) - ADDED Jan 2026
+            "ohlcv_15m",    # 15-minute OHLCV candles (Barchart external)
+            "ohlcv_24h",    # 24-hour OHLCV candles (Yahoo Finance external)
+            # Note: mbp_10, mbp_1 are EXPLICITLY NOT allowed (too expensive)
         ]
         types = [t.strip() for t in v.split(",")]
 
@@ -420,21 +424,25 @@ class InstrumentDefinition(BaseModel):
         # Check data types
         if self.data_types:
             valid_data_types = [
+                # CeFi data types (Tardis)
                 "trades",
                 "book_snapshot_5",
                 "derivative_ticker",
                 "options_chain",
                 "liquidations",
-                "quotes",  # TradFi quotes (Databento) - note: actual fetching uses OHLCV for cost efficiency
-                "ohlcv_1m",  # 1-minute OHLCV candles (Databento TradFi, Hyperliquid, Aster)
-                "ohlcv_15m",  # 15-minute OHLCV candles (Barchart, Databento TradFi)
-                "ohlcv_1h",  # 1-hour OHLCV candles (fallback for Hyperliquid, Aster)
-                "ohlcv_24h",  # 24-hour OHLCV candles (FX pairs like USD/KRW)
+                # TradFi data types (Databento) - ALLOWED: trades, ohlcv_1m, tbbo
+                "quotes",       # TradFi quotes (Databento)
+                "ohlcv_1m",     # 1-minute OHLCV candles (Databento TradFi, Hyperliquid, Aster)
+                "tbbo",         # Top of book best bid/offer (Databento TradFi) - ADDED Jan 2026
+                "ohlcv_15m",    # 15-minute OHLCV candles (Barchart external)
+                "ohlcv_1h",     # 1-hour OHLCV candles (fallback for Hyperliquid, Aster)
+                "ohlcv_24h",    # 24-hour OHLCV candles (Yahoo Finance external)
+                # Note: mbp_10, mbp_1 are EXPLICITLY NOT allowed (too expensive)
                 # DeFi-specific data types
-                "swaps",  # DEX pool swap events (Uniswap, Balancer)
-                "rate_indices",  # Lending protocol indices (Aave, Morpho) for APY calculation
+                "swaps",        # DEX pool swap events (Uniswap, Balancer)
+                "rate_indices", # Lending protocol indices (Aave, Morpho) for APY calculation
                 "utilization",  # Lending pool utilization rate
-                "oracle_prices",  # Protocol oracle price feeds (LSTs, sUSDe yield calculation)
+                "oracle_prices",# Protocol oracle price feeds (LSTs, sUSDe yield calculation)
             ]
             types = [t.strip() for t in self.data_types.split(",")]
             for data_type in types:

@@ -1,6 +1,6 @@
 # Instruments Service - Deployment Guide (Femi)
 
-**Last Updated:** January 6, 2026  
+**Last Updated:** January 21, 2026  
 **Owner:** Femi  
 **Service:** `instruments-service`
 
@@ -143,23 +143,46 @@ pip install git+https://github.com/IggyIkenna/unified-cloud-services.git
 
 ### Expected File Sizes & Row Counts (Benchmarks)
 
-#### Benchmark: May 23, 2023 (Historical Reference Date)
+#### Historical Reference 1: May 23, 2023 (Baseline)
 
-| Domain | File Size | Rows | Columns | Notes |
-|--------|-----------|------|---------|-------|
-| **CeFi** | **168.73 KB** (0.16 MB) | **2,905** | 59 | Crypto exchanges (Binance, OKX, Bybit, Deribit) |
-| **TradFi** | **310.19 KB** (0.30 MB) | **9,577** | 59 | Equities, futures, options (NYSE, NASDAQ, CME) |
-| **DeFi** | **45.77 KB** (0.04 MB) | **116** | 59 | DEX pools, lending protocols (Uniswap, AAVE, Curve) |
+This date provides a baseline before Bitcoin ETFs and newer DeFi protocols.
+
+| Domain | File Size | Instruments | Top Venues |
+|--------|-----------|-------------|------------|
+| **CeFi** | **168.71 KB** | **2,905** | DERIBIT (1,299), BYBIT (523), OKX (503), BINANCE-SPOT (360), BINANCE-FUTURES (180), COINBASE (17), UPBIT (16) |
+| **TradFi** | **310.19 KB** | **9,577** | CME (9,010), NYSE (463), NASDAQ (102), CBOE (1), YAHOO_FINANCE (1) |
+| **DeFi** | **45.81 KB** | **116** | HYPERLIQUID (38), UNISWAPV3-ETH (31), ASTER (20), BALANCER-ETH (18), AAVE_V3_ETH (7), LIDO (2) |
 
 **Total for 2023-05-23:** ~525 KB, **12,598 instruments**
 
-#### Benchmark: June 3, 2024 (Recent Date)
+**What you'll see:**
+- ✅ CeFi: All crypto exchanges (Binance, OKX, Bybit, Deribit, Coinbase, Upbit)
+- ✅ TradFi: Equities, CME futures, KRW/USD FX
+- ✅ DeFi: Uniswap V3, AAVE V3, Hyperliquid, Aster, Balancer, Lido
+- ❌ Missing: Bitcoin ETFs (launched Jan 2024), Ethena (2024), EtherFi, Morpho
 
-| Domain | Actual Size | Notes |
-|--------|-------------|-------|
-| **CeFi** | **~35 KB** | 34.9 KiB on 2024-06-03 |
-| **TradFi** | **~289 KB** | 288.52 KiB on 2024-06-03 (includes all equity/futures) |
-| **DeFi** | **~45 KB** | 44.83 KiB on 2024-06-03 |
+---
+
+#### Historical Reference 2: July 1, 2024 (With Bitcoin ETFs & More DeFi)
+
+This date shows the expanded universe after Bitcoin ETF launches and additional DeFi protocol support.
+
+| Domain | File Size | Instruments | Top Venues |
+|--------|-----------|-------------|------------|
+| **CeFi** | **253.69 KB** | **4,795** | DERIBIT (2,681), BYBIT (887), OKX (539), BINANCE-SPOT (385), BINANCE-FUTURES (262), COINBASE (18), UPBIT (16) |
+| **TradFi** | **360.26 KB** | **11,234** | CME (10,664), NYSE (468), NASDAQ (100), CBOE (1), YAHOO_FINANCE (1) |
+| **DeFi** | **48.27 KB** | **128** | HYPERLIQUID (38), UNISWAPV3-ETH (37), ASTER (20), BALANCER-ETH (18), AAVE_V3_ETH (7), MORPHO (4), LIDO (2), ETHERFI (1), ETHENA (1) |
+
+**Total for 2024-07-01:** ~662 KB, **16,157 instruments**
+
+**What July 2024 has that May 2023 doesn't:**
+- ✅ Bitcoin ETFs: IBIT, FBTC, ARKB (NASDAQ:ETF)
+- ✅ EtherFi (weETH) - more mature by 2024
+- ✅ Ethena (sUSDe) - launched 2024
+- ✅ Morpho (Ethereum) - lending protocol
+- ✅ +65% more CeFi instruments overall
+
+---
 
 **Note:** 
 - File sizes and row counts vary by date based on:
@@ -174,6 +197,31 @@ pip install git+https://github.com/IggyIkenna/unified-cloud-services.git
 - Check file sizes are within expected ranges (see benchmarks above)
 - Confirm row counts match expected instrument counts per domain
 - All files should have 59 columns (standard instrument definition schema)
+
+---
+
+## Expected Runtime
+
+### Performance Benchmarks
+
+**Runtime per day**: ~2 minutes per day (for all domains: CeFi, TradFi, DeFi combined)
+
+**Notes**:
+- Runtime is consistent across dates (processes all domains in single run)
+- Runtime may vary slightly based on:
+  - Number of instruments discovered per domain
+  - API response times (Tardis, Databento, The Graph)
+  - Network latency
+- For historical backfill of multiple years, runtime scales linearly:
+  - 1 year (~365 days) ≈ ~12 hours
+  - 2 years (~730 days) ≈ ~24 hours
+  - 5 years (~1,825 days) ≈ ~61 hours (~2.5 days)
+
+**Example Runtime Estimates**:
+- Single day (2023-05-23): ~2 minutes
+- One month (May 2023): ~60 minutes (~1 hour)
+- One year (2023): ~12 hours
+- Full historical backfill (2019-2026): ~3-4 days (depending on start date)
 
 ---
 
