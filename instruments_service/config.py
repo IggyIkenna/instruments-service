@@ -126,9 +126,10 @@ TRADFI_INSTRUMENTS_CONFIG: List[Dict] = [
     {"symbol": "DX.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFUS.IMPACT", "stype": "parent", "base": "DOLLARINDEX", "code": "DX"},
     # =========================================================================
     # ICE Futures Europe (IFEU.IMPACT) - Energy commodities
-    # NOTE: Brent crude symbol on ICE Europe is "B", not "BRN"
+    # Available from: December 23, 2018 (same as ICE US)
+    # NOTE: Brent crude symbol on ICE Europe is "BRN", not "B"
     # =========================================================================
-    {"symbol": "B.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFEU.IMPACT", "stype": "parent", "base": "BRENT", "code": "B"},
+    {"symbol": "BRN.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFEU.IMPACT", "stype": "parent", "base": "BRENT", "code": "BRN"},
     {"symbol": "G.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFEU.IMPACT", "stype": "parent", "base": "GASOIL", "code": "G"},
     {"symbol": "T.FUT", "venue": "ICE", "type": "FUTURE", "dataset": "IFEU.IMPACT", "stype": "parent", "base": "WTI", "code": "T"},
 ]
@@ -220,12 +221,13 @@ DATABENTO_VALID_PARENT_SYMBOLS: Dict[str, Tuple[str, str]] = {
     "ORANGEJUICE": ("OJ.FUT", "IFUS.IMPACT"),
     "DX": ("DX.FUT", "IFUS.IMPACT"),
     "DOLLARINDEX": ("DX.FUT", "IFUS.IMPACT"),
-    # ICE Futures Europe - Energy
-    "B": ("B.FUT", "IFEU.IMPACT"),
-    "BRENT": ("B.FUT", "IFEU.IMPACT"),
-    "BRN": ("B.FUT", "IFEU.IMPACT"),  # Common alias for Brent
+    # ICE Futures Europe - Energy (available from Dec 23, 2018)
+    "BRN": ("BRN.FUT", "IFEU.IMPACT"),
+    "BRENT": ("BRN.FUT", "IFEU.IMPACT"),
     "G": ("G.FUT", "IFEU.IMPACT"),
     "GASOIL": ("G.FUT", "IFEU.IMPACT"),
+    "T": ("T.FUT", "IFEU.IMPACT"),
+    "WTI": ("T.FUT", "IFEU.IMPACT"),
 }
 
 # Options parent symbol mapping
@@ -260,7 +262,7 @@ EXCHANGE_CODE_TO_NAME: Dict[str, str] = {
     "CT": "COTTON", "CC": "COCOA", "KC": "COFFEE", "SB": "SUGAR",
     "OJ": "ORANGEJUICE", "DX": "DOLLARINDEX",
     # ICE Europe
-    "B": "BRENT", "G": "GASOIL", "T": "WTI",
+    "BRN": "BRENT", "G": "GASOIL", "T": "WTI",
 }
 
 
