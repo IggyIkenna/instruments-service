@@ -1637,6 +1637,21 @@ class DatabentoAdapter:
                             f"{expiry_date} -> {expiry_iso} (UTC)"
                         )
 
+                    elif exchange.upper() == "CME" and instrument_type == "FUTURE":
+                        # CME futures expire at end of trading day, typically 4:00 PM CT
+                        # Reference: CME Group - most equity index futures (ES, NQ, RTY, YM) settle at 4:00 PM CT
+                        # Some products like agricultural (ZC, ZW, ZS) have different times but 4 PM CT is reasonable default
+                        expiry_date = expiry_dt.date()
+                        ct_tz = ZoneInfo("America/Chicago")
+                        expiry_4pm_ct = datetime.combine(expiry_date, time(16, 0, 0)).replace(
+                            tzinfo=ct_tz
+                        )
+                        expiry_iso = expiry_4pm_ct.astimezone(timezone.utc).isoformat()
+                        logger.debug(
+                            f"✅ Set CME future expiry to 4:00 PM CT for {exchange_raw_symbol}: "
+                            f"{expiry_date} -> {expiry_iso} (UTC)"
+                        )
+
                     elif exchange.upper() in ("ICE", "IFEU"):
                         # ICE Europe futures have specific expiry times in London time
                         # Reference: ICE Futures Europe Contract Specifications
@@ -1667,17 +1682,47 @@ class DatabentoAdapter:
                             f"✅ Set ICE Europe expiry to {expiry_hour}:{expiry_minute:02d} London for "
                             f"{exchange_raw_symbol}: {expiry_date} -> {expiry_iso} (UTC)"
                         )
-                    else:
-                        # For other exchanges with date-only expiry, use end of trading day (typically 16:00 local)
-                        # This is a reasonable default when we don't have specific knowledge
+
+                    elif exchange.upper() == "CBOE" and instrument_type == "OPTION":
+                        # CBOE options (SPX, VIX options) expire at 4:15 PM ET
+                        # Reference: CBOE - options get 15 extra minutes after market close for exercise
                         expiry_date = expiry_dt.date()
-                        expiry_eod_utc = datetime.combine(
-                            expiry_date, time(21, 0, 0), tzinfo=timezone.utc  # ~5PM ET / 4PM CT in UTC
+                        et_tz = ZoneInfo("America/New_York")
+                        expiry_415pm_et = datetime.combine(expiry_date, time(16, 15, 0)).replace(
+                            tzinfo=et_tz
                         )
-                        expiry_iso = expiry_eod_utc.isoformat()
+                        expiry_iso = expiry_415pm_et.astimezone(timezone.utc).isoformat()
                         logger.debug(
-                            f"Using 21:00 UTC default for {exchange} {instrument_type} "
-                            f"symbol {exchange_raw_symbol}: {expiry_date} -> {expiry_iso}"
+                            f"✅ Set CBOE option expiry to 4:15 PM ET for {exchange_raw_symbol}: "
+                            f"{expiry_date} -> {expiry_iso} (UTC)"
+                        )
+
+                    elif exchange.upper() in ("OPRA", "NYSE", "NASDAQ", "AMEX", "ARCA", "BATS", "IEX") and instrument_type == "OPTION":
+                        # US equity options (OPRA) expire at 4:00 PM ET
+                        # Reference: OCC - standard US equity options expire at market close
+                        expiry_date = expiry_dt.date()
+                        et_tz = ZoneInfo("America/New_York")
+                        expiry_4pm_et = datetime.combine(expiry_date, time(16, 0, 0)).replace(
+                            tzinfo=et_tz
+                        )
+                        expiry_iso = expiry_4pm_et.astimezone(timezone.utc).isoformat()
+                        logger.debug(
+                            f"✅ Set US equity option expiry to 4:00 PM ET for {exchange_raw_symbol}: "
+                            f"{expiry_date} -> {expiry_iso} (UTC)"
+                        )
+
+                    else:
+                        # For other exchanges with date-only expiry, use 4:00 PM ET as reasonable US default
+                        # Most US trading ends around this time
+                        expiry_date = expiry_dt.date()
+                        et_tz = ZoneInfo("America/New_York")
+                        expiry_4pm_et = datetime.combine(expiry_date, time(16, 0, 0)).replace(
+                            tzinfo=et_tz
+                        )
+                        expiry_iso = expiry_4pm_et.astimezone(timezone.utc).isoformat()
+                        logger.debug(
+                            f"Using 4:00 PM ET default for {exchange} {instrument_type} "
+                            f"symbol {exchange_raw_symbol}: {expiry_date} -> {expiry_iso} (UTC)"
                         )
                 else:
                     # Databento provided time, use as-is (it's the correct expiry time for this contract)
