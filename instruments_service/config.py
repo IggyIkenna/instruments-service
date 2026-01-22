@@ -225,24 +225,55 @@ class UnifiedInstrumentConfig:
                 return self.exchange_code_to_name[base_code]
         return exchange_code
 
+    # ETFs that are in the S&P 500 or commonly traded (should NOT be classified as EQUITY)
+    KNOWN_ETFS = {
+        'SPY', 'QQQ', 'IVV', 'VOO', 'VTI', 'DIA', 'IWM', 'EEM', 'VEA', 'VWO',
+        'GLD', 'SLV', 'USO', 'UNG', 'TLT', 'IEF', 'SHY', 'LQD', 'HYG', 'JNK',
+        'XLF', 'XLE', 'XLK', 'XLV', 'XLI', 'XLY', 'XLP', 'XLB', 'XLU', 'XLRE',
+        'VNQ', 'IBB', 'SMH', 'ARKK', 'ARKG', 'ARKW', 'ARKF', 'ARKQ',
+        'IBIT', 'FBTC', 'ARKB', 'GBTC', 'BITO'  # Bitcoin ETFs
+    }
+    
+    # Symbols with spaces that need dot format for Databento API
+    # Databento uses "BRK.B" not "BRK B"
+    SPACE_TO_DOT_SYMBOLS = {
+        'BRK B': 'BRK.B',   # Berkshire Hathaway Class B
+        'BF B': 'BF.B',     # Brown-Forman Class B
+        'BRK A': 'BRK.A',   # Berkshire Hathaway Class A
+        'BF A': 'BF.A'      # Brown-Forman Class A
+    }
+    
     def _get_sp500_equities(self) -> List[TradFiInstrument]:
-        """Generate S&P 500 equity instrument definitions from external data file."""
+        """Generate S&P 500 equity/ETF instrument definitions from external data file."""
         sp500_tickers, nasdaq_tickers = _load_sp500_tickers()
         
         if not sp500_tickers:
             logger.warning("No S&P 500 tickers loaded - returning empty list")
             return []
 
-        equities = []
+        instruments = []
         for ticker in sp500_tickers:
+            # Convert space symbols to dot format for Databento
+            databento_symbol = self.SPACE_TO_DOT_SYMBOLS.get(ticker, ticker)
+            
             # Determine venue (NASDAQ for known tech stocks, NYSE for others)
             venue = "NASDAQ" if ticker in nasdaq_tickers else "NYSE"
-            equities.append(
+            
+            # Determine instrument type (ETF vs EQUITY)
+            instrument_type = "ETF" if ticker in self.KNOWN_ETFS else "EQUITY"
+            
+            instruments.append(
                 TradFiInstrument(
-                    ticker, venue, "EQUITY", "DBEQ.BASIC", "raw_symbol", ticker, "USD"
+                    symbol=databento_symbol,  # Use Databento-compatible symbol (BRK.B not BRK B)
+                    venue=venue, 
+                    instrument_type=instrument_type,  # ETF or EQUITY
+                    dataset="DBEQ.BASIC", 
+                    stype_in="raw_symbol", 
+                    base_asset=ticker,  # Keep original ticker as base_asset for display
+                    quote_asset="USD"
                 )
             )
-        return equities
+        return instruments
 
     def get_all_instruments(self) -> List[TradFiInstrument]:
         """Get all instruments (base instruments + dynamically generated S&P 500 equities)"""
