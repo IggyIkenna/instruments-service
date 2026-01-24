@@ -9,11 +9,12 @@ Reference: https://docs.uniswap.org/contracts/v2/reference/API/queries
 """
 
 import logging
+import asyncio
+import concurrent.futures
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
 import aiohttp
-import asyncio
 
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 from instruments_service.config import instruments_config
@@ -91,10 +92,25 @@ class UniswapV2Adapter(BaseDefiAdapter):
         Returns:
             Dictionary mapping instrument_key to instrument definition
         """
-        pairs = asyncio.run(self._fetch_pairs(
-            base_currency=base_currency,
-            min_liquidity=min_liquidity or 100000  # Default 100k min liquidity
-        ))
+        # Handle nested event loops (CLI may already have one running)
+        try:
+            loop = asyncio.get_running_loop()
+            # Already in async context - run in thread pool
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(
+                    asyncio.run,
+                    self._fetch_pairs(
+                        base_currency=base_currency,
+                        min_liquidity=min_liquidity or 100000
+                    )
+                )
+                pairs = future.result()
+        except RuntimeError:
+            # No event loop running - safe to use asyncio.run
+            pairs = asyncio.run(self._fetch_pairs(
+                base_currency=base_currency,
+                min_liquidity=min_liquidity or 100000
+            ))
         
         instruments = {}
         
