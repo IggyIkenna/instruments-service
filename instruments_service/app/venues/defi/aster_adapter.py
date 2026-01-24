@@ -102,16 +102,29 @@ class AsterAdapter(BaseDefiAdapter):
         instruments.update(self.fetch_spot_pairs())
         return list(instruments.values())
 
-    def fetch_perpetuals(self, test_data_availability: bool = False) -> Dict[str, Dict[str, Any]]:
+    def fetch_perpetuals(
+        self, 
+        test_data_availability: bool = False,
+        target_date: Optional[datetime] = None
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all perpetual futures from Aster.
 
         Args:
             test_data_availability: If True, test data availability and populate data_types
+            target_date: Target date for instrument availability check
 
         Returns:
             Dictionary mapping instrument_key to instrument definition
         """
+        # Check if target_date is before Aster launch
+        if target_date and target_date < self.ASTER_LAUNCH_DATE:
+            logger.info(
+                f"ℹ️ Aster DEX not available for {target_date.strftime('%Y-%m-%d')} "
+                f"(Aster launched Q4 2024). Returning empty instruments - this is expected."
+            )
+            return {}
+        
         try:
             # Check cache first (instrument lists rarely change)
             cache_key = "aster_futures_exchange_info"
@@ -164,7 +177,11 @@ class AsterAdapter(BaseDefiAdapter):
             logger.error(f"Failed to fetch Aster perpetuals: {e}")
             return {}
 
-    def fetch_spot_pairs(self, test_data_availability: bool = False) -> Dict[str, Dict[str, Any]]:
+    def fetch_spot_pairs(
+        self, 
+        test_data_availability: bool = False,
+        target_date: Optional[datetime] = None
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all spot trading pairs from Aster for MVP coins.
 
@@ -173,10 +190,19 @@ class AsterAdapter(BaseDefiAdapter):
 
         Args:
             test_data_availability: If True, test data availability and populate data_types
+            target_date: Target date for instrument availability check
 
         Returns:
             Dictionary mapping instrument_key to instrument definition (empty if spot API unavailable)
         """
+        # Check if target_date is before Aster launch
+        if target_date and target_date < self.ASTER_LAUNCH_DATE:
+            logger.info(
+                f"ℹ️ Aster DEX not available for {target_date.strftime('%Y-%m-%d')} "
+                f"(Aster launched Q4 2024). Returning empty instruments - this is expected."
+            )
+            return {}
+        
         try:
             # Check cache first
             cache_key = "aster_spot_exchange_info"
