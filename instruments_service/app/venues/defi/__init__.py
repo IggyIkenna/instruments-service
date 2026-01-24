@@ -1,7 +1,7 @@
 """
 DeFi Venue Adapters Package
 
-Contains adapters for DeFi protocols:
+Contains adapters for AMM-style DeFi protocols:
 - Uniswap V2 (DEX pairs - legacy but still active)
 - Uniswap V3 (DEX pools with concentrated liquidity)
 - Uniswap V4 (DEX pools with hooks)
@@ -11,9 +11,10 @@ Contains adapters for DeFi protocols:
 - Lido (LST staking)
 - Ethena (sUSDe yield-bearing)
 - Morpho (lending protocol)
-- Hyperliquid (perpetual futures DEX)
-- Aster (perpetual futures exchange)
 - Curve (stablecoin DEX)
+
+NOTE: On-chain CLOB-style perpetual DEXes (Hyperliquid, Aster) have been moved to
+      venues/onchain_perps/ because their data model matches Tardis/CeFi schema.
 """
 
 from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
@@ -26,9 +27,11 @@ from instruments_service.app.venues.defi.aave_adapter import AaveV3Adapter
 from instruments_service.app.venues.defi.lst_adapters import EtherFiAdapter, LidoAdapter
 from instruments_service.app.venues.defi.ethena_adapter import EthenaAdapter
 from instruments_service.app.venues.defi.morpho_adapter import MorphoAdapter
-from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
-from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
 from instruments_service.app.venues.defi.curve_rpc_adapter import CurveRPCAdapter
+
+# Backwards-compatible imports from onchain_perps
+# DEPRECATED: Import from instruments_service.app.venues.onchain_perps instead
+from instruments_service.app.venues.onchain_perps import HyperliquidAdapter, AsterAdapter
 
 __all__ = [
     "TheGraphClient",
@@ -42,7 +45,8 @@ __all__ = [
     "LidoAdapter",
     "EthenaAdapter",
     "MorphoAdapter",
+    "CurveRPCAdapter",
+    # Deprecated - import from onchain_perps
     "HyperliquidAdapter",
     "AsterAdapter",
-    "CurveRPCAdapter",
 ]

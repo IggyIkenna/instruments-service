@@ -49,11 +49,15 @@ from instruments_service.app.venues.defi import (
     AaveV3Adapter,
     EtherFiAdapter,
     LidoAdapter,
-    AsterAdapter,
-    HyperliquidAdapter,
     MorphoAdapter,
     CurveRPCAdapter,
     EthenaAdapter,
+)
+
+# On-chain CLOB perps (Tardis-compatible data schema)
+from instruments_service.app.venues.onchain_perps import (
+    HyperliquidAdapter,
+    AsterAdapter,
 )
 
 # Import Secret Manager for API key retrieval
