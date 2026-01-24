@@ -14,11 +14,12 @@ Uniswap V4 introduces:
 """
 
 import logging
+import asyncio
+import concurrent.futures
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
 import aiohttp
-import asyncio
 
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 from instruments_service.config import instruments_config
@@ -100,10 +101,25 @@ class UniswapV4Adapter(BaseDefiAdapter):
         Returns:
             Dictionary mapping instrument_key to instrument definition
         """
-        pools = asyncio.run(self._fetch_pools(
-            base_currency=base_currency,
-            min_tx_count=1000  # Filter by transaction count instead (V4 TVL data may be unreliable)
-        ))
+        # Handle nested event loops (CLI may already have one running)
+        try:
+            loop = asyncio.get_running_loop()
+            # Already in async context - run in thread pool
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(
+                    asyncio.run,
+                    self._fetch_pools(
+                        base_currency=base_currency,
+                        min_tx_count=1000
+                    )
+                )
+                pools = future.result()
+        except RuntimeError:
+            # No event loop running - safe to use asyncio.run
+            pools = asyncio.run(self._fetch_pools(
+                base_currency=base_currency,
+                min_tx_count=1000
+            ))
         
         instruments = {}
         
