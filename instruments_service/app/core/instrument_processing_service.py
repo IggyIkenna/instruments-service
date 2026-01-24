@@ -42,7 +42,9 @@ import instruments_service.app.venues.defi.the_graph_client as tgc_module
 from instruments_service.app.venues.tardis import TardisAdapter
 from instruments_service.app.venues.databento import DatabentoAdapter
 from instruments_service.app.venues.defi import (
+    UniswapV2Adapter,
     UniswapV3Adapter,
+    UniswapV4Adapter,
     BalancerAdapter,
     AaveV3Adapter,
     EtherFiAdapter,
@@ -2287,10 +2289,7 @@ class InstrumentProcessingService:
                 spot_pairs = adapter.fetch_spot_pairs(test_data_availability=False)
                 raw_instruments = {**perpetuals, **spot_pairs}
 
-            # Adapter not yet implemented (e.g., UniswapV2Adapter, UniswapV4Adapter, CurveAdapter, EthenaAdapter)
             elif protocol.lower() == "uniswap_v2":
-                logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
-                return {}
                 adapter = UniswapV2Adapter(chain=chain, api_key=graph_api_key)
                 raw_instruments = adapter.fetch_pools(
                     base_currency_list=base_currency_list,
@@ -2299,8 +2298,6 @@ class InstrumentProcessingService:
                 )
 
             elif protocol.lower() == "uniswap_v4":
-                logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
-                return {}
                 adapter = UniswapV4Adapter(chain=chain, api_key=graph_api_key)
                 raw_instruments = adapter.fetch_pools(
                     base_currency_list=base_currency_list,
