@@ -34,6 +34,10 @@ class MorphoAdapter(BaseDefiAdapter):
     MORPHO-ETHEREUM:A_TOKEN:AUSDT@ETHEREUM
     MORPHO-ETHEREUM:DEBT_TOKEN:DEBTWETH@ETHEREUM
     """
+    
+    # Morpho Blue mainnet launch (January 2024)
+    # Note: Morpho Optimizer launched earlier (2022) but we target Morpho Blue
+    MORPHO_BLUE_LAUNCH_DATE = datetime(2024, 1, 8)
 
     def __init__(
         self, 
@@ -112,13 +116,27 @@ class MorphoAdapter(BaseDefiAdapter):
         instruments = self.fetch_markets()
         return list(instruments.values())
 
-    def fetch_markets(self) -> Dict[str, Dict[str, Any]]:
+    def fetch_markets(
+        self, 
+        target_date: Optional[datetime] = None
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch Morpho markets and convert to instrument definitions.
 
+        Args:
+            target_date: Target date for instrument availability check
+            
         Returns:
             Dictionary mapping instrument_key to instrument definition
         """
+        # Check if target_date is before Morpho Blue launch
+        if target_date and target_date < self.MORPHO_BLUE_LAUNCH_DATE:
+            logger.info(
+                f"ℹ️ Morpho Blue not available for {target_date.strftime('%Y-%m-%d')} "
+                f"(Morpho Blue mainnet launched January 2024). Returning empty instruments - this is expected."
+            )
+            return {}
+        
         instruments = {}
 
         try:

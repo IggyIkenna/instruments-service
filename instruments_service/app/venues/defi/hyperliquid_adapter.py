@@ -50,6 +50,9 @@ class HyperliquidAdapter(BaseDefiAdapter):
     Generates instruments in format:
     HYPERLIQUID:PERPETUAL:BTC-USDC
     """
+    
+    # Hyperliquid mainnet launch (December 2022)
+    HYPERLIQUID_LAUNCH_DATE = datetime(2022, 12, 1)
 
     def __init__(
         self,
@@ -94,16 +97,29 @@ class HyperliquidAdapter(BaseDefiAdapter):
         instruments.update(self.fetch_spot_pairs())
         return list(instruments.values())
 
-    def fetch_perpetuals(self, test_data_availability: bool = False) -> Dict[str, Dict[str, Any]]:
+    def fetch_perpetuals(
+        self, 
+        test_data_availability: bool = False,
+        target_date: Optional[datetime] = None
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all perpetual futures from Hyperliquid.
 
         Args:
             test_data_availability: If True, test data availability and populate data_types
+            target_date: Target date for instrument availability check
 
         Returns:
             Dictionary mapping instrument_key to instrument definition
         """
+        # Check if target_date is before Hyperliquid launch
+        if target_date and target_date < self.HYPERLIQUID_LAUNCH_DATE:
+            logger.info(
+                f"ℹ️ Hyperliquid not available for {target_date.strftime('%Y-%m-%d')} "
+                f"(Hyperliquid launched December 2022). Returning empty instruments - this is expected."
+            )
+            return {}
+        
         try:
             # Check cache first (instrument lists rarely change)
             cache_key = "hyperliquid_perp_meta"
@@ -160,16 +176,29 @@ class HyperliquidAdapter(BaseDefiAdapter):
             logger.error(f"Failed to fetch Hyperliquid perpetuals: {e}")
             return {}
 
-    def fetch_spot_pairs(self, test_data_availability: bool = False) -> Dict[str, Dict[str, Any]]:
+    def fetch_spot_pairs(
+        self, 
+        test_data_availability: bool = False,
+        target_date: Optional[datetime] = None
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all spot trading pairs from Hyperliquid for MVP coins.
 
         Args:
             test_data_availability: If True, test data availability and populate data_types
+            target_date: Target date for instrument availability check
 
         Returns:
             Dictionary mapping instrument_key to instrument definition
         """
+        # Check if target_date is before Hyperliquid launch
+        if target_date and target_date < self.HYPERLIQUID_LAUNCH_DATE:
+            logger.info(
+                f"ℹ️ Hyperliquid not available for {target_date.strftime('%Y-%m-%d')} "
+                f"(Hyperliquid launched December 2022). Returning empty instruments - this is expected."
+            )
+            return {}
+        
         try:
             # Check cache first (reuses same metadata as perpetuals)
             cache_key = "hyperliquid_perp_meta"
