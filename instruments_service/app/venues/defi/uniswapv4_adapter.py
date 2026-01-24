@@ -82,12 +82,16 @@ class UniswapV4Adapter(BaseDefiAdapter):
         
         logger.info(f"✅ UniswapV4Adapter initialized for chain: {self.chain}")
 
+    # V4 launched late 2024 (mainnet: ~November 2024)
+    V4_LAUNCH_DATE = datetime(2024, 11, 1)
+    
     def fetch_pools(
         self,
         base_currency: Optional[str] = None,
         base_currency_list: Optional[List[str]] = None,
         quote_currency_list: Optional[List[str]] = None,
         min_liquidity: Optional[float] = None,
+        target_date: Optional[datetime] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch Uniswap V4 pools and convert to instrument definitions.
@@ -97,10 +101,19 @@ class UniswapV4Adapter(BaseDefiAdapter):
             base_currency_list: Filter by list of base currencies
             quote_currency_list: Filter by list of quote currencies
             min_liquidity: Minimum liquidity threshold in USD (not well supported in V4 yet)
+            target_date: Target date for instrument availability check
 
         Returns:
             Dictionary mapping instrument_key to instrument definition
         """
+        # Check if target_date is before V4 launch
+        if target_date and target_date < self.V4_LAUNCH_DATE:
+            logger.info(
+                f"ℹ️ Uniswap V4 not available for {target_date.strftime('%Y-%m-%d')} "
+                f"(V4 mainnet launched November 2024). Returning empty instruments - this is expected."
+            )
+            return {}
+        
         # Handle nested event loops (CLI may already have one running)
         try:
             loop = asyncio.get_running_loop()
