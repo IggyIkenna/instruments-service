@@ -1,8 +1,10 @@
 """
-DeFi Venue Adapters Package - OPTIMIZED MVP
+DeFi Venue Adapters Package
 
-Contains adapters for DeFi protocols (active protocols only):
-- Uniswap V3 (DEX pools)
+Contains adapters for DeFi protocols:
+- Uniswap V2 (DEX pairs - legacy but still active)
+- Uniswap V3 (DEX pools with concentrated liquidity)
+- Uniswap V4 (DEX pools with hooks)
 - Balancer (DEX pools)
 - AAVE V3 (lending/borrowing positions with emode params)
 - EtherFi (LST staking)
@@ -11,14 +13,14 @@ Contains adapters for DeFi protocols (active protocols only):
 - Morpho (lending protocol)
 - Hyperliquid (perpetual futures DEX)
 - Aster (perpetual futures exchange)
-
-Removed for performance (0 instruments generated):
-- Uniswap V2, V4, Curve, Plasma adapters
+- Curve (stablecoin DEX)
 """
 
 from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
+from instruments_service.app.venues.defi.uniswapv2_adapter import UniswapV2Adapter
 from instruments_service.app.venues.defi.uniswapv3_adapter import UniswapV3Adapter
+from instruments_service.app.venues.defi.uniswapv4_adapter import UniswapV4Adapter
 from instruments_service.app.venues.defi.balancer_adapter import BalancerAdapter
 from instruments_service.app.venues.defi.aave_adapter import AaveV3Adapter
 from instruments_service.app.venues.defi.lst_adapters import EtherFiAdapter, LidoAdapter
@@ -31,7 +33,9 @@ from instruments_service.app.venues.defi.curve_rpc_adapter import CurveRPCAdapte
 __all__ = [
     "TheGraphClient",
     "BaseDefiAdapter",
+    "UniswapV2Adapter",
     "UniswapV3Adapter",
+    "UniswapV4Adapter",
     "BalancerAdapter",
     "AaveV3Adapter",
     "EtherFiAdapter",

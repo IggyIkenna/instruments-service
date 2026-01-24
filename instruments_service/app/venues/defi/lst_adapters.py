@@ -106,7 +106,7 @@ class EtherFiAdapter(BaseDefiAdapter):
             "instrument_type": "LST",
             "symbol": symbol,
             "base_asset": underlying,
-            "quote_asset": "",
+            "quote_asset": underlying,  # weETH is quoted in ETH (exchange rate)
             "settle_asset": underlying,  # Redeemable for ETH
             "base_asset_contract_address": "0x0000000000000000000000000000000000000000",  # ETH native
             "quote_asset_contract_address": contract_address,
@@ -125,7 +125,7 @@ class EtherFiAdapter(BaseDefiAdapter):
                 2024, 2, 1
             ).isoformat(),  # EtherFi weETH launch date (Feb 2024)
             "available_to_datetime": None,
-            "data_types": "oracle_prices",  # LST price from Aave oracle (weETH/ETH ratio for yield calculation)
+            "data_types": "yields,oracle_prices",  # LST APY from DefiLlama + oracle price
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
@@ -232,7 +232,7 @@ class LidoAdapter(BaseDefiAdapter):
             "instrument_type": "LST",
             "symbol": symbol,
             "base_asset": underlying,
-            "quote_asset": "",
+            "quote_asset": underlying,  # stETH/wstETH is quoted in ETH (exchange rate)
             "settle_asset": underlying,
             "base_asset_contract_address": "0x0000000000000000000000000000000000000000",  # ETH native
             "quote_asset_contract_address": contract_address,
@@ -251,7 +251,7 @@ class LidoAdapter(BaseDefiAdapter):
                 2020, 12, 18
             ).isoformat(),  # Lido stETH launch date (Dec 18, 2020)
             "available_to_datetime": None,
-            "data_types": "oracle_prices",  # LST price from Aave oracle (wstETH/ETH ratio for yield calculation)
+            "data_types": "yields,oracle_prices",  # LST APY from DefiLlama + oracle price
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
