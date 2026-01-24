@@ -50,6 +50,9 @@ class AsterAdapter(BaseDefiAdapter):
     Generates instruments in format:
     ASTER:PERPETUAL:BTC-USDT
     """
+    
+    # Aster DEX launch (approximately Q4 2024)
+    ASTER_LAUNCH_DATE = datetime(2024, 10, 1)
 
     def __init__(
         self,

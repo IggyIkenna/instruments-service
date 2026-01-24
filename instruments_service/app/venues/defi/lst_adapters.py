@@ -23,6 +23,9 @@ class EtherFiAdapter(BaseDefiAdapter):
     Generates instruments in format:
     ETHERFI:LST:WEETH@ETHEREUM
     """
+    
+    # EtherFi mainnet launch (weETH launched ~January 2024)
+    ETHERFI_LAUNCH_DATE = datetime(2024, 1, 1)
 
     def __init__(
         self, 
@@ -52,13 +55,27 @@ class EtherFiAdapter(BaseDefiAdapter):
         instruments = self.fetch_lst_instruments()
         return list(instruments.values())
 
-    def fetch_lst_instruments(self) -> Dict[str, Dict[str, Any]]:
+    def fetch_lst_instruments(
+        self, 
+        target_date: Optional[datetime] = None
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch EtherFi LST instruments.
 
+        Args:
+            target_date: Target date for instrument availability check
+            
         Returns:
             Dictionary mapping instrument_key to instrument definition
         """
+        # Check if target_date is before EtherFi launch
+        if target_date and target_date < self.ETHERFI_LAUNCH_DATE:
+            logger.info(
+                f"ℹ️ EtherFi weETH not available for {target_date.strftime('%Y-%m-%d')} "
+                f"(EtherFi weETH launched January 2024). Returning empty instruments - this is expected."
+            )
+            return {}
+        
         instruments = {}
 
         # Known EtherFi LST tokens
@@ -142,6 +159,9 @@ class LidoAdapter(BaseDefiAdapter):
     LIDO:LST:STETH@ETHEREUM
     LIDO:LST:WSTETH@ETHEREUM
     """
+    
+    # Lido mainnet launch (December 2020)
+    LIDO_LAUNCH_DATE = datetime(2020, 12, 17)
 
     def __init__(
         self, 
@@ -171,13 +191,27 @@ class LidoAdapter(BaseDefiAdapter):
         instruments = self.fetch_lst_instruments()
         return list(instruments.values())
 
-    def fetch_lst_instruments(self) -> Dict[str, Dict[str, Any]]:
+    def fetch_lst_instruments(
+        self, 
+        target_date: Optional[datetime] = None
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch Lido LST instruments.
 
+        Args:
+            target_date: Target date for instrument availability check
+            
         Returns:
             Dictionary mapping instrument_key to instrument definition
         """
+        # Lido launched in December 2020, so it's available for most historical dates
+        if target_date and target_date < self.LIDO_LAUNCH_DATE:
+            logger.info(
+                f"ℹ️ Lido not available for {target_date.strftime('%Y-%m-%d')} "
+                f"(Lido launched December 2020). Returning empty instruments - this is expected."
+            )
+            return {}
+        
         instruments = {}
 
         # Known Lido LST tokens
