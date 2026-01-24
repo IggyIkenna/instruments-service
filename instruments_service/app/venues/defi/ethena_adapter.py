@@ -117,7 +117,7 @@ class EthenaAdapter(BaseDefiAdapter):
             "instrument_type": "YIELD_BEARING",  # New type for staked/wrapped yield tokens
             "symbol": symbol,
             "base_asset": underlying,  # USDe is the base
-            "quote_asset": "",
+            "quote_asset": underlying,  # sUSDe is quoted in USDE (exchange rate)
             "settle_asset": underlying,  # Redeemable for USDe
             "base_asset_contract_address": underlying_address,
             "quote_asset_contract_address": contract_address,
@@ -136,7 +136,7 @@ class EthenaAdapter(BaseDefiAdapter):
                 2024, 2, 16
             ).isoformat(),  # Ethena mainnet launch (Feb 2024)
             "available_to_datetime": None,
-            "data_types": "oracle_prices",  # sUSDe oracle price from Aave for yield calculation
+            "data_types": "yields,oracle_prices",  # sUSDe APY from DefiLlama + oracle price
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
