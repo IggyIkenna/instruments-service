@@ -1,0 +1,46 @@
+steps:
+  # Step 1: Get GitHub token from Secret Manager
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'get-github-token'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud secrets versions access latest --secret=github-token > /workspace/github_token.txt
+
+  # Step 2: Build Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        GITHUB_TOKEN=$(cat /workspace/github_token.txt)
+        docker build \
+          --build-arg GH_PAT=$${GITHUB_TOKEN} \
+          -t asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service:$SHORT_SHA \
+          -t asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service:latest \
+          .
+
+  # Step 3: Push images to Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push'
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service'
+
+  # Step 4: Cleanup token
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'cleanup'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - 'rm -f /workspace/github_token.txt'
+
+images:
+  - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service:$SHORT_SHA'
+  - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
