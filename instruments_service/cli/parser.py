@@ -32,12 +32,12 @@ def parse_arguments() -> argparse.Namespace:
         epilog=_get_examples_text(),
     )
 
-    # Mode selection (only instruments generation now, query moved to unified-cloud-services)
+    # Mode selection
     parser.add_argument(
         "--mode",
-        choices=["instruments"],
+        choices=["instruments", "corporate_actions"],
         required=True,
-        help="Operation mode: instruments (generate instrument definitions)",
+        help="Operation mode: instruments (generate instrument definitions), corporate_actions (TRADFI only: fetch dividends, splits, earnings for equities)",
     )
 
     # Date range (required for instruments mode)
@@ -108,6 +108,24 @@ def parse_arguments() -> argparse.Namespace:
         help="Include DeFi (Decentralized Finance) protocols via The Graph (uniswap_v3, curve, aave_v3, etc.). Default: Process all market types if no flags specified.",
     )
 
+    # Corporate actions options
+    parser.add_argument(
+        "--tickers",
+        nargs="+",
+        help="Specific tickers for corporate_actions mode (default: S&P 500)",
+    )
+    parser.add_argument(
+        "--output-format",
+        choices=["parquet", "csv"],
+        default="parquet",
+        help="Output format for corporate_actions mode (default: parquet)",
+    )
+    parser.add_argument(
+        "--upload-to-gcs",
+        action="store_true",
+        help="Upload corporate actions to GCS (default: save locally only)",
+    )
+
     # Logging
     parser.add_argument(
         "--log-level",
@@ -143,6 +161,14 @@ def validate_arguments(args: argparse.Namespace) -> None:
             # Default to same as start_date if not provided
             args.end_date = args.start_date
 
+    # Validate date range for corporate_actions mode
+    if args.mode == "corporate_actions":
+        if not args.start_date:
+            raise ValueError("--start-date is required for corporate_actions mode")
+        if not args.end_date:
+            # Default to same as start_date if not provided
+            args.end_date = args.start_date
+
     # Market type filters can be combined (e.g., --CEFI --TRADFI)
     # If none specified, all will be processed by default
     # No validation needed - flags are additive
@@ -171,6 +197,17 @@ Examples:
 
   # Generate instruments with force flag
   python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --force
+
+Corporate Actions (dividends, splits, earnings):
+
+  # Fetch corporate actions for S&P 500 (last 6 years)
+  python -m instruments_service --mode corporate_actions --start-date 2020-01-01 --end-date 2026-01-25
+
+  # Fetch corporate actions for specific tickers
+  python -m instruments_service --mode corporate_actions --start-date 2020-01-01 --end-date 2026-01-25 --tickers AAPL MSFT GOOGL
+
+  # Save as CSV instead of Parquet
+  python -m instruments_service --mode corporate_actions --start-date 2020-01-01 --end-date 2026-01-25 --output-format csv
 
 Query Instruments (use unified-cloud-services):
 
