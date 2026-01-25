@@ -10,6 +10,7 @@ Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 from typing import Dict, Any
 import logging
 from .instrument_handler import InstrumentHandler
+from .corporate_actions_handler import CorporateActionsHandler
 from instruments_service.cli.base_handler import ModeHandler
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,7 @@ def get_handler_for_mode(mode: str, config: Dict[str, Any]) -> ModeHandler:
     Get handler instance for a specific mode.
 
     Args:
-        mode: Operation mode (e.g., 'instruments')
+        mode: Operation mode (e.g., 'instruments', 'corporate_actions')
         config: Configuration dictionary
 
     Returns:
@@ -41,7 +42,9 @@ def get_handler_for_mode(mode: str, config: Dict[str, Any]) -> ModeHandler:
     if not _handler_registry:
         try:
             register_handler("instruments", InstrumentHandler)
+            register_handler("corporate_actions", CorporateActionsHandler)
             logger.debug(f"Registered 'instruments' handler: {InstrumentHandler}")
+            logger.debug(f"Registered 'corporate_actions' handler: {CorporateActionsHandler}")
             logger.debug(f"Final registry: {_handler_registry}")
         except Exception as e:
             logger.error(f"Error registering handlers: {e}", exc_info=True)
