@@ -96,10 +96,18 @@ def main() -> Dict[str, Any]:
             handler_kwargs["end_date"] = args.end_date
 
         # Common options
-        if args.force:
+        if hasattr(args, 'force') and args.force:
             handler_kwargs["force"] = args.force
-        if args.exchanges:
+        if hasattr(args, 'exchanges') and args.exchanges:
             handler_kwargs["exchanges"] = args.exchanges
+
+        # Corporate actions specific options
+        if hasattr(args, 'tickers') and args.tickers:
+            handler_kwargs["tickers"] = args.tickers
+        if hasattr(args, 'output_format') and args.output_format:
+            handler_kwargs["output_format"] = args.output_format
+        if hasattr(args, 'upload_to_gcs') and args.upload_to_gcs:
+            handler_kwargs["upload_to_gcs"] = args.upload_to_gcs
 
         # Market type filters
         # Priority: --category flag takes precedence, then individual flags

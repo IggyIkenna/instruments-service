@@ -1,6 +1,6 @@
 # Instruments Service - Deployment Guide (Femi)
 
-**Last Updated:** January 21, 2026  
+**Last Updated:** January 25, 2026  
 **Owner:** Femi  
 **Service:** `instruments-service`
 
@@ -9,6 +9,31 @@
 ## Overview
 
 This guide covers deploying `instruments-service` to GCP for batch historical backfill and T+1 daily updates.
+
+---
+
+## ⚠️ Execution Order
+
+**instruments-service has two modes that MUST be run in order:**
+
+| Step | Mode | Description | Dependency |
+|------|------|-------------|------------|
+| 1️⃣ | `--mode instruments` | Generate instrument definitions (CeFi, TradFi, DeFi) | None |
+| 2️⃣ | `--mode corporate_actions` | Fetch dividends, splits, earnings (TradFi only) | Requires Step 1 |
+
+**Why?** Corporate actions mode reads the equity ticker list from GCS instruments store (populated by instruments mode). This ensures both modes use the same universe of instruments.
+
+```bash
+# Step 1: Generate instrument definitions (MUST run first)
+python -m instruments_service --mode instruments \
+    --start-date 2020-01-01 --end-date 2026-01-25 \
+    --CEFI --TRADFI --DEFI --force
+
+# Step 2: Fetch corporate actions (reads tickers from GCS)
+python -m instruments_service --mode corporate_actions \
+    --start-date 2020-01-01 --end-date 2026-01-25 \
+    --upload-to-gcs
+```
 
 ---
 
@@ -287,6 +312,95 @@ python -m instruments_service --mode instruments --start-date $YESTERDAY --force
 ```
 
 **Note:** T+1 scheduler should start running from **Jan 6, 2026** onwards (after backfill completes up to Jan 5, 2026).
+
+---
+
+## Corporate Actions Mode (TRADFI Only)
+
+Corporate actions (dividends, stock splits, earnings dates) are reference data for US equities. This is a **separate mode** from instrument definitions.
+
+### Prerequisites
+
+**`--mode instruments` must be run first** to populate GCS with instrument definitions. Corporate actions mode reads the equity ticker list from GCS instruments store (same universe).
+
+### What It Fetches
+
+| Data Type | Description | Use Case |
+|-----------|-------------|----------|
+| **Dividends** | Ex-date, amount, pay date | Price adjustment, yield calculation |
+| **Stock Splits** | Effective date, ratio (e.g., 4:1) | Historical price normalization |
+| **Earnings** | Earnings date, EPS (reported vs estimated) | Volatility modeling, event strategies |
+
+### Data Sources
+
+- **Ticker list**: GCS instruments store (`instruments-store-tradfi` → NYSE/NASDAQ equities)
+- **Corporate actions**: yfinance (free, no API key, 20+ years of history)
+
+### GCS Output Path
+
+```
+gs://instruments-store-tradfi-central-element-323112/corporate_actions/
+├── dividends_20200101_20260125.parquet
+├── splits_20200101_20260125.parquet
+└── earnings_20200101_20260125.parquet
+```
+
+### CLI Commands
+
+```bash
+# Fetch corporate actions for all equities (tickers from GCS instruments store)
+# Runtime: ~13 minutes for 596 tickers (6 years)
+python -m instruments_service --mode corporate_actions \
+    --start-date 2020-01-01 \
+    --end-date 2026-01-25
+
+# Fetch for specific tickers only (faster for testing)
+python -m instruments_service --mode corporate_actions \
+    --start-date 2020-01-01 \
+    --end-date 2026-01-25 \
+    --tickers AAPL MSFT GOOGL NVDA
+
+# Upload to GCS after fetching
+python -m instruments_service --mode corporate_actions \
+    --start-date 2020-01-01 \
+    --end-date 2026-01-25 \
+    --upload-to-gcs
+
+# Output as CSV instead of Parquet
+python -m instruments_service --mode corporate_actions \
+    --start-date 2020-01-01 \
+    --end-date 2026-01-25 \
+    --output-format csv
+```
+
+### Local Output
+
+By default, files are saved to `./corporate_actions_output/`:
+
+```
+corporate_actions_output/
+├── dividends_20200101_20260125.parquet
+├── splits_20200101_20260125.parquet
+└── earnings_20200101_20260125.parquet
+```
+
+### Expected Data Volumes (596 equities, 6 years: 2020-2026)
+
+Tickers sourced from GCS instruments store (NYSE + NASDAQ equities).
+
+| Data Type | Records | Unique Tickers | File Size |
+|-----------|---------|----------------|-----------|
+| **Dividends** | ~9,500 | ~420 | ~106 KB |
+| **Splits** | ~86 | ~74 | ~9 KB |
+| **Earnings** | ~11,700 | ~497 | ~202 KB |
+
+**Runtime**: ~13 minutes for full backfill (596 tickers, 6 years)
+
+### When to Run
+
+- **One-time backfill**: Run once to populate historical data (after instruments mode)
+- **Periodic updates**: Monthly or quarterly refresh (corporate actions don't change frequently)
+- **No T+1 scheduler needed**: Unlike instruments, corporate actions don't need daily updates
 
 ---
 
