@@ -1223,6 +1223,196 @@ query GetReserve($underlyingAddress: Bytes!) {
                 self._historical_query_failed.add(target_date.isoformat())
             return None
 
+    def _fetch_reserve_config_history_from_graph(
+        self, reserve_symbol: str, target_date: Optional[datetime] = None, limit: int = 10
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Fetch historical reserve configuration changes from The Graph subgraph.
+        
+        Uses ReserveConfigurationHistoryItem entity to track when governance
+        changes risk parameters (LTV, liquidation thresholds, etc.).
+        
+        Args:
+            reserve_symbol: Token symbol (e.g., 'WETH', 'USDC')
+            target_date: Optional target date - fetches history up to this date
+            limit: Maximum number of history items to return
+            
+        Returns:
+            List of configuration history items or None
+        """
+        cache_key = f"config_history_{reserve_symbol}_{target_date.isoformat() if target_date else 'current'}_{limit}"
+        if cache_key in self._reserve_config_cache:
+            return self._reserve_config_cache[cache_key]
+        
+        try:
+            graph_api_key = self.graph_api_key or self._thegraph_client.api_key
+            if not graph_api_key:
+                logger.warning("⚠️ No The Graph API key found - skipping config history query")
+                return None
+            
+            graph_api_key = graph_api_key.strip()
+            subgraph_url = f"https://gateway.thegraph.com/api/{graph_api_key}/subgraphs/id/{self.aave_subgraph_id}"
+            
+            # Build timestamp filter if target_date provided
+            timestamp_filter = ""
+            if target_date:
+                target_timestamp = int(target_date.timestamp())
+                timestamp_filter = f", timestamp_lte: {target_timestamp}"
+            
+            query = f"""
+query GetReserveConfigHistory {{
+    reserveConfigurationHistoryItems(
+        where: {{ reserve_: {{ symbol: "{reserve_symbol}" }}{timestamp_filter} }}
+        orderBy: timestamp
+        orderDirection: desc
+        first: {limit}
+    ) {{
+        id
+        timestamp
+        baseLTVasCollateral
+        reserveLiquidationThreshold
+        reserveLiquidationBonus
+        borrowingEnabled
+        usageAsCollateralEnabled
+        isActive
+        isFrozen
+        reserveInterestRateStrategy
+        reserve {{
+            id
+            symbol
+            underlyingAsset
+        }}
+    }}
+}}
+""".strip()
+            
+            headers = {"Content-Type": "application/json"}
+            session = get_http_session(base_url="https://gateway.thegraph.com")
+            response = session.post(
+                subgraph_url,
+                json={"query": query},
+                headers=headers,
+                timeout=30,
+            )
+            response.raise_for_status()
+            
+            data = response.json()
+            if "errors" in data:
+                logger.warning(f"⚠️ GraphQL config history query errors: {data['errors']}")
+                return None
+            
+            history_items = data.get("data", {}).get("reserveConfigurationHistoryItems", [])
+            if not history_items:
+                logger.debug(f"No config history found for {reserve_symbol}")
+                return None
+            
+            # Convert from basis points to decimals
+            result = []
+            for item in history_items:
+                base_ltv = item.get("baseLTVasCollateral")
+                liq_threshold = item.get("reserveLiquidationThreshold")
+                liq_bonus = item.get("reserveLiquidationBonus")
+                
+                result.append({
+                    "timestamp": item.get("timestamp"),
+                    "ltv": float(base_ltv) / 10000.0 if base_ltv else None,
+                    "liquidation_threshold": float(liq_threshold) / 10000.0 if liq_threshold else None,
+                    "liquidation_bonus": float(liq_bonus) / 10000.0 if liq_bonus else None,
+                    "borrowing_enabled": item.get("borrowingEnabled"),
+                    "collateral_enabled": item.get("usageAsCollateralEnabled"),
+                    "is_active": item.get("isActive"),
+                    "is_frozen": item.get("isFrozen"),
+                    "interest_rate_strategy": item.get("reserveInterestRateStrategy"),
+                    "reserve_id": item.get("reserve", {}).get("id"),
+                    "underlying_asset": item.get("reserve", {}).get("underlyingAsset"),
+                })
+            
+            logger.info(
+                f"✅ Fetched {len(result)} config history items for {reserve_symbol} "
+                f"(latest change: {result[0]['timestamp'] if result else 'N/A'})"
+            )
+            
+            self._reserve_config_cache[cache_key] = result
+            return result
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to fetch reserve config history from The Graph: {e}")
+            return None
+
+    def _fetch_emode_categories_from_graph(self) -> Optional[Dict[int, Dict[str, Any]]]:
+        """
+        Fetch all eMode categories from The Graph subgraph.
+        
+        Returns:
+            Dictionary mapping category ID to category details, or None
+        """
+        cache_key = "emode_categories"
+        if cache_key in self._reserve_config_cache:
+            return self._reserve_config_cache[cache_key]
+        
+        try:
+            graph_api_key = self.graph_api_key or self._thegraph_client.api_key
+            if not graph_api_key:
+                return None
+            
+            graph_api_key = graph_api_key.strip()
+            subgraph_url = f"https://gateway.thegraph.com/api/{graph_api_key}/subgraphs/id/{self.aave_subgraph_id}"
+            
+            query = """
+query GetEModeCategories {
+    emodeCategories {
+        id
+        ltv
+        liquidationThreshold
+        liquidationBonus
+        oracle
+        label
+    }
+}
+""".strip()
+            
+            headers = {"Content-Type": "application/json"}
+            session = get_http_session(base_url="https://gateway.thegraph.com")
+            response = session.post(
+                subgraph_url,
+                json={"query": query},
+                headers=headers,
+                timeout=30,
+            )
+            response.raise_for_status()
+            
+            data = response.json()
+            if "errors" in data:
+                logger.warning(f"⚠️ GraphQL eMode query errors: {data['errors']}")
+                return None
+            
+            categories = data.get("data", {}).get("emodeCategories", [])
+            result = {}
+            for cat in categories:
+                cat_id = int(cat.get("id", 0))
+                ltv = cat.get("ltv")
+                liq_threshold = cat.get("liquidationThreshold")
+                liq_bonus = cat.get("liquidationBonus")
+                
+                result[cat_id] = {
+                    "id": cat_id,
+                    "label": cat.get("label"),
+                    "ltv": float(ltv) / 10000.0 if ltv else None,
+                    "liquidation_threshold": float(liq_threshold) / 10000.0 if liq_threshold else None,
+                    "liquidation_bonus": float(liq_bonus) / 10000.0 if liq_bonus else None,
+                    "oracle": cat.get("oracle"),
+                }
+            
+            if result:
+                logger.info(f"✅ Fetched {len(result)} eMode categories from The Graph")
+                self._reserve_config_cache[cache_key] = result
+            
+            return result
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to fetch eMode categories from The Graph: {e}")
+            return None
+
     def _fetch_reserve_emode_from_rpc(
         self, underlying_address: str, target_date: Optional[datetime] = None
     ) -> Optional[int]:
@@ -1597,13 +1787,25 @@ query GetReserve($underlyingAddress: Bytes!) {
 
         logger.debug(f"🔍 eMode params for {asset_symbol}: emode_category_id={emode_category_id}")
 
-        # OPTIMIZATION: Skip RPC/Graph calls (always fail) - use STATIC_RISK_PARAMS immediately
-        # This saves ~1 second per reserve (RPC + Graph timeout/retry) × 4 reserves = ~4 seconds
-        logger.info("🔍 [METHOD_TRACE] _extract_lending_metadata using STATIC_RISK_PARAMS (skipping RPC/Graph calls)")
+        # Priority: 1) The Graph eMode categories, 2) reserve_config, 3) STATIC_RISK_PARAMS
         if emode_category_id:
-            # Use static emode params from JSON immediately
             symbol = reserve.get("asset", {}).get("symbol", "")
-            if symbol and emode_category_id == 1:  # E-mode category 1 is ETH correlation
+            
+            # Try The Graph first for eMode category details
+            emode_categories = self._fetch_emode_categories_from_graph()
+            if emode_categories and emode_category_id in emode_categories:
+                cat_data = emode_categories[emode_category_id]
+                emode_label = cat_data.get("label")
+                emode_liquidation_threshold = cat_data.get("liquidation_threshold")
+                emode_liquidation_bonus = cat_data.get("liquidation_bonus")
+                emode_price_source = cat_data.get("oracle")
+                logger.info(
+                    f"  ✅ Using The Graph eMode params for {symbol} (category {emode_category_id}): "
+                    f"label={emode_label}, liq_threshold={emode_liquidation_threshold}"
+                )
+            elif symbol and emode_category_id == 1:
+                # Fallback to STATIC_RISK_PARAMS for ETH correlation mode
+                logger.info("🔍 [METHOD_TRACE] _extract_lending_metadata using STATIC_RISK_PARAMS (Graph eMode unavailable)")
                 emode_label = "ETH_CORRELATION"
                 pair_key = f"{symbol}_WETH"
                 emode_liquidation_threshold = self.STATIC_RISK_PARAMS["emode"][
@@ -1612,7 +1814,6 @@ query GetReserve($underlyingAddress: Bytes!) {
                 emode_liquidation_bonus = self.STATIC_RISK_PARAMS["emode"]["liquidation_bonus"].get(
                     pair_key
                 )
-
                 logger.debug(
                     f"  ✅ Using STATIC eMode params for {symbol}: "
                     f"liq_threshold={emode_liquidation_threshold}, bonus={emode_liquidation_bonus}"

@@ -414,12 +414,20 @@ class InstrumentDefinition(BaseModel):
                 # Check venue
                 valid_venues = [v.value for v in Venue]
                 if venue not in valid_venues:
-                    logger.warning(f"Unknown venue in instrument key: {venue}")
+                    logger.info(
+                        f"Venue '{venue}' not in Venue enum yet. "
+                        f"Add to unified_cloud_services/models/instrument.py if this is a new supported venue. "
+                        f"Valid venues: {', '.join(sorted(valid_venues)[:10])}..."
+                    )
 
                 # Check instrument type
                 valid_types = [t.value for t in InstrumentType]
                 if instrument_type not in valid_types:
-                    logger.warning(f"Unknown instrument type in instrument key: {instrument_type}")
+                    logger.info(
+                        f"Instrument type '{instrument_type}' not in InstrumentType enum yet. "
+                        f"Add to unified_cloud_services/models/instrument.py if this is a new supported type. "
+                        f"Valid types: {', '.join(sorted(valid_types)[:10])}..."
+                    )
 
         # Check data types
         if self.data_types:
