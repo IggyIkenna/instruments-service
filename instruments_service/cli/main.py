@@ -33,21 +33,10 @@ def _load_env_early():
 
 _load_env_early()
 
-# Setup logging with immediate flush for Cloud Run visibility
-# Default StreamHandler buffers output; we need unbuffered stderr for Cloud Logging
-import sys
+# Setup structured JSON logging for Cloud Run visibility
+from unified_cloud_services import setup_cloud_logging
 
-class UnbufferedStreamHandler(logging.StreamHandler):
-    """StreamHandler that flushes after every emit for Cloud Run logging."""
-    def emit(self, record):
-        super().emit(record)
-        self.flush()
-
-handler = UnbufferedStreamHandler(sys.stderr)
-handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
-logging.root.handlers = []
-logging.root.addHandler(handler)
-logging.root.setLevel(logging.INFO)
+setup_cloud_logging(log_level="INFO", json_format=True)
 logger = logging.getLogger(__name__)
 
 from instruments_service.config import instruments_config
