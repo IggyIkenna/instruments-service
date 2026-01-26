@@ -2092,6 +2092,7 @@ query GetEModeCategories {
             "quote_asset_contract_address": None,
             "pool_address": debt_token_address,  # debtToken contract address
             "pool_fee_tier": None,
+            "chain": self.chain,  # Chain identifier (ETHEREUM, ARBITRUM, POLYGON, etc.)
             "asset_class": "crypto",
             "venue_type": "protocol",
             "data_provider": "aavescan",
