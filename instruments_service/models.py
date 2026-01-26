@@ -451,6 +451,7 @@ class InstrumentDefinition(BaseModel):
                 "rate_indices", # Lending protocol indices (Aave, Morpho) for APY calculation
                 "utilization",  # Lending pool utilization rate
                 "oracle_prices",# Protocol oracle price feeds (LSTs, sUSDe yield calculation)
+                "yields",       # LST/yield-bearing token yields (Lido, EtherFi, Ethena)
             ]
             types = [t.strip() for t in self.data_types.split(",")]
             for data_type in types:
