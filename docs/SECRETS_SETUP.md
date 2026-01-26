@@ -202,14 +202,22 @@ ENVIRONMENT=development
 
 ## 5. API Key Sources
 
-| Secret | Provider | Get Key From | Purpose |
-|--------|----------|--------------|---------|
-| `tardis-api-key` | Tardis | https://tardis.dev | CeFi crypto data |
-| `databento-api-key` | Databento | https://databento.com | TradFi data |
-| `graph-api-key` | The Graph | https://thegraph.com/studio | DeFi subgraphs |
-| `alchemy-api-key` | Alchemy | https://dashboard.alchemy.com | DeFi RPC |
-| `envio-api-key` | Envio | https://envio.dev/app/api-tokens | Uniswap V4 |
-| `aavescan-api-key` | AaveScan | https://aavescan.com | AAVE fallback |
+| Secret | Provider | Get Key From | Purpose | Pricing |
+|--------|----------|--------------|---------|---------|
+| `tardis-api-key` | Tardis | https://tardis.dev | CeFi crypto data | Subscription-based |
+| `databento-api-key` | Databento | https://databento.com | TradFi data | Pay-per-use |
+| `graph-api-key` | The Graph | https://thegraph.com/studio | DeFi subgraphs | **$2 per 100k queries** |
+| `alchemy-api-key` | Alchemy | https://dashboard.alchemy.com | DeFi RPC | Pay-as-you-go |
+| `envio-api-key` | Envio | https://envio.dev/app/api-tokens | Uniswap V4 | Free tier available |
+| `aavescan-api-key` | AaveScan | https://aavescan.com | AAVE fallback | Free |
+
+### The Graph Billing Notes
+
+- **Free tier**: 100k queries/month per API key
+- **Paid tier**: $2 per 100k queries (billed in GRT tokens on Arbitrum)
+- **Billing portal**: https://thegraph.com/studio/billing/
+- **Adding funds**: Deposit GRT tokens to your API key wallet on Arbitrum One
+- **Subgraphs used**: Uniswap V2/V3/V4, AAVE V3, Balancer, Curve
 
 ---
 
