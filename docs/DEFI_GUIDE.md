@@ -254,6 +254,8 @@ query GetPools($first: Int!, $skip: Int!) {
 - Secret Name: `thegraph-api-key`
 - Get API key from: https://thegraph.com/studio/
 - Free tier: 100,000 queries/month
+- Paid tier: **$2 per 100k queries** (billed in GRT on Arbitrum)
+- Billing portal: https://thegraph.com/studio/billing/
 
 ### Alchemy SDK
 
