@@ -1,3 +1,20 @@
+# Quality Gates for instruments-service
+#
+# E2E TESTING NOTE (for unified-trading-deployment-v2 integration):
+# ------------------------------------------------------------------
+# Quality gates e2e should include ensuring every possible CLI combinatoric
+# has run on a code push, but just for ONE RESULT per combination to avoid
+# wasting too much time.
+#
+# Example for instruments-service:
+#   - Run with --category CEFI --start-date 2024-01-01 --end-date 2024-01-01 (1 day)
+#   - Run with --category TRADFI --start-date 2024-01-01 --end-date 2024-01-01 (1 day)
+#   - Run with --category DEFI --start-date 2024-01-01 --end-date 2024-01-01 (1 day)
+#
+# This validates that all dimension combinations work without running full backfills.
+# See: unified-trading-deployment-v2/configs/sharding.instruments-service.yaml
+# ------------------------------------------------------------------
+
 name: Quality Gates
 
 on:
