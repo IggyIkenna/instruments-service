@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from instruments_service.app.core.instrument_processing_service import (
     InstrumentProcessingService,
 )
-from instruments_service.config import VenueMapping
+from unified_cloud_services import VenueMapping
 
 
 @pytest.mark.integration
