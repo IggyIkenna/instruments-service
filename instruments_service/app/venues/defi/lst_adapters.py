@@ -4,7 +4,7 @@ EtherFi and Lido Adapters
 Fetches LST (Liquid Staking Token) instruments from protocol SDKs or The Graph.
 Generates canonical instrument keys for staking positions.
 
-Reference: archive/basis-strategy-v1/docs/MVP_DEFI_INSTRUMENTS.md
+Reference: instruments-service/docs/MVP_INSTRUMENTS.md (DeFi section)
 """
 
 import logging

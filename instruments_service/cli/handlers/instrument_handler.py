@@ -16,37 +16,10 @@ from pathlib import Path
 from instruments_service.cli.base_handler import ModeHandler
 from instruments_service.app.core.instruments_service import InstrumentsService
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
-from unified_cloud_services import VenueMapping
+from unified_cloud_services import VenueMapping, parse_date, get_date_range
 from instruments_service.app.core.cloud_data_provider import CloudDataProvider
 
 logger = logging.getLogger(__name__)
-
-
-def parse_date(date_str: str) -> datetime:
-    """Parse date string to timezone-aware datetime."""
-    try:
-        return datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    except ValueError as e:
-        raise ValueError(f"Invalid date format '{date_str}'. Use YYYY-MM-DD format.") from e
-
-
-def get_date_range(start_date: datetime, end_date: datetime) -> List[datetime]:
-    """Generate date range from start/end date strings."""
-    if isinstance(start_date, str):
-        start_date = parse_date(start_date)
-    if isinstance(end_date, str):
-        end_date = parse_date(end_date)
-
-    if start_date > end_date:
-        raise ValueError(f"Start date {start_date} must be <= end date {end_date}")
-
-    date_range = []
-    current_date = start_date
-    while current_date <= end_date:
-        date_range.append(current_date)
-        current_date += timedelta(days=1)
-
-    return date_range
 
 
 class InstrumentHandler(ModeHandler):
