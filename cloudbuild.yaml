@@ -8,7 +8,54 @@ steps:
       - |
         gcloud secrets versions access latest --secret=github-token > /workspace/github_token.txt
 
-  # Step 2: Build Docker image
+  # Step 2: Clone unified-cloud-services (needed for tests)
+  - name: 'gcr.io/cloud-builders/git'
+    id: 'clone-ucs'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        GITHUB_TOKEN=$(cat /workspace/github_token.txt)
+        git clone https://x-access-token:$${GITHUB_TOKEN}@github.com/IggyIkenna/unified-cloud-services.git /workspace/unified-cloud-services
+
+  # Step 3: Run quality gates (lint + tests) - MUST PASS before build
+  - name: 'python:3.11-slim'
+    id: 'quality-gates'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "=== Installing dependencies ==="
+        pip install --quiet --upgrade pip setuptools wheel
+        pip install --quiet -e /workspace/unified-cloud-services
+        pip install --quiet -e . || pip install --quiet -e ".[dev]"
+        pip install --quiet ruff pytest
+
+        echo "=== Running linting (ruff) ==="
+        ruff check . --output-format=text
+        LINT_EXIT=$?
+        if [ $LINT_EXIT -ne 0 ]; then
+          echo "LINT FAILED - blocking build"
+          exit 1
+        fi
+        echo "Linting passed"
+
+        echo "=== Running tests (pytest) ==="
+        if [ -d "tests" ]; then
+          pytest tests/ -v --tb=short
+          TEST_EXIT=$?
+          if [ $TEST_EXIT -ne 0 ]; then
+            echo "TESTS FAILED - blocking build"
+            exit 1
+          fi
+          echo "Tests passed"
+        else
+          echo "No tests directory found, skipping tests"
+        fi
+
+        echo "=== Quality gates passed - proceeding to build ==="
+
+  # Step 4: Build Docker image (only runs if quality-gates pass)
   - name: 'gcr.io/cloud-builders/docker'
     id: 'build'
     entrypoint: 'bash'
@@ -22,7 +69,7 @@ steps:
           -t asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service:latest \
           .
 
-  # Step 3: Push images to Artifact Registry
+  # Step 5: Push images to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     id: 'push'
     args:
@@ -30,7 +77,7 @@ steps:
       - '--all-tags'
       - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service'
 
-  # Step 4: Cleanup token
+  # Step 6: Cleanup token
   - name: 'gcr.io/cloud-builders/gcloud'
     id: 'cleanup'
     entrypoint: 'bash'

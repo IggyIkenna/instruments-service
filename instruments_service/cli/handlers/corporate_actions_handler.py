@@ -78,10 +78,10 @@ class CorporateActionsHandler(ModeHandler):
             List of ticker symbols (e.g., ['AAPL', 'MSFT', ...])
         """
         try:
-            from google.cloud import storage
+            from unified_cloud_services import get_gcs_client
             import tempfile
             
-            client = storage.Client(project=self.project_id)
+            client = get_gcs_client(project_id=self.project_id)
             bucket_name = instruments_config.gcs_bucket_tradfi or TRADFI_BUCKET
             bucket = client.bucket(bucket_name)
             
@@ -308,8 +308,8 @@ class CorporateActionsHandler(ModeHandler):
                 return {}
             
             # Import GCS client
-            from google.cloud import storage
-            client = storage.Client(project=self.project_id)
+            from unified_cloud_services import get_gcs_client
+            client = get_gcs_client(project_id=self.project_id)
             bucket = client.bucket(bucket_name)
             
             for action_type, local_path in output_files.items():
