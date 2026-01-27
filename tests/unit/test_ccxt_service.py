@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 from datetime import datetime, timedelta, timezone
 
 from instruments_service.utils.ccxt_service import CCXTService
-from instruments_service.config import VenueMapping
+from unified_cloud_services import VenueMapping
 
 
 class TestCCXTService:
