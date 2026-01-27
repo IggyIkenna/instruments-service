@@ -55,7 +55,7 @@ def test_envio_endpoint(api_url: str, api_token: str):
             print(f"⚠️  GraphQL errors: {data['errors']}")
             return False
 
-        print(f"✅ Endpoint is accessible and responding!")
+        print("✅ Endpoint is accessible and responding!")
         print(
             f"   Query type: {data.get('data', {}).get('__schema', {}).get('queryType', {}).get('name', 'Unknown')}"
         )

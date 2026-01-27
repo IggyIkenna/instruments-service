@@ -21,14 +21,12 @@ from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapte
 from unified_cloud_services import (
     get_secret_with_fallback,
     AlchemyBaseClient,
-    AlchemyClientConfig,
     TheGraphBaseClient,
     TheGraphClientConfig,
     get_http_session,  # Centralized HTTP session pool
 )
 from instruments_service.config import instruments_config
 from web3 import Web3
-from eth_abi import decode
 
 logger = logging.getLogger(__name__)
 
@@ -149,13 +147,13 @@ class AaveV3Adapter(BaseDefiAdapter):
 
         # Store Graph API key (use provided or centralized client handles it)
         self.graph_api_key = graph_api_key
-        
+
         # Initialize centralized Alchemy client for on-chain RPC calls
         self._alchemy_client = AlchemyBaseClient(
             chain=self.chain,
             project_id=self.project_id,
         )
-        
+
         # Initialize centralized The Graph client for subgraph queries
         graph_config = TheGraphClientConfig(secret_name=instruments_config.graph_secret_name)
         self._thegraph_client = TheGraphBaseClient(
@@ -328,7 +326,7 @@ class AaveV3Adapter(BaseDefiAdapter):
                 )
                 graph_reserves = self._fetch_reserves_from_graph(target_date=target_date)
                 if graph_reserves:
-                    logger.info(f"✅ Successfully fetched historical reserves from The Graph")
+                    logger.info("✅ Successfully fetched historical reserves from The Graph")
                     return graph_reserves
                 else:
                     # Graph failed - log warning and mark as failed, then use AaveScan
@@ -464,7 +462,7 @@ class AaveV3Adapter(BaseDefiAdapter):
                 # Use centralized Alchemy client for RPC URL
                 rpc_url = self._alchemy_client.get_rpc_url()
                 timestamp = int(target_date.timestamp())
-                
+
                 if rpc_url:
 
                     # Use pooled HTTP session
@@ -893,7 +891,7 @@ query GetReserves($blockNumber: Int!) {
             if not graph_api_key:
                 logger.warning("⚠️ No The Graph API key found - skipping subgraph query")
                 return None
-            
+
             graph_api_key = graph_api_key.strip()
             self.graph_api_key = graph_api_key  # Cache for future use
 
@@ -1009,9 +1007,9 @@ query GetReserve($underlyingAddress: Bytes!) {
                     )
                     # Retry query without eModeCategoryId (may not exist in older schema versions)
                     if block_number:
-                        query_no_emode = f"""
-query GetReserve($underlyingAddress: Bytes!, $blockNumber: Int!) {{
-    reserves(where: {{ underlyingAsset: $underlyingAddress }}, block: {{number: $blockNumber}}) {{
+                        query_no_emode = """
+query GetReserve($underlyingAddress: Bytes!, $blockNumber: Int!) {
+    reserves(where: { underlyingAsset: $underlyingAddress }, block: {number: $blockNumber}) {
         id
         underlyingAsset
         symbol
@@ -1031,11 +1029,11 @@ query GetReserve($underlyingAddress: Bytes!, $blockNumber: Int!) {{
         isActive
         isFrozen
         isPaused
-        pool {{
+        pool {
             id
-        }}
-    }}
-}}
+        }
+    }
+}
 """.strip()
                         variables_no_emode = {
                             "underlyingAddress": underlying_address.lower(),
@@ -1229,37 +1227,37 @@ query GetReserve($underlyingAddress: Bytes!) {
     ) -> Optional[List[Dict[str, Any]]]:
         """
         Fetch historical reserve configuration changes from The Graph subgraph.
-        
+
         Uses ReserveConfigurationHistoryItem entity to track when governance
         changes risk parameters (LTV, liquidation thresholds, etc.).
-        
+
         Args:
             reserve_symbol: Token symbol (e.g., 'WETH', 'USDC')
             target_date: Optional target date - fetches history up to this date
             limit: Maximum number of history items to return
-            
+
         Returns:
             List of configuration history items or None
         """
         cache_key = f"config_history_{reserve_symbol}_{target_date.isoformat() if target_date else 'current'}_{limit}"
         if cache_key in self._reserve_config_cache:
             return self._reserve_config_cache[cache_key]
-        
+
         try:
             graph_api_key = self.graph_api_key or self._thegraph_client.api_key
             if not graph_api_key:
                 logger.warning("⚠️ No The Graph API key found - skipping config history query")
                 return None
-            
+
             graph_api_key = graph_api_key.strip()
             subgraph_url = f"https://gateway.thegraph.com/api/{graph_api_key}/subgraphs/id/{self.aave_subgraph_id}"
-            
+
             # Build timestamp filter if target_date provided
             timestamp_filter = ""
             if target_date:
                 target_timestamp = int(target_date.timestamp())
                 timestamp_filter = f", timestamp_lte: {target_timestamp}"
-            
+
             query = f"""
 query GetReserveConfigHistory {{
     reserveConfigurationHistoryItems(
@@ -1286,7 +1284,7 @@ query GetReserveConfigHistory {{
     }}
 }}
 """.strip()
-            
+
             headers = {"Content-Type": "application/json"}
             session = get_http_session(base_url="https://gateway.thegraph.com")
             response = session.post(
@@ -1296,24 +1294,24 @@ query GetReserveConfigHistory {{
                 timeout=30,
             )
             response.raise_for_status()
-            
+
             data = response.json()
             if "errors" in data:
                 logger.warning(f"⚠️ GraphQL config history query errors: {data['errors']}")
                 return None
-            
+
             history_items = data.get("data", {}).get("reserveConfigurationHistoryItems", [])
             if not history_items:
                 logger.debug(f"No config history found for {reserve_symbol}")
                 return None
-            
+
             # Convert from basis points to decimals
             result = []
             for item in history_items:
                 base_ltv = item.get("baseLTVasCollateral")
                 liq_threshold = item.get("reserveLiquidationThreshold")
                 liq_bonus = item.get("reserveLiquidationBonus")
-                
+
                 result.append({
                     "timestamp": item.get("timestamp"),
                     "ltv": float(base_ltv) / 10000.0 if base_ltv else None,
@@ -1327,15 +1325,15 @@ query GetReserveConfigHistory {{
                     "reserve_id": item.get("reserve", {}).get("id"),
                     "underlying_asset": item.get("reserve", {}).get("underlyingAsset"),
                 })
-            
+
             logger.info(
                 f"✅ Fetched {len(result)} config history items for {reserve_symbol} "
                 f"(latest change: {result[0]['timestamp'] if result else 'N/A'})"
             )
-            
+
             self._reserve_config_cache[cache_key] = result
             return result
-            
+
         except Exception as e:
             logger.warning(f"⚠️ Failed to fetch reserve config history from The Graph: {e}")
             return None
@@ -1343,22 +1341,22 @@ query GetReserveConfigHistory {{
     def _fetch_emode_categories_from_graph(self) -> Optional[Dict[int, Dict[str, Any]]]:
         """
         Fetch all eMode categories from The Graph subgraph.
-        
+
         Returns:
             Dictionary mapping category ID to category details, or None
         """
         cache_key = "emode_categories"
         if cache_key in self._reserve_config_cache:
             return self._reserve_config_cache[cache_key]
-        
+
         try:
             graph_api_key = self.graph_api_key or self._thegraph_client.api_key
             if not graph_api_key:
                 return None
-            
+
             graph_api_key = graph_api_key.strip()
             subgraph_url = f"https://gateway.thegraph.com/api/{graph_api_key}/subgraphs/id/{self.aave_subgraph_id}"
-            
+
             query = """
 query GetEModeCategories {
     emodeCategories {
@@ -1371,7 +1369,7 @@ query GetEModeCategories {
     }
 }
 """.strip()
-            
+
             headers = {"Content-Type": "application/json"}
             session = get_http_session(base_url="https://gateway.thegraph.com")
             response = session.post(
@@ -1381,12 +1379,12 @@ query GetEModeCategories {
                 timeout=30,
             )
             response.raise_for_status()
-            
+
             data = response.json()
             if "errors" in data:
                 logger.warning(f"⚠️ GraphQL eMode query errors: {data['errors']}")
                 return None
-            
+
             categories = data.get("data", {}).get("emodeCategories", [])
             result = {}
             for cat in categories:
@@ -1394,7 +1392,7 @@ query GetEModeCategories {
                 ltv = cat.get("ltv")
                 liq_threshold = cat.get("liquidationThreshold")
                 liq_bonus = cat.get("liquidationBonus")
-                
+
                 result[cat_id] = {
                     "id": cat_id,
                     "label": cat.get("label"),
@@ -1403,13 +1401,13 @@ query GetEModeCategories {
                     "liquidation_bonus": float(liq_bonus) / 10000.0 if liq_bonus else None,
                     "oracle": cat.get("oracle"),
                 }
-            
+
             if result:
                 logger.info(f"✅ Fetched {len(result)} eMode categories from The Graph")
                 self._reserve_config_cache[cache_key] = result
-            
+
             return result
-            
+
         except Exception as e:
             logger.warning(f"⚠️ Failed to fetch eMode categories from The Graph: {e}")
             return None
@@ -1791,7 +1789,7 @@ query GetEModeCategories {
         # Priority: 1) The Graph eMode categories, 2) reserve_config, 3) STATIC_RISK_PARAMS
         if emode_category_id:
             symbol = reserve.get("asset", {}).get("symbol", "")
-            
+
             # Try The Graph first for eMode category details
             emode_categories = self._fetch_emode_categories_from_graph()
             if emode_categories and emode_category_id in emode_categories:
@@ -1821,7 +1819,7 @@ query GetEModeCategories {
                 )
         elif reserve_config:
             # Fallback: use values from reserve_config if available
-            logger.debug(f"  → Using reserve_config fallback for eMode data")
+            logger.debug("  → Using reserve_config fallback for eMode data")
             emode_category_id = emode_category_id or reserve_config.get("emode_category_id")
             emode_label = reserve_config.get("emode_label")
             emode_liquidation_threshold = reserve_config.get("emode_liquidation_threshold")

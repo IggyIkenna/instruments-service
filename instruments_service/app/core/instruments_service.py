@@ -321,14 +321,14 @@ class InstrumentsService:
                             exchanges = []  # Don't process any CEFI exchanges if no match
                     else:
                         # venues_filter provided but no CEFI venues in it, skip CEFI processing
-                        logger.info(f"🔍 No CEFI venues in filter, skipping CEFI processing")
+                        logger.info("🔍 No CEFI venues in filter, skipping CEFI processing")
                         exchanges = []
                 else:
                     # No venue filter specified, use exchanges as-is (either provided or all Tardis exchanges)
                     logger.debug(f"🔍 No venue filter specified, processing exchanges: {exchanges}")
 
                 if not exchanges:
-                    logger.info(f"⏭️ Skipping CEFI processing - no exchanges to process")
+                    logger.info("⏭️ Skipping CEFI processing - no exchanges to process")
                 else:
                     logger.info(f"🚀 Processing {len(exchanges)} CeFi exchanges in parallel...")
 
@@ -401,7 +401,7 @@ class InstrumentsService:
                         else:
                             # No TRADFI venues in filter, don't process TRADFI
                             logger.info(
-                                f"🔍 No TRADFI venues in filter, skipping TRADFI processing"
+                                "🔍 No TRADFI venues in filter, skipping TRADFI processing"
                             )
                             databento_exchanges = []
                     else:
@@ -412,7 +412,7 @@ class InstrumentsService:
                         )
 
                     if not databento_exchanges:
-                        logger.info(f"⏭️ Skipping TRADFI processing - no exchanges to process")
+                        logger.info("⏭️ Skipping TRADFI processing - no exchanges to process")
                     else:
                         logger.info(f"🚀 Processing {len(databento_exchanges)} TradFi venues...")
 
@@ -452,16 +452,16 @@ class InstrumentsService:
                                     # Create Databento adapter instance (reuses cached client)
                                     databento_adapter = DatabentoAdapter()
                                     instruments = {}
-                                    
+
                                     # Get ETF symbols for this venue from config
                                     symbols = databento_config.get_symbols_for_venue(exchange)
-                                    
+
                                     # Process Bitcoin ETFs using static definitions
                                     # (more reliable for new ETFs like IBIT, FBTC, ARKB)
                                     # IMPORTANT: Bitcoin ETFs launched January 11, 2024 - skip for earlier dates
                                     bitcoin_etf_launch_date = datetime(2024, 1, 11, tzinfo=timezone.utc)
                                     bitcoin_etf_tickers = ["IBIT", "FBTC", "ARKB"]
-                                    
+
                                     # Only process Bitcoin ETFs if date is on or after launch date
                                     if date >= bitcoin_etf_launch_date:
                                         for ticker in bitcoin_etf_tickers:
@@ -476,7 +476,7 @@ class InstrumentsService:
                                                     logger.info(f"✅ Created Bitcoin ETF: {etf_def.instrument_key}")
                                     else:
                                         logger.debug(f"⏭️ Skipping Bitcoin ETFs - date {date.strftime('%Y-%m-%d')} is before launch (2024-01-11)")
-                                    
+
                                     # Also fetch any other symbols via Databento API
                                     non_btc_etf_symbols = [s for s in symbols if s not in bitcoin_etf_tickers]
                                     if non_btc_etf_symbols:
@@ -492,7 +492,7 @@ class InstrumentsService:
                                             logger.info(
                                                 f"✅ Processed {len(databento_instruments)} additional instruments from {exchange}"
                                             )
-                                    
+
                                     if instruments:
                                         logger.info(f"✅ Processed {len(instruments)} total instruments from {exchange}")
                                     return instruments
@@ -500,7 +500,7 @@ class InstrumentsService:
                                     # ICE datasets have different availability dates:
                                     # - IFUS.IMPACT (ICE US - Cotton, Coffee, Sugar, etc.): Dec 23, 2018
                                     # - IFEU.IMPACT (ICE Europe - Brent, Gasoil, WTI): Oct 1, 2024
-                                    # 
+                                    #
                                     # Since we can't filter per-symbol here, we use the earliest date (IFUS)
                                     # The individual symbol downloads will handle IFEU date filtering
                                     ice_us_launch = datetime(2018, 12, 23, tzinfo=timezone.utc)
@@ -509,14 +509,14 @@ class InstrumentsService:
                                             f"⏭️ Skipping ICE - date {date.strftime('%Y-%m-%d')} is before ICE US dataset launch (2018-12-23)"
                                         )
                                         return {}
-                                    
+
                                     # Get symbols for ICE from config
                                     symbols = databento_config.get_symbols_for_venue(exchange)
-                                    
+
                                     if not symbols:
                                         logger.warning(f"⚠️ No symbols configured for {exchange}")
                                         return {}
-                                    
+
                                     # Fetch Databento instruments
                                     databento_instruments = (
                                         await self.processing_service.fetch_databento_instruments(
@@ -525,7 +525,7 @@ class InstrumentsService:
                                             target_date=date,
                                         )
                                     )
-                                    
+
                                     if databento_instruments:
                                         logger.info(
                                             f"✅ Processed {len(databento_instruments)} ICE instruments"
@@ -645,14 +645,14 @@ class InstrumentsService:
                                 defi_protocols = []
                         else:
                             # No DEFI venues in filter, don't process DEFI
-                            logger.info(f"🔍 No DEFI venues in filter, skipping DEFI processing")
+                            logger.info("🔍 No DEFI venues in filter, skipping DEFI processing")
                             defi_protocols = []
                     else:
                         defi_protocols = all_defi_protocols
-                        logger.info(f"🔍 No venue filter specified, processing all DEFI protocols")
+                        logger.info("🔍 No venue filter specified, processing all DEFI protocols")
 
                     if not defi_protocols:
-                        logger.info(f"⏭️ Skipping DEFI processing - no protocols to process")
+                        logger.info("⏭️ Skipping DEFI processing - no protocols to process")
                     else:
                         for protocol, chain in defi_protocols:
                             try:

@@ -634,14 +634,12 @@ class CCXTService:
 
             # Try to fetch leverage tiers for each symbol format
             leverage_tiers = None
-            matched_symbol = None
 
             for symbol_format in possible_symbols:
                 try:
                     tiers = exchange.fetchMarketLeverageTiers(symbol_format)
                     if tiers:
                         leverage_tiers = tiers
-                        matched_symbol = symbol_format
                         break
                 except Exception as e:
                     logger.debug(f"Failed to fetch leverage tiers for {symbol_format}: {e}")

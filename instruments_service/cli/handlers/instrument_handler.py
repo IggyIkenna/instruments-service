@@ -5,13 +5,10 @@ Generates instrument definitions using direct GCS existence checks.
 No missing data report dependencies - pure force/skip logic.
 """
 
-import os
 import logging
-import pandas as pd
 import asyncio
-from typing import Dict, Any, List, Optional
-from datetime import datetime, timezone, timedelta
-from pathlib import Path
+from typing import Dict, Any
+from datetime import datetime, timezone
 
 from instruments_service.cli.base_handler import ModeHandler
 from instruments_service.app.core.instruments_service import InstrumentsService
@@ -67,7 +64,6 @@ class InstrumentHandler(ModeHandler):
         total_dates_processed = 0
         total_skipped = 0
         total_errors = 0
-        total_warnings = 0
         total_processing_errors = 0  # Errors from processing (not date-level failures)
         total_processing_warnings = 0  # Warnings from processing
         today = datetime.now(timezone.utc).date()
@@ -123,7 +119,7 @@ class InstrumentHandler(ModeHandler):
                 exchanges_to_process = self.venue_mapping.all_tardis_exchanges
         else:
             exchanges_to_process = []
-        
+
         # Also check for TradFi venues passed via --exchanges when --tradfi is set
         if tradfi and not tradfi_venues_to_process:
             user_exchanges = kwargs.get("exchanges")
@@ -140,7 +136,7 @@ class InstrumentHandler(ModeHandler):
 
             try:
                 # Direct GCS existence check
-                instrument_path = f"instrument_availability/by_date/day-{date.strftime('%Y-%m-%d')}/instruments.parquet"
+                f"instrument_availability/by_date/day-{date.strftime('%Y-%m-%d')}/instruments.parquet"
 
                 # Check if file exists (using cloud service)
                 if not force:
@@ -153,7 +149,7 @@ class InstrumentHandler(ModeHandler):
                             categories_to_check.append("TRADFI")
                         if defi:
                             categories_to_check.append("DEFI")
-                        
+
                         # Use cloud_data_provider to check existence for specific categories
                         data_provider = CloudDataProvider()
                         if data_provider.check_instruments_exist(date, categories=categories_to_check):
@@ -232,7 +228,7 @@ class InstrumentHandler(ModeHandler):
         total_attempted = total_dates_processed + total_errors
         success_rate = (total_dates_processed / total_attempted * 100) if total_attempted > 0 else 0
 
-        logger.info(f"📊 Instrument generation pipeline complete:")
+        logger.info("📊 Instrument generation pipeline complete:")
         logger.info(f"   Generated: {total_generated} instruments")
         logger.info(
             f"   Dates processed: {total_dates_processed}/{total_attempted} successful ({success_rate:.1f}%)"

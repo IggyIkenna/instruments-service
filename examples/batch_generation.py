@@ -64,7 +64,7 @@ async def generate_instruments_batch(
     logger.info("🚀 Initializing instruments-service...")
     processing_service = InstrumentProcessingService(config)
     storage_service = CloudInstrumentStorage()  # Uses default config from env
-    batch_processor = InstrumentBatchProcessor(config)
+    InstrumentBatchProcessor(config)
 
     # Determine exchanges to process
     if exchanges is None:

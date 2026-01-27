@@ -45,9 +45,9 @@ class BaseDefiAdapter(SharedBaseDefiAdapter):
     async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
         """
         Get instrument metadata for this protocol.
-        
+
         Subclasses must implement this method.
-        
+
         Returns:
             List of instrument definition dictionaries
         """
@@ -61,10 +61,10 @@ class BaseDefiAdapter(SharedBaseDefiAdapter):
     ) -> Dict[str, Any]:
         """
         Download market data for an instrument.
-        
+
         For instruments-service, this returns empty - market data is handled
         by market-tick-data-handler.
-        
+
         Returns:
             Empty dictionary (not applicable for instruments-service)
         """

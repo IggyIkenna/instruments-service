@@ -10,7 +10,6 @@ Tests the complete workflow:
 """
 
 import pytest
-import asyncio
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -73,7 +72,7 @@ async def test_instrument_generation_e2e(
     processing_service = InstrumentProcessingService(config)
     # Use test_cloud_target fixture to ensure test bucket is used
     storage = CloudInstrumentStorage(cloud_target=test_cloud_target)
-    batch_processor = InstrumentBatchProcessor(config)
+    InstrumentBatchProcessor(config)
 
     # Verify test bucket is being used
     assert (
@@ -155,7 +154,7 @@ async def test_instrument_generation_e2e(
         storage.cloud_target.gcs_bucket != prod_bucket
     ), f"Must not write to prod bucket {prod_bucket}, got {storage.cloud_target.gcs_bucket}"
 
-    print(f"\n✅ E2E Test Summary:")
+    print("\n✅ E2E Test Summary:")
     print(f"   - Dates processed: {len(dates_processed)}")
     print(f"   - Total instruments: {len(all_instruments)}")
     print(f"   - Test bucket: {storage.cloud_target.gcs_bucket}")

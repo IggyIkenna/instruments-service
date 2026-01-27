@@ -5,11 +5,9 @@ Tests additional functionality not covered in basic tests.
 """
 
 import pytest
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
-from datetime import datetime, timezone, date, timedelta
+from datetime import datetime, timezone
 from instruments_service.app.core.instrument_processing_service import (
     InstrumentProcessingService,
-    InstrumentProcessingConfig,
 )
 
 
@@ -91,9 +89,9 @@ class TestInstrumentProcessingServiceExtended:
         service = InstrumentProcessingService(config)
 
         # Test problematic patterns
-        assert service._is_problematic_binance_instrument("1000SHIBUSDT") == True
-        assert service._is_problematic_binance_instrument("USDTTRY") == True
-        assert service._is_problematic_binance_instrument("BTCUSDT") == False
+        assert service._is_problematic_binance_instrument("1000SHIBUSDT")
+        assert service._is_problematic_binance_instrument("USDTTRY")
+        assert not service._is_problematic_binance_instrument("BTCUSDT")
 
     @pytest.mark.asyncio
     async def test_populate_all_derived_fields_option(self):
@@ -356,7 +354,7 @@ class TestInstrumentProcessingServiceExtended:
         problematic = ["1000xUSDT", "1000satsUSDT", "1000catUSDT", "1000000mogUSDT"]
 
         for symbol in problematic:
-            assert service._is_problematic_binance_instrument(symbol) == True
+            assert service._is_problematic_binance_instrument(symbol)
 
     def test_is_problematic_binance_instrument_usdt_base(self):
         """Test detecting USDT as base asset."""
@@ -366,7 +364,7 @@ class TestInstrumentProcessingServiceExtended:
         problematic = ["USDTTRY", "USDTZAR", "USDTUAH"]
 
         for symbol in problematic:
-            assert service._is_problematic_binance_instrument(symbol) == True
+            assert service._is_problematic_binance_instrument(symbol)
 
     def test_is_problematic_binance_instrument_valid(self):
         """Test valid Binance instruments are not flagged."""
@@ -384,7 +382,7 @@ class TestInstrumentProcessingServiceExtended:
             # 1000SHIBUSDT might be flagged, but BTCUSDT should not be
             if symbol.startswith("1000"):
                 continue  # Skip multiplier tokens
-            assert service._is_problematic_binance_instrument(symbol) == False
+            assert not service._is_problematic_binance_instrument(symbol)
 
     @pytest.mark.asyncio
     async def test_populate_all_derived_fields_deribit_inverse(self):
@@ -406,7 +404,7 @@ class TestInstrumentProcessingServiceExtended:
         assert isinstance(fields, dict)
         # For DERIBIT with USD quote, inverse should be True
         if fields:
-            assert fields.get("inverse") == True
+            assert fields.get("inverse")
 
     @pytest.mark.asyncio
     async def test_populate_all_derived_fields_deribit_linear(self):
@@ -428,7 +426,7 @@ class TestInstrumentProcessingServiceExtended:
         assert isinstance(fields, dict)
         # For DERIBIT with USDC quote, inverse should be False
         if fields:
-            assert fields.get("inverse") == False
+            assert not fields.get("inverse")
 
     @pytest.mark.asyncio
     async def test_populate_all_derived_fields_underlying(self):
