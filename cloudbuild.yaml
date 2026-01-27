@@ -32,7 +32,7 @@ steps:
         pip install --quiet ruff pytest
 
         echo "=== Running linting (ruff) ==="
-        ruff check . --output-format=text || exit 1
+        ruff check . || exit 1
         echo "Linting passed"
 
         echo "=== Running tests (pytest) ==="
