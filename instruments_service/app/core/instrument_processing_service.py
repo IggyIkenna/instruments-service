@@ -407,7 +407,7 @@ class InstrumentProcessingService:
                     try:
                         expiry_dt = datetime.fromisoformat(expiry_date.replace("Z", "+00:00"))
                         expiry_str = expiry_dt.strftime("%y%m%d")
-                    except:
+                    except (ValueError, AttributeError):
                         expiry_str = expiry_date  # Use as-is if parsing fails
                 else:
                     expiry_str = str(expiry_date)
@@ -493,7 +493,7 @@ class InstrumentProcessingService:
                 try:
                     expiry_dt = datetime.fromisoformat(expiry_date.replace("Z", "+00:00"))
                     expiry_str = expiry_dt.strftime("%y%m%d")
-                except:
+                except (ValueError, AttributeError):
                     expiry_str = expiry_date
             else:
                 expiry_str = str(expiry_date)
