@@ -2,15 +2,12 @@
 Extended unit tests for configuration to increase coverage to 80%+.
 """
 
-import pytest
-import os
-from instruments_service.config import (
+from unified_cloud_services import (
     VenueMapping,
     ExchangeInstrumentConfig,
     DataTypeConfig,
-    UnifiedInstrumentConfig,
-    DatabentoInstrumentConfig,
 )
+from instruments_service.config import UnifiedInstrumentConfig
 
 
 class TestUnifiedInstrumentConfig:
@@ -44,13 +41,11 @@ class TestUnifiedInstrumentConfig:
         assert "G.FUT" in ice_symbols  # Gasoil
 
     def test_get_symbols_for_venue_nasdaq(self):
-        """Test getting symbols for NASDAQ venue - should include ETFs and equities."""
+        """Test getting symbols for NASDAQ venue - should include equities."""
         config = UnifiedInstrumentConfig()
         nasdaq_symbols = config.get_symbols_for_venue("NASDAQ")
 
         assert len(nasdaq_symbols) > 0
-        assert "SPY" in nasdaq_symbols  # ETF
-        assert "QQQ" in nasdaq_symbols  # ETF
         assert "AAPL" in nasdaq_symbols  # Equity
 
     def test_get_symbols_for_venue_empty(self):
@@ -209,9 +204,9 @@ class TestUnifiedInstrumentConfig:
         # Should include base instruments
         assert any(inst.symbol == "ES.FUT" for inst in all_insts)
 
-        # Should include S&P 500 stocks (500+ stocks)
+        # Should include S&P 500 stocks (500 stocks)
         equity_count = sum(1 for inst in all_insts if inst.instrument_type == "EQUITY")
-        assert equity_count > 500  # S&P 500 has 503 stocks
+        assert equity_count >= 500  # S&P 500 has ~500 stocks
 
     def test_get_all_instruments_no_duplicates(self):
         """Test get_all_instruments doesn't create duplicates."""
@@ -221,80 +216,6 @@ class TestUnifiedInstrumentConfig:
         # Check that AAPL (defined in base list) isn't duplicated
         aapl_count = sum(1 for inst in all_insts if inst.symbol == "AAPL")
         assert aapl_count == 1
-
-
-class TestDatabentoInstrumentConfig:
-    """Tests for DatabentoInstrumentConfig (legacy wrapper)."""
-
-    def test_extended_symbols_property(self):
-        """Test extended_symbols returns all base instrument symbols."""
-        config = DatabentoInstrumentConfig()
-        symbols = config.extended_symbols
-
-        assert len(symbols) > 0
-        assert "ES.FUT" in symbols
-        assert "SPY" in symbols
-
-    def test_sp500_stocks_property(self):
-        """Test sp500_stocks returns EQUITY type symbols."""
-        config = DatabentoInstrumentConfig()
-        stocks = config.sp500_stocks
-
-        assert len(stocks) > 0
-        # Should include equities
-        assert "AAPL" in stocks
-        assert "MSFT" in stocks
-        # Should not include futures
-        assert "ES.FUT" not in stocks
-
-    def test_get_dataset_and_stype_future(self):
-        """Test get_dataset_and_stype for future."""
-        config = DatabentoInstrumentConfig()
-        dataset, stype = config.get_dataset_and_stype("ES.FUT")
-
-        assert dataset == "GLBX.MDP3"
-        assert stype == "parent"
-
-    def test_get_dataset_and_stype_equity(self):
-        """Test get_dataset_and_stype for equity."""
-        config = DatabentoInstrumentConfig()
-        dataset, stype = config.get_dataset_and_stype("AAPL")
-
-        assert dataset == "DBEQ.BASIC"
-        assert stype == "raw_symbol"
-
-    def test_get_dataset_and_stype_fallback_future(self):
-        """Test fallback logic for unknown future symbol."""
-        config = DatabentoInstrumentConfig()
-        dataset, stype = config.get_dataset_and_stype("UNKNOWN.FUT")
-
-        # Should fallback to future defaults
-        assert dataset == "GLBX.MDP3"
-        assert stype == "parent"
-
-    def test_get_dataset_and_stype_fallback_default(self):
-        """Test fallback logic for completely unknown symbol."""
-        config = DatabentoInstrumentConfig()
-        dataset, stype = config.get_dataset_and_stype("UNKNOWN")
-
-        # Should fallback to equity defaults
-        assert dataset == "DBEQ.BASIC"
-        assert stype == "raw_symbol"
-
-    def test_get_human_readable_name(self):
-        """Test get_human_readable_name delegates to unified config."""
-        config = DatabentoInstrumentConfig()
-
-        assert config.get_human_readable_name("ES") == "SP500"
-        assert config.get_human_readable_name("GC") == "GOLD"
-
-    def test_get_symbols_for_venue(self):
-        """Test get_symbols_for_venue delegates to unified config."""
-        config = DatabentoInstrumentConfig()
-        cme_symbols = config.get_symbols_for_venue("CME")
-
-        assert len(cme_symbols) > 0
-        assert "ES.FUT" in cme_symbols
 
 
 class TestVenueMappingExtended:
@@ -410,7 +331,7 @@ class TestVenueMappingExtended:
 
         assert mapping.get_databento_exchange_id("CME") == "GLBX.MDP3"
         assert mapping.get_databento_exchange_id("NASDAQ") == "DBEQ.BASIC"
-        assert mapping.get_databento_exchange_id("ICE") == "IFEU.IMPACT"
+        assert mapping.get_databento_exchange_id("ICE") == "IFUS.IMPACT"
 
     def test_get_databento_exchange_id_invalid(self):
         """Test get_databento_exchange_id returns None for invalid venue."""

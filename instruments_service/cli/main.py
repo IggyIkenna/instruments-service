@@ -12,7 +12,6 @@ Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 
 import sys
 import logging
-import os
 from pathlib import Path
 from typing import Dict, Any
 
@@ -25,7 +24,7 @@ def _load_env_early():
         if not env_path.exists():
             # Try parent directory once
             env_path = Path(__file__).parent.parent.parent / ".env"
-        
+
         if env_path.exists():
             load_dotenv(dotenv_path=env_path, override=True)
     except ImportError:

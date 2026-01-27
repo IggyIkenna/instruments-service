@@ -8,7 +8,6 @@ Tests the complete workflow for DeFi instruments:
 """
 
 import pytest
-from datetime import datetime, timezone
 
 
 @pytest.mark.e2e
@@ -24,7 +23,7 @@ class TestDefiInstrumentGeneration:
         """Test DEFI bucket naming convention."""
         category = "defi"
         bucket_template = f"instruments-store-{category}-{gcp_project_id}"
-        
+
         assert "defi" in bucket_template
         assert gcp_project_id in bucket_template
 
@@ -53,7 +52,7 @@ class TestDefiProtocolSupport:
     def test_lst_protocols_supported(self):
         """Test LST protocols (Lido, EtherFi) are supported."""
         lst_protocols = ["lido_eth", "etherfi_eth"]
-        
+
         assert "lido_eth" in lst_protocols
         assert "etherfi_eth" in lst_protocols
 
@@ -72,7 +71,7 @@ class TestDefiInstrumentTypes:
             "protocol_type": "lending",
             "chain": "ETHEREUM",
         }
-        
+
         required = ["instrument_key", "venue", "symbol", "category", "protocol_type"]
         for field in required:
             assert field in lending_instrument
@@ -88,7 +87,7 @@ class TestDefiInstrumentTypes:
             "fee_tier": 3000,
             "chain": "ETHEREUM",
         }
-        
+
         required = ["instrument_key", "venue", "symbol", "protocol_type"]
         for field in required:
             assert field in dex_instrument
@@ -103,7 +102,7 @@ class TestDefiInstrumentTypes:
             "protocol_type": "lst",
             "chain": "ETHEREUM",
         }
-        
+
         required = ["instrument_key", "venue", "symbol", "protocol_type"]
         for field in required:
             assert field in lst_instrument
@@ -121,7 +120,7 @@ class TestDefiChainSupport:
     def test_l2_chains_supported(self):
         """Test L2 chains are supported."""
         l2_chains = ["ARBITRUM", "OPTIMISM", "BASE"]
-        
+
         for chain in l2_chains:
             assert chain in ["ARBITRUM", "OPTIMISM", "BASE", "POLYGON"]
 
@@ -133,14 +132,14 @@ class TestDefiDataSources:
     def test_the_graph_client(self):
         """Test The Graph client configuration."""
         subgraph_url_template = "https://gateway.thegraph.com/api/{api_key}/subgraphs/id/{subgraph_id}"
-        
+
         assert "{api_key}" in subgraph_url_template
         assert "{subgraph_id}" in subgraph_url_template
 
     def test_rpc_endpoint_support(self):
         """Test RPC endpoint support for protocols."""
         rpc_protocols = ["curve"]  # Curve uses RPC calls
-        
+
         assert "curve" in rpc_protocols
 
 
@@ -166,14 +165,14 @@ class TestDefiTestBucketIsolation:
     def test_test_bucket_contains_test_string(self, gcp_project_id):
         """Test bucket name contains 'test' for isolation."""
         test_bucket = f"instruments-store-test-defi-{gcp_project_id}"
-        
+
         assert "test" in test_bucket.lower()
 
     def test_test_bucket_different_from_prod(self, gcp_project_id):
         """Test bucket is different from production bucket."""
         test_bucket = f"instruments-store-test-defi-{gcp_project_id}"
         prod_bucket = f"instruments-store-defi-{gcp_project_id}"
-        
+
         assert test_bucket != prod_bucket
 
 
@@ -201,7 +200,7 @@ class TestDefiOnchainPerpsSupport:
             "instrument_type": "perpetual",
             "contract_type": "linear",
         }
-        
+
         required = ["instrument_key", "venue", "symbol", "instrument_type"]
         for field in required:
             assert field in perp_instrument

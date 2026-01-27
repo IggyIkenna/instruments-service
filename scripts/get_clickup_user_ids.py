@@ -10,7 +10,6 @@ Usage:
 """
 
 import sys
-import os
 from pathlib import Path
 from unified_cloud_services import get_secret_with_fallback
 from instruments_service.config import instruments_config
@@ -70,11 +69,11 @@ def get_clickup_user_ids():
         print(
             "❌ API token not found. Set CLICKUP_API_TOKEN env var or add clickup_api_token=... to .env.clickup"
         )
-        print(f"   Checked: Secret Manager (clickup-api-key)")
+        print("   Checked: Secret Manager (clickup-api-key)")
         print(f"   Checked: {service_env_file}")
         print(f"   Checked: {root_env_file}")
-        print(f"\n💡 To store API key in Secret Manager, run:")
-        print(f"   cd ../unified-cloud-services && python scripts/store_secret.py --secret-name clickup-api-key --secret-value YOUR_TOKEN")
+        print("\n💡 To store API key in Secret Manager, run:")
+        print("   cd ../unified-cloud-services && python scripts/store_secret.py --secret-name clickup-api-key --secret-value YOUR_TOKEN")
         return 1
 
     print(f"✅ Using API token: {api_token[:20]}...")
@@ -147,7 +146,7 @@ def get_clickup_user_ids():
                 or "igboaka" in full_name
             ):
                 ikenna_id = user_info["id"]
-                print(f"✅ Found Ikenna:")
+                print("✅ Found Ikenna:")
                 print(f"   Username: {user_info.get('username', 'N/A')}")
                 if full_name and full_name != "n/a":
                     print(f"   Full Name: {user_info.get('name', 'N/A')}")
@@ -156,7 +155,7 @@ def get_clickup_user_ids():
                 print()
             elif "harsh" in username or "harsh" in email:
                 harsh_id = user_info["id"]
-                print(f"✅ Found Harsh:")
+                print("✅ Found Harsh:")
                 print(f"   Username: {user_info.get('username', 'N/A')}")
                 if full_name and full_name != "n/a":
                     print(f"   Full Name: {user_info.get('name', 'N/A')}")

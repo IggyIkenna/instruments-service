@@ -7,7 +7,6 @@ Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 
 import pytest
 from unittest.mock import Mock, patch
-import instruments_service.cli.main as cli_main_module
 from instruments_service.cli.main import main, run_cli
 
 
@@ -25,8 +24,8 @@ class TestCLIMain:
     def test_main_success(self, mock_handler):
         """Test successful main execution."""
         with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
-             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler) as mock_get_handler:
-            
+             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler):
+
             mock_args = Mock()
             mock_args.mode = "instruments"
             mock_args.log_level = "INFO"
@@ -37,12 +36,13 @@ class TestCLIMain:
             mock_args.bigquery_dataset = "test-dataset"
             mock_args.force = False
             mock_args.exchanges = None
+            mock_args.category = None  # Explicitly set to None to avoid Mock iteration
             mock_args.CEFI = False
             mock_args.TRADFI = False
             mock_args.DEFI = False
             mock_args.venues = None
             mock_args.instrument_ids = None
-            
+
             mock_parse.return_value = mock_args
 
             result = main()
@@ -55,7 +55,7 @@ class TestCLIMain:
     def test_main_with_categories(self, mock_handler):
         """Test main with market category flags."""
         with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
-             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler) as mock_get_handler:
+             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler):
 
             mock_args = Mock()
             mock_args.mode = "instruments"
@@ -67,12 +67,13 @@ class TestCLIMain:
             mock_args.bigquery_dataset = "test-dataset"
             mock_args.force = True
             mock_args.exchanges = None
+            mock_args.category = None  # Explicitly set to None to use individual flags
             mock_args.CEFI = True
             mock_args.TRADFI = True
             mock_args.DEFI = False
             mock_args.venues = None
             mock_args.instrument_ids = None
-            
+
             mock_parse.return_value = mock_args
 
             result = main()
@@ -89,7 +90,7 @@ class TestCLIMain:
     def test_main_failure_status(self, mock_handler):
         """Test main with failure status."""
         with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
-             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler) as mock_get_handler:
+             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler):
 
             mock_args = Mock()
             mock_args.mode = "instruments"
@@ -101,12 +102,13 @@ class TestCLIMain:
             mock_args.bigquery_dataset = "test-dataset"
             mock_args.force = False
             mock_args.exchanges = None
+            mock_args.category = None  # Explicitly set to None to avoid Mock iteration
             mock_args.CEFI = False
             mock_args.TRADFI = False
             mock_args.DEFI = False
             mock_args.venues = None
             mock_args.instrument_ids = None
-            
+
             mock_parse.return_value = mock_args
             mock_handler.run.return_value = {"status": "error", "success": False}
 
@@ -129,7 +131,7 @@ class TestCLIMain:
     def test_run_cli_success(self, mock_handler):
         """Test run_cli with success - tests that run_cli calls main and returns result."""
         with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
-             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler) as mock_get_handler:
+             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler):
 
             mock_args = Mock()
             mock_args.mode = "instruments"
@@ -141,12 +143,13 @@ class TestCLIMain:
             mock_args.bigquery_dataset = "test-dataset"
             mock_args.force = False
             mock_args.exchanges = None
+            mock_args.category = None  # Explicitly set to None to avoid Mock iteration
             mock_args.CEFI = False
             mock_args.TRADFI = False
             mock_args.DEFI = False
             mock_args.venues = None
             mock_args.instrument_ids = None
-            
+
             mock_parse.return_value = mock_args
 
             # Test run_cli which calls main()

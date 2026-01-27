@@ -6,9 +6,8 @@ Tests subgraph URL resolution and caching.
 
 import pytest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
 
-from instruments_service.utils.subgraph_service import SubgraphService
+from instruments_service.utils import SubgraphService
 
 
 class TestSubgraphService:
@@ -72,13 +71,14 @@ class TestSubgraphService:
         """Test cache validity checking."""
         cache_key = "test_key"
         subgraph_service._subgraph_cache[cache_key] = "https://test.url"
-        subgraph_service._cache_timestamps[cache_key] = datetime.now(timezone.utc)
+        # Use naive datetime to match SubgraphService._is_cache_valid() implementation
+        subgraph_service._cache_timestamps[cache_key] = datetime.now()
 
         # Cache should be valid immediately
         assert subgraph_service._is_cache_valid(cache_key) is True
 
         # Cache should be invalid after TTL expires
-        subgraph_service._cache_timestamps[cache_key] = datetime.now(timezone.utc) - timedelta(
+        subgraph_service._cache_timestamps[cache_key] = datetime.now() - timedelta(
             hours=25
         )
         assert subgraph_service._is_cache_valid(cache_key) is False

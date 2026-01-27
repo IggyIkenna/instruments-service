@@ -12,8 +12,6 @@ This example shows:
 """
 
 import logging
-from datetime import datetime
-from typing import Optional
 
 # Simple imports - assumes packages are installed
 from unified_cloud_services import create_instruments_client
@@ -105,7 +103,7 @@ def query_summary_stats():
 
     stats = client.get_summary_stats(date="2023-05-23")
 
-    print(f"\n✅ Summary statistics for 2023-05-23:")
+    print("\n✅ Summary statistics for 2023-05-23:")
     print(f"  Total instruments: {stats.get('total_instruments', 0)}")
     print(f"  Venues: {stats.get('venues', 0)}")
     print(f"  Instrument types: {stats.get('instrument_types', 0)}")

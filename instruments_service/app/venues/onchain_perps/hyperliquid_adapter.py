@@ -50,7 +50,7 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
     Generates instruments in format:
     HYPERLIQUID:PERPETUAL:BTC-USDC
     """
-    
+
     # Hyperliquid mainnet launch (December 2022)
     HYPERLIQUID_LAUNCH_DATE = datetime(2022, 12, 1)
 
@@ -95,7 +95,7 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
     async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
         """
         Get instrument metadata for Hyperliquid.
-        
+
         Returns:
             List of instrument definition dictionaries
         """
@@ -104,7 +104,7 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
         return list(instruments.values())
 
     def fetch_perpetuals(
-        self, 
+        self,
         test_data_availability: bool = False,
         target_date: Optional[datetime] = None
     ) -> Dict[str, Dict[str, Any]]:
@@ -125,12 +125,12 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
                 f"(Hyperliquid launched December 2022). Returning empty instruments - this is expected."
             )
             return {}
-        
+
         try:
             # Check cache first (instrument lists rarely change)
             cache_key = "hyperliquid_perp_meta"
             cached_metadata = _get_cached_response(cache_key)
-            
+
             if cached_metadata is not None:
                 logger.info("📋 Using cached Hyperliquid perpetual metadata")
                 metadata = cached_metadata
@@ -186,7 +186,7 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
             return {}
 
     def fetch_spot_pairs(
-        self, 
+        self,
         test_data_availability: bool = False,
         target_date: Optional[datetime] = None
     ) -> Dict[str, Dict[str, Any]]:
@@ -207,12 +207,12 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
                 f"(Hyperliquid launched December 2022). Returning empty instruments - this is expected."
             )
             return {}
-        
+
         try:
             # Check cache first (reuses same metadata as perpetuals)
             cache_key = "hyperliquid_perp_meta"
             cached_metadata = _get_cached_response(cache_key)
-            
+
             if cached_metadata is not None:
                 logger.debug("📋 Using cached Hyperliquid metadata for spot pairs")
                 metadata = cached_metadata
@@ -350,9 +350,9 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
         available_from = datetime(2023, 5, 1).isoformat()
 
         # Extract metadata
-        sz_decimals = asset.get("szDecimals", 8)
+        asset.get("szDecimals", 8)
         max_leverage = asset.get("maxLeverage", {})
-        max_leverage_value = (
+        (
             max_leverage
             if isinstance(max_leverage, (int, float))
             else (max_leverage.get("value", 1) if isinstance(max_leverage, dict) else 1)

@@ -11,8 +11,8 @@ Tests cover real-world usage scenarios:
 
 import pytest
 import pandas as pd
-from datetime import datetime, timezone, timedelta
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
+from datetime import datetime, timezone
+from unittest.mock import Mock, AsyncMock, patch
 
 from instruments_service.app.core.instruments_service import InstrumentsService
 
@@ -56,7 +56,7 @@ class TestInstrumentsServiceInitialization:
                 "max_batch_size": 500,
                 "lookback_days": 7,
             }
-            service = InstrumentsService(config)
+            InstrumentsService(config)
 
             # Verify processing service initialized with correct config
             mock_proc.assert_called_once()
@@ -81,7 +81,7 @@ class TestInstrumentsServiceInitialization:
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
             config = {}  # No project_id
-            service = InstrumentsService(config)
+            InstrumentsService(config)
 
             # Should use default project_id
             proc_config = mock_proc.call_args[0][0]
@@ -161,7 +161,7 @@ class TestGenerateInstrumentsSingleDate:
             service = InstrumentsService(config)
 
             date = datetime(2024, 1, 1, tzinfo=timezone.utc)
-            result = await service.generate_instruments_for_date(
+            await service.generate_instruments_for_date(
                 date=date, cefi=True  # No exchanges specified
             )
 
@@ -281,7 +281,7 @@ class TestGenerateInstrumentsSingleDate:
             service = InstrumentsService(config)
 
             date = datetime(2024, 1, 1, tzinfo=timezone.utc)
-            result = await service.generate_instruments_for_date(
+            await service.generate_instruments_for_date(
                 date=date, defi=True, venues=["HYPERLIQUID"]
             )
 
@@ -319,7 +319,7 @@ class TestGenerateInstrumentsSingleDate:
             service = InstrumentsService(config)
 
             date = datetime(2024, 1, 1, tzinfo=timezone.utc)
-            result = await service.generate_instruments_for_date(date=date)
+            await service.generate_instruments_for_date(date=date)
 
             # Should call all three processing methods
             assert mock_proc.process_exchange_instruments.call_count > 0

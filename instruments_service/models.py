@@ -1,7 +1,7 @@
 """
 Data Models for Instruments Service
 
-This module defines the InstrumentDefinition Pydantic model following the 
+This module defines the InstrumentDefinition Pydantic model following the
 INSTRUMENT_KEY_SPEC.md format with proper expiry, call/put, and margin currency support.
 
 Note: InstrumentKey is imported from unified-cloud-services (shared across services).
