@@ -9,10 +9,11 @@ ARCHITECTURE:
 - Uses TheGraphBaseClient (unified-cloud-services) for subgraph queries
 - Uses get_http_session for HTTP calls (AaveScan API)
 
-Reference: archive/basis-strategy-v1/docs/MVP_DEFI_INSTRUMENTS.md
+Reference: instruments-service/docs/MVP_INSTRUMENTS.md (DeFi section)
 """
 
 import logging
+import os
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
 
@@ -48,9 +49,9 @@ class AaveV3Adapter(BaseDefiAdapter):
     See instruments-service/issues/aave-dynamic-params.md for details.
     """
 
-    # Static risk parameters from archive/basis-strategy-v1/data/protocol_data/aave/risk_params/aave_v3_risk_parameters.json
-    # Used as fallback when RPC/Graph queries fail
-    # TODO: Replace with dynamic fetching from AAVE contracts - see instruments-service/issues/aave-dynamic-params.md
+    # Static risk parameters used as fallback when RPC/Graph queries fail.
+    # These are fetched dynamically when available via _fetch_emode_categories_from_graph()
+    # and _fetch_reserve_config_from_graph() methods. See instruments-service/issues/aave-dynamic-params.md
     STATIC_RISK_PARAMS = {
         "emode": {
             "ltv_limits": {
@@ -165,8 +166,8 @@ class AaveV3Adapter(BaseDefiAdapter):
             self._thegraph_client._api_key = graph_api_key
 
         # AaveScan Pro API uses v2 endpoint with apiKey query parameter
-        # Base URL: https://api.aavescan.com/v2
-        self.base_url = "https://api.aavescan.com/v2"
+        # Configurable via environment variable with default fallback
+        self.base_url = os.environ.get("AAVESCAN_API_URL", "https://api.aavescan.com/v2")
 
         # Aave V3 Ethereum subgraph ID from The Graph
         # Subgraph: https://thegraph.com/explorer/subgraphs/Cd2gEDVeqnjBn1hSeqFMitw8Q1iiyV9FYUZkLNRcL87g

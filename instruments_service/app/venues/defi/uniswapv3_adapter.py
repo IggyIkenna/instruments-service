@@ -4,7 +4,7 @@ Uniswap V3 Adapter
 Fetches Uniswap V3 pool instruments from The Graph.
 Generates canonical instrument keys for DEX pools.
 
-Reference: archive/basis-strategy-v1/docs/MVP_DEFI_INSTRUMENTS.md
+Reference: instruments-service/docs/MVP_INSTRUMENTS.md (DeFi section)
 """
 
 import logging

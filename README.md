@@ -39,8 +39,6 @@ instruments_service/
 │   └── handlers/
 │       ├── instrument_handler.py         # Instrument generation handler
 │       └── instruments_query_handler.py  # Query handler
-├── clients/
-│   └── instruments_client.py             # Convenience client (downstream should use unified-cloud-services)
 ├── models.py                             # InstrumentDefinition, InstrumentKey models
 ├── config.py                             # VenueMapping, ExchangeInstrumentConfig, DataTypeConfig, InstrumentsServiceConfig
 └── requirements.txt
@@ -54,7 +52,6 @@ instruments_service/
 2. ✅ **Configs** - `VenueMapping`, `ExchangeInstrumentConfig`, `DataTypeConfig` (extracted and migrated)
 3. ✅ **Service** - `InstrumentProcessingService` (extracted and migrated, ~1547 lines)
 4. ✅ **CLI Handlers** - Instrument generation and query handlers (extracted and migrated)
-5. ✅ **Clients** - `InstrumentsClient` (extracted and migrated)
 
 **Old files deleted from `market-tick-data-handler`:**
 - ✅ `market_data_tick_handler/services/instrument_processing_service.py`

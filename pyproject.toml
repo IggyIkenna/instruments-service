@@ -16,29 +16,33 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
+    # Core data processing
+    "numpy>=2.4.0",
+    "pandas>=3.0.0",
+    # Validation
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
-    "pandas>=2.3.3",
-    "numpy>=2.3.5",  # Latest numpy 2.x (compatible with pandas 2.3.x and Python 3.13)
+    # Utilities
     "python-dateutil>=2.8.0",
-    "python-dotenv>=1.0.0",  # For loading .env files
+    "python-dotenv>=1.0.0",
     "requests>=2.32.5",
+    # Exchange integrations
     "ccxt>=4.5.24",
-    "plotly>=6.4.0",
     "web3>=6.0.0",
-    "eth-abi>=4.0.0",  # ABI encoding/decoding for web3
-    "databento>=0.20.0",  # TradFi instruments (CME, NASDAQ, NYSE)
-    "exchange-calendars>=4.5.0",  # Trading calendars for holiday detection (NYSE, NASDAQ, CME)
+    "eth-abi>=4.0.0",
+    "databento>=0.20.0",
+    "exchange-calendars>=4.5.0",
+    "yfinance>=0.2.50",
+    # Visualization
+    "plotly>=6.4.0",
+    # AWS
     "boto3>=1.40.70",
-    "yfinance>=0.2.50",  # Corporate actions (dividends, splits, earnings) - free, no API key
-    # Unified cloud services (infrastructure)
-    # For local development: pip install -e ../unified-cloud-services
-    # For production/CI: Install from GitHub or use published package
-    # "unified-cloud-services @ git+ssh://git@github.com/iggyikenna/unified-cloud-services.git@v1.2.0",
 ]
 
 [project.optional-dependencies]
@@ -67,10 +71,10 @@ include-package-data = true
 
 [tool.black]
 line-length = 100
-target-version = ['py313']
+target-version = ['py311', 'py312', 'py313']
 
 [tool.mypy]
-python_version = "3.13.7"
+python_version = "3.11"
 warn_return_any = true
 disallow_untyped_defs = false
 
