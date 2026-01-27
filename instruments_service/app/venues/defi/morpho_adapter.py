@@ -4,7 +4,7 @@ Morpho Adapter
 Fetches Morpho lending market instruments using Morpho SDK or The Graph.
 Generates canonical instrument keys for Morpho positions.
 
-Reference: archive/basis-strategy-v1/docs/MVP_DEFI_INSTRUMENTS.md
+Reference: instruments-service/docs/MVP_INSTRUMENTS.md (DeFi section)
 """
 
 import logging

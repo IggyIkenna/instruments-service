@@ -11,7 +11,7 @@ ARCHITECTURE:
 - Cached UnifiedInstrumentConfig instance
 - Parallel symbol group queries (asyncio.gather)
 
-Reference: archive/genConfig/instrumentDefinitionConfig/dataBentoInstrumentSelection.py
+See instruments-service/docs/DATABENTO_ADAPTER_GUIDE.md for implementation details
 """
 
 import logging
