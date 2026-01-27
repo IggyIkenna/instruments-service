@@ -14,12 +14,12 @@ This module provides:
 
 Usage:
     from instruments_service.app.core.dependency_checker import DependencyChecker
-    
+
     checker = DependencyChecker()
-    
+
     # Check external API connectivity
     status = checker.check_external_apis()
-    
+
     # Validate output path exists
     checker.validate_output_path(category="CEFI", date="2024-01-15")
 """
@@ -35,12 +35,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DependencyStatus:
     """Status of a dependency check."""
-    
+
     name: str
     available: bool
     message: str
     required: bool = True
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
@@ -53,12 +53,12 @@ class DependencyStatus:
 @dataclass
 class DependencyReport:
     """Report of all dependency checks."""
-    
+
     service: str
     all_available: bool
     required_available: bool
     checks: List[DependencyStatus]
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "service": self.service,
@@ -71,36 +71,36 @@ class DependencyReport:
 class DependencyChecker:
     """
     Dependency checker for instruments-service.
-    
+
     instruments-service is the ROOT of the data pipeline - it has NO
     upstream GCS data dependencies. Its dependencies are:
-    
+
     1. External APIs (for data):
        - Tardis API (CeFi exchanges) - requires API key
        - Databento API (TradFi markets) - requires API key
        - The Graph API (DeFi protocols) - requires API key
        - Protocol-specific APIs (AAVE, Hyperliquid, etc.)
-    
+
     2. Infrastructure:
        - GCS buckets for output
        - GCP Secret Manager for API keys
-    
+
     Downstream services that depend on instruments-service:
        - market-tick-data-handler
        - strategy-service
        - execution-services
     """
-    
+
     # GCS output buckets
     OUTPUT_BUCKETS = {
         "CEFI": "instruments-store-cefi-{project_id}",
         "TRADFI": "instruments-store-tradfi-{project_id}",
         "DEFI": "instruments-store-defi-{project_id}",
     }
-    
+
     # Output path template
     OUTPUT_PATH_TEMPLATE = "instrument_availability/by_date/day-{date}/instruments.parquet"
-    
+
     # External API dependencies by category
     EXTERNAL_APIS = {
         "CEFI": [
@@ -114,31 +114,31 @@ class DependencyChecker:
             {"name": "alchemy_api", "secret": "alchemy-api-key", "required": False},
         ],
     }
-    
+
     def __init__(self, project_id: Optional[str] = None):
         """
         Initialize the dependency checker.
-        
+
         Args:
             project_id: GCP project ID (default from env)
         """
         self.project_id = project_id or os.environ.get(
             "GOOGLE_CLOUD_PROJECT", "central-element-323112"
         )
-    
+
     def get_upstream_dependencies(self) -> List[str]:
         """
         Get list of upstream service dependencies.
-        
+
         Returns:
             Empty list - instruments-service has no upstream deps
         """
         return []
-    
+
     def get_downstream_dependents(self) -> List[str]:
         """
         Get list of services that depend on instruments-service output.
-        
+
         Returns:
             List of downstream service names
         """
@@ -147,52 +147,52 @@ class DependencyChecker:
             "strategy-service",
             "execution-services",
         ]
-    
+
     def check_external_apis(
         self,
         categories: Optional[List[str]] = None,
     ) -> DependencyReport:
         """
         Check availability of external APIs.
-        
+
         Args:
             categories: Categories to check (default: all)
-        
+
         Returns:
             DependencyReport with API availability status
         """
         if categories is None:
             categories = list(self.EXTERNAL_APIS.keys())
-        
+
         checks = []
         all_available = True
         required_available = True
-        
+
         for category in categories:
             apis = self.EXTERNAL_APIS.get(category, [])
-            
+
             for api in apis:
                 status = self._check_api_key(api["name"], api["secret"])
                 status.required = api.get("required", True)
                 checks.append(status)
-                
+
                 if not status.available:
                     all_available = False
                     if status.required:
                         required_available = False
-        
+
         return DependencyReport(
             service="instruments-service",
             all_available=all_available,
             required_available=required_available,
             checks=checks,
         )
-    
+
     def _check_api_key(self, api_name: str, secret_name: str) -> DependencyStatus:
         """Check if an API key is available in Secret Manager."""
         try:
             from unified_cloud_services import get_secret
-            
+
             secret = get_secret(secret_name, project_id=self.project_id)
             if secret:
                 return DependencyStatus(
@@ -226,47 +226,47 @@ class DependencyChecker:
                 available=False,
                 message=f"Error checking API key: {e}",
             )
-    
+
     def get_output_path(self, category: str, date: str) -> str:
         """
         Get the expected GCS output path for a date/category.
-        
+
         Args:
             category: Market category (CEFI, TRADFI, DEFI)
             date: Date string (YYYY-MM-DD)
-        
+
         Returns:
             Full GCS path
         """
         bucket = self.OUTPUT_BUCKETS[category].format(project_id=self.project_id)
         path = self.OUTPUT_PATH_TEMPLATE.format(date=date)
         return f"gs://{bucket}/{path}"
-    
+
     def check_output_exists(self, category: str, date: str) -> bool:
         """
         Check if output exists for a date/category.
-        
+
         Args:
             category: Market category
             date: Date string
-        
+
         Returns:
             True if output file exists
         """
         try:
             from unified_cloud_services import get_gcs_client
-            
+
             client = get_gcs_client(project_id=self.project_id)
             bucket_name = self.OUTPUT_BUCKETS[category].format(project_id=self.project_id)
             blob_path = self.OUTPUT_PATH_TEMPLATE.format(date=date)
-            
+
             bucket = client.bucket(bucket_name)
             blob = bucket.blob(blob_path)
             return blob.exists()
         except Exception as e:
             logger.warning(f"Error checking output: {e}")
             return False
-    
+
     def validate_can_run(
         self,
         categories: Optional[List[str]] = None,
@@ -274,33 +274,33 @@ class DependencyChecker:
     ) -> bool:
         """
         Validate that the service can run.
-        
+
         Since instruments-service has no upstream data dependencies,
         this checks external API availability.
-        
+
         Args:
             categories: Categories to check
             fail_on_optional: Whether to fail on missing optional APIs
-        
+
         Returns:
             True if service can run
-        
+
         Raises:
             RuntimeError: If required dependencies are not met
         """
         report = self.check_external_apis(categories)
-        
+
         if not report.required_available:
             missing = [c for c in report.checks if c.required and not c.available]
             missing_names = [m.name for m in missing]
             raise RuntimeError(
                 f"instruments-service cannot run: missing required API keys: {missing_names}"
             )
-        
+
         if fail_on_optional and not report.all_available:
             logger.warning("Some optional API keys are missing")
             return False
-        
+
         return True
 
 
@@ -308,10 +308,10 @@ class DependencyChecker:
 def check_dependencies(categories: Optional[List[str]] = None) -> DependencyReport:
     """
     Check all dependencies for instruments-service.
-    
+
     Args:
         categories: Categories to check (default: all)
-    
+
     Returns:
         DependencyReport with status
     """

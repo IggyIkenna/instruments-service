@@ -8,7 +8,7 @@ Each domain has its own bucket and dataset (instruments domain).
 import logging
 import pandas as pd
 import os
-from typing import Optional, Dict, Any
+from typing import Optional
 from datetime import datetime
 from unified_cloud_services import StandardizedDomainCloudService, CloudTarget, get_config
 
@@ -32,7 +32,6 @@ class CloudDataProvider:
             cloud_target: Optional CloudTarget configuration (auto-detects if not provided)
         """
         if cloud_target is None:
-            import os
 
             # NOTE: This default is only used when no category is specified.
             # Production flow should always use category-specific buckets via get_bucket_for_category()
@@ -78,7 +77,7 @@ class CloudDataProvider:
             # If category specified, use category-specific bucket
             if category:
                 return self.get_instruments_from_category(date, category, gcs_path=gcs_path)
-            
+
             logger.info(f"📥 Loading instruments from GCS: {gcs_path}")
             df = self.cloud_service.download_from_gcs(
                 gcs_path=gcs_path, format="parquet", log_errors=False
@@ -100,7 +99,7 @@ class CloudDataProvider:
 
             logger.error(f"❌ Failed to load instruments from GCS: {e}")
             return pd.DataFrame()
-    
+
     def get_instruments_from_category(
         self, date: datetime, category: str, gcs_path: Optional[str] = None
     ) -> pd.DataFrame:
@@ -127,10 +126,10 @@ class CloudDataProvider:
                 or "pytest" in os.environ.get("_", "")
                 or get_config("PYTEST_CURRENT_TEST", "") != ""
             )
-            
+
             # Get bucket for category
             category_bucket = get_bucket_for_category(category, test_mode=is_test)
-            
+
             # Create cloud service for category bucket
             category_cloud_target = CloudTarget(
                 project_id=self.cloud_target.project_id,
@@ -141,7 +140,7 @@ class CloudDataProvider:
             category_cloud_service = StandardizedDomainCloudService(
                 domain="instruments", cloud_target=category_cloud_target
             )
-            
+
             logger.info(
                 f"📥 Loading {category} instruments from GCS: {category_bucket}/{gcs_path}"
             )
@@ -216,13 +215,13 @@ class CloudDataProvider:
             return pd.DataFrame()
 
     def check_instruments_exist(
-        self, 
-        date: datetime, 
+        self,
+        date: datetime,
         categories: Optional[list] = None
     ) -> bool:
         """
         Check if instruments exist for a specific date.
-        
+
         Args:
             date: Target date
             categories: Optional list of categories to check (e.g., ["CEFI", "TRADFI"]).
@@ -241,19 +240,19 @@ class CloudDataProvider:
             check_all = False  # Return True if ANY exist (legacy behavior)
         else:
             check_all = True  # Return True only if ALL specified categories exist
-        
+
         found_categories = []
-        
+
         for category in categories:
             try:
                 # Use get_instruments_from_category which handles bucket selection (test vs prod)
                 # and uses the correct category-specific bucket
                 df = self.get_instruments_from_category(date, category, gcs_path=gcs_path)
-                
+
                 if df is not None and not df.empty:
                     logger.debug(f"📊 Instruments found in {category} for {date_str}")
                     found_categories.append(category)
-                    
+
                     # Legacy behavior: return True on first find
                     if not check_all:
                         return True
@@ -261,7 +260,7 @@ class CloudDataProvider:
                 # Log but continue checking other categories
                 logger.debug(f"Could not check {category} for {date_str}: {e}")
                 continue
-        
+
         if check_all:
             # Only return True if ALL specified categories were found
             all_found = len(found_categories) == len(categories)
@@ -269,6 +268,6 @@ class CloudDataProvider:
                 missing = set(categories) - set(found_categories)
                 logger.debug(f"📊 Missing categories for {date_str}: {missing}")
             return all_found
-                
+
         logger.debug(f"📊 No instruments found for {date_str} in any category")
         return False

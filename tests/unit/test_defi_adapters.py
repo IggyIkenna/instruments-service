@@ -2,9 +2,7 @@
 Unit tests for DeFi adapters (Balancer, Hyperliquid, EtherFi, Lido, Morpho, Curve, Uniswap V3, Aster).
 """
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime, timezone
+from unittest.mock import Mock, patch
 
 
 class TestBalancerAdapter:
@@ -17,7 +15,7 @@ class TestBalancerAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.balancer_adapter import BalancerAdapter
-            
+
             adapter = BalancerAdapter.__new__(BalancerAdapter)
             adapter.chain = "ETHEREUM"
             adapter.project_id = "test-project"
@@ -25,7 +23,7 @@ class TestBalancerAdapter:
             chain_suffix_map = {"ETHEREUM": "ETH", "ARBITRUM": "ARB", "BASE": "BASE"}
             venue_suffix = chain_suffix_map.get(adapter.chain, adapter.chain[:3])
             adapter.venue = f"BALANCER-{venue_suffix}"
-            
+
             assert adapter.venue == "BALANCER-ETH"
 
     def test_init_arbitrum(self):
@@ -35,14 +33,14 @@ class TestBalancerAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.balancer_adapter import BalancerAdapter
-            
+
             adapter = BalancerAdapter.__new__(BalancerAdapter)
             adapter.chain = "ARBITRUM"
             adapter.project_id = "test-project"
             chain_suffix_map = {"ETHEREUM": "ETH", "ARBITRUM": "ARB", "BASE": "BASE"}
             venue_suffix = chain_suffix_map.get(adapter.chain, adapter.chain[:3])
             adapter.venue = f"BALANCER-{venue_suffix}"
-            
+
             assert adapter.venue == "BALANCER-ARB"
 
     def test_fetch_pools_empty(self):
@@ -52,14 +50,14 @@ class TestBalancerAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.balancer_adapter import BalancerAdapter
-            
+
             adapter = BalancerAdapter.__new__(BalancerAdapter)
             adapter.chain = "ETHEREUM"
             adapter.venue = "BALANCER-ETH"
             adapter.project_id = "test-project"
             adapter.graph_client = Mock()
             adapter.graph_client.execute_query_sync = Mock(return_value={"data": {"poolGetPools": []}})
-            
+
             result = adapter.fetch_pools()
             assert isinstance(result, dict)
             assert len(result) == 0
@@ -71,13 +69,13 @@ class TestBalancerAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.balancer_adapter import BalancerAdapter
-            
+
             adapter = BalancerAdapter.__new__(BalancerAdapter)
             adapter.chain = "ETHEREUM"
             adapter.venue = "BALANCER-ETH"
             adapter.project_id = "test-project"
             adapter.graph_client = Mock()
-            
+
             mock_pool = {
                 "id": "0x123",
                 "address": "0x123",
@@ -93,7 +91,7 @@ class TestBalancerAdapter:
             adapter.graph_client.execute_query_sync = Mock(
                 return_value={"data": {"poolGetPools": [mock_pool]}}
             )
-            
+
             result = adapter.fetch_pools()
             assert isinstance(result, dict)
 
@@ -108,7 +106,7 @@ class TestHyperliquidAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
-            
+
             adapter = HyperliquidAdapter.__new__(HyperliquidAdapter)
             adapter.chain = "HYPERLIQUID"
             adapter.project_id = "test-project"
@@ -116,7 +114,7 @@ class TestHyperliquidAdapter:
             adapter.api_base_url = "https://api.hyperliquid.xyz"
             adapter.mvp_only = True
             adapter.mvp_base_currencies = set()
-            
+
             assert adapter.venue == "HYPERLIQUID"
             assert adapter.api_base_url == "https://api.hyperliquid.xyz"
 
@@ -127,7 +125,7 @@ class TestHyperliquidAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
-            
+
             adapter = HyperliquidAdapter.__new__(HyperliquidAdapter)
             adapter.chain = "HYPERLIQUID"
             adapter.project_id = "test-project"
@@ -136,7 +134,7 @@ class TestHyperliquidAdapter:
             adapter.mvp_only = True
             base_currency_list = ["BTC", "ETH", "SOL"]
             adapter.mvp_base_currencies = {c.upper() for c in base_currency_list}
-            
+
             assert "BTC" in adapter.mvp_base_currencies
             assert "ETH" in adapter.mvp_base_currencies
             assert "SOL" in adapter.mvp_base_currencies
@@ -148,7 +146,7 @@ class TestHyperliquidAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
-            
+
             adapter = HyperliquidAdapter.__new__(HyperliquidAdapter)
             adapter.chain = "HYPERLIQUID"
             adapter.venue = "HYPERLIQUID"
@@ -156,13 +154,13 @@ class TestHyperliquidAdapter:
             adapter.mvp_only = False
             adapter.mvp_base_currencies = set()
             adapter.project_id = "test-project"
-            
+
             with patch("requests.post") as mock_post:
                 mock_response = Mock()
                 mock_response.json.return_value = []
                 mock_response.raise_for_status = Mock()
                 mock_post.return_value = mock_response
-                
+
                 result = adapter.fetch_perpetuals()
                 assert isinstance(result, dict)
 
@@ -173,7 +171,7 @@ class TestHyperliquidAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
-            
+
             adapter = HyperliquidAdapter.__new__(HyperliquidAdapter)
             adapter.chain = "HYPERLIQUID"
             adapter.venue = "HYPERLIQUID"
@@ -181,7 +179,7 @@ class TestHyperliquidAdapter:
             adapter.mvp_only = False
             adapter.mvp_base_currencies = set()
             adapter.project_id = "test-project"
-            
+
             with patch("requests.post") as mock_post:
                 mock_meta = [
                     {"universe": [{"name": "BTC", "szDecimals": 3}]}
@@ -190,7 +188,7 @@ class TestHyperliquidAdapter:
                 mock_response.json.return_value = mock_meta
                 mock_response.raise_for_status = Mock()
                 mock_post.return_value = mock_response
-                
+
                 result = adapter.fetch_perpetuals()
                 assert isinstance(result, dict)
 
@@ -205,12 +203,12 @@ class TestEtherFiAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.lst_adapters import EtherFiAdapter
-            
+
             adapter = EtherFiAdapter.__new__(EtherFiAdapter)
             adapter.chain = "ETHEREUM"
             adapter.venue = "ETHERFI"
             adapter.project_id = "test-project"
-            
+
             assert adapter.venue == "ETHERFI"
             assert adapter.chain == "ETHEREUM"
 
@@ -221,12 +219,12 @@ class TestEtherFiAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.lst_adapters import EtherFiAdapter
-            
+
             adapter = EtherFiAdapter.__new__(EtherFiAdapter)
             adapter.chain = "ETHEREUM"
             adapter.venue = "ETHERFI"
             adapter.project_id = "test-project"
-            
+
             result = adapter.fetch_lst_instruments()
             assert isinstance(result, dict)
             # EtherFi should have weETH instrument
@@ -243,12 +241,12 @@ class TestLidoAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.lst_adapters import LidoAdapter
-            
+
             adapter = LidoAdapter.__new__(LidoAdapter)
             adapter.chain = "ETHEREUM"
             adapter.venue = "LIDO"
             adapter.project_id = "test-project"
-            
+
             assert adapter.venue == "LIDO"
             assert adapter.chain == "ETHEREUM"
 
@@ -259,12 +257,12 @@ class TestLidoAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.lst_adapters import LidoAdapter
-            
+
             adapter = LidoAdapter.__new__(LidoAdapter)
             adapter.chain = "ETHEREUM"
             adapter.venue = "LIDO"
             adapter.project_id = "test-project"
-            
+
             result = adapter.fetch_lst_instruments()
             assert isinstance(result, dict)
             # Lido should have stETH/wstETH instruments
@@ -281,13 +279,13 @@ class TestMorphoAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.morpho_adapter import MorphoAdapter
-            
+
             adapter = MorphoAdapter.__new__(MorphoAdapter)
             adapter.chain = "ETHEREUM"
             adapter.venue = "MORPHO"
             adapter.project_id = "test-project"
             adapter.api_url = "https://blue-api.morpho.org/graphql"
-            
+
             assert adapter.venue == "MORPHO"
             assert adapter.chain == "ETHEREUM"
 
@@ -298,19 +296,19 @@ class TestMorphoAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.morpho_adapter import MorphoAdapter
-            
+
             adapter = MorphoAdapter.__new__(MorphoAdapter)
             adapter.chain = "ETHEREUM"
             adapter.venue = "MORPHO"
             adapter.project_id = "test-project"
             adapter.api_url = "https://blue-api.morpho.org/graphql"
-            
+
             with patch("requests.post") as mock_post:
                 mock_response = Mock()
                 mock_response.json.return_value = {"data": {"markets": {"items": []}}}
                 mock_response.raise_for_status = Mock()
                 mock_post.return_value = mock_response
-                
+
                 result = adapter.fetch_markets()
                 assert isinstance(result, dict)
                 assert len(result) == 0
@@ -326,12 +324,12 @@ class TestCurveRPCAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.curve_rpc_adapter import CurveRPCAdapter
-            
+
             adapter = CurveRPCAdapter.__new__(CurveRPCAdapter)
             adapter.chain = "ETHEREUM"
             adapter.venue = "CURVE-ETH"
             adapter.project_id = "test-project"
-            
+
             assert adapter.venue == "CURVE-ETH"
             assert adapter.chain == "ETHEREUM"
 
@@ -342,14 +340,14 @@ class TestCurveRPCAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.curve_rpc_adapter import CurveRPCAdapter
-            
+
             adapter = CurveRPCAdapter.__new__(CurveRPCAdapter)
             adapter.chain = "ETHEREUM"
             adapter.venue = "CURVE-ETH"
             adapter.project_id = "test-project"
             adapter.w3 = None  # Set w3 attribute to None
             adapter._fetch_pools_from_api = Mock(return_value=[])
-            
+
             result = adapter.fetch_pools()
             # Curve adapter returns empty list when w3 is None
             assert isinstance(result, (dict, list))
@@ -366,7 +364,7 @@ class TestUniswapV3Adapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.uniswapv3_adapter import UniswapV3Adapter
-            
+
             adapter = UniswapV3Adapter.__new__(UniswapV3Adapter)
             adapter.chain = "ETHEREUM"
             adapter.project_id = "test-project"
@@ -374,7 +372,7 @@ class TestUniswapV3Adapter:
             chain_suffix_map = {"ETHEREUM": "ETH", "ARBITRUM": "ARB", "BASE": "BASE"}
             venue_suffix = chain_suffix_map.get(adapter.chain, adapter.chain[:3])
             adapter.venue = f"UNISWAPV3-{venue_suffix}"
-            
+
             assert adapter.venue == "UNISWAPV3-ETH"
             assert adapter.chain == "ETHEREUM"
 
@@ -385,14 +383,14 @@ class TestUniswapV3Adapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.uniswapv3_adapter import UniswapV3Adapter
-            
+
             adapter = UniswapV3Adapter.__new__(UniswapV3Adapter)
             adapter.chain = "BASE"
             adapter.project_id = "test-project"
             chain_suffix_map = {"ETHEREUM": "ETH", "ARBITRUM": "ARB", "BASE": "BASE"}
             venue_suffix = chain_suffix_map.get(adapter.chain, adapter.chain[:3])
             adapter.venue = f"UNISWAPV3-{venue_suffix}"
-            
+
             assert adapter.venue == "UNISWAPV3-BASE"
 
     def test_fetch_pools_empty(self):
@@ -402,14 +400,14 @@ class TestUniswapV3Adapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.uniswapv3_adapter import UniswapV3Adapter
-            
+
             adapter = UniswapV3Adapter.__new__(UniswapV3Adapter)
             adapter.chain = "ETHEREUM"
             adapter.venue = "UNISWAPV3-ETH"
             adapter.project_id = "test-project"
             adapter.graph_client = Mock()
             adapter.graph_client.query_pools = Mock(return_value=[])
-            
+
             result = adapter.fetch_pools()
             assert isinstance(result, dict)
             assert len(result) == 0
@@ -425,7 +423,7 @@ class TestAsterAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
-            
+
             adapter = AsterAdapter.__new__(AsterAdapter)
             adapter.chain = "ASTER"
             adapter.venue = "ASTER"
@@ -433,7 +431,7 @@ class TestAsterAdapter:
             adapter.api_base_url = "https://api.aster.fi"
             adapter.mvp_only = True
             adapter.mvp_base_currencies = set()
-            
+
             assert adapter.venue == "ASTER"
 
     def test_fetch_perpetuals_empty(self):
@@ -443,7 +441,7 @@ class TestAsterAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
-            
+
             adapter = AsterAdapter.__new__(AsterAdapter)
             adapter.chain = "ASTER"
             adapter.venue = "ASTER"
@@ -451,13 +449,13 @@ class TestAsterAdapter:
             adapter.api_base_url = "https://api.aster.fi"
             adapter.mvp_only = False
             adapter.mvp_base_currencies = set()
-            
+
             with patch("requests.get") as mock_get:
                 mock_response = Mock()
                 mock_response.json.return_value = []
                 mock_response.raise_for_status = Mock()
                 mock_get.return_value = mock_response
-                
+
                 result = adapter.fetch_perpetuals()
                 assert isinstance(result, dict)
 
@@ -468,7 +466,7 @@ class TestAsterAdapter:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
-            
+
             adapter = AsterAdapter.__new__(AsterAdapter)
             adapter.chain = "ASTER"
             adapter.venue = "ASTER"
@@ -476,13 +474,13 @@ class TestAsterAdapter:
             adapter.api_base_url = "https://api.aster.fi"
             adapter.mvp_only = False
             adapter.mvp_base_currencies = set()
-            
+
             with patch("requests.get") as mock_get:
                 mock_response = Mock()
                 mock_response.json.return_value = []
                 mock_response.raise_for_status = Mock()
                 mock_get.return_value = mock_response
-                
+
                 result = adapter.fetch_spot_pairs()
                 assert isinstance(result, dict)
 
@@ -493,13 +491,13 @@ class TestBaseDefiAdapter:
     def test_init_with_chain(self):
         """Test base initialization with chain."""
         from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
-        
+
         # BaseDefiAdapter is abstract, but we can test that subclasses work
         with patch.object(BaseDefiAdapter, "__abstractmethods__", set()):
             adapter = BaseDefiAdapter.__new__(BaseDefiAdapter)
             adapter.chain = "ETHEREUM"
             adapter.project_id = "test-project"
-            
+
             assert adapter.chain == "ETHEREUM"
 
     def test_generate_instrument_key_pool(self):
@@ -509,7 +507,7 @@ class TestBaseDefiAdapter:
         instrument_type = "POOL"
         symbol = "ETH-USDC"
         chain = "ETHEREUM"
-        
+
         key = f"{venue}:{instrument_type}:{symbol}@{chain}"
         assert key == "UNISWAPV3-ETH:POOL:ETH-USDC@ETHEREUM"
 
@@ -518,7 +516,7 @@ class TestBaseDefiAdapter:
         venue = "HYPERLIQUID"
         instrument_type = "PERPETUAL"
         symbol = "BTC-USDC"
-        
+
         key = f"{venue}:{instrument_type}:{symbol}"
         assert key == "HYPERLIQUID:PERPETUAL:BTC-USDC"
 
@@ -528,7 +526,7 @@ class TestBaseDefiAdapter:
         instrument_type = "LST"
         symbol = "WEETH"
         chain = "ETHEREUM"
-        
+
         key = f"{venue}:{instrument_type}:{symbol}@{chain}"
         assert key == "ETHERFI:LST:WEETH@ETHEREUM"
 
@@ -543,14 +541,14 @@ class TestUniswapV3AdapterExtended:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.uniswapv3_adapter import UniswapV3Adapter
-            
+
             adapter = UniswapV3Adapter.__new__(UniswapV3Adapter)
             adapter.chain = "ARBITRUM"
             adapter.project_id = "test-project"
             chain_suffix_map = {"ETHEREUM": "ETH", "ARBITRUM": "ARB", "BASE": "BASE"}
             venue_suffix = chain_suffix_map.get(adapter.chain, adapter.chain[:3])
             adapter.venue = f"UNISWAPV3-{venue_suffix}"
-            
+
             assert adapter.venue == "UNISWAPV3-ARB"
 
     def test_fetch_pools_with_data(self):
@@ -560,7 +558,7 @@ class TestUniswapV3AdapterExtended:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.uniswapv3_adapter import UniswapV3Adapter
-            
+
             adapter = UniswapV3Adapter.__new__(UniswapV3Adapter)
             adapter.chain = "ETHEREUM"
             adapter.venue = "UNISWAPV3-ETH"
@@ -568,7 +566,7 @@ class TestUniswapV3AdapterExtended:
             adapter.mvp_only = False
             adapter.mvp_base_currencies = set()
             adapter.graph_client = Mock()
-            
+
             mock_pool = {
                 "id": "0x123",
                 "token0": {"symbol": "ETH", "id": "0xeth"},
@@ -577,7 +575,7 @@ class TestUniswapV3AdapterExtended:
                 "totalValueLockedUSD": "1000000",
             }
             adapter.graph_client.query_pools = Mock(return_value=[mock_pool])
-            
+
             result = adapter.fetch_pools()
             assert isinstance(result, dict)
 
@@ -592,7 +590,7 @@ class TestHyperliquidAdapterExtended:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
-            
+
             adapter = HyperliquidAdapter.__new__(HyperliquidAdapter)
             adapter.chain = "HYPERLIQUID"
             adapter.venue = "HYPERLIQUID"
@@ -600,13 +598,13 @@ class TestHyperliquidAdapterExtended:
             adapter.mvp_only = False
             adapter.mvp_base_currencies = set()
             adapter.project_id = "test-project"
-            
+
             with patch("requests.post") as mock_post:
                 mock_response = Mock()
                 mock_response.json.return_value = []
                 mock_response.raise_for_status = Mock()
                 mock_post.return_value = mock_response
-                
+
                 result = adapter.fetch_spot_pairs()
                 assert isinstance(result, dict)
 
@@ -621,7 +619,7 @@ class TestAsterAdapterExtended:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
-            
+
             adapter = AsterAdapter.__new__(AsterAdapter)
             adapter.chain = "ASTER"
             adapter.venue = "ASTER"
@@ -629,14 +627,14 @@ class TestAsterAdapterExtended:
             adapter.api_base_url = "https://api.aster.fi"
             adapter.mvp_only = False
             adapter.mvp_base_currencies = set()
-            
+
             with patch("requests.get") as mock_get:
                 mock_data = [{"symbol": "BTC-USDC", "baseAsset": "BTC", "quoteAsset": "USDC"}]
                 mock_response = Mock()
                 mock_response.json.return_value = mock_data
                 mock_response.raise_for_status = Mock()
                 mock_get.return_value = mock_response
-                
+
                 result = adapter.fetch_perpetuals()
                 assert isinstance(result, dict)
 
@@ -647,7 +645,7 @@ class TestAsterAdapterExtended:
             return_value=None,
         ):
             from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
-            
+
             adapter = AsterAdapter.__new__(AsterAdapter)
             adapter.chain = "ASTER"
             adapter.venue = "ASTER"
@@ -655,14 +653,14 @@ class TestAsterAdapterExtended:
             adapter.api_base_url = "https://api.aster.fi"
             adapter.mvp_only = False
             adapter.mvp_base_currencies = set()
-            
+
             with patch("requests.get") as mock_get:
                 mock_data = [{"symbol": "ETH-USDC", "baseAsset": "ETH", "quoteAsset": "USDC"}]
                 mock_response = Mock()
                 mock_response.json.return_value = mock_data
                 mock_response.raise_for_status = Mock()
                 mock_get.return_value = mock_response
-                
+
                 result = adapter.fetch_spot_pairs()
                 assert isinstance(result, dict)
 

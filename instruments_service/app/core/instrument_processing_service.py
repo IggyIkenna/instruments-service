@@ -50,7 +50,6 @@ from instruments_service.app.venues.defi import (
     EtherFiAdapter,
     LidoAdapter,
     MorphoAdapter,
-    CurveRPCAdapter,
     EthenaAdapter,
 )
 
@@ -536,7 +535,7 @@ class InstrumentProcessingService:
     def _get_tardis_adapter(self):
         """
         Lazy-load Tardis adapter only when needed for CeFi instruments.
-        
+
         Note: Warmup is handled automatically by TardisBaseClient in unified-cloud-services
         when the session is first created.
 
@@ -558,7 +557,7 @@ class InstrumentProcessingService:
                 api_key=self.api_key, project_id=self._tardis_project_id
             )
             # Note: TardisBaseClient auto-warms up on first request
-                
+
         return self.tardis_adapter
 
     async def fetch_exchange_instruments(
@@ -1334,7 +1333,7 @@ class InstrumentProcessingService:
 
                     # Filter USDT as base (should be quote only)
                     if s.upper().startswith("USDT") and len(s) > 4:
-                        quote_part = s[4:].upper()
+                        s[4:].upper()
                         # Common fiat/regional suffixes that would make USDT+{suffix}
                         usdt_suffixes = [
                             "TRY",
@@ -2312,12 +2311,6 @@ class InstrumentProcessingService:
             elif protocol.lower() == "curve":
                 logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
                 return {}
-                adapter = CurveAdapter(chain=chain, api_key=graph_api_key)
-                raw_instruments = adapter.fetch_pools(
-                    base_currency_list=base_currency_list,
-                    quote_currency_list=quote_currency_list,
-                    **kwargs,
-                )
 
             elif protocol.lower() == "ethena":
                 adapter = EthenaAdapter(chain=chain)

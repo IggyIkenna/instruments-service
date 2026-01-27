@@ -9,7 +9,7 @@ import csv
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
-from typing import Dict, List, Any, Optional
+from typing import Optional
 
 # Add instruments_service to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -40,8 +40,6 @@ def find_earliest_available_data_hyperliquid(
     end_date = datetime.now()
 
     # Binary search for earliest available data
-    left = 0
-    right = max_days_back
     earliest_found = None
 
     logger.info(f"🔍 Searching for earliest data for {coin} (up to {max_days_back} days back)...")

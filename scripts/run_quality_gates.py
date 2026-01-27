@@ -75,7 +75,7 @@ echo "password={token}"
                 "git",
                 "config",
                 "--global",
-                f"credential.https://github.com.helper",
+                "credential.https://github.com.helper",
                 f"!{helper_path}",
             ],
             capture_output=True,
@@ -123,7 +123,7 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
     result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
 
     if result.returncode != 0:
-        print(f"❌ Failed to install instruments-service:")
+        print("❌ Failed to install instruments-service:")
         print(result.stderr)
         return False
 
@@ -161,7 +161,7 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
     result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
 
     if result.returncode != 0:
-        print(f"⚠️  Warning: Some dependencies failed to install:")
+        print("⚠️  Warning: Some dependencies failed to install:")
         print(result.stderr)
         print("Continuing anyway...")
 

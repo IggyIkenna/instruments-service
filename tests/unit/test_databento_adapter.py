@@ -86,7 +86,7 @@ class TestDatabentoAdapter:
             ):
                 # Re-import to pick up the patched value
                 from instruments_service.app.venues.databento import databento_adapter
-                
+
                 # The base client should raise ImportError
                 with pytest.raises(ImportError):
                     databento_adapter.DatabentoAdapter()
@@ -97,7 +97,6 @@ class TestDatabentoAdapter:
     def test_clear_cache(self):
         """Test clearing module-level cache."""
         from instruments_service.app.venues.databento import databento_adapter
-        from unified_cloud_services.clients import databento_base_client
 
         # Set some cache values in the unified config cache (local to adapter)
         databento_adapter._UNIFIED_CONFIG_CACHE = Mock()
@@ -314,9 +313,9 @@ class TestDatabentoAdapter:
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
                 target_date = datetime(2024, 11, 11, 12, 0, 0, tzinfo=timezone.utc)
-                
+
                 vix_def = adapter.create_vix_instrument_definition(target_date)
-                
+
                 assert vix_def is not None
                 assert vix_def["instrument_key"] == "CBOE:INDEX:VIX-USD"
                 assert vix_def["venue"] == "CBOE"
@@ -348,10 +347,10 @@ class TestDatabentoAdapter:
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
                 target_date = datetime(2024, 11, 11, 12, 0, 0, tzinfo=timezone.utc)
-                
+
                 # Note: method signature is (ticker, target_date)
                 etf_def = adapter.create_bitcoin_etf_instrument_definition("IBIT", target_date)
-                
+
                 assert etf_def is not None
                 assert etf_def["instrument_key"] == "NASDAQ:ETF:IBIT-USD"
                 assert etf_def["venue"] == "NASDAQ"
@@ -384,10 +383,10 @@ class TestDatabentoAdapter:
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
                 target_date = datetime(2024, 11, 11, 12, 0, 0, tzinfo=timezone.utc)
-                
+
                 # GBTC is not in the supported ETF list
                 etf_def = adapter.create_bitcoin_etf_instrument_definition("GBTC", target_date)
-                
+
                 # Should return None for unsupported ticker
                 assert etf_def is None
         finally:
@@ -415,7 +414,7 @@ class TestDatabentoAdapter:
                 ),
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
-                
+
                 # Test a known holiday (Christmas 2024)
                 is_holiday, name = adapter.is_us_market_holiday(date(2024, 12, 25))
                 assert is_holiday
@@ -450,11 +449,11 @@ class TestDatabentoAdapter:
                 ),
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
-                
+
                 # Saturday Nov 16, 2024 should roll back to Friday Nov 15
                 saturday = datetime(2024, 11, 16, 12, 0, 0, tzinfo=timezone.utc)
                 query_date = adapter._get_query_date_for_databento(saturday)
-                
+
                 # Should be Friday
                 assert query_date.weekday() == 4  # Friday
         finally:
@@ -482,9 +481,9 @@ class TestDatabentoAdapter:
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
                 target_date = datetime(2024, 11, 11, 12, 0, 0, tzinfo=timezone.utc)
-                
+
                 hours = adapter._get_exchange_trading_hours("CME", "FUTURE", target_date)
-                
+
                 assert hours is not None
                 assert "session" in hours
                 assert hours["session"] == "regular"

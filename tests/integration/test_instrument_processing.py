@@ -6,7 +6,6 @@ with test bucket and real credentials.
 """
 
 import pytest
-import asyncio
 from datetime import datetime, timezone
 from instruments_service.app.core.instrument_processing_service import (
     InstrumentProcessingService,
@@ -88,7 +87,7 @@ class TestInstrumentProcessingIntegration:
         }
 
         service = InstrumentProcessingService(config)
-        venue_mapping = VenueMapping()
+        VenueMapping()
 
         # Test with a subset of exchanges for faster testing
         test_exchanges = ["binance-futures", "deribit"]

@@ -22,14 +22,14 @@ def _load_env_early():
     tests_dir = Path(__file__).parent
     project_root = tests_dir.parent
     env_path = project_root / ".env"
-    
+
     if env_path.exists():
         try:
             from dotenv import load_dotenv
             # Use override=True to ensure .env values take precedence over shell environment
             # This prevents stale/invalid shell environment variables from breaking tests
             load_dotenv(dotenv_path=env_path, override=True)
-            
+
             # Resolve relative GOOGLE_APPLICATION_CREDENTIALS path
             creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
             if creds_path and not Path(creds_path).is_absolute():
@@ -55,8 +55,6 @@ import pytest
 import json
 from typing import Optional
 
-from google.cloud import storage
-from google.oauth2 import service_account
 from google.cloud import storage
 from google.oauth2 import service_account
 from unified_cloud_services import CloudTarget, get_secret_with_fallback
@@ -281,7 +279,7 @@ def setup_test_environment(gcp_credentials, test_bucket_name):
     """Automatically setup test environment for all tests."""
     # Ensure test bucket is used (not prod)
     os.environ["INSTRUMENTS_GCS_BUCKET_TEST"] = test_bucket_name
-    
+
     # Set category-specific test buckets if not already set
     # These are needed by get_bucket_for_category when test_mode=True
     # Note: get_bucket_for_category uses getattr(unified_config, env_var) which requires
@@ -293,19 +291,19 @@ def setup_test_environment(gcp_credentials, test_bucket_name):
         os.environ["INSTRUMENTS_GCS_BUCKET_TRADFI_TEST"] = "instruments-store-test-tradfi-central-element-323112"
     if "INSTRUMENTS_GCS_BUCKET_DEFI_TEST" not in os.environ:
         os.environ["INSTRUMENTS_GCS_BUCKET_DEFI_TEST"] = "instruments-store-test-defi-central-element-323112"
-    
+
     # Enable CSV sampling for tests if not explicitly disabled
     if "ENABLE_CSV_SAMPLING" not in os.environ:
         os.environ["ENABLE_CSV_SAMPLING"] = "true"
-    
+
     # Patch unified_config in unified_cloud_services to use instruments_config
     # This ensures that get_bucket_for_category() uses the correct bucket configuration
     # from instruments-service (which has the category-specific properties)
     # instead of the default BaseServiceConfig
     from unittest.mock import patch
-    
+
     with patch("unified_cloud_services.core.market_category.unified_config", instruments_config):
         yield
-    
+
     # Cleanup if needed
     pass

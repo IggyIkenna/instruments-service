@@ -21,7 +21,6 @@ Validation Flow:
 """
 
 from typing import Dict, List, Optional
-from datetime import datetime
 
 # Parquet Schema Definition
 # Maps to pandas DataFrame columns when stored to GCS

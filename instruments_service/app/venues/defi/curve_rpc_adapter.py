@@ -65,7 +65,7 @@ class CurveRPCAdapter(BaseDefiAdapter):
             try:
                 self.w3 = Web3(Web3.HTTPProvider(self.rpc_url))
                 if self.w3.is_connected():
-                    logger.info(f"✅ Connected to Ethereum RPC for Curve queries")
+                    logger.info("✅ Connected to Ethereum RPC for Curve queries")
                 else:
                     logger.warning("⚠️ Failed to connect to Ethereum RPC")
                     self.w3 = None
@@ -105,7 +105,7 @@ class CurveRPCAdapter(BaseDefiAdapter):
     async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
         """
         Get instrument metadata for Curve.
-        
+
         Returns:
             List of instrument definition dictionaries
         """

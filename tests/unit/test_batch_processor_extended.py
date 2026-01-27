@@ -2,8 +2,6 @@
 Extended unit tests for batch processor to increase coverage to 80%+.
 """
 
-import pytest
-from datetime import datetime, timezone, timedelta
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 
 

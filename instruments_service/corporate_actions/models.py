@@ -30,7 +30,7 @@ class DividendType(str, Enum):
 class DividendRecord(BaseModel):
     """
     Dividend record for an equity instrument.
-    
+
     Used for:
     - Price adjustment (adjusted close calculations)
     - Dividend reinvestment modeling
@@ -46,7 +46,7 @@ class DividendRecord(BaseModel):
     currency: str = Field(default="USD", description="Currency of dividend payment")
     source: str = Field(default="yfinance", description="Data source")
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="When data was fetched")
-    
+
     # For canonical instrument key matching
     instrument_key: Optional[str] = Field(default=None, description="Canonical instrument key (e.g., NYSE:EQUITY:AAPL)")
 
@@ -87,12 +87,12 @@ class DividendRecord(BaseModel):
 class StockSplitRecord(BaseModel):
     """
     Stock split record for an equity instrument.
-    
+
     Used for:
     - Historical price adjustment (split-adjusted prices)
     - Volume adjustment
     - Share count calculations
-    
+
     Split ratios:
     - Forward split (e.g., 4:1): ratio = 4.0 (each share becomes 4)
     - Reverse split (e.g., 1:10): ratio = 0.1 (10 shares become 1)
@@ -104,7 +104,7 @@ class StockSplitRecord(BaseModel):
     split_to: int = Field(default=1, ge=1, description="New share count (e.g., 4 in 4:1 split)")
     source: str = Field(default="yfinance", description="Data source")
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="When data was fetched")
-    
+
     # For canonical instrument key matching
     instrument_key: Optional[str] = Field(default=None, description="Canonical instrument key")
 
@@ -161,7 +161,7 @@ class StockSplitRecord(BaseModel):
 class EarningsRecord(BaseModel):
     """
     Earnings announcement record for an equity instrument.
-    
+
     Used for:
     - Volatility modeling (earnings volatility premium)
     - Event-driven strategies
@@ -179,7 +179,7 @@ class EarningsRecord(BaseModel):
     estimated_revenue: Optional[float] = Field(default=None, description="Estimated revenue in USD")
     source: str = Field(default="yfinance", description="Data source")
     fetched_at: datetime = Field(default_factory=datetime.utcnow, description="When data was fetched")
-    
+
     # For canonical instrument key matching
     instrument_key: Optional[str] = Field(default=None, description="Canonical instrument key")
 
@@ -225,7 +225,7 @@ class EarningsRecord(BaseModel):
 class CorporateActionsBundle(BaseModel):
     """
     Bundle of all corporate actions for a ticker.
-    
+
     Used for batch fetching and storage.
     """
     ticker: str = Field(..., description="Stock ticker symbol")

@@ -2,8 +2,7 @@
 Unit tests for AaveV3Adapter.
 """
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock, AsyncMock
+from unittest.mock import Mock, patch
 from datetime import datetime, timezone
 from instruments_service.app.venues.defi.aave_adapter import AaveV3Adapter
 
@@ -263,7 +262,7 @@ class TestAaveV3Adapter:
             adapter.project_id = "test-project"
             chain_to_venue = {"ETHEREUM": "AAVE_V3_ETH", "ARBITRUM": "AAVE_V3_ARB"}
             adapter.venue = chain_to_venue.get(adapter.chain, f"AAVE_V3_{adapter.chain}")
-            
+
             assert adapter.venue == "AAVE_V3_ARB"
 
     def test_static_risk_params_emode_has_keys(self):
@@ -287,10 +286,10 @@ class TestAaveV3Adapter:
             adapter.chain = "ETHEREUM"
             adapter.project_id = "test-project"
             adapter.venue = "AAVE_V3_ETH"
-            
+
             reserves = adapter._get_fallback_reserves()
             symbols = [r["asset"]["symbol"] for r in reserves]
-            
+
             # Should include major tokens
             assert "USDC" in symbols or "WETH" in symbols or len(symbols) > 0
 
@@ -305,7 +304,7 @@ class TestAaveV3Adapter:
             adapter.project_id = "test-project"
             chain_to_venue = {"ETHEREUM": "AAVE_V3_ETH", "ARBITRUM": "AAVE_V3_ARB", "BASE": "AAVE_V3_BASE"}
             adapter.venue = chain_to_venue.get(adapter.chain, f"AAVE_V3_{adapter.chain}")
-            
+
             assert adapter.venue == "AAVE_V3_BASE"
 
     def test_reserve_factors_exist(self):

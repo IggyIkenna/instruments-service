@@ -36,12 +36,12 @@ class EthenaAdapter(BaseDefiAdapter):
     # Contract addresses on Ethereum mainnet
     SUSDE_ADDRESS = "0x9d39a5de30e57443bff2a8307a4256c8797a3497"  # sUSDe token
     USDE_ADDRESS = "0x4c9edd5852cd905f086c759e8383e09bff1e68b3"   # USDe token
-    
+
     # Ethena mainnet launch date (February 2024)
     ETHENA_LAUNCH_DATE = datetime(2024, 2, 16)
 
     def __init__(
-        self, 
+        self,
         chain: str = "ETHEREUM",
         api_key: Optional[str] = None,
         project_id: Optional[str] = None,
@@ -61,7 +61,7 @@ class EthenaAdapter(BaseDefiAdapter):
     async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
         """
         Get instrument metadata for Ethena.
-        
+
         Returns:
             List of instrument definition dictionaries
         """
@@ -69,7 +69,7 @@ class EthenaAdapter(BaseDefiAdapter):
         return list(instruments.values())
 
     def fetch_yield_bearing_instruments(
-        self, 
+        self,
         target_date: Optional[datetime] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
@@ -77,7 +77,7 @@ class EthenaAdapter(BaseDefiAdapter):
 
         Args:
             target_date: Target date for instrument availability check
-            
+
         Returns:
             Dictionary mapping instrument_key to instrument definition
         """
@@ -88,7 +88,7 @@ class EthenaAdapter(BaseDefiAdapter):
                 f"(Ethena mainnet launched February 2024). Returning empty instruments - this is expected."
             )
             return {}
-        
+
         instruments = {}
 
         # sUSDe - Staked USDe (yield-bearing)
