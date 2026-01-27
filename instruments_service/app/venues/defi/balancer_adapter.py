@@ -67,8 +67,8 @@ class BalancerAdapter(BaseDefiAdapter):
         # Use TheGraphClient for GraphQL queries (works with any GraphQL endpoint)
         # Pass secret_name from config so it uses the correct Secret Manager secret
         self.graph_client = TheGraphClient(
-            subgraph_url=subgraph_url, 
-            api_key=None, 
+            subgraph_url=subgraph_url,
+            api_key=None,
             project_id=project_id,
             secret_name=instruments_config.graph_secret_name
         )  # Balancer API doesn't need API key, but we still want correct secret name for consistency
@@ -129,7 +129,7 @@ class BalancerAdapter(BaseDefiAdapter):
                             continue  # No valid quote currency in MVP list, skip
 
                         # Use first valid quote (Balancer pools can have multiple tokens)
-                        quote_symbol = quote_candidates[0]
+                        quote_candidates[0]
                     else:
                         # No base filter - require at least 2 tokens in MVP list (for a valid pair)
                         tokens_in_mvp = sum(1 for sym in token_symbols if sym in allowed_quotes)

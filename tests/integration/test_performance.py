@@ -100,8 +100,8 @@ class TestPerformance:
     @pytest.mark.asyncio
     async def test_defi_performance(self):
         """Test DEFI instrument generation performance (target: <180s).
-        
-        Note: DEFI is slower due to multiple external API calls (The Graph, AAVE, 
+
+        Note: DEFI is slower due to multiple external API calls (The Graph, AAVE,
         HYPERLIQUID RPC, Uniswap subgraph, etc.) that may timeout or require fallbacks.
         The 180s target accounts for cold-start scenarios with API fallbacks.
         """
@@ -140,7 +140,7 @@ class TestPerformance:
     @pytest.mark.asyncio
     async def test_full_pipeline_performance(self):
         """Test full pipeline (CEFI + TRADFI + DEFI) performance (target: <200s).
-        
+
         Note: Full pipeline includes DEFI which has external API dependencies.
         The 200s target accounts for cold-start scenarios where:
         - CEFI: ~35s (CCXT calls)

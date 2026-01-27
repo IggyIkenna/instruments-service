@@ -2,7 +2,6 @@
 Unit tests for Parquet schema definitions.
 """
 
-import pytest
 from instruments_service.schemas.parquet import (
     get_required_columns,
     get_optional_columns,

@@ -153,7 +153,7 @@ class TestCloudDataProvider:
     def test_check_instruments_exist_true(self, provider, mock_cloud_service):
         """Test checking if instruments exist when they do."""
         date = datetime(2024, 1, 1, tzinfo=timezone.utc)
-        
+
         # Mock get_instruments_from_category since check_instruments_exist creates
         # new cloud services for each category, bypassing the fixture mock
         with patch.object(

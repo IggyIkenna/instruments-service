@@ -50,7 +50,7 @@ class AsterAdapter(BaseDefiAdapter):
     Generates instruments in format:
     ASTER:PERPETUAL:BTC-USDT
     """
-    
+
     # Aster DEX launch (approximately Q4 2024)
     ASTER_LAUNCH_DATE = datetime(2024, 10, 1)
 
@@ -94,7 +94,7 @@ class AsterAdapter(BaseDefiAdapter):
     async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
         """
         Get instrument metadata for Aster.
-        
+
         Returns:
             List of instrument definition dictionaries
         """
@@ -103,7 +103,7 @@ class AsterAdapter(BaseDefiAdapter):
         return list(instruments.values())
 
     def fetch_perpetuals(
-        self, 
+        self,
         test_data_availability: bool = False,
         target_date: Optional[datetime] = None
     ) -> Dict[str, Dict[str, Any]]:
@@ -124,12 +124,12 @@ class AsterAdapter(BaseDefiAdapter):
                 f"(Aster launched Q4 2024). Returning empty instruments - this is expected."
             )
             return {}
-        
+
         try:
             # Check cache first (instrument lists rarely change)
             cache_key = "aster_futures_exchange_info"
             cached_data = _get_cached_response(cache_key)
-            
+
             if cached_data is not None:
                 logger.info("📋 Using cached Aster perpetual exchange info")
                 exchange_info = cached_data
@@ -145,7 +145,7 @@ class AsterAdapter(BaseDefiAdapter):
 
             for symbol_info in symbols:
                 try:
-                    symbol = symbol_info.get("symbol", "")
+                    symbol_info.get("symbol", "")
                     status = symbol_info.get("status", "")
                     contract_type = symbol_info.get("contractType", "")
 
@@ -178,7 +178,7 @@ class AsterAdapter(BaseDefiAdapter):
             return {}
 
     def fetch_spot_pairs(
-        self, 
+        self,
         test_data_availability: bool = False,
         target_date: Optional[datetime] = None
     ) -> Dict[str, Dict[str, Any]]:
@@ -202,12 +202,12 @@ class AsterAdapter(BaseDefiAdapter):
                 f"(Aster launched Q4 2024). Returning empty instruments - this is expected."
             )
             return {}
-        
+
         try:
             # Check cache first
             cache_key = "aster_spot_exchange_info"
             cached_data = _get_cached_response(cache_key)
-            
+
             if cached_data is not None:
                 logger.debug("📋 Using cached Aster spot exchange info")
                 exchange_info = cached_data
@@ -224,7 +224,7 @@ class AsterAdapter(BaseDefiAdapter):
 
             for symbol_info in symbols:
                 try:
-                    symbol = symbol_info.get("symbol", "")
+                    symbol_info.get("symbol", "")
                     status = symbol_info.get("status", "")
 
                     # Only include SPOT symbols that are TRADING
