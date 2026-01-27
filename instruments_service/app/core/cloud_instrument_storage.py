@@ -204,8 +204,8 @@ class CloudInstrumentStorage:
                             instruments_df[ts_col] = pd.to_datetime(
                                 instruments_df[ts_col]
                             ).dt.tz_localize(None)
-                        except:
-                            pass
+                        except (ValueError, TypeError, AttributeError) as e:
+                            logger.debug(f"Could not parse timestamp column {ts_col}: {e}")
 
             # Determine date string for GCS path
             if date:
@@ -218,7 +218,8 @@ class CloudInstrumentStorage:
                             instruments_df["available_from_datetime"].iloc[0]
                         )
                         date_str = first_date.strftime("%Y-%m-%d")
-                    except:
+                    except (ValueError, TypeError, IndexError) as e:
+                        logger.debug(f"Could not extract date from available_from_datetime: {e}")
                         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
                 else:
                     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
