@@ -25,6 +25,7 @@ dependencies = [
     # Core data processing (aligned with unified-cloud-services)
     "numpy>=2.1.0,<2.4.0",
     "pandas>=2.2.3,<3.0.0",
+    "polars>=1.0.0",  # Required by unified-cloud-services feature_data_loader
     # Validation
     "pydantic>=2.12.5",
     "pydantic-settings>=2.12.0",
