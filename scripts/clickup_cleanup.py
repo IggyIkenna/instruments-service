@@ -267,7 +267,7 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
             failed_count += 1
             print(f"   ⚠️  Error deleting {task_type} '{task['name']}': {e}")
 
-    print(f"\n✅ Cleanup complete!")
+    print("\n✅ Cleanup complete!")
     print(f"   - Deleted: {deleted_count} task(s)")
     if failed_count > 0:
         print(f"   - Failed: {failed_count} task(s)")
@@ -319,9 +319,9 @@ def main():
     if not api_token:
         print("❌ API token not found. Set --api-token or CLICKUP_API_TOKEN env var")
         print(f"   Checked: Secret Manager ({instruments_config.clickup_secret_name})")
-        print(f"   Checked: Environment variables via settings.py")
-        print(f"\n💡 To store API key in Secret Manager, run:")
-        print(f"   cd ../unified-cloud-services && python scripts/store_secret.py --secret-name clickup-api-key --secret-value YOUR_TOKEN")
+        print("   Checked: Environment variables via settings.py")
+        print("\n💡 To store API key in Secret Manager, run:")
+        print("   cd ../unified-cloud-services && python scripts/store_secret.py --secret-name clickup-api-key --secret-value YOUR_TOKEN")
         return 1
 
     # Get list ID from args or instruments_config

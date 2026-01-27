@@ -23,12 +23,12 @@ class EtherFiAdapter(BaseDefiAdapter):
     Generates instruments in format:
     ETHERFI:LST:WEETH@ETHEREUM
     """
-    
+
     # EtherFi mainnet launch (weETH launched ~January 2024)
     ETHERFI_LAUNCH_DATE = datetime(2024, 1, 1)
 
     def __init__(
-        self, 
+        self,
         chain: str = "ETHEREUM",
         api_key: Optional[str] = None,
         project_id: Optional[str] = None,
@@ -48,7 +48,7 @@ class EtherFiAdapter(BaseDefiAdapter):
     async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
         """
         Get instrument metadata for EtherFi.
-        
+
         Returns:
             List of instrument definition dictionaries
         """
@@ -56,7 +56,7 @@ class EtherFiAdapter(BaseDefiAdapter):
         return list(instruments.values())
 
     def fetch_lst_instruments(
-        self, 
+        self,
         target_date: Optional[datetime] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
@@ -64,7 +64,7 @@ class EtherFiAdapter(BaseDefiAdapter):
 
         Args:
             target_date: Target date for instrument availability check
-            
+
         Returns:
             Dictionary mapping instrument_key to instrument definition
         """
@@ -75,7 +75,7 @@ class EtherFiAdapter(BaseDefiAdapter):
                 f"(EtherFi weETH launched January 2024). Returning empty instruments - this is expected."
             )
             return {}
-        
+
         instruments = {}
 
         # Known EtherFi LST tokens
@@ -159,12 +159,12 @@ class LidoAdapter(BaseDefiAdapter):
     LIDO:LST:STETH@ETHEREUM
     LIDO:LST:WSTETH@ETHEREUM
     """
-    
+
     # Lido mainnet launch (December 2020)
     LIDO_LAUNCH_DATE = datetime(2020, 12, 17)
 
     def __init__(
-        self, 
+        self,
         chain: str = "ETHEREUM",
         api_key: Optional[str] = None,
         project_id: Optional[str] = None,
@@ -184,7 +184,7 @@ class LidoAdapter(BaseDefiAdapter):
     async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
         """
         Get instrument metadata for Lido.
-        
+
         Returns:
             List of instrument definition dictionaries
         """
@@ -192,7 +192,7 @@ class LidoAdapter(BaseDefiAdapter):
         return list(instruments.values())
 
     def fetch_lst_instruments(
-        self, 
+        self,
         target_date: Optional[datetime] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
@@ -200,7 +200,7 @@ class LidoAdapter(BaseDefiAdapter):
 
         Args:
             target_date: Target date for instrument availability check
-            
+
         Returns:
             Dictionary mapping instrument_key to instrument definition
         """
@@ -211,7 +211,7 @@ class LidoAdapter(BaseDefiAdapter):
                 f"(Lido launched December 2020). Returning empty instruments - this is expected."
             )
             return {}
-        
+
         instruments = {}
 
         # Known Lido LST tokens

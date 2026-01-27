@@ -101,8 +101,8 @@ class UniswapV3Adapter(BaseDefiAdapter):
 
         # Pass secret_name from config so it uses the correct Secret Manager secret
         self.graph_client = TheGraphClient(
-            subgraph_url=subgraph_url, 
-            api_key=self.api_key, 
+            subgraph_url=subgraph_url,
+            api_key=self.api_key,
             project_id=self.project_id,
             secret_name=instruments_config.graph_secret_name
         )
@@ -273,8 +273,8 @@ class UniswapV3Adapter(BaseDefiAdapter):
         token1_symbol = token1.get("symbol", "")
         token0_address = token0.get("id", "")
         token1_address = token1.get("id", "")
-        token0_decimals = token0.get("decimals", 18)
-        token1_decimals = token1.get("decimals", 18)
+        token0.get("decimals", 18)
+        token1.get("decimals", 18)
 
         # Determine base and quote (use ETH as base if present)
         if "ETH" in token0_symbol.upper() or "WETH" in token0_symbol.upper():
@@ -282,23 +282,17 @@ class UniswapV3Adapter(BaseDefiAdapter):
             quote_symbol = token1_symbol
             base_address = token0_address
             quote_address = token1_address
-            base_decimals = token0_decimals
-            quote_decimals = token1_decimals
         elif "ETH" in token1_symbol.upper() or "WETH" in token1_symbol.upper():
             base_symbol = token1_symbol
             quote_symbol = token0_symbol
             base_address = token1_address
             quote_address = token0_address
-            base_decimals = token1_decimals
-            quote_decimals = token0_decimals
         else:
             # Default: token0 as base, token1 as quote
             base_symbol = token0_symbol
             quote_symbol = token1_symbol
             base_address = token0_address
             quote_address = token1_address
-            base_decimals = token0_decimals
-            quote_decimals = token1_decimals
 
         # Build symbol with fee tier
         symbol = f"{base_symbol}-{quote_symbol}:{fee_tier}"

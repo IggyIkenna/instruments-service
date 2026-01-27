@@ -12,23 +12,23 @@ from pathlib import Path
 def pytest_load_initial_conftests(early_config, parser, args):
     """
     Pytest hook that runs VERY early, before any conftest.py files are loaded.
-    
+
     This ensures .env is loaded before test modules are imported, so skipif
     decorators can access environment variables.
     """
     try:
         from dotenv import load_dotenv
-        
+
         # Find project root (instruments-service directory)
         # This file should be in the project root
         project_root = Path(__file__).parent
         env_path = project_root / ".env"
-        
+
         if env_path.exists():
             # Use override=True to ensure .env values take precedence
             # This prevents stale shell environment from breaking tests
             load_dotenv(dotenv_path=env_path, override=True)
-            
+
             # Resolve relative paths in .env file to absolute paths
             creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
             if creds_path:
@@ -49,15 +49,15 @@ def pytest_load_initial_conftests(early_config, parser, args):
                             print(f"   Checked: {parent_creds}")
                 elif not creds_path_obj.exists():
                     print(f"⚠️  Credentials file not found at absolute path: {creds_path}")
-            
+
             # Ensure GCP_PROJECT_ID is set (required for many tests)
             if not os.getenv("GCP_PROJECT_ID"):
                 os.environ["GCP_PROJECT_ID"] = "central-element-323112"
-            
+
             # Ensure ENVIRONMENT is set for test detection
             if not os.getenv("ENVIRONMENT"):
                 os.environ["ENVIRONMENT"] = "development"
-            
+
             # Debug output for troubleshooting
             final_creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
             creds_exists = Path(final_creds).exists() if final_creds else False

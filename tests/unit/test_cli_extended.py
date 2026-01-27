@@ -6,7 +6,6 @@ Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 """
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
 import sys
 from instruments_service.cli.parser import parse_arguments, validate_arguments
 from instruments_service.cli.base_handler import ModeHandler
@@ -91,7 +90,7 @@ class TestModeHandlerExtended:
         # Test that it requires config
         with pytest.raises(TypeError):
             # Abstract class can't be instantiated
-            handler = ModeHandler(config)
+            ModeHandler(config)
 
     def test_mode_handler_validation(self):
         """Test ModeHandler config validation."""

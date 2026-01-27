@@ -40,15 +40,15 @@ class TestBucketConfiguration:
         """Test that InstrumentsServiceConfig has category bucket attributes."""
         with patch.dict(os.environ, self.env_vars):
             config = InstrumentsServiceConfig()
-            
+
             assert hasattr(config, "gcs_bucket_cefi")
             assert hasattr(config, "gcs_bucket_tradfi")
             assert hasattr(config, "gcs_bucket_defi")
-            
+
             assert config.gcs_bucket_cefi == "test-bucket-cefi"
             assert config.gcs_bucket_tradfi == "test-bucket-tradfi"
             assert config.gcs_bucket_defi == "test-bucket-defi"
-            
+
             # Check test buckets
             assert hasattr(config, "gcs_bucket_cefi_test")
             assert config.gcs_bucket_cefi_test == "test-bucket-cefi-test"
@@ -57,7 +57,7 @@ class TestBucketConfiguration:
         """Test that get_bucket_for_category resolves correctly."""
         # We need to patch get_config in unified_cloud_services to return our test values
         # get_config converts env vars to snake_case and uses getattr on unified_config
-        
+
         def mock_get_config(key, default=""):
             """Mock get_config that returns test bucket values."""
             key_upper = key.upper()
@@ -68,14 +68,14 @@ class TestBucketConfiguration:
                 "INSTRUMENTS_GCS_BUCKET": "test-bucket",
             }
             return config_map.get(key_upper, default)
-        
+
         with patch("unified_cloud_services.core.market_category.get_config", mock_get_config):
             bucket_cefi = get_bucket_for_category("CEFI", test_mode=False)
             assert bucket_cefi == "test-bucket-cefi"
-            
+
             bucket_tradfi = get_bucket_for_category("TRADFI", test_mode=False)
             assert bucket_tradfi == "test-bucket-tradfi"
-            
+
             bucket_defi = get_bucket_for_category("DEFI", test_mode=False)
             assert bucket_defi == "test-bucket-defi"
 
@@ -89,13 +89,13 @@ class TestBucketConfiguration:
         # Actual values resolved via get_bucket_for_category with test_mode=True
         # The values should match what is in the .env file (since we are running in the real environment context here)
         # Or specifically, check that we get the *-test-* buckets
-        
+
         actual_cefi = get_bucket_for_category("CEFI", test_mode=True)
-        actual_tradfi = get_bucket_for_category("TRADFI", test_mode=True)
-        actual_defi = get_bucket_for_category("DEFI", test_mode=True)
-        
+        get_bucket_for_category("TRADFI", test_mode=True)
+        get_bucket_for_category("DEFI", test_mode=True)
+
         print(f"\nDEBUG: CEFI Test Bucket: {actual_cefi}")
-        
+
         assert "test" in actual_cefi, f"Expected 'test' in bucket name, got {actual_cefi}"
         assert "instruments-store" in actual_cefi
         assert "cefi" in actual_cefi.lower()
@@ -103,7 +103,7 @@ class TestBucketConfiguration:
         # Specifically verify against known .env values if possible, but general structure check is safer for portability
         # Verify it matches the pattern expected from .env
         # INSTRUMENTS_GCS_BUCKET_CEFI_TEST=instruments-store-test-cefi-central-element-323112
-        
+
         if os.getenv("INSTRUMENTS_GCS_BUCKET_CEFI_TEST"):
              assert actual_cefi == os.getenv("INSTRUMENTS_GCS_BUCKET_CEFI_TEST")
 
@@ -111,31 +111,31 @@ class TestBucketConfiguration:
         """Test that check_instruments_exist checks all categories."""
         with patch("instruments_service.app.core.cloud_data_provider.StandardizedDomainCloudService"), \
              patch.object(CloudDataProvider, "get_instruments_from_category") as mock_get_from_cat:
-            
+
             # Mock DataFrame objects
             empty_df = MagicMock()
             empty_df.empty = True
-            
+
             found_df = MagicMock()
             found_df.empty = False
-            
+
             # Make it fail for first two, succeed for last
             mock_get_from_cat.side_effect = [
                 empty_df,  # CEFI (empty)
                 None,      # TRADFI (None/Error)
                 found_df   # DEFI (Found)
             ]
-            
+
             provider = CloudDataProvider()
             # Mock date object
             mock_date = MagicMock()
             mock_date.strftime.return_value = "2023-01-01"
-            
+
             exists = provider.check_instruments_exist(mock_date)
-            
+
             assert exists is True
             assert mock_get_from_cat.call_count == 3
-            
+
             # Verify calls were for correct categories
             calls = mock_get_from_cat.call_args_list
             assert calls[0][0][1] == "CEFI"

@@ -11,7 +11,7 @@ This is different from DeFi protocols which produce:
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,7 @@ class BaseOnchainPerpAdapter(ABC):
     - derivative_ticker: Funding rates + OI + mark/index prices
     - liquidations: Liquidation events
     - book_snapshot_5: L2 orderbook (5 levels each side)
-    
+
     Market category is DEFI but data schema matches Tardis (CeFi).
     """
 

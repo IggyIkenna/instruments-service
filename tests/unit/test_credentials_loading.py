@@ -9,7 +9,6 @@ import os
 from unittest.mock import Mock, patch, MagicMock
 
 # Import get_config from conftest (avoids circular import issues)
-from tests.conftest import get_config
 from unified_cloud_services import get_secret_with_fallback
 from instruments_service.config import instruments_config
 
@@ -275,7 +274,7 @@ class TestCredentialLoading:
             project_id = instruments_config.gcp_project_id
 
             # Try to access a secret (will return None if secret doesn't exist, but should not raise exception)
-            result = get_secret_with_fallback(
+            get_secret_with_fallback(
                 project_id=project_id,
                 secret_name=instruments_config.tardis_secret_name,
                 fallback_env_var="TARDIS_API_KEY",

@@ -157,7 +157,7 @@ def main():
 
         if not subgraph_id:
             # Try querying registry
-            print(f"   🔍 Querying subgraph registry...")
+            print("   🔍 Querying subgraph registry...")
             subgraph_id = query_subgraph_registry(subgraph_name)
 
         if subgraph_id:
@@ -167,11 +167,11 @@ def main():
             # Verify if we have a real API key
             if api_key != "test-key":
                 if verify_subgraph_id(subgraph_name, subgraph_id, api_key):
-                    print(f"   ✅ Verified: ID works with API key")
+                    print("   ✅ Verified: ID works with API key")
                 else:
-                    print(f"   ⚠️  Warning: ID may not be valid")
+                    print("   ⚠️  Warning: ID may not be valid")
         else:
-            print(f"   ⚠️  Could not find ID (will use name-based URL)")
+            print("   ⚠️  Could not find ID (will use name-based URL)")
             subgraph_ids[subgraph_name] = None
 
     print("\n" + "=" * 60)

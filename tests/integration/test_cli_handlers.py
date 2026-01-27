@@ -10,7 +10,6 @@ Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 import pytest
 import os
 from datetime import datetime, timezone
-from unittest.mock import Mock, patch, MagicMock
 
 from instruments_service.cli.handlers.instrument_handler import InstrumentHandler
 
@@ -53,7 +52,7 @@ def test_instrument_handler_initialization(config):
 def test_instrument_handler_run(mock_instrument_handler):
     """Test instrument handler run method with real services."""
     # Use a past date to avoid future date skipping
-    from datetime import datetime, timedelta, timezone
+    from datetime import timedelta
 
     past_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
 
@@ -72,7 +71,7 @@ def test_instrument_handler_run(mock_instrument_handler):
 )
 def test_instrument_handler_run_with_categories(mock_instrument_handler):
     """Test instrument handler run method with market categories."""
-    from datetime import datetime, timedelta, timezone
+    from datetime import timedelta
 
     past_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
 

@@ -3,9 +3,8 @@ Comprehensive unit tests for InstrumentHandler to increase coverage to 80%+.
 """
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock, AsyncMock
+from unittest.mock import Mock, patch, AsyncMock
 from datetime import datetime, timezone, timedelta
-import pandas as pd
 from instruments_service.cli.handlers.instrument_handler import (
     InstrumentHandler,
     parse_date,
