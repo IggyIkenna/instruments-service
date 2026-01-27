@@ -151,3 +151,4 @@ instruments_df = service.query_instruments(
 - [Usage Guide](docs/USAGE_GUIDE.md) - Usage examples and patterns
 - [Setup Guide](docs/SETUP_GUIDE.md) - Installation and configuration
 - [Instrument Key Specification](docs/INSTRUMENT_KEY.md) - Instrument ID format
+# Build trigger test Tue Jan 27 15:04:47 GMT 2026
