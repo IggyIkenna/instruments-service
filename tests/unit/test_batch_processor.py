@@ -2,7 +2,6 @@
 Unit tests for InstrumentBatchProcessor.
 """
 
-import pytest
 from datetime import datetime, timezone, timedelta
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 

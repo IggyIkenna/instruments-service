@@ -3,13 +3,12 @@ Tests for CloudInstrumentStorage to increase coverage.
 """
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 import pandas as pd
 from datetime import datetime, timezone
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 
 # Import for patching
-from instruments_service.app.core import cloud_instrument_storage
 
 
 class TestCloudInstrumentStorage:

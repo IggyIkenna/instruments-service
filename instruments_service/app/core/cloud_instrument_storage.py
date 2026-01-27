@@ -7,7 +7,7 @@ Uses unified-cloud-services directly for cloud operations.
 
 import pandas as pd
 import logging
-from typing import Dict, Optional, Any, List
+from typing import Optional, Any
 from datetime import datetime, timezone
 import os
 
@@ -234,12 +234,12 @@ class CloudInstrumentStorage:
                 instruments_df.loc[mask, 'market_category'] = instruments_df.loc[mask].apply(
                     lambda row: determine_market_category(row.to_dict()), axis=1
                 )
-            
+
             # Group by category
             category_groups = instruments_df.groupby('market_category')
             total_stored = 0
             all_successful = True
-            
+
             # Detect test mode for bucket selection
             environment = get_config("ENVIRONMENT", "development").lower()
             is_test = (
@@ -247,20 +247,20 @@ class CloudInstrumentStorage:
                 or "pytest" in os.environ.get("_", "")
                 or get_config("PYTEST_CURRENT_TEST", "") != ""
             )
-            
+
             # Group uploads by bucket to use batch upload per bucket
             # (each bucket needs its own cloud service)
             bucket_uploads: dict[str, list[tuple[str, Any, str]]] = {}  # bucket -> [(gcs_path, df, category)]
-            
+
             for category, category_df in category_groups:
                 category_bucket = get_bucket_for_category(category, test_mode=is_test)
                 gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
                 category_df_to_store = category_df.copy()
-                
+
                 if category_bucket not in bucket_uploads:
                     bucket_uploads[category_bucket] = []
                 bucket_uploads[category_bucket].append((gcs_path, category_df_to_store, category))
-            
+
             # Upload to each bucket using batch upload (thread-safe)
             for bucket_name, uploads_list in bucket_uploads.items():
                 try:
@@ -274,16 +274,16 @@ class CloudInstrumentStorage:
                     bucket_cloud_service = StandardizedDomainCloudService(
                         domain="instruments", cloud_target=bucket_cloud_target
                     )
-                    
+
                     # Prepare batch upload
                     batch_uploads = [
                         {"data": df, "gcs_path": gcs_path, "format": "parquet"}
                         for gcs_path, df, _ in uploads_list
                     ]
-                    
+
                     # Use thread-safe batch upload
                     results = bucket_cloud_service.upload_to_gcs_batch(batch_uploads, show_progress=False)
-                    
+
                     # Process results
                     for i, result in enumerate(results):
                         gcs_path, df, category = uploads_list[i]
@@ -298,7 +298,7 @@ class CloudInstrumentStorage:
                                 f"❌ GCS upload failed for {category} category: {result.get('error')}"
                             )
                             all_successful = False
-                    
+
                 except Exception as gcs_error:
                     logger.error(f"❌ GCS upload failed for bucket {bucket_name}: {gcs_error}")
                     all_successful = False

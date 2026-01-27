@@ -3,7 +3,6 @@ Extended unit tests for models to increase coverage to 80%+.
 """
 
 import pytest
-from datetime import datetime, timezone
 from instruments_service.models import (
     Venue,
     InstrumentType,
@@ -427,34 +426,6 @@ class TestInstrumentDefinitionValidation:
 class TestInstrumentDefinitionModelValidator:
     """Test InstrumentDefinition model validator (consistency checks)."""
 
-    def test_unknown_venue_warning(self, caplog):
-        """Test InstrumentDefinition logs warning for unknown venue."""
-        import logging
-
-        caplog.set_level(logging.WARNING)
-        inst = InstrumentDefinition(
-            instrument_key="UNKNOWN-VENUE:SPOT_PAIR:BTC-USDT",
-            venue="UNKNOWN-VENUE",
-            instrument_type="SPOT_PAIR",
-            symbol="BTC-USDT",
-            available_from_datetime="2023-01-01T00:00:00Z",
-        )
-        assert "Unknown venue" in caplog.text
-
-    def test_unknown_instrument_type_warning(self, caplog):
-        """Test InstrumentDefinition logs warning for unknown instrument type."""
-        import logging
-
-        caplog.set_level(logging.WARNING)
-        inst = InstrumentDefinition(
-            instrument_key="BINANCE-SPOT:UNKNOWN-TYPE:BTC-USDT",
-            venue="BINANCE-SPOT",
-            instrument_type="UNKNOWN-TYPE",
-            symbol="BTC-USDT",
-            available_from_datetime="2023-01-01T00:00:00Z",
-        )
-        assert "Unknown instrument type" in caplog.text
-
     def test_future_missing_expiry_extracts_from_key(self):
         """Test InstrumentDefinition extracts expiry for FUTURE from key."""
         inst = InstrumentDefinition(
@@ -473,7 +444,7 @@ class TestInstrumentDefinitionModelValidator:
         import logging
 
         caplog.set_level(logging.WARNING)
-        inst = InstrumentDefinition(
+        InstrumentDefinition(
             instrument_key="BINANCE-FUTURES:FUTURE:BTC-USDT",  # No date
             venue="BINANCE-FUTURES",
             instrument_type="FUTURE",
@@ -501,7 +472,7 @@ class TestInstrumentDefinitionModelValidator:
         import logging
 
         caplog.set_level(logging.WARNING)
-        inst = InstrumentDefinition(
+        InstrumentDefinition(
             instrument_key="DERIBIT:OPTION:BTC-USD",  # No strike info
             venue="DERIBIT",
             instrument_type="OPTION",

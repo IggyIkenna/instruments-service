@@ -8,7 +8,6 @@ Note: For InstrumentDefinition Pydantic model (with full validation), use instru
 This file contains TradFiInstrument dataclass for static TradFi instrument configuration.
 """
 
-import os
 import json
 import logging
 from dataclasses import dataclass, field
@@ -21,9 +20,6 @@ from pydantic_settings import SettingsConfigDict
 # Import from unified-cloud-services (required dependency)
 from unified_cloud_services import (
     UnifiedCloudServicesConfig,
-    VenueMapping,
-    DataTypeConfig,
-    ExchangeInstrumentConfig,
     CloudTarget,
 )
 
@@ -49,7 +45,7 @@ def _get_data_dir() -> Path:
 # TRADFI INSTRUMENTS CONFIG (Inline - no external JSON file needed)
 # ============================================================================
 # This maps Databento symbols to venues and datasets for TradFi instruments.
-# 
+#
 # DATASETS:
 # - GLBX.MDP3: CME Globex (ES, NQ, CL, NG, GC, SI, HG, ZC, ZW, ZS, currencies)
 # - IFUS.IMPACT: ICE Futures US (Cotton, Coffee, Sugar, Cocoa, OJ, Dollar Index)
@@ -268,15 +264,15 @@ EXCHANGE_CODE_TO_NAME: Dict[str, str] = {
 
 def _load_sp500_tickers() -> Tuple[List[str], List[str]]:
     """Load S&P 500 tickers and ETF tickers from JSON file.
-    
+
     Returns both regular tickers and ETF tickers (including Bitcoin ETFs like IBIT, FBTC)
     combined into a single list for instrument generation.
     """
     global _sp500_tickers_cache, _nasdaq_tickers_cache
-    
+
     if _sp500_tickers_cache is not None:
         return _sp500_tickers_cache, _nasdaq_tickers_cache or []
-    
+
     try:
         data_file = _get_data_dir() / "sp500_tickers.json"
         if data_file.exists():
@@ -285,14 +281,14 @@ def _load_sp500_tickers() -> Tuple[List[str], List[str]]:
                 base_tickers = data.get("tickers", [])
                 etf_tickers = data.get("etf_tickers", [])  # Includes Bitcoin ETFs (IBIT, FBTC, etc.)
                 _nasdaq_tickers_cache = data.get("nasdaq_tickers", [])
-                
+
                 # Combine tickers and ETF tickers, avoiding duplicates
                 # ETFs like IBIT, FBTC, ARKB, GBTC, BITO need to be included for Bitcoin ETF support
                 all_tickers = list(base_tickers)
                 for etf in etf_tickers:
                     if etf not in all_tickers:
                         all_tickers.append(etf)
-                
+
                 _sp500_tickers_cache = all_tickers
                 logger.debug(f"Loaded {len(base_tickers)} base tickers + {len(etf_tickers)} ETF tickers = {len(_sp500_tickers_cache)} total from {data_file}")
         else:
@@ -303,26 +299,26 @@ def _load_sp500_tickers() -> Tuple[List[str], List[str]]:
         logger.error(f"Failed to load S&P 500 tickers: {e}")
         _sp500_tickers_cache = []
         _nasdaq_tickers_cache = []
-    
+
     return _sp500_tickers_cache, _nasdaq_tickers_cache
 
 
 def _load_tradfi_instruments() -> Tuple[List[Dict], Dict[str, str]]:
     """Load TradFi instruments and exchange code mappings from inline config.
-    
+
     Previously loaded from data/tradfi_instruments.json, now uses inline
     TRADFI_INSTRUMENTS_CONFIG and EXCHANGE_CODE_TO_NAME for version control.
     """
     global _tradfi_instruments_cache, _exchange_code_to_name_cache
-    
+
     if _tradfi_instruments_cache is not None:
         return _tradfi_instruments_cache, _exchange_code_to_name_cache or {}
-    
+
     # Use inline config instead of external JSON file
     _tradfi_instruments_cache = TRADFI_INSTRUMENTS_CONFIG
     _exchange_code_to_name_cache = EXCHANGE_CODE_TO_NAME
     logger.debug(f"Loaded {len(_tradfi_instruments_cache)} TradFi instruments from inline config")
-    
+
     return _tradfi_instruments_cache, _exchange_code_to_name_cache
 
 
@@ -330,7 +326,7 @@ def _load_tradfi_instruments() -> Tuple[List[Dict], Dict[str, str]]:
 class TradFiInstrument:
     """
     Single TradFi instrument definition with metadata.
-    
+
     Note: This is different from instruments_service.models.InstrumentDefinition (Pydantic model).
     This dataclass is for static TradFi instrument configuration (Databento symbols).
     """
@@ -354,7 +350,7 @@ InstrumentDefinition = TradFiInstrument
 class UnifiedInstrumentConfig:
     """
     Unified instrument configuration - single source of truth for all TradFi instruments.
-    
+
     Loads instruments and exchange code mappings from external JSON files.
     All TradFi instruments are loaded from data/tradfi_instruments.json.
     """
@@ -371,9 +367,9 @@ class UnifiedInstrumentConfig:
         """Load TradFi instruments and exchange mappings from JSON file."""
         if self._instruments is not None:
             return
-            
+
         raw_instruments, exchange_mappings = _load_tradfi_instruments()
-        
+
         # Convert raw JSON to TradFiInstrument objects
         self._instruments = []
         for inst in raw_instruments:
@@ -388,7 +384,7 @@ class UnifiedInstrumentConfig:
                 exchange_code=inst.get("code"),
                 underlying=inst.get("underlying"),
             ))
-        
+
         self._exchange_code_to_name = exchange_mappings
 
     @property
@@ -460,7 +456,7 @@ class UnifiedInstrumentConfig:
         'VNQ', 'IBB', 'SMH', 'ARKK', 'ARKG', 'ARKW', 'ARKF', 'ARKQ',
         'IBIT', 'FBTC', 'ARKB', 'GBTC', 'BITO'  # Bitcoin ETFs
     }
-    
+
     # Symbols with spaces that need dot format for Databento API
     # Databento uses "BRK.B" not "BRK B"
     SPACE_TO_DOT_SYMBOLS = {
@@ -469,11 +465,11 @@ class UnifiedInstrumentConfig:
         'BRK A': 'BRK.A',   # Berkshire Hathaway Class A
         'BF A': 'BF.A'      # Brown-Forman Class A
     }
-    
+
     def _get_sp500_equities(self) -> List[TradFiInstrument]:
         """Generate S&P 500 equity/ETF instrument definitions from external data file."""
         sp500_tickers, nasdaq_tickers = _load_sp500_tickers()
-        
+
         if not sp500_tickers:
             logger.warning("No S&P 500 tickers loaded - returning empty list")
             return []
@@ -482,20 +478,20 @@ class UnifiedInstrumentConfig:
         for ticker in sp500_tickers:
             # Convert space symbols to dot format for Databento
             databento_symbol = self.SPACE_TO_DOT_SYMBOLS.get(ticker, ticker)
-            
+
             # Determine venue (NASDAQ for known tech stocks, NYSE for others)
             venue = "NASDAQ" if ticker in nasdaq_tickers else "NYSE"
-            
+
             # Determine instrument type (ETF vs EQUITY)
             instrument_type = "ETF" if ticker in self.KNOWN_ETFS else "EQUITY"
-            
+
             instruments.append(
                 TradFiInstrument(
                     symbol=databento_symbol,  # Use Databento-compatible symbol (BRK.B not BRK B)
-                    venue=venue, 
+                    venue=venue,
                     instrument_type=instrument_type,  # ETF or EQUITY
-                    dataset="DBEQ.BASIC", 
-                    stype_in="raw_symbol", 
+                    dataset="DBEQ.BASIC",
+                    stype_in="raw_symbol",
                     base_asset=ticker,  # Keep original ticker as base_asset for display
                     quote_asset="USD"
                 )

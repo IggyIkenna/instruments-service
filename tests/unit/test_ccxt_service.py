@@ -5,7 +5,7 @@ Tests centralized CCXT integration, market loading, caching, and metadata extrac
 """
 
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock, patch
 from datetime import datetime, timedelta, timezone
 
 from instruments_service.utils.ccxt_service import CCXTService

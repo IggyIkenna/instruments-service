@@ -34,15 +34,15 @@ class UniswapV4Adapter(BaseDefiAdapter):
 
     Generates instruments in format:
     UNISWAPV4-ETH:POOL:ETH-USDC:500@ETHEREUM
-    
+
     Uniswap V4 uses the singleton PoolManager pattern where all pools
     are managed by a single contract. Pool IDs are keccak256 hashes.
     """
-    
+
     # The Graph Uniswap V4 subgraph (decentralized network)
     THEGRAPH_SUBGRAPH_ID = "DiYPVdygkfjDWhbxGSqAQxwBKmfKnkWQojqeM2rkLb3G"
     THEGRAPH_ENDPOINT = f"https://gateway.thegraph.com/api/{{api_key}}/subgraphs/id/{THEGRAPH_SUBGRAPH_ID}"
-    
+
     # PoolManager contract address on Ethereum mainnet
     POOL_MANAGER_ADDRESS = "0x000000000004444c5dc75cb358380d2e3de08a90"
 
@@ -61,13 +61,13 @@ class UniswapV4Adapter(BaseDefiAdapter):
             project_id: GCP project ID for Secret Manager
         """
         super().__init__(chain, api_key, project_id)
-        
+
         # Map chain to venue format
         chain_to_venue = {
             "ETHEREUM": "UNISWAPV4-ETH",
         }
         self.venue = chain_to_venue.get(self.chain, f"UNISWAPV4-{self.chain}")
-        
+
         # Get The Graph API key
         self._thegraph_api_key = api_key
         if not self._thegraph_api_key:
@@ -79,12 +79,12 @@ class UniswapV4Adapter(BaseDefiAdapter):
                 )
             except Exception:
                 logger.warning("No The Graph API key found")
-        
+
         logger.info(f"✅ UniswapV4Adapter initialized for chain: {self.chain}")
 
     # V4 launched late 2024 (mainnet: ~November 2024)
     V4_LAUNCH_DATE = datetime(2024, 11, 1)
-    
+
     def fetch_pools(
         self,
         base_currency: Optional[str] = None,
@@ -113,10 +113,10 @@ class UniswapV4Adapter(BaseDefiAdapter):
                 f"(V4 mainnet launched November 2024). Returning empty instruments - this is expected."
             )
             return {}
-        
+
         # Handle nested event loops (CLI may already have one running)
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
             # Already in async context - run in thread pool
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(
@@ -133,13 +133,13 @@ class UniswapV4Adapter(BaseDefiAdapter):
                 base_currency=base_currency,
                 min_tx_count=1000
             ))
-        
+
         instruments = {}
-        
+
         # Normalize filter lists
         allowed_bases = {b.upper() for b in base_currency_list} if base_currency_list else None
         allowed_quotes = {q.upper() for q in quote_currency_list} if quote_currency_list else None
-        
+
         # Wrapped/staked token mappings
         wrapped_mappings = {
             "WETH": "ETH",
@@ -148,19 +148,19 @@ class UniswapV4Adapter(BaseDefiAdapter):
             "STETH": "ETH",
             "ETH": "ETH",  # V4 uses native ETH symbol
         }
-        
+
         for pool in pools:
             try:
                 token0_symbol = pool.get("token0", {}).get("symbol", "").upper()
                 token1_symbol = pool.get("token1", {}).get("symbol", "").upper()
-                
+
                 # Apply filtering logic
                 if allowed_bases or allowed_quotes:
                     token0_in_bases = token0_symbol in allowed_bases if allowed_bases else True
                     token1_in_bases = token1_symbol in allowed_bases if allowed_bases else True
                     token0_in_quotes = token0_symbol in allowed_quotes if allowed_quotes else True
                     token1_in_quotes = token1_symbol in allowed_quotes if allowed_quotes else True
-                    
+
                     # Check wrapped versions
                     if not token0_in_bases and token0_symbol in wrapped_mappings:
                         token0_in_bases = wrapped_mappings[token0_symbol] in allowed_bases if allowed_bases else True
@@ -170,7 +170,7 @@ class UniswapV4Adapter(BaseDefiAdapter):
                         token0_in_quotes = wrapped_mappings[token0_symbol] in allowed_quotes if allowed_quotes else True
                     if not token1_in_quotes and token1_symbol in wrapped_mappings:
                         token1_in_quotes = wrapped_mappings[token1_symbol] in allowed_quotes if allowed_quotes else True
-                    
+
                     # Require: (token0 in bases AND token1 in quotes) OR (token1 in bases AND token0 in quotes)
                     valid_pair = False
                     if allowed_bases and allowed_quotes:
@@ -179,17 +179,17 @@ class UniswapV4Adapter(BaseDefiAdapter):
                         valid_pair = token0_in_bases or token1_in_bases
                     elif allowed_quotes:
                         valid_pair = token0_in_quotes or token1_in_quotes
-                    
+
                     if not valid_pair:
                         continue
-                
+
                 inst_def = self._convert_pool_to_instrument(pool)
                 if inst_def:
                     instruments[inst_def["instrument_key"]] = inst_def
             except Exception as e:
                 logger.warning(f"Failed to convert pool {pool.get('id')}: {e}")
                 continue
-        
+
         logger.info(f"✅ Generated {len(instruments)} Uniswap V4 instruments")
         return instruments
 
@@ -204,9 +204,9 @@ class UniswapV4Adapter(BaseDefiAdapter):
         if not self._thegraph_api_key:
             logger.warning("No The Graph API key available for Uniswap V4")
             return []
-        
+
         endpoint = self.THEGRAPH_ENDPOINT.format(api_key=self._thegraph_api_key)
-        
+
         # Query for pools by transaction count (more reliable than TVL for V4)
         if base_currency:
             # Query by base currency
@@ -282,7 +282,7 @@ class UniswapV4Adapter(BaseDefiAdapter):
             }
             """
             variables = {"minTxCount": str(min_tx_count)}
-        
+
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(
@@ -293,17 +293,17 @@ class UniswapV4Adapter(BaseDefiAdapter):
                     if response.status != 200:
                         logger.warning(f"The Graph returned HTTP {response.status}")
                         return []
-                    
+
                     data = await response.json()
-                    
+
                     if "errors" in data:
                         logger.warning(f"The Graph errors: {data['errors']}")
                         return []
-                    
+
                     pools = data.get("data", {}).get("pools", [])
                     logger.info(f"Fetched {len(pools)} Uniswap V4 pools")
                     return pools
-                    
+
         except Exception as e:
             logger.error(f"Failed to fetch V4 pools: {e}")
             return []
@@ -322,59 +322,53 @@ class UniswapV4Adapter(BaseDefiAdapter):
         token0 = pool.get("token0", {})
         token1 = pool.get("token1", {})
         fee_tier = pool.get("feeTier")
-        
+
         if not pool_id or not token0 or not token1:
             return None
-        
+
         # Extract token info
         token0_symbol = pool.get("token0", {}).get("symbol", "")
         token1_symbol = pool.get("token1", {}).get("symbol", "")
         token0_address = token0.get("id", "")
         token1_address = token1.get("id", "")
-        token0_decimals = token0.get("decimals", "18")
-        token1_decimals = token1.get("decimals", "18")
-        
+        token0.get("decimals", "18")
+        token1.get("decimals", "18")
+
         # V4 uses native ETH (address 0x0) - normalize symbol
         if token0_address == "0x0000000000000000000000000000000000000000":
             token0_symbol = "ETH"
         if token1_address == "0x0000000000000000000000000000000000000000":
             token1_symbol = "ETH"
-        
+
         # Determine base and quote (ETH as base if present)
         if "ETH" in token0_symbol.upper():
             base_symbol = token0_symbol
             quote_symbol = token1_symbol
             base_address = token0_address
             quote_address = token1_address
-            base_decimals = token0_decimals
-            quote_decimals = token1_decimals
         elif "ETH" in token1_symbol.upper():
             base_symbol = token1_symbol
             quote_symbol = token0_symbol
             base_address = token1_address
             quote_address = token0_address
-            base_decimals = token1_decimals
-            quote_decimals = token0_decimals
         else:
             # Default: token0 as base, token1 as quote
             base_symbol = token0_symbol
             quote_symbol = token1_symbol
             base_address = token0_address
             quote_address = token1_address
-            base_decimals = token0_decimals
-            quote_decimals = token1_decimals
-        
+
         # Build symbol with fee tier
         fee_tier_str = str(fee_tier) if fee_tier else "0"
         symbol = f"{base_symbol}-{quote_symbol}:{fee_tier_str}"
-        
+
         # Build canonical instrument key
         chain_suffix = f"@{self.chain}"
         instrument_key = f"{self.venue}:POOL:{symbol}{chain_suffix}"
-        
+
         # V4 launched late 2024
         available_from = "2024-11-01T00:00:00"
-        
+
         return {
             "instrument_key": instrument_key,
             "venue": self.venue,

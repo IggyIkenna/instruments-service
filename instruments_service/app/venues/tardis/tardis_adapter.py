@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # for delisted tokens). We manually correct these based on known events.
 #
 # Format: {exchange: {symbol_id: {"availableTo": "ISO_DATE"}}}
-# 
+#
 # FTT (FTX Token) - FTX collapsed November 8-11, 2022. Trading halted on most
 # exchanges by November 16, 2022. Tardis incorrectly reports availableTo=None
 # for fttusdt on binance, even though no data exists after the collapse.
@@ -96,7 +96,7 @@ class TardisAdapter:
             secret_name=instruments_config.tardis_secret_name,
             fallback_env_var="TARDIS_API_KEY",
         )
-        
+
         # Initialize centralized base client
         self._base_client = TardisBaseClient(
             config=config,
@@ -116,18 +116,18 @@ class TardisAdapter:
     ) -> List[Dict[str, Any]]:
         """
         Apply manual metadata corrections for instruments with known Tardis API issues.
-        
+
         Args:
             exchange: Exchange name (lowercase)
             symbols: List of symbol dicts from Tardis API
-            
+
         Returns:
             Updated symbols list with corrected metadata
         """
         overrides = TARDIS_METADATA_OVERRIDES.get(exchange, {})
         if not overrides:
             return symbols
-        
+
         corrected_count = 0
         for symbol in symbols:
             symbol_id = symbol.get("id", "").lower()
@@ -139,16 +139,16 @@ class TardisAdapter:
                     logger.info(
                         f"🔧 Manual override: {exchange}:{symbol_id} {key}: {old_value} → {value}"
                     )
-        
+
         if corrected_count > 0:
             logger.info(f"📝 Applied {corrected_count} manual metadata corrections for {exchange}")
-        
+
         return symbols
 
     def warmup(self) -> bool:
         """
         Warmup connection by making a lightweight request.
-        
+
         Returns:
             bool: True if warmup successful
         """

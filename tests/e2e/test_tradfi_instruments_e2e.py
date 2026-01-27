@@ -8,9 +8,8 @@ Tests the complete workflow for TradFi instruments:
 """
 
 import pytest
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
-import pandas as pd
 
 
 @pytest.mark.e2e
@@ -26,7 +25,7 @@ class TestTradfiInstrumentGeneration:
         """Test TRADFI bucket naming convention."""
         category = "tradfi"
         bucket_template = f"instruments-store-{category}-{gcp_project_id}"
-        
+
         assert "tradfi" in bucket_template
         assert gcp_project_id in bucket_template
 
@@ -61,7 +60,7 @@ class TestTradfiInstrumentTypes:
             "underlying": "SPX",
             "expiry": "2024-06-21",
         }
-        
+
         required = ["instrument_key", "venue", "symbol", "category", "instrument_type"]
         for field in required:
             assert field in futures_instrument
@@ -79,7 +78,7 @@ class TestTradfiInstrumentTypes:
             "option_type": "call",
             "expiry": "2024-03-15",
         }
-        
+
         required = ["instrument_key", "venue", "symbol", "option_type", "strike"]
         for field in required:
             assert field in options_instrument
@@ -93,7 +92,7 @@ class TestTradfiInstrumentTypes:
             "category": "TRADFI",
             "instrument_type": "equity",
         }
-        
+
         required = ["instrument_key", "venue", "symbol", "instrument_type"]
         for field in required:
             assert field in equity_instrument
@@ -110,14 +109,14 @@ class TestTradfiDataProvider:
             "cboe": "OPRA.PILLAR",
             "nasdaq": "DBEQ.BASIC",
         }
-        
+
         assert "cme" in dataset_map
         assert dataset_map["cme"] == "GLBX.MDP3"
 
     def test_databento_symbol_types(self):
         """Test Databento symbol type options."""
         stype_options = ["raw_symbol", "parent", "instrument_id"]
-        
+
         assert "raw_symbol" in stype_options
         assert "parent" in stype_options
 
@@ -130,14 +129,14 @@ class TestTradfiTradingCalendar:
         """Test weekend dates are not trading days."""
         saturday = datetime(2024, 1, 13, tzinfo=timezone.utc)
         sunday = datetime(2024, 1, 14, tzinfo=timezone.utc)
-        
+
         assert saturday.weekday() == 5  # Saturday
         assert sunday.weekday() == 6  # Sunday
 
     def test_weekday_is_potential_trading_day(self):
         """Test weekdays are potential trading days."""
         monday = datetime(2024, 1, 15, tzinfo=timezone.utc)
-        
+
         assert monday.weekday() == 0  # Monday
         assert monday.weekday() < 5  # Is weekday
 
@@ -149,12 +148,12 @@ class TestTradfiTestBucketIsolation:
     def test_test_bucket_contains_test_string(self, gcp_project_id):
         """Test bucket name contains 'test' for isolation."""
         test_bucket = f"instruments-store-test-tradfi-{gcp_project_id}"
-        
+
         assert "test" in test_bucket.lower()
 
     def test_test_bucket_different_from_prod(self, gcp_project_id):
         """Test bucket is different from production bucket."""
         test_bucket = f"instruments-store-test-tradfi-{gcp_project_id}"
         prod_bucket = f"instruments-store-tradfi-{gcp_project_id}"
-        
+
         assert test_bucket != prod_bucket

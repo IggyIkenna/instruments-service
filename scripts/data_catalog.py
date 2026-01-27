@@ -16,7 +16,7 @@ import json
 import logging
 import os
 import sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -43,14 +43,14 @@ PATH_TEMPLATE = "instrument_availability/by_date/day-{date}/instruments.parquet"
 @dataclass
 class CatalogEntry:
     """Single entry in the data catalog."""
-    
+
     category: str
     date: str
     exists: bool
     gcs_path: str
     file_size: Optional[int] = None
     instrument_count: Optional[int] = None
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "category": self.category,
@@ -65,14 +65,14 @@ class CatalogEntry:
 @dataclass
 class CategorySummary:
     """Summary for a single category."""
-    
+
     category: str
     total_dates: int
     existing_dates: int
     missing_dates: int
     completion_pct: float
     missing_date_list: List[str] = field(default_factory=list)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "category": self.category,
@@ -87,7 +87,7 @@ class CategorySummary:
 @dataclass
 class CatalogReport:
     """Complete catalog report."""
-    
+
     service: str
     start_date: str
     end_date: str
@@ -95,7 +95,7 @@ class CatalogReport:
     overall_completion: float
     category_summaries: List[CategorySummary]
     entries: List[CatalogEntry]
-    
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "service": self.service,
@@ -111,11 +111,11 @@ class CatalogReport:
 def get_gcs_client():
     """Get GCS client, with fallback for mock mode."""
     mock_mode = os.environ.get("CLOUD_MOCK_MODE", "").lower() == "true"
-    
+
     if mock_mode:
         logger.warning("Running in MOCK mode - no real GCS checks")
         return None
-    
+
     try:
         from unified_cloud_services import get_gcs_client
         return get_gcs_client(project_id=PROJECT_ID)
@@ -131,17 +131,17 @@ def get_gcs_client():
 def check_file_exists(client, bucket_name: str, blob_path: str) -> tuple:
     """
     Check if a file exists in GCS.
-    
+
     Returns:
         Tuple of (exists: bool, size: Optional[int])
     """
     if client is None:
         return False, None
-    
+
     try:
         bucket = client.bucket(bucket_name)
         blob = bucket.blob(blob_path)
-        
+
         if blob.exists():
             blob.reload()
             return True, blob.size
@@ -169,48 +169,48 @@ def generate_catalog(
 ) -> CatalogReport:
     """
     Generate the data catalog.
-    
+
     Args:
         start_date: Start of date range
         end_date: End of date range
         categories: Categories to check (default: all)
         include_entries: Whether to include individual entries
-    
+
     Returns:
         CatalogReport with results
     """
     if categories is None:
         categories = CATEGORIES
-    
+
     client = get_gcs_client()
     dates = generate_date_range(start_date, end_date)
-    
+
     entries = []
     category_summaries = []
     total_existing = 0
     total_expected = 0
-    
+
     for category in categories:
         bucket_name = GCS_BUCKETS.get(category)
         if not bucket_name:
             logger.warning(f"No bucket configured for category: {category}")
             continue
-        
+
         existing_count = 0
         missing_dates = []
-        
+
         for d in dates:
             date_str = d.isoformat()
             blob_path = PATH_TEMPLATE.format(date=date_str)
             gcs_path = f"gs://{bucket_name}/{blob_path}"
-            
+
             exists, size = check_file_exists(client, bucket_name, blob_path)
-            
+
             if exists:
                 existing_count += 1
             else:
                 missing_dates.append(date_str)
-            
+
             if include_entries:
                 entries.append(CatalogEntry(
                     category=category,
@@ -219,12 +219,12 @@ def generate_catalog(
                     gcs_path=gcs_path,
                     file_size=size,
                 ))
-        
+
         total_expected += len(dates)
         total_existing += existing_count
-        
+
         completion_pct = (existing_count / len(dates) * 100) if dates else 0
-        
+
         category_summaries.append(CategorySummary(
             category=category,
             total_dates=len(dates),
@@ -233,11 +233,11 @@ def generate_catalog(
             completion_pct=round(completion_pct, 2),
             missing_date_list=missing_dates,
         ))
-        
+
         logger.info(f"{category}: {existing_count}/{len(dates)} dates ({completion_pct:.1f}%)")
-    
+
     overall_completion = (total_existing / total_expected * 100) if total_expected > 0 else 0
-    
+
     return CatalogReport(
         service="instruments-service",
         start_date=start_date.isoformat(),
@@ -259,18 +259,18 @@ def print_report(report: CatalogReport):
     print(f"Generated: {report.generated_at}")
     print(f"Overall Completion: {report.overall_completion}%")
     print()
-    
+
     for summary in report.category_summaries:
         status = "✅" if summary.completion_pct == 100 else "⏳" if summary.completion_pct > 0 else "❌"
         print(f"{status} {summary.category}: {summary.completion_pct}% ({summary.existing_dates}/{summary.total_dates} dates)")
-        
+
         if summary.missing_dates > 0 and summary.missing_date_list:
             print(f"   Missing: {', '.join(summary.missing_date_list[:5])}", end="")
             if summary.missing_dates > 5:
                 print(f" ... and {summary.missing_dates - 5} more")
             else:
                 print()
-    
+
     print()
     print("=" * 60)
 
@@ -280,7 +280,7 @@ def main():
         description="Generate data catalog for instruments-service",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    
+
     parser.add_argument(
         "--start-date",
         type=lambda s: datetime.strptime(s, "%Y-%m-%d").date(),
@@ -316,28 +316,28 @@ def main():
         action="store_true",
         help="Output in JSON format",
     )
-    
+
     args = parser.parse_args()
-    
+
     categories = args.category if args.category else None
-    
+
     report = generate_catalog(
         start_date=args.start_date,
         end_date=args.end_date,
         categories=categories,
         include_entries=not args.no_entries,
     )
-    
+
     if args.output:
         with open(args.output, "w") as f:
             json.dump(report.to_dict(), f, indent=2)
         logger.info(f"Report saved to {args.output}")
-    
+
     if args.json:
         print(json.dumps(report.to_dict(), indent=2))
     else:
         print_report(report)
-    
+
     # Exit with non-zero if not 100% complete
     if report.overall_completion < 100:
         sys.exit(1)

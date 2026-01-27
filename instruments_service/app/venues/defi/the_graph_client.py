@@ -68,7 +68,7 @@ class TheGraphClient:
         if secret_name is None:
             from instruments_service.config import instruments_config
             secret_name = instruments_config.graph_secret_name
-        
+
         # Create config with custom secret name if provided
         config = TheGraphClientConfig(
             secret_name=secret_name,
@@ -83,7 +83,7 @@ class TheGraphClient:
             project_id=project_id,
         )
 
-        logger.info(f"✅ TheGraphClient initialized (using TheGraphBaseClient)")
+        logger.info("✅ TheGraphClient initialized (using TheGraphBaseClient)")
         logger.info(f"   Subgraph URL: {self._base_client.subgraph_url}")
         if self._base_client.api_key:
             logger.info("   Using The Graph API key for authenticated requests")

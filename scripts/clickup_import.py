@@ -105,7 +105,7 @@ class ClickUpClient:
     def delete_task(self, task_id: str) -> bool:
         """Delete a task"""
         try:
-            result = self._request("DELETE", f"/task/{task_id}")
+            self._request("DELETE", f"/task/{task_id}")
             # DELETE returns 204 No Content (empty body) on success
             return True
         except Exception as e:
@@ -419,11 +419,11 @@ class StatusMdParser:
                 task_match = re.match(task_pattern, line)
 
                 if task_match:
-                    numbered_prefix = task_match.group(1)  # e.g., "1.) "
+                    task_match.group(1)  # e.g., "1.) "
                     task_name = task_match.group(2).strip()
                     due_date_str = task_match.group(3).strip()
                     owner = task_match.group(4).strip()
-                    priority = task_match.group(5).strip()
+                    task_match.group(5).strip()
                     blocks = task_match.group(6).strip()
                     dependencies = task_match.group(7).strip()
 
@@ -1206,11 +1206,11 @@ class ClickUpImporter:
                                 f"⚠️  Could not create custom field '{field_data['name']}': {error_msg}"
                             )
                             print(
-                                f"   💡 This is usually OK - field might already exist with different format"
+                                "   💡 This is usually OK - field might already exist with different format"
                             )
-                            print(f"   💡 Script will continue and use existing field if found")
+                            print("   💡 Script will continue and use existing field if found")
                             print(
-                                f"   💡 If tasks fail due to missing field, create manually in ClickUp UI"
+                                "   💡 If tasks fail due to missing field, create manually in ClickUp UI"
                             )
                     else:
                         print(f"⚠️  Could not create custom field {field_data['name']}: {e}")
@@ -1260,7 +1260,7 @@ class ClickUpImporter:
                 return []
 
             # Get team members
-            teams = self.client._request("GET", f"/team")
+            teams = self.client._request("GET", "/team")
             members = []
             for team in teams.get("teams", []):
                 if team.get("id") == workspace_id:
@@ -1651,9 +1651,9 @@ class ClickUpImporter:
                 # Check for common issues
                 if "parent" in error_msg.lower():
                     print(f"   💡 Parent ID format might be invalid: {parent_id}")
-                    print(f"   💡 Try checking if parent task exists in ClickUp")
+                    print("   💡 Try checking if parent task exists in ClickUp")
                 if "name" in error_msg.lower() or "title" in error_msg.lower():
-                    print(f"   💡 Task name might contain invalid characters")
+                    print("   💡 Task name might contain invalid characters")
                 # Debug: print payload keys (not values for security)
                 if parent_id:
                     print(f"   💡 Payload keys: {list(payload.keys())}")
@@ -1674,19 +1674,19 @@ class ClickUpImporter:
             if self.assignee_map.get("Ikenna"):
                 print(f"   ✅ Found Ikenna: {self.assignee_map['Ikenna']}")
             else:
-                print(f"   ⚠️  Ikenna user ID not found - check .env file (loaded by settings.py)")
+                print("   ⚠️  Ikenna user ID not found - check .env file (loaded by settings.py)")
             if self.assignee_map.get("Harsh"):
                 print(f"   ✅ Found Harsh: {self.assignee_map['Harsh']}")
             else:
-                print(f"   ⚠️  Harsh user ID not found - check .env file (loaded by settings.py)")
+                print("   ⚠️  Harsh user ID not found - check .env file (loaded by settings.py)")
             if self.assignee_map.get("Femi"):
                 print(f"   ✅ Found Femi: {self.assignee_map['Femi']}")
             else:
-                print(f"   ⚠️  Femi user ID not found - check .env file (loaded by settings.py)")
+                print("   ⚠️  Femi user ID not found - check .env file (loaded by settings.py)")
             if self.assignee_map.get("Daniel"):
                 print(f"   ✅ Found Daniel: {self.assignee_map['Daniel']}")
             else:
-                print(f"   ⚠️  Daniel user ID not found - check .env file (loaded by settings.py)")
+                print("   ⚠️  Daniel user ID not found - check .env file (loaded by settings.py)")
             if self.assignee_map.get("Carlos"):
                 print(f"   ✅ Found Carlos: {self.assignee_map['Carlos']}")
 
@@ -2248,7 +2248,7 @@ class ClickUpImporter:
                     print(
                         f"      Available milestones in existing_tasks: {[k for k in self.existing_tasks.keys() if 'Strategy' in k][:5]}"
                     )
-                    print(f"      Skipping data catalogue subtask")
+                    print("      Skipping data catalogue subtask")
                     continue
 
                 # Create subtask name
@@ -2439,7 +2439,7 @@ class ClickUpImporter:
                 if not assignee_id:
                     print(f"   ⚠️  Owner '{owner_name}' not found in assignee_map")
                     if owner_name == "Femi":
-                        print(f"      💡 Add clickup_user_id_femi=... to .env file")
+                        print("      💡 Add clickup_user_id_femi=... to .env file")
                         # Try auto-assignment based on task name as fallback
                         task_name = task_data.get("name", "")
                         if (
@@ -2458,7 +2458,7 @@ class ClickUpImporter:
                             # Try to get Femi from assignee_map again (might have been resolved)
                             assignee_id = self.assignee_map.get("Femi")
                             if assignee_id:
-                                print(f"      ✅ Found Femi via auto-assignment fallback")
+                                print("      ✅ Found Femi via auto-assignment fallback")
 
             # Determine tags based on priority level
             tags = [self.service_tag, "task"]
@@ -2603,7 +2603,7 @@ class ClickUpImporter:
                             if self.client.delete_task(task_id):
                                 orphaned_count += 1
                             else:
-                                print(f"      ⚠️  Failed to delete")
+                                print("      ⚠️  Failed to delete")
                     except Exception as e:
                         print(f"      ⚠️  Could not check/delete task {task_name}: {e}")
 
@@ -2626,9 +2626,9 @@ class ClickUpImporter:
                     print(f"   - {task_name}")
                 if len(orphaned_tasks) > 10:
                     print(f"   ... and {len(orphaned_tasks) - 10} more")
-                print(f"\n   💡 These may have been renamed or removed from STATUS.md.")
+                print("\n   💡 These may have been renamed or removed from STATUS.md.")
                 print(
-                    f"   💡 To delete them, run with --clean-orphaned flag (or delete manually in ClickUp)"
+                    "   💡 To delete them, run with --clean-orphaned flag (or delete manually in ClickUp)"
                 )
 
         # Count tasks vs subtasks
@@ -2636,8 +2636,8 @@ class ClickUpImporter:
         milestone_count = len(milestones)
         in_progress_count = len(in_progress)
 
-        print(f"\n✅ Import complete!")
-        print(f"📊 Summary:")
+        print("\n✅ Import complete!")
+        print("📊 Summary:")
         print(f"   - Milestone tasks: {milestone_count}")
         print(f"   - Subtasks: {subtask_count}")
         print(f"   - In-progress tasks: {in_progress_count}")
@@ -2645,43 +2645,43 @@ class ClickUpImporter:
         print(f"   - Total tasks: {total_tasks}")
 
         if not self.dry_run:
-            print(f"\n📋 Task mapping (for reference):")
+            print("\n📋 Task mapping (for reference):")
             print(json.dumps(self.task_map, indent=2))
 
         # Note about dependencies and timelines
-        print(f"\n📝 Import Details:")
+        print("\n📝 Import Details:")
         if not self.dry_run:
             print(f"   ✅ Dependencies: {dependency_count} automatically linked via API")
-            print(f"   ✅ Priorities: Automatically set (DeFi=High, TradFi=Normal)")
+            print("   ✅ Priorities: Automatically set (DeFi=High, TradFi=Normal)")
             print(
                 f"   ✅ Due Dates: Automatically set (Week 5-6 = {self.week_dates['Week 5-6'].strftime('%Y-%m-%d')}, Week 7-8 = {self.week_dates['Week 7-8'].strftime('%Y-%m-%d')})"
             )
-            print(f"   ✅ Assignees: Automatically assigned (Ikenna for all tasks)")
-            print(f"   ✅ Tags: Automatically applied")
-            print(f"   ✅ Custom Fields: Automatically created and populated")
+            print("   ✅ Assignees: Automatically assigned (Ikenna for all tasks)")
+            print("   ✅ Tags: Automatically applied")
+            print("   ✅ Custom Fields: Automatically created and populated")
         else:
             print(
                 f"   ✅ Dependencies: Will be linked automatically ({len(dependency_map)} dependencies)"
             )
-            print(f"   ✅ Priorities: Will be set automatically (DeFi=High, TradFi=Normal)")
+            print("   ✅ Priorities: Will be set automatically (DeFi=High, TradFi=Normal)")
             print(
                 f"   ✅ Due Dates: Will be set automatically (Week 5-6 = {self.week_dates['Week 5-6'].strftime('%Y-%m-%d')}, Week 7-8 = {self.week_dates['Week 7-8'].strftime('%Y-%m-%d')})"
             )
             print(
-                f"   ✅ Assignees: Will be assigned automatically (Ikenna for code tasks, Femi for infrastructure/backfill)"
+                "   ✅ Assignees: Will be assigned automatically (Ikenna for code tasks, Femi for infrastructure/backfill)"
             )
-            print(f"   ✅ Tags: Will be applied automatically")
-            print(f"   ✅ Custom Fields: Will be created and populated automatically")
+            print("   ✅ Tags: Will be applied automatically")
+            print("   ✅ Custom Fields: Will be created and populated automatically")
 
-        print(f"\n📅 Week Date Mapping:")
+        print("\n📅 Week Date Mapping:")
         print(f"   Sprint Start: {self.sprint_start.strftime('%Y-%m-%d')} (Nov 7, 2025)")
         print(
             f"   Week 5-6 ends: {self.week_dates['Week 5-6'].strftime('%Y-%m-%d')} (Dec 19, 2025)"
         )
         print(f"   Week 7-8 ends: {self.week_dates['Week 7-8'].strftime('%Y-%m-%d')} (Jan 2, 2026)")
 
-        print(f"\n⚠️  Manual Setup Still Needed:")
-        print(f"   👤 Assignees: If user IDs not found, assign manually in ClickUp")
+        print("\n⚠️  Manual Setup Still Needed:")
+        print("   👤 Assignees: If user IDs not found, assign manually in ClickUp")
 
 
 def main():
@@ -2726,9 +2726,9 @@ def main():
             else:
                 print("❌ API token not found. Set --api-token or CLICKUP_API_TOKEN env var")
                 print(f"   Checked: Secret Manager ({instruments_config.clickup_secret_name})")
-                print(f"   Checked: Environment variables via settings.py")
-                print(f"\n💡 To store API key in Secret Manager, run:")
-                print(f"   python scripts/store_clickup_secret.py --api-key YOUR_TOKEN")
+                print("   Checked: Environment variables via settings.py")
+                print("\n💡 To store API key in Secret Manager, run:")
+                print("   python scripts/store_clickup_secret.py --api-key YOUR_TOKEN")
                 return 1
         except Exception as e:
             print(f"⚠️  Secret Manager lookup failed: {e}")
@@ -2762,7 +2762,7 @@ def main():
     print(f"✅ Reading STATUS.md from: {status_md_path}")
     print(f"✅ Sprint start date: {args.sprint_start}")
     if args.clean_orphaned:
-        print(f"⚠️  CLEAN ORPHANED MODE: Will delete tasks not in STATUS.md")
+        print("⚠️  CLEAN ORPHANED MODE: Will delete tasks not in STATUS.md")
 
     print()
 

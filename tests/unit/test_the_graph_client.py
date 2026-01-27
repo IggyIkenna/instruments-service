@@ -2,8 +2,7 @@
 Unit tests for TheGraphClient.
 """
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import patch
 from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
 
 

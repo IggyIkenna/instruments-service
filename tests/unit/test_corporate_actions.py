@@ -5,17 +5,15 @@ Tests for corporate actions models and adapter.
 """
 
 import pytest
-from datetime import date, datetime
+from datetime import date
 from unittest.mock import patch, MagicMock
 import pandas as pd
-import math
 
 from instruments_service.corporate_actions.models import (
     DividendRecord,
     StockSplitRecord,
     EarningsRecord,
     CorporateActionsBundle,
-    CorporateActionType,
     DividendType,
 )
 from instruments_service.corporate_actions.adapter import CorporateActionsAdapter
@@ -195,10 +193,10 @@ class TestEarningsRecord:
         # Valid times
         earn = EarningsRecord(ticker="AAPL", earnings_date=date(2024, 1, 1), earnings_time="bmo")
         assert earn.earnings_time == "BMO"
-        
+
         earn = EarningsRecord(ticker="AAPL", earnings_date=date(2024, 1, 1), earnings_time="amc")
         assert earn.earnings_time == "AMC"
-        
+
         # Invalid time returns None
         earn = EarningsRecord(ticker="AAPL", earnings_date=date(2024, 1, 1), earnings_time="invalid")
         assert earn.earnings_time is None
@@ -234,7 +232,7 @@ class TestCorporateActionsBundle:
         div1 = DividendRecord(ticker="AAPL", ex_date=date(2024, 5, 10), amount=0.24)
         div2 = DividendRecord(ticker="AAPL", ex_date=date(2024, 8, 10), amount=0.24)
         split1 = StockSplitRecord(ticker="AAPL", effective_date=date(2020, 8, 31), ratio=4.0)
-        
+
         bundle = CorporateActionsBundle(
             ticker="AAPL",
             dividends=[div1, div2],
@@ -259,21 +257,21 @@ class TestCorporateActionsAdapter:
         # Setup mock
         mock_ticker = MagicMock()
         mock_yf.Ticker.return_value = mock_ticker
-        
+
         # Create sample dividend data
         div_index = pd.to_datetime(['2024-05-10', '2024-08-12'])
         mock_ticker.dividends = pd.Series([0.24, 0.25], index=div_index)
-        
+
         # Test adapter
         adapter = CorporateActionsAdapter()
         adapter._yf = mock_yf
-        
+
         dividends = adapter.fetch_dividends(
             ticker="AAPL",
             start_date=date(2024, 1, 1),
             end_date=date(2024, 12, 31),
         )
-        
+
         assert len(dividends) == 2
         assert dividends[0].ticker == "AAPL"
         assert dividends[0].amount == 0.24
@@ -284,21 +282,21 @@ class TestCorporateActionsAdapter:
         # Setup mock
         mock_ticker = MagicMock()
         mock_yf.Ticker.return_value = mock_ticker
-        
+
         # Create sample split data
         split_index = pd.to_datetime(['2020-08-31', '2014-06-09'])
         mock_ticker.splits = pd.Series([4.0, 7.0], index=split_index)
-        
+
         # Test adapter
         adapter = CorporateActionsAdapter()
         adapter._yf = mock_yf
-        
+
         splits = adapter.fetch_splits(
             ticker="AAPL",
             start_date=date(2010, 1, 1),
             end_date=date(2024, 12, 31),
         )
-        
+
         assert len(splits) == 2
         assert splits[0].ratio == 4.0
         assert splits[1].ratio == 7.0
@@ -309,16 +307,16 @@ class TestCorporateActionsAdapter:
         mock_ticker = MagicMock()
         mock_yf.Ticker.return_value = mock_ticker
         mock_ticker.dividends = pd.Series([], dtype=float)
-        
+
         adapter = CorporateActionsAdapter()
         adapter._yf = mock_yf
-        
+
         dividends = adapter.fetch_dividends(
             ticker="NVDA",
             start_date=date(2024, 1, 1),
             end_date=date(2024, 12, 31),
         )
-        
+
         assert len(dividends) == 0
 
     @patch('instruments_service.corporate_actions.adapter.CorporateActionsAdapter.yf')
@@ -349,14 +347,14 @@ class TestCorporateActionsAdapter:
                 end_date=date(2024, 12, 31),
             ),
         }
-        
+
         adapter = CorporateActionsAdapter()
         dividends_df, splits_df, earnings_df = adapter.to_dataframes(bundles)
-        
+
         assert len(dividends_df) == 2
         assert len(splits_df) == 1
         assert len(earnings_df) == 0
-        
+
         assert "ticker" in dividends_df.columns
         assert "ex_date" in dividends_df.columns
         assert "amount" in dividends_df.columns
@@ -383,7 +381,7 @@ class TestCorporateActionsIntegration:
             start_date=date(2023, 1, 1),
             end_date=date(2024, 12, 31),
         )
-        
+
         # AAPL pays quarterly dividends
         assert len(dividends) >= 4
         for div in dividends:
@@ -398,7 +396,7 @@ class TestCorporateActionsIntegration:
             start_date=date(2024, 1, 1),
             end_date=date(2024, 12, 31),
         )
-        
+
         # NVDA had a 10:1 split in June 2024
         assert len(splits) >= 1
         # Find the 10:1 split
