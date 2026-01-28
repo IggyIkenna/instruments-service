@@ -44,6 +44,8 @@ dependencies = [
     "plotly>=6.4.0",
     # AWS
     "boto3>=1.40.70",
+    # Shared utilities (installed from GitHub in Docker/CI)
+    "unified-cloud-services @ git+https://github.com/IggyIkenna/unified-cloud-services.git",
 ]
 
 [project.optional-dependencies]
