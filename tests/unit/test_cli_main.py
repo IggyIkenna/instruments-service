@@ -35,7 +35,7 @@ class TestCLIMain:
             mock_args.gcs_bucket = "test-bucket"
             mock_args.bigquery_dataset = "test-dataset"
             mock_args.force = False
-            mock_args.exchanges = None
+            mock_args.dry_run = False
             mock_args.category = None  # Explicitly set to None to avoid Mock iteration
             mock_args.CEFI = False
             mock_args.TRADFI = False
@@ -66,7 +66,7 @@ class TestCLIMain:
             mock_args.gcs_bucket = "test-bucket"
             mock_args.bigquery_dataset = "test-dataset"
             mock_args.force = True
-            mock_args.exchanges = None
+            mock_args.dry_run = False
             mock_args.category = None  # Explicitly set to None to use individual flags
             mock_args.CEFI = True
             mock_args.TRADFI = True
@@ -101,7 +101,7 @@ class TestCLIMain:
             mock_args.gcs_bucket = "test-bucket"
             mock_args.bigquery_dataset = "test-dataset"
             mock_args.force = False
-            mock_args.exchanges = None
+            mock_args.dry_run = False
             mock_args.category = None  # Explicitly set to None to avoid Mock iteration
             mock_args.CEFI = False
             mock_args.TRADFI = False
@@ -142,7 +142,7 @@ class TestCLIMain:
             mock_args.gcs_bucket = "test-bucket"
             mock_args.bigquery_dataset = "test-dataset"
             mock_args.force = False
-            mock_args.exchanges = None
+            mock_args.dry_run = False
             mock_args.category = None  # Explicitly set to None to avoid Mock iteration
             mock_args.CEFI = False
             mock_args.TRADFI = False

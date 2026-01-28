@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timezone, timedelta
 
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
+from unified_cloud_services import handle_api_errors
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ class HyperliquidAdapter(BaseDefiAdapter):
         api_base_url: Optional[str] = None,
         base_currency_list: Optional[List[str]] = None,
         mvp_only: bool = True,
-        chain: str = "HYPERLIQUID",
+        chain: str = "off-chain",  # CEFI classification for bucket routing
         api_key: Optional[str] = None,
         project_id: Optional[str] = None,
     ):
@@ -67,7 +68,7 @@ class HyperliquidAdapter(BaseDefiAdapter):
         Initialize Hyperliquid adapter.
 
         Args:
-            api_base_url: Optional custom API base URL (defaults to https://api.hyperliquid.xyz)
+            api_base_url: Optional custom API base URL (default from config)
             base_currency_list: List of MVP base currencies from config (defaults to None, uses all if not provided)
             mvp_only: If True, only include MVP coins (default: True)
             chain: Chain identifier (default: 'HYPERLIQUID')
@@ -76,7 +77,8 @@ class HyperliquidAdapter(BaseDefiAdapter):
         """
         super().__init__(chain=chain, api_key=api_key, project_id=project_id)
         self.venue = "HYPERLIQUID"
-        self.api_base_url = api_base_url or "https://api.hyperliquid.xyz"
+        from instruments_service.config import instruments_config
+        self.api_base_url = api_base_url or instruments_config.hyperliquid_api_url
         self.mvp_only = mvp_only
         # Use provided base_currency_list or empty set (no filtering)
         self.mvp_base_currencies = (
@@ -86,6 +88,7 @@ class HyperliquidAdapter(BaseDefiAdapter):
             f"✅ HyperliquidAdapter initialized (MVP only: {mvp_only}, base currencies: {len(self.mvp_base_currencies) if self.mvp_base_currencies else 'all'})"
         )
 
+    @handle_api_errors(max_retries=3)
     async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
         """
         Get instrument metadata for Hyperliquid.
@@ -292,7 +295,7 @@ class HyperliquidAdapter(BaseDefiAdapter):
             "base_asset": coin,
             "quote_asset": "USDC",
             "settle_asset": "USDC",
-            "chain": "HYPERLIQUID",  # Hyperliquid is on its own chain
+            "chain": "off-chain",  # CEFI classification for bucket routing
             "asset_class": "crypto",
             "venue_type": "exchange",  # Hyperliquid is an exchange, not a protocol
             "data_provider": "hyperliquid_api",
@@ -362,7 +365,7 @@ class HyperliquidAdapter(BaseDefiAdapter):
             "base_asset": coin,
             "quote_asset": "USDC",
             "settle_asset": "USDC",
-            "chain": "HYPERLIQUID",  # Hyperliquid is on its own chain
+            "chain": "off-chain",  # CEFI classification for bucket routing
             "asset_class": "crypto",
             "venue_type": "exchange",  # Hyperliquid is an exchange, not a protocol
             "data_provider": "hyperliquid_api",

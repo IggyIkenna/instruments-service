@@ -66,8 +66,9 @@ class InstrumentsService:
         self.config = config
 
         # Initialize processing service
+        from instruments_service.config import instruments_config
         processing_config = {
-            "project_id": config.get("project_id", "central-element-323112"),
+            "project_id": config.get("project_id") or instruments_config.gcp_project_id,
             "enable_ccxt_integration": config.get("enable_ccxt_integration", True),
             "enable_metadata_caching": config.get("enable_metadata_caching", True),
         }

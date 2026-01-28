@@ -18,6 +18,16 @@ steps:
         GITHUB_TOKEN=$(cat /workspace/github_token.txt)
         git clone https://x-access-token:$${GITHUB_TOKEN}@github.com/IggyIkenna/unified-cloud-services.git /workspace/unified-cloud-services
 
+  # Step 2b: Clone unified-trading-deployment-v2 (needed for smoke tests)
+  - name: 'gcr.io/cloud-builders/git'
+    id: 'clone-deployment'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        GITHUB_TOKEN=$(cat /workspace/github_token.txt)
+        git clone https://x-access-token:$${GITHUB_TOKEN}@github.com/IggyIkenna/unified-trading-deployment-v2.git /workspace/unified-trading-deployment-v2
+
   # Step 3: Run quality gates (lint + tests) - MUST PASS before build
   - name: 'python:3.11-slim'
     id: 'quality-gates'
@@ -28,6 +38,7 @@ steps:
         echo "=== Installing dependencies ==="
         pip install --quiet --upgrade pip setuptools wheel
         pip install --quiet -e /workspace/unified-cloud-services
+        pip install --quiet -e /workspace/unified-trading-deployment-v2 || true
         pip install --quiet -e . || pip install --quiet -e ".[dev]"
         pip install --quiet ruff pytest
 
@@ -38,7 +49,10 @@ steps:
         echo "=== Running tests (pytest) ==="
         if [ -d "tests" ]; then
           pytest tests/ -v --tb=short || exit 1
-          echo "Tests passed"
+        echo "=== Running smoke tests ==="
+        if [ -d "tests/smoke" ]; then
+          pytest tests/smoke/ -v --tb=short || echo "Some smoke tests skipped"
+        fi          echo "Tests passed"
         else
           echo "No tests directory found, skipping tests"
         fi

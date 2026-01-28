@@ -284,7 +284,7 @@ class UniswapV4Adapter(BaseDefiAdapter):
             variables = {"minTxCount": str(min_tx_count)}
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with create_aiohttp_session(timeout=60) as session:
                 async with session.post(
                     endpoint,
                     json={"query": query, "variables": variables},

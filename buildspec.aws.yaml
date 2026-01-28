@@ -1,0 +1,58 @@
+# AWS CodeBuild Buildspec for instruments-service
+# AWS equivalent of cloudbuild.yaml for multi-cloud CI/CD
+
+version: 0.2
+
+env:
+  secrets-manager:
+    GITHUB_TOKEN: github-pat:token
+  variables:
+    SERVICE_NAME: "instruments-service"
+    REPOSITORY: "instruments"
+    CLOUD_PROVIDER: "aws"
+    CLOUD_MOCK_MODE: "true"
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - pip install --upgrade pip setuptools wheel
+
+  pre_build:
+    commands:
+      - echo "=== Cloning dependencies ==="
+      - git clone https://x-access-token:${GITHUB_TOKEN}@github.com/IggyIkenna/unified-cloud-services.git /tmp/unified-cloud-services
+      - git clone https://x-access-token:${GITHUB_TOKEN}@github.com/IggyIkenna/unified-trading-deployment-v2.git /tmp/unified-trading-deployment-v2 || true
+      
+      - echo "=== Installing packages ==="
+      - pip install -e /tmp/unified-cloud-services
+      - pip install -e /tmp/unified-trading-deployment-v2 || true
+      - pip install -e . || pip install -e ".[dev]"
+      - pip install ruff pytest
+      
+      - echo "=== ECR login ==="
+      - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
+
+  build:
+    commands:
+      - echo "=== Running linting ==="
+      - ruff check instruments_service/ tests/ --ignore E501 || exit 1
+      
+      - echo "=== Running tests ==="
+      - pytest tests/ -v --tb=short || exit 1
+      
+      - echo "=== Building Docker image ==="
+      - export IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION:0:7}
+      - export ECR_REPO=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${REPOSITORY}
+      - docker build --build-arg GH_PAT=${GITHUB_TOKEN} -t ${ECR_REPO}:${SERVICE_NAME}:${IMAGE_TAG} -t ${ECR_REPO}:${SERVICE_NAME}:latest .
+
+  post_build:
+    commands:
+      - docker push ${ECR_REPO}:${SERVICE_NAME}:${IMAGE_TAG}
+      - docker push ${ECR_REPO}:${SERVICE_NAME}:latest
+      - echo "Build completed"
+
+cache:
+  paths:
+    - '/root/.cache/pip/**/*'
