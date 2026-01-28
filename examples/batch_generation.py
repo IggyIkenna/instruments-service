@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 
 async def generate_instruments_batch(
-    start_date: str, end_date: str, exchanges: list = None, force: bool = False
+    start_date: str, end_date: str, force: bool = False
 ):
     """
     Generate instruments for a date range.
@@ -46,7 +46,6 @@ async def generate_instruments_batch(
     Args:
         start_date: Start date (YYYY-MM-DD)
         end_date: End date (YYYY-MM-DD)
-        exchanges: Optional list of exchanges to process (default: all)
         force: Force regeneration even if instruments exist
     """
     # Parse dates
@@ -66,10 +65,9 @@ async def generate_instruments_batch(
     storage_service = CloudInstrumentStorage()  # Uses default config from env
     InstrumentBatchProcessor(config)
 
-    # Determine exchanges to process
-    if exchanges is None:
-        venue_mapping = VenueMapping()
-        exchanges = venue_mapping.all_tardis_exchanges
+    # Always process all exchanges (exchange filtering was removed from CLI)
+    venue_mapping = VenueMapping()
+    exchanges = venue_mapping.all_tardis_exchanges
 
     logger.info(f"📅 Processing date range: {start_date} to {end_date}")
     logger.info(f"🏦 Processing exchanges: {exchanges}")
@@ -167,17 +165,15 @@ def main():
     parser = argparse.ArgumentParser(description="Batch instrument generation")
     parser.add_argument("--start-date", required=True, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end-date", required=True, help="End date (YYYY-MM-DD)")
-    parser.add_argument("--exchanges", nargs="+", help="Exchanges to process (default: all)")
     parser.add_argument("--force", action="store_true", help="Force regeneration")
 
     args = parser.parse_args()
 
-    # Run async function
+    # Run async function (always processes all exchanges)
     result = asyncio.run(
         generate_instruments_batch(
             start_date=args.start_date,
             end_date=args.end_date,
-            exchanges=args.exchanges,
             force=args.force,
         )
     )

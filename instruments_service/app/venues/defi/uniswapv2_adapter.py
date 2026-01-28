@@ -257,7 +257,7 @@ class UniswapV2Adapter(BaseDefiAdapter):
             variables = {"minLiquidity": str(min_liquidity)}
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with create_aiohttp_session(timeout=60) as session:
                 async with session.post(
                     endpoint,
                     json={"query": query, "variables": variables},

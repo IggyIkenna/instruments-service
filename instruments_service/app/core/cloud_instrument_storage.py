@@ -11,10 +11,15 @@ from typing import Optional, Any
 from datetime import datetime, timezone
 import os
 
-from unified_cloud_services import (get_config,
+from unified_cloud_services import (
+    get_config,
     determine_market_category,
     get_bucket_for_category,
+    ParquetSchemaEnforcer,
+    handle_storage_errors,
 )
+
+from instruments_service.config import instruments_config
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +41,9 @@ try:
 except ImportError:
     SAMPLING_SERVICE_AVAILABLE = False
     logger.debug("Sampling service not available")
+
+# Import schema for validation
+from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
 
 
 class CloudInstrumentStorage:
@@ -66,7 +74,7 @@ class CloudInstrumentStorage:
             test_bucket = get_config("INSTRUMENTS_GCS_BUCKET_TEST", "")
             # NOTE: This default is only used when no category is specified.
             # Production flow should always use category-specific buckets via get_bucket_for_category()
-            prod_bucket = get_config("INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-central-element-323112")
+            prod_bucket = get_config("INSTRUMENTS_GCS_BUCKET_CEFI", instruments_config.get_bucket_for_category("cefi"))
 
             # Only use test bucket if explicitly in test environment
             is_test = (
@@ -83,7 +91,7 @@ class CloudInstrumentStorage:
                 bucket_name = prod_bucket
 
             cloud_target = CloudTarget(
-                project_id=get_config("GCP_PROJECT_ID", "central-element-323112"),
+                project_id=get_config("GCP_PROJECT_ID", instruments_config.gcp_project_id),
                 gcs_bucket=bucket_name,
                 bigquery_dataset=get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
                 bigquery_location=get_config(
@@ -106,6 +114,7 @@ class CloudInstrumentStorage:
             f"location={cloud_target.bigquery_location}"
         )
 
+    @handle_storage_errors(max_retries=2)
     def store_instruments(
         self,
         instruments_df: pd.DataFrame,
@@ -252,10 +261,28 @@ class CloudInstrumentStorage:
             # (each bucket needs its own cloud service)
             bucket_uploads: dict[str, list[tuple[str, Any, str]]] = {}  # bucket -> [(gcs_path, df, category)]
 
+            # Create schema enforcer for validation
+            schema_enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
+
             for category, category_df in category_groups:
                 category_bucket = get_bucket_for_category(category, test_mode=is_test)
                 gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
                 category_df_to_store = category_df.copy()
+
+                # Validate schema before upload
+                dimensions = {"category": category}
+                validation_result = schema_enforcer.validate_dataframe(category_df_to_store, dimensions)
+
+                if not validation_result.valid:
+                    for error in validation_result.errors:
+                        logger.error(f"Schema validation failed for {category}: {error}")
+                    logger.error(f"Skipping GCS upload for {category} due to schema validation errors")
+                    all_successful = False
+                    continue  # Skip this category
+
+                # Log any warnings
+                for warning in validation_result.warnings:
+                    logger.warning(f"Schema validation warning for {category}: {warning}")
 
                 if category_bucket not in bucket_uploads:
                     bucket_uploads[category_bucket] = []
