@@ -120,11 +120,10 @@ class DependencyChecker:
         Initialize the dependency checker.
 
         Args:
-            project_id: GCP project ID (default from env)
+            project_id: GCP project ID (default from config)
         """
-        self.project_id = project_id or os.environ.get(
-            "GOOGLE_CLOUD_PROJECT", "central-element-323112"
-        )
+        from instruments_service.config import instruments_config
+        self.project_id = project_id or instruments_config.gcp_project_id
 
     def get_upstream_dependencies(self) -> List[str]:
         """

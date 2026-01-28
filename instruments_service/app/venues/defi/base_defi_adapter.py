@@ -9,11 +9,34 @@ import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
+import aiohttp
+from aiohttp.resolver import ThreadedResolver
+
 # Import shared base adapter from unified-cloud-services
 from unified_cloud_services.adapters.defi import BaseDefiAdapter as SharedBaseDefiAdapter
 from instruments_service.config import instruments_config
 
 logger = logging.getLogger(__name__)
+
+
+def create_aiohttp_session(timeout: int = 30) -> aiohttp.ClientSession:
+    """
+    Create an aiohttp ClientSession with ThreadedResolver.
+    
+    This fixes DNS resolution issues on macOS where the default asyncio DNS
+    resolver can fail with "Timeout while contacting DNS servers".
+    
+    Args:
+        timeout: Request timeout in seconds
+        
+    Returns:
+        Configured aiohttp.ClientSession
+    """
+    connector = aiohttp.TCPConnector(resolver=ThreadedResolver())
+    return aiohttp.ClientSession(
+        connector=connector,
+        timeout=aiohttp.ClientTimeout(total=timeout),
+    )
 
 
 class BaseDefiAdapter(SharedBaseDefiAdapter):

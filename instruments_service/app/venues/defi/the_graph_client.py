@@ -27,7 +27,14 @@ clear_api_key_cache = clear_thegraph_api_key_cache
 _API_KEY_CACHE = None  # Managed by TheGraphBaseClient
 _API_KEY_PROJECT_ID = None  # Managed by TheGraphBaseClient
 
-# Default subgraph URLs
+# Default subgraph URLs - use config for flexibility
+def _get_default_uniswap_v3_url() -> str:
+    """Get default Uniswap V3 URL from config."""
+    from instruments_service.config import instruments_config
+    return instruments_config.thegraph_uniswap_v3_studio_url
+
+
+# Legacy constant for backwards compatibility
 DEFAULT_UNISWAP_V3_URL = "https://api.studio.thegraph.com/query/48211/uniswap-v3-mainnet/version/latest"
 
 

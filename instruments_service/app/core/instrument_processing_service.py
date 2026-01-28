@@ -31,6 +31,7 @@ from unified_cloud_services import (
     SubgraphService,
     DateFilterService,
     determine_market_category,
+    handle_api_errors,
 )
 
 from instruments_service.config import instruments_config
@@ -104,13 +105,13 @@ class InstrumentProcessingService:
                    Can include:
                    - tardis_api_key: Direct API key (optional if Secret Manager available)
                    - api_key: Alternative key name (optional)
-                   - project_id: GCP project ID for Secret Manager (default: central-element-323112)
+                   - project_id: GCP project ID for Secret Manager (default from config)
 
         Raises:
             ValueError: If API key cannot be retrieved from config or Secret Manager
         """
         self.config = config
-        project_id = config.get("project_id", "central-element-323112")
+        project_id = config.get("project_id") or instruments_config.gcp_project_id
 
         # Try to get API key from config first
         self.api_key = config.get("tardis_api_key") or config.get("api_key")
@@ -560,6 +561,7 @@ class InstrumentProcessingService:
 
         return self.tardis_adapter
 
+    @handle_api_errors(max_retries=3)
     async def fetch_exchange_instruments(
         self, exchange: str, target_date: datetime = None, force: bool = False
     ) -> Tuple[Dict[str, Dict[str, Any]], int]:
@@ -2164,6 +2166,7 @@ class InstrumentProcessingService:
         self._cache_timestamps.clear()
         logger.info(f"🧹 Cleared {cache_count} cached instruments")
 
+    @handle_api_errors(max_retries=3)
     async def fetch_databento_instruments(
         self, exchange: str, symbols: List[str], target_date: Optional[datetime] = None
     ) -> Dict[str, InstrumentDefinition]:

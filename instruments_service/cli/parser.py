@@ -56,8 +56,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--project-id",
         type=str,
-        default="central-element-323112",
-        help="GCP project ID (default: central-element-323112)",
+        default=None,  # Will use config default if not specified
+        help="GCP project ID (default: from service config)",
     )
     parser.add_argument(
         "--gcs-bucket",
@@ -79,9 +79,9 @@ def parse_arguments() -> argparse.Namespace:
         help="Force processing all dates (overrides existence checks)",
     )
     parser.add_argument(
-        "--exchanges",
-        nargs="+",
-        help="Exchanges to process (binance, binance-futures, deribit, bybit, okx, etc.)",
+        "--dry-run",
+        action="store_true",
+        help="Don't upload to GCS, dump to local data/sample/ directory instead",
     )
 
     # Market type filters (can be combined, default is ALL if none specified)
@@ -197,6 +197,9 @@ Examples:
 
   # Generate instruments with force flag
   python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --force
+
+  # Dry run (don't upload to GCS, save to local data/sample/ directory)
+  python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --CEFI --dry-run
 
 Corporate Actions (dividends, splits, earnings):
 

@@ -108,7 +108,7 @@ class TestHyperliquidAdapter:
             from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
 
             adapter = HyperliquidAdapter.__new__(HyperliquidAdapter)
-            adapter.chain = "HYPERLIQUID"
+            adapter.chain = "off-chain"
             adapter.project_id = "test-project"
             adapter.venue = "HYPERLIQUID"
             adapter.api_base_url = "https://api.hyperliquid.xyz"
@@ -127,7 +127,7 @@ class TestHyperliquidAdapter:
             from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
 
             adapter = HyperliquidAdapter.__new__(HyperliquidAdapter)
-            adapter.chain = "HYPERLIQUID"
+            adapter.chain = "off-chain"
             adapter.project_id = "test-project"
             adapter.venue = "HYPERLIQUID"
             adapter.api_base_url = "https://api.hyperliquid.xyz"
@@ -148,7 +148,7 @@ class TestHyperliquidAdapter:
             from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
 
             adapter = HyperliquidAdapter.__new__(HyperliquidAdapter)
-            adapter.chain = "HYPERLIQUID"
+            adapter.chain = "off-chain"
             adapter.venue = "HYPERLIQUID"
             adapter.api_base_url = "https://api.hyperliquid.xyz"
             adapter.mvp_only = False
@@ -173,7 +173,7 @@ class TestHyperliquidAdapter:
             from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
 
             adapter = HyperliquidAdapter.__new__(HyperliquidAdapter)
-            adapter.chain = "HYPERLIQUID"
+            adapter.chain = "off-chain"
             adapter.venue = "HYPERLIQUID"
             adapter.api_base_url = "https://api.hyperliquid.xyz"
             adapter.mvp_only = False
@@ -425,7 +425,7 @@ class TestAsterAdapter:
             from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
 
             adapter = AsterAdapter.__new__(AsterAdapter)
-            adapter.chain = "ASTER"
+            adapter.chain = "off-chain"
             adapter.venue = "ASTER"
             adapter.project_id = "test-project"
             adapter.api_base_url = "https://api.aster.fi"
@@ -443,7 +443,7 @@ class TestAsterAdapter:
             from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
 
             adapter = AsterAdapter.__new__(AsterAdapter)
-            adapter.chain = "ASTER"
+            adapter.chain = "off-chain"
             adapter.venue = "ASTER"
             adapter.project_id = "test-project"
             adapter.api_base_url = "https://api.aster.fi"
@@ -468,7 +468,7 @@ class TestAsterAdapter:
             from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
 
             adapter = AsterAdapter.__new__(AsterAdapter)
-            adapter.chain = "ASTER"
+            adapter.chain = "off-chain"
             adapter.venue = "ASTER"
             adapter.project_id = "test-project"
             adapter.api_base_url = "https://api.aster.fi"
@@ -592,7 +592,7 @@ class TestHyperliquidAdapterExtended:
             from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
 
             adapter = HyperliquidAdapter.__new__(HyperliquidAdapter)
-            adapter.chain = "HYPERLIQUID"
+            adapter.chain = "off-chain"
             adapter.venue = "HYPERLIQUID"
             adapter.api_base_url = "https://api.hyperliquid.xyz"
             adapter.mvp_only = False
@@ -621,7 +621,7 @@ class TestAsterAdapterExtended:
             from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
 
             adapter = AsterAdapter.__new__(AsterAdapter)
-            adapter.chain = "ASTER"
+            adapter.chain = "off-chain"
             adapter.venue = "ASTER"
             adapter.project_id = "test-project"
             adapter.api_base_url = "https://api.aster.fi"
@@ -647,7 +647,7 @@ class TestAsterAdapterExtended:
             from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
 
             adapter = AsterAdapter.__new__(AsterAdapter)
-            adapter.chain = "ASTER"
+            adapter.chain = "off-chain"
             adapter.venue = "ASTER"
             adapter.project_id = "test-project"
             adapter.api_base_url = "https://api.aster.fi"
