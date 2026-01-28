@@ -35,9 +35,10 @@ class CloudDataProvider:
 
             # NOTE: This default is only used when no category is specified.
             # Production flow should always use category-specific buckets via get_bucket_for_category()
+            from instruments_service.config import instruments_config
             cloud_target = CloudTarget(
-                project_id=get_config("GCP_PROJECT_ID", "central-element-323112"),
-                gcs_bucket=get_config("INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-central-element-323112"),
+                project_id=get_config("GCP_PROJECT_ID", instruments_config.gcp_project_id),
+                gcs_bucket=get_config("INSTRUMENTS_GCS_BUCKET_CEFI", instruments_config.get_bucket_for_category("cefi")),
                 bigquery_dataset=get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
                 bigquery_location=get_config(
                     "BIGQUERY_LOCATION", "asia-northeast1"

@@ -616,6 +616,11 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
     # =========================================================================
     # DEFI URLS (instruments-specific)
     # =========================================================================
+    aavescan_api_url: str = Field(
+        default="https://api.aavescan.com/v2",
+        validation_alias=AliasChoices("AAVESCAN_API_URL"),
+        description="AaveScan Pro API base URL",
+    )
     ethereum_rpc_url: str = Field(
         default="",
         validation_alias=AliasChoices("ETHEREUM_RPC_URL"),
@@ -640,6 +645,41 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
         default="",
         validation_alias=AliasChoices("ENVIO_API_URL"),
         description="Envio API URL",
+    )
+    
+    # Hyperliquid API URL
+    hyperliquid_api_url: str = Field(
+        default="https://api.hyperliquid.xyz",
+        validation_alias=AliasChoices("HYPERLIQUID_API_URL"),
+        description="Hyperliquid API base URL",
+    )
+    
+    # The Graph Gateway URL template
+    thegraph_gateway_url: str = Field(
+        default="https://gateway.thegraph.com/api/{api_key}/subgraphs/id/{subgraph_id}",
+        validation_alias=AliasChoices("THEGRAPH_GATEWAY_URL"),
+        description="The Graph Gateway URL template",
+    )
+    
+    # Uniswap V3 Mainnet Subgraph ID (for The Graph Gateway)
+    uniswap_v3_mainnet_subgraph_id: str = Field(
+        default="5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV",
+        validation_alias=AliasChoices("UNISWAP_V3_MAINNET_SUBGRAPH_ID"),
+        description="Uniswap V3 Ethereum mainnet subgraph ID",
+    )
+    
+    # Default TheGraph Uniswap V3 Studio URL (fallback when no API key)
+    thegraph_uniswap_v3_studio_url: str = Field(
+        default="https://api.studio.thegraph.com/query/48211/uniswap-v3-mainnet/version/latest",
+        validation_alias=AliasChoices("THEGRAPH_UNISWAP_V3_STUDIO_URL"),
+        description="TheGraph Uniswap V3 Studio URL (public, rate-limited)",
+    )
+    
+    # Alchemy mainnet URL template
+    alchemy_mainnet_url_template: str = Field(
+        default="https://eth-mainnet.g.alchemy.com/v2/{api_key}",
+        validation_alias=AliasChoices("ALCHEMY_MAINNET_URL_TEMPLATE"),
+        description="Alchemy Ethereum mainnet URL template",
     )
 
     # DeFi MVP tokens configuration
@@ -791,5 +831,17 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
         return self.gcs_bucket_test if test_mode else self.gcs_bucket
 
 
-# Create singleton instance
-instruments_config = InstrumentsServiceConfig()
+# Singleton pattern for config access
+_config: Optional[InstrumentsServiceConfig] = None
+
+
+def get_config() -> InstrumentsServiceConfig:
+    """Get the singleton service config instance."""
+    global _config
+    if _config is None:
+        _config = InstrumentsServiceConfig()
+    return _config
+
+
+# Create singleton instance (backward compatibility)
+instruments_config = get_config()

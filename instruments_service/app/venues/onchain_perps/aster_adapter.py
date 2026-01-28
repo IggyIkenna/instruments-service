@@ -12,6 +12,7 @@ import requests
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timezone, timedelta
 
+from unified_cloud_services import handle_api_errors
 from instruments_service.app.venues.onchain_perps.base_onchain_perp_adapter import BaseOnchainPerpAdapter
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ class AsterAdapter(BaseOnchainPerpAdapter):
         spot_api_base_url: Optional[str] = None,
         base_currency_list: Optional[List[str]] = None,
         mvp_only: bool = True,
-        chain: str = "ASTER",
+        chain: str = "off-chain",  # CEFI classification for bucket routing
         api_key: Optional[str] = None,
         project_id: Optional[str] = None,
     ):
@@ -97,6 +98,7 @@ class AsterAdapter(BaseOnchainPerpAdapter):
             f"✅ AsterAdapter initialized (MVP only: {mvp_only}, base currencies: {len(self.mvp_base_currencies) if self.mvp_base_currencies else 'all'})"
         )
 
+    @handle_api_errors(max_retries=3)
     async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
         """
         Get instrument metadata for Aster.
@@ -337,7 +339,7 @@ class AsterAdapter(BaseOnchainPerpAdapter):
             "base_asset": base_asset,
             "quote_asset": quote_asset,
             "settle_asset": quote_asset,
-            "chain": "ASTER",  # Aster DEX proprietary chain
+            "chain": "off-chain",  # CEFI classification for bucket routing
             "asset_class": "crypto",
             "venue_type": "exchange",  # Aster is an exchange, not a protocol
             "data_provider": "aster_api",
@@ -425,7 +427,7 @@ class AsterAdapter(BaseOnchainPerpAdapter):
             "base_asset": base_asset,
             "quote_asset": quote_asset,
             "settle_asset": quote_asset,
-            "chain": "ASTER",  # Aster DEX proprietary chain
+            "chain": "off-chain",  # CEFI classification for bucket routing
             "asset_class": "crypto",
             "venue_type": "exchange",  # Aster is an exchange, not a protocol
             "data_provider": "aster_api",
