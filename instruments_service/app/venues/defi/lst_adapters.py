@@ -11,6 +11,7 @@ import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
+from unified_cloud_services import handle_api_errors
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class EtherFiAdapter(BaseDefiAdapter):
         self.venue = "ETHERFI"
         logger.info(f"✅ EtherFiAdapter initialized for chain: {self.chain}")
 
+    @handle_api_errors(max_retries=3)
     async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
         """
         Get instrument metadata for EtherFi.
@@ -181,6 +183,7 @@ class LidoAdapter(BaseDefiAdapter):
         self.venue = "LIDO"
         logger.info(f"✅ LidoAdapter initialized for chain: {self.chain}")
 
+    @handle_api_errors(max_retries=3)
     async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
         """
         Get instrument metadata for Lido.
