@@ -32,11 +32,19 @@ def _load_env_early():
 
 _load_env_early()
 
-# Setup structured JSON logging for Cloud Run visibility
+# Setup structured JSON logging for Cloud Run visibility with resource monitoring
 from unified_cloud_services import setup_cloud_logging
+from unified_cloud_services.core.signal_handler import GracefulShutdownHandler
 
-setup_cloud_logging(log_level="INFO", json_format=True)
+setup_cloud_logging(
+    log_level="INFO",
+    json_format=True,
+    enable_resource_monitoring=True,  # Log CPU/memory/disk every 30s for crash diagnostics
+)
 logger = logging.getLogger(__name__)
+
+# Global shutdown handler (initialized in main())
+_shutdown_handler = None
 
 from instruments_service.config import instruments_config
 
@@ -64,6 +72,22 @@ def main() -> Dict[str, Any]:
     Returns:
         Dictionary with operation results
     """
+    global _shutdown_handler
+    mode_handler = None  # Track mode handler for cleanup on signal
+    
+    def cleanup_on_signal():
+        """Cleanup function called on SIGTERM/SIGINT."""
+        nonlocal mode_handler
+        if mode_handler is not None:
+            try:
+                mode_handler.cleanup()
+                logger.info("Cleanup completed on signal")
+            except Exception as e:
+                logger.warning(f"Cleanup error on signal: {e}")
+    
+    # Initialize graceful shutdown handler (handles SIGTERM/SIGINT)
+    _shutdown_handler = GracefulShutdownHandler(cleanup_callback=cleanup_on_signal)
+    
     try:
         # Parse arguments
         args = parse_arguments()
@@ -84,6 +108,7 @@ def main() -> Dict[str, Any]:
 
         # Get handler for mode
         handler: ModeHandler = get_handler_for_mode(args.mode, config)
+        mode_handler = handler  # Track for cleanup on signal
 
         # Prepare arguments for handler
         handler_kwargs = {}
@@ -97,8 +122,8 @@ def main() -> Dict[str, Any]:
         # Common options
         if hasattr(args, 'force') and args.force:
             handler_kwargs["force"] = args.force
-        if hasattr(args, 'exchanges') and args.exchanges:
-            handler_kwargs["exchanges"] = args.exchanges
+        if hasattr(args, 'dry_run') and args.dry_run:
+            handler_kwargs["dry_run"] = args.dry_run
 
         # Corporate actions specific options
         if hasattr(args, 'tickers') and args.tickers:

@@ -165,62 +165,54 @@ def test_category_flag_vs_category_arg():
 
 
 # =============================================================================
-# Exchanges Tests (--exchanges)
+# Dry Run Tests (--dry-run)
 # =============================================================================
 
 
-def test_parse_exchanges_single():
-    """Test --exchanges with single value."""
+def test_parse_dry_run_flag():
+    """Test --dry-run flag."""
     test_args = [
         "--mode",
         "instruments",
         "--start-date",
         "2023-05-23",
-        "--exchanges",
-        "binance-futures",
+        "--dry-run",
     ]
 
     with patch.object(sys, "argv", ["parser"] + test_args):
         args = parse_arguments()
-        assert args.exchanges == ["binance-futures"]
+        assert args.dry_run is True
 
 
-def test_parse_exchanges_multiple():
-    """Test --exchanges with multiple values."""
+def test_parse_dry_run_default_false():
+    """Test --dry-run defaults to False."""
     test_args = [
         "--mode",
         "instruments",
         "--start-date",
         "2023-05-23",
-        "--exchanges",
-        "binance-futures",
-        "deribit",
-        "bybit",
     ]
 
     with patch.object(sys, "argv", ["parser"] + test_args):
         args = parse_arguments()
-        assert args.exchanges == ["binance-futures", "deribit", "bybit"]
+        assert args.dry_run is False
 
 
-def test_parse_category_with_exchanges():
-    """Test combining --category and --exchanges."""
+def test_parse_dry_run_with_force():
+    """Test combining --dry-run and --force."""
     test_args = [
         "--mode",
         "instruments",
         "--start-date",
         "2023-05-23",
-        "--category",
-        "CEFI",
-        "--exchanges",
-        "binance-futures",
-        "deribit",
+        "--dry-run",
+        "--force",
     ]
 
     with patch.object(sys, "argv", ["parser"] + test_args):
         args = parse_arguments()
-        assert args.category == ["CEFI"]
-        assert args.exchanges == ["binance-futures", "deribit"]
+        assert args.dry_run is True
+        assert args.force is True
 
 
 # =============================================================================

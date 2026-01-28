@@ -164,8 +164,8 @@ class AaveV3Adapter(BaseDefiAdapter):
             self._thegraph_client._api_key = graph_api_key
 
         # AaveScan Pro API uses v2 endpoint with apiKey query parameter
-        # Configurable via environment variable with default fallback
-        self.base_url = os.environ.get("AAVESCAN_API_URL", "https://api.aavescan.com/v2")
+        # Configurable via config (with default fallback)
+        self.base_url = instruments_config.aavescan_api_url
 
         # Aave V3 Ethereum subgraph ID from The Graph
         # Subgraph: https://thegraph.com/explorer/subgraphs/Cd2gEDVeqnjBn1hSeqFMitw8Q1iiyV9FYUZkLNRcL87g

@@ -26,14 +26,34 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# GCS bucket configuration
-PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "central-element-323112")
+# Cloud project/account configuration (multi-cloud support)
+PROJECT_ID = os.environ.get("GCP_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("AWS_ACCOUNT_ID") or "central-element-323112"
+CLOUD_PROVIDER = os.environ.get("CLOUD_PROVIDER", "gcp").lower()
 CATEGORIES = ["CEFI", "TRADFI", "DEFI"]
 
+
+def _get_bucket_name(category: str) -> str:
+    """Get bucket name for category with multi-cloud support."""
+    category_upper = category.upper()
+    
+    # Check for environment variable override
+    env_key = f"INSTRUMENTS_GCS_BUCKET_{category_upper}"
+    bucket_from_env = os.environ.get(env_key)
+    if bucket_from_env:
+        return bucket_from_env
+    
+    # Generate bucket name based on cloud provider
+    if CLOUD_PROVIDER == "aws":
+        return f"unified-trading-instruments-{category.lower()}-{PROJECT_ID}"
+    else:
+        return f"instruments-store-{category.lower()}-{PROJECT_ID}"
+
+
+# Storage bucket configuration (dynamically generated)
 GCS_BUCKETS = {
-    "CEFI": f"instruments-store-cefi-{PROJECT_ID}",
-    "TRADFI": f"instruments-store-tradfi-{PROJECT_ID}",
-    "DEFI": f"instruments-store-defi-{PROJECT_ID}",
+    "CEFI": _get_bucket_name("CEFI"),
+    "TRADFI": _get_bucket_name("TRADFI"),
+    "DEFI": _get_bucket_name("DEFI"),
 }
 
 # Path pattern: instrument_availability/by_date/day-{YYYY-MM-DD}/instruments.parquet
@@ -109,23 +129,30 @@ class CatalogReport:
 
 
 def get_gcs_client():
-    """Get GCS client, with fallback for mock mode."""
+    """Get cloud storage client (GCS or S3), with fallback for mock mode."""
     mock_mode = os.environ.get("CLOUD_MOCK_MODE", "").lower() == "true"
 
     if mock_mode:
-        logger.warning("Running in MOCK mode - no real GCS checks")
+        logger.warning("Running in MOCK mode - no real storage checks")
         return None
 
     try:
-        from unified_cloud_services import get_gcs_client
-        return get_gcs_client(project_id=PROJECT_ID)
+        # Use cloud-agnostic storage client factory
+        from unified_cloud_services.core.client_factory import get_storage_client
+        return get_storage_client()
     except ImportError:
         try:
-            from google.cloud import storage
-            return storage.Client(project=PROJECT_ID)
-        except Exception as e:
-            logger.warning(f"Could not initialize GCS client: {e}")
-            return None
+            # Fallback to legacy method
+            from unified_cloud_services import get_gcs_client
+            return get_gcs_client(project_id=PROJECT_ID)
+        except ImportError:
+            try:
+                # Last resort: direct GCP client
+                from google.cloud import storage
+                return storage.Client(project=PROJECT_ID)
+            except Exception as e:
+                logger.warning(f"Could not initialize storage client: {e}")
+                return None
 
 
 def check_file_exists(client, bucket_name: str, blob_path: str) -> tuple:

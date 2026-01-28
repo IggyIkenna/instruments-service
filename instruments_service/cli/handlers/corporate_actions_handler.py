@@ -24,8 +24,9 @@ from instruments_service.config import instruments_config
 
 logger = logging.getLogger(__name__)
 
-# GCS bucket for TRADFI instruments
-TRADFI_BUCKET = "instruments-store-tradfi-central-element-323112"
+# GCS bucket for TRADFI instruments - use config
+def _get_tradfi_bucket() -> str:
+    return instruments_config.get_bucket_for_category("tradfi")
 
 
 def parse_date(date_str: str) -> date:
@@ -53,7 +54,7 @@ class CorporateActionsHandler(ModeHandler):
     def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
 
-        self.project_id = config.get("project_id", "central-element-323112")
+        self.project_id = config.get("project_id") or instruments_config.gcp_project_id
 
         # Initialize adapter (yfinance only - free, no API key needed)
         self.adapter = CorporateActionsAdapter()
@@ -82,7 +83,7 @@ class CorporateActionsHandler(ModeHandler):
             import tempfile
 
             client = get_gcs_client(project_id=self.project_id)
-            bucket_name = instruments_config.gcs_bucket_tradfi or TRADFI_BUCKET
+            bucket_name = instruments_config.gcs_bucket_tradfi or _get_tradfi_bucket()
             bucket = client.bucket(bucket_name)
 
             def try_load_tickers(gcs_path: str) -> List[str]:
@@ -294,7 +295,7 @@ class CorporateActionsHandler(ModeHandler):
         """
         Upload corporate actions files to GCS TRADFI bucket.
 
-        Target path: gs://instruments-store-tradfi-central-element-323112/corporate_actions/
+        Target path: gs://{tradfi_bucket}/corporate_actions/
         """
         from instruments_service.config import instruments_config
 
