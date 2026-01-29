@@ -28,6 +28,8 @@ from instruments_service.app.venues.defi.lst_adapters import EtherFiAdapter, Lid
 from instruments_service.app.venues.defi.ethena_adapter import EthenaAdapter
 from instruments_service.app.venues.defi.morpho_adapter import MorphoAdapter
 from instruments_service.app.venues.defi.curve_rpc_adapter import CurveRPCAdapter
+from instruments_service.app.venues.defi.euler_adapter import EulerAdapter
+from instruments_service.app.venues.defi.fluid_adapter import FluidAdapter
 
 # Backwards-compatible imports from onchain_perps
 # DEPRECATED: Import from instruments_service.app.venues.onchain_perps instead
@@ -46,6 +48,8 @@ __all__ = [
     "EthenaAdapter",
     "MorphoAdapter",
     "CurveRPCAdapter",
+    "EulerAdapter",
+    "FluidAdapter",
     # Deprecated - import from onchain_perps
     "HyperliquidAdapter",
     "AsterAdapter",
