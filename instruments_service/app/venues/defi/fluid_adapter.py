@@ -135,17 +135,19 @@ class FluidAdapter(BaseDefiAdapter):
                         symbol=f"{market['collateral_asset']}-{market['borrow_asset']}"
                     )
 
+                    symbol = f"{market['collateral_asset']}-{market['borrow_asset']}"
                     instruments[instrument_key] = {
                         "instrument_key": instrument_key,
                         "venue": self.venue,
                         "instrument_type": "LENDING_MARKET",
+                        "symbol": symbol,
                         "base_asset": market["collateral_asset"],
                         "quote_asset": market["borrow_asset"],
                         "collateral_asset": market["collateral_asset"],
                         "borrow_asset": market["borrow_asset"],
                         "chain": self.chain,
-                        "available_from_datetime": self.FLUID_LAUNCH,
-                        "data_types": ["utilization", "rate_indices", "oracle_prices"],
+                        "available_from_datetime": self.FLUID_LAUNCH.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "data_types": "utilization,rate_indices,oracle_prices",
                         "vault_address": market.get("vault_address"),
                     }
 
