@@ -5,15 +5,21 @@ Fetches Ethena sUSDe/USDe instruments for yield calculation.
 Uses Aave oracle price feed for sUSDe to calculate staking yield from conversion rate changes.
 
 Reference: https://docs.ethena.fi/
+
+NOTE: Venue start dates are centralized in unified_cloud_services.models.VenueMapping.venue_start_dates
 """
 
 import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
+from unified_cloud_services import VenueMapping
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 
 logger = logging.getLogger(__name__)
+
+# Centralized venue config
+_venue_mapping = VenueMapping()
 
 
 class EthenaAdapter(BaseDefiAdapter):
@@ -36,9 +42,6 @@ class EthenaAdapter(BaseDefiAdapter):
     # Contract addresses on Ethereum mainnet
     SUSDE_ADDRESS = "0x9d39a5de30e57443bff2a8307a4256c8797a3497"  # sUSDe token
     USDE_ADDRESS = "0x4c9edd5852cd905f086c759e8383e09bff1e68b3"   # USDe token
-
-    # Ethena mainnet launch date (February 2024)
-    ETHENA_LAUNCH_DATE = datetime(2024, 2, 16)
 
     def __init__(
         self,
@@ -81,11 +84,12 @@ class EthenaAdapter(BaseDefiAdapter):
         Returns:
             Dictionary mapping instrument_key to instrument definition
         """
-        # Check if target_date is before Ethena launch
-        if target_date and target_date < self.ETHENA_LAUNCH_DATE:
+        # Check if target_date is before venue launch (using centralized config)
+        if target_date and not _venue_mapping.is_venue_available_on_date(self.venue, target_date):
+            start_date = _venue_mapping.get_venue_start_date(self.venue)
             logger.info(
-                f"ℹ️ Ethena not available for {target_date.strftime('%Y-%m-%d')} "
-                f"(Ethena mainnet launched February 2024). Returning empty instruments - this is expected."
+                f"ℹ️ {self.venue} not available for {target_date.strftime('%Y-%m-%d')} "
+                f"(launched {start_date}). Returning empty instruments - this is expected."
             )
             return {}
 
