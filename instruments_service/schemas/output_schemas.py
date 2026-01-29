@@ -397,15 +397,19 @@ INSTRUMENTS_SCHEMA = SchemaDefinition(
             name="trading_hours_open",
             dtype="string",
             nullable=True,
-            nullable_overrides={"TRADFI": False},  # Required for TRADFI
-            description="Trading hours open time (TRADFI only)",
+            # Trading hours are optional for all categories:
+            # - CEFI/DEFI: Always null (crypto trades 24/7)
+            # - TRADFI: May be null if exchange trading hours not mapped
+            description="Trading hours open time in UTC (TRADFI only, may be null for unmapped exchanges)",
         ),
         ColumnSchema(
             name="trading_hours_close",
             dtype="string",
             nullable=True,
-            nullable_overrides={"TRADFI": False},  # Required for TRADFI
-            description="Trading hours close time (TRADFI only)",
+            # Trading hours are optional for all categories:
+            # - CEFI/DEFI: Always null (crypto trades 24/7)
+            # - TRADFI: May be null if exchange trading hours not mapped
+            description="Trading hours close time in UTC (TRADFI only, may be null for unmapped exchanges)",
         ),
         ColumnSchema(
             name="trading_session",
