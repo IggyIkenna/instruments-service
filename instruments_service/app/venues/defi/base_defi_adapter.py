@@ -22,13 +22,13 @@ logger = logging.getLogger(__name__)
 def create_aiohttp_session(timeout: int = 30) -> aiohttp.ClientSession:
     """
     Create an aiohttp ClientSession with ThreadedResolver.
-    
+
     This fixes DNS resolution issues on macOS where the default asyncio DNS
     resolver can fail with "Timeout while contacting DNS servers".
-    
+
     Args:
         timeout: Request timeout in seconds
-        
+
     Returns:
         Configured aiohttp.ClientSession
     """

@@ -35,13 +35,13 @@ CATEGORIES = ["CEFI", "TRADFI", "DEFI"]
 def _get_bucket_name(category: str) -> str:
     """Get bucket name for category with multi-cloud support."""
     category_upper = category.upper()
-    
+
     # Check for environment variable override
     env_key = f"INSTRUMENTS_GCS_BUCKET_{category_upper}"
     bucket_from_env = os.environ.get(env_key)
     if bucket_from_env:
         return bucket_from_env
-    
+
     # Generate bucket name based on cloud provider
     if CLOUD_PROVIDER == "aws":
         return f"unified-trading-instruments-{category.lower()}-{PROJECT_ID}"

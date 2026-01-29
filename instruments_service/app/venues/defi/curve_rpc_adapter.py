@@ -181,7 +181,7 @@ class CurveRPCAdapter(BaseDefiAdapter):
                         pool_name = registry.functions.get_pool_name(pool_addr).call(
                             block_identifier=block_number if block_number else "latest"
                         )
-                    except:
+                    except Exception:
                         pool_name = f"Curve Pool {pool_addr[:10]}"
 
                     # Get token symbols (would need ERC20 ABI for full implementation)

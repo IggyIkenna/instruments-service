@@ -71,6 +71,15 @@ INSTRUMENTS_SCHEMA = SchemaDefinition(
             description="Generation timestamp when instrument definition was created/stored",
         ),
         # ==========================================================================
+        # EXECUTION INSTRUCTION TYPE
+        # ==========================================================================
+        ColumnSchema(
+            name="instruction_type",
+            dtype="string",
+            nullable=True,
+            description="Instruction type for execution algorithm selection: TRADE (CLOB), SWAP (DEX), or ZERO_ALPHA (lending/staking)",
+        ),
+        # ==========================================================================
         # METADATA FIELDS (nullable by default, defaults exist)
         # ==========================================================================
         ColumnSchema(
