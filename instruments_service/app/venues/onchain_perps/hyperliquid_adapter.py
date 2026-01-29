@@ -170,11 +170,25 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
                     inst_def = self._convert_asset_to_instrument(asset)
                     if inst_def:
                         # Data types matching Tardis schema for CLOB perps
-                        # trades: Historical trade data from S3 archive
-                        # derivative_ticker: Funding rates + OI + mark/index price
-                        # liquidations: Need to parse from trades (no dedicated endpoint)
-                        # NOTE: book_snapshot_5 available via websocket only
-                        inst_def["data_types"] = "trades,derivative_ticker,liquidations"
+                        # NOTE: liquidations NOT available from any source
+                        inst_def["data_types"] = "trades,derivative_ticker,book_snapshot_5"
+
+                        # Data source routing metadata (for variable sources per data type)
+                        # This tells market-tick-data-handler which source to use for each date range
+                        import json
+                        inst_def["data_sources_metadata"] = json.dumps({
+                            "trades": [
+                                {"source": "tardis", "start": "2024-10-29", "end": "2025-03-21", "notes": "Tardis.dev hyperliquid exchange"},
+                                {"source": "hyperliquid_s3", "start": "2025-03-22", "end": None, "notes": "hl-mainnet-node-data/node_fills bucket"}
+                            ],
+                            "derivative_ticker": [
+                                {"source": "hyperliquid_s3", "start": "2023-05-20", "end": None, "notes": "hyperliquid-archive/asset_ctxs bucket"}
+                            ],
+                            "book_snapshot_5": [
+                                {"source": "hyperliquid_s3", "start": "2023-04-15", "end": None, "notes": "hyperliquid-archive/market_data bucket"}
+                            ],
+                            "liquidations": None  # NOT AVAILABLE from any source
+                        })
 
                         instruments[inst_def["instrument_key"]] = inst_def
                 except Exception as e:
@@ -252,9 +266,20 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
                     # Create SPOT_PAIR instrument (Hyperliquid spot uses USDC as quote)
                     inst_def = self._convert_asset_to_spot_pair(asset)
                     if inst_def:
-                        # Set default data types - actual data fetching happens in market tick data handler
                         # Hyperliquid spot supports trades and order book snapshots
                         inst_def["data_types"] = "trades,book_snapshot_5"
+
+                        # Data source routing metadata for spot (same as perps)
+                        import json
+                        inst_def["data_sources_metadata"] = json.dumps({
+                            "trades": [
+                                {"source": "tardis", "start": "2024-10-29", "end": "2025-03-21"},
+                                {"source": "hyperliquid_s3", "start": "2025-03-22", "end": None}
+                            ],
+                            "book_snapshot_5": [
+                                {"source": "hyperliquid_s3", "start": "2023-04-15", "end": None}
+                            ]
+                        })
 
                         instruments[inst_def["instrument_key"]] = inst_def
                 except Exception as e:

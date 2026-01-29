@@ -184,9 +184,10 @@ class InstrumentsService:
             # Validate venues against allowed venues for each market type
             if venues_filter:
                 # Get allowed venues for each market type from config
+                # Use all_cefi_venues which includes both Tardis exchanges AND on-chain CLOBs (Hyperliquid, Aster)
                 allowed_cefi_venues = set(
-                    self.venue_mapping.tardis_to_venue.values()
-                )  # Canonical venues from CEFI
+                    self.venue_mapping.all_cefi_venues
+                )  # Canonical venues from CEFI (Tardis + on-chain CLOBs)
                 allowed_tradfi_venues = set(
                     self.venue_mapping.all_databento_venues
                 )  # TRADFI venues
@@ -363,6 +364,37 @@ class InstrumentsService:
                     for result in results:
                         if result:
                             all_instruments.update(result)
+
+                # Process on-chain CLOB venues (Hyperliquid, Aster) as part of CEFI
+                # These produce CLOB-style data with chain="off-chain", so they're classified as CEFI
+                cefi_onchain_clob_venues = self.venue_mapping.all_cefi_onchain_clob_venues
+                cefi_clob_protocols = []
+
+                if venues_filter:
+                    # Check if any on-chain CLOB venues are in the filter
+                    for venue in venues_filter:
+                        if venue.upper() in cefi_onchain_clob_venues:
+                            protocol_name = venue.lower()
+                            cefi_clob_protocols.append((protocol_name, None))
+                else:
+                    # Process all on-chain CLOB venues
+                    for venue in cefi_onchain_clob_venues:
+                        cefi_clob_protocols.append((venue.lower(), None))
+
+                if cefi_clob_protocols:
+                    logger.info(f"🚀 Processing {len(cefi_clob_protocols)} on-chain CLOB venues (CEFI): {[p[0] for p in cefi_clob_protocols]}")
+                    for protocol, chain in cefi_clob_protocols:
+                        try:
+                            # Fetch on-chain CLOB instruments via processing_service
+                            clob_instruments = self.processing_service.fetch_defi_instruments(
+                                protocol=protocol,
+                                target_date=date,
+                            )
+                            if clob_instruments:
+                                all_instruments.update(clob_instruments)
+                                logger.info(f"✅ Processed {len(clob_instruments)} instruments from {protocol} (CEFI on-chain CLOB)")
+                        except Exception as e:
+                            logger.error(f"❌ Failed to process on-chain CLOB {protocol}: {e}", exc_info=True)
 
             # Process TRADFI (Databento) exchanges
             if tradfi:

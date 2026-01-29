@@ -7,7 +7,6 @@ with dimension-aware nullability.
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from unified_cloud_services import ParquetSchemaEnforcer
 from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA, get_instruments_schema
@@ -26,7 +25,7 @@ class TestInstrumentsSchema:
     def test_required_columns_all_categories(self):
         """Test required columns are consistent across categories."""
         schema = INSTRUMENTS_SCHEMA
-        
+
         # Core columns should be required for all categories
         for category in ["CEFI", "TRADFI", "DEFI"]:
             required = schema.get_required_columns({"category": category})
@@ -40,7 +39,7 @@ class TestInstrumentsSchema:
     def test_cefi_specific_columns(self):
         """Test CEFI-specific column requirements."""
         schema = INSTRUMENTS_SCHEMA
-        
+
         # tardis_exchange should be required for CEFI
         assert schema.is_nullable("tardis_exchange", {"category": "CEFI"}) is False
         # But nullable for TRADFI
@@ -49,12 +48,12 @@ class TestInstrumentsSchema:
     def test_tradfi_specific_columns(self):
         """Test TRADFI-specific column requirements."""
         schema = INSTRUMENTS_SCHEMA
-        
+
         # databento_symbol should be required for TRADFI
         assert schema.is_nullable("databento_symbol", {"category": "TRADFI"}) is False
         # But nullable for CEFI
         assert schema.is_nullable("databento_symbol", {"category": "CEFI"}) is True
-        
+
         # Trading hours should be required for TRADFI
         assert schema.is_nullable("trading_hours_open", {"category": "TRADFI"}) is False
         assert schema.is_nullable("trading_hours_close", {"category": "TRADFI"}) is False
@@ -71,10 +70,10 @@ class TestInstrumentsSchema:
             "tardis_exchange": ["binance-futures"],  # Required for CEFI
             "databento_symbol": [None],  # Nullable for CEFI
         })
-        
+
         enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
         result = enforcer.validate_dataframe(df, {"category": "CEFI"})
-        
+
         assert result.valid is True
 
     def test_validate_invalid_cefi_missing_tardis(self):
@@ -88,10 +87,10 @@ class TestInstrumentsSchema:
             "timestamp": [pd.Timestamp("2024-01-01")],
             "tardis_exchange": [np.nan],  # Missing - should fail for CEFI
         })
-        
+
         enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
         result = enforcer.validate_dataframe(df, {"category": "CEFI"})
-        
+
         assert result.valid is False
         assert any("tardis_exchange" in str(e) for e in result.errors)
 
@@ -109,10 +108,10 @@ class TestInstrumentsSchema:
             "trading_hours_close": ["16:00:00-05:00"],  # Required for TRADFI
             "tardis_exchange": [None],  # Nullable for TRADFI
         })
-        
+
         enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
         result = enforcer.validate_dataframe(df, {"category": "TRADFI"})
-        
+
         assert result.valid is True
 
     def test_validate_invalid_tradfi_missing_databento(self):
@@ -128,9 +127,9 @@ class TestInstrumentsSchema:
             "trading_hours_open": ["09:30:00-05:00"],
             "trading_hours_close": ["16:00:00-05:00"],
         })
-        
+
         enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
         result = enforcer.validate_dataframe(df, {"category": "TRADFI"})
-        
+
         assert result.valid is False
         assert any("databento_symbol" in str(e) for e in result.errors)
