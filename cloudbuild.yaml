@@ -40,10 +40,15 @@ steps:
         
         echo "=== Installing dependencies ==="
         pip install --quiet --upgrade pip setuptools wheel
-        pip install --quiet polars pyarrow  # Required by unified-cloud-services
+        
+        # Install unified-cloud-services from local clone FIRST
         pip install --quiet -e /workspace/unified-cloud-services
         pip install --quiet -e /workspace/unified-trading-deployment-v2 || true
-        pip install --quiet -e . || pip install --quiet -e ".[dev]"
+        
+        # Install instruments-service deps (skip git-based ucs, already installed)
+        pip install --quiet --no-deps -e .
+        pip install --quiet ccxt databento web3 eth-abi exchange-calendars yfinance plotly boto3 numpy pandas polars pydantic pydantic-settings python-dateutil python-dotenv requests
+        
         pip install --quiet ruff pytest
 
         echo "=== Running linting (ruff) ==="
