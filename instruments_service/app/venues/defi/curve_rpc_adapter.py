@@ -312,6 +312,13 @@ class CurveRPCAdapter(BaseDefiAdapter):
                     "%Y-%m-%dT%H:%M:%SZ"
                 ),
                 "data_types": "swaps,liquidity,volume",
+                # Required fields for market-tick-data-handler routing
+                "asset_class": "crypto",
+                "venue_type": "protocol",
+                "data_provider": "the_graph",  # Uses The Graph subgraph for data
+                "tardis_exchange": "",
+                "tardis_symbol": "",
+                "exchange_raw_symbol": pool.get("id"),  # Pool address as raw symbol
             }
 
         logger.info(f"✅ Generated {len(instruments)} Curve instrument definitions")
