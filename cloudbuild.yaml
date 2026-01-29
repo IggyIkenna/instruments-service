@@ -49,10 +49,12 @@ steps:
         echo "=== Running tests (pytest) ==="
         if [ -d "tests" ]; then
           pytest tests/ -v --tb=short || exit 1
-        echo "=== Running smoke tests ==="
-        if [ -d "tests/smoke" ]; then
-          pytest tests/smoke/ -v --tb=short || echo "Some smoke tests skipped"
-        fi          echo "Tests passed"
+          echo "Tests passed"
+          echo "=== Running smoke tests ==="
+          if [ -d "tests/smoke" ]; then
+            pytest tests/smoke/ -v --tb=short || exit 1
+            echo "Smoke tests passed"
+          fi
         else
           echo "No tests directory found, skipping tests"
         fi

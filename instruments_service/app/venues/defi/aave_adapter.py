@@ -13,7 +13,6 @@ Reference: instruments-service/docs/MVP_INSTRUMENTS.md (DeFi section)
 """
 
 import logging
-import os
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
 

@@ -20,6 +20,7 @@ from unified_cloud_services import (
 )
 
 from instruments_service.config import instruments_config
+from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +42,6 @@ try:
 except ImportError:
     SAMPLING_SERVICE_AVAILABLE = False
     logger.debug("Sampling service not available")
-
-# Import schema for validation
-from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
 
 
 class CloudInstrumentStorage:
