@@ -43,35 +43,37 @@ class CurveRPCAdapter(BaseDefiAdapter):
         """
         super().__init__(chain=chain, api_key=api_key, project_id=project_id)
         self.w3 = None
+        self.rpc_url = None
 
-        # Get RPC URL
-        if rpc_url:
-            self.rpc_url = rpc_url
-        else:
-
-            project_id = project_id or instruments_config.gcp_project_id
-            alchemy_key = get_secret_with_fallback(
-                project_id=project_id,
-                secret_name=instruments_config.alchemy_secret_name,
-                fallback_env_var="ALCHEMY_API_KEY",
-            )
-
-            if alchemy_key:
-                self.rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key}"
+        # Initialize web3 provider for RPC interaction
+        try:
+            if not rpc_url:
+                try:
+                    alchemy_key = get_secret_with_fallback(
+                        project_id=instruments_config.gcp_project_id,
+                        secret_name=instruments_config.alchemy_secret_name,
+                        fallback_env_var="ALCHEMY_API_KEY",
+                    )
+                    if alchemy_key:
+                        self.rpc_url = f"https://eth-mainnet.g.alchemy.com/v2/{alchemy_key.strip()}"
+                        logger.info("✅ Constructed Ethereum RPC URL from Alchemy API key")
+                    else:
+                        self.rpc_url = instruments_config.ethereum_rpc_url
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to get RPC URL from Secret Manager: {e}")
+                    self.rpc_url = instruments_config.ethereum_rpc_url
             else:
-                self.rpc_url = instruments_config.ethereum_rpc_url
+                self.rpc_url = rpc_url
 
-        if self.rpc_url:
-            try:
+            if self.rpc_url:
                 self.w3 = Web3(Web3.HTTPProvider(self.rpc_url))
                 if self.w3.is_connected():
                     logger.info("✅ Connected to Ethereum RPC for Curve queries")
                 else:
                     logger.warning("⚠️ Failed to connect to Ethereum RPC")
                     self.w3 = None
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to initialize Web3: {e}")
-                self.w3 = None
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize Web3: {e}")
 
         # Curve Registry contract address (Ethereum mainnet)
         self.registry_address = "0x90E00ACe148ca3b23Ac1bC8C240C2a7Dd9c2d9f5"
