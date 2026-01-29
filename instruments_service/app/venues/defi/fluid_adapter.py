@@ -149,6 +149,13 @@ class FluidAdapter(BaseDefiAdapter):
                         "available_from_datetime": self.FLUID_LAUNCH.strftime("%Y-%m-%dT%H:%M:%SZ"),
                         "data_types": "utilization,rate_indices,oracle_prices",
                         "vault_address": market.get("vault_address"),
+                        # Required fields for market-tick-data-handler routing
+                        "asset_class": "crypto",
+                        "venue_type": "protocol",
+                        "data_provider": "fluid_rpc",  # Uses RPC for on-chain data
+                        "tardis_exchange": "",
+                        "tardis_symbol": "",
+                        "exchange_raw_symbol": market.get("vault_address", ""),
                     }
 
                 except Exception as e:
