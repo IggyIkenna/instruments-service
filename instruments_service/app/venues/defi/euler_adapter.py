@@ -149,6 +149,13 @@ class EulerAdapter(BaseDefiAdapter):
                         "available_from_datetime": self.EULER_V2_LAUNCH.strftime("%Y-%m-%dT%H:%M:%SZ"),
                         "data_types": "utilization,rate_indices,oracle_prices",
                         "market_address": market.get("market_address"),
+                        # Required fields for market-tick-data-handler routing
+                        "asset_class": "crypto",
+                        "venue_type": "protocol",
+                        "data_provider": "euler_rpc",  # Uses RPC for on-chain data
+                        "tardis_exchange": "",
+                        "tardis_symbol": "",
+                        "exchange_raw_symbol": market.get("market_address", ""),
                     }
 
                 except Exception as e:
