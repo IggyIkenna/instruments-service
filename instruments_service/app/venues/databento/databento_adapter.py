@@ -718,10 +718,10 @@ class DatabentoAdapter:
             "leverage_tiers_json": None,
 
             # ============================================================================
-            # TRADING HOURS METADATA (forex trades 24/7)
+            # TRADING HOURS METADATA (forex trades 24/7, Sun 5pm ET - Fri 5pm ET)
             # ============================================================================
-            "trading_hours_open": None,  # Forex trades 24/7, no specific open time
-            "trading_hours_close": None,  # Forex trades 24/7, no specific close time
+            "trading_hours_open": "00:00:00+00:00",  # Forex trades 24/7 (Sun-Fri), use midnight UTC
+            "trading_hours_close": "23:59:59+00:00",  # Forex trades 24/7, use end of day UTC
             "trading_session": "24/7",  # Forex market trades continuously
             "is_trading_day": True,  # Forex trades every day (including weekends)
             "holiday_calendar": None,  # No holidays for forex market
