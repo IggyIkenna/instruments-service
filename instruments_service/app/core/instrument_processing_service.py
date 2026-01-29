@@ -52,6 +52,9 @@ from instruments_service.app.venues.defi import (
     LidoAdapter,
     MorphoAdapter,
     EthenaAdapter,
+    CurveRPCAdapter,
+    EulerAdapter,
+    FluidAdapter,
 )
 
 # On-chain CLOB perps (Tardis-compatible data schema)
@@ -2312,15 +2315,36 @@ class InstrumentProcessingService:
                 )
 
             elif protocol.lower() == "curve":
-                logger.debug(f"DeFi adapter {protocol.lower()} not available (not yet implemented)")
-                return {}
+                adapter = CurveRPCAdapter(chain=chain)
+                pools = adapter.fetch_pools()
+                # Convert pools to instrument definitions
+                raw_instruments = {}
+                for pool in pools:
+                    instrument_key = f"CURVE-ETH:POOL:{pool.get('name', pool.get('id', '')[:10])}@ETHEREUM"
+                    raw_instruments[instrument_key] = {
+                        "instrument_key": instrument_key,
+                        "venue": "CURVE-ETH",
+                        "instrument_type": "POOL",
+                        "pool_address": pool.get("id"),
+                        "pool_name": pool.get("name"),
+                        "chain": chain,
+                        "available_from_datetime": datetime(2020, 1, 20, tzinfo=timezone.utc),  # Curve launch
+                    }
 
             elif protocol.lower() == "ethena":
                 adapter = EthenaAdapter(chain=chain)
                 raw_instruments = adapter.fetch_yield_bearing_instruments()
 
+            elif protocol.lower() == "euler_plasma":
+                adapter = EulerAdapter(chain=chain if chain else "ETHEREUM")
+                raw_instruments = adapter.fetch_markets(target_date=target_date)
+
+            elif protocol.lower() == "fluid_plasma":
+                adapter = FluidAdapter(chain=chain if chain else "ETHEREUM")
+                raw_instruments = adapter.fetch_markets(target_date=target_date)
+
             else:
-                # Protocol is listed but not yet implemented (e.g., euler_plasma, fluid_plasma, aave_plasma)
+                # Protocol is listed but not yet implemented (e.g., aave_plasma)
                 logger.debug(f"DeFi protocol '{protocol}' not yet implemented, skipping")
                 return {}
 
