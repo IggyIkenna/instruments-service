@@ -54,9 +54,9 @@ class TestInstrumentsSchema:
         # But nullable for CEFI
         assert schema.is_nullable("databento_symbol", {"category": "CEFI"}) is True
 
-        # Trading hours should be required for TRADFI
-        assert schema.is_nullable("trading_hours_open", {"category": "TRADFI"}) is False
-        assert schema.is_nullable("trading_hours_close", {"category": "TRADFI"}) is False
+        # Trading hours are now nullable for all categories (TRADFI may have unmapped exchanges)
+        assert schema.is_nullable("trading_hours_open", {"category": "TRADFI"}) is True
+        assert schema.is_nullable("trading_hours_close", {"category": "TRADFI"}) is True
 
     def test_validate_valid_cefi_instruments(self):
         """Test validation with valid CEFI instruments."""
@@ -104,8 +104,8 @@ class TestInstrumentsSchema:
             "available_from_datetime": [pd.Timestamp("2020-01-01")],
             "timestamp": [pd.Timestamp("2024-01-01")],
             "databento_symbol": ["ES.FUT"],  # Required for TRADFI
-            "trading_hours_open": ["09:30:00-05:00"],  # Required for TRADFI
-            "trading_hours_close": ["16:00:00-05:00"],  # Required for TRADFI
+            "trading_hours_open": ["09:30:00-05:00"],  # Optional (populated when exchange mapped)
+            "trading_hours_close": ["16:00:00-05:00"],  # Optional (populated when exchange mapped)
             "tardis_exchange": [None],  # Nullable for TRADFI
         })
 
