@@ -66,9 +66,12 @@ COPY --from=with-github-ucs /usr/local/lib/python3.13/site-packages/ /usr/local/
 # Copy instruments-service source code
 COPY . /app/instruments-service
 
-# Install instruments-service
+# Install instruments-service (skip unified-cloud-services, already installed)
+# Configure git to use GH_PAT for any remaining git dependencies
 WORKDIR /app/instruments-service
-RUN pip install -e .
+RUN git config --global url."https://${GH_PAT}@github.com/".insteadOf "https://github.com/" && \
+    pip install -e . && \
+    git config --global --unset url."https://${GH_PAT}@github.com/".insteadOf
 
 # Create data directories
 RUN mkdir -p /app/data/samples /app/logs
