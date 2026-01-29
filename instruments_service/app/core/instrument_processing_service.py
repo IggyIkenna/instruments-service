@@ -2315,21 +2315,8 @@ class InstrumentProcessingService:
                 )
 
             elif protocol.lower() == "curve":
-                adapter = CurveRPCAdapter(chain=chain)
-                pools = adapter.fetch_pools()
-                # Convert pools to instrument definitions
-                raw_instruments = {}
-                for pool in pools:
-                    instrument_key = f"CURVE-ETH:POOL:{pool.get('name', pool.get('id', '')[:10])}@ETHEREUM"
-                    raw_instruments[instrument_key] = {
-                        "instrument_key": instrument_key,
-                        "venue": "CURVE-ETH",
-                        "instrument_type": "POOL",
-                        "pool_address": pool.get("id"),
-                        "pool_name": pool.get("name"),
-                        "chain": chain,
-                        "available_from_datetime": datetime(2020, 1, 20, tzinfo=timezone.utc),  # Curve launch
-                    }
+                adapter = CurveRPCAdapter(chain=chain if chain else "ETHEREUM")
+                raw_instruments = adapter.fetch_markets(target_date=target_date)
 
             elif protocol.lower() == "ethena":
                 adapter = EthenaAdapter(chain=chain)
