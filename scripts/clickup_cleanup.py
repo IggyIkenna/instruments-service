@@ -96,7 +96,7 @@ class TasksMdParser:
                             ).strftime("%Y-%m-%d")
                         else:
                             current_task["due_date"] = due_str
-                    except:
+                    except (ValueError, TypeError):
                         current_task["due_date"] = due_str
                     continue
 

@@ -68,6 +68,23 @@ class InstrumentDefinition(BaseModel):
         description="Comma-separated list of available data types",
     )
 
+    # Per-data-type source routing (for venues with variable data sources)
+    # JSON string mapping data_type -> source info (provider, start_date, end_date)
+    # Example for Hyperliquid:
+    # {
+    #   "trades": [
+    #     {"source": "tardis", "start": "2024-10-29", "end": "2025-03-21"},
+    #     {"source": "hyperliquid_s3", "start": "2025-03-22", "end": null}
+    #   ],
+    #   "book_snapshot_5": [{"source": "hyperliquid_s3", "start": "2023-04-15", "end": null}],
+    #   "derivative_ticker": [{"source": "hyperliquid_s3", "start": "2023-05-20", "end": null}]
+    # }
+    data_sources_metadata: Optional[str] = Field(
+        default=None,
+        description="JSON string mapping data types to their sources with availability dates. "
+        "Used for venues with multiple data sources per data type (e.g., Hyperliquid: Tardis for early trades, S3 for recent).",
+    )
+
     # Asset information
     base_asset: str = Field(default="", description="Base asset symbol (e.g., BTC, ETH)")
     quote_asset: str = Field(default="", description="Quote asset symbol (e.g., USDT, USD)")
@@ -116,6 +133,12 @@ class InstrumentDefinition(BaseModel):
     market_category: str = Field(
         default="",
         description="Market category: 'CEFI' (databento_symbol empty AND chain off-chain), 'TRADFI' (databento_symbol filled), 'DEFI' (chain not off-chain). Auto-populated from databento_symbol and chain fields.",
+    )
+
+    # Execution instruction type classification (TRADE, SWAP, ZERO_ALPHA)
+    instruction_type: Optional[str] = Field(
+        default=None,
+        description="Instruction type for execution algorithm selection: 'TRADE' (CLOB venues like Binance, Hyperliquid, CME), 'SWAP' (DEX venues like Uniswap, Curve), 'ZERO_ALPHA' (lending/staking venues like AAVE, Lido). Auto-populated from venue.",
     )
 
     base_asset_contract_address: Optional[str] = Field(

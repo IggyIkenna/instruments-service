@@ -83,7 +83,7 @@ class ClickUpClient:
             try:
                 error_detail = response.json()
                 print(f"   🔍 API Error Details: {json.dumps(error_detail, indent=2)[:500]}")
-            except:
+            except (ValueError, json.JSONDecodeError):
                 print(f"   🔍 API Error Response: {response.text[:500]}")
 
         response.raise_for_status()
@@ -248,7 +248,7 @@ class StatusMdParser:
                         due_date = int(
                             datetime.strptime(target_date, "%Y-%m-%d").timestamp() * 1000
                         )
-                except:
+                except (ValueError, TypeError):
                     pass
 
             milestones.append(
@@ -340,7 +340,7 @@ class StatusMdParser:
                         due_date = int(
                             datetime.strptime(actual_date, "%Y-%m-%d").timestamp() * 1000
                         )
-                except:
+                except (ValueError, TypeError):
                     pass
 
             completed_milestones.append(
@@ -434,7 +434,7 @@ class StatusMdParser:
                             due_date = int(
                                 datetime.strptime(due_date_str, "%Y-%m-%d").timestamp() * 1000
                             )
-                        except:
+                        except (ValueError, TypeError):
                             pass
 
                     # Map priority to ClickUp priority (1=Urgent, 2=High, 3=Normal, 4=Low)
@@ -728,7 +728,7 @@ class StatusMdParser:
                 if coverage_match:
                     try:
                         coverage_pct = float(coverage_match.group(1))
-                    except:
+                    except (ValueError, TypeError):
                         pass
 
             # Handle multi-strategy entries (e.g., "Delta-One ML / TradFi")
