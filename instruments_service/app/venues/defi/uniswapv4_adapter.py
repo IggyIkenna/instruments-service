@@ -21,7 +21,10 @@ from datetime import datetime
 
 import aiohttp
 
-from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
+from instruments_service.app.venues.defi.base_defi_adapter import (
+    BaseDefiAdapter,
+    create_aiohttp_session,
+)
 from instruments_service.config import instruments_config
 from unified_cloud_services import get_secret_with_fallback
 

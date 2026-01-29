@@ -74,7 +74,7 @@ def main() -> Dict[str, Any]:
     """
     global _shutdown_handler
     mode_handler = None  # Track mode handler for cleanup on signal
-    
+
     def cleanup_on_signal():
         """Cleanup function called on SIGTERM/SIGINT."""
         nonlocal mode_handler
@@ -84,10 +84,10 @@ def main() -> Dict[str, Any]:
                 logger.info("Cleanup completed on signal")
             except Exception as e:
                 logger.warning(f"Cleanup error on signal: {e}")
-    
+
     # Initialize graceful shutdown handler (handles SIGTERM/SIGINT)
     _shutdown_handler = GracefulShutdownHandler(cleanup_callback=cleanup_on_signal)
-    
+
     try:
         # Parse arguments
         args = parse_arguments()
