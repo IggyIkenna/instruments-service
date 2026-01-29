@@ -5,16 +5,21 @@ Fetches LST (Liquid Staking Token) instruments from protocol SDKs or The Graph.
 Generates canonical instrument keys for staking positions.
 
 Reference: instruments-service/docs/MVP_INSTRUMENTS.md (DeFi section)
+
+NOTE: Venue start dates are centralized in unified_cloud_services.models.VenueMapping.venue_start_dates
 """
 
 import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
-from unified_cloud_services import handle_api_errors
+from unified_cloud_services import handle_api_errors, VenueMapping
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 
 logger = logging.getLogger(__name__)
+
+# Centralized venue config
+_venue_mapping = VenueMapping()
 
 
 class EtherFiAdapter(BaseDefiAdapter):
@@ -24,9 +29,6 @@ class EtherFiAdapter(BaseDefiAdapter):
     Generates instruments in format:
     ETHERFI:LST:WEETH@ETHEREUM
     """
-
-    # EtherFi mainnet launch (weETH launched ~January 2024)
-    ETHERFI_LAUNCH_DATE = datetime(2024, 1, 1)
 
     def __init__(
         self,
@@ -70,11 +72,12 @@ class EtherFiAdapter(BaseDefiAdapter):
         Returns:
             Dictionary mapping instrument_key to instrument definition
         """
-        # Check if target_date is before EtherFi launch
-        if target_date and target_date < self.ETHERFI_LAUNCH_DATE:
+        # Check if target_date is before venue launch (using centralized config)
+        if target_date and not _venue_mapping.is_venue_available_on_date(self.venue, target_date):
+            start_date = _venue_mapping.get_venue_start_date(self.venue)
             logger.info(
-                f"ℹ️ EtherFi weETH not available for {target_date.strftime('%Y-%m-%d')} "
-                f"(EtherFi weETH launched January 2024). Returning empty instruments - this is expected."
+                f"ℹ️ {self.venue} not available for {target_date.strftime('%Y-%m-%d')} "
+                f"(launched {start_date}). Returning empty instruments - this is expected."
             )
             return {}
 
