@@ -144,6 +144,58 @@ instruments_df = service.query_instruments(
 )
 ```
 
+## OpenBB Integration (Corporate Actions)
+
+This service uses **OpenBB** for enhanced corporate actions data (earnings, dividends) via the `CorporateActionsAdapter`.
+
+### Data Sources
+
+| Data Type | Primary Provider | Fallback |
+|-----------|-----------------|----------|
+| Earnings | FMP (via OpenBB) | yfinance |
+| Dividends | FMP (via OpenBB) | yfinance |
+
+OpenBB provides richer data (revenue, fiscal periods, surprise %) compared to yfinance.
+
+### Setup
+
+```bash
+# Install with OpenBB support
+pip install -e ".[openbb]"
+
+# Or install openbb separately
+pip install openbb
+```
+
+### API Keys
+
+API keys are loaded from Secret Manager or environment variables:
+
+| Secret Name | Env Fallback | Purpose |
+|-------------|--------------|---------|
+| `openbb-fmp-api-key` | `FMP_API_KEY` | FMP fundamentals/corporate actions |
+
+Get a free FMP API key at: https://financialmodelingprep.com/developer/docs/ (250 calls/day free tier)
+
+### Usage
+
+```python
+from instruments_service.corporate_actions import CorporateActionsAdapter
+
+# Use OpenBB as primary provider with yfinance fallback
+adapter = CorporateActionsAdapter(
+    provider="openbb",
+    fallback_to_yfinance=True,
+    project_id="your-project-id"
+)
+
+# Fetch earnings with enhanced data
+earnings = adapter.fetch_earnings("AAPL", start_date, end_date)
+
+# Fetch dividends
+dividends = adapter.fetch_dividends("AAPL", start_date, end_date)
+```
+
 ## Documentation
 
 - [Service Overview](docs/SERVICE_OVERVIEW.md) - Architecture and design

@@ -377,7 +377,7 @@ def test_parse_project_id():
 
 
 def test_parse_project_id_default():
-    """Test default project-id."""
+    """Test default project-id is None (service config provides default)."""
     test_args = [
         "--mode",
         "instruments",
@@ -387,7 +387,8 @@ def test_parse_project_id_default():
 
     with patch.object(sys, "argv", ["parser"] + test_args):
         args = parse_arguments()
-        assert args.project_id == "central-element-323112"
+        # Parser returns None, service config provides the default
+        assert args.project_id is None
 
 
 def test_parse_gcs_bucket():
