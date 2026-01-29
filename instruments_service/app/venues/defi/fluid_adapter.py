@@ -155,7 +155,7 @@ class FluidAdapter(BaseDefiAdapter):
                         "data_provider": "fluid_rpc",  # Uses RPC for on-chain data
                         "tardis_exchange": "",
                         "tardis_symbol": "",
-                        "exchange_raw_symbol": market.get("vault_address", ""),
+                        "exchange_raw_symbol": market.get("vault_address") or "",
                     }
 
                 except Exception as e:

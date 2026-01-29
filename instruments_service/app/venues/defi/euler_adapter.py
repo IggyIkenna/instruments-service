@@ -155,7 +155,7 @@ class EulerAdapter(BaseDefiAdapter):
                         "data_provider": "euler_rpc",  # Uses RPC for on-chain data
                         "tardis_exchange": "",
                         "tardis_symbol": "",
-                        "exchange_raw_symbol": market.get("market_address", ""),
+                        "exchange_raw_symbol": market.get("market_address") or "",
                     }
 
                 except Exception as e:
