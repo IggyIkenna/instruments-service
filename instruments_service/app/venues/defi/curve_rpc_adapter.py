@@ -52,7 +52,7 @@ class CurveRPCAdapter(BaseDefiAdapter):
             project_id = project_id or instruments_config.gcp_project_id
             alchemy_key = get_secret_with_fallback(
                 project_id=project_id,
-                secret_name="alchemy-api-key",
+                secret_name=instruments_config.alchemy_secret_name,
                 fallback_env_var="ALCHEMY_API_KEY",
             )
 
@@ -75,7 +75,7 @@ class CurveRPCAdapter(BaseDefiAdapter):
 
         # Curve Registry contract address (Ethereum mainnet)
         self.registry_address = "0x90E00ACe148ca3b23Ac1bC8C240C2a7Dd9c2d9f5"
-        self.venue = "CURVE"
+        self.venue = "CURVE-ETH"
 
         # Minimal Registry ABI for get_pool_list()
         self.registry_abi = [
@@ -114,13 +114,13 @@ class CurveRPCAdapter(BaseDefiAdapter):
         instruments = []
         for pool in pools:
             instrument_key = self._build_instrument_key(
-                venue="CURVE",
+                venue="CURVE-ETH",
                 instrument_type="POOL",
                 symbol=pool.get("name", pool.get("id", "")[:10])
             )
             instruments.append({
                 "instrument_key": instrument_key,
-                "venue": "CURVE",
+                "venue": "CURVE-ETH",
                 "instrument_type": "POOL",
                 "pool_address": pool.get("id"),
                 "pool_name": pool.get("name"),
