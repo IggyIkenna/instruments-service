@@ -85,7 +85,7 @@ class FluidAdapter(BaseDefiAdapter):
                 if rpc_url:
                     self.web3 = Web3(Web3.HTTPProvider(rpc_url))
                     if self.web3.is_connected():
-                        logger.info(f"✅ Connected to Ethereum RPC for Fluid queries")
+                        logger.info("✅ Connected to Ethereum RPC for Fluid queries")
                     else:
                         self.web3 = None
             except Exception as e:
