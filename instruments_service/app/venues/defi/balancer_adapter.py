@@ -1,6 +1,22 @@
 """
 Balancer Adapter
 
+================================================================================
+FUTURE IMPLEMENTATION - NOT MVP
+================================================================================
+This adapter is preserved for future implementation but is NOT part of the MVP.
+DO NOT include BALANCER-ETH in any deployment configurations or validation.
+
+Reason: The Graph hosted service has been deprecated. The RPC fallback approach
+requires additional development for reliable historical data retrieval from
+Balancer V2 Vault contract logs.
+
+When revisiting:
+1. Test eth_getLogs against Alchemy archive node
+2. Verify pool discovery logic with min TVL filtering
+3. Add rate limiting and pagination for large block ranges
+================================================================================
+
 Fetches Balancer pool instruments from Balancer API v3 (GraphQL).
 Generates canonical instrument keys for Balancer pools.
 
