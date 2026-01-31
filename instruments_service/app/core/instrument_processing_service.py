@@ -2376,8 +2376,9 @@ class InstrumentProcessingService:
             elif protocol.lower() == "ethena":
                 # Ethena uses USDE as the base asset - special case for yield-bearing tokens
                 # sUSDe represents staked USDE, so USDE is the underlying
+                # quote_asset is also USDE (sUSDe is quoted in USDE exchange rate)
                 mvp_bases = {"USDE", "SUSDE"}
-                mvp_quotes = {""}  # No quote currency for yield-bearing tokens
+                mvp_quotes = {"USDE", "SUSDE", ""}  # sUSDe quoted in USDE + allow empty
             else:
                 mvp_quotes = {q.upper() for q in quote_currency_list}
                 mvp_bases = {b.upper() for b in base_currency_list}
