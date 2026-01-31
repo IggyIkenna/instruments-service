@@ -253,6 +253,12 @@ INSTRUMENTS_SCHEMA = SchemaDefinition(
             description="ERC-20 contract address for quote asset (DeFi only)",
         ),
         ColumnSchema(
+            name="pool_id",
+            dtype="string",
+            nullable=True,
+            description="Full pool ID for API queries (e.g., Balancer poolEvents)",
+        ),
+        ColumnSchema(
             name="pool_address",
             dtype="string",
             nullable=True,
