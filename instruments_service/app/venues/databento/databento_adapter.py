@@ -83,8 +83,10 @@ class DatabentoAdapter:
             project_id: GCP project ID for Secret Manager (defaults to GCP_PROJECT_ID env var)
         """
         # Create config with instruments-service specific settings
+        # Note: DatabentoClientConfig uses secret_name_prefix for multi-key rotation
+        # e.g., secret_name_prefix="databento-api-key" -> databento-api-key-1, databento-api-key-2, etc.
         config = DatabentoClientConfig(
-            secret_name=instruments_config.databento_secret_name,
+            secret_name_prefix=instruments_config.databento_secret_name,
             fallback_env_var="DATABENTO_API_KEY",
             reuse_client=True,  # Enable module-level client caching
         )
@@ -462,7 +464,9 @@ class DatabentoAdapter:
                         )
 
                 # Filter out calendar spreads, complex products, and internal IDs
-                # Spreads/combos contain special characters: dash (-), colon (:), plus (+), asterisk (*), slash (/), period (.)
+                # IMPORTANT: Only apply to futures/options (parent symbology), NOT equities (raw_symbol)
+                # Equities like BRK.B and BF.B have periods but are valid symbols
+                # Spreads/combos contain special characters: dash (-), colon (:), plus (+), asterisk (*), slash (/)
                 # ICE spreads specifically use period notation: "BRN FQF0024.H0024" (quarter spread)
                 # Examples:
                 # - Calendar spreads: "ESH6-ESM6" (dash between contracts)
@@ -470,7 +474,9 @@ class DatabentoAdapter:
                 # - ICE internal IDs: "BRN 142   7377732", "G     3  30451873" (numbered format - not tradeable)
                 # - Average price products: "CL:SA 02M F6" (colon separator)
                 # - Ratio spreads: "CL*NG" (asterisk for ratio)
-                if "raw_symbol" in df.columns:
+                if "raw_symbol" in df.columns and stype_in == "parent":
+                    # Only filter spreads for futures/options (parent symbology)
+                    # Equities use raw_symbol stype_in and may have periods (BRK.B, BF.B)
                     pre_spread_count = len(df)
                     # Exclude symbols with special characters indicating combos/spreads
                     # Pattern: dash (-), colon (:), plus (+), asterisk (*), slash (/), period (.)
@@ -1086,8 +1092,12 @@ class DatabentoAdapter:
                             )
                         )
                 else:
-                    # For raw_symbol, the asset IS the query symbol
-                    databento_symbol = asset_to_raw_symbol.get(asset, asset)
+                    # For raw_symbol (equities), the raw_symbol IS the query symbol
+                    # Note: DBEQ.BASIC returns empty 'asset' column, so we use the symbol directly
+                    # The 'symbol' variable is the row index from df_grouped (raw_symbol)
+                    databento_symbol = asset_to_raw_symbol.get(
+                        str(symbol), asset_to_raw_symbol.get(asset, str(symbol))
+                    )
 
                 # exchange_raw_symbol should be the actual Databento symbol (contract symbol)
                 # This is what the exchange uses internally, not the asset/base
@@ -2135,33 +2145,41 @@ class DatabentoAdapter:
 
         # Handle available_from_datetime and available_to_datetime
         # For TradFi instruments, these should reflect the actual trading session times
-        # Priority: ts_event from Databento > trading session start > target_date start
+        # IMPORTANT: Databento's ts_event is the timestamp when DATABENTO received the definition,
+        # NOT the historical date we're querying for. So we MUST use target_date-based trading hours.
+        # Priority: trading session start (based on target_date) > target_date start > ts_event (last resort)
         available_from = None
-        if "ts_event" in row and pd.notna(row["ts_event"]):
+        
+        # First priority: trading session start time (calculated from target_date)
+        if trading_hours.get("session_start_utc"):
+            available_from = trading_hours["session_start_utc"]
+        elif target_date:
+            # Second priority: target date start (00:00:00 UTC)
+            target_date_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            if target_date_start.tzinfo is None:
+                target_date_start = target_date_start.replace(tzinfo=timezone.utc)
+            available_from = target_date_start.isoformat()
+        elif "ts_event" in row and pd.notna(row["ts_event"]):
+            # Last resort: ts_event from Databento (WARNING: this is today's date, not historical!)
             try:
                 ts_event = row["ts_event"]
                 if isinstance(ts_event, pd.Timestamp):
                     available_from = ts_event.isoformat()
                 elif isinstance(ts_event, str):
                     available_from = pd.to_datetime(ts_event).isoformat()
+                logger.warning(
+                    f"Using ts_event for available_from_datetime - this may be today's date, not target date"
+                )
             except Exception as e:
                 logger.warning(f"Failed to parse ts_event: {e}")
-
-        # If ts_event not available, use trading session start time
-        # For sessions that span UTC days (like CME), this will be the previous day
+        
+        # Final fallback
         if not available_from:
-            if trading_hours.get("session_start_utc"):
-                available_from = trading_hours["session_start_utc"]
-            elif target_date:
-                # Fallback to target date start (00:00:00 UTC)
-                target_date_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
-                available_from = target_date_start.isoformat()
-            else:
-                # Fallback to current UTC time (should not happen in normal flow)
-                available_from = datetime.now(timezone.utc).isoformat()
-                logger.warning(
-                    "No target_date provided, using current UTC time for available_from_datetime"
-                )
+            # Fallback to current UTC time (should not happen in normal flow)
+            available_from = datetime.now(timezone.utc).isoformat()
+            logger.warning(
+                "No target_date provided and no ts_event, using current UTC time for available_from_datetime"
+            )
 
         # Set available_to_datetime to trading session end time
         # For sessions that span UTC days, this will be the same day (closing after midnight UTC)
