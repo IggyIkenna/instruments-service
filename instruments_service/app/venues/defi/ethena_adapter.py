@@ -145,6 +145,7 @@ class EthenaAdapter(BaseDefiAdapter):
             "pool_address": contract_address,  # sUSDe contract
             "pool_fee_tier": None,
             "chain": self.chain,  # Chain identifier (ETHEREUM)
+            "market_category": "DEFI",
             "asset_class": "crypto",
             "venue_type": "protocol",
             "data_provider": "ethena",
