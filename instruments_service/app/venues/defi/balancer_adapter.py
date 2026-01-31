@@ -308,8 +308,12 @@ class BalancerAdapter(BaseDefiAdapter):
                     )
 
                 # Convert to expected format
+                # IMPORTANT: Use full pool ID (with suffix) for querying, not just address
+                # The full ID is required for poolEvents queries (e.g., swap history)
+                # Example: 0x3de27efa...000200000000000000000588 (full ID) vs 0x3de27efa... (address)
                 converted_pool = {
-                    "id": pool.get("address", pool.get("id", "")),
+                    "id": pool.get("id", pool.get("address", "")),  # Prefer full ID over address
+                    "address": pool.get("address", ""),  # Store address separately for reference
                     "tokens": tokens,
                     "totalLiquidity": pool.get("dynamicData", {}).get("totalLiquidity", 0),
                     "name": pool.get("name", ""),
@@ -349,7 +353,10 @@ class BalancerAdapter(BaseDefiAdapter):
         Returns:
             Instrument definition dictionary
         """
-        pool_id = pool.get("id")
+        # pool_id is the FULL pool ID (with suffix) needed for API queries
+        # pool_address is just the contract address (for on-chain execution)
+        pool_id = pool.get("id")  # Full ID like: 0x3de27efa...000200000000000000000588
+        pool_address = pool.get("address", pool_id)  # Contract address like: 0x3de27efa...
         tokens = pool.get("tokens", [])
 
         if len(tokens) < 2:
@@ -408,7 +415,12 @@ class BalancerAdapter(BaseDefiAdapter):
             "settle_asset": quote_symbol,
             "base_asset_contract_address": base_address,
             "quote_asset_contract_address": quote_address,
-            "pool_address": pool_id,
+            # pool_id: FULL pool ID with suffix (required for Balancer API queries like poolEvents)
+            # Example: 0x3de27efa2f1aa663ae5d458857e731c129069f29000200000000000000000588
+            "pool_id": pool_id,
+            # pool_address: Contract address only (for on-chain execution)
+            # Example: 0x3de27efa2f1aa663ae5d458857e731c129069f29
+            "pool_address": pool_address,
             "pool_fee_tier": None,  # Balancer uses swapFee (percentage)
             "chain": self.chain,  # Chain identifier (ETHEREUM, ARBITRUM, BASE, etc.)
             "asset_class": "crypto",
@@ -418,7 +430,7 @@ class BalancerAdapter(BaseDefiAdapter):
             "tardis_symbol": "",
             # exchange_raw_symbol: Native exchange identifier (pool address for Balancer)
             # This is the identifier used directly by the exchange/protocol for execution
-            "exchange_raw_symbol": pool_id,  # Pool contract address (native identifier)
+            "exchange_raw_symbol": pool_address,  # Pool contract address (native identifier)
             "ccxt_symbol": "",
             "ccxt_exchange": "",
             "available_from_datetime": available_from,  # Pool creation date or protocol launch (2021-05-03)
