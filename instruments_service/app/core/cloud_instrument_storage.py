@@ -158,8 +158,23 @@ class CloudInstrumentStorage:
             instruments_df = instruments_df.copy()
 
             # Add generation timestamp BEFORE validation (if not present)
+            # IMPORTANT: Use the target date parameter, NOT datetime.now(), to avoid TIMESTAMP_DATE_MISMATCH
+            # The timestamp should reflect the date the instruments are valid for, not when they were generated
             if "timestamp" not in instruments_df.columns:
-                instruments_df["timestamp"] = datetime.now(timezone.utc)
+                if date is not None:
+                    # Use target date (start of day UTC)
+                    if isinstance(date, datetime):
+                        target_timestamp = date.replace(hour=0, minute=0, second=0, microsecond=0)
+                        if target_timestamp.tzinfo is None:
+                            target_timestamp = target_timestamp.replace(tzinfo=timezone.utc)
+                    else:
+                        # date is a date object, convert to datetime
+                        target_timestamp = datetime.combine(date, datetime.min.time(), tzinfo=timezone.utc)
+                    instruments_df["timestamp"] = target_timestamp
+                else:
+                    # Fallback to current time (should not happen in normal flow)
+                    instruments_df["timestamp"] = datetime.now(timezone.utc)
+                    logger.warning("No date parameter provided, using current time for timestamp column")
 
             # Validate schema using unified-cloud-services SchemaValidator (DRY)
             # Domain-specific schema definition provides required columns list
