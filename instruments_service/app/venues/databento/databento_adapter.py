@@ -2149,7 +2149,7 @@ class DatabentoAdapter:
         # NOT the historical date we're querying for. So we MUST use target_date-based trading hours.
         # Priority: trading session start (based on target_date) > target_date start > ts_event (last resort)
         available_from = None
-        
+
         # First priority: trading session start time (calculated from target_date)
         if trading_hours.get("session_start_utc"):
             available_from = trading_hours["session_start_utc"]
@@ -2168,11 +2168,11 @@ class DatabentoAdapter:
                 elif isinstance(ts_event, str):
                     available_from = pd.to_datetime(ts_event).isoformat()
                 logger.warning(
-                    f"Using ts_event for available_from_datetime - this may be today's date, not target date"
+                    "Using ts_event for available_from_datetime - this may be today's date, not target date"
                 )
             except Exception as e:
                 logger.warning(f"Failed to parse ts_event: {e}")
-        
+
         # Final fallback
         if not available_from:
             # Fallback to current UTC time (should not happen in normal flow)
