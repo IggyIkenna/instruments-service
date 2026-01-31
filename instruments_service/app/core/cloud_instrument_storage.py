@@ -18,6 +18,7 @@ from unified_cloud_services import (
     ParquetSchemaEnforcer,
     handle_storage_errors,
 )
+from unified_cloud_services.domain import validate_timestamp_date_alignment
 
 from instruments_service.config import instruments_config
 from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
@@ -281,6 +282,26 @@ class CloudInstrumentStorage:
                 # Log any warnings
                 for warning in validation_result.warnings:
                     logger.warning(f"Schema validation warning for {category}: {warning}")
+
+                # Validate timestamp-date alignment (item_22c)
+                # Instruments use available_from_datetime which should align with the date folder
+                from datetime import date as date_type
+                expected_date = date_type.fromisoformat(date_str)
+                alignment_result = validate_timestamp_date_alignment(
+                    category_df_to_store,
+                    expected_date=expected_date,
+                    timestamp_col="timestamp",  # Use generation timestamp
+                    alignment_threshold=100.0,  # All timestamps should match date
+                    timestamp_unit="auto",
+                )
+                if not alignment_result.valid:
+                    logger.error(
+                        f"TIMESTAMP_DATE_MISMATCH for {category}: Expected {date_str}, "
+                        f"found dates: {alignment_result.actual_dates_found}. "
+                        f"Alignment: {alignment_result.alignment_percentage:.1f}%"
+                    )
+                    # For instruments, this is a warning not a blocker since timestamp is generation time
+                    # The actual data date is determined by available_from_datetime range
 
                 if category_bucket not in bucket_uploads:
                     bucket_uploads[category_bucket] = []
