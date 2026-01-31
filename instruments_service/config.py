@@ -26,10 +26,93 @@ from unified_cloud_services import (
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# DATA LOADING FROM JSON FILES
+# S&P 500 TICKERS (Embedded - no external JSON file needed)
+# ============================================================================
+# Source: Wikipedia S&P 500 list + manual ETF additions
+# Last updated: 2026-01-31
+
+SP500_TICKERS = [
+    "AAPL", "ABBV", "ABT", "ACN", "ADBE", "ADI", "ADM", "ADP", "ADSK", "AEE",
+    "AEP", "AES", "AFL", "AIG", "AIZ", "AJG", "AKAM", "ALB", "ALGN", "ALL",
+    "ALLE", "AMAT", "AMCR", "AMD", "AME", "AMGN", "AMP", "AMT", "AMZN", "ANET",
+    "ANSS", "AON", "AOS", "APA", "APD", "APH", "APTV", "ARE", "ATO", "AVB",
+    "AVGO", "AVY", "AWK", "AXON", "AXP", "AZO", "BA", "BAC", "BALL", "BAX",
+    "BBWI", "BBY", "BDX", "BEN", "BF.B", "BG", "BIIB", "BIO", "BK", "BKNG",
+    "BKR", "BLDR", "BLK", "BMY", "BR", "BRK.B", "BRO", "BSX", "BWA", "BX",
+    "BXP", "C", "CAG", "CAH", "CARR", "CAT", "CB", "CBOE", "CBRE", "CCI",
+    "CCL", "CDNS", "CDW", "CE", "CEG", "CF", "CFG", "CHD", "CHRW", "CHTR",
+    "CI", "CINF", "CL", "CLX", "CMA", "CMCSA", "CME", "CMG", "CMI", "CMS",
+    "CNC", "CNP", "COF", "COO", "COP", "COR", "COST", "CPAY", "CPB", "CPRT",
+    "CPT", "CRL", "CRM", "CSCO", "CSGP", "CSX", "CTAS", "CTLT", "CTRA", "CTSH",
+    "CTVA", "CVS", "CVX", "CZR", "D", "DAL", "DAY", "DD", "DE", "DECK",
+    "DFS", "DG", "DGX", "DHI", "DHR", "DIS", "DLR", "DLTR", "DOC", "DOV",
+    "DOW", "DPZ", "DRI", "DTE", "DUK", "DVA", "DVN", "DXCM", "EA", "EBAY",
+    "ECL", "ED", "EFX", "EG", "EIX", "EL", "ELV", "EMN", "EMR", "ENPH",
+    "EOG", "EPAM", "EQIX", "EQR", "EQT", "ES", "ESS", "ETN", "ETR", "EVRG",
+    "EW", "EXC", "EXPD", "EXPE", "EXR", "F", "FANG", "FAST", "FCX", "FDS",
+    "FDX", "FE", "FFIV", "FI", "FICO", "FIS", "FITB", "FLT", "FMC", "FOX",
+    "FOXA", "FRT", "FSLR", "FTNT", "FTV", "GD", "GDDY", "GE", "GEHC", "GEN",
+    "GEV", "GILD", "GIS", "GL", "GLW", "GM", "GNRC", "GOOG", "GOOGL", "GPC",
+    "GPN", "GRMN", "GS", "GWW", "HAL", "HAS", "HBAN", "HCA", "HD", "HES",
+    "HIG", "HII", "HLT", "HOLX", "HON", "HPE", "HPQ", "HRL", "HSIC", "HST",
+    "HSY", "HUBB", "HUM", "HWM", "IBM", "ICE", "IDXX", "IEX", "IFF", "INCY",
+    "INTC", "INTU", "INVH", "IP", "IPG", "IQV", "IR", "IRM", "ISRG", "IT",
+    "ITW", "IVZ", "J", "JBHT", "JBL", "JCI", "JKHY", "JNJ", "JNPR", "JPM",
+    "K", "KDP", "KEY", "KEYS", "KHC", "KIM", "KKR", "KLAC", "KMB", "KMI",
+    "KMX", "KO", "KR", "KVUE", "L", "LDOS", "LEN", "LH", "LHX", "LIN",
+    "LKQ", "LLY", "LMT", "LNT", "LOW", "LRCX", "LULU", "LUV", "LVS", "LW",
+    "LYB", "LYV", "MA", "MAA", "MAR", "MAS", "MCD", "MCHP", "MCK", "MCO",
+    "MDLZ", "MDT", "MET", "META", "MGM", "MHK", "MKC", "MKTX", "MLM", "MMC",
+    "MMM", "MNST", "MO", "MOH", "MOS", "MPC", "MPWR", "MRK", "MRNA", "MRO",
+    "MS", "MSCI", "MSFT", "MSI", "MTB", "MTCH", "MTD", "MU", "NCLH", "NDAQ",
+    "NDSN", "NEE", "NEM", "NFLX", "NI", "NKE", "NOC", "NOW", "NRG", "NSC",
+    "NTAP", "NTRS", "NUE", "NVDA", "NVR", "NWS", "NWSA", "NXPI", "O", "ODFL",
+    "OKE", "OMC", "ON", "ORCL", "ORLY", "OTIS", "OXY", "PANW", "PARA", "PAYC",
+    "PAYX", "PCAR", "PCG", "PEG", "PEP", "PFE", "PFG", "PG", "PGR", "PH",
+    "PHM", "PKG", "PLD", "PLTR", "PM", "PNC", "PNR", "PNW", "PODD", "POOL",
+    "PPG", "PPL", "PRU", "PSA", "PSX", "PTC", "PWR", "PYPL", "QCOM", "QRVO",
+    "RCL", "REG", "REGN", "RF", "RJF", "RL", "RMD", "ROK", "ROL", "ROP",
+    "ROST", "RSG", "RTX", "RVTY", "SBAC", "SBUX", "SCHW", "SHW", "SJM", "SLB",
+    "SMCI", "SNA", "SNPS", "SO", "SOLV", "SPG", "SPGI", "SRE", "STE", "STLD",
+    "STT", "STX", "STZ", "SW", "SWK", "SWKS", "SYF", "SYK", "SYY", "T",
+    "TAP", "TDG", "TDY", "TECH", "TEL", "TER", "TFC", "TFX", "TGT", "TJX",
+    "TMO", "TMUS", "TPR", "TRGP", "TRMB", "TROW", "TRV", "TSCO", "TSLA", "TSN",
+    "TT", "TTWO", "TXN", "TXT", "TYL", "UAL", "UBER", "UDR", "UHS", "ULTA",
+    "UNH", "UNP", "UPS", "URI", "USB", "V", "VICI", "VLO", "VLTO", "VMC",
+    "VRSK", "VRSN", "VRTX", "VST", "VTR", "VTRS", "VZ", "WAB", "WAT", "WBA",
+    "WBD", "WDC", "WEC", "WELL", "WFC", "WM", "WMB", "WMT", "WRB", "WST",
+    "WTW", "WY", "WYNN", "XEL", "XOM", "XYL", "YUM", "ZBH", "ZBRA", "ZTS",
+]
+
+# ETF tickers including Bitcoin ETFs
+ETF_TICKERS = [
+    "SPY", "QQQ", "IVV", "VOO", "VTI", "DIA", "IWM",
+    "IBIT", "FBTC", "ARKB", "GBTC", "BITO",  # Bitcoin ETFs
+    "GLD", "SLV", "USO",  # Commodity ETFs
+    "XLF", "XLE", "XLK", "XLV",  # Sector ETFs
+]
+
+# NASDAQ-listed tickers (subset of S&P 500 that trade on NASDAQ vs NYSE)
+NASDAQ_TICKERS = [
+    "AAPL", "ADBE", "ADI", "ADP", "ADSK", "AEP", "ALGN", "AMAT", "AMD", "AMGN",
+    "AMZN", "ANSS", "ASML", "AVGO", "AZN", "BIDU", "BIIB", "BKNG", "CDNS", "CDW",
+    "CEG", "CHTR", "CMCSA", "COST", "CPRT", "CRWD", "CSCO", "CSGP", "CSX", "CTAS",
+    "CTSH", "DDOG", "DLTR", "DXCM", "EA", "EBAY", "ENPH", "EXC", "FANG", "FAST",
+    "FTNT", "GEHC", "GFS", "GILD", "GOOG", "GOOGL", "HON", "IDXX", "ILMN", "INTC",
+    "INTU", "ISRG", "JD", "KDP", "KHC", "KLAC", "LRCX", "LULU", "MAR", "MCHP",
+    "MDLZ", "MELI", "META", "MNST", "MRNA", "MRVL", "MSFT", "MU", "NFLX", "NVDA",
+    "NXPI", "ODFL", "ON", "ORLY", "PANW", "PAYX", "PCAR", "PDD", "PEP", "PYPL",
+    "QCOM", "REGN", "RIVN", "ROST", "SBUX", "SIRI", "SNPS", "TEAM", "TMUS", "TSLA",
+    "TTD", "TXN", "VRSK", "VRTX", "WBA", "WDAY", "XEL", "ZM", "ZS",
+    # Bitcoin ETFs also trade on NASDAQ
+    "IBIT", "FBTC", "ARKB",
+]
+
+# ============================================================================
+# DATA LOADING (now uses embedded constants, no external JSON)
 # ============================================================================
 
-# Caches for loaded data
+# Caches for loaded data (for backward compatibility)
 _sp500_tickers_cache: Optional[List[str]] = None
 _nasdaq_tickers_cache: Optional[List[str]] = None
 _tradfi_instruments_cache: Optional[List[Dict]] = None
@@ -263,42 +346,34 @@ EXCHANGE_CODE_TO_NAME: Dict[str, str] = {
 
 
 def _load_sp500_tickers() -> Tuple[List[str], List[str]]:
-    """Load S&P 500 tickers and ETF tickers from JSON file.
+    """Load S&P 500 tickers and ETF tickers from embedded constants.
 
     Returns both regular tickers and ETF tickers (including Bitcoin ETFs like IBIT, FBTC)
     combined into a single list for instrument generation.
+
+    Note: Data is now embedded in config.py (SP500_TICKERS, ETF_TICKERS, NASDAQ_TICKERS)
+    instead of loading from sp500_tickers.json to ensure it's version-controlled
+    and available in all deployment environments (per centralized config checklist).
     """
     global _sp500_tickers_cache, _nasdaq_tickers_cache
 
     if _sp500_tickers_cache is not None:
         return _sp500_tickers_cache, _nasdaq_tickers_cache or []
 
-    try:
-        data_file = _get_data_dir() / "sp500_tickers.json"
-        if data_file.exists():
-            with open(data_file, "r") as f:
-                data = json.load(f)
-                base_tickers = data.get("tickers", [])
-                etf_tickers = data.get("etf_tickers", [])  # Includes Bitcoin ETFs (IBIT, FBTC, etc.)
-                _nasdaq_tickers_cache = data.get("nasdaq_tickers", [])
+    # Use embedded constants instead of JSON file
+    _nasdaq_tickers_cache = list(NASDAQ_TICKERS)
 
-                # Combine tickers and ETF tickers, avoiding duplicates
-                # ETFs like IBIT, FBTC, ARKB, GBTC, BITO need to be included for Bitcoin ETF support
-                all_tickers = list(base_tickers)
-                for etf in etf_tickers:
-                    if etf not in all_tickers:
-                        all_tickers.append(etf)
+    # Combine S&P 500 tickers and ETF tickers, avoiding duplicates
+    all_tickers = list(SP500_TICKERS)
+    for etf in ETF_TICKERS:
+        if etf not in all_tickers:
+            all_tickers.append(etf)
 
-                _sp500_tickers_cache = all_tickers
-                logger.debug(f"Loaded {len(base_tickers)} base tickers + {len(etf_tickers)} ETF tickers = {len(_sp500_tickers_cache)} total from {data_file}")
-        else:
-            logger.warning(f"S&P 500 tickers file not found: {data_file}")
-            _sp500_tickers_cache = []
-            _nasdaq_tickers_cache = []
-    except Exception as e:
-        logger.error(f"Failed to load S&P 500 tickers: {e}")
-        _sp500_tickers_cache = []
-        _nasdaq_tickers_cache = []
+    _sp500_tickers_cache = all_tickers
+    logger.debug(
+        f"Loaded {len(SP500_TICKERS)} S&P 500 tickers + {len(ETF_TICKERS)} ETF tickers = "
+        f"{len(_sp500_tickers_cache)} total from embedded config"
+    )
 
     return _sp500_tickers_cache, _nasdaq_tickers_cache
 
