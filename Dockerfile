@@ -86,7 +86,11 @@ USER appuser
 WORKDIR /app/instruments-service
 
 # Default environment variables
+# ENABLE_CSV_SAMPLING=false prevents disk filling on ephemeral VMs
+# UCS_SKIP_GCSFUSE_CHECK=1 skips GCSFUSE check (not used in Cloud Run/VMs)
 ENV ENVIRONMENT=production \
+    ENABLE_CSV_SAMPLING=false \
+    UCS_SKIP_GCSFUSE_CHECK=1 \
     GCS_REGION=asia-northeast1-c \
     GCS_LOCATION=asia-northeast1 \
     INSTRUMENTS_GCS_BUCKET_CEFI=instruments-store-cefi-central-element-323112 \
