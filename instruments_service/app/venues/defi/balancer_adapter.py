@@ -76,9 +76,13 @@ class BalancerAdapter(BaseDefiAdapter):
             f"✅ BalancerAdapter initialized for chain: {self.chain} (using Balancer API v3)"
         )
 
+    # Default minimum TVL to filter out inactive/low-liquidity pools
+    DEFAULT_MIN_TVL = 100_000  # $100k minimum TVL
+
     def fetch_pools(
         self,
         base_currency: Optional[str] = None,
+        base_currency_list: Optional[List[str]] = None,
         quote_currency_list: Optional[List[str]] = None,
         min_liquidity: Optional[float] = None,
         **kwargs,
@@ -87,68 +91,79 @@ class BalancerAdapter(BaseDefiAdapter):
         Fetch Balancer pools and convert to POOL instrument definitions.
 
         Args:
-            base_currency: Filter by base currency symbol (e.g., 'ETH')
+            base_currency: Filter by single base currency symbol (e.g., 'ETH')
+            base_currency_list: Filter by list of base currencies (e.g., ['WETH', 'WBTC'])
             quote_currency_list: Optional list of allowed quote currencies (filters pools where quote is in this list)
-            min_liquidity: Minimum liquidity threshold in USD
+            min_liquidity: Minimum liquidity threshold in USD (default: $100k)
             **kwargs: Additional arguments
 
         Returns:
             Dictionary mapping instrument_key to instrument definition
         """
-        # Query Balancer pools from The Graph
-        pools = self._query_balancer_pools(base_currency, min_liquidity)
+        # Use default min liquidity if not specified to filter out inactive pools
+        if min_liquidity is None:
+            min_liquidity = self.DEFAULT_MIN_TVL
+            logger.info(f"📊 Using default min TVL: ${min_liquidity:,.0f}")
+
+        # Query Balancer pools from API (ordered by TVL descending)
+        # Note: _query_balancer_pools already filters by base_currency_list with wrapped variants
+        pools = self._query_balancer_pools(base_currency, base_currency_list, min_liquidity)
 
         instruments = {}
 
-        # Normalize quote_currency_list for comparison
-        allowed_quotes = None
+        # Build expanded set of allowed tokens (base + quote + wrapped variants)
+        allowed_tokens = set()
         if quote_currency_list:
-            allowed_quotes = {q.upper() for q in quote_currency_list}
+            allowed_tokens.update(q.upper() for q in quote_currency_list)
+        if base_currency_list:
+            allowed_tokens.update(b.upper() for b in base_currency_list)
+        if base_currency:
+            allowed_tokens.add(base_currency.upper())
+
+        # Add wrapped/staked variants for better matching
+        wrapped_mappings = {
+            "ETH": ["WETH", "STETH", "WSTETH", "RETH", "CBETH", "WEETH", "OSETH", "TETH"],
+            "BTC": ["WBTC", "TBTC", "RENBTC", "SBTC"],
+            "USD": ["USDC", "USDT", "DAI", "USDE", "SUSDE", "GHO", "FRAX", "LUSD", "SUSD", "GUSD"],
+        }
+        expanded_tokens = set(allowed_tokens)
+        for token in allowed_tokens:
+            for canonical, variants in wrapped_mappings.items():
+                if token == canonical or token in variants:
+                    expanded_tokens.add(canonical)
+                    expanded_tokens.update(variants)
+        allowed_tokens = expanded_tokens
 
         for pool in pools:
             try:
-                # Filter by quote currency if quote_currency_list is provided
-                # CRITICAL: When base_currency is provided, quote MUST be in MVP list
-                if allowed_quotes:
-                    tokens = pool.get("tokens", [])
-                    token_symbols = [t.get("symbol", "").upper() for t in tokens]
+                tokens = pool.get("tokens", [])
+                token_symbols = [t.get("symbol", "").upper() for t in tokens]
 
-                    if base_currency:
-                        # When querying by base_currency, ensure quote is in MVP list
-                        base_upper = base_currency.upper()
-                        if base_upper not in token_symbols:
-                            continue  # Base currency not in pool, skip
+                # Relaxed filter: Pool is valid if it has at least 1 token in our allowed list
+                # (The TVL filter already ensures these are active, high-quality pools)
+                if allowed_tokens:
+                    tokens_matched = sum(1 for sym in token_symbols if sym in allowed_tokens)
+                    if tokens_matched < 1:
+                        continue  # Skip pools with no recognized tokens
 
-                        # Find quote currency (first token that's not base and is in MVP list)
-                        quote_candidates = [
-                            sym
-                            for sym in token_symbols
-                            if sym != base_upper and sym in allowed_quotes
-                        ]
-                        if not quote_candidates:
-                            continue  # No valid quote currency in MVP list, skip
-
-                        # Use first valid quote (Balancer pools can have multiple tokens)
-                        quote_candidates[0]
-                    else:
-                        # No base filter - require at least 2 tokens in MVP list (for a valid pair)
-                        tokens_in_mvp = sum(1 for sym in token_symbols if sym in allowed_quotes)
-                        if tokens_in_mvp < 2:
-                            continue  # Skip pools where less than 2 tokens are in MVP list
-
-                inst_def = self._convert_pool_to_instrument(pool, base_currency, allowed_quotes)
+                # Convert pool to instrument (uses first two tokens as base/quote)
+                inst_def = self._convert_pool_to_instrument(pool, base_currency, allowed_tokens)
                 if inst_def and self._validate_instrument_definition(inst_def):
+                    # Add TVL for sorting/filtering
+                    inst_def["tvl_usd"] = float(pool.get("totalLiquidity", 0))
+                    inst_def["volume_24h_usd"] = float(pool.get("volume24h", 0))
                     instruments[inst_def["instrument_key"]] = inst_def
             except Exception as e:
                 logger.warning(f"Failed to convert Balancer pool {pool.get('id')}: {e}")
                 continue
 
-        logger.info(f"✅ Generated {len(instruments)} Balancer POOL instruments")
+        logger.info(f"✅ Generated {len(instruments)} Balancer POOL instruments (min TVL: ${min_liquidity:,.0f})")
         return instruments
 
     def fetch_spot_pairs(
         self,
         base_currency: Optional[str] = None,
+        base_currency_list: Optional[List[str]] = None,
         quote_currency_list: Optional[List[str]] = None,
         **kwargs,
     ) -> Dict[str, Dict[str, Any]]:
@@ -156,7 +171,8 @@ class BalancerAdapter(BaseDefiAdapter):
         Fetch Balancer spot trading pairs (SPOT_PAIR instrument type).
 
         Args:
-            base_currency: Filter by base currency symbol
+            base_currency: Filter by single base currency symbol
+            base_currency_list: Filter by list of base currencies
             quote_currency_list: Optional list of allowed quote currencies
 
         Returns:
@@ -164,6 +180,7 @@ class BalancerAdapter(BaseDefiAdapter):
         """
         pools = self.fetch_pools(
             base_currency=base_currency,
+            base_currency_list=base_currency_list,
             quote_currency_list=quote_currency_list,
             **kwargs,
         )
@@ -228,34 +245,37 @@ class BalancerAdapter(BaseDefiAdapter):
         return instruments
 
     def _query_balancer_pools(
-        self, base_currency: Optional[str] = None, min_liquidity: Optional[float] = None
+        self,
+        base_currency: Optional[str] = None,
+        base_currency_list: Optional[List[str]] = None,
+        min_liquidity: Optional[float] = None,
     ) -> List[Dict[str, Any]]:
         """
         Query Balancer pools from Balancer API v3 (GraphQL).
 
         Args:
-            base_currency: Filter by base currency
-            min_liquidity: Minimum liquidity threshold in USD
-                - Measured as: totalLiquidity (TVL) from Balancer API v3
-                - Represents: Total value locked in the pool, denominated in USD
-                - Default: $10,000 minimum to filter out low-liquidity/inactive pools
+            base_currency: Filter by single base currency (e.g., 'ETH')
+            base_currency_list: Filter by list of base currencies (e.g., ['WETH', 'WBTC', 'ETH'])
+            min_liquidity: Minimum liquidity threshold in USD (TVL)
+                - Default: $100,000 to filter out low-liquidity/inactive pools
+                - Pools ordered by TVL descending to get most active pools first
 
         Returns:
             List of pool dictionaries
         """
         # Build GraphQL query for Balancer API v3
-        # Balancer API v3 uses different schema than The Graph subgraph
-        where_clause = []
+        # Include chainIn filter for Ethereum mainnet and minTvl for liquidity
+        where_clauses = ["chainIn: [MAINNET]"]
         if min_liquidity:
-            where_clause.append(f"minTvl: {min_liquidity}")
+            where_clauses.append(f"minTvl: {min_liquidity}")
 
-        where_str = ", ".join(where_clause) if where_clause else ""
+        where_str = ", ".join(where_clauses)
 
         query = f"""
         {{
             poolGetPools(
-                first: 1000
-                {f'where: {{ {where_str} }}' if where_str else ''}
+                first: 500
+                where: {{ {where_str} }}
                 orderBy: totalLiquidity
                 orderDirection: desc
             ) {{
@@ -270,6 +290,7 @@ class BalancerAdapter(BaseDefiAdapter):
                 }}
                 dynamicData {{
                     totalLiquidity
+                    volume24h
                 }}
             }}
         }}
@@ -291,6 +312,30 @@ class BalancerAdapter(BaseDefiAdapter):
                     return []
 
             pools_data = result.get("data", {}).get("poolGetPools", [])
+            logger.info(f"📊 Balancer API returned {len(pools_data)} pools with TVL >= ${min_liquidity:,.0f}")
+
+            # Build set of allowed base currencies (including wrapped variants)
+            allowed_bases = None
+            if base_currency_list:
+                allowed_bases = {b.upper() for b in base_currency_list}
+                # Add common wrapped/staked variants
+                wrapped_mappings = {
+                    "ETH": ["WETH", "STETH", "WSTETH", "RETH", "CBETH", "WEETH", "OSETH", "TETH"],
+                    "BTC": ["WBTC", "TBTC", "RENBTC", "SBTC"],
+                    "USD": ["USDC", "USDT", "DAI", "USDE", "SUSDE", "GHO", "FRAX", "LUSD", "SUSD", "GUSD"],
+                }
+                expanded_bases = set()
+                for base in allowed_bases:
+                    expanded_bases.add(base)
+                    # Add wrapped variants
+                    for canonical, variants in wrapped_mappings.items():
+                        if base == canonical or base in variants:
+                            expanded_bases.add(canonical)
+                            expanded_bases.update(variants)
+                allowed_bases = expanded_bases
+                logger.info(f"📊 Filtering for base currencies: {sorted(allowed_bases)[:10]}...")
+            elif base_currency:
+                allowed_bases = {base_currency.upper()}
 
             # Convert Balancer API v3 format to our expected format
             pools = []
@@ -307,27 +352,31 @@ class BalancerAdapter(BaseDefiAdapter):
                         }
                     )
 
+                # Filter by allowed base currencies
+                if allowed_bases:
+                    token_symbols = [t.get("symbol", "").upper() for t in tokens]
+                    # Check if ANY token in pool matches allowed bases
+                    if not any(sym in allowed_bases for sym in token_symbols):
+                        continue  # Skip pools that don't contain any allowed base currency
+
                 # Convert to expected format
                 # IMPORTANT: Use full pool ID (with suffix) for querying, not just address
                 # The full ID is required for poolEvents queries (e.g., swap history)
-                # Example: 0x3de27efa...000200000000000000000588 (full ID) vs 0x3de27efa... (address)
+                tvl = pool.get("dynamicData", {}).get("totalLiquidity", 0)
+                vol24h = pool.get("dynamicData", {}).get("volume24h", 0)
+
                 converted_pool = {
                     "id": pool.get("id", pool.get("address", "")),  # Prefer full ID over address
                     "address": pool.get("address", ""),  # Store address separately for reference
                     "tokens": tokens,
-                    "totalLiquidity": pool.get("dynamicData", {}).get("totalLiquidity", 0),
+                    "totalLiquidity": tvl,
+                    "volume24h": vol24h,
                     "name": pool.get("name", ""),
                 }
 
-                # Filter by base currency if specified
-                if base_currency:
-                    token_symbols = [t.get("symbol", "").upper() for t in tokens]
-                    if base_currency.upper() not in token_symbols:
-                        continue  # Skip pools that don't contain base currency
-
                 pools.append(converted_pool)
 
-            logger.info(f"✅ Fetched {len(pools)} Balancer pools from API v3")
+            logger.info(f"✅ Fetched {len(pools)} Balancer pools matching filter criteria")
             return pools
 
         except Exception as e:
