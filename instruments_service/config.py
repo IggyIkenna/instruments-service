@@ -8,7 +8,6 @@ Note: For InstrumentDefinition Pydantic model (with full validation), use instru
 This file contains TradFiInstrument dataclass for static TradFi instrument configuration.
 """
 
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
