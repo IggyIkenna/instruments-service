@@ -147,6 +147,10 @@ class InstrumentDefinition(BaseModel):
     quote_asset_contract_address: Optional[str] = Field(
         default=None, description="ERC-20 contract address for quote asset (DeFi)"
     )
+    pool_id: Optional[str] = Field(
+        default=None,
+        description="Full pool ID (with suffix) required for API queries (e.g., Balancer poolEvents)",
+    )
     pool_address: Optional[str] = Field(
         default=None,
         description="Pool contract address (for DEX pairs, computed from tokens + fee)",

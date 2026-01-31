@@ -258,6 +258,13 @@ INSTRUMENTS_PARQUET_SCHEMA: List[Dict[str, str]] = [
         "description": "ERC-20 contract address for quote asset (DeFi instruments only)",
     },
     {
+        "name": "pool_id",
+        "type": "string",
+        "required": False,
+        "nullable": True,
+        "description": "Full pool ID (with suffix) required for API queries (e.g., Balancer poolEvents)",
+    },
+    {
         "name": "pool_address",
         "type": "string",
         "required": False,
