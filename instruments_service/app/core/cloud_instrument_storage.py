@@ -280,47 +280,55 @@ class CloudInstrumentStorage:
 
             for category, category_df in category_groups:
                 category_bucket = get_bucket_for_category(category, test_mode=is_test)
-                gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
-                category_df_to_store = category_df.copy()
+                
+                # NEW: Group by venue within category for by-venue folder structure
+                # This enables turbo mode venue-level status checks without opening parquet files
+                venue_groups = category_df.groupby('venue')
+                
+                for venue, venue_df in venue_groups:
+                    # Sanitize venue name for folder (replace slashes, etc.)
+                    venue_folder = venue.replace("/", "-").replace("\\", "-")
+                    gcs_path = f"instrument_availability/by_date/day-{date_str}/venue-{venue_folder}/instruments.parquet"
+                    venue_df_to_store = venue_df.copy()
 
-                # Validate schema before upload
-                dimensions = {"category": category}
-                validation_result = schema_enforcer.validate_dataframe(category_df_to_store, dimensions)
+                    # Validate schema before upload
+                    dimensions = {"category": category}
+                    validation_result = schema_enforcer.validate_dataframe(venue_df_to_store, dimensions)
 
-                if not validation_result.valid:
-                    for error in validation_result.errors:
-                        logger.error(f"Schema validation failed for {category}: {error}")
-                    logger.error(f"Skipping GCS upload for {category} due to schema validation errors")
-                    all_successful = False
-                    continue  # Skip this category
+                    if not validation_result.valid:
+                        for error in validation_result.errors:
+                            logger.error(f"Schema validation failed for {category}/{venue}: {error}")
+                        logger.error(f"Skipping GCS upload for {category}/{venue} due to schema validation errors")
+                        all_successful = False
+                        continue  # Skip this venue
 
-                # Log any warnings
-                for warning in validation_result.warnings:
-                    logger.warning(f"Schema validation warning for {category}: {warning}")
+                    # Log any warnings
+                    for warning in validation_result.warnings:
+                        logger.warning(f"Schema validation warning for {category}/{venue}: {warning}")
 
-                # Validate timestamp-date alignment (item_22c)
-                # Instruments use available_from_datetime which should align with the date folder
-                from datetime import date as date_type
-                expected_date = date_type.fromisoformat(date_str)
-                alignment_result = validate_timestamp_date_alignment(
-                    category_df_to_store,
-                    expected_date=expected_date,
-                    timestamp_col="timestamp",  # Use generation timestamp
-                    alignment_threshold=100.0,  # All timestamps should match date
-                    timestamp_unit="auto",
-                )
-                if not alignment_result.valid:
-                    logger.error(
-                        f"TIMESTAMP_DATE_MISMATCH for {category}: Expected {date_str}, "
-                        f"found dates: {alignment_result.actual_dates_found}. "
-                        f"Alignment: {alignment_result.alignment_percentage:.1f}%"
+                    # Validate timestamp-date alignment (item_22c)
+                    # Instruments use available_from_datetime which should align with the date folder
+                    from datetime import date as date_type
+                    expected_date = date_type.fromisoformat(date_str)
+                    alignment_result = validate_timestamp_date_alignment(
+                        venue_df_to_store,
+                        expected_date=expected_date,
+                        timestamp_col="timestamp",  # Use generation timestamp
+                        alignment_threshold=100.0,  # All timestamps should match date
+                        timestamp_unit="auto",
                     )
-                    # For instruments, this is a warning not a blocker since timestamp is generation time
-                    # The actual data date is determined by available_from_datetime range
+                    if not alignment_result.valid:
+                        logger.error(
+                            f"TIMESTAMP_DATE_MISMATCH for {category}/{venue}: Expected {date_str}, "
+                            f"found dates: {alignment_result.actual_dates_found}. "
+                            f"Alignment: {alignment_result.alignment_percentage:.1f}%"
+                        )
+                        # For instruments, this is a warning not a blocker since timestamp is generation time
+                        # The actual data date is determined by available_from_datetime range
 
-                if category_bucket not in bucket_uploads:
-                    bucket_uploads[category_bucket] = []
-                bucket_uploads[category_bucket].append((gcs_path, category_df_to_store, category))
+                    if category_bucket not in bucket_uploads:
+                        bucket_uploads[category_bucket] = []
+                    bucket_uploads[category_bucket].append((gcs_path, venue_df_to_store, f"{category}/{venue}"))
 
             # Upload to each bucket using batch upload (thread-safe)
             for bucket_name, uploads_list in bucket_uploads.items():
@@ -347,16 +355,16 @@ class CloudInstrumentStorage:
 
                     # Process results
                     for i, result in enumerate(results):
-                        gcs_path, df, category = uploads_list[i]
+                        gcs_path, df, category_venue = uploads_list[i]
                         if result.get("success"):
                             logger.info(
-                                f"✅ Uploaded {len(df)} {category} instruments to GCS: "
+                                f"✅ Uploaded {len(df)} {category_venue} instruments to GCS: "
                                 f"{bucket_name}/{gcs_path}"
                             )
                             total_stored += len(df)
                         else:
                             logger.error(
-                                f"❌ GCS upload failed for {category} category: {result.get('error')}"
+                                f"❌ GCS upload failed for {category_venue}: {result.get('error')}"
                             )
                             all_successful = False
 
@@ -365,13 +373,15 @@ class CloudInstrumentStorage:
                     all_successful = False
 
             if all_successful:
+                # Count unique venues stored
+                unique_venues = instruments_df['venue'].nunique() if 'venue' in instruments_df.columns else 0
                 logger.info(
-                    f"✅ Stored {total_stored} instruments to category-specific buckets "
-                    f"(batch historical data)"
+                    f"✅ Stored {total_stored} instruments across {unique_venues} venues to "
+                    f"category-specific buckets (by-venue folder structure)"
                 )
             else:
                 logger.warning(
-                    f"⚠️ Some category uploads failed. Total stored: {total_stored}/{len(instruments_df)}"
+                    f"⚠️ Some venue uploads failed. Total stored: {total_stored}/{len(instruments_df)}"
                 )
 
             return all_successful
