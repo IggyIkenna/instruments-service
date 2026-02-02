@@ -87,6 +87,39 @@ class TestCLIMain:
             # False flags are not passed to handler, so they're None
             assert "defi" not in call_kwargs
 
+    def test_main_with_venues_filter(self, mock_handler):
+        """Test main with venues filter."""
+        with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
+             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler):
+
+            mock_args = Mock()
+            mock_args.mode = "instruments"
+            mock_args.log_level = "INFO"
+            mock_args.start_date = "2024-01-01"
+            mock_args.end_date = "2024-01-01"
+            mock_args.project_id = "test-project"
+            mock_args.gcs_bucket = "test-bucket"
+            mock_args.bigquery_dataset = "test-dataset"
+            mock_args.force = True
+            mock_args.dry_run = False
+            mock_args.category = None
+            mock_args.CEFI = False
+            mock_args.TRADFI = False
+            mock_args.DEFI = True
+            mock_args.venues = ["AAVE_V3_ETH", "LIDO"]
+            mock_args.instrument_ids = None
+
+            mock_parse.return_value = mock_args
+
+            result = main()
+
+            assert result["status"] == "success"
+            mock_handler.run.assert_called_once()
+            # Verify venues were passed to handler
+            call_kwargs = mock_handler.run.call_args[1]
+            assert call_kwargs.get("venues") == ["AAVE_V3_ETH", "LIDO"]
+            assert call_kwargs.get("defi") is True
+
     def test_main_failure_status(self, mock_handler):
         """Test main with failure status."""
         with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
