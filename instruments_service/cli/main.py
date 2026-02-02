@@ -153,6 +153,10 @@ def main() -> Dict[str, Any]:
             if args.DEFI:
                 handler_kwargs["defi"] = True
 
+        # Venue filter (optional - filter to specific venues within a category)
+        if hasattr(args, 'venues') and args.venues:
+            handler_kwargs["venues"] = args.venues
+
         # Execute handler
         result = handler.run(**handler_kwargs)
 
