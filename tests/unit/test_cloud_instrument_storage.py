@@ -56,6 +56,14 @@ class TestCloudInstrumentStorage:
         mock_validation_result.errors = []
         mock_validator.validate_dataframe_schema = Mock(return_value=mock_validation_result)
 
+        # Mock ParquetSchemaEnforcer to return valid result (for per-venue validation)
+        mock_schema_enforcer = Mock()
+        mock_schema_validation_result = Mock()
+        mock_schema_validation_result.valid = True
+        mock_schema_validation_result.errors = []
+        mock_schema_validation_result.warnings = []
+        mock_schema_enforcer.validate_dataframe = Mock(return_value=mock_schema_validation_result)
+
         # Create patches that will stay active
         # Patch the imports in cloud_instrument_storage module
         patches = [
@@ -85,6 +93,11 @@ class TestCloudInstrumentStorage:
                 "instruments_service.app.core.cloud_instrument_storage.get_bucket_for_category",
                 return_value="test-bucket",
             ),
+            # Mock ParquetSchemaEnforcer for per-venue validation
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.ParquetSchemaEnforcer",
+                return_value=mock_schema_enforcer,
+            ),
         ]
 
         # Start all patches
@@ -98,6 +111,8 @@ class TestCloudInstrumentStorage:
             storage._mock_category_service = mock_category_service
             storage._mock_validator = mock_validator
             storage._mock_validation_result = mock_validation_result
+            storage._mock_schema_enforcer = mock_schema_enforcer
+            storage._mock_schema_validation_result = mock_schema_validation_result
             storage._patches = patches
             yield storage
         finally:
@@ -231,14 +246,15 @@ class TestCloudInstrumentStorage:
         """Test storing instruments with missing required columns."""
         df = pd.DataFrame(
             {
-                "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"]
+                "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                "venue": ["TEST"],  # Need venue for groupby
                 # Missing required columns
             }
         )
 
-        # Configure validator to return invalid result for this test
-        storage._mock_validation_result.valid = False
-        storage._mock_validation_result.errors = ["Missing required columns"]
+        # Configure schema enforcer to return invalid result for this test
+        storage._mock_schema_validation_result.valid = False
+        storage._mock_schema_validation_result.errors = ["Missing required columns"]
 
         # Storage returns False when validation fails, doesn't raise ValueError
         result = storage.store_instruments(df, table_name="instruments")
@@ -383,3 +399,91 @@ class TestCloudInstrumentStorage:
 
         assert result is True
         storage._mock_category_service.upload_to_gcs_batch.assert_called()
+
+    def test_store_instruments_multiple_venues(self, storage, mock_cloud_service):
+        """Test storing instruments creates separate files per venue (by-venue structure)."""
+        df = pd.DataFrame(
+            {
+                "instrument_key": [
+                    "BINANCE-FUTURES:PERPETUAL:BTC-USDT",
+                    "BINANCE-FUTURES:PERPETUAL:ETH-USDT",
+                    "DERIBIT:PERPETUAL:BTC-USDT-PERPETUAL",
+                    "OKX:PERPETUAL:BTC-USDT-SWAP",
+                ],
+                "venue": ["BINANCE-FUTURES", "BINANCE-FUTURES", "DERIBIT", "OKX"],
+                "instrument_type": ["PERPETUAL", "PERPETUAL", "PERPETUAL", "PERPETUAL"],
+                "symbol": ["BTC-USDT", "ETH-USDT", "BTC-USDT-PERPETUAL", "BTC-USDT-SWAP"],
+                "available_from_datetime": [
+                    "2024-01-01T00:00:00Z",
+                    "2024-01-01T00:00:00Z",
+                    "2024-01-01T00:00:00Z",
+                    "2024-01-01T00:00:00Z",
+                ],
+            }
+        )
+        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+        result = storage.store_instruments(df, table_name="instruments", date=date)
+
+        assert result is True
+        # Should have called batch upload with 3 uploads (one per venue)
+        storage._mock_category_service.upload_to_gcs_batch.assert_called()
+        call_args = storage._mock_category_service.upload_to_gcs_batch.call_args
+        uploads = call_args[0][0]  # First positional argument is the list of uploads
+        
+        # Verify we have 3 venue folders
+        assert len(uploads) == 3
+        
+        # Verify the paths contain venue folders
+        paths = [u["gcs_path"] for u in uploads]
+        assert any("venue-BINANCE-FUTURES" in p for p in paths)
+        assert any("venue-DERIBIT" in p for p in paths)
+        assert any("venue-OKX" in p for p in paths)
+
+    def test_store_instruments_venue_path_format(self, storage, mock_cloud_service):
+        """Test that GCS path follows by-venue folder structure."""
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                "venue": ["TEST-VENUE"],
+                "instrument_type": ["SPOT_PAIR"],
+                "symbol": ["BTC-USDT"],
+                "available_from_datetime": ["2024-01-01T00:00:00Z"],
+            }
+        )
+        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+        result = storage.store_instruments(df, table_name="instruments", date=date)
+
+        assert result is True
+        call_args = storage._mock_category_service.upload_to_gcs_batch.call_args
+        uploads = call_args[0][0]
+        
+        # Verify path format: instrument_availability/by_date/day-YYYY-MM-DD/venue-{VENUE}/instruments.parquet
+        path = uploads[0]["gcs_path"]
+        assert "instrument_availability/by_date/day-2024-01-01" in path
+        assert "venue-TEST-VENUE" in path
+        assert "instruments.parquet" in path
+
+    def test_store_instruments_venue_with_special_chars(self, storage, mock_cloud_service):
+        """Test storing instruments with venue names containing special characters."""
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["UNISWAPV3-ETHEREUM:SPOT_PAIR:WETH-USDC"],
+                "venue": ["UNISWAPV3-ETHEREUM"],
+                "instrument_type": ["SPOT_PAIR"],
+                "symbol": ["WETH-USDC"],
+                "available_from_datetime": ["2024-01-01T00:00:00Z"],
+            }
+        )
+        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+        result = storage.store_instruments(df, table_name="instruments", date=date)
+
+        assert result is True
+        call_args = storage._mock_category_service.upload_to_gcs_batch.call_args
+        uploads = call_args[0][0]
+        
+        # Verify venue folder is properly sanitized
+        path = uploads[0]["gcs_path"]
+        assert "venue-UNISWAPV3-ETHEREUM" in path
