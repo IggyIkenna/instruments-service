@@ -430,10 +430,10 @@ class TestCloudInstrumentStorage:
         storage._mock_category_service.upload_to_gcs_batch.assert_called()
         call_args = storage._mock_category_service.upload_to_gcs_batch.call_args
         uploads = call_args[0][0]  # First positional argument is the list of uploads
-        
+
         # Verify we have 3 venue folders
         assert len(uploads) == 3
-        
+
         # Verify the paths contain venue folders
         paths = [u["gcs_path"] for u in uploads]
         assert any("venue-BINANCE-FUTURES" in p for p in paths)
@@ -458,7 +458,7 @@ class TestCloudInstrumentStorage:
         assert result is True
         call_args = storage._mock_category_service.upload_to_gcs_batch.call_args
         uploads = call_args[0][0]
-        
+
         # Verify path format: instrument_availability/by_date/day-YYYY-MM-DD/venue-{VENUE}/instruments.parquet
         path = uploads[0]["gcs_path"]
         assert "instrument_availability/by_date/day-2024-01-01" in path
@@ -483,7 +483,7 @@ class TestCloudInstrumentStorage:
         assert result is True
         call_args = storage._mock_category_service.upload_to_gcs_batch.call_args
         uploads = call_args[0][0]
-        
+
         # Verify venue folder is properly sanitized
         path = uploads[0]["gcs_path"]
         assert "venue-UNISWAPV3-ETHEREUM" in path
