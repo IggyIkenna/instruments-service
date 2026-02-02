@@ -280,11 +280,11 @@ class CloudInstrumentStorage:
 
             for category, category_df in category_groups:
                 category_bucket = get_bucket_for_category(category, test_mode=is_test)
-                
+
                 # NEW: Group by venue within category for by-venue folder structure
                 # This enables turbo mode venue-level status checks without opening parquet files
                 venue_groups = category_df.groupby('venue')
-                
+
                 for venue, venue_df in venue_groups:
                     # Sanitize venue name for folder (replace slashes, etc.)
                     venue_folder = venue.replace("/", "-").replace("\\", "-")
