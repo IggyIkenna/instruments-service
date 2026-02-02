@@ -2035,7 +2035,7 @@ query GetEModeCategories {
                 2023, 1, 27
             ).isoformat(),  # AAVE V3 Ethereum launch date
             "available_to_datetime": None,
-            "data_types": "rate_indices,utilization",  # Raw data: supplyIndex, liquidityIndex, utilization rate
+            "data_types": "rate_indices,utilization,oracle_prices",  # Raw data: supplyIndex, liquidityIndex, utilization rate, oracle prices
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
@@ -2103,7 +2103,7 @@ query GetEModeCategories {
                 2023, 1, 27
             ).isoformat(),  # AAVE V3 Ethereum launch date
             "available_to_datetime": None,
-            "data_types": "rate_indices,utilization",  # Raw data: borrowIndex, utilization rate
+            "data_types": "rate_indices,utilization,oracle_prices",  # Raw data: borrowIndex, utilization rate, oracle prices
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
