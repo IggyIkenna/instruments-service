@@ -92,6 +92,14 @@ def parse_arguments() -> argparse.Namespace:
         type=str.upper,  # Accept any case (tradfi -> TRADFI)
         help="Market categories to process (can specify multiple: --category CEFI TRADFI). Alternative to --CEFI --TRADFI --DEFI flags.",
     )
+
+    # Venue filter (optional - filter to specific venues within a category)
+    parser.add_argument(
+        "--venues",
+        nargs="+",
+        type=str.upper,  # Accept any case (aave_v3_eth -> AAVE_V3_ETH)
+        help="Specific venues to process (space-separated). Examples: --venues AAVE_V3_ETH LIDO, --venues BINANCE-SPOT BYBIT",
+    )
     parser.add_argument(
         "--CEFI",
         action="store_true",
@@ -190,6 +198,10 @@ Examples:
 
   # Generate DEFI instruments only (The Graph: uniswap_v3, curve, aave_v3, etc.)
   python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --DEFI --force
+
+  # Generate instruments for specific venues only (filter within a category)
+  python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --DEFI --venues AAVE_V3_ETH LIDO --force
+  python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --CEFI --venues BINANCE-SPOT BYBIT --force
 
   # Generate CEFI and TRADFI (combine flags OR use --category)
   python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-23 --CEFI --TRADFI --force
