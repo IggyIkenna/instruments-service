@@ -366,7 +366,7 @@ class UniswapV2Adapter(BaseDefiAdapter):
             "ccxt_exchange": "",
             "available_from_datetime": available_from,
             "available_to_datetime": None,
-            "data_types": "swaps",
+            "data_types": "swaps,liquidity",
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
