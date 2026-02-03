@@ -351,6 +351,13 @@ class InstrumentDefinition(BaseModel):
             "ohlcv_15m",    # 15-minute OHLCV candles (Barchart external)
             "ohlcv_24h",    # 24-hour OHLCV candles (Yahoo Finance external)
             # Note: mbp_10, mbp_1 are EXPLICITLY NOT allowed (too expensive)
+            # DeFi-specific data types
+            "swaps",        # DEX pool swap events (Uniswap, Balancer)
+            "rate_indices", # Lending protocol indices (Aave, Morpho) for APY calculation
+            "utilization",  # Lending pool utilization rate
+            "oracle_prices",# Protocol oracle price feeds (LSTs, sUSDe yield calculation)
+            "yields",       # LST/yield-bearing token yields (Lido, EtherFi, Ethena)
+            "liquidity",    # AMM pool liquidity (Uniswap, Curve) for slippage simulation
         ]
         types = [t.strip() for t in v.split(",")]
 
@@ -479,6 +486,7 @@ class InstrumentDefinition(BaseModel):
                 "utilization",  # Lending pool utilization rate
                 "oracle_prices",# Protocol oracle price feeds (LSTs, sUSDe yield calculation)
                 "yields",       # LST/yield-bearing token yields (Lido, EtherFi, Ethena)
+                "liquidity",    # AMM pool liquidity (Uniswap, Curve) for slippage simulation
             ]
             types = [t.strip() for t in self.data_types.split(",")]
             for data_type in types:

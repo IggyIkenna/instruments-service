@@ -335,7 +335,7 @@ class UniswapV3Adapter(BaseDefiAdapter):
             "ccxt_exchange": "",
             "available_from_datetime": available_from,
             "available_to_datetime": None,  # Pools don't expire
-            "data_types": "swaps",  # DEX pool swap events from The Graph subgraph
+            "data_types": "swaps,liquidity",  # DEX pool swap events + liquidity for slippage simulation
             "inverse": False,
             "contract_size": None,
             "tick_size": "",  # Uniswap V3 uses tick spacing
