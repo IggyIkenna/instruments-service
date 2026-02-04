@@ -1,33 +1,25 @@
-# Pre-commit hooks configuration
-# Install: pip install pre-commit
-# Setup: pre-commit install
-# Run manually: pre-commit run --all-files
+# Pre-commit hooks - auto-format on commit
+# Setup: pip install pre-commit && pre-commit install
 
 repos:
-  # Black - Python code formatter
-  - repo: https://github.com/psf/black
-    rev: 25.11.0
+  # Ruff - Fast Python linter AND formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.6
     hooks:
-      - id: black
-        name: Format code with Black
-        language_version: python3.13
-        # Files to include (customize these paths as needed)
-        files: ^instruments_service/.*\.py$
-        # You can also use 'exclude' to skip certain files
-        # exclude: ^tests/fixtures/
+      - id: ruff
+        name: Lint with Ruff
+        args: [--fix, --exit-non-zero-on-fix]
+      - id: ruff-format
+        name: Format with Ruff
 
-  # Optional: Basic file checks
+  # Basic file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-        name: Remove trailing whitespace
       - id: end-of-file-fixer
-        name: Ensure files end with newline
       - id: check-yaml
-        name: Check YAML syntax
       - id: check-toml
-        name: Check TOML syntax
       - id: check-added-large-files
-        name: Prevent large files from being committed
-        args: ['--maxkb=1000']
+        args: ["--maxkb=1000"]
+
