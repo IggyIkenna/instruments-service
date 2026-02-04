@@ -182,8 +182,8 @@ class TestGenerateInstrumentsSingleDate:
             ) as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
             patch(
-                "instruments_service.app.core.instruments_service.DatabentoInstrumentConfig"
-            ) as mock_db_config,
+                "instruments_service.app.core.instruments_service.UnifiedInstrumentConfig"
+            ) as mock_config,
         ):
             # Setup mocks
             mock_proc = Mock()
@@ -200,12 +200,11 @@ class TestGenerateInstrumentsSingleDate:
             mock_storage.store_instruments = Mock(return_value=True)
             mock_storage_class.return_value = mock_storage
 
-            # Mock DatabentoInstrumentConfig
-            mock_db_inst = Mock()
-            mock_db_inst._unified = Mock()
-            mock_db_inst._unified.get_symbols_for_dataset = Mock(return_value=["ES.FUT", "NQ.FUT"])
-            mock_db_inst.get_symbols_for_venue = Mock(return_value=["ES.FUT", "GC.FUT"])
-            mock_db_config.return_value = mock_db_inst
+            # Mock UnifiedInstrumentConfig
+            mock_config_inst = Mock()
+            mock_config_inst.get_symbols_for_dataset = Mock(return_value=["ES.FUT", "NQ.FUT"])
+            mock_config_inst.get_symbols_for_venue = Mock(return_value=["ES.FUT", "GC.FUT"])
+            mock_config.return_value = mock_config_inst
 
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
@@ -282,15 +281,15 @@ class TestGenerateInstrumentsSingleDate:
 
             date = datetime(2024, 1, 1, tzinfo=timezone.utc)
             await service.generate_instruments_for_date(
-                date=date, defi=True, venues=["HYPERLIQUID"]
+                date=date, defi=True, venues=["UNISWAPV3-ETH"]
             )
 
-            # Should only process Hyperliquid
+            # Should only process Uniswap V3
             mock_proc.fetch_defi_instruments.assert_called()
-            # Verify only hyperliquid was called
+            # Verify only uniswap_v3 was called
             calls = mock_proc.fetch_defi_instruments.call_args_list
             protocols_called = [call[1]["protocol"] for call in calls]
-            assert "hyperliquid" in protocols_called
+            assert "uniswap_v3" in protocols_called
 
     @pytest.mark.asyncio
     async def test_generate_no_mode_specified_processes_all(self):
@@ -303,7 +302,7 @@ class TestGenerateInstrumentsSingleDate:
                 "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
             ) as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-            patch("instruments_service.app.core.instruments_service.DatabentoInstrumentConfig"),
+            patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig"),
         ):
             mock_proc = Mock()
             mock_proc.process_exchange_instruments = AsyncMock(return_value={})

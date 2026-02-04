@@ -256,7 +256,7 @@ class TestInstrumentsServiceExtended:
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
         with patch("instruments_service.app.core.instruments_service.DatabentoAdapter") as mock_adapter_class, \
-             patch("instruments_service.app.core.instruments_service.DatabentoInstrumentConfig") as mock_config_class:
+             patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig") as mock_config_class:
             mock_adapter = Mock()
             mock_vix_def = Mock()
             mock_vix_def.instrument_key = "CBOE:INDEX:VIX"
@@ -307,7 +307,7 @@ class TestInstrumentsServiceExtended:
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
         with patch("instruments_service.app.core.instruments_service.DatabentoAdapter") as mock_adapter_class, \
-             patch("instruments_service.app.core.instruments_service.DatabentoInstrumentConfig") as mock_config_class, \
+             patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig") as mock_config_class, \
              patch("instruments_service.models.InstrumentDefinition") as mock_inst_def:
             mock_adapter = Mock()
             mock_adapter.create_vix_instrument_definition.return_value = {
@@ -350,7 +350,7 @@ class TestInstrumentsServiceExtended:
         from datetime import datetime, timezone
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
-        with patch("instruments_service.app.core.instruments_service.DatabentoInstrumentConfig") as mock_config_class:
+        with patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig") as mock_config_class:
             mock_config = Mock()
             mock_config.get_symbols_for_venue.side_effect = Exception("Config error")
             mock_config_class.return_value = mock_config
@@ -415,9 +415,9 @@ class TestInstrumentsServiceExtended:
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
         mock_instrument = Mock()
-        mock_instrument.instrument_key = "HYPERLIQUID:PERPETUAL:TEST"
+        mock_instrument.instrument_key = "UNISWAPV3-ETH:POOL:TEST"
         service.processing_service.fetch_defi_instruments = Mock(
-            return_value={"HYPERLIQUID:PERPETUAL:TEST": mock_instrument}
+            return_value={"UNISWAPV3-ETH:POOL:TEST": mock_instrument}
         )
         service.cloud_storage.store_instruments = Mock(return_value=True)
 
@@ -426,7 +426,7 @@ class TestInstrumentsServiceExtended:
             cefi=False,
             tradfi=False,
             defi=True,
-            venues=["HYPERLIQUID"],
+            venues=["UNISWAPV3-ETH"],
         )
 
         assert result["status"] in ["success", "warning"]
@@ -438,9 +438,9 @@ class TestInstrumentsServiceExtended:
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
         mock_instrument = Mock()
-        mock_instrument.instrument_key = "ASTER:PERPETUAL:TEST"
+        mock_instrument.instrument_key = "AAVE_V3_ETH:LENDING_POOL:TEST"
         service.processing_service.fetch_defi_instruments = Mock(
-            return_value={"ASTER:PERPETUAL:TEST": mock_instrument}
+            return_value={"AAVE_V3_ETH:LENDING_POOL:TEST": mock_instrument}
         )
         service.cloud_storage.store_instruments = Mock(return_value=True)
 
@@ -449,7 +449,7 @@ class TestInstrumentsServiceExtended:
             cefi=False,
             tradfi=False,
             defi=True,
-            venues="ASTER",  # String instead of list
+            venues="AAVE_V3_ETH",  # String instead of list
         )
 
         assert result["status"] in ["success", "warning"]
