@@ -49,23 +49,29 @@ steps:
         pip install --quiet --no-deps -e .
         pip install --quiet ccxt databento web3 eth-abi exchange-calendars yfinance plotly boto3 numpy pandas polars pydantic pydantic-settings python-dateutil python-dotenv requests
         
-        pip install --quiet ruff pytest
+        pip install --quiet ruff pytest pytest-asyncio pytest-mock
 
         echo "=== Running linting (ruff) ==="
         ruff check instruments_service/ tests/ --ignore E501 || exit 1
         echo "Linting passed"
 
-        echo "=== Running tests (pytest) ==="
-        if [ -d "tests" ]; then
-          pytest tests/ -v --tb=short || exit 1
-          echo "Tests passed"
-          echo "=== Running smoke tests ==="
-          if [ -d "tests/smoke" ]; then
-            pytest tests/smoke/ -v --tb=short || exit 1
-            echo "Smoke tests passed"
-          fi
+        # Set config directory for smoke tests (same as market-tick-data-handler)
+        export DEPLOYMENT_CONFIG_DIR=/workspace/unified-trading-deployment-v2/configs
+
+        echo "=== Running unit tests (pytest) ==="
+        if [ -d "tests/unit" ]; then
+          pytest tests/unit/ -v --tb=short || exit 1
+          echo "Unit tests passed"
         else
-          echo "No tests directory found, skipping tests"
+          echo "No unit tests directory found, skipping tests"
+        fi
+
+        echo "=== Running shard combinatorics smoke tests ==="
+        if [ -d "tests/smoke" ]; then
+          pytest tests/smoke/ -v --tb=short || exit 1
+          echo "Smoke tests passed"
+        else
+          echo "No smoke tests directory found, skipping smoke tests"
         fi
 
         echo "=== Quality gates passed - proceeding to build ==="
