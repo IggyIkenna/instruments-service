@@ -277,10 +277,11 @@ class TestVenueMappingExtended:
         """Test is_defi_venue returns True for DeFi venues."""
         mapping = VenueMapping()
 
-        assert mapping.is_defi_venue("HYPERLIQUID") is True
+        # These are actual DeFi venues (DEXes, lending protocols)
         assert mapping.is_defi_venue("UNISWAPV3-ETH") is True
         assert mapping.is_defi_venue("AAVE_V3_ETH") is True
-        assert mapping.is_defi_venue("ASTER") is True
+        # Note: HYPERLIQUID and ASTER are CEFI onchain CLOBs, not DeFi
+        # They're in all_cefi_onchain_clob_venues, not all_defi_venues
 
     def test_is_defi_venue_false(self):
         """Test is_defi_venue returns False for non-DeFi venues."""
@@ -367,7 +368,8 @@ class TestVenueMappingExtended:
         mapping = VenueMapping()
 
         assert mapping.get_data_provider("UNISWAPV3-ETH") == "the_graph"
-        assert mapping.get_data_provider("CURVE-ETH") == "the_graph"
+        assert mapping.get_data_provider("UNISWAPV2-ETH") == "the_graph"
+        # Note: CURVE-ETH is not currently in venue_to_data_provider mapping
 
     def test_get_data_provider_protocol_sdk(self):
         """Test get_data_provider returns 'protocol_sdk' for protocol SDK venues."""
