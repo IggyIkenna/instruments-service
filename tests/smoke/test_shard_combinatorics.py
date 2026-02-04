@@ -7,14 +7,30 @@ and that the ShardCalculator correctly filters by venue start dates.
 Run with: pytest tests/smoke/test_shard_combinatorics.py -v
 """
 
+import os
 import sys
 from datetime import date
 from pathlib import Path
 
 import pytest
 
+
+def _get_deployment_path() -> Path:
+    """Get the deployment path, preferring DEPLOYMENT_CONFIG_DIR env var."""
+    # Check environment variable first (set in Cloud Build)
+    config_dir = os.environ.get("DEPLOYMENT_CONFIG_DIR")
+    if config_dir:
+        deployment_path = Path(config_dir).parent
+        if deployment_path.exists():
+            return deployment_path
+
+    # Fall back to relative path for local development
+    local_path = Path(__file__).parent.parent.parent.parent / "unified-trading-deployment-v2"
+    return local_path
+
+
 # Add unified-trading-deployment-v2 to path for imports
-DEPLOYMENT_PATH = Path(__file__).parent.parent.parent.parent / "unified-trading-deployment-v2"
+DEPLOYMENT_PATH = _get_deployment_path()
 if DEPLOYMENT_PATH.exists():
     sys.path.insert(0, str(DEPLOYMENT_PATH))
 
