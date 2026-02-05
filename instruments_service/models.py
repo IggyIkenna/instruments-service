@@ -37,26 +37,20 @@ class InstrumentDefinition(BaseModel):
         description="Canonical instrument key in format VENUE:INSTRUMENT_TYPE:SYMBOL",
     )
     venue: str = Field(..., description="Venue identifier (e.g., BINANCE, DERIBIT)")
-    instrument_type: str = Field(
-        ..., description="Instrument type (e.g., SPOT_PAIR, PERPETUAL, FUTURE, OPTION)"
-    )
+    instrument_type: str = Field(..., description="Instrument type (e.g., SPOT_PAIR, PERPETUAL, FUTURE, OPTION)")
     symbol: str = Field(
         ...,
         description="Symbol (e.g., BTC-USDT, ETH-USDT@LIN, BTC-USD@INV, BTC-USDT-20250101-50000-CALL)",
     )
 
     # Required fields with defaults (CORRECTED per INSTRUMENT_KEY.md)
-    venue_type: str = Field(
-        default="exchange", description="Type of venue: exchange, protocol, or wallet"
-    )
+    venue_type: str = Field(default="exchange", description="Type of venue: exchange, protocol, or wallet")
     tardis_exchange: str = Field(default="", description="Tardis exchange identifier")
     data_provider: str = Field(default="tardis", description="Data provider source")
     asset_class: str = Field(default="crypto", description="Asset class classification")
 
     # Availability windows (CORRECTED - allow empty for SPOT/PERPETUAL)
-    available_from_datetime: str = Field(
-        ..., description="ISO datetime string when instrument became available"
-    )
+    available_from_datetime: str = Field(..., description="ISO datetime string when instrument became available")
     available_to_datetime: Optional[str] = Field(
         default=None,
         description="ISO datetime string when instrument expires (empty for SPOT/PERPETUAL)",
@@ -111,9 +105,7 @@ class InstrumentDefinition(BaseModel):
     option_type: str = Field(default="", description="Option type (C for call, P for put)")
 
     # Contract-specific fields
-    expiry: Optional[str] = Field(
-        default=None, description="Expiry datetime for futures/options (ISO string)"
-    )
+    expiry: Optional[str] = Field(default=None, description="Expiry datetime for futures/options (ISO string)")
     contract_size: Optional[float] = Field(default=None, description="Contract size/multiplier")
     tick_size: Optional[str] = Field(default="", description="Minimum price increment")
     underlying: Optional[str] = Field(default="", description="Underlying asset for derivatives")
@@ -345,19 +337,19 @@ class InstrumentDefinition(BaseModel):
             "options_chain",
             "liquidations",
             # TradFi data types (Databento) - ALLOWED: trades, ohlcv_1m, tbbo
-            "quotes",       # TradFi quotes (Databento)
-            "ohlcv_1m",     # 1-minute OHLCV candles (Databento TradFi)
-            "tbbo",         # Top of book best bid/offer (Databento TradFi) - ADDED Jan 2026
-            "ohlcv_15m",    # 15-minute OHLCV candles (Barchart external)
-            "ohlcv_24h",    # 24-hour OHLCV candles (Yahoo Finance external)
+            "quotes",  # TradFi quotes (Databento)
+            "ohlcv_1m",  # 1-minute OHLCV candles (Databento TradFi)
+            "tbbo",  # Top of book best bid/offer (Databento TradFi) - ADDED Jan 2026
+            "ohlcv_15m",  # 15-minute OHLCV candles (Barchart external)
+            "ohlcv_24h",  # 24-hour OHLCV candles (Yahoo Finance external)
             # Note: mbp_10, mbp_1 are EXPLICITLY NOT allowed (too expensive)
             # DeFi-specific data types
-            "swaps",        # DEX pool swap events (Uniswap, Balancer)
-            "rate_indices", # Lending protocol indices (Aave, Morpho) for APY calculation
+            "swaps",  # DEX pool swap events (Uniswap, Balancer)
+            "rate_indices",  # Lending protocol indices (Aave, Morpho) for APY calculation
             "utilization",  # Lending pool utilization rate
-            "oracle_prices",# Protocol oracle price feeds (LSTs, sUSDe yield calculation)
-            "yields",       # LST/yield-bearing token yields (Lido, EtherFi, Ethena)
-            "liquidity",    # AMM pool liquidity (Uniswap, Curve) for slippage simulation
+            "oracle_prices",  # Protocol oracle price feeds (LSTs, sUSDe yield calculation)
+            "yields",  # LST/yield-bearing token yields (Lido, EtherFi, Ethena)
+            "liquidity",  # AMM pool liquidity (Uniswap, Curve) for slippage simulation
         ]
         types = [t.strip() for t in v.split(",")]
 
@@ -473,20 +465,20 @@ class InstrumentDefinition(BaseModel):
                 "options_chain",
                 "liquidations",
                 # TradFi data types (Databento) - ALLOWED: trades, ohlcv_1m, tbbo
-                "quotes",       # TradFi quotes (Databento)
-                "ohlcv_1m",     # 1-minute OHLCV candles (Databento TradFi, Hyperliquid, Aster)
-                "tbbo",         # Top of book best bid/offer (Databento TradFi) - ADDED Jan 2026
-                "ohlcv_15m",    # 15-minute OHLCV candles (Barchart external)
-                "ohlcv_1h",     # 1-hour OHLCV candles (fallback for Hyperliquid, Aster)
-                "ohlcv_24h",    # 24-hour OHLCV candles (Yahoo Finance external)
+                "quotes",  # TradFi quotes (Databento)
+                "ohlcv_1m",  # 1-minute OHLCV candles (Databento TradFi, Hyperliquid, Aster)
+                "tbbo",  # Top of book best bid/offer (Databento TradFi) - ADDED Jan 2026
+                "ohlcv_15m",  # 15-minute OHLCV candles (Barchart external)
+                "ohlcv_1h",  # 1-hour OHLCV candles (fallback for Hyperliquid, Aster)
+                "ohlcv_24h",  # 24-hour OHLCV candles (Yahoo Finance external)
                 # Note: mbp_10, mbp_1 are EXPLICITLY NOT allowed (too expensive)
                 # DeFi-specific data types
-                "swaps",        # DEX pool swap events (Uniswap, Balancer)
-                "rate_indices", # Lending protocol indices (Aave, Morpho) for APY calculation
+                "swaps",  # DEX pool swap events (Uniswap, Balancer)
+                "rate_indices",  # Lending protocol indices (Aave, Morpho) for APY calculation
                 "utilization",  # Lending pool utilization rate
-                "oracle_prices",# Protocol oracle price feeds (LSTs, sUSDe yield calculation)
-                "yields",       # LST/yield-bearing token yields (Lido, EtherFi, Ethena)
-                "liquidity",    # AMM pool liquidity (Uniswap, Curve) for slippage simulation
+                "oracle_prices",  # Protocol oracle price feeds (LSTs, sUSDe yield calculation)
+                "yields",  # LST/yield-bearing token yields (Lido, EtherFi, Ethena)
+                "liquidity",  # AMM pool liquidity (Uniswap, Curve) for slippage simulation
             ]
             types = [t.strip() for t in self.data_types.split(",")]
             for data_type in types:
@@ -544,16 +536,12 @@ class InstrumentDefinition(BaseModel):
                     key_symbol = parts[2]
                     strike_price, option_type = self._parse_option_from_symbol_string(key_symbol)
         except Exception as e:
-            logger.debug(
-                f"Failed to extract option info from instrument_key {self.instrument_key}: {e}"
-            )
+            logger.debug(f"Failed to extract option info from instrument_key {self.instrument_key}: {e}")
 
         # If not found, try parsing from symbol field as backup
         if (not strike_price or not option_type) and hasattr(self, "symbol") and self.symbol:
             try:
-                backup_strike, backup_option_type = self._parse_option_from_symbol_string(
-                    self.symbol
-                )
+                backup_strike, backup_option_type = self._parse_option_from_symbol_string(self.symbol)
                 strike_price = strike_price or backup_strike
                 option_type = option_type or backup_option_type
             except Exception as e:

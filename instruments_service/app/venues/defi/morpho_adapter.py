@@ -264,9 +264,7 @@ class MorphoAdapter(BaseDefiAdapter):
                     # Liquidation threshold = 100% (1.0) since lltv is the max LTV
                     # Liquidation bonus = (1 / lltv) - 1
                     liquidation_threshold = 1.0  # Morpho uses lltv as max LTV
-                    liquidation_bonus = (
-                        (1.0 / lltv_decimal - 1.0) if lltv_decimal and lltv_decimal > 0 else None
-                    )
+                    liquidation_bonus = (1.0 / lltv_decimal - 1.0) if lltv_decimal and lltv_decimal > 0 else None
 
                     config = {
                         "ltv": lltv_decimal,
@@ -312,9 +310,7 @@ class MorphoAdapter(BaseDefiAdapter):
 
         # Extract values from market_params if available
         ltv = market_params.get("ltv") if market_params else None
-        liquidation_threshold = (
-            market_params.get("liquidation_threshold") if market_params else None
-        )
+        liquidation_threshold = market_params.get("liquidation_threshold") if market_params else None
         liquidation_bonus = market_params.get("liquidation_bonus") if market_params else None
 
         return {
@@ -381,9 +377,7 @@ class MorphoAdapter(BaseDefiAdapter):
             "exchange_raw_symbol": a_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(
-                2023, 6, 1
-            ).isoformat(),  # Morpho launch date (June 2023)
+            "available_from_datetime": datetime(2023, 6, 1).isoformat(),  # Morpho launch date (June 2023)
             "available_to_datetime": None,
             "data_types": "rate_indices",  # Raw data: supplyIndex (rate_indices includes utilization)
             "inverse": False,
@@ -440,9 +434,7 @@ class MorphoAdapter(BaseDefiAdapter):
             "exchange_raw_symbol": debt_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(
-                2023, 6, 1
-            ).isoformat(),  # Morpho launch date (June 2023)
+            "available_from_datetime": datetime(2023, 6, 1).isoformat(),  # Morpho launch date (June 2023)
             "available_to_datetime": None,
             "data_types": "rate_indices",  # Raw data: borrowIndex (rate_indices includes utilization)
             "inverse": False,

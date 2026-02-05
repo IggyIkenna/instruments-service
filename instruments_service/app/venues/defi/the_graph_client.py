@@ -27,10 +27,12 @@ clear_api_key_cache = clear_thegraph_api_key_cache
 _API_KEY_CACHE = None  # Managed by TheGraphBaseClient
 _API_KEY_PROJECT_ID = None  # Managed by TheGraphBaseClient
 
+
 # Default subgraph URLs - use config for flexibility
 def _get_default_uniswap_v3_url() -> str:
     """Get default Uniswap V3 URL from config."""
     from instruments_service.config import instruments_config
+
     return instruments_config.thegraph_uniswap_v3_studio_url
 
 
@@ -74,6 +76,7 @@ class TheGraphClient:
         # Get secret name from config if not provided
         if secret_name is None:
             from instruments_service.config import instruments_config
+
             secret_name = instruments_config.graph_secret_name
 
         # Create config with custom secret name if provided
@@ -146,7 +149,7 @@ class TheGraphClient:
         {{
             pools(
                 first: {limit}
-                {f'where: {{ {where_str} }}' if where_str else ''}
+                {f"where: {{ {where_str} }}" if where_str else ""}
                 orderBy: totalValueLockedUSD
                 orderDirection: desc
             ) {{
@@ -174,9 +177,7 @@ class TheGraphClient:
         logger.info(f"Fetched {len(pools)} pools from The Graph")
         return pools
 
-    def query_pools_by_base_currency(
-        self, base_currency: str, limit: int = 100
-    ) -> List[Dict[str, Any]]:
+    def query_pools_by_base_currency(self, base_currency: str, limit: int = 100) -> List[Dict[str, Any]]:
         """
         Query pools containing a specific base currency.
 
@@ -249,7 +250,7 @@ class TheGraphClient:
         {{
             pairs(
                 first: {limit}
-                {f'where: {{ {where_str} }}' if where_str else ''}
+                {f"where: {{ {where_str} }}" if where_str else ""}
                 orderBy: reserveUSD
                 orderDirection: desc
             ) {{

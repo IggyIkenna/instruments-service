@@ -65,9 +65,7 @@ class TestShardCombinatoricsGeneration:
         generator = ShardCombinatoricsGenerator(config_dir)
 
         try:
-            combinations = generator.get_all_category_venue_combinations(
-                service=SERVICE_NAME
-            )
+            combinations = generator.get_all_category_venue_combinations(service=SERVICE_NAME)
             # Verify we have some combinations
             assert len(combinations) >= 0
         except FileNotFoundError:

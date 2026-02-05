@@ -85,9 +85,7 @@ class AsterAdapter(BaseDefiAdapter):
         self.spot_api_base_url = spot_api_base_url or "https://sapi.asterdex.com"
         self.mvp_only = mvp_only
         # Use provided base_currency_list or empty set (no filtering)
-        self.mvp_base_currencies = (
-            {c.upper() for c in base_currency_list} if base_currency_list else set()
-        )
+        self.mvp_base_currencies = {c.upper() for c in base_currency_list} if base_currency_list else set()
         logger.info(
             f"✅ AsterAdapter initialized (MVP only: {mvp_only}, base currencies: {len(self.mvp_base_currencies) if self.mvp_base_currencies else 'all'})"
         )
@@ -105,9 +103,7 @@ class AsterAdapter(BaseDefiAdapter):
         return list(instruments.values())
 
     def fetch_perpetuals(
-        self,
-        test_data_availability: bool = False,
-        target_date: Optional[datetime] = None
+        self, test_data_availability: bool = False, target_date: Optional[datetime] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all perpetual futures from Aster.
@@ -167,9 +163,7 @@ class AsterAdapter(BaseDefiAdapter):
 
                             instruments[inst_def["instrument_key"]] = inst_def
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to convert symbol {symbol_info.get('symbol', 'unknown')}: {e}"
-                    )
+                    logger.warning(f"Failed to convert symbol {symbol_info.get('symbol', 'unknown')}: {e}")
                     continue
 
             logger.info(f"✅ Generated {len(instruments)} Aster perpetual instruments")
@@ -180,9 +174,7 @@ class AsterAdapter(BaseDefiAdapter):
             return {}
 
     def fetch_spot_pairs(
-        self,
-        test_data_availability: bool = False,
-        target_date: Optional[datetime] = None
+        self, test_data_availability: bool = False, target_date: Optional[datetime] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all spot trading pairs from Aster for MVP coins.
@@ -246,9 +238,7 @@ class AsterAdapter(BaseDefiAdapter):
 
                             instruments[inst_def["instrument_key"]] = inst_def
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to convert symbol {symbol_info.get('symbol', 'unknown')} to spot pair: {e}"
-                    )
+                    logger.warning(f"Failed to convert symbol {symbol_info.get('symbol', 'unknown')} to spot pair: {e}")
                     continue
 
             logger.info(f"✅ Generated {len(instruments)} Aster spot pair instruments")
@@ -257,9 +247,7 @@ class AsterAdapter(BaseDefiAdapter):
         except requests.exceptions.RequestException as e:
             # DNS errors, connection errors, etc. - Aster spot API may not be publicly accessible
             logger.debug(f"Aster spot API unavailable (endpoint: {self.spot_api_base_url}): {e}")
-            logger.info(
-                "ℹ️  Aster spot trading API not accessible - skipping spot pairs (perpetuals only)"
-            )
+            logger.info("ℹ️  Aster spot trading API not accessible - skipping spot pairs (perpetuals only)")
             return {}
         except Exception as e:
             logger.warning(f"⚠️ Failed to fetch Aster spot pairs: {e}")
@@ -349,9 +337,7 @@ class AsterAdapter(BaseDefiAdapter):
             "underlying": base_asset,
         }
 
-    def _convert_symbol_to_instrument(
-        self, symbol_info: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+    def _convert_symbol_to_instrument(self, symbol_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Convert Aster symbol data to instrument definition.
 

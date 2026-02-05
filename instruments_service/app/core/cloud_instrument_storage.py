@@ -100,9 +100,7 @@ class CloudInstrumentStorage:
 
         # Create instruments service using direct instantiation (canonical pattern)
         # Each domain has its own bucket and dataset (instruments domain)
-        self.cloud_service = StandardizedDomainCloudService(
-            domain="instruments", cloud_target=cloud_target
-        )
+        self.cloud_service = StandardizedDomainCloudService(domain="instruments", cloud_target=cloud_target)
         self.cloud_target = cloud_target
 
         logger.info(
@@ -141,11 +139,7 @@ class CloudInstrumentStorage:
         """
         try:
             # Generate CSV sample using centralized service (only in non-production)
-            if (
-                SAMPLING_SERVICE_AVAILABLE
-                and instruments_df is not None
-                and not instruments_df.empty
-            ):
+            if SAMPLING_SERVICE_AVAILABLE and instruments_df is not None and not instruments_df.empty:
                 sampling_service = create_sampling_service()
                 sample_date = date if date else datetime.now(timezone.utc)
                 sampling_service.generate_csv_sample(
@@ -184,9 +178,7 @@ class CloudInstrumentStorage:
 
                 validator = SchemaValidator()
                 required_columns = get_required_columns()
-                result = validator.validate_dataframe_schema(
-                    df=instruments_df, required_columns=required_columns
-                )
+                result = validator.validate_dataframe_schema(df=instruments_df, required_columns=required_columns)
 
                 if not result.valid:
                     raise ValueError(f"Schema validation failed: {result.errors}")
@@ -198,9 +190,7 @@ class CloudInstrumentStorage:
                     "instrument_type",
                     "available_from_datetime",
                 ]
-                missing_columns = [
-                    col for col in required_columns if col not in instruments_df.columns
-                ]
+                missing_columns = [col for col in required_columns if col not in instruments_df.columns]
                 if missing_columns:
                     raise ValueError(f"Missing required columns: {missing_columns}")
 
@@ -217,16 +207,12 @@ class CloudInstrumentStorage:
                     if instruments_df[ts_col].dtype.name.startswith("datetime64"):
                         ts_series = pd.to_datetime(instruments_df[ts_col])
                         if ts_series.dt.tz is not None:
-                            instruments_df[ts_col] = ts_series.dt.tz_convert("UTC").dt.tz_localize(
-                                None
-                            )
+                            instruments_df[ts_col] = ts_series.dt.tz_convert("UTC").dt.tz_localize(None)
                         instruments_df[ts_col] = instruments_df[ts_col].astype("datetime64[ns]")
                     elif instruments_df[ts_col].dtype == "object":
                         # Try to parse string timestamps
                         try:
-                            instruments_df[ts_col] = pd.to_datetime(
-                                instruments_df[ts_col]
-                            ).dt.tz_localize(None)
+                            instruments_df[ts_col] = pd.to_datetime(instruments_df[ts_col]).dt.tz_localize(None)
                         except (ValueError, TypeError, AttributeError) as e:
                             logger.debug(f"Could not parse timestamp column {ts_col}: {e}")
 
@@ -237,9 +223,7 @@ class CloudInstrumentStorage:
                 # Extract date from available_from_datetime if available
                 if "available_from_datetime" in instruments_df.columns:
                     try:
-                        first_date = pd.to_datetime(
-                            instruments_df["available_from_datetime"].iloc[0]
-                        )
+                        first_date = pd.to_datetime(instruments_df["available_from_datetime"].iloc[0])
                         date_str = first_date.strftime("%Y-%m-%d")
                     except (ValueError, TypeError, IndexError) as e:
                         logger.debug(f"Could not extract date from available_from_datetime: {e}")
@@ -249,17 +233,17 @@ class CloudInstrumentStorage:
 
             # Ensure market_category is populated for all instruments
             logger.info(f"📊 Ensuring market_category is populated for {len(instruments_df)} instruments...")
-            if 'market_category' not in instruments_df.columns:
-                instruments_df['market_category'] = ''
+            if "market_category" not in instruments_df.columns:
+                instruments_df["market_category"] = ""
             # Populate market_category for instruments that don't have it or have empty value
-            mask = (instruments_df['market_category'].isna()) | (instruments_df['market_category'] == '')
+            mask = (instruments_df["market_category"].isna()) | (instruments_df["market_category"] == "")
             if mask.any():
-                instruments_df.loc[mask, 'market_category'] = instruments_df.loc[mask].apply(
+                instruments_df.loc[mask, "market_category"] = instruments_df.loc[mask].apply(
                     lambda row: determine_market_category(row.to_dict()), axis=1
                 )
 
             # Group by category
-            category_groups = instruments_df.groupby('market_category')
+            category_groups = instruments_df.groupby("market_category")
             total_stored = 0
             all_successful = True
 
@@ -283,12 +267,14 @@ class CloudInstrumentStorage:
 
                 # NEW: Group by venue within category for by-venue folder structure
                 # This enables turbo mode venue-level status checks without opening parquet files
-                venue_groups = category_df.groupby('venue')
+                venue_groups = category_df.groupby("venue")
 
                 for venue, venue_df in venue_groups:
                     # Sanitize venue name for folder (replace slashes, etc.)
                     venue_folder = venue.replace("/", "-").replace("\\", "-")
-                    gcs_path = f"instrument_availability/by_date/day-{date_str}/venue-{venue_folder}/instruments.parquet"
+                    gcs_path = (
+                        f"instrument_availability/by_date/day-{date_str}/venue-{venue_folder}/instruments.parquet"
+                    )
                     venue_df_to_store = venue_df.copy()
 
                     # Validate schema before upload
@@ -309,6 +295,7 @@ class CloudInstrumentStorage:
                     # Validate timestamp-date alignment (item_22c)
                     # Instruments use available_from_datetime which should align with the date folder
                     from datetime import date as date_type
+
                     expected_date = date_type.fromisoformat(date_str)
                     alignment_result = validate_timestamp_date_alignment(
                         venue_df_to_store,
@@ -346,8 +333,7 @@ class CloudInstrumentStorage:
 
                     # Prepare batch upload
                     batch_uploads = [
-                        {"data": df, "gcs_path": gcs_path, "format": "parquet"}
-                        for gcs_path, df, _ in uploads_list
+                        {"data": df, "gcs_path": gcs_path, "format": "parquet"} for gcs_path, df, _ in uploads_list
                     ]
 
                     # Use thread-safe batch upload
@@ -358,14 +344,11 @@ class CloudInstrumentStorage:
                         gcs_path, df, category_venue = uploads_list[i]
                         if result.get("success"):
                             logger.info(
-                                f"✅ Uploaded {len(df)} {category_venue} instruments to GCS: "
-                                f"{bucket_name}/{gcs_path}"
+                                f"✅ Uploaded {len(df)} {category_venue} instruments to GCS: {bucket_name}/{gcs_path}"
                             )
                             total_stored += len(df)
                         else:
-                            logger.error(
-                                f"❌ GCS upload failed for {category_venue}: {result.get('error')}"
-                            )
+                            logger.error(f"❌ GCS upload failed for {category_venue}: {result.get('error')}")
                             all_successful = False
 
                 except Exception as gcs_error:
@@ -374,15 +357,13 @@ class CloudInstrumentStorage:
 
             if all_successful:
                 # Count unique venues stored
-                unique_venues = instruments_df['venue'].nunique() if 'venue' in instruments_df.columns else 0
+                unique_venues = instruments_df["venue"].nunique() if "venue" in instruments_df.columns else 0
                 logger.info(
                     f"✅ Stored {total_stored} instruments across {unique_venues} venues to "
                     f"category-specific buckets (by-venue folder structure)"
                 )
             else:
-                logger.warning(
-                    f"⚠️ Some venue uploads failed. Total stored: {total_stored}/{len(instruments_df)}"
-                )
+                logger.warning(f"⚠️ Some venue uploads failed. Total stored: {total_stored}/{len(instruments_df)}")
 
             return all_successful
 
