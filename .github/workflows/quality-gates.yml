@@ -34,24 +34,24 @@ jobs:
         with:
           repository: IggyIkenna/unified-cloud-services
           token: ${{ secrets.GH_PAT }}
-          path: ../unified-cloud-services
+          path: deps/unified-cloud-services
 
       - name: Checkout unified-trading-deployment-v2
         uses: actions/checkout@v4
         with:
           repository: IggyIkenna/unified-trading-deployment-v2
           token: ${{ secrets.GH_PAT }}
-          path: ../unified-trading-deployment-v2
+          path: deps/unified-trading-deployment-v2
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
 
           # Install unified-cloud-services first
-          pip install -e ../unified-cloud-services
+          pip install -e deps/unified-cloud-services
 
           # Install unified-trading-deployment-v2 (for smoke tests)
-          pip install -e ../unified-trading-deployment-v2 || true
+          pip install -e deps/unified-trading-deployment-v2 || true
 
           # Install instruments-service without deps first
           pip install -e . --no-deps
@@ -120,7 +120,7 @@ jobs:
         env:
           CLOUD_MOCK_MODE: "true"
           GOOGLE_CLOUD_PROJECT: "test-project"
-          DEPLOYMENT_CONFIG_DIR: "../unified-trading-deployment-v2/configs"
+          DEPLOYMENT_CONFIG_DIR: "deps/unified-trading-deployment-v2/configs"
         run: |
           echo "=== Running smoke tests ==="
           if [ -d "tests/smoke" ]; then
