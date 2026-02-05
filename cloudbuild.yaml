@@ -49,6 +49,10 @@ steps:
         echo "=== Installing system dependencies ==="
         apt-get update && apt-get install -y --no-install-recommends git
 
+        echo "=== Configuring git credentials ==="
+        GITHUB_TOKEN=$(cat /workspace/github_token.txt)
+        git config --global url."https://x-access-token:$${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+
         echo "=== Installing dependencies ==="
         pip install --quiet --upgrade pip setuptools wheel
 
