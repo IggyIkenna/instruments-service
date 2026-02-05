@@ -131,9 +131,7 @@ class InstrumentsService:
 
         try:
             date_str = date.strftime("%Y-%m-%d")
-            logger.info(
-                f"📅 Generating instruments for {date_str} (CeFi={cefi}, TradFi={tradfi}, DeFi={defi})"
-            )
+            logger.info(f"📅 Generating instruments for {date_str} (CeFi={cefi}, TradFi={tradfi}, DeFi={defi})")
 
             # Normalize venues filter
             venues_filter = venues or []
@@ -144,9 +142,7 @@ class InstrumentsService:
             # Extract venues from instrument_ids if provided (early filtering)
             # Format: VENUE:INSTRUMENT_TYPE:SYMBOL or VENUE:INSTRUMENT_TYPE:SYMBOL@LIN
             if instrument_ids:
-                instrument_ids_list = (
-                    instrument_ids if isinstance(instrument_ids, list) else [instrument_ids]
-                )
+                instrument_ids_list = instrument_ids if isinstance(instrument_ids, list) else [instrument_ids]
                 venues_from_instrument_ids = set()
 
                 for inst_id in instrument_ids_list:
@@ -155,21 +151,15 @@ class InstrumentsService:
                     if len(parts) >= 1:
                         venue_from_id = parts[0].upper()
                         venues_from_instrument_ids.add(venue_from_id)
-                        logger.debug(
-                            f"  Extracted venue '{venue_from_id}' from instrument_id: {inst_id}"
-                        )
+                        logger.debug(f"  Extracted venue '{venue_from_id}' from instrument_id: {inst_id}")
 
                 if venues_from_instrument_ids:
-                    logger.info(
-                        f"🔍 Extracted venues from instrument_ids: {sorted(venues_from_instrument_ids)}"
-                    )
+                    logger.info(f"🔍 Extracted venues from instrument_ids: {sorted(venues_from_instrument_ids)}")
 
                     # If venues filter is also provided, intersect them
                     if venues_filter:
                         # Intersect: only process venues that are in both filters
-                        venues_filter = [
-                            v for v in venues_filter if v in venues_from_instrument_ids
-                        ]
+                        venues_filter = [v for v in venues_filter if v in venues_from_instrument_ids]
                         if not venues_filter:
                             logger.warning(
                                 f"⚠️ No matching venues between --venues {venues} and instrument_ids {venues_from_instrument_ids}. "
@@ -178,9 +168,7 @@ class InstrumentsService:
                     else:
                         # Use venues from instrument_ids as the filter
                         venues_filter = list(venues_from_instrument_ids)
-                        logger.info(
-                            f"🔍 Using venues from instrument_ids as venue filter: {venues_filter}"
-                        )
+                        logger.info(f"🔍 Using venues from instrument_ids as venue filter: {venues_filter}")
 
             # Validate venues against allowed venues for each market type
             if venues_filter:
@@ -189,9 +177,7 @@ class InstrumentsService:
                 allowed_cefi_venues = set(
                     self.venue_mapping.all_cefi_venues
                 )  # Canonical venues from CEFI (Tardis + on-chain CLOBs)
-                allowed_tradfi_venues = set(
-                    self.venue_mapping.all_databento_venues
-                )  # TRADFI venues
+                allowed_tradfi_venues = set(self.venue_mapping.all_databento_venues)  # TRADFI venues
                 allowed_defi_venues = set(self.venue_mapping.all_defi_venues)  # DEFI venues
 
                 # Determine which market types are being processed
@@ -285,9 +271,7 @@ class InstrumentsService:
                 # Note: Invalid venues have already been rejected in validation above
                 if venues_filter:
                     # Filter to only CEFI venues (venues were validated above)
-                    cefi_venues = [
-                        v for v in venues_filter if v in self.venue_mapping.tardis_to_venue.values()
-                    ]
+                    cefi_venues = [v for v in venues_filter if v in self.venue_mapping.tardis_to_venue.values()]
 
                     if cefi_venues:
                         # Use centralized reverse mapping: canonical venue -> list of Tardis exchange names
@@ -303,10 +287,7 @@ class InstrumentsService:
                                 raw_exchanges_for_venue = venue_to_exchanges[canonical_venue]
                                 for raw_exchange in raw_exchanges_for_venue:
                                     # Only include if it's in the current exchanges list
-                                    if (
-                                        raw_exchange in exchanges
-                                        and raw_exchange not in filtered_exchanges
-                                    ):
+                                    if raw_exchange in exchanges and raw_exchange not in filtered_exchanges:
                                         filtered_exchanges.append(raw_exchange)
                                         logger.debug(
                                             f"  Mapped canonical venue {canonical_venue} -> raw exchange {raw_exchange}"
@@ -314,13 +295,9 @@ class InstrumentsService:
 
                         if filtered_exchanges:
                             exchanges = filtered_exchanges
-                            logger.info(
-                                f"🔍 Filtered CEFI exchanges by canonical venues {cefi_venues}: {exchanges}"
-                            )
+                            logger.info(f"🔍 Filtered CEFI exchanges by canonical venues {cefi_venues}: {exchanges}")
                         else:
-                            logger.warning(
-                                f"⚠️ No matching CEFI exchanges found for canonical venues: {cefi_venues}"
-                            )
+                            logger.warning(f"⚠️ No matching CEFI exchanges found for canonical venues: {cefi_venues}")
                             exchanges = []  # Don't process any CEFI exchanges if no match
                     else:
                         # venues_filter provided but no CEFI venues in it, skip CEFI processing
@@ -333,8 +310,19 @@ class InstrumentsService:
                 if exchanges:
                     # Pre-flight check: Validate venue access before processing
                     # This detects Cloudflare blocks early instead of failing per-venue later
-                    if hasattr(self.processing_service, "tardis_adapter"):
+                    # Note: tardis_adapter is lazy-loaded, so we need to call _get_tardis_adapter()
+                    # to ensure it's initialized before checking venue access
+                    adapter = None
+                    if hasattr(self.processing_service, "_get_tardis_adapter"):
+                        try:
+                            adapter = self.processing_service._get_tardis_adapter()
+                        except ValueError as e:
+                            # API key not available - skip venue access check
+                            logger.warning(f"⚠️ Cannot check venue access: {e}")
+                    elif hasattr(self.processing_service, "tardis_adapter"):
                         adapter = self.processing_service.tardis_adapter
+
+                    if adapter is not None:
                         access_results = adapter.check_venues_access(exchanges)
                         blocked = [ex for ex, (ok, _) in access_results.items() if not ok]
                         if blocked:
@@ -344,9 +332,7 @@ class InstrumentsService:
                             # Filter out blocked exchanges
                             accessible = [ex for ex in exchanges if ex not in blocked]
                             if not accessible:
-                                logger.error(
-                                    f"❌ All {len(exchanges)} CEFI venues blocked - skipping CEFI processing"
-                                )
+                                logger.error(f"❌ All {len(exchanges)} CEFI venues blocked - skipping CEFI processing")
                                 exchanges = []
                             else:
                                 logger.warning(
@@ -365,15 +351,11 @@ class InstrumentsService:
                     async def process_single_exchange(exchange: str):
                         try:
                             logger.info(f"🔍 Processing CeFi exchange {exchange}...")
-                            exchange_instruments = (
-                                await self.processing_service.process_exchange_instruments(
-                                    exchange=exchange, target_date=date, force=force
-                                )
+                            exchange_instruments = await self.processing_service.process_exchange_instruments(
+                                exchange=exchange, target_date=date, force=force
                             )
                             if exchange_instruments:
-                                logger.info(
-                                    f"✅ Processed {len(exchange_instruments)} instruments from {exchange}"
-                                )
+                                logger.info(f"✅ Processed {len(exchange_instruments)} instruments from {exchange}")
                                 return exchange_instruments
                             return {}
                         except Exception as e:
@@ -424,9 +406,7 @@ class InstrumentsService:
                                     f"✅ Processed {len(clob_instruments)} instruments from {protocol} (CEFI on-chain CLOB)"
                                 )
                         except Exception as e:
-                            logger.error(
-                                f"❌ Failed to process on-chain CLOB {protocol}: {e}", exc_info=True
-                            )
+                            logger.error(f"❌ Failed to process on-chain CLOB {protocol}: {e}", exc_info=True)
 
             # Process TRADFI (Databento) exchanges
             if tradfi:
@@ -443,14 +423,10 @@ class InstrumentsService:
                     # Note: Invalid venues have already been rejected in validation above
                     if tradfi_venues:
                         # Use explicit tradfi_venues parameter (from --exchanges NASDAQ etc.)
-                        filtered_tradfi_venues = [
-                            v for v in tradfi_venues if v in all_databento_exchanges
-                        ]
+                        filtered_tradfi_venues = [v for v in tradfi_venues if v in all_databento_exchanges]
                         if filtered_tradfi_venues:
                             databento_exchanges = filtered_tradfi_venues
-                            logger.info(
-                                f"🔍 Processing specified TradFi venues: {databento_exchanges}"
-                            )
+                            logger.info(f"🔍 Processing specified TradFi venues: {databento_exchanges}")
                         else:
                             logger.warning(
                                 f"⚠️ No valid TradFi venues in tradfi_venues={tradfi_venues}, skipping TRADFI processing"
@@ -458,9 +434,7 @@ class InstrumentsService:
                             databento_exchanges = []
                     elif venues_filter:
                         # Filter to only TRADFI venues (venues were validated above)
-                        filtered_tradfi_venues = [
-                            v for v in venues_filter if v in all_databento_exchanges
-                        ]
+                        filtered_tradfi_venues = [v for v in venues_filter if v in all_databento_exchanges]
 
                         if filtered_tradfi_venues:
                             databento_exchanges = filtered_tradfi_venues
@@ -499,9 +473,7 @@ class InstrumentsService:
                                     databento_adapter = DatabentoAdapter()
 
                                     # Create VIX instrument definition
-                                    vix_def_dict = (
-                                        databento_adapter.create_vix_instrument_definition(date)
-                                    )
+                                    vix_def_dict = databento_adapter.create_vix_instrument_definition(date)
                                     if vix_def_dict:
                                         vix_def = InstrumentDefinition(**vix_def_dict)
                                         logger.info(f"✅ Created VIX: {vix_def.instrument_key}")
@@ -513,14 +485,10 @@ class InstrumentsService:
                                     databento_adapter = DatabentoAdapter()
 
                                     # Create KRW/USD instrument definition
-                                    krwusd_def_dict = (
-                                        databento_adapter.create_krwusd_instrument_definition(date)
-                                    )
+                                    krwusd_def_dict = databento_adapter.create_krwusd_instrument_definition(date)
                                     if krwusd_def_dict:
                                         krwusd_def = InstrumentDefinition(**krwusd_def_dict)
-                                        logger.info(
-                                            f"✅ Created KRW/USD: {krwusd_def.instrument_key}"
-                                        )
+                                        logger.info(f"✅ Created KRW/USD: {krwusd_def.instrument_key}")
                                         return {krwusd_def.instrument_key: krwusd_def}
                                     return {}
                                 elif exchange in ["NASDAQ", "NYSE"]:
@@ -535,9 +503,7 @@ class InstrumentsService:
                                     # Process Bitcoin ETFs using static definitions
                                     # (more reliable for new ETFs like IBIT, FBTC, ARKB)
                                     # IMPORTANT: Bitcoin ETFs launched January 11, 2024 - skip for earlier dates
-                                    bitcoin_etf_launch_date = datetime(
-                                        2024, 1, 11, tzinfo=timezone.utc
-                                    )
+                                    bitcoin_etf_launch_date = datetime(2024, 1, 11, tzinfo=timezone.utc)
                                     bitcoin_etf_tickers = ["IBIT", "FBTC", "ARKB"]
 
                                     # Only process Bitcoin ETFs if date is on or after launch date
@@ -545,29 +511,29 @@ class InstrumentsService:
                                         for ticker in bitcoin_etf_tickers:
                                             # Check if this ticker is in the symbols for this venue
                                             if ticker in symbols:
-                                                etf_def_dict = databento_adapter.create_bitcoin_etf_instrument_definition(
-                                                    ticker, date
+                                                etf_def_dict = (
+                                                    databento_adapter.create_bitcoin_etf_instrument_definition(
+                                                        ticker, date
+                                                    )
                                                 )
                                                 if etf_def_dict:
                                                     etf_def = InstrumentDefinition(**etf_def_dict)
                                                     instruments[etf_def.instrument_key] = etf_def
-                                                    logger.info(
-                                                        f"✅ Created Bitcoin ETF: {etf_def.instrument_key}"
-                                                    )
+                                                    logger.info(f"✅ Created Bitcoin ETF: {etf_def.instrument_key}")
                                     else:
                                         logger.debug(
                                             f"⏭️ Skipping Bitcoin ETFs - date {date.strftime('%Y-%m-%d')} is before launch (2024-01-11)"
                                         )
 
                                     # Also fetch any other symbols via Databento API
-                                    non_btc_etf_symbols = [
-                                        s for s in symbols if s not in bitcoin_etf_tickers
-                                    ]
+                                    non_btc_etf_symbols = [s for s in symbols if s not in bitcoin_etf_tickers]
                                     if non_btc_etf_symbols:
-                                        databento_instruments = await self.processing_service.fetch_databento_instruments(
-                                            exchange=exchange,
-                                            symbols=non_btc_etf_symbols,
-                                            target_date=date,
+                                        databento_instruments = (
+                                            await self.processing_service.fetch_databento_instruments(
+                                                exchange=exchange,
+                                                symbols=non_btc_etf_symbols,
+                                                target_date=date,
+                                            )
                                         )
                                         if databento_instruments:
                                             instruments.update(databento_instruments)
@@ -602,18 +568,14 @@ class InstrumentsService:
                                         return {}
 
                                     # Fetch Databento instruments
-                                    databento_instruments = (
-                                        await self.processing_service.fetch_databento_instruments(
-                                            exchange=exchange,
-                                            symbols=symbols,
-                                            target_date=date,
-                                        )
+                                    databento_instruments = await self.processing_service.fetch_databento_instruments(
+                                        exchange=exchange,
+                                        symbols=symbols,
+                                        target_date=date,
                                     )
 
                                     if databento_instruments:
-                                        logger.info(
-                                            f"✅ Processed {len(databento_instruments)} ICE instruments"
-                                        )
+                                        logger.info(f"✅ Processed {len(databento_instruments)} ICE instruments")
                                     return databento_instruments or {}
                                 else:
                                     # Get symbols for CME from config
@@ -624,12 +586,10 @@ class InstrumentsService:
                                         return {}
 
                                     # Fetch Databento instruments (uses cached client, runs in thread pool)
-                                    databento_instruments = (
-                                        await self.processing_service.fetch_databento_instruments(
-                                            exchange=exchange,
-                                            symbols=symbols,
-                                            target_date=date,
-                                        )
+                                    databento_instruments = await self.processing_service.fetch_databento_instruments(
+                                        exchange=exchange,
+                                        symbols=symbols,
+                                        target_date=date,
                                     )
 
                                     if databento_instruments:
@@ -653,9 +613,7 @@ class InstrumentsService:
                                 all_instruments.update(result)
 
                 except Exception as e:
-                    logger.error(
-                        f"❌ Failed to initialize Databento processing: {e}", exc_info=True
-                    )
+                    logger.error(f"❌ Failed to initialize Databento processing: {e}", exc_info=True)
 
             # Process DEFI protocols
             if defi:
@@ -705,9 +663,7 @@ class InstrumentsService:
                     # Note: Invalid venues have already been rejected in validation above
                     if venues_filter:
                         # Filter to only DEFI venues (venues were validated above)
-                        defi_venues = [
-                            v for v in venues_filter if v in self.venue_mapping.all_defi_venues
-                        ]
+                        defi_venues = [v for v in venues_filter if v in self.venue_mapping.all_defi_venues]
 
                         if defi_venues:
                             defi_protocols = []
@@ -724,9 +680,7 @@ class InstrumentsService:
                                 )
                             else:
                                 # No matching protocols found (shouldn't happen after validation, but handle gracefully)
-                                logger.warning(
-                                    f"⚠️ No matching DEFI protocols found for venues: {defi_venues}"
-                                )
+                                logger.warning(f"⚠️ No matching DEFI protocols found for venues: {defi_venues}")
                                 defi_protocols = []
                         else:
                             # No DEFI venues in filter, don't process DEFI
@@ -743,25 +697,19 @@ class InstrumentsService:
                             try:
                                 # Fetch DeFi instruments
                                 if chain:
-                                    defi_instruments = (
-                                        self.processing_service.fetch_defi_instruments(
-                                            protocol=protocol,
-                                            chain=chain,
-                                            target_date=date,
-                                        )
+                                    defi_instruments = self.processing_service.fetch_defi_instruments(
+                                        protocol=protocol,
+                                        chain=chain,
+                                        target_date=date,
                                     )
                                 else:
-                                    defi_instruments = (
-                                        self.processing_service.fetch_defi_instruments(
-                                            protocol=protocol,
-                                            target_date=date,
-                                        )
+                                    defi_instruments = self.processing_service.fetch_defi_instruments(
+                                        protocol=protocol,
+                                        target_date=date,
                                     )
                                 if defi_instruments:
                                     all_instruments.update(defi_instruments)
-                                    logger.info(
-                                        f"✅ Processed {len(defi_instruments)} instruments from {protocol}"
-                                    )
+                                    logger.info(f"✅ Processed {len(defi_instruments)} instruments from {protocol}")
                             except Exception as e:
                                 logger.error(f"❌ Failed to process {protocol}: {e}", exc_info=True)
                 except Exception as e:
@@ -783,9 +731,7 @@ class InstrumentsService:
 
             # Apply instrument_id filtering if specified
             if instrument_ids:
-                instrument_ids_list = (
-                    instrument_ids if isinstance(instrument_ids, list) else [instrument_ids]
-                )
+                instrument_ids_list = instrument_ids if isinstance(instrument_ids, list) else [instrument_ids]
                 instrument_ids_set = set(str(inst_id).upper() for inst_id in instrument_ids_list)
 
                 filtered_instruments = {}
@@ -854,11 +800,7 @@ class InstrumentsService:
                     "date": date_str,
                     "instruments_generated": len(instruments_df),
                     "exchanges_processed": len(exchanges) if exchanges else 0,
-                    "venues": (
-                        instruments_df["venue"].unique().tolist()
-                        if "venue" in instruments_df.columns
-                        else []
-                    ),
+                    "venues": (instruments_df["venue"].unique().tolist() if "venue" in instruments_df.columns else []),
                     "error_count": error_count,
                     "warning_count": warning_count,
                 }
@@ -927,9 +869,7 @@ class InstrumentsService:
         # Filter to requested range
         date_range = [d for d in date_range if start_date <= d <= end_date]
 
-        logger.info(
-            f"📅 Processing {len(date_range)} dates from {start_date.date()} to {end_date.date()}"
-        )
+        logger.info(f"📅 Processing {len(date_range)} dates from {start_date.date()} to {end_date.date()}")
 
         results = []
         total_generated = 0
@@ -969,9 +909,7 @@ class InstrumentsService:
         success_count = len([r for r in results if r.get("status") == "success"])
         success_rate = (success_count / len(date_range) * 100) if date_range else 0
 
-        logger.info(
-            f"📊 Batch processing complete: {success_count}/{len(date_range)} successful ({success_rate:.1f}%)"
-        )
+        logger.info(f"📊 Batch processing complete: {success_count}/{len(date_range)} successful ({success_rate:.1f}%)")
         logger.info(f"   Total instruments generated: {total_generated}")
         logger.info(f"   Errors: {total_errors}")
 
