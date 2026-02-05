@@ -41,7 +41,7 @@ class EthenaAdapter(BaseDefiAdapter):
 
     # Contract addresses on Ethereum mainnet
     SUSDE_ADDRESS = "0x9d39a5de30e57443bff2a8307a4256c8797a3497"  # sUSDe token
-    USDE_ADDRESS = "0x4c9edd5852cd905f086c759e8383e09bff1e68b3"   # USDe token
+    USDE_ADDRESS = "0x4c9edd5852cd905f086c759e8383e09bff1e68b3"  # USDe token
 
     def __init__(
         self,
@@ -71,10 +71,7 @@ class EthenaAdapter(BaseDefiAdapter):
         instruments = self.fetch_yield_bearing_instruments()
         return list(instruments.values())
 
-    def fetch_yield_bearing_instruments(
-        self,
-        target_date: Optional[datetime] = None
-    ) -> Dict[str, Dict[str, Any]]:
+    def fetch_yield_bearing_instruments(self, target_date: Optional[datetime] = None) -> Dict[str, Dict[str, Any]]:
         """
         Fetch Ethena yield-bearing instruments.
 
@@ -154,9 +151,7 @@ class EthenaAdapter(BaseDefiAdapter):
             "exchange_raw_symbol": symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(
-                2024, 2, 16
-            ).isoformat(),  # Ethena mainnet launch (Feb 2024)
+            "available_from_datetime": datetime(2024, 2, 16).isoformat(),  # Ethena mainnet launch (Feb 2024)
             "available_to_datetime": None,
             "data_types": "yields,oracle_prices",  # sUSDe APY from DefiLlama + oracle price
             "inverse": False,
@@ -165,20 +160,3 @@ class EthenaAdapter(BaseDefiAdapter):
             "min_size": "",
             "underlying": underlying,
         }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

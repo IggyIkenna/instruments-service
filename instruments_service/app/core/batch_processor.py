@@ -34,9 +34,7 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
 
         # Instrument specific configuration
         self.max_batch_size: int = config.get("max_batch_size", 1000)
-        self.lookback_days: int = config.get(
-            "lookback_days", 0
-        )  # Default: no lookback for instruments
+        self.lookback_days: int = config.get("lookback_days", 0)  # Default: no lookback for instruments
 
     def calculate_date_range(
         self, target_date: datetime, lookback_days: int | None = None
@@ -57,16 +55,11 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
         start_date = target_date - timedelta(days=lookback_days)
         end_date = target_date
 
-        logger.info(
-            f"Calculated date range: {start_date.date()} to {end_date.date()} "
-            f"(lookback: {lookback_days} days)"
-        )
+        logger.info(f"Calculated date range: {start_date.date()} to {end_date.date()} (lookback: {lookback_days} days)")
 
         return start_date, end_date
 
-    def estimate_memory_requirements(
-        self, num_instruments: int, date_range_days: int
-    ) -> dict[str, Any]:
+    def estimate_memory_requirements(self, num_instruments: int, date_range_days: int) -> dict[str, Any]:
         """
         Estimate memory requirements for batch processing.
 
@@ -97,9 +90,7 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
 
         return estimate
 
-    def get_required_periods(
-        self, target_date: datetime, lookback_days: int | None = None
-    ) -> list[datetime]:
+    def get_required_periods(self, target_date: datetime, lookback_days: int | None = None) -> list[datetime]:
         """
         Get list of required periods (dates) for processing.
 
@@ -144,9 +135,6 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
             batch = instruments[i : i + batch_size]
             batches.append(batch)
 
-        logger.info(
-            f"Split {len(instruments)} instruments into {len(batches)} batches "
-            f"(batch size: {batch_size})"
-        )
+        logger.info(f"Split {len(instruments)} instruments into {len(batches)} batches (batch size: {batch_size})")
 
         return batches

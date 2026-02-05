@@ -75,9 +75,7 @@ class TestAaveV3Adapter:
             adapter.venue = "AAVE_V3_ETH"
 
             # Test known token
-            address = adapter._get_a_token_address(
-                "WETH", "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
-            )
+            address = adapter._get_a_token_address("WETH", "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
             assert address == "0x4d5F47FA6A74757f35C14fD3a6Ef8E3C9BC514E8"
 
             # Test unknown token
@@ -96,9 +94,7 @@ class TestAaveV3Adapter:
             adapter.venue = "AAVE_V3_ETH"
 
             # Test known token
-            address = adapter._get_debt_token_address(
-                "WETH", "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
-            )
+            address = adapter._get_debt_token_address("WETH", "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
             assert address == "0xeA51d7853EEFb32b6ee06b1C12E6dcCA88Be0fFE"
 
             # Test unknown token

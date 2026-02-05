@@ -137,9 +137,7 @@ class TestCloudInstrumentStorage:
                 "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
                 return_value=mock_cloud_service,
             ),
-            patch(
-                "instruments_service.app.core.cloud_instrument_storage.CloudTarget"
-            ) as mock_target_class,
+            patch("instruments_service.app.core.cloud_instrument_storage.CloudTarget") as mock_target_class,
         ):
             mock_target = Mock()
             mock_target.project_id = "test-project"
@@ -158,9 +156,7 @@ class TestCloudInstrumentStorage:
                 "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
                 return_value=mock_cloud_service,
             ),
-            patch(
-                "instruments_service.app.core.cloud_instrument_storage.CloudTarget"
-            ) as mock_target_class,
+            patch("instruments_service.app.core.cloud_instrument_storage.CloudTarget") as mock_target_class,
             patch.dict(
                 "os.environ",
                 {"ENVIRONMENT": "test", "INSTRUMENTS_GCS_BUCKET_TEST": "test-bucket"},

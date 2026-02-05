@@ -24,16 +24,12 @@ class TestInstrumentsServiceExtended:
     @pytest.fixture
     def service(self, service_config):
         """Create InstrumentsService with mocked dependencies."""
-        with patch(
-            "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-        ) as mock_processing, patch(
-            "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
-        ) as mock_storage, patch(
-            "instruments_service.app.core.instruments_service.InstrumentBatchProcessor"
-        ) as mock_batch:
-            mock_processing.return_value.get_processing_stats.return_value = {
-                "exchanges_processed": 0
-            }
+        with (
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_processing,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage,
+            patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor") as mock_batch,
+        ):
+            mock_processing.return_value.get_processing_stats.return_value = {"exchanges_processed": 0}
             service = InstrumentsService(service_config)
             service.processing_service = mock_processing.return_value
             service.cloud_storage = mock_storage.return_value
@@ -109,9 +105,7 @@ class TestInstrumentsServiceExtended:
             ]
         )
 
-        result = await service.generate_instruments_date_range(
-            start_date=start_date, end_date=end_date, cefi=True
-        )
+        result = await service.generate_instruments_date_range(start_date=start_date, end_date=end_date, cefi=True)
 
         assert result["status"] == "partial"
         assert result["dates_failed"] == 1
@@ -132,9 +126,7 @@ class TestInstrumentsServiceExtended:
 
         assert isinstance(result, pd.DataFrame)
         assert len(result) == 1
-        service.cloud_storage.query_instruments.assert_called_once_with(
-            venue="TEST", instrument_type="SPOT_PAIR"
-        )
+        service.cloud_storage.query_instruments.assert_called_once_with(venue="TEST", instrument_type="SPOT_PAIR")
 
     def test_query_instruments_no_filters(self, service):
         """Test querying instruments without filters."""
@@ -144,15 +136,11 @@ class TestInstrumentsServiceExtended:
         result = service.query_instruments()
 
         assert isinstance(result, pd.DataFrame)
-        service.cloud_storage.query_instruments.assert_called_once_with(
-            venue=None, instrument_type=None
-        )
+        service.cloud_storage.query_instruments.assert_called_once_with(venue=None, instrument_type=None)
 
     def test_get_processing_stats(self, service):
         """Test getting processing statistics."""
-        service.processing_service.get_processing_stats.return_value = {
-            "exchanges_processed": 5
-        }
+        service.processing_service.get_processing_stats.return_value = {"exchanges_processed": 5}
         service.batch_processor.max_batch_size = 1000
         service.batch_processor.lookback_days = 7
 
@@ -173,6 +161,7 @@ class TestInstrumentsServiceExtended:
     async def test_generate_instruments_for_date_cefi(self, service):
         """Test generating instruments for CeFi mode."""
         from datetime import datetime, timezone
+
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
         mock_instrument = Mock()
@@ -203,6 +192,7 @@ class TestInstrumentsServiceExtended:
     async def test_generate_instruments_for_date_cefi_with_exchanges(self, service):
         """Test generating instruments for CeFi mode with specific exchanges."""
         from datetime import datetime, timezone
+
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
         mock_instrument = Mock()
@@ -232,11 +222,10 @@ class TestInstrumentsServiceExtended:
     async def test_generate_instruments_for_date_cefi_exception(self, service):
         """Test generating instruments for CeFi mode with exception."""
         from datetime import datetime, timezone
+
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
-        service.processing_service.process_exchange_instruments = AsyncMock(
-            side_effect=Exception("Test error")
-        )
+        service.processing_service.process_exchange_instruments = AsyncMock(side_effect=Exception("Test error"))
         service.venue_mapping.all_tardis_exchanges = ["binance"]
 
         result = await service.generate_instruments_for_date(
@@ -253,10 +242,13 @@ class TestInstrumentsServiceExtended:
     async def test_generate_instruments_for_date_tradfi(self, service):
         """Test generating instruments for TradFi mode."""
         from datetime import datetime, timezone
+
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
-        with patch("instruments_service.app.core.instruments_service.DatabentoAdapter") as mock_adapter_class, \
-             patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig") as mock_config_class:
+        with (
+            patch("instruments_service.app.core.instruments_service.DatabentoAdapter") as mock_adapter_class,
+            patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig") as mock_config_class,
+        ):
             mock_adapter = Mock()
             mock_vix_def = Mock()
             mock_vix_def.instrument_key = "CBOE:INDEX:VIX"
@@ -304,11 +296,14 @@ class TestInstrumentsServiceExtended:
     async def test_generate_instruments_for_date_tradfi_cboe_only(self, service):
         """Test generating instruments for TradFi mode with CBOE only."""
         from datetime import datetime, timezone
+
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
-        with patch("instruments_service.app.core.instruments_service.DatabentoAdapter") as mock_adapter_class, \
-             patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig") as mock_config_class, \
-             patch("instruments_service.models.InstrumentDefinition") as mock_inst_def:
+        with (
+            patch("instruments_service.app.core.instruments_service.DatabentoAdapter") as mock_adapter_class,
+            patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig") as mock_config_class,
+            patch("instruments_service.models.InstrumentDefinition") as mock_inst_def,
+        ):
             mock_adapter = Mock()
             mock_adapter.create_vix_instrument_definition.return_value = {
                 "instrument_key": "CBOE:INDEX:VIX",
@@ -348,6 +343,7 @@ class TestInstrumentsServiceExtended:
     async def test_generate_instruments_for_date_tradfi_exception(self, service):
         """Test generating instruments for TradFi mode with exception."""
         from datetime import datetime, timezone
+
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
         with patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig") as mock_config_class:
@@ -369,6 +365,7 @@ class TestInstrumentsServiceExtended:
     async def test_generate_instruments_for_date_defi(self, service):
         """Test generating instruments for DeFi mode."""
         from datetime import datetime, timezone
+
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
         mock_instrument = Mock()
@@ -392,11 +389,10 @@ class TestInstrumentsServiceExtended:
     async def test_generate_instruments_for_date_defi_exception(self, service):
         """Test generating instruments for DeFi mode with exception."""
         from datetime import datetime, timezone
+
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
-        service.processing_service.fetch_defi_instruments = Mock(
-            side_effect=Exception("DeFi error")
-        )
+        service.processing_service.fetch_defi_instruments = Mock(side_effect=Exception("DeFi error"))
 
         result = await service.generate_instruments_for_date(
             date=target_date,
@@ -412,6 +408,7 @@ class TestInstrumentsServiceExtended:
     async def test_generate_instruments_for_date_defi_with_venues(self, service):
         """Test generating instruments for DeFi mode with venue filter."""
         from datetime import datetime, timezone
+
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
         mock_instrument = Mock()
@@ -435,6 +432,7 @@ class TestInstrumentsServiceExtended:
     async def test_generate_instruments_for_date_defi_venues_string(self, service):
         """Test generating instruments for DeFi mode with venues as string."""
         from datetime import datetime, timezone
+
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
         mock_instrument = Mock()
@@ -458,6 +456,7 @@ class TestInstrumentsServiceExtended:
     async def test_generate_instruments_for_date_no_modes(self, service):
         """Test generating instruments with no mode flags (processes all)."""
         from datetime import datetime, timezone
+
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
         # Mock all the processing methods
@@ -479,20 +478,19 @@ class TestInstrumentsServiceExtended:
 
     def test_query_instruments_with_filters(self, service):
         """Test querying instruments with all filters."""
-        mock_df = pd.DataFrame({
-            "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
-            "venue": ["TEST"],
-            "instrument_type": ["SPOT_PAIR"],
-            "base_asset": ["BTC"],
-            "quote_asset": ["USDT"],
-        })
+        mock_df = pd.DataFrame(
+            {
+                "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                "venue": ["TEST"],
+                "instrument_type": ["SPOT_PAIR"],
+                "base_asset": ["BTC"],
+                "quote_asset": ["USDT"],
+            }
+        )
         service.cloud_storage.query_instruments.return_value = mock_df
 
         result = service.query_instruments(
-            venue="TEST",
-            instrument_type="SPOT_PAIR",
-            base_asset="BTC",
-            quote_asset="USDT"
+            venue="TEST", instrument_type="SPOT_PAIR", base_asset="BTC", quote_asset="USDT"
         )
 
         assert isinstance(result, pd.DataFrame)
@@ -502,6 +500,7 @@ class TestInstrumentsServiceExtended:
     async def test_generate_instruments_for_date_storage_failure(self, service):
         """Test generating instruments when storage fails."""
         from datetime import datetime, timezone
+
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
         mock_instrument = Mock()
@@ -528,6 +527,7 @@ class TestInstrumentsServiceExtended:
     async def test_generate_instruments_for_date_no_instruments(self, service):
         """Test generating instruments when no instruments are generated."""
         from datetime import datetime, timezone
+
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
         service.processing_service.process_exchange_instruments = AsyncMock(return_value={})
@@ -547,6 +547,7 @@ class TestInstrumentsServiceExtended:
     async def test_generate_instruments_for_date_dict_instruments(self, service):
         """Test generating instruments when instruments are dicts, not objects."""
         from datetime import datetime, timezone
+
         target_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
 
         # Test with dict instruments (no model_dump method)
@@ -564,4 +565,3 @@ class TestInstrumentsServiceExtended:
         )
 
         assert result["status"] in ["success", "warning"]
-

@@ -499,9 +499,7 @@ def get_required_columns() -> List[str]:
 
 def get_optional_columns() -> List[str]:
     """Get list of optional column names."""
-    return [
-        field["name"] for field in INSTRUMENTS_PARQUET_SCHEMA if not field.get("required", False)
-    ]
+    return [field["name"] for field in INSTRUMENTS_PARQUET_SCHEMA if not field.get("required", False)]
 
 
 def get_column_info(column_name: str) -> Optional[Dict[str, str]]:

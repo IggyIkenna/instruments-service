@@ -25,9 +25,7 @@ class TestInstrumentKeyExtended:
         ]
 
         for venue in venues:
-            key = InstrumentKey(
-                venue=venue, instrument_type=InstrumentType.SPOT_PAIR, symbol="BTC-USDT"
-            )
+            key = InstrumentKey(venue=venue, instrument_type=InstrumentType.SPOT_PAIR, symbol="BTC-USDT")
             assert key.venue == venue
 
     def test_instrument_key_all_instrument_types(self):

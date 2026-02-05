@@ -113,12 +113,7 @@ class TestInstrumentProcessingServiceExtended:
         assert isinstance(fields, dict)
         # If fields exist, check for option-specific fields
         if fields:
-            assert (
-                "expiry" in fields
-                or "strike" in fields
-                or "option_type" in fields
-                or "ccxt_symbol" in fields
-            )
+            assert "expiry" in fields or "strike" in fields or "option_type" in fields or "ccxt_symbol" in fields
 
     @pytest.mark.asyncio
     async def test_populate_all_derived_fields_future(self):

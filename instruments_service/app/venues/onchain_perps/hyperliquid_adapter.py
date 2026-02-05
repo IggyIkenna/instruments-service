@@ -76,20 +76,13 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
             project_id: GCP project ID for Secret Manager
         """
         from instruments_service.config import instruments_config
+
         api_url = api_base_url or instruments_config.hyperliquid_api_url
-        super().__init__(
-            venue="HYPERLIQUID",
-            chain=chain,
-            api_url=api_url,
-            api_key=api_key,
-            project_id=project_id
-        )
+        super().__init__(venue="HYPERLIQUID", chain=chain, api_url=api_url, api_key=api_key, project_id=project_id)
         self.api_base_url = api_url
         self.mvp_only = mvp_only
         # Use provided base_currency_list or empty set (no filtering)
-        self.mvp_base_currencies = (
-            {c.upper() for c in base_currency_list} if base_currency_list else set()
-        )
+        self.mvp_base_currencies = {c.upper() for c in base_currency_list} if base_currency_list else set()
         logger.info(
             f"✅ HyperliquidAdapter initialized (MVP only: {mvp_only}, base currencies: {len(self.mvp_base_currencies) if self.mvp_base_currencies else 'all'})"
         )
@@ -107,9 +100,7 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
         return list(instruments.values())
 
     def fetch_perpetuals(
-        self,
-        test_data_availability: bool = False,
-        target_date: Optional[datetime] = None
+        self, test_data_availability: bool = False, target_date: Optional[datetime] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all perpetual futures from Hyperliquid.
@@ -176,19 +167,42 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
                         # Data source routing metadata (for variable sources per data type)
                         # This tells market-tick-data-handler which source to use for each date range
                         import json
-                        inst_def["data_sources_metadata"] = json.dumps({
-                            "trades": [
-                                {"source": "tardis", "start": "2024-10-29", "end": "2025-03-21", "notes": "Tardis.dev hyperliquid exchange"},
-                                {"source": "hyperliquid_s3", "start": "2025-03-22", "end": None, "notes": "hl-mainnet-node-data/node_fills bucket"}
-                            ],
-                            "derivative_ticker": [
-                                {"source": "hyperliquid_s3", "start": "2023-05-20", "end": None, "notes": "hyperliquid-archive/asset_ctxs bucket"}
-                            ],
-                            "book_snapshot_5": [
-                                {"source": "hyperliquid_s3", "start": "2023-04-15", "end": None, "notes": "hyperliquid-archive/market_data bucket"}
-                            ],
-                            "liquidations": None  # NOT AVAILABLE from any source
-                        })
+
+                        inst_def["data_sources_metadata"] = json.dumps(
+                            {
+                                "trades": [
+                                    {
+                                        "source": "tardis",
+                                        "start": "2024-10-29",
+                                        "end": "2025-03-21",
+                                        "notes": "Tardis.dev hyperliquid exchange",
+                                    },
+                                    {
+                                        "source": "hyperliquid_s3",
+                                        "start": "2025-03-22",
+                                        "end": None,
+                                        "notes": "hl-mainnet-node-data/node_fills bucket",
+                                    },
+                                ],
+                                "derivative_ticker": [
+                                    {
+                                        "source": "hyperliquid_s3",
+                                        "start": "2023-05-20",
+                                        "end": None,
+                                        "notes": "hyperliquid-archive/asset_ctxs bucket",
+                                    }
+                                ],
+                                "book_snapshot_5": [
+                                    {
+                                        "source": "hyperliquid_s3",
+                                        "start": "2023-04-15",
+                                        "end": None,
+                                        "notes": "hyperliquid-archive/market_data bucket",
+                                    }
+                                ],
+                                "liquidations": None,  # NOT AVAILABLE from any source
+                            }
+                        )
 
                         instruments[inst_def["instrument_key"]] = inst_def
                 except Exception as e:
@@ -203,9 +217,7 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
             return {}
 
     def fetch_spot_pairs(
-        self,
-        test_data_availability: bool = False,
-        target_date: Optional[datetime] = None
+        self, test_data_availability: bool = False, target_date: Optional[datetime] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all spot trading pairs from Hyperliquid for MVP coins.
@@ -271,21 +283,20 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
 
                         # Data source routing metadata for spot (same as perps)
                         import json
-                        inst_def["data_sources_metadata"] = json.dumps({
-                            "trades": [
-                                {"source": "tardis", "start": "2024-10-29", "end": "2025-03-21"},
-                                {"source": "hyperliquid_s3", "start": "2025-03-22", "end": None}
-                            ],
-                            "book_snapshot_5": [
-                                {"source": "hyperliquid_s3", "start": "2023-04-15", "end": None}
-                            ]
-                        })
+
+                        inst_def["data_sources_metadata"] = json.dumps(
+                            {
+                                "trades": [
+                                    {"source": "tardis", "start": "2024-10-29", "end": "2025-03-21"},
+                                    {"source": "hyperliquid_s3", "start": "2025-03-22", "end": None},
+                                ],
+                                "book_snapshot_5": [{"source": "hyperliquid_s3", "start": "2023-04-15", "end": None}],
+                            }
+                        )
 
                         instruments[inst_def["instrument_key"]] = inst_def
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to convert asset {asset.get('name', 'unknown')} to spot pair: {e}"
-                    )
+                    logger.warning(f"Failed to convert asset {asset.get('name', 'unknown')} to spot pair: {e}")
                     continue
 
             logger.info(f"✅ Generated {len(instruments)} Hyperliquid spot pair instruments")
