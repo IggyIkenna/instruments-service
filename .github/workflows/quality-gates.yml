@@ -1,20 +1,11 @@
 # Quality Gates for instruments-service
 #
-# E2E TESTING NOTE (for unified-trading-deployment-v2 integration):
-# ------------------------------------------------------------------
-# Quality gates e2e should include ensuring every possible CLI combinatoric
-# has run on a code push, but just for ONE RESULT per combination to avoid
-# wasting too much time.
+# This workflow runs the EXACT same checks as:
+#   - Local: ./scripts/quality-gates.sh
+#   - Cloud Build: cloudbuild.yaml
 #
-# Example for instruments-service:
-#   - Run with --category CEFI --start-date 2024-01-01 --end-date 2024-01-01 (1 day)
-#   - Run with --category TRADFI --start-date 2024-01-01 --end-date 2024-01-01 (1 day)
-#   - Run with --category DEFI --start-date 2024-01-01 --end-date 2024-01-01 (1 day)
+# All three MUST be kept in sync. If you change one, change all three.
 #
-# This validates that all dimension combinations work without running full backfills.
-# See: unified-trading-deployment-v2/configs/sharding.instruments-service.yaml
-# ------------------------------------------------------------------
-
 name: Quality Gates
 
 on:
@@ -44,97 +35,113 @@ jobs:
         run: |
           if [ -n "$GH_PAT" ]; then
             git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-cloud-services.git ../unified-cloud-services
-            echo "Cloned unified-cloud-services"
+            echo "✅ Cloned unified-cloud-services"
           else
-            echo "GH_PAT not set, skipping unified-cloud-services clone"
+            echo "⚠️ GH_PAT not set, skipping unified-cloud-services clone"
+            exit 1
+          fi
+
+      - name: Checkout unified-trading-deployment-v2 (for smoke tests)
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -n "$GH_PAT" ]; then
+            git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-trading-deployment-v2.git ../unified-trading-deployment-v2
+            echo "✅ Cloned unified-trading-deployment-v2"
+          else
+            echo "⚠️ GH_PAT not set, skipping unified-trading-deployment-v2 clone"
           fi
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
 
-          # Install test dependencies
-          pip install pytest pytest-cov pytest-asyncio pytest-mock
+          # Install unified-cloud-services first
+          pip install -e ../unified-cloud-services
 
-          # Install unified-cloud-services if cloned
-          if [ -d "../unified-cloud-services" ]; then
-            pip install -e ../unified-cloud-services || echo "Failed to install unified-cloud-services"
-          fi
+          # Install unified-trading-deployment-v2 (for smoke tests)
+          pip install -e ../unified-trading-deployment-v2 || true
 
-          # Install the package without dependencies first
-          pip install -e . --no-deps || true
+          # Install instruments-service without deps first
+          pip install -e . --no-deps
 
           # Install core dependencies
           pip install pydantic pydantic-settings pandas numpy python-dateutil \
             python-dotenv requests ccxt plotly web3 eth-abi databento boto3 \
-            exchange-calendars yfinance || true
+            exchange-calendars yfinance polars
 
+          # Install test dependencies
+          pip install pytest pytest-asyncio pytest-mock pytest-timeout ruff
+
+      # ========================================================================
+      # LINTING (ruff) - MUST PASS
+      # ========================================================================
+      - name: Lint with ruff
+        run: |
+          echo "=== Running linting (ruff) ==="
+          ruff check instruments_service/ tests/
+          echo "✅ Linting passed"
+
+      # ========================================================================
+      # UNIT TESTS - MUST PASS
+      # ========================================================================
       - name: Run unit tests
         run: |
-          if [ -d "tests/unit" ]; then
-            python -m pytest tests/unit/ -v --tb=short --timeout=60 || echo "Some unit tests failed"
-          else
-            echo "No unit tests directory found"
-          fi
-        continue-on-error: true
+          echo "=== Running unit tests ==="
+          python -m pytest tests/unit/ -v --tb=short --timeout=60
+          echo "✅ Unit tests passed"
 
-      - name: Run integration tests (mocked)
+      # ========================================================================
+      # INTEGRATION TESTS - MUST PASS
+      # ========================================================================
+      - name: Run integration tests
         run: |
+          echo "=== Running integration tests ==="
           if [ -d "tests/integration" ]; then
             python -m pytest tests/integration/ -v --tb=short --timeout=120 \
               --ignore=tests/integration/test_performance.py \
-              -k "not api and not live and not download" || echo "Some integration tests failed"
+              -k "not api and not live and not download"
+            echo "✅ Integration tests passed"
           else
             echo "No integration tests directory found"
           fi
-        continue-on-error: true
 
+      # ========================================================================
+      # E2E TESTS - MUST PASS
+      # ========================================================================
       - name: Run e2e tests
         env:
           CLOUD_MOCK_MODE: "true"
           GOOGLE_CLOUD_PROJECT: "test-project"
         run: |
+          echo "=== Running e2e tests ==="
           if [ -d "tests/e2e" ]; then
-            python -m pytest tests/e2e/ -v --tb=short --timeout=180 || echo "Some e2e tests failed"
+            python -m pytest tests/e2e/ -v --tb=short --timeout=180
+            echo "✅ E2E tests passed"
           else
             echo "No e2e tests directory found"
           fi
-        continue-on-error: true
 
-      - name: Run shard combinatorics smoke tests
+      # ========================================================================
+      # SMOKE TESTS (shard combinatorics) - MUST PASS
+      # ========================================================================
+      - name: Run smoke tests
         env:
           CLOUD_MOCK_MODE: "true"
           GOOGLE_CLOUD_PROJECT: "test-project"
+          DEPLOYMENT_CONFIG_DIR: "../unified-trading-deployment-v2/configs"
         run: |
+          echo "=== Running smoke tests ==="
           if [ -d "tests/smoke" ]; then
-            python -m pytest tests/smoke/ -v --tb=short --timeout=180 || echo "Some smoke tests failed"
+            python -m pytest tests/smoke/ -v --tb=short --timeout=180
+            echo "✅ Smoke tests passed"
           else
             echo "No smoke tests directory found"
           fi
-        continue-on-error: true
 
-      - name: Check Python module imports
+      - name: Quality gates passed
         run: |
-          python -c "import instruments_service; print('Module import OK')" || echo "Module import failed"
-
-  lint:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.13
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.13'
-
-      - name: Install linters
-        run: pip install black isort
-
-      - name: Check formatting with black
-        run: black --check --diff instruments_service/ || true
-        continue-on-error: true
-
-      - name: Check imports with isort
-        run: isort --check-only --diff instruments_service/ || true
-        continue-on-error: true
+          echo ""
+          echo "======================================================================"
+          echo "✅ ALL QUALITY GATES PASSED"
+          echo "======================================================================"
