@@ -16,6 +16,7 @@ Provides:
 import os
 from pathlib import Path
 
+
 def _load_env_early():
     """Load .env file and resolve relative credential paths."""
     # Find the project root (parent of tests directory)
@@ -26,6 +27,7 @@ def _load_env_early():
     if env_path.exists():
         try:
             from dotenv import load_dotenv
+
             # Use override=True to ensure .env values take precedence over shell environment
             # This prevents stale/invalid shell environment variables from breaking tests
             load_dotenv(dotenv_path=env_path, override=True)
@@ -44,6 +46,7 @@ def _load_env_early():
         except ImportError:
             # python-dotenv not installed, skip
             pass
+
 
 # Load env vars immediately at import time
 _load_env_early()
@@ -296,14 +299,7 @@ def setup_test_environment(gcp_credentials, test_bucket_name):
     if "ENABLE_CSV_SAMPLING" not in os.environ:
         os.environ["ENABLE_CSV_SAMPLING"] = "true"
 
-    # Patch unified_config in unified_cloud_services to use instruments_config
-    # This ensures that get_bucket_for_category() uses the correct bucket configuration
-    # from instruments-service (which has the category-specific properties)
-    # instead of the default BaseServiceConfig
-    from unittest.mock import patch
-
-    with patch("unified_cloud_services.core.market_category.unified_config", instruments_config):
-        yield
-
-    # Cleanup if needed
-    pass
+    # The environment variables are already set above for category-specific buckets.
+    # get_bucket_for_category() now uses get_config() which reads from env vars,
+    # so no additional patching is needed.
+    yield
