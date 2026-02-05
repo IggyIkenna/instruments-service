@@ -113,6 +113,7 @@ class CorporateActionsAdapter:
         """Lazy load yfinance."""
         if self._yf is None:
             import yfinance as yf
+
             self._yf = yf
         return self._yf
 
@@ -203,11 +204,11 @@ class CorporateActionsAdapter:
             for _, row in div_df.iterrows():
                 try:
                     # OpenBB returns various column names depending on provider
-                    ex_date = row.get('ex_dividend_date') or row.get('ex_date') or row.get('date')
-                    amount = row.get('amount') or row.get('dividend') or row.get('cash_amount')
-                    pay_date = row.get('pay_date') or row.get('payment_date')
-                    record_date = row.get('record_date')
-                    declaration_date = row.get('declaration_date')
+                    ex_date = row.get("ex_dividend_date") or row.get("ex_date") or row.get("date")
+                    amount = row.get("amount") or row.get("dividend") or row.get("cash_amount")
+                    pay_date = row.get("pay_date") or row.get("payment_date")
+                    record_date = row.get("record_date")
+                    declaration_date = row.get("declaration_date")
 
                     if ex_date is None or amount is None:
                         continue
@@ -215,7 +216,7 @@ class CorporateActionsAdapter:
                     # Convert dates
                     if isinstance(ex_date, str):
                         ex_date = pd.to_datetime(ex_date).date()
-                    elif hasattr(ex_date, 'date'):
+                    elif hasattr(ex_date, "date"):
                         ex_date = ex_date.date()
 
                     if pd.isna(amount) or amount <= 0:
@@ -224,9 +225,11 @@ class CorporateActionsAdapter:
                     record = DividendRecord(
                         ticker=ticker,
                         ex_date=ex_date,
-                        pay_date=pay_date.date() if hasattr(pay_date, 'date') else pay_date,
-                        record_date=record_date.date() if hasattr(record_date, 'date') else record_date,
-                        declaration_date=declaration_date.date() if hasattr(declaration_date, 'date') else declaration_date,
+                        pay_date=pay_date.date() if hasattr(pay_date, "date") else pay_date,
+                        record_date=record_date.date() if hasattr(record_date, "date") else record_date,
+                        declaration_date=declaration_date.date()
+                        if hasattr(declaration_date, "date")
+                        else declaration_date,
                         amount=float(amount),
                         dividend_type=DividendType.UNSPECIFIED,
                         source="openbb",
@@ -420,7 +423,7 @@ class CorporateActionsAdapter:
             for _, row in earnings_df.iterrows():
                 try:
                     # OpenBB returns various column names depending on provider
-                    earnings_date = row.get('date') or row.get('report_date') or row.get('fiscal_date_ending')
+                    earnings_date = row.get("date") or row.get("report_date") or row.get("fiscal_date_ending")
 
                     if earnings_date is None:
                         continue
@@ -428,7 +431,7 @@ class CorporateActionsAdapter:
                     # Convert date
                     if isinstance(earnings_date, str):
                         earnings_date = pd.to_datetime(earnings_date).date()
-                    elif hasattr(earnings_date, 'date'):
+                    elif hasattr(earnings_date, "date"):
                         earnings_date = earnings_date.date()
 
                     # Filter by date range
@@ -436,17 +439,19 @@ class CorporateActionsAdapter:
                         continue
 
                     # Extract earnings data
-                    reported_eps = row.get('actual_eps') or row.get('reported_eps') or row.get('eps_actual')
-                    estimated_eps = row.get('estimated_eps') or row.get('eps_estimate') or row.get('consensus_eps')
-                    surprise_pct = row.get('surprise_percent') or row.get('surprise_pct') or row.get('eps_surprise_percent')
+                    reported_eps = row.get("actual_eps") or row.get("reported_eps") or row.get("eps_actual")
+                    estimated_eps = row.get("estimated_eps") or row.get("eps_estimate") or row.get("consensus_eps")
+                    surprise_pct = (
+                        row.get("surprise_percent") or row.get("surprise_pct") or row.get("eps_surprise_percent")
+                    )
 
                     # Also get revenue if available
-                    revenue = row.get('revenue') or row.get('actual_revenue')
-                    estimated_revenue = row.get('estimated_revenue') or row.get('revenue_estimate')
+                    revenue = row.get("revenue") or row.get("actual_revenue")
+                    estimated_revenue = row.get("estimated_revenue") or row.get("revenue_estimate")
 
                     # Fiscal info
-                    fiscal_quarter = row.get('fiscal_quarter') or row.get('period')
-                    fiscal_year = row.get('fiscal_year')
+                    fiscal_quarter = row.get("fiscal_quarter") or row.get("period")
+                    fiscal_year = row.get("fiscal_year")
 
                     # Clean up NaN values
                     if pd.isna(reported_eps):
@@ -503,8 +508,8 @@ class CorporateActionsAdapter:
                 calendar = stock.calendar
                 if calendar is not None and not calendar.empty:
                     # Future earnings date
-                    if 'Earnings Date' in calendar.index:
-                        calendar.loc['Earnings Date']
+                    if "Earnings Date" in calendar.index:
+                        calendar.loc["Earnings Date"]
                         # This is typically future dates, not historical
             except Exception:
                 pass
@@ -523,9 +528,9 @@ class CorporateActionsAdapter:
                             if earnings_date < start_date or earnings_date > end_date:
                                 continue
 
-                            reported_eps = row.get('Reported EPS', None)
-                            estimated_eps = row.get('EPS Estimate', None)
-                            surprise_pct = row.get('Surprise(%)', None)
+                            reported_eps = row.get("Reported EPS", None)
+                            estimated_eps = row.get("EPS Estimate", None)
+                            surprise_pct = row.get("Surprise(%)", None)
 
                             # Clean up NaN values
                             if pd.isna(reported_eps):
@@ -664,10 +669,10 @@ class CorporateActionsAdapter:
 
         # Sort by date
         if not dividends_df.empty:
-            dividends_df = dividends_df.sort_values(['ticker', 'ex_date'])
+            dividends_df = dividends_df.sort_values(["ticker", "ex_date"])
         if not splits_df.empty:
-            splits_df = splits_df.sort_values(['ticker', 'effective_date'])
+            splits_df = splits_df.sort_values(["ticker", "effective_date"])
         if not earnings_df.empty:
-            earnings_df = earnings_df.sort_values(['ticker', 'earnings_date'])
+            earnings_df = earnings_df.sort_values(["ticker", "earnings_date"])
 
         return dividends_df, splits_df, earnings_df

@@ -111,9 +111,7 @@ class TardisAdapter:
 
         logger.info("✅ TardisAdapter initialized (using TardisBaseClient)")
 
-    def _apply_metadata_overrides(
-        self, exchange: str, symbols: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+    def _apply_metadata_overrides(self, exchange: str, symbols: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Apply manual metadata corrections for instruments with known Tardis API issues.
 
@@ -136,9 +134,7 @@ class TardisAdapter:
                     old_value = symbol.get(key)
                     symbol[key] = value
                     corrected_count += 1
-                    logger.info(
-                        f"🔧 Manual override: {exchange}:{symbol_id} {key}: {old_value} → {value}"
-                    )
+                    logger.info(f"🔧 Manual override: {exchange}:{symbol_id} {key}: {old_value} → {value}")
 
         if corrected_count > 0:
             logger.info(f"📝 Applied {corrected_count} manual metadata corrections for {exchange}")
@@ -210,9 +206,7 @@ class TardisAdapter:
         if not force_refresh:
             cached = get_cached_instruments(exchange)
             if cached is not None:
-                logger.info(
-                    f"📋 Using module-level cached Tardis data for {exchange} ({len(cached)} instruments)"
-                )
+                logger.info(f"📋 Using module-level cached Tardis data for {exchange} ({len(cached)} instruments)")
                 # Apply overrides to cached data (in case cache was populated before fix)
                 available_symbols = self._apply_metadata_overrides(exchange, cached)
             else:
@@ -248,9 +242,7 @@ class TardisAdapter:
                 self._cache_timestamps[cache_key] = datetime.now(timezone.utc)
                 set_cached_instruments(exchange, available_symbols)
 
-                logger.info(
-                    f"✅ Fetched & cached {len(available_symbols)} instruments from {exchange}"
-                )
+                logger.info(f"✅ Fetched & cached {len(available_symbols)} instruments from {exchange}")
             except Exception as e:
                 logger.error(f"❌ Tardis API failed for {exchange}: {e}")
                 return [], 0
@@ -283,9 +275,7 @@ class TardisAdapter:
             today = datetime.now(timezone.utc).date()
             original_count = len(available_symbols)
             available_symbols = [
-                symbol
-                for symbol in available_symbols
-                if self._is_instrument_currently_active(symbol, today)
+                symbol for symbol in available_symbols if self._is_instrument_currently_active(symbol, today)
             ]
             date_filtered_count = original_count - len(available_symbols)
 
@@ -328,9 +318,7 @@ class TardisAdapter:
             # Parse availableSince
             if available_since:
                 try:
-                    since_date = datetime.fromisoformat(
-                        available_since.replace("Z", "+00:00")
-                    ).date()
+                    since_date = datetime.fromisoformat(available_since.replace("Z", "+00:00")).date()
                     if target_date < since_date:
                         return False
                 except (ValueError, AttributeError):
@@ -348,9 +336,7 @@ class TardisAdapter:
             return True
 
         except Exception as e:
-            logger.warning(
-                f"Error checking date availability for {symbol.get('id', 'unknown')}: {e}"
-            )
+            logger.warning(f"Error checking date availability for {symbol.get('id', 'unknown')}: {e}")
             return True  # Default to available if parsing fails
 
     def _is_instrument_currently_active(self, symbol: Dict[str, Any], today: date) -> bool:

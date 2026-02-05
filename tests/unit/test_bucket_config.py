@@ -105,13 +105,14 @@ class TestBucketConfiguration:
         # INSTRUMENTS_GCS_BUCKET_CEFI_TEST=instruments-store-test-cefi-central-element-323112
 
         if os.getenv("INSTRUMENTS_GCS_BUCKET_CEFI_TEST"):
-             assert actual_cefi == os.getenv("INSTRUMENTS_GCS_BUCKET_CEFI_TEST")
+            assert actual_cefi == os.getenv("INSTRUMENTS_GCS_BUCKET_CEFI_TEST")
 
     def test_check_instruments_exist_iterates_categories(self):
         """Test that check_instruments_exist checks all categories."""
-        with patch("instruments_service.app.core.cloud_data_provider.StandardizedDomainCloudService"), \
-             patch.object(CloudDataProvider, "get_instruments_from_category") as mock_get_from_cat:
-
+        with (
+            patch("instruments_service.app.core.cloud_data_provider.StandardizedDomainCloudService"),
+            patch.object(CloudDataProvider, "get_instruments_from_category") as mock_get_from_cat,
+        ):
             # Mock DataFrame objects
             empty_df = MagicMock()
             empty_df.empty = True
@@ -122,8 +123,8 @@ class TestBucketConfiguration:
             # Make it fail for first two, succeed for last
             mock_get_from_cat.side_effect = [
                 empty_df,  # CEFI (empty)
-                None,      # TRADFI (None/Error)
-                found_df   # DEFI (Found)
+                None,  # TRADFI (None/Error)
+                found_df,  # DEFI (Found)
             ]
 
             provider = CloudDataProvider()

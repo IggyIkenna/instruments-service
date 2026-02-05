@@ -134,9 +134,7 @@ class AaveV3Adapter(BaseDefiAdapter):
                 )
 
                 if self.api_key:
-                    logger.info(
-                        f"✅ Retrieved AaveScan API key from Secret Manager (secret: {secret_name})"
-                    )
+                    logger.info(f"✅ Retrieved AaveScan API key from Secret Manager (secret: {secret_name})")
             except Exception as e:
                 logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
                 self.api_key = instruments_config.aavescan_secret_name
@@ -217,9 +215,7 @@ class AaveV3Adapter(BaseDefiAdapter):
                         instruments[a_token_def["instrument_key"]] = a_token_def
 
                     # Generate debtToken instrument
-                    debt_token_def = self._create_debt_token_instrument(
-                        reserve, target_date=target_date
-                    )
+                    debt_token_def = self._create_debt_token_instrument(reserve, target_date=target_date)
                     if debt_token_def:
                         instruments[debt_token_def["instrument_key"]] = debt_token_def
 
@@ -304,14 +300,10 @@ class AaveV3Adapter(BaseDefiAdapter):
         """
         # OPTIMIZATION: Check cache first (reserves don't change intraday)
         cache_date = (
-            target_date.strftime("%Y-%m-%d")
-            if target_date
-            else datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            target_date.strftime("%Y-%m-%d") if target_date else datetime.now(timezone.utc).strftime("%Y-%m-%d")
         )
         if self._reserves_cache is not None and self._reserves_cache_date == cache_date:
-            logger.debug(
-                f"✅ Using cached AAVE reserves for {cache_date} ({len(self._reserves_cache)} reserves)"
-            )
+            logger.debug(f"✅ Using cached AAVE reserves for {cache_date} ({len(self._reserves_cache)} reserves)")
             return self._reserves_cache
 
         # If target_date is provided, try Graph once (if not already failed), then use AaveScan
@@ -320,9 +312,7 @@ class AaveV3Adapter(BaseDefiAdapter):
 
             # Try Graph once if we haven't already failed for this date
             if date_key not in self._historical_query_failed:
-                logger.info(
-                    f"📅 Attempting historical query for {date_key} via The Graph (one-time attempt)"
-                )
+                logger.info(f"📅 Attempting historical query for {date_key} via The Graph (one-time attempt)")
                 graph_reserves = self._fetch_reserves_from_graph(target_date=target_date)
                 if graph_reserves:
                     logger.info("✅ Successfully fetched historical reserves from The Graph")
@@ -337,8 +327,7 @@ class AaveV3Adapter(BaseDefiAdapter):
             else:
                 # Already tried Graph and it failed - use AaveScan directly
                 logger.debug(
-                    f"⏭️ Skipping Graph query for {date_key} (already failed). "
-                    f"Using current data from AaveScan API."
+                    f"⏭️ Skipping Graph query for {date_key} (already failed). Using current data from AaveScan API."
                 )
 
         logger.info("🔍 [METHOD_TRACE] _fetch_reserves calling AaveScan API (primary method)")
@@ -391,8 +380,7 @@ class AaveV3Adapter(BaseDefiAdapter):
                     seen_symbols.add(symbol)
 
             logger.info(
-                f"✅ Fetched {len(reserves)} reserves from AaveScan, "
-                f"filtered to {len(filtered_reserves)} MVP tokens"
+                f"✅ Fetched {len(reserves)} reserves from AaveScan, filtered to {len(filtered_reserves)} MVP tokens"
             )
 
             # Cache the filtered reserves for reuse
@@ -403,9 +391,7 @@ class AaveV3Adapter(BaseDefiAdapter):
 
         except Exception as e:
             logger.error(f"Failed to fetch reserves from AaveScan: {e}")
-            logger.info(
-                "🔍 [METHOD_TRACE] Falling back to _get_fallback_reserves (static reserves)"
-            )
+            logger.info("🔍 [METHOD_TRACE] Falling back to _get_fallback_reserves (static reserves)")
             # Fallback: return empty list or use hardcoded known reserves
             fallback_reserves = self._get_fallback_reserves()
 
@@ -438,9 +424,7 @@ class AaveV3Adapter(BaseDefiAdapter):
             # OPTIMIZATION: Check block number cache first
             date_str = target_date.strftime("%Y-%m-%d")
             if date_str in self._block_number_cache:
-                logger.debug(
-                    f"✅ Using cached block number for {date_str}: {self._block_number_cache[date_str]}"
-                )
+                logger.debug(f"✅ Using cached block number for {date_str}: {self._block_number_cache[date_str]}")
                 return self._block_number_cache[date_str]
 
             # Check failure cache first - if we already know this date fails, skip retrying
@@ -465,7 +449,6 @@ class AaveV3Adapter(BaseDefiAdapter):
                 timestamp = int(target_date.timestamp())
 
                 if rpc_url:
-
                     # Use pooled HTTP session
                     session = get_http_session(base_url=rpc_url)
 
@@ -515,9 +498,7 @@ class AaveV3Adapter(BaseDefiAdapter):
                                 if "result" in block_data and block_data["result"]:
                                     block_timestamp = int(block_data["result"]["timestamp"], 16)
                                     # Binary search for exact block if needed
-                                    if (
-                                        abs(block_timestamp - timestamp) > 60
-                                    ):  # More than 1 minute off
+                                    if abs(block_timestamp - timestamp) > 60:  # More than 1 minute off
                                         # Use approximation
                                         logger.debug(
                                             f"RPC block lookup found block {estimated_block} with timestamp {block_timestamp}, target {timestamp}"
@@ -535,9 +516,7 @@ class AaveV3Adapter(BaseDefiAdapter):
             seconds_since_genesis = (target_date - genesis_date).total_seconds()
             block_number = int(seconds_since_genesis / 12)
 
-            logger.info(
-                f"📅 Converted {target_date.isoformat()} to approximate block {block_number:,}"
-            )
+            logger.info(f"📅 Converted {target_date.isoformat()} to approximate block {block_number:,}")
 
             # Cache the block number for reuse
             block_num = max(0, block_number)
@@ -578,9 +557,7 @@ class AaveV3Adapter(BaseDefiAdapter):
             # Convert date to block number
             block_number = self._date_to_block_number(target_date)
             if not block_number:
-                logger.warning(
-                    "⚠️ Could not convert date to block number, falling back to current data"
-                )
+                logger.warning("⚠️ Could not convert date to block number, falling back to current data")
                 # Cache the failure
                 self._historical_query_failed.add(date_key)
                 return []
@@ -654,23 +631,18 @@ query GetReserves($blockNumber: Int!) {
                 # Check if error is about missing/unavailable blocks
                 error_messages = [str(e.get("message", "")) for e in errors]
                 has_missing_block_error = any(
-                    "missing block" in msg.lower()
-                    or "unavailable" in msg.lower()
-                    or "bad indexers" in msg.lower()
+                    "missing block" in msg.lower() or "unavailable" in msg.lower() or "bad indexers" in msg.lower()
                     for msg in error_messages
                 )
 
                 # Check if error is about eModeCategoryId field not existing (historical schema difference)
                 has_emode_field_error = any(
-                    "emodecategoryid" in msg.lower()
-                    or ("emode" in msg.lower() and "field" in msg.lower())
+                    "emodecategoryid" in msg.lower() or ("emode" in msg.lower() and "field" in msg.lower())
                     for msg in error_messages
                 )
 
                 if has_emode_field_error:
-                    logger.debug(
-                        f"⚠️ eModeCategoryId field not available at block {block_number}, retrying without it"
-                    )
+                    logger.debug(f"⚠️ eModeCategoryId field not available at block {block_number}, retrying without it")
                     # Retry query without eModeCategoryId (may not exist in older schema versions)
                     query_no_emode = """
 query GetReserves($blockNumber: Int!) {
@@ -773,8 +745,7 @@ query GetReserves($blockNumber: Int!) {
 
         except Exception as e:
             logger.warning(
-                f"⚠️ Failed to fetch historical reserves from The Graph: {e}. "
-                f"Will use AaveScan current data instead."
+                f"⚠️ Failed to fetch historical reserves from The Graph: {e}. Will use AaveScan current data instead."
             )
             # Cache the failure
             date_key = target_date.isoformat()
@@ -879,9 +850,7 @@ query GetReserves($blockNumber: Int!) {
         if target_date:
             date_key = target_date.isoformat()
             if date_key in self._historical_query_failed:
-                logger.debug(
-                    f"⏭️ Skipping historical Graph config query for {date_key} - already failed"
-                )
+                logger.debug(f"⏭️ Skipping historical Graph config query for {date_key} - already failed")
                 return None
 
         cache_key = f"{underlying_address}_{target_date.isoformat() if target_date else 'current'}"
@@ -991,23 +960,18 @@ query GetReserve($underlyingAddress: Bytes!) {
                 # Check if error is about missing/unavailable blocks
                 error_messages = [str(e.get("message", "")) for e in errors]
                 has_missing_block_error = any(
-                    "missing block" in msg.lower()
-                    or "unavailable" in msg.lower()
-                    or "bad indexers" in msg.lower()
+                    "missing block" in msg.lower() or "unavailable" in msg.lower() or "bad indexers" in msg.lower()
                     for msg in error_messages
                 )
 
                 # Check if error is about eModeCategoryId field not existing (historical schema difference)
                 has_emode_field_error = any(
-                    "emodecategoryid" in msg.lower()
-                    or ("emode" in msg.lower() and "field" in msg.lower())
+                    "emodecategoryid" in msg.lower() or ("emode" in msg.lower() and "field" in msg.lower())
                     for msg in error_messages
                 )
 
                 if has_emode_field_error:
-                    logger.debug(
-                        f"⚠️ eModeCategoryId field not available at block {block_number}, retrying without it"
-                    )
+                    logger.debug(f"⚠️ eModeCategoryId field not available at block {block_number}, retrying without it")
                     # Retry query without eModeCategoryId (may not exist in older schema versions)
                     if block_number:
                         query_no_emode = """
@@ -1121,43 +1085,31 @@ query GetReserve($underlyingAddress: Bytes!) {
 
                 reserve_liquidation_bonus = reserve_config.get("reserveLiquidationBonus")
                 liquidation_bonus = (
-                    float(reserve_liquidation_bonus) / 10000.0
-                    if reserve_liquidation_bonus is not None
-                    else None
+                    float(reserve_liquidation_bonus) / 10000.0 if reserve_liquidation_bonus is not None else None
                 )
 
                 optimal_utilization_rate_raw = reserve_config.get("optimalUtilisationRate")
                 optimal_utilization_rate = (
-                    float(optimal_utilization_rate_raw) / 1e27
-                    if optimal_utilization_rate_raw is not None
-                    else None
+                    float(optimal_utilization_rate_raw) / 1e27 if optimal_utilization_rate_raw is not None else None
                 )
 
                 variable_rate_slope1_raw = reserve_config.get("variableRateSlope1")
                 variable_rate_slope1 = (
-                    float(variable_rate_slope1_raw) / 1e27
-                    if variable_rate_slope1_raw is not None
-                    else None
+                    float(variable_rate_slope1_raw) / 1e27 if variable_rate_slope1_raw is not None else None
                 )
 
                 variable_rate_slope2_raw = reserve_config.get("variableRateSlope2")
                 variable_rate_slope2 = (
-                    float(variable_rate_slope2_raw) / 1e27
-                    if variable_rate_slope2_raw is not None
-                    else None
+                    float(variable_rate_slope2_raw) / 1e27 if variable_rate_slope2_raw is not None else None
                 )
 
                 base_variable_borrow_rate_raw = reserve_config.get("baseVariableBorrowRate")
                 base_variable_borrow_rate = (
-                    float(base_variable_borrow_rate_raw) / 1e27
-                    if base_variable_borrow_rate_raw is not None
-                    else None
+                    float(base_variable_borrow_rate_raw) / 1e27 if base_variable_borrow_rate_raw is not None else None
                 )
 
                 reserve_factor_raw = reserve_config.get("reserveFactor")
-                reserve_factor = (
-                    float(reserve_factor_raw) / 10000.0 if reserve_factor_raw is not None else None
-                )
+                reserve_factor = float(reserve_factor_raw) / 10000.0 if reserve_factor_raw is not None else None
 
                 # Extract reserve mode
                 is_active = reserve_config.get("isActive", True)
@@ -1319,9 +1271,7 @@ query GetReserveConfigHistory {{
                     {
                         "timestamp": item.get("timestamp"),
                         "ltv": float(base_ltv) / 10000.0 if base_ltv else None,
-                        "liquidation_threshold": (
-                            float(liq_threshold) / 10000.0 if liq_threshold else None
-                        ),
+                        "liquidation_threshold": (float(liq_threshold) / 10000.0 if liq_threshold else None),
                         "liquidation_bonus": float(liq_bonus) / 10000.0 if liq_bonus else None,
                         "borrowing_enabled": item.get("borrowingEnabled"),
                         "collateral_enabled": item.get("usageAsCollateralEnabled"),
@@ -1404,9 +1354,7 @@ query GetEModeCategories {
                     "id": cat_id,
                     "label": cat.get("label"),
                     "ltv": float(ltv) / 10000.0 if ltv else None,
-                    "liquidation_threshold": (
-                        float(liq_threshold) / 10000.0 if liq_threshold else None
-                    ),
+                    "liquidation_threshold": (float(liq_threshold) / 10000.0 if liq_threshold else None),
                     "liquidation_bonus": float(liq_bonus) / 10000.0 if liq_bonus else None,
                     "oracle": cat.get("oracle"),
                 }
@@ -1543,9 +1491,7 @@ query GetEModeCategories {
                 }
             ]
 
-            pool_contract = w3.eth.contract(
-                address=Web3.to_checksum_address(pool_address), abi=pool_abi
-            )
+            pool_contract = w3.eth.contract(address=Web3.to_checksum_address(pool_address), abi=pool_abi)
             reserve_address = Web3.to_checksum_address(underlying_address)
 
             # Call getReserveData - configuration is the first element
@@ -1568,14 +1514,10 @@ query GetEModeCategories {
 
             # eMode category 0 means no eMode
             if emode_category_id == 0:
-                logger.debug(
-                    f"No eMode category found for reserve {underlying_address} (category ID is 0)"
-                )
+                logger.debug(f"No eMode category found for reserve {underlying_address} (category ID is 0)")
                 return None
 
-            logger.debug(
-                f"✅ Fetched eMode category ID {emode_category_id} for reserve {underlying_address} via RPC"
-            )
+            logger.debug(f"✅ Fetched eMode category ID {emode_category_id} for reserve {underlying_address} via RPC")
             return emode_category_id
 
         except Exception as e:
@@ -1634,11 +1576,9 @@ query GetEModeCategories {
             reserve.get("baseLTVasCollateral")
             or reserve.get("baseLTV")
             or reserve.get("ltv")
-            or (
-                reserve.get("configuration", {})
-                if isinstance(reserve.get("configuration"), dict)
-                else {}
-            ).get("baseLTVasCollateral")
+            or (reserve.get("configuration", {}) if isinstance(reserve.get("configuration"), dict) else {}).get(
+                "baseLTVasCollateral"
+            )
         )
         if ltv_raw:
             try:
@@ -1652,11 +1592,9 @@ query GetEModeCategories {
             reserve.get("reserveLiquidationThreshold")
             or reserve.get("liquidationThreshold")
             or reserve.get("liquidation_threshold")
-            or (
-                reserve.get("configuration", {})
-                if isinstance(reserve.get("configuration"), dict)
-                else {}
-            ).get("reserveLiquidationThreshold")
+            or (reserve.get("configuration", {}) if isinstance(reserve.get("configuration"), dict) else {}).get(
+                "reserveLiquidationThreshold"
+            )
         )
         if liquidation_threshold_raw:
             try:
@@ -1669,11 +1607,9 @@ query GetEModeCategories {
             reserve.get("reserveLiquidationBonus")
             or reserve.get("liquidationBonus")
             or reserve.get("liquidation_bonus")
-            or (
-                reserve.get("configuration", {})
-                if isinstance(reserve.get("configuration"), dict)
-                else {}
-            ).get("reserveLiquidationBonus")
+            or (reserve.get("configuration", {}) if isinstance(reserve.get("configuration"), dict) else {}).get(
+                "reserveLiquidationBonus"
+            )
         )
         if liquidation_bonus_raw:
             try:
@@ -1685,11 +1621,9 @@ query GetEModeCategories {
         reserve_factor_raw = (
             reserve.get("reserveFactor")
             or reserve.get("reserve_factor")
-            or (
-                reserve.get("configuration", {})
-                if isinstance(reserve.get("configuration"), dict)
-                else {}
-            ).get("reserveFactor")
+            or (reserve.get("configuration", {}) if isinstance(reserve.get("configuration"), dict) else {}).get(
+                "reserveFactor"
+            )
         )
         if reserve_factor_raw:
             try:
@@ -1701,13 +1635,9 @@ query GetEModeCategories {
         reserve_config = None
         if underlying_address and target_date:
             # Only try Graph for historical queries - for current data, use AaveScan
-            reserve_config = self._fetch_reserve_config_from_graph(
-                underlying_address, target_date=target_date
-            )
+            reserve_config = self._fetch_reserve_config_from_graph(underlying_address, target_date=target_date)
             if not reserve_config:
-                logger.debug(
-                    f"⚠️ No reserve config from Graph for {underlying_address} - using AaveScan data"
-                )
+                logger.debug(f"⚠️ No reserve config from Graph for {underlying_address} - using AaveScan data")
         elif not underlying_address:
             logger.debug(
                 f"⚠️ No underlying_address provided for reserve: {reserve.get('asset', {}).get('symbol', 'unknown')}"
@@ -1721,15 +1651,9 @@ query GetEModeCategories {
             reserve_mode = reserve_config.get("reserve_mode")
         else:
             # Fallback: determine from flags
-            is_active = reserve.get(
-                "isActive", reserve_config.get("isActive") if reserve_config else True
-            )
-            is_frozen = reserve.get(
-                "isFrozen", reserve_config.get("isFrozen") if reserve_config else False
-            )
-            is_paused = reserve.get(
-                "isPaused", reserve_config.get("isPaused") if reserve_config else False
-            )
+            is_active = reserve.get("isActive", reserve_config.get("isActive") if reserve_config else True)
+            is_frozen = reserve.get("isFrozen", reserve_config.get("isFrozen") if reserve_config else False)
+            is_paused = reserve.get("isPaused", reserve_config.get("isPaused") if reserve_config else False)
             if is_frozen:
                 reserve_mode = "FROZEN"
             elif is_paused:
@@ -1756,22 +1680,18 @@ query GetEModeCategories {
         # Get eModeCategoryId from reserve_config (key is "emode_category_id" in our format, but "eModeCategoryId" from Graph)
         emode_category_id_from_config = None
         if reserve_config:
-            emode_category_id_from_config = reserve_config.get(
-                "emode_category_id"
-            ) or reserve_config.get("eModeCategoryId")
+            emode_category_id_from_config = reserve_config.get("emode_category_id") or reserve_config.get(
+                "eModeCategoryId"
+            )
 
         # Try RPC first to get eMode category ID (most reliable)
         emode_category_id_from_rpc = None
         if underlying_address:
-            emode_category_id_from_rpc = self._fetch_reserve_emode_from_rpc(
-                underlying_address, target_date=target_date
-            )
+            emode_category_id_from_rpc = self._fetch_reserve_emode_from_rpc(underlying_address, target_date=target_date)
 
         # Use RPC result if available, otherwise fall back to other sources
         emode_category_id = (
-            emode_category_id_from_rpc
-            or e_mode_category_id_from_reserve
-            or emode_category_id_from_config
+            emode_category_id_from_rpc or e_mode_category_id_from_reserve or emode_category_id_from_config
         )
 
         # STATIC FALLBACK: If still no emode_category_id, use hardcoded values for known ETH correlation assets
@@ -1779,9 +1699,7 @@ query GetEModeCategories {
         asset_symbol = reserve.get("asset", {}).get("symbol", "")
         if not emode_category_id and asset_symbol in ["weETH", "wstETH", "WETH"]:
             emode_category_id = 1  # ETH correlation emode
-            logger.info(
-                f"  ✅ Using STATIC emode_category_id=1 (ETH correlation) for {asset_symbol}"
-            )
+            logger.info(f"  ✅ Using STATIC emode_category_id=1 (ETH correlation) for {asset_symbol}")
 
         # Fetch eMode category details if we have an ID
         emode_label = None
@@ -1820,12 +1738,8 @@ query GetEModeCategories {
                 )
                 emode_label = "ETH_CORRELATION"
                 pair_key = f"{symbol}_WETH"
-                emode_liquidation_threshold = self.STATIC_RISK_PARAMS["emode"][
-                    "liquidation_thresholds"
-                ].get(pair_key)
-                emode_liquidation_bonus = self.STATIC_RISK_PARAMS["emode"]["liquidation_bonus"].get(
-                    pair_key
-                )
+                emode_liquidation_threshold = self.STATIC_RISK_PARAMS["emode"]["liquidation_thresholds"].get(pair_key)
+                emode_liquidation_bonus = self.STATIC_RISK_PARAMS["emode"]["liquidation_bonus"].get(pair_key)
                 logger.debug(
                     f"  ✅ Using STATIC eMode params for {symbol}: "
                     f"liq_threshold={emode_liquidation_threshold}, bonus={emode_liquidation_bonus}"
@@ -1853,41 +1767,28 @@ query GetEModeCategories {
 
         # Extract interest rate model parameters
         # Use values from reserve_config if available (from The Graph), otherwise try market_configs
-        optimal_utilization_rate = (
-            reserve_config.get("optimal_utilization_rate") if reserve_config else None
-        )
-        variable_rate_slope1 = (
-            reserve_config.get("variable_rate_slope1") if reserve_config else None
-        )
-        variable_rate_slope2 = (
-            reserve_config.get("variable_rate_slope2") if reserve_config else None
-        )
+        optimal_utilization_rate = reserve_config.get("optimal_utilization_rate") if reserve_config else None
+        variable_rate_slope1 = reserve_config.get("variable_rate_slope1") if reserve_config else None
+        variable_rate_slope2 = reserve_config.get("variable_rate_slope2") if reserve_config else None
         base_variable_borrow_rate_from_config = (
             reserve_config.get("base_variable_borrow_rate") if reserve_config else None
         )
 
         # If not in reserve_config, try market_configs (only for current data)
         if not optimal_utilization_rate and market_configs:
-            interest_rate_strategy_address = (
-                reserve_config.get("interest_rate_strategy") if reserve_config else None
-            )
+            interest_rate_strategy_address = reserve_config.get("interest_rate_strategy") if reserve_config else None
             if interest_rate_strategy_address:
                 strategies = market_configs.get("strategies", [])
                 if isinstance(strategies, list):
                     for strategy in strategies:
-                        if (
-                            strategy.get("address", "").lower()
-                            == interest_rate_strategy_address.lower()
-                        ):
+                        if strategy.get("address", "").lower() == interest_rate_strategy_address.lower():
                             optimal_utilization_rate = strategy.get("optimalUtilizationRate")
                             variable_rate_slope1 = strategy.get("variableRateSlope1")
                             variable_rate_slope2 = strategy.get("variableRateSlope2")
                             # Convert from Ray (1e27) to decimal if needed
                             if optimal_utilization_rate:
                                 try:
-                                    optimal_utilization_rate = (
-                                        float(optimal_utilization_rate) / 1e27
-                                    )
+                                    optimal_utilization_rate = float(optimal_utilization_rate) / 1e27
                                 except (ValueError, TypeError):
                                     pass
                             if variable_rate_slope1:
@@ -1921,9 +1822,7 @@ query GetEModeCategories {
 
         # Final fallback to STATIC_RISK_PARAMS if still missing
         asset_symbol = reserve.get("asset", {}).get("symbol", "")
-        if asset_symbol and (
-            not ltv or not liquidation_threshold or not liquidation_bonus or not reserve_factor
-        ):
+        if asset_symbol and (not ltv or not liquidation_threshold or not liquidation_bonus or not reserve_factor):
             logger.info(f"  🔄 Attempting static fallback for {asset_symbol} risk params")
 
             # Use emode params if in emode (ETH correlation mode)
@@ -1932,13 +1831,9 @@ query GetEModeCategories {
                 if not ltv:
                     ltv = self.STATIC_RISK_PARAMS["emode"]["ltv_limits"].get(pair_key)
                 if not liquidation_threshold:
-                    liquidation_threshold = self.STATIC_RISK_PARAMS["emode"][
-                        "liquidation_thresholds"
-                    ].get(pair_key)
+                    liquidation_threshold = self.STATIC_RISK_PARAMS["emode"]["liquidation_thresholds"].get(pair_key)
                 if not liquidation_bonus:
-                    liquidation_bonus = self.STATIC_RISK_PARAMS["emode"]["liquidation_bonus"].get(
-                        pair_key
-                    )
+                    liquidation_bonus = self.STATIC_RISK_PARAMS["emode"]["liquidation_bonus"].get(pair_key)
                 if ltv:
                     logger.info(
                         f"  ✅ Using STATIC eMode risk params for {pair_key}: ltv={ltv}, liq_threshold={liquidation_threshold}"
@@ -1949,13 +1844,9 @@ query GetEModeCategories {
                 if not ltv:
                     ltv = self.STATIC_RISK_PARAMS["standard"]["ltv_limits"].get(pair_key)
                 if not liquidation_threshold:
-                    liquidation_threshold = self.STATIC_RISK_PARAMS["standard"][
-                        "liquidation_thresholds"
-                    ].get(pair_key)
+                    liquidation_threshold = self.STATIC_RISK_PARAMS["standard"]["liquidation_thresholds"].get(pair_key)
                 if not liquidation_bonus:
-                    liquidation_bonus = self.STATIC_RISK_PARAMS["standard"][
-                        "liquidation_bonus"
-                    ].get(pair_key)
+                    liquidation_bonus = self.STATIC_RISK_PARAMS["standard"]["liquidation_bonus"].get(pair_key)
                 if ltv:
                     logger.info(
                         f"  ✅ Using STATIC standard risk params for {pair_key}: ltv={ltv}, liq_threshold={liquidation_threshold}"
@@ -1965,9 +1856,7 @@ query GetEModeCategories {
             if not reserve_factor:
                 reserve_factor = self.STATIC_RISK_PARAMS["reserve_factors"].get(asset_symbol)
                 if reserve_factor:
-                    logger.info(
-                        f"  ✅ Using STATIC reserve_factor for {asset_symbol}: {reserve_factor}"
-                    )
+                    logger.info(f"  ✅ Using STATIC reserve_factor for {asset_symbol}: {reserve_factor}")
 
         return {
             "flash_loan_providers": flash_loan_providers,
@@ -2045,9 +1934,7 @@ query GetEModeCategories {
             "exchange_raw_symbol": a_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(
-                2023, 1, 27
-            ).isoformat(),  # AAVE V3 Ethereum launch date
+            "available_from_datetime": datetime(2023, 1, 27).isoformat(),  # AAVE V3 Ethereum launch date
             "available_to_datetime": None,
             "data_types": "rate_indices,oracle_prices",  # Raw data: supplyIndex, liquidityIndex, oracle prices (rate_indices includes utilization)
             "inverse": False,
@@ -2113,9 +2000,7 @@ query GetEModeCategories {
             "exchange_raw_symbol": debt_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(
-                2023, 1, 27
-            ).isoformat(),  # AAVE V3 Ethereum launch date
+            "available_from_datetime": datetime(2023, 1, 27).isoformat(),  # AAVE V3 Ethereum launch date
             "available_to_datetime": None,
             "data_types": "rate_indices,oracle_prices",  # Raw data: borrowIndex, oracle prices (rate_indices includes utilization)
             "inverse": False,

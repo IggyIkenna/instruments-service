@@ -75,7 +75,8 @@ class CCXTService:
         # Filter out already-cached exchanges and spot-only exchanges
         spot_only_exchanges = {"upbit", "coinbase"}
         to_load = [
-            (v, cid) for v, cid in ccxt_exchange_ids
+            (v, cid)
+            for v, cid in ccxt_exchange_ids
             if cid not in self._markets_cache and cid.lower() not in spot_only_exchanges
         ]
 
@@ -87,10 +88,7 @@ class CCXTService:
 
         results = {}
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(self.load_markets, venue): (venue, ccxt_id)
-                for venue, ccxt_id in to_load
-            }
+            futures = {executor.submit(self.load_markets, venue): (venue, ccxt_id) for venue, ccxt_id in to_load}
             for future in as_completed(futures):
                 venue, ccxt_id = futures[future]
                 try:
@@ -278,9 +276,7 @@ class CCXTService:
                     # Also try with expiry for futures (if symbol_id contains date)
                     if instrument_type == "FUTURE" and any(char.isdigit() for char in symbol_id):
                         # Try to extract date from symbol_id (e.g., BTCUSDT241225)
-                        possible_symbols.append(
-                            f"{base_asset}/{quote_asset}:{quote_asset}-{symbol_id}"
-                        )
+                        possible_symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}-{symbol_id}")
                 # Standard formats
                 possible_symbols.extend(
                     [
@@ -302,9 +298,7 @@ class CCXTService:
                     possible_symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}")
                     # Also try with expiry for futures
                     if instrument_type == "FUTURE" and any(char.isdigit() for char in symbol_id):
-                        possible_symbols.append(
-                            f"{base_asset}/{quote_asset}:{quote_asset}-{symbol_id}"
-                        )
+                        possible_symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}-{symbol_id}")
                 # Standard formats
                 possible_symbols.extend(
                     [
@@ -507,9 +501,7 @@ class CCXTService:
                 break
 
         if not ccxt_market:
-            logger.debug(
-                f"No CCXT market found for {venue}:{symbol_id} (tried {len(possible_symbols)} formats)"
-            )
+            logger.debug(f"No CCXT market found for {venue}:{symbol_id} (tried {len(possible_symbols)} formats)")
             # CRITICAL FIX: Still return ccxt_symbol even if market not found
             # Use the first reasonable format as default
             default_symbol = self._generate_default_ccxt_symbol(
@@ -646,9 +638,7 @@ class CCXTService:
                     continue
 
             if not leverage_tiers:
-                logger.debug(
-                    f"No leverage tiers found for {venue}:{symbol_id} (tried {len(possible_symbols)} formats)"
-                )
+                logger.debug(f"No leverage tiers found for {venue}:{symbol_id} (tried {len(possible_symbols)} formats)")
                 # Try fallback and cache it
                 fallback_params = self._get_leverage_limits_fallback(venue)
                 if fallback_params:

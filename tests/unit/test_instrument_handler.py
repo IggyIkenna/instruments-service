@@ -84,7 +84,6 @@ class TestInstrumentHandler:
                 return_value=mock_cloud_storage,
             ),
         ):
-
             config = {"project_id": "test-project"}
             handler = InstrumentHandler(config)
             handler.instruments_service = mock_instrument_service
@@ -121,9 +120,7 @@ class TestInstrumentHandler:
             mock_execute.assert_called_once()
             assert result["status"] == "success"
 
-    def test_execute_instrument_generation_success(
-        self, handler, mock_instrument_service, mock_cloud_storage
-    ):
+    def test_execute_instrument_generation_success(self, handler, mock_instrument_service, mock_cloud_storage):
         """Test successful instrument generation."""
         # Mock instruments service to return success
         mock_instrument_service.generate_instruments_for_date = AsyncMock(
@@ -235,9 +232,7 @@ class TestInstrumentHandler:
 
     def test_execute_instrument_generation_exception_handling(self, handler):
         """Test exception handling during generation."""
-        handler.instruments_service.generate_instruments_for_date = AsyncMock(
-            side_effect=Exception("Test error")
-        )
+        handler.instruments_service.generate_instruments_for_date = AsyncMock(side_effect=Exception("Test error"))
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
 
@@ -289,9 +284,7 @@ class TestInstrumentHandler:
 
     def test_generate_instruments_for_date_exchange_error(self, handler, mock_instrument_service):
         """Test handling exchange processing errors."""
-        mock_instrument_service.generate_instruments_for_date = AsyncMock(
-            side_effect=Exception("Exchange error")
-        )
+        mock_instrument_service.generate_instruments_for_date = AsyncMock(side_effect=Exception("Exchange error"))
 
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)

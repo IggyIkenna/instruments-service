@@ -88,9 +88,7 @@ class TestBalancerAdapter:
                 "dynamicData": {"totalLiquidity": "1000000"},
                 "type": "WEIGHTED",
             }
-            adapter.graph_client.execute_query_sync = Mock(
-                return_value={"data": {"poolGetPools": [mock_pool]}}
-            )
+            adapter.graph_client.execute_query_sync = Mock(return_value={"data": {"poolGetPools": [mock_pool]}})
 
             result = adapter.fetch_pools()
             assert isinstance(result, dict)
@@ -181,9 +179,7 @@ class TestHyperliquidAdapter:
             adapter.project_id = "test-project"
 
             with patch("requests.post") as mock_post:
-                mock_meta = [
-                    {"universe": [{"name": "BTC", "szDecimals": 3}]}
-                ]
+                mock_meta = [{"universe": [{"name": "BTC", "szDecimals": 3}]}]
                 mock_response = Mock()
                 mock_response.json.return_value = mock_meta
                 mock_response.raise_for_status = Mock()
@@ -663,4 +659,3 @@ class TestAsterAdapterExtended:
 
                 result = adapter.fetch_spot_pairs()
                 assert isinstance(result, dict)
-

@@ -65,7 +65,7 @@ class TestDividendRecord:
         div = DividendRecord(
             ticker="AAPL",
             ex_date=date(2024, 5, 10),
-            amount=float('nan'),
+            amount=float("nan"),
         )
         assert div.amount == 0.0
 
@@ -251,7 +251,7 @@ class TestCorporateActionsBundle:
 class TestCorporateActionsAdapter:
     """Tests for CorporateActionsAdapter."""
 
-    @patch('instruments_service.corporate_actions.adapter.CorporateActionsAdapter.yf')
+    @patch("instruments_service.corporate_actions.adapter.CorporateActionsAdapter.yf")
     def test_fetch_dividends(self, mock_yf):
         """Test fetching dividends with mocked yfinance."""
         # Setup mock
@@ -259,7 +259,7 @@ class TestCorporateActionsAdapter:
         mock_yf.Ticker.return_value = mock_ticker
 
         # Create sample dividend data
-        div_index = pd.to_datetime(['2024-05-10', '2024-08-12'])
+        div_index = pd.to_datetime(["2024-05-10", "2024-08-12"])
         mock_ticker.dividends = pd.Series([0.24, 0.25], index=div_index)
 
         # Test adapter
@@ -276,7 +276,7 @@ class TestCorporateActionsAdapter:
         assert dividends[0].ticker == "AAPL"
         assert dividends[0].amount == 0.24
 
-    @patch('instruments_service.corporate_actions.adapter.CorporateActionsAdapter.yf')
+    @patch("instruments_service.corporate_actions.adapter.CorporateActionsAdapter.yf")
     def test_fetch_splits(self, mock_yf):
         """Test fetching splits with mocked yfinance."""
         # Setup mock
@@ -284,7 +284,7 @@ class TestCorporateActionsAdapter:
         mock_yf.Ticker.return_value = mock_ticker
 
         # Create sample split data
-        split_index = pd.to_datetime(['2020-08-31', '2014-06-09'])
+        split_index = pd.to_datetime(["2020-08-31", "2014-06-09"])
         mock_ticker.splits = pd.Series([4.0, 7.0], index=split_index)
 
         # Test adapter
@@ -301,7 +301,7 @@ class TestCorporateActionsAdapter:
         assert splits[0].ratio == 4.0
         assert splits[1].ratio == 7.0
 
-    @patch('instruments_service.corporate_actions.adapter.CorporateActionsAdapter.yf')
+    @patch("instruments_service.corporate_actions.adapter.CorporateActionsAdapter.yf")
     def test_fetch_empty_dividends(self, mock_yf):
         """Test fetching dividends when none exist."""
         mock_ticker = MagicMock()
@@ -319,7 +319,7 @@ class TestCorporateActionsAdapter:
 
         assert len(dividends) == 0
 
-    @patch('instruments_service.corporate_actions.adapter.CorporateActionsAdapter.yf')
+    @patch("instruments_service.corporate_actions.adapter.CorporateActionsAdapter.yf")
     def test_to_dataframes(self, mock_yf):
         """Test converting bundles to DataFrames."""
         # Create sample bundles
@@ -368,7 +368,7 @@ class TestCorporateActionsAdapter:
 @pytest.mark.integration
 @pytest.mark.skipif(
     True,  # Skip by default, enable for manual testing
-    reason="Integration test - requires internet and yfinance"
+    reason="Integration test - requires internet and yfinance",
 )
 class TestCorporateActionsIntegration:
     """Integration tests with real yfinance calls."""

@@ -15,10 +15,12 @@ import logging
 from pathlib import Path
 from typing import Dict, Any
 
+
 # CRITICAL: Load .env file explicitly before any other imports
 def _load_env_early():
     try:
         from dotenv import load_dotenv
+
         # Find .env file in current directory or project root
         env_path = Path(".env")
         if not env_path.exists():
@@ -29,6 +31,7 @@ def _load_env_early():
             load_dotenv(dotenv_path=env_path, override=True)
     except ImportError:
         pass
+
 
 _load_env_early()
 
@@ -53,6 +56,7 @@ from instruments_service.config import instruments_config
 # from instruments-service instead of the default BaseServiceConfig
 try:
     import unified_cloud_services.core.market_category
+
     unified_cloud_services.core.market_category.unified_config = instruments_config
     logger.info("✅ Patched unified_cloud_services config with instruments_config")
 except ImportError:
@@ -76,14 +80,24 @@ def main() -> Dict[str, Any]:
     mode_handler = None  # Track mode handler for cleanup on signal
 
     def cleanup_on_signal():
-        """Cleanup function called on SIGTERM/SIGINT."""
+        """Cleanup function called on SIGTERM/SIGINT.
+
+        Note: During atexit, stdout/stderr may be closed, so we wrap logging
+        in try/except to avoid ValueError from closed streams.
+        """
         nonlocal mode_handler
         if mode_handler is not None:
             try:
                 mode_handler.cleanup()
-                logger.info("Cleanup completed on signal")
+                try:
+                    logger.info("Cleanup completed on signal")
+                except ValueError:
+                    pass  # Streams closed during interpreter shutdown
             except Exception as e:
-                logger.warning(f"Cleanup error on signal: {e}")
+                try:
+                    logger.warning(f"Cleanup error on signal: {e}")
+                except ValueError:
+                    pass  # Streams closed during interpreter shutdown
 
     # Initialize graceful shutdown handler (handles SIGTERM/SIGINT)
     _shutdown_handler = GracefulShutdownHandler(cleanup_callback=cleanup_on_signal)
@@ -120,22 +134,22 @@ def main() -> Dict[str, Any]:
             handler_kwargs["end_date"] = args.end_date
 
         # Common options
-        if hasattr(args, 'force') and args.force:
+        if hasattr(args, "force") and args.force:
             handler_kwargs["force"] = args.force
-        if hasattr(args, 'dry_run') and args.dry_run:
+        if hasattr(args, "dry_run") and args.dry_run:
             handler_kwargs["dry_run"] = args.dry_run
 
         # Corporate actions specific options
-        if hasattr(args, 'tickers') and args.tickers:
+        if hasattr(args, "tickers") and args.tickers:
             handler_kwargs["tickers"] = args.tickers
-        if hasattr(args, 'output_format') and args.output_format:
+        if hasattr(args, "output_format") and args.output_format:
             handler_kwargs["output_format"] = args.output_format
-        if hasattr(args, 'upload_to_gcs') and args.upload_to_gcs:
+        if hasattr(args, "upload_to_gcs") and args.upload_to_gcs:
             handler_kwargs["upload_to_gcs"] = args.upload_to_gcs
 
         # Market type filters
         # Priority: --category flag takes precedence, then individual flags
-        if hasattr(args, 'category') and args.category:
+        if hasattr(args, "category") and args.category:
             # --category can be a list (e.g., --category CEFI TRADFI)
             for cat in args.category:
                 if cat.upper() == "CEFI":
@@ -154,7 +168,7 @@ def main() -> Dict[str, Any]:
                 handler_kwargs["defi"] = True
 
         # Venue filter (optional - filter to specific venues within a category)
-        if hasattr(args, 'venues') and args.venues:
+        if hasattr(args, "venues") and args.venues:
             handler_kwargs["venues"] = args.venues
 
         # Execute handler

@@ -59,10 +59,7 @@ class EtherFiAdapter(BaseDefiAdapter):
         instruments = self.fetch_lst_instruments()
         return list(instruments.values())
 
-    def fetch_lst_instruments(
-        self,
-        target_date: Optional[datetime] = None
-    ) -> Dict[str, Dict[str, Any]]:
+    def fetch_lst_instruments(self, target_date: Optional[datetime] = None) -> Dict[str, Dict[str, Any]]:
         """
         Fetch EtherFi LST instruments.
 
@@ -143,9 +140,7 @@ class EtherFiAdapter(BaseDefiAdapter):
             "exchange_raw_symbol": symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(
-                2024, 2, 1
-            ).isoformat(),  # EtherFi weETH launch date (Feb 2024)
+            "available_from_datetime": datetime(2024, 2, 1).isoformat(),  # EtherFi weETH launch date (Feb 2024)
             "available_to_datetime": None,
             "data_types": "yields,oracle_prices",  # LST APY from DefiLlama + oracle price
             "inverse": False,
@@ -197,10 +192,7 @@ class LidoAdapter(BaseDefiAdapter):
         instruments = self.fetch_lst_instruments()
         return list(instruments.values())
 
-    def fetch_lst_instruments(
-        self,
-        target_date: Optional[datetime] = None
-    ) -> Dict[str, Dict[str, Any]]:
+    def fetch_lst_instruments(self, target_date: Optional[datetime] = None) -> Dict[str, Dict[str, Any]]:
         """
         Fetch Lido LST instruments.
 
@@ -287,9 +279,7 @@ class LidoAdapter(BaseDefiAdapter):
             "exchange_raw_symbol": symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(
-                2020, 12, 18
-            ).isoformat(),  # Lido stETH launch date (Dec 18, 2020)
+            "available_from_datetime": datetime(2020, 12, 18).isoformat(),  # Lido stETH launch date (Dec 18, 2020)
             "available_to_datetime": None,
             "data_types": "yields,oracle_prices",  # LST APY from DefiLlama + oracle price
             "inverse": False,
