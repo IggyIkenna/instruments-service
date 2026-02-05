@@ -24,9 +24,7 @@ class TestDatabentoAdapter:
         original_db = getattr(databento_adapter, "db", None)
 
         try:
-            with patch(
-                "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-            ):
+            with patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
                 assert adapter.api_key == "test-key"
                 assert adapter.client is not None
@@ -51,12 +49,8 @@ class TestDatabentoAdapter:
             databento_base_client.clear_databento_client_cache()
 
             with (
-                patch(
-                    "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-                ),
-                patch(
-                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
-                ),
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
                 patch(
                     "unified_cloud_services.clients.databento_base_client.get_secret_with_fallback",
                     return_value="secret-key",
@@ -81,9 +75,7 @@ class TestDatabentoAdapter:
 
         try:
             # Mock DATABENTO_AVAILABLE as False
-            with patch(
-                "unified_cloud_services.clients.databento_base_client.DATABENTO_AVAILABLE", False
-            ):
+            with patch("unified_cloud_services.clients.databento_base_client.DATABENTO_AVAILABLE", False):
                 # Re-import to pick up the patched value
                 from instruments_service.app.venues.databento import databento_adapter
 
@@ -120,12 +112,8 @@ class TestDatabentoAdapter:
             databento_base_client.clear_databento_client_cache()
 
             with (
-                patch(
-                    "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-                ),
-                patch(
-                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
-                ),
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
                 dataset = adapter._get_dataset_for_exchange("CME")
@@ -146,12 +134,8 @@ class TestDatabentoAdapter:
             databento_base_client.clear_databento_client_cache()
 
             with (
-                patch(
-                    "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-                ),
-                patch(
-                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
-                ),
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
                 dataset = adapter._get_dataset_for_exchange("CBOE")
@@ -172,12 +156,8 @@ class TestDatabentoAdapter:
             databento_base_client.clear_databento_client_cache()
 
             with (
-                patch(
-                    "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-                ),
-                patch(
-                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
-                ),
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
                 dataset = adapter._get_dataset_for_exchange("NASDAQ")
@@ -199,12 +179,8 @@ class TestDatabentoAdapter:
             databento_base_client.clear_databento_client_cache()
 
             with (
-                patch(
-                    "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-                ),
-                patch(
-                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
-                ),
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
                 dataset = adapter._get_dataset_for_exchange("NYSE")
@@ -228,12 +204,8 @@ class TestDatabentoAdapter:
             databento_base_client.clear_databento_api_key_cache()
 
             with (
-                patch(
-                    "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-                ),
-                patch(
-                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
-                ),
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
             ):
                 # Create first adapter
                 adapter1 = databento_adapter.DatabentoAdapter(api_key="test-key")
@@ -266,12 +238,8 @@ class TestDatabentoAdapter:
             databento_base_client.clear_databento_api_key_cache()
 
             with (
-                patch(
-                    "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-                ),
-                patch(
-                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
-                ),
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
                 patch(
                     "unified_cloud_services.clients.databento_base_client.get_secret_with_fallback",
                     mock_get_secret,
@@ -304,12 +272,8 @@ class TestDatabentoAdapter:
             databento_base_client.clear_databento_client_cache()
 
             with (
-                patch(
-                    "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-                ),
-                patch(
-                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
-                ),
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
                 target_date = datetime(2024, 11, 11, 12, 0, 0, tzinfo=timezone.utc)
@@ -338,12 +302,8 @@ class TestDatabentoAdapter:
             databento_base_client.clear_databento_client_cache()
 
             with (
-                patch(
-                    "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-                ),
-                patch(
-                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
-                ),
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
                 target_date = datetime(2024, 11, 11, 12, 0, 0, tzinfo=timezone.utc)
@@ -374,12 +334,8 @@ class TestDatabentoAdapter:
             databento_base_client.clear_databento_client_cache()
 
             with (
-                patch(
-                    "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-                ),
-                patch(
-                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
-                ),
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
                 target_date = datetime(2024, 11, 11, 12, 0, 0, tzinfo=timezone.utc)
@@ -406,12 +362,8 @@ class TestDatabentoAdapter:
             databento_base_client.clear_databento_client_cache()
 
             with (
-                patch(
-                    "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-                ),
-                patch(
-                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
-                ),
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
 
@@ -441,12 +393,8 @@ class TestDatabentoAdapter:
             databento_base_client.clear_databento_client_cache()
 
             with (
-                patch(
-                    "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-                ),
-                patch(
-                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
-                ),
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
 
@@ -472,12 +420,8 @@ class TestDatabentoAdapter:
             databento_base_client.clear_databento_client_cache()
 
             with (
-                patch(
-                    "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-                ),
-                patch(
-                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
-                ),
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
             ):
                 adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
                 target_date = datetime(2024, 11, 11, 12, 0, 0, tzinfo=timezone.utc)

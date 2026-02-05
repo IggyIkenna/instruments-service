@@ -36,10 +36,10 @@ _UNIFIED_CONFIG_CACHE: Optional[Any] = None
 # Maps our calendar names to exchange_calendars calendar codes
 _EXCHANGE_CALENDAR_MAPPING = {
     "NASDAQ": "XNAS",  # NASDAQ Stock Market
-    "NYSE": "XNYS",    # New York Stock Exchange
-    "CME": "CMES",     # CME (uses same calendar as NYSE with some variations)
-    "CBOE": "XNYS",    # CBOE uses NYSE calendar for equity products
-    "ICE": "XNYS",     # ICE US uses NYSE calendar
+    "NYSE": "XNYS",  # New York Stock Exchange
+    "CME": "CMES",  # CME (uses same calendar as NYSE with some variations)
+    "CBOE": "XNYS",  # CBOE uses NYSE calendar for equity products
+    "ICE": "XNYS",  # ICE US uses NYSE calendar
 }
 _EXCHANGE_CALENDARS_CACHE: Dict[str, Any] = {}
 
@@ -48,6 +48,7 @@ def clear_databento_cache():
     """Clear module-level cache (useful for testing or credential rotation)"""
     global _UNIFIED_CONFIG_CACHE, _EXCHANGE_CALENDARS_CACHE
     from unified_cloud_services import clear_databento_api_key_cache, clear_databento_client_cache
+
     clear_databento_api_key_cache()
     clear_databento_client_cache()
     _UNIFIED_CONFIG_CACHE = None
@@ -145,7 +146,9 @@ class DatabentoAdapter:
         """
         import tempfile
 
-        logger.info(f"📦 Using BATCH API for {dataset} {schema} ({len(symbols)} symbols) - FREE re-download within 30 days!")
+        logger.info(
+            f"📦 Using BATCH API for {dataset} {schema} ({len(symbols)} symbols) - FREE re-download within 30 days!"
+        )
 
         try:
             # Step 1: Check for existing batch job (free re-download!)
@@ -159,7 +162,7 @@ class DatabentoAdapter:
             )
 
             if existing_job:
-                job_id = existing_job['id']
+                job_id = existing_job["id"]
                 logger.info(f"   ♻️ Found existing batch job {job_id} - FREE re-download!")
             else:
                 # Step 2: Submit new batch job
@@ -171,11 +174,11 @@ class DatabentoAdapter:
                     stype_out="instrument_id",
                     start=start,
                     end=end,
-                    encoding='dbn',
-                    compression='zstd',
-                    delivery='download',
+                    encoding="dbn",
+                    compression="zstd",
+                    delivery="download",
                 )
-                job_id = job['id']
+                job_id = job["id"]
                 logger.info(f"   📤 Submitted new batch job: {job_id}")
 
                 # Step 3: Wait for job completion
@@ -191,12 +194,12 @@ class DatabentoAdapter:
                 if not downloaded_files:
                     logger.warning(f"⚠️ No files downloaded for batch job {job_id}")
                     # Return empty DBNStore-like object
-                    return type('EmptyData', (), {'to_df': lambda: pd.DataFrame()})()
+                    return type("EmptyData", (), {"to_df": lambda: pd.DataFrame()})()
 
                 # Find the data file (not metadata files)
                 data_file = None
                 for f in downloaded_files:
-                    if str(f).endswith('.dbn.zst') or str(f).endswith('.dbn'):
+                    if str(f).endswith(".dbn.zst") or str(f).endswith(".dbn"):
                         data_file = f
                         break
 
@@ -205,14 +208,14 @@ class DatabentoAdapter:
                     return db.DBNStore.from_file(str(data_file))
                 else:
                     logger.warning("⚠️ No .dbn data file found in batch download")
-                    return type('EmptyData', (), {'to_df': lambda: pd.DataFrame()})()
+                    return type("EmptyData", (), {"to_df": lambda: pd.DataFrame()})()
 
         except Exception as e:
             logger.warning(f"⚠️ Batch API failed, falling back to streaming: {e}")
             # Fallback to streaming API
             return self.client.timeseries.get_range(
                 dataset=dataset,
-                schema=db.Schema.DEFINITION if schema == 'definition' else schema,
+                schema=db.Schema.DEFINITION if schema == "definition" else schema,
                 symbols=symbols,
                 stype_in=stype_in,
                 stype_out="instrument_id",
@@ -232,20 +235,22 @@ class DatabentoAdapter:
         """Find an existing batch job matching the query parameters."""
         try:
             # List recent batch jobs (last 30 days are downloadable)
-            jobs = self.client.batch.list_jobs(states=['done'])
+            jobs = self.client.batch.list_jobs(states=["done"])
 
             # Match job parameters
             symbols_set = set(symbols)
             for job in jobs:
-                if (job.get('dataset') == dataset and
-                    job.get('schema') == schema and
-                    job.get('stype_in') == stype_in and
-                    str(job.get('start', '')).startswith(start) and
-                    str(job.get('end', '')).startswith(end)):
+                if (
+                    job.get("dataset") == dataset
+                    and job.get("schema") == schema
+                    and job.get("stype_in") == stype_in
+                    and str(job.get("start", "")).startswith(start)
+                    and str(job.get("end", "")).startswith(end)
+                ):
                     # Check symbols match
-                    job_symbols = job.get('symbols', '')
+                    job_symbols = job.get("symbols", "")
                     if isinstance(job_symbols, str):
-                        job_symbols_set = set(job_symbols.split(','))
+                        job_symbols_set = set(job_symbols.split(","))
                     else:
                         job_symbols_set = set(job_symbols) if job_symbols else set()
 
@@ -268,18 +273,18 @@ class DatabentoAdapter:
             jobs = self.client.batch.list_jobs()
 
             # Find our job
-            job = next((j for j in jobs if j['id'] == job_id), None)
+            job = next((j for j in jobs if j["id"] == job_id), None)
 
             if not job:
                 raise RuntimeError(f"Batch job {job_id} not found")
 
-            state = job.get('state', 'unknown')
-            progress = job.get('progress', 0)
+            state = job.get("state", "unknown")
+            progress = job.get("progress", 0)
 
-            if state == 'done':
+            if state == "done":
                 logger.info(f"   ✅ Batch job {job_id} completed!")
                 return
-            elif state in ('expired', 'failed'):
+            elif state in ("expired", "failed"):
                 raise RuntimeError(f"Batch job {job_id} {state}")
             else:
                 if i % 6 == 0:  # Log every 30 seconds
@@ -312,7 +317,6 @@ class DatabentoAdapter:
         global _UNIFIED_CONFIG_CACHE
 
         if _UNIFIED_CONFIG_CACHE is None:
-
             _UNIFIED_CONFIG_CACHE = UnifiedInstrumentConfig()
             logger.debug("✅ Cached UnifiedInstrumentConfig instance")
 
@@ -398,20 +402,20 @@ class DatabentoAdapter:
                     # Legacy streaming API (bills every request)
                     zipped_data = self.client.timeseries.get_range(
                         dataset=symbol_dataset,
-                    schema=db.Schema.DEFINITION,
-                    symbols=symbol_group,
-                    stype_in=stype_in,
-                    stype_out="instrument_id",
-                    start=start_date_str,
-                    end=end_date_str,
-                )
+                        schema=db.Schema.DEFINITION,
+                        symbols=symbol_group,
+                        stype_in=stype_in,
+                        stype_out="instrument_id",
+                        start=start_date_str,
+                        end=end_date_str,
+                    )
 
                 # Convert to DataFrame
                 df = zipped_data.to_df()
 
                 if df.empty:
                     # Check if this is a US market holiday for better user feedback
-                    is_holiday, holiday_name = self.is_us_market_holiday(date.date() if hasattr(date, 'date') else date)
+                    is_holiday, holiday_name = self.is_us_market_holiday(date.date() if hasattr(date, "date") else date)
                     if is_holiday:
                         logger.info(
                             f"📅 No data for {exchange} on {start_date_str} - US market holiday ({holiday_name}). "
@@ -450,7 +454,9 @@ class DatabentoAdapter:
                 # - "S" = Future Spread (exclude)
                 # - "C"/"P" = Call/Put option
                 # This is the recommended approach per Databento docs for filtering spreads
-                if "instrument_class" in df.columns and any(s.endswith(".FUT") for s in symbol_group if isinstance(s, str)):
+                if "instrument_class" in df.columns and any(
+                    s.endswith(".FUT") for s in symbol_group if isinstance(s, str)
+                ):
                     pre_class_count = len(df)
                     # Keep only outright futures (instrument_class == "F")
                     # Note: For options (.OPT), we keep C (Call) and P (Put)
@@ -480,14 +486,10 @@ class DatabentoAdapter:
                     pre_spread_count = len(df)
                     # Exclude symbols with special characters indicating combos/spreads
                     # Pattern: dash (-), colon (:), plus (+), asterisk (*), slash (/), period (.)
-                    df = df[
-                        ~df["raw_symbol"].astype(str).str.contains(r"[-:+*/.]", regex=True, na=False)
-                    ]
+                    df = df[~df["raw_symbol"].astype(str).str.contains(r"[-:+*/.]", regex=True, na=False)]
                     # Also filter out ICE internal/numbered formats (e.g., "BRN 142   7377732")
                     # These have a number sequence after the product code followed by a long ID
-                    df = df[
-                        ~df["raw_symbol"].astype(str).str.match(r"^[A-Z]+\s+\d+\s+\d+$", na=False)
-                    ]
+                    df = df[~df["raw_symbol"].astype(str).str.match(r"^[A-Z]+\s+\d+\s+\d+$", na=False)]
                     post_spread_count = len(df)
                     if pre_spread_count != post_spread_count:
                         logger.info(
@@ -503,9 +505,7 @@ class DatabentoAdapter:
                 all_instruments.update(group_instruments)
 
             except Exception as e:
-                logger.error(
-                    f"Failed to fetch Databento instruments for {exchange} (stype_in={stype_in}): {e}"
-                )
+                logger.error(f"Failed to fetch Databento instruments for {exchange} (stype_in={stype_in}): {e}")
                 continue
 
         return all_instruments
@@ -628,7 +628,6 @@ class DatabentoAdapter:
             "instrument_type": instrument_type,
             "symbol": symbol_canonical,
             "available_from_datetime": available_from,
-
             # ============================================================================
             # METADATA FIELDS (with defaults)
             # ============================================================================
@@ -636,57 +635,48 @@ class DatabentoAdapter:
             "tardis_exchange": "",
             "data_provider": "yahoo_finance",  # Data source is Yahoo Finance
             "asset_class": "traditional",
-
             # ============================================================================
             # AVAILABILITY WINDOWS
             # ============================================================================
             "available_to_datetime": available_to,  # Currency pairs don't expire
-
             # ============================================================================
             # DATA TYPES
             # ============================================================================
             "data_types": "ohlcv_24h",  # Yahoo Finance provides daily OHLCV data (free historical from 2020)
-
             # ============================================================================
             # ASSET INFORMATION
             # ============================================================================
             "base_asset": base_asset,
             "quote_asset": quote_asset,
             "settle_asset": quote_asset,
-
             # ============================================================================
             # EXCHANGE-SPECIFIC IDENTIFIERS
             # ============================================================================
             "exchange_raw_symbol": "KRWUSD=X",  # Yahoo Finance ticker symbol format
             "databento_symbol": "",  # Not available via Databento
             "tardis_symbol": "",
-
             # ============================================================================
             # TRADING PARAMETERS
             # ============================================================================
             "inverse": False,
             "tick_size": "",  # Not a trading instrument, irrelevant for data-only
             "min_size": "",  # Not a trading instrument, irrelevant for data-only
-
             # ============================================================================
             # OPTION-SPECIFIC FIELDS (not applicable for forex)
             # ============================================================================
             "strike": "",
             "option_type": "",
-
             # ============================================================================
             # CONTRACT-SPECIFIC FIELDS (not applicable for forex spot)
             # ============================================================================
             "expiry": None,  # Not applicable for forex spot
             "contract_size": None,  # Not applicable for forex spot
             "underlying": "",  # Not applicable for forex spot
-
             # ============================================================================
             # CCXT INTEGRATION FIELDS
             # ============================================================================
             "ccxt_symbol": "",  # Not using CCXT for Yahoo Finance
             "ccxt_exchange": "",
-
             # ============================================================================
             # DEFI-SPECIFIC FIELDS (not applicable for forex)
             # ============================================================================
@@ -694,7 +684,6 @@ class DatabentoAdapter:
             "quote_asset_contract_address": None,
             "pool_address": None,
             "pool_fee_tier": None,
-
             # ============================================================================
             # LENDING PROTOCOL-SPECIFIC FIELDS (not applicable for forex)
             # ============================================================================
@@ -713,7 +702,6 @@ class DatabentoAdapter:
             "base_variable_borrow_rate": None,
             "variable_rate_slope1": None,
             "variable_rate_slope2": None,
-
             # ============================================================================
             # CEFI RISK PARAMETERS (not applicable for forex spot)
             # ============================================================================
@@ -722,7 +710,6 @@ class DatabentoAdapter:
             "initial_margin_rate": None,
             "maintenance_margin_rate": None,
             "leverage_tiers_json": None,
-
             # ============================================================================
             # TRADING HOURS METADATA (forex trades 24/7, Sun 5pm ET - Fri 5pm ET)
             # ============================================================================
@@ -731,7 +718,6 @@ class DatabentoAdapter:
             "trading_session": "24/7",  # Forex market trades continuously
             "is_trading_day": True,  # Forex trades every day (including weekends)
             "holiday_calendar": None,  # No holidays for forex market
-
             # ============================================================================
             # ADDITIONAL METADATA
             # ============================================================================
@@ -739,9 +725,7 @@ class DatabentoAdapter:
             "market_category": "TRADFI",  # Forex is TradFi
         }
 
-    def create_bitcoin_etf_instrument_definition(
-        self, ticker: str, target_date: datetime
-    ) -> Optional[Dict[str, Any]]:
+    def create_bitcoin_etf_instrument_definition(self, ticker: str, target_date: datetime) -> Optional[Dict[str, Any]]:
         """
         Create Bitcoin ETF instrument definition with full metadata.
 
@@ -807,7 +791,6 @@ class DatabentoAdapter:
             "instrument_type": instrument_type,
             "symbol": symbol_canonical,
             "available_from_datetime": available_from,
-
             # ============================================================================
             # ASSET INFORMATION
             # ============================================================================
@@ -815,7 +798,6 @@ class DatabentoAdapter:
             "quote_asset": quote_asset,
             "settle_asset": quote_asset,
             "underlying": "BTC",  # Bitcoin is the underlying asset for all Bitcoin ETFs
-
             # ============================================================================
             # METADATA FIELDS
             # ============================================================================
@@ -823,7 +805,6 @@ class DatabentoAdapter:
             "venue_type": "exchange",
             "chain": "off-chain",  # TradFi exchanges are off-chain
             "market_category": "TRADFI",  # Bitcoin ETFs are TradFi instruments
-
             # ============================================================================
             # DATA PROVIDER
             # ============================================================================
@@ -832,24 +813,20 @@ class DatabentoAdapter:
             "exchange_raw_symbol": ticker_upper,
             "tardis_exchange": "",
             "tardis_symbol": "",
-
             # ============================================================================
             # DATA TYPES
             # ============================================================================
             "data_types": "ohlcv_1m",  # Databento provides OHLCV 1-minute data
-
             # ============================================================================
             # AVAILABILITY WINDOWS
             # ============================================================================
             "available_to_datetime": available_to,
-
             # ============================================================================
             # TRADING PARAMETERS
             # ============================================================================
             "tick_size": "0.01",  # ETFs are quoted to 2 decimal places
             "min_size": "1",  # Minimum 1 share
             "inverse": False,
-
             # ============================================================================
             # CONTRACT-SPECIFIC FIELDS (not applicable for ETFs)
             # ============================================================================
@@ -857,13 +834,11 @@ class DatabentoAdapter:
             "contract_size": None,
             "strike": "",
             "option_type": "",
-
             # ============================================================================
             # CCXT INTEGRATION FIELDS (not applicable for TradFi ETFs)
             # ============================================================================
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-
             # ============================================================================
             # DEFI-SPECIFIC FIELDS (not applicable for TradFi ETFs)
             # ============================================================================
@@ -871,7 +846,6 @@ class DatabentoAdapter:
             "quote_asset_contract_address": None,
             "pool_address": None,
             "pool_fee_tier": None,
-
             # ============================================================================
             # LENDING PROTOCOL-SPECIFIC FIELDS (not applicable for ETFs)
             # ============================================================================
@@ -890,7 +864,6 @@ class DatabentoAdapter:
             "base_variable_borrow_rate": None,
             "variable_rate_slope1": None,
             "variable_rate_slope2": None,
-
             # ============================================================================
             # CEFI RISK PARAMETERS (not applicable for spot ETFs)
             # ============================================================================
@@ -899,7 +872,6 @@ class DatabentoAdapter:
             "initial_margin_rate": None,
             "maintenance_margin_rate": None,
             "leverage_tiers_json": None,
-
             # ============================================================================
             # TRADING HOURS METADATA (UTC converted)
             # ============================================================================
@@ -1076,28 +1048,20 @@ class DatabentoAdapter:
                     # For parent symbology, use security_type to choose correct mapping
                     if security_type == "FUT":
                         # This is a future - use futures mapping
-                        databento_symbol = asset_to_fut_symbol.get(
-                            asset, query_symbols[0] if query_symbols else ""
-                        )
+                        databento_symbol = asset_to_fut_symbol.get(asset, query_symbols[0] if query_symbols else "")
                     elif security_type == "OOF":
                         # This is an option on futures - use options mapping
-                        databento_symbol = asset_to_opt_symbol.get(
-                        asset, query_symbols[0] if query_symbols else ""
-                    )
+                        databento_symbol = asset_to_opt_symbol.get(asset, query_symbols[0] if query_symbols else "")
                     else:
                         # Unknown type - try futures first, then options
                         databento_symbol = asset_to_fut_symbol.get(
-                            asset, asset_to_opt_symbol.get(
-                                asset, query_symbols[0] if query_symbols else ""
-                            )
+                            asset, asset_to_opt_symbol.get(asset, query_symbols[0] if query_symbols else "")
                         )
                 else:
                     # For raw_symbol (equities), the raw_symbol IS the query symbol
                     # Note: DBEQ.BASIC returns empty 'asset' column, so we use the symbol directly
                     # The 'symbol' variable is the row index from df_grouped (raw_symbol)
-                    databento_symbol = asset_to_raw_symbol.get(
-                        str(symbol), asset_to_raw_symbol.get(asset, str(symbol))
-                    )
+                    databento_symbol = asset_to_raw_symbol.get(str(symbol), asset_to_raw_symbol.get(asset, str(symbol)))
 
                 # exchange_raw_symbol should be the actual Databento symbol (contract symbol)
                 # This is what the exchange uses internally, not the asset/base
@@ -1279,13 +1243,9 @@ class DatabentoAdapter:
                     # Response is a single value (try to convert to string)
                     return str(resolved)
 
-            logger.warning(
-                f"Symbology resolution returned empty result for instrument_id {instrument_id}"
-            )
+            logger.warning(f"Symbology resolution returned empty result for instrument_id {instrument_id}")
         except Exception as e:
-            logger.warning(
-                f"Symbology resolution failed for instrument_id {instrument_id}: {e}", exc_info=True
-            )
+            logger.warning(f"Symbology resolution failed for instrument_id {instrument_id}: {e}", exc_info=True)
 
         return None
 
@@ -1359,15 +1319,49 @@ class DatabentoAdapter:
         # Override: Known ETFs that Databento returns as STK (Stock)
         # SPY, QQQ, IVV, etc. are ETFs but security_type="STK" from Databento
         KNOWN_ETFS = {
-            'SPY', 'QQQ', 'IVV', 'VOO', 'VTI', 'DIA', 'IWM', 'EEM', 'VEA', 'VWO',
-            'GLD', 'SLV', 'USO', 'UNG', 'TLT', 'IEF', 'SHY', 'LQD', 'HYG', 'JNK',
-            'XLF', 'XLE', 'XLK', 'XLV', 'XLI', 'XLY', 'XLP', 'XLB', 'XLU', 'XLRE',
-            'VNQ', 'IBB', 'SMH', 'IBIT', 'FBTC', 'ARKB', 'GBTC', 'BITO'
+            "SPY",
+            "QQQ",
+            "IVV",
+            "VOO",
+            "VTI",
+            "DIA",
+            "IWM",
+            "EEM",
+            "VEA",
+            "VWO",
+            "GLD",
+            "SLV",
+            "USO",
+            "UNG",
+            "TLT",
+            "IEF",
+            "SHY",
+            "LQD",
+            "HYG",
+            "JNK",
+            "XLF",
+            "XLE",
+            "XLK",
+            "XLV",
+            "XLI",
+            "XLY",
+            "XLP",
+            "XLB",
+            "XLU",
+            "XLRE",
+            "VNQ",
+            "IBB",
+            "SMH",
+            "IBIT",
+            "FBTC",
+            "ARKB",
+            "GBTC",
+            "BITO",
         }
         # Check if symbol (without -USD suffix) is a known ETF
-        symbol_clean = asset_raw.replace('-USD', '').upper() if asset_raw else ''
+        symbol_clean = asset_raw.replace("-USD", "").upper() if asset_raw else ""
         if not symbol_clean and exchange_raw_symbol:
-            symbol_clean = exchange_raw_symbol.replace('-USD', '').upper()
+            symbol_clean = exchange_raw_symbol.replace("-USD", "").upper()
         if symbol_clean in KNOWN_ETFS:
             instrument_type = "ETF"
             logger.debug(f"Overriding {symbol_clean} from STK to ETF (known ETF)")
@@ -1396,9 +1390,7 @@ class DatabentoAdapter:
         # If so, parse it. Otherwise, if asset is empty, parse from exchange_raw_symbol
         if instrument_type == "OPTION":
             # Check if asset_raw looks like OCC format (has digits and C/P character)
-            if underlying_asset and re.search(
-                r"\d{6}[CP]\d{8}", str(underlying_asset).strip().upper()
-            ):
+            if underlying_asset and re.search(r"\d{6}[CP]\d{8}", str(underlying_asset).strip().upper()):
                 # asset_raw contains full OCC symbol, parse underlying from it
                 symbol_str = str(underlying_asset).strip().upper()
                 match = re.match(r"^([A-Z]+)\s*", symbol_str)
@@ -1427,9 +1419,7 @@ class DatabentoAdapter:
         else:
             # Futures only: convert exchange codes to human-readable names
             # This applies to CME futures (FUT, OOF) where codes like "ES" should become "SP500"
-            base_asset = (
-                unified_config.get_human_readable_name(underlying_asset) if underlying_asset else ""
-            )
+            base_asset = unified_config.get_human_readable_name(underlying_asset) if underlying_asset else ""
 
         # For TradFi (equities, options, futures), quote currency is always USD
         # Per INSTRUMENT_KEY.md: stocks/equities use USD as quote currency
@@ -1484,9 +1474,7 @@ class DatabentoAdapter:
                 expiry_dt = None
                 expiry_str = ""
         elif exchange.upper() == "ICE" and instrument_type == "FUTURE":
-            logger.debug(
-                f"⚠️ ICE Future {exchange_raw_symbol} has no expiration field or it's NaN"
-            )
+            logger.debug(f"⚠️ ICE Future {exchange_raw_symbol} has no expiration field or it's NaN")
 
         # If expiry is still missing for ICE/CME futures, try parsing from raw_symbol
         # ICE Europe format: BRNM25 (product + month code + 2-digit year)
@@ -1494,31 +1482,40 @@ class DatabentoAdapter:
         # Month codes: F=Jan, G=Feb, H=Mar, J=Apr, K=May, M=Jun, N=Jul, Q=Aug, U=Sep, V=Oct, X=Nov, Z=Dec
         if not expiry_dt and exchange_raw_symbol and instrument_type == "FUTURE":
             import calendar
+
             month_codes = {
-                'F': 1, 'G': 2, 'H': 3, 'J': 4, 'K': 5, 'M': 6,
-                'N': 7, 'Q': 8, 'U': 9, 'V': 10, 'X': 11, 'Z': 12
+                "F": 1,
+                "G": 2,
+                "H": 3,
+                "J": 4,
+                "K": 5,
+                "M": 6,
+                "N": 7,
+                "Q": 8,
+                "U": 9,
+                "V": 10,
+                "X": 11,
+                "Z": 12,
             }
 
             raw_upper = exchange_raw_symbol.upper().strip()
 
             # Pattern 1: Standard format [A-Z]+[FGHJKMNQUVXZ][0-9]{1,2} (e.g., BRNM25, ESZ4, NGF26)
-            match = re.match(r'^([A-Z]+)([FGHJKMNQUVXZ])(\d{1,2})$', raw_upper)
+            match = re.match(r"^([A-Z]+)([FGHJKMNQUVXZ])(\d{1,2})$", raw_upper)
 
             # Pattern 2: Space-separated format (e.g., "BRN M25", "ES Z4")
             if not match:
-                match = re.match(r'^([A-Z]+)\s+([FGHJKMNQUVXZ])(\d{1,2})$', raw_upper)
+                match = re.match(r"^([A-Z]+)\s+([FGHJKMNQUVXZ])(\d{1,2})$", raw_upper)
 
             # Pattern 3: ICE continuous contract format (just product code, no expiry)
             # For continuous contracts, skip expiry - they don't have one
-            if not match and re.match(r'^[A-Z]{1,4}$', raw_upper):
-                logger.debug(
-                    f"⏭️ Skipping expiry parsing for continuous contract: {exchange_raw_symbol}"
-                )
+            if not match and re.match(r"^[A-Z]{1,4}$", raw_upper):
+                logger.debug(f"⏭️ Skipping expiry parsing for continuous contract: {exchange_raw_symbol}")
 
             if match:
                 product_code = match.group(1)  # e.g., "BRN", "ES", "NG"
-                month_code = match.group(2)    # e.g., "M", "Z"
-                year_digits = match.group(3)   # e.g., "25", "4"
+                month_code = match.group(2)  # e.g., "M", "Z"
+                year_digits = match.group(3)  # e.g., "25", "4"
 
                 month = month_codes.get(month_code)
                 if month:
@@ -1544,7 +1541,7 @@ class DatabentoAdapter:
                         )
                     except ValueError as e:
                         logger.debug(f"Failed to construct date from raw_symbol {exchange_raw_symbol}: {e}")
-            elif not re.match(r'^[A-Z]{1,4}$', raw_upper):
+            elif not re.match(r"^[A-Z]{1,4}$", raw_upper):
                 # Log a warning if we couldn't parse and it's not a known continuous contract format
                 logger.warning(
                     f"⚠️ Could not parse expiry from raw_symbol '{exchange_raw_symbol}' for {instrument_type} "
@@ -1628,9 +1625,7 @@ class DatabentoAdapter:
 
                     # Check if symbol_str is Databento internal format (e.g., "UD:1V: 12 2511947")
                     # This format is not parseable and should be skipped
-                    if symbol_str.startswith("UD:") or (
-                        ":" in symbol_str[:5] and "UD" in symbol_str[:5]
-                    ):
+                    if symbol_str.startswith("UD:") or (":" in symbol_str[:5] and "UD" in symbol_str[:5]):
                         logger.debug(
                             f"Skipping parsing for Databento internal format: {symbol_str} "
                             f"(exchange_raw_symbol={exchange_raw_symbol})"
@@ -1690,38 +1685,26 @@ class DatabentoAdapter:
                                         )
                                         # Use Databento symbology resolution to get raw_symbol
                                         # This will give us the actual CME symbol like "ESZ0 C3620"
-                                        raw_symbol_resolved = (
-                                            self._resolve_instrument_id_to_raw_symbol(
-                                                instrument_id, exchange, dataset, target_date
-                                            )
+                                        raw_symbol_resolved = self._resolve_instrument_id_to_raw_symbol(
+                                            instrument_id, exchange, dataset, target_date
                                         )
                                         if raw_symbol_resolved:
                                             # Parse the resolved raw_symbol
-                                            resolved_symbol_str = (
-                                                str(raw_symbol_resolved).strip().upper()
-                                            )
+                                            resolved_symbol_str = str(raw_symbol_resolved).strip().upper()
                                             logger.info(
                                                 f"✅ Resolved instrument_id {instrument_id} to raw_symbol: {resolved_symbol_str}"
                                             )
 
                                             # Handle case where symbology returns dict format
-                                            if (
-                                                isinstance(raw_symbol_resolved, dict)
-                                                and "S" in raw_symbol_resolved
-                                            ):
-                                                resolved_symbol_str = (
-                                                    str(raw_symbol_resolved["S"]).strip().upper()
-                                                )
+                                            if isinstance(raw_symbol_resolved, dict) and "S" in raw_symbol_resolved:
+                                                resolved_symbol_str = str(raw_symbol_resolved["S"]).strip().upper()
                                                 logger.debug(
                                                     f"Extracted symbol from dict 'S' key: {resolved_symbol_str}"
                                                 )
 
                                             # Check if resolved symbol is Databento internal format (e.g., "UD:1V: 12 2502245")
                                             # This format is not parseable and indicates the symbology API couldn't resolve to actual exchange symbol
-                                            if (
-                                                resolved_symbol_str.startswith("UD:")
-                                                or ":" in resolved_symbol_str[:5]
-                                            ):
+                                            if resolved_symbol_str.startswith("UD:") or ":" in resolved_symbol_str[:5]:
                                                 logger.debug(
                                                     f"Skipping symbology resolution result - Databento internal format detected: {resolved_symbol_str}"
                                                 )
@@ -1737,15 +1720,11 @@ class DatabentoAdapter:
                                                 )
                                                 if resolved_cme_match:
                                                     opt_char = resolved_cme_match.group(2)  # C or P
-                                                    strike_str = resolved_cme_match.group(
-                                                        3
-                                                    )  # Strike price digits
+                                                    strike_str = resolved_cme_match.group(3)  # Strike price digits
                                                     if not strike_price:
                                                         strike_price = strike_str
                                                     if not option_type:
-                                                        option_type = (
-                                                            "CALL" if opt_char == "C" else "PUT"
-                                                        )
+                                                        option_type = "CALL" if opt_char == "C" else "PUT"
                                                     logger.info(
                                                         f"✅ Parsed CME option from resolved symbol: "
                                                         f"{resolved_symbol_str} -> strike={strike_price}, type={option_type}"
@@ -1758,18 +1737,14 @@ class DatabentoAdapter:
                                                         f"trying fallback pattern matching"
                                                     )
                                                     # Fallback: look for C/P followed by digits anywhere
-                                                    fallback_match = re.search(
-                                                        r"([CP])(\d+)", resolved_symbol_str
-                                                    )
+                                                    fallback_match = re.search(r"([CP])(\d+)", resolved_symbol_str)
                                                     if fallback_match:
                                                         opt_char = fallback_match.group(1)
                                                         strike_str = fallback_match.group(2)
                                                         if not strike_price:
                                                             strike_price = strike_str
                                                         if not option_type:
-                                                            option_type = (
-                                                                "CALL" if opt_char == "C" else "PUT"
-                                                            )
+                                                            option_type = "CALL" if opt_char == "C" else "PUT"
                                                         logger.info(
                                                             f"✅ Parsed CME option (fallback): "
                                                             f"{resolved_symbol_str} -> strike={strike_price}, type={option_type}"
@@ -1826,9 +1801,7 @@ class DatabentoAdapter:
                                 elif not strike_price or not option_type:
                                     # Last resort: warn only if still missing strike/option_type for actual options
                                     # Double-check instrument_class to avoid false warnings for futures
-                                    instr_class = (
-                                        str(row.get("instrument_class", "")).upper().strip()
-                                    )
+                                    instr_class = str(row.get("instrument_class", "")).upper().strip()
                                     if instr_class != "F":  # Only warn if not a Future
                                         logger.warning(
                                             f"Could not parse CME option format from symbol: {symbol_str} "
@@ -1875,9 +1848,7 @@ class DatabentoAdapter:
                                 strike_int = int(strike_occ)
                                 strike_decimal = strike_int / 1000.0  # 3 decimal places
                                 strike_price = (
-                                    str(int(strike_decimal))
-                                    if strike_decimal.is_integer()
-                                    else str(strike_decimal)
+                                    str(int(strike_decimal)) if strike_decimal.is_integer() else str(strike_decimal)
                                 )
 
                             # Parse option type (always parse from OCC if not set)
@@ -1936,11 +1907,7 @@ class DatabentoAdapter:
             strike_clean = ""
             if strike_price:
                 # Remove .0 suffix if present, but don't strip trailing zeros from integers
-                strike_clean = (
-                    strike_price.replace(".0", "").rstrip(".")
-                    if "." in strike_price
-                    else strike_price
-                )
+                strike_clean = strike_price.replace(".0", "").rstrip(".") if "." in strike_price else strike_price
 
             if strike_clean and option_type and expiry_str:
                 symbol = f"{base_asset}-{quote_asset}-{expiry_str}-{strike_clean}-{option_type}@LIN"
@@ -1998,9 +1965,7 @@ class DatabentoAdapter:
                         # Create 9:00 AM CT datetime for the expiry date
                         # ZoneInfo("America/Chicago") automatically determines DST based on expiry_date
                         ct_tz = ZoneInfo("America/Chicago")
-                        expiry_9am_ct = datetime.combine(expiry_date, time(9, 0, 0)).replace(
-                            tzinfo=ct_tz
-                        )
+                        expiry_9am_ct = datetime.combine(expiry_date, time(9, 0, 0)).replace(tzinfo=ct_tz)
 
                         # Convert to UTC (ZoneInfo handles DST automatically)
                         expiry_iso = expiry_9am_ct.astimezone(timezone.utc).isoformat()
@@ -2016,9 +1981,7 @@ class DatabentoAdapter:
                         # Some products like agricultural (ZC, ZW, ZS) have different times but 4 PM CT is reasonable default
                         expiry_date = expiry_dt.date()
                         ct_tz = ZoneInfo("America/Chicago")
-                        expiry_4pm_ct = datetime.combine(expiry_date, time(16, 0, 0)).replace(
-                            tzinfo=ct_tz
-                        )
+                        expiry_4pm_ct = datetime.combine(expiry_date, time(16, 0, 0)).replace(tzinfo=ct_tz)
                         expiry_iso = expiry_4pm_ct.astimezone(timezone.utc).isoformat()
                         logger.debug(
                             f"✅ Set CME future expiry to 4:00 PM CT for {exchange_raw_symbol}: "
@@ -2051,9 +2014,9 @@ class DatabentoAdapter:
 
                             # London timezone handles GMT/BST automatically
                             london_tz = ZoneInfo("Europe/London")
-                            expiry_local = datetime.combine(
-                                expiry_date, time(expiry_hour, expiry_minute, 0)
-                            ).replace(tzinfo=london_tz)
+                            expiry_local = datetime.combine(expiry_date, time(expiry_hour, expiry_minute, 0)).replace(
+                                tzinfo=london_tz
+                            )
                             expiry_iso = expiry_local.astimezone(timezone.utc).isoformat()
                             logger.debug(
                                 f"✅ Set ICE Europe expiry to {expiry_hour}:{expiry_minute:02d} London for "
@@ -2066,7 +2029,8 @@ class DatabentoAdapter:
                             # Using 2:30 PM ET as reasonable default (many soft commodities)
                             et_tz = ZoneInfo("America/New_York")
                             expiry_local = datetime.combine(
-                                expiry_date, time(14, 30, 0)  # 2:30 PM ET
+                                expiry_date,
+                                time(14, 30, 0),  # 2:30 PM ET
                             ).replace(tzinfo=et_tz)
                             expiry_iso = expiry_local.astimezone(timezone.utc).isoformat()
                             logger.debug(
@@ -2076,9 +2040,7 @@ class DatabentoAdapter:
                         else:
                             # Fallback for generic ICE - use 4:00 PM ET (safe US default)
                             et_tz = ZoneInfo("America/New_York")
-                            expiry_local = datetime.combine(
-                                expiry_date, time(16, 0, 0)
-                            ).replace(tzinfo=et_tz)
+                            expiry_local = datetime.combine(expiry_date, time(16, 0, 0)).replace(tzinfo=et_tz)
                             expiry_iso = expiry_local.astimezone(timezone.utc).isoformat()
                             logger.debug(
                                 f"✅ Set ICE (unknown dataset) expiry to 4:00 PM ET for "
@@ -2090,23 +2052,22 @@ class DatabentoAdapter:
                         # Reference: CBOE - options get 15 extra minutes after market close for exercise
                         expiry_date = expiry_dt.date()
                         et_tz = ZoneInfo("America/New_York")
-                        expiry_415pm_et = datetime.combine(expiry_date, time(16, 15, 0)).replace(
-                            tzinfo=et_tz
-                        )
+                        expiry_415pm_et = datetime.combine(expiry_date, time(16, 15, 0)).replace(tzinfo=et_tz)
                         expiry_iso = expiry_415pm_et.astimezone(timezone.utc).isoformat()
                         logger.debug(
                             f"✅ Set CBOE option expiry to 4:15 PM ET for {exchange_raw_symbol}: "
                             f"{expiry_date} -> {expiry_iso} (UTC)"
                         )
 
-                    elif exchange.upper() in ("OPRA", "NYSE", "NASDAQ", "AMEX", "ARCA", "BATS", "IEX") and instrument_type == "OPTION":
+                    elif (
+                        exchange.upper() in ("OPRA", "NYSE", "NASDAQ", "AMEX", "ARCA", "BATS", "IEX")
+                        and instrument_type == "OPTION"
+                    ):
                         # US equity options (OPRA) expire at 4:00 PM ET
                         # Reference: OCC - standard US equity options expire at market close
                         expiry_date = expiry_dt.date()
                         et_tz = ZoneInfo("America/New_York")
-                        expiry_4pm_et = datetime.combine(expiry_date, time(16, 0, 0)).replace(
-                            tzinfo=et_tz
-                        )
+                        expiry_4pm_et = datetime.combine(expiry_date, time(16, 0, 0)).replace(tzinfo=et_tz)
                         expiry_iso = expiry_4pm_et.astimezone(timezone.utc).isoformat()
                         logger.debug(
                             f"✅ Set US equity option expiry to 4:00 PM ET for {exchange_raw_symbol}: "
@@ -2118,9 +2079,7 @@ class DatabentoAdapter:
                         # Most US trading ends around this time
                         expiry_date = expiry_dt.date()
                         et_tz = ZoneInfo("America/New_York")
-                        expiry_4pm_et = datetime.combine(expiry_date, time(16, 0, 0)).replace(
-                            tzinfo=et_tz
-                        )
+                        expiry_4pm_et = datetime.combine(expiry_date, time(16, 0, 0)).replace(tzinfo=et_tz)
                         expiry_iso = expiry_4pm_et.astimezone(timezone.utc).isoformat()
                         logger.debug(
                             f"Using 4:00 PM ET default for {exchange} {instrument_type} "
@@ -2130,18 +2089,14 @@ class DatabentoAdapter:
                     # Databento provided time, use as-is (it's the correct expiry time for this contract)
                     expiry_iso = expiry_dt.isoformat()
             except Exception as e:
-                logger.warning(
-                    f"Failed to convert expiry to ISO for {exchange} {exchange_raw_symbol}: {e}"
-                )
+                logger.warning(f"Failed to convert expiry to ISO for {exchange} {exchange_raw_symbol}: {e}")
                 expiry_iso = None
 
         # Extract trading hours metadata using exchange-specific defaults
         # Databento doesn't provide trading hours in DEFINITION schema, so we use defaults
         # Convert to UTC for consistency with other timestamps
         # This also calculates the trading session start/end times
-        trading_hours = self._get_exchange_trading_hours(
-            exchange, instrument_type, target_date=target_date
-        )
+        trading_hours = self._get_exchange_trading_hours(exchange, instrument_type, target_date=target_date)
 
         # Handle available_from_datetime and available_to_datetime
         # For TradFi instruments, these should reflect the actual trading session times
@@ -2167,9 +2122,7 @@ class DatabentoAdapter:
                     available_from = ts_event.isoformat()
                 elif isinstance(ts_event, str):
                     available_from = pd.to_datetime(ts_event).isoformat()
-                logger.warning(
-                    "Using ts_event for available_from_datetime - this may be today's date, not target date"
-                )
+                logger.warning("Using ts_event for available_from_datetime - this may be today's date, not target date")
             except Exception as e:
                 logger.warning(f"Failed to parse ts_event: {e}")
 
@@ -2218,16 +2171,10 @@ class DatabentoAdapter:
             # See: https://databento.com/docs/examples/options/equity-options-introduction
             "data_types": "trades" if instrument_type == "OPTION" else "ohlcv_1m",
             "inverse": False,
-            "contract_size": (
-                row.get("contract_size", None) if pd.notna(row.get("contract_size")) else None
-            ),
+            "contract_size": (row.get("contract_size", None) if pd.notna(row.get("contract_size")) else None),
             "underlying": base_asset,  # Human-readable underlying
-            "strike": (
-                strike_price if instrument_type == "OPTION" else ""
-            ),  # Strike price for options
-            "option_type": (
-                option_type if instrument_type == "OPTION" else ""
-            ),  # CALL or PUT for options
+            "strike": (strike_price if instrument_type == "OPTION" else ""),  # Strike price for options
+            "option_type": (option_type if instrument_type == "OPTION" else ""),  # CALL or PUT for options
             # Trading hours metadata (TradFi only)
             "trading_hours_open": trading_hours.get("open"),
             "trading_hours_close": trading_hours.get("close"),
@@ -2344,14 +2291,8 @@ class DatabentoAdapter:
 
             # Remove timezone offset part (everything after '-' or '+')
             # Format is "HH:MM:SS-OO:OO", we want "HH:MM:SS"
-            open_time_only = (
-                open_time_str.split("-")[0] if "-" in open_time_str else open_time_str.split("+")[0]
-            )
-            close_time_only = (
-                close_time_str.split("-")[0]
-                if "-" in close_time_str
-                else close_time_str.split("+")[0]
-            )
+            open_time_only = open_time_str.split("-")[0] if "-" in open_time_str else open_time_str.split("+")[0]
+            close_time_only = close_time_str.split("-")[0] if "-" in close_time_str else close_time_str.split("+")[0]
 
             # Parse time components (HH:MM:SS)
             open_parts = open_time_only.split(":")
@@ -2422,9 +2363,7 @@ class DatabentoAdapter:
             session_end_utc = close_utc_dt.isoformat()
 
             # Check if it's a holiday (simplified check - can be enhanced with holiday calendar)
-            is_holiday = self._is_trading_holiday(
-                target_date.date(), hours_config.get("holiday_calendar")
-            )
+            is_holiday = self._is_trading_holiday(target_date.date(), hours_config.get("holiday_calendar"))
 
             # For CME: Sunday is NOT a holiday (Sunday evening is when Monday session starts)
             # But Sunday itself is NOT a trading day - it's when Monday's session starts

@@ -169,9 +169,7 @@ class TestCCXTService:
         ccxt_service._markets_cache[cache_key] = {"markets": {"OLD": "data"}}
         ccxt_service._cache_timestamps[cache_key] = datetime.now(timezone.utc)
 
-        with patch(
-            "instruments_service.utils.ccxt_service.CCXTService.get_ccxt_exchange"
-        ) as mock_get_exchange:
+        with patch("instruments_service.utils.ccxt_service.CCXTService.get_ccxt_exchange") as mock_get_exchange:
             mock_exchange = Mock()
             mock_exchange.load_markets.return_value = {"BTC/USDT:USDT": {}}
             mock_get_exchange.return_value = mock_exchange
@@ -186,9 +184,7 @@ class TestCCXTService:
         """Test load_markets when exception occurs."""
         ccxt_service.venue_mapping.venue_to_ccxt = {"BINANCE-FUTURES": "binance"}
 
-        with patch(
-            "instruments_service.utils.ccxt_service.CCXTService.get_ccxt_exchange"
-        ) as mock_get_exchange:
+        with patch("instruments_service.utils.ccxt_service.CCXTService.get_ccxt_exchange") as mock_get_exchange:
             mock_exchange = Mock()
             mock_exchange.load_markets.side_effect = Exception("API Error")
             mock_get_exchange.return_value = mock_exchange
@@ -323,11 +319,7 @@ class TestCCXTService:
 
         assert isinstance(limits, dict)
         # Should have risk parameters
-        assert (
-            "max_leverage" in limits
-            or "max_position_size" in limits
-            or "initial_margin_rate" in limits
-        )
+        assert "max_leverage" in limits or "max_position_size" in limits or "initial_margin_rate" in limits
 
     def test_get_leverage_limits_cached(self, ccxt_service):
         """Test getting leverage limits from cache."""

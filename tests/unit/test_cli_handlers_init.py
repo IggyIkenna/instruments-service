@@ -34,9 +34,7 @@ class TestCLIHandlersInit:
         _handler_registry.clear()
 
         # Mock InstrumentHandler to avoid API key requirements
-        with patch(
-            "instruments_service.cli.handlers.instrument_handler.InstrumentHandler"
-        ) as mock_handler_class:
+        with patch("instruments_service.cli.handlers.instrument_handler.InstrumentHandler") as mock_handler_class:
             mock_handler = Mock()
             mock_handler_class.return_value = mock_handler
 
@@ -71,9 +69,7 @@ class TestCLIHandlersInit:
 
         config = {"project_id": "test-project"}
 
-        with patch(
-            "instruments_service.cli.handlers.instrument_handler.InstrumentHandler"
-        ) as mock_handler_class:
+        with patch("instruments_service.cli.handlers.instrument_handler.InstrumentHandler") as mock_handler_class:
             mock_handler = Mock()
             mock_handler_class.return_value = mock_handler
 

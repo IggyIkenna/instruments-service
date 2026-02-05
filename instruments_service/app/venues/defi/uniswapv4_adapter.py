@@ -122,20 +122,11 @@ class UniswapV4Adapter(BaseDefiAdapter):
             asyncio.get_running_loop()
             # Already in async context - run in thread pool
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(
-                    asyncio.run,
-                    self._fetch_pools(
-                        base_currency=base_currency,
-                        min_tx_count=1000
-                    )
-                )
+                future = executor.submit(asyncio.run, self._fetch_pools(base_currency=base_currency, min_tx_count=1000))
                 pools = future.result()
         except RuntimeError:
             # No event loop running - safe to use asyncio.run
-            pools = asyncio.run(self._fetch_pools(
-                base_currency=base_currency,
-                min_tx_count=1000
-            ))
+            pools = asyncio.run(self._fetch_pools(base_currency=base_currency, min_tx_count=1000))
 
         instruments = {}
 
@@ -289,9 +280,7 @@ class UniswapV4Adapter(BaseDefiAdapter):
         try:
             async with create_aiohttp_session(timeout=60) as session:
                 async with session.post(
-                    endpoint,
-                    json={"query": query, "variables": variables},
-                    timeout=aiohttp.ClientTimeout(total=30)
+                    endpoint, json={"query": query, "variables": variables}, timeout=aiohttp.ClientTimeout(total=30)
                 ) as response:
                     if response.status != 200:
                         logger.warning(f"The Graph returned HTTP {response.status}")

@@ -78,12 +78,11 @@ class HyperliquidAdapter(BaseDefiAdapter):
         super().__init__(chain=chain, api_key=api_key, project_id=project_id)
         self.venue = "HYPERLIQUID"
         from instruments_service.config import instruments_config
+
         self.api_base_url = api_base_url or instruments_config.hyperliquid_api_url
         self.mvp_only = mvp_only
         # Use provided base_currency_list or empty set (no filtering)
-        self.mvp_base_currencies = (
-            {c.upper() for c in base_currency_list} if base_currency_list else set()
-        )
+        self.mvp_base_currencies = {c.upper() for c in base_currency_list} if base_currency_list else set()
         logger.info(
             f"✅ HyperliquidAdapter initialized (MVP only: {mvp_only}, base currencies: {len(self.mvp_base_currencies) if self.mvp_base_currencies else 'all'})"
         )
@@ -101,9 +100,7 @@ class HyperliquidAdapter(BaseDefiAdapter):
         return list(instruments.values())
 
     def fetch_perpetuals(
-        self,
-        test_data_availability: bool = False,
-        target_date: Optional[datetime] = None
+        self, test_data_availability: bool = False, target_date: Optional[datetime] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all perpetual futures from Hyperliquid.
@@ -180,9 +177,7 @@ class HyperliquidAdapter(BaseDefiAdapter):
             return {}
 
     def fetch_spot_pairs(
-        self,
-        test_data_availability: bool = False,
-        target_date: Optional[datetime] = None
+        self, test_data_availability: bool = False, target_date: Optional[datetime] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all spot trading pairs from Hyperliquid for MVP coins.
@@ -249,9 +244,7 @@ class HyperliquidAdapter(BaseDefiAdapter):
 
                         instruments[inst_def["instrument_key"]] = inst_def
                 except Exception as e:
-                    logger.warning(
-                        f"Failed to convert asset {asset.get('name', 'unknown')} to spot pair: {e}"
-                    )
+                    logger.warning(f"Failed to convert asset {asset.get('name', 'unknown')} to spot pair: {e}")
                     continue
 
             logger.info(f"✅ Generated {len(instruments)} Hyperliquid spot pair instruments")

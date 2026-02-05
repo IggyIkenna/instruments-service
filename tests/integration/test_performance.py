@@ -22,9 +22,7 @@ class TestPerformance:
 
     @pytest.mark.skipif(
         not get_config("GCP_PROJECT_ID")
-        and not os.path.exists(
-            os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
-        ),
+        and not os.path.exists(os.path.expanduser("~/.config/gcloud/application_default_credentials.json")),
         reason="Requires GCP credentials for performance testing",
     )
     @pytest.mark.asyncio
@@ -57,9 +55,7 @@ class TestPerformance:
 
     @pytest.mark.skipif(
         not get_config("GCP_PROJECT_ID")
-        and not os.path.exists(
-            os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
-        ),
+        and not os.path.exists(os.path.expanduser("~/.config/gcloud/application_default_credentials.json")),
         reason="Requires GCP credentials for performance testing",
     )
     @pytest.mark.asyncio
@@ -92,9 +88,7 @@ class TestPerformance:
 
     @pytest.mark.skipif(
         not get_config("GCP_PROJECT_ID")
-        and not os.path.exists(
-            os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
-        ),
+        and not os.path.exists(os.path.expanduser("~/.config/gcloud/application_default_credentials.json")),
         reason="Requires GCP credentials for performance testing",
     )
     @pytest.mark.asyncio
@@ -132,9 +126,7 @@ class TestPerformance:
 
     @pytest.mark.skipif(
         not get_config("GCP_PROJECT_ID")
-        and not os.path.exists(
-            os.path.expanduser("~/.config/gcloud/application_default_credentials.json")
-        ),
+        and not os.path.exists(os.path.expanduser("~/.config/gcloud/application_default_credentials.json")),
         reason="Requires GCP credentials for performance testing",
     )
     @pytest.mark.asyncio
