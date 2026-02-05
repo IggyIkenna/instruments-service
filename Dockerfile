@@ -69,6 +69,7 @@ COPY . /app/instruments-service
 # Install instruments-service (skip unified-cloud-services, already installed)
 # Configure git to use GH_PAT for any remaining git dependencies
 WORKDIR /app/instruments-service
+COPY pyproject.toml .
 RUN git config --global url."https://${GH_PAT}@github.com/".insteadOf "https://github.com/" && \
     pip install -e . && \
     git config --global --unset url."https://${GH_PAT}@github.com/".insteadOf
