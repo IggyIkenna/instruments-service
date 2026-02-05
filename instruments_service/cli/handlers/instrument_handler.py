@@ -7,6 +7,7 @@ No missing data report dependencies - pure force/skip logic.
 
 import logging
 import asyncio
+import os
 from typing import Dict, Any
 from datetime import datetime, timezone
 
@@ -17,6 +18,11 @@ from unified_cloud_services import VenueMapping, parse_date, get_date_range
 from instruments_service.app.core.cloud_data_provider import CloudDataProvider
 
 logger = logging.getLogger(__name__)
+
+# Deployment context from environment (set by VM startup script)
+# Used to detect race conditions when data appears after shard launch
+DEPLOYMENT_ID = os.getenv("DEPLOYMENT_ID", "")
+SHARD_LAUNCHED_AT = os.getenv("SHARD_LAUNCHED_AT", "")
 
 
 class InstrumentHandler(ModeHandler):
@@ -130,12 +136,28 @@ class InstrumentHandler(ModeHandler):
                         if data_provider.check_instruments_exist(
                             date, categories=categories_to_check, venues=venues_to_check
                         ):
-                            skip_msg = f"⏭️ Skipping {date.strftime('%Y-%m-%d')} - instruments exist"
-                            if venues_to_check:
-                                skip_msg += f" for {categories_to_check}/{venues_to_check}"
+                            date_str = date.strftime("%Y-%m-%d")
+
+                            # Detect race condition: data appeared after shard was launched
+                            # SHARD_LAUNCHED_AT is set by VM startup script - if present, this
+                            # VM was launched because data was reported as MISSING, but now exists
+                            if SHARD_LAUNCHED_AT:
+                                # Race condition detected: another deployment completed while we were launching
+                                skip_msg = f"⚠️ RACE_CONDITION: Skipping {date_str} - data appeared after launch"
+                                if venues_to_check:
+                                    skip_msg += f" for {categories_to_check}/{venues_to_check}"
+                                if DEPLOYMENT_ID:
+                                    skip_msg += f" (deployment={DEPLOYMENT_ID}, launched_at={SHARD_LAUNCHED_AT})"
+                                logger.warning(skip_msg)
                             else:
-                                skip_msg += f" for {categories_to_check}"
-                            logger.info(skip_msg)
+                                # Normal expected skip (resume scenario or data already exists)
+                                skip_msg = f"⏭️ Skipping {date_str} - instruments exist"
+                                if venues_to_check:
+                                    skip_msg += f" for {categories_to_check}/{venues_to_check}"
+                                else:
+                                    skip_msg += f" for {categories_to_check}"
+                                logger.info(skip_msg)
+
                             total_skipped += 1
                             continue
                     except Exception:
@@ -209,9 +231,7 @@ class InstrumentHandler(ModeHandler):
 
         logger.info("📊 Instrument generation pipeline complete:")
         logger.info(f"   Generated: {total_generated} instruments")
-        logger.info(
-            f"   Dates processed: {total_dates_processed}/{total_attempted} successful ({success_rate:.1f}%)"
-        )
+        logger.info(f"   Dates processed: {total_dates_processed}/{total_attempted} successful ({success_rate:.1f}%)")
         logger.info(f"   Skipped: {total_skipped} (already existed)")
         logger.info(f"   Date-level errors: {total_errors}")
         logger.info(f"   Processing errors: {total_processing_errors}")
