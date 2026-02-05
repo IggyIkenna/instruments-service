@@ -27,6 +27,7 @@ class InstrumentHandler(ModeHandler):
 
         # Initialize services directly (no ServiceContainer)
         from instruments_service.config import get_config as get_service_config
+
         project_id = config.get("project_id") or get_service_config().gcp_project_id
 
         # Initialize InstrumentsService (orchestration wrapper)
@@ -107,9 +108,6 @@ class InstrumentHandler(ModeHandler):
                 break
 
             try:
-                # Direct GCS existence check
-                f"instrument_availability/by_date/day-{date.strftime('%Y-%m-%d')}/instruments.parquet"
-
                 # Check if file exists (using cloud service)
                 if not force:
                     try:
@@ -122,12 +120,22 @@ class InstrumentHandler(ModeHandler):
                         if defi:
                             categories_to_check.append("DEFI")
 
-                        # Use cloud_data_provider to check existence for specific categories
+                        # Get venues from kwargs (from --venues CLI arg)
+                        venues_to_check = kwargs.get("venues")
+
+                        # Use cloud_data_provider to check existence for specific categories AND venues
+                        # When venues specified, checks venue-level files (new structure)
+                        # This enables granular skip logic matching category x venue x date sharding
                         data_provider = CloudDataProvider()
-                        if data_provider.check_instruments_exist(date, categories=categories_to_check):
-                            logger.info(
-                                f"⏭️ Skipping {date.strftime('%Y-%m-%d')} - instruments exist for {categories_to_check}"
-                            )
+                        if data_provider.check_instruments_exist(
+                            date, categories=categories_to_check, venues=venues_to_check
+                        ):
+                            skip_msg = f"⏭️ Skipping {date.strftime('%Y-%m-%d')} - instruments exist"
+                            if venues_to_check:
+                                skip_msg += f" for {categories_to_check}/{venues_to_check}"
+                            else:
+                                skip_msg += f" for {categories_to_check}"
+                            logger.info(skip_msg)
                             total_skipped += 1
                             continue
                     except Exception:

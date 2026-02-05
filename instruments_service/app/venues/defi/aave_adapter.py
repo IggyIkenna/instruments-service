@@ -403,7 +403,9 @@ class AaveV3Adapter(BaseDefiAdapter):
 
         except Exception as e:
             logger.error(f"Failed to fetch reserves from AaveScan: {e}")
-            logger.info("🔍 [METHOD_TRACE] Falling back to _get_fallback_reserves (static reserves)")
+            logger.info(
+                "🔍 [METHOD_TRACE] Falling back to _get_fallback_reserves (static reserves)"
+            )
             # Fallback: return empty list or use hardcoded known reserves
             fallback_reserves = self._get_fallback_reserves()
 
@@ -870,7 +872,9 @@ query GetReserves($blockNumber: Int!) {
         Returns:
             Reserve configuration dictionary or None
         """
-        logger.info(f"🔍 [METHOD_TRACE] _fetch_reserve_config_from_graph called for {underlying_address}, target_date={target_date}")
+        logger.info(
+            f"🔍 [METHOD_TRACE] _fetch_reserve_config_from_graph called for {underlying_address}, target_date={target_date}"
+        )
         # Check failure cache first for historical queries
         if target_date:
             date_key = target_date.isoformat()
@@ -1311,19 +1315,23 @@ query GetReserveConfigHistory {{
                 liq_threshold = item.get("reserveLiquidationThreshold")
                 liq_bonus = item.get("reserveLiquidationBonus")
 
-                result.append({
-                    "timestamp": item.get("timestamp"),
-                    "ltv": float(base_ltv) / 10000.0 if base_ltv else None,
-                    "liquidation_threshold": float(liq_threshold) / 10000.0 if liq_threshold else None,
-                    "liquidation_bonus": float(liq_bonus) / 10000.0 if liq_bonus else None,
-                    "borrowing_enabled": item.get("borrowingEnabled"),
-                    "collateral_enabled": item.get("usageAsCollateralEnabled"),
-                    "is_active": item.get("isActive"),
-                    "is_frozen": item.get("isFrozen"),
-                    "interest_rate_strategy": item.get("reserveInterestRateStrategy"),
-                    "reserve_id": item.get("reserve", {}).get("id"),
-                    "underlying_asset": item.get("reserve", {}).get("underlyingAsset"),
-                })
+                result.append(
+                    {
+                        "timestamp": item.get("timestamp"),
+                        "ltv": float(base_ltv) / 10000.0 if base_ltv else None,
+                        "liquidation_threshold": (
+                            float(liq_threshold) / 10000.0 if liq_threshold else None
+                        ),
+                        "liquidation_bonus": float(liq_bonus) / 10000.0 if liq_bonus else None,
+                        "borrowing_enabled": item.get("borrowingEnabled"),
+                        "collateral_enabled": item.get("usageAsCollateralEnabled"),
+                        "is_active": item.get("isActive"),
+                        "is_frozen": item.get("isFrozen"),
+                        "interest_rate_strategy": item.get("reserveInterestRateStrategy"),
+                        "reserve_id": item.get("reserve", {}).get("id"),
+                        "underlying_asset": item.get("reserve", {}).get("underlyingAsset"),
+                    }
+                )
 
             logger.info(
                 f"✅ Fetched {len(result)} config history items for {reserve_symbol} "
@@ -1396,7 +1404,9 @@ query GetEModeCategories {
                     "id": cat_id,
                     "label": cat.get("label"),
                     "ltv": float(ltv) / 10000.0 if ltv else None,
-                    "liquidation_threshold": float(liq_threshold) / 10000.0 if liq_threshold else None,
+                    "liquidation_threshold": (
+                        float(liq_threshold) / 10000.0 if liq_threshold else None
+                    ),
                     "liquidation_bonus": float(liq_bonus) / 10000.0 if liq_bonus else None,
                     "oracle": cat.get("oracle"),
                 }
@@ -1426,7 +1436,9 @@ query GetEModeCategories {
         Returns:
             eMode category ID (integer) or None
         """
-        logger.info(f"🔍 [METHOD_TRACE] _fetch_reserve_emode_from_rpc called for {underlying_address}, target_date={target_date}")
+        logger.info(
+            f"🔍 [METHOD_TRACE] _fetch_reserve_emode_from_rpc called for {underlying_address}, target_date={target_date}"
+        )
         try:
             # Get block number if target_date provided
             block_number = None
@@ -1803,7 +1815,9 @@ query GetEModeCategories {
                 )
             elif symbol and emode_category_id == 1:
                 # Fallback to STATIC_RISK_PARAMS for ETH correlation mode
-                logger.info("🔍 [METHOD_TRACE] _extract_lending_metadata using STATIC_RISK_PARAMS (Graph eMode unavailable)")
+                logger.info(
+                    "🔍 [METHOD_TRACE] _extract_lending_metadata using STATIC_RISK_PARAMS (Graph eMode unavailable)"
+                )
                 emode_label = "ETH_CORRELATION"
                 pair_key = f"{symbol}_WETH"
                 emode_liquidation_threshold = self.STATIC_RISK_PARAMS["emode"][
@@ -2035,7 +2049,7 @@ query GetEModeCategories {
                 2023, 1, 27
             ).isoformat(),  # AAVE V3 Ethereum launch date
             "available_to_datetime": None,
-            "data_types": "rate_indices,utilization,oracle_prices",  # Raw data: supplyIndex, liquidityIndex, utilization rate, oracle prices
+            "data_types": "rate_indices,oracle_prices",  # Raw data: supplyIndex, liquidityIndex, oracle prices (rate_indices includes utilization)
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
@@ -2103,7 +2117,7 @@ query GetEModeCategories {
                 2023, 1, 27
             ).isoformat(),  # AAVE V3 Ethereum launch date
             "available_to_datetime": None,
-            "data_types": "rate_indices,utilization,oracle_prices",  # Raw data: borrowIndex, utilization rate, oracle prices
+            "data_types": "rate_indices,oracle_prices",  # Raw data: borrowIndex, oracle prices (rate_indices includes utilization)
             "inverse": False,
             "contract_size": None,
             "tick_size": "",

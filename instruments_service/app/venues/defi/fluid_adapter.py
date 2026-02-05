@@ -26,6 +26,7 @@ _venue_mapping = VenueMapping()
 # Try to import web3 for contract interaction
 try:
     from web3 import Web3
+
     WEB3_AVAILABLE = True
 except ImportError:
     WEB3_AVAILABLE = False
@@ -99,10 +100,7 @@ class FluidAdapter(BaseDefiAdapter):
         instruments = self.fetch_markets()
         return list(instruments.values())
 
-    def fetch_markets(
-        self,
-        target_date: Optional[datetime] = None
-    ) -> Dict[str, Dict[str, Any]]:
+    def fetch_markets(self, target_date: Optional[datetime] = None) -> Dict[str, Dict[str, Any]]:
         """
         Fetch Fluid markets and convert to instrument definitions.
 
@@ -132,7 +130,7 @@ class FluidAdapter(BaseDefiAdapter):
                     instrument_key = self._build_instrument_key(
                         venue=self.venue,
                         instrument_type="LENDING_MARKET",
-                        symbol=f"{market['collateral_asset']}-{market['borrow_asset']}"
+                        symbol=f"{market['collateral_asset']}-{market['borrow_asset']}",
                     )
 
                     symbol = f"{market['collateral_asset']}-{market['borrow_asset']}"
@@ -147,7 +145,7 @@ class FluidAdapter(BaseDefiAdapter):
                         "borrow_asset": market["borrow_asset"],
                         "chain": self.chain,
                         "available_from_datetime": self.FLUID_LAUNCH.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "data_types": "utilization,rate_indices,oracle_prices",
+                        "data_types": "rate_indices,oracle_prices",  # rate_indices includes utilization
                         "vault_address": market.get("vault_address"),
                         # Required fields for market-tick-data-handler routing
                         "asset_class": "crypto",

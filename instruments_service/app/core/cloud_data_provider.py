@@ -36,9 +36,13 @@ class CloudDataProvider:
             # NOTE: This default is only used when no category is specified.
             # Production flow should always use category-specific buckets via get_bucket_for_category()
             from instruments_service.config import instruments_config
+
             cloud_target = CloudTarget(
                 project_id=get_config("GCP_PROJECT_ID", instruments_config.gcp_project_id),
-                gcs_bucket=get_config("INSTRUMENTS_GCS_BUCKET_CEFI", instruments_config.get_bucket_for_category("cefi")),
+                gcs_bucket=get_config(
+                    "INSTRUMENTS_GCS_BUCKET_CEFI",
+                    instruments_config.get_bucket_for_category("cefi"),
+                ),
                 bigquery_dataset=get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
                 bigquery_location=get_config(
                     "BIGQUERY_LOCATION", "asia-northeast1"
@@ -142,17 +146,13 @@ class CloudDataProvider:
                 domain="instruments", cloud_target=category_cloud_target
             )
 
-            logger.info(
-                f"📥 Loading {category} instruments from GCS: {category_bucket}/{gcs_path}"
-            )
+            logger.info(f"📥 Loading {category} instruments from GCS: {category_bucket}/{gcs_path}")
             df = category_cloud_service.download_from_gcs(
                 gcs_path=gcs_path, format="parquet", log_errors=False
             )
 
             if df.empty:
-                logger.warning(
-                    f"⚠️ No {category} instruments found at {category_bucket}/{gcs_path}"
-                )
+                logger.warning(f"⚠️ No {category} instruments found at {category_bucket}/{gcs_path}")
             else:
                 logger.info(f"✅ Loaded {len(df)} {category} instruments from GCS")
 
@@ -162,7 +162,9 @@ class CloudDataProvider:
             error_msg = str(e)
             # Handle 404/Not Found gracefully - this is an expected state when data hasn't been generated yet
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
-                logger.info(f"ℹ️ No {category} instruments found (404): {category_bucket}/{gcs_path}")
+                logger.info(
+                    f"ℹ️ No {category} instruments found (404): {category_bucket}/{gcs_path}"
+                )
                 return pd.DataFrame()
 
             logger.error(f"❌ Failed to load {category} instruments from GCS: {e}")
@@ -216,24 +218,27 @@ class CloudDataProvider:
             return pd.DataFrame()
 
     def check_instruments_exist(
-        self,
-        date: datetime,
-        categories: Optional[list] = None
+        self, date: datetime, categories: Optional[list] = None, venues: Optional[list] = None
     ) -> bool:
         """
         Check if instruments exist for a specific date.
+
+        When venues is specified, checks for venue-level files (new structure).
+        When venues is None, checks for date-level aggregate file (legacy behavior).
 
         Args:
             date: Target date
             categories: Optional list of categories to check (e.g., ["CEFI", "TRADFI"]).
                        If None, checks ALL categories and returns True if ANY exist.
                        If specified, returns True only if ALL specified categories exist.
+            venues: Optional list of venues to check (e.g., ["BINANCE-SPOT", "BYBIT"]).
+                   When specified, checks venue-level files instead of date-level aggregate.
+                   Returns True only if ALL specified venues exist.
 
         Returns:
-            True if instruments exist (logic depends on categories parameter)
+            True if instruments exist (logic depends on categories/venues parameters)
         """
         date_str = date.strftime("%Y-%m-%d")
-        gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
 
         # Default: check all categories
         if categories is None:
@@ -242,6 +247,41 @@ class CloudDataProvider:
         else:
             check_all = True  # Return True only if ALL specified categories exist
 
+        # When venues specified, use venue-level paths (new structure)
+        # This enables granular skip logic matching the category x venue x date sharding
+        if venues:
+            logger.debug(
+                f"🔍 Checking venue-level existence for {date_str}: categories={categories}, venues={venues}"
+            )
+            for category in categories:
+                for venue in venues:
+                    # Sanitize venue name for folder (replace slashes, etc.)
+                    venue_folder = venue.replace("/", "-").replace("\\", "-")
+                    gcs_path = f"instrument_availability/by_date/day-{date_str}/venue-{venue_folder}/instruments.parquet"
+
+                    try:
+                        df = self.get_instruments_from_category(date, category, gcs_path=gcs_path)
+
+                        if df is not None and not df.empty:
+                            logger.debug(
+                                f"📊 Venue instruments found: {category}/{venue} for {date_str}"
+                            )
+                            # For venue-level checks, we need ALL venues to exist
+                            # (matches the sharding logic - each shard is a specific venue)
+                        else:
+                            logger.debug(
+                                f"📊 Venue instruments NOT found: {category}/{venue} for {date_str}"
+                            )
+                            return False  # Any missing venue means data doesn't exist
+                    except Exception as e:
+                        logger.debug(f"Could not check {category}/{venue} for {date_str}: {e}")
+                        return False  # Error checking = treat as not existing
+
+            # All venues found
+            return True
+
+        # Legacy behavior: check date-level aggregate file
+        gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
         found_categories = []
 
         for category in categories:
