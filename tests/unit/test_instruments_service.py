@@ -39,13 +39,9 @@ class TestInstrumentsServiceInitialization:
     def test_initialization_full_config(self):
         """Test initialization with full configuration."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage"),
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentBatchProcessor"
-            ) as mock_batch,
+            patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor") as mock_batch,
         ):
             config = {
                 "project_id": "test-project",
@@ -74,9 +70,7 @@ class TestInstrumentsServiceInitialization:
     def test_initialization_default_project_id(self):
         """Test initialization uses default project ID if not provided."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage"),
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
@@ -95,12 +89,8 @@ class TestGenerateInstrumentsSingleDate:
     async def test_generate_cefi_mode_with_exchanges(self):
         """Test generating instruments in CeFi mode with specific exchanges."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc_class,
-            patch(
-                "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
-            ) as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
             # Setup mocks
@@ -115,6 +105,10 @@ class TestGenerateInstrumentsSingleDate:
                     )
                 }
             )
+            # Mock tardis_adapter.check_venues_access to return access results dict
+            mock_tardis_adapter = Mock()
+            mock_tardis_adapter.check_venues_access = Mock(return_value={"binance": (True, None)})
+            mock_proc.tardis_adapter = mock_tardis_adapter
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -126,9 +120,7 @@ class TestGenerateInstrumentsSingleDate:
 
             # Test CeFi mode with specific exchanges
             date = datetime(2024, 1, 1, tzinfo=timezone.utc)
-            result = await service.generate_instruments_for_date(
-                date=date, exchanges=["binance"], cefi=True
-            )
+            result = await service.generate_instruments_for_date(date=date, exchanges=["binance"], cefi=True)
 
             assert result["status"] == "success"
             assert result["instruments_generated"] == 1
@@ -141,16 +133,18 @@ class TestGenerateInstrumentsSingleDate:
     async def test_generate_cefi_mode_all_exchanges(self):
         """Test CeFi mode processes all Tardis exchanges when none specified."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc_class,
-            patch(
-                "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
-            ) as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
             mock_proc = Mock()
             mock_proc.process_exchange_instruments = AsyncMock(return_value={})
+            # Mock tardis_adapter.check_venues_access - return all accessible
+            mock_tardis_adapter = Mock()
+            mock_tardis_adapter.check_venues_access = Mock(
+                side_effect=lambda exchanges: {ex: (True, None) for ex in exchanges}
+            )
+            mock_proc.tardis_adapter = mock_tardis_adapter
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -162,28 +156,21 @@ class TestGenerateInstrumentsSingleDate:
 
             date = datetime(2024, 1, 1, tzinfo=timezone.utc)
             await service.generate_instruments_for_date(
-                date=date, cefi=True  # No exchanges specified
+                date=date,
+                cefi=True,  # No exchanges specified
             )
 
             # Should call process_exchange_instruments for all Tardis exchanges
-            assert mock_proc.process_exchange_instruments.call_count == len(
-                service.venue_mapping.all_tardis_exchanges
-            )
+            assert mock_proc.process_exchange_instruments.call_count == len(service.venue_mapping.all_tardis_exchanges)
 
     @pytest.mark.asyncio
     async def test_generate_tradfi_mode(self):
         """Test generating instruments in TradFi (Databento) mode."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc_class,
-            patch(
-                "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
-            ) as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-            patch(
-                "instruments_service.app.core.instruments_service.UnifiedInstrumentConfig"
-            ) as mock_config,
+            patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig") as mock_config,
         ):
             # Setup mocks
             mock_proc = Mock()
@@ -221,12 +208,8 @@ class TestGenerateInstrumentsSingleDate:
     async def test_generate_defi_mode(self):
         """Test generating instruments in DeFi mode."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc_class,
-            patch(
-                "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
-            ) as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
             mock_proc = Mock()
@@ -260,12 +243,8 @@ class TestGenerateInstrumentsSingleDate:
     async def test_generate_defi_mode_with_venue_filter(self):
         """Test DeFi mode with venue filter."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc_class,
-            patch(
-                "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
-            ) as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
             mock_proc = Mock()
@@ -280,9 +259,7 @@ class TestGenerateInstrumentsSingleDate:
             service = InstrumentsService(config)
 
             date = datetime(2024, 1, 1, tzinfo=timezone.utc)
-            await service.generate_instruments_for_date(
-                date=date, defi=True, venues=["UNISWAPV3-ETH"]
-            )
+            await service.generate_instruments_for_date(date=date, defi=True, venues=["UNISWAPV3-ETH"])
 
             # Should only process Uniswap V3
             mock_proc.fetch_defi_instruments.assert_called()
@@ -295,12 +272,8 @@ class TestGenerateInstrumentsSingleDate:
     async def test_generate_no_mode_specified_processes_all(self):
         """Test that when no mode flags are specified, all modes are processed."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc_class,
-            patch(
-                "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
-            ) as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
             patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig"),
         ):
@@ -308,6 +281,12 @@ class TestGenerateInstrumentsSingleDate:
             mock_proc.process_exchange_instruments = AsyncMock(return_value={})
             mock_proc.fetch_databento_instruments = Mock(return_value={})
             mock_proc.fetch_defi_instruments = Mock(return_value={})
+            # Mock tardis_adapter.check_venues_access
+            mock_tardis_adapter = Mock()
+            mock_tardis_adapter.check_venues_access = Mock(
+                side_effect=lambda exchanges: {ex: (True, None) for ex in exchanges}
+            )
+            mock_proc.tardis_adapter = mock_tardis_adapter
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -329,23 +308,23 @@ class TestGenerateInstrumentsSingleDate:
     async def test_generate_no_instruments_warning(self):
         """Test warning when no instruments are generated."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage"),
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
             mock_proc = Mock()
             mock_proc.process_exchange_instruments = AsyncMock(return_value={})  # No instruments
+            # Mock tardis_adapter.check_venues_access
+            mock_tardis_adapter = Mock()
+            mock_tardis_adapter.check_venues_access = Mock(return_value={"binance": (True, None)})
+            mock_proc.tardis_adapter = mock_tardis_adapter
             mock_proc_class.return_value = mock_proc
 
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
             date = datetime(2024, 1, 1, tzinfo=timezone.utc)
-            result = await service.generate_instruments_for_date(
-                date=date, exchanges=["binance"], cefi=True
-            )
+            result = await service.generate_instruments_for_date(date=date, exchanges=["binance"], cefi=True)
 
             assert result["status"] == "warning"
             assert result["instruments_generated"] == 0
@@ -355,12 +334,8 @@ class TestGenerateInstrumentsSingleDate:
     async def test_generate_storage_failure(self):
         """Test handling of storage failure."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc_class,
-            patch(
-                "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
-            ) as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
             mock_proc = Mock()
@@ -371,6 +346,10 @@ class TestGenerateInstrumentsSingleDate:
                     )
                 }
             )
+            # Mock tardis_adapter.check_venues_access
+            mock_tardis_adapter = Mock()
+            mock_tardis_adapter.check_venues_access = Mock(return_value={"binance": (True, None)})
+            mock_proc.tardis_adapter = mock_tardis_adapter
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -381,9 +360,7 @@ class TestGenerateInstrumentsSingleDate:
             service = InstrumentsService(config)
 
             date = datetime(2024, 1, 1, tzinfo=timezone.utc)
-            result = await service.generate_instruments_for_date(
-                date=date, exchanges=["binance"], cefi=True
-            )
+            result = await service.generate_instruments_for_date(date=date, exchanges=["binance"], cefi=True)
 
             assert result["status"] == "error"
             assert result["instruments_generated"] == 1
@@ -393,12 +370,8 @@ class TestGenerateInstrumentsSingleDate:
     async def test_generate_exchange_processing_error(self):
         """Test error handling when exchange processing fails."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc_class,
-            patch(
-                "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
-            ) as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
             mock_proc = Mock()
@@ -416,6 +389,12 @@ class TestGenerateInstrumentsSingleDate:
                     },
                 ]
             )
+            # Mock tardis_adapter.check_venues_access
+            mock_tardis_adapter = Mock()
+            mock_tardis_adapter.check_venues_access = Mock(
+                return_value={"binance": (True, None), "deribit": (True, None)}
+            )
+            mock_proc.tardis_adapter = mock_tardis_adapter
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -426,9 +405,7 @@ class TestGenerateInstrumentsSingleDate:
             service = InstrumentsService(config)
 
             date = datetime(2024, 1, 1, tzinfo=timezone.utc)
-            result = await service.generate_instruments_for_date(
-                date=date, exchanges=["binance", "deribit"], cefi=True
-            )
+            result = await service.generate_instruments_for_date(date=date, exchanges=["binance", "deribit"], cefi=True)
 
             # Should still succeed with instruments from deribit
             assert result["status"] == "success"
@@ -438,16 +415,16 @@ class TestGenerateInstrumentsSingleDate:
     async def test_generate_force_mode(self):
         """Test force regeneration flag is passed through."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc_class,
-            patch(
-                "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
-            ) as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
             mock_proc = Mock()
             mock_proc.process_exchange_instruments = AsyncMock(return_value={})
+            # Mock tardis_adapter.check_venues_access
+            mock_tardis_adapter = Mock()
+            mock_tardis_adapter.check_venues_access = Mock(return_value={"binance": (True, None)})
+            mock_proc.tardis_adapter = mock_tardis_adapter
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -458,9 +435,7 @@ class TestGenerateInstrumentsSingleDate:
             service = InstrumentsService(config)
 
             date = datetime(2024, 1, 1, tzinfo=timezone.utc)
-            await service.generate_instruments_for_date(
-                date=date, exchanges=["binance"], cefi=True, force=True
-            )
+            await service.generate_instruments_for_date(date=date, exchanges=["binance"], cefi=True, force=True)
 
             # Verify force=True was passed
             mock_proc.process_exchange_instruments.assert_called_once_with(
@@ -476,12 +451,8 @@ class TestGenerateInstrumentsDateRange:
         """Test date range processing with single date."""
         with (
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService"),
-            patch(
-                "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
-            ) as mock_storage_class,
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentBatchProcessor"
-            ) as mock_batch_class,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor") as mock_batch_class,
         ):
             mock_storage = Mock()
             mock_storage.store_instruments = Mock(return_value=True)
@@ -521,9 +492,7 @@ class TestGenerateInstrumentsDateRange:
         with (
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService"),
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage"),
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentBatchProcessor"
-            ) as mock_batch_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor") as mock_batch_class,
         ):
             mock_batch = Mock()
             dates = [
@@ -546,9 +515,7 @@ class TestGenerateInstrumentsDateRange:
                 ]
             )
 
-            result = await service.generate_instruments_date_range(
-                start_date=dates[0], end_date=dates[2], cefi=True
-            )
+            result = await service.generate_instruments_date_range(start_date=dates[0], end_date=dates[2], cefi=True)
 
             assert result["status"] == "success"
             assert result["dates_processed"] == 3
@@ -563,9 +530,7 @@ class TestGenerateInstrumentsDateRange:
         with (
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService"),
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage"),
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentBatchProcessor"
-            ) as mock_batch_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor") as mock_batch_class,
         ):
             mock_batch = Mock()
             dates = [
@@ -588,9 +553,7 @@ class TestGenerateInstrumentsDateRange:
                 ]
             )
 
-            result = await service.generate_instruments_date_range(
-                start_date=dates[0], end_date=dates[2], cefi=True
-            )
+            result = await service.generate_instruments_date_range(start_date=dates[0], end_date=dates[2], cefi=True)
 
             assert result["status"] == "partial"
             assert result["dates_processed"] == 3
@@ -607,15 +570,11 @@ class TestQueryAndStats:
         """Test querying stored instruments."""
         with (
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService"),
-            patch(
-                "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
-            ) as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
             mock_storage = Mock()
-            expected_df = pd.DataFrame(
-                {"instrument_key": ["TEST:SPOT:BTC-USDT"], "venue": ["TEST"]}
-            )
+            expected_df = pd.DataFrame({"instrument_key": ["TEST:SPOT:BTC-USDT"], "venue": ["TEST"]})
             mock_storage.query_instruments = Mock(return_value=expected_df)
             mock_storage_class.return_value = mock_storage
 
@@ -624,21 +583,15 @@ class TestQueryAndStats:
 
             result = service.query_instruments(venue="TEST", instrument_type="SPOT")
 
-            mock_storage.query_instruments.assert_called_once_with(
-                venue="TEST", instrument_type="SPOT"
-            )
+            mock_storage.query_instruments.assert_called_once_with(venue="TEST", instrument_type="SPOT")
             pd.testing.assert_frame_equal(result, expected_df)
 
     def test_get_processing_stats(self):
         """Test getting processing statistics."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage"),
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentBatchProcessor"
-            ) as mock_batch_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor") as mock_batch_class,
         ):
             mock_proc = Mock()
             mock_proc.get_processing_stats = Mock(return_value={"total_processed": 1000})
@@ -667,9 +620,7 @@ class TestCleanup:
     def test_cleanup(self):
         """Test cleanup calls processing service cleanup."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage"),
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
@@ -708,12 +659,8 @@ class TestUpbitCoinbaseIntegration:
     async def test_generate_cefi_mode_with_upbit(self):
         """Test generating instruments in CeFi mode with Upbit exchange."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc_class,
-            patch(
-                "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
-            ) as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
             # Setup mocks
@@ -728,6 +675,10 @@ class TestUpbitCoinbaseIntegration:
                     )
                 }
             )
+            # Mock tardis_adapter.check_venues_access
+            mock_tardis_adapter = Mock()
+            mock_tardis_adapter.check_venues_access = Mock(return_value={"upbit": (True, None)})
+            mock_proc.tardis_adapter = mock_tardis_adapter
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -739,9 +690,7 @@ class TestUpbitCoinbaseIntegration:
 
             # Test CeFi mode with Upbit
             date = datetime(2024, 1, 1, tzinfo=timezone.utc)
-            result = await service.generate_instruments_for_date(
-                date=date, exchanges=["upbit"], cefi=True
-            )
+            result = await service.generate_instruments_for_date(date=date, exchanges=["upbit"], cefi=True)
 
             assert result["status"] == "success"
             assert result["instruments_generated"] == 1
@@ -753,12 +702,8 @@ class TestUpbitCoinbaseIntegration:
     async def test_generate_cefi_mode_with_coinbase(self):
         """Test generating instruments in CeFi mode with Coinbase exchange."""
         with (
-            patch(
-                "instruments_service.app.core.instruments_service.InstrumentProcessingService"
-            ) as mock_proc_class,
-            patch(
-                "instruments_service.app.core.instruments_service.CloudInstrumentStorage"
-            ) as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
             # Setup mocks
@@ -773,6 +718,10 @@ class TestUpbitCoinbaseIntegration:
                     )
                 }
             )
+            # Mock tardis_adapter.check_venues_access
+            mock_tardis_adapter = Mock()
+            mock_tardis_adapter.check_venues_access = Mock(return_value={"coinbase": (True, None)})
+            mock_proc.tardis_adapter = mock_tardis_adapter
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -784,9 +733,7 @@ class TestUpbitCoinbaseIntegration:
 
             # Test CeFi mode with Coinbase
             date = datetime(2024, 1, 1, tzinfo=timezone.utc)
-            result = await service.generate_instruments_for_date(
-                date=date, exchanges=["coinbase"], cefi=True
-            )
+            result = await service.generate_instruments_for_date(date=date, exchanges=["coinbase"], cefi=True)
 
             assert result["status"] == "success"
             assert result["instruments_generated"] == 1

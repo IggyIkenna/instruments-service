@@ -1,3 +1,11 @@
+# Cloud Build for instruments-service
+#
+# This runs the EXACT same quality gates as:
+#   - Local: ./scripts/quality-gates.sh
+#   - GitHub Actions: .github/workflows/quality-gates.yml
+#
+# All three MUST be kept in sync. If you change one, change all three.
+#
 steps:
   # Step 1: Get GitHub token from Secret Manager
   - name: 'gcr.io/cloud-builders/gcloud'
@@ -29,52 +37,98 @@ steps:
         git clone https://x-access-token:$${GITHUB_TOKEN}@github.com/IggyIkenna/unified-trading-deployment-v2.git /workspace/unified-trading-deployment-v2
 
   # Step 3: Run quality gates (lint + tests) - MUST PASS before build
-  - name: 'python:3.11-slim'
+  # Uses Python 3.13 to match local and GitHub Actions
+  - name: 'python:3.13-slim'
     id: 'quality-gates'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
+        set -e  # Exit on any error
+
         echo "=== Installing system dependencies ==="
         apt-get update && apt-get install -y --no-install-recommends git
-        
+
         echo "=== Installing dependencies ==="
         pip install --quiet --upgrade pip setuptools wheel
-        
+
         # Install unified-cloud-services from local clone FIRST
         pip install --quiet -e /workspace/unified-cloud-services
         pip install --quiet -e /workspace/unified-trading-deployment-v2 || true
-        
+
         # Install instruments-service deps (skip git-based ucs, already installed)
         pip install --quiet --no-deps -e .
         pip install --quiet ccxt databento web3 eth-abi exchange-calendars yfinance plotly boto3 numpy pandas polars pydantic pydantic-settings python-dateutil python-dotenv requests
-        
-        pip install --quiet ruff pytest pytest-asyncio pytest-mock
 
+        pip install --quiet ruff pytest pytest-asyncio pytest-mock pytest-timeout
+
+        # ====================================================================
+        # LINTING (ruff) - MUST PASS
+        # ====================================================================
+        echo ""
         echo "=== Running linting (ruff) ==="
-        ruff check instruments_service/ tests/ --ignore E501 || exit 1
-        echo "Linting passed"
+        ruff check instruments_service/ tests/ || exit 1
+        echo "✅ Linting passed"
 
-        # Set config directory for smoke tests (same as market-tick-data-handler)
+        # Set environment variables for tests
         export DEPLOYMENT_CONFIG_DIR=/workspace/unified-trading-deployment-v2/configs
+        export CLOUD_MOCK_MODE="true"
+        export GOOGLE_CLOUD_PROJECT="test-project"
 
-        echo "=== Running unit tests (pytest) ==="
+        # ====================================================================
+        # UNIT TESTS - MUST PASS
+        # ====================================================================
+        echo ""
+        echo "=== Running unit tests ==="
         if [ -d "tests/unit" ]; then
-          pytest tests/unit/ -v --tb=short || exit 1
-          echo "Unit tests passed"
+          pytest tests/unit/ -v --tb=short --timeout=60 || exit 1
+          echo "✅ Unit tests passed"
         else
-          echo "No unit tests directory found, skipping tests"
+          echo "No unit tests directory found, skipping"
         fi
 
-        echo "=== Running shard combinatorics smoke tests ==="
+        # ====================================================================
+        # INTEGRATION TESTS - MUST PASS
+        # ====================================================================
+        echo ""
+        echo "=== Running integration tests ==="
+        if [ -d "tests/integration" ]; then
+          pytest tests/integration/ -v --tb=short --timeout=120 \
+            --ignore=tests/integration/test_performance.py \
+            -k "not api and not live and not download" || exit 1
+          echo "✅ Integration tests passed"
+        else
+          echo "No integration tests directory found, skipping"
+        fi
+
+        # ====================================================================
+        # E2E TESTS - MUST PASS
+        # ====================================================================
+        echo ""
+        echo "=== Running e2e tests ==="
+        if [ -d "tests/e2e" ]; then
+          pytest tests/e2e/ -v --tb=short --timeout=180 || exit 1
+          echo "✅ E2E tests passed"
+        else
+          echo "No e2e tests directory found, skipping"
+        fi
+
+        # ====================================================================
+        # SMOKE TESTS - MUST PASS
+        # ====================================================================
+        echo ""
+        echo "=== Running smoke tests ==="
         if [ -d "tests/smoke" ]; then
-          pytest tests/smoke/ -v --tb=short || exit 1
-          echo "Smoke tests passed"
+          pytest tests/smoke/ -v --tb=short --timeout=180 || exit 1
+          echo "✅ Smoke tests passed"
         else
-          echo "No smoke tests directory found, skipping smoke tests"
+          echo "No smoke tests directory found, skipping"
         fi
 
-        echo "=== Quality gates passed - proceeding to build ==="
+        echo ""
+        echo "======================================================================"
+        echo "✅ ALL QUALITY GATES PASSED - Proceeding to build"
+        echo "======================================================================"
 
   # Step 4: Build Docker image (only runs if quality-gates pass)
   - name: 'gcr.io/cloud-builders/docker'
