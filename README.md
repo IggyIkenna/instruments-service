@@ -72,31 +72,73 @@ instruments_service/
 
 ## Quick Start
 
-### Installation
+### Prerequisites
 
-**Prerequisites**: Both `instruments-service` and `unified-cloud-services` should be cloned as siblings.
+- Python 3.13.x (required - see installation below)
+- SSH key configured with GitHub (for unified-cloud-services)
+
+**Note:** GCP credentials are included in the repo (private repo). The setup script will auto-detect them.
+
+### One-Command Setup
 
 ```bash
-# 1. Install unified-cloud-services first (required dependency)
-pip install -e ../unified-cloud-services
+# 1. Install Python 3.13 SYSTEM-WIDE (not in venv - the venv is created from this)
+pyenv install 3.13.1 && pyenv local 3.13.1
 
-# 2. Install instruments-service (automatically installs dependencies)
-pip install -e .
+# 2. Clone instruments-service
+git clone git@github.com:IggyIkenna/instruments-service.git
+cd instruments-service
 
-# 3. Configure environment (copy example and edit if needed)
-cp .env.example .env
-# Edit .env to set your credentials path and preferences
+# 3. Run setup (creates venv, installs everything, auto-activates)
+source ./scripts/setup.sh
+
+# 4. Verify installation
+python -m instruments_service --help
+
+# 5. Run quality gates
+./scripts/quality-gates.sh
 ```
 
-**Configuration**: The service uses a `.env` file for configuration. Key settings:
-- `ENVIRONMENT=development` - Auto-detects credentials, enables sampling
-- `ENABLE_CSV_SAMPLING=true` - Enable CSV samples in development
-- `CSV_SAMPLE_SIZE=10` - Number of rows per sample
-- `GOOGLE_APPLICATION_CREDENTIALS` - Path to credentials file (auto-detected if not set)
+The setup script will:
+1. Ask you to confirm Python 3.13 is installed
+2. Show installation instructions if needed (brew, pyenv)
+3. Verify architecture on Apple Silicon (ARM64 required)
+4. Create a virtual environment (.venv/)
+5. Install unified-cloud-services (latest) from GitHub
+6. Install instruments-service with all dependencies
+7. Auto-detect and configure GCP credentials
 
-**That's it!** The service automatically detects credentials files in common locations - no manual setup needed.
+### Known Working Command
 
-**Note**: Make sure your `.env` file has the correct bucket name (`INSTRUMENTS_GCS_BUCKET=instruments-store-central-element-323112`) and credentials path.
+```bash
+# Lightweight test: Generate CEFI instruments (fast, ~2 min)
+python -m instruments_service \
+  --category CEFI \
+  --start-date 2023-05-23 \
+  --end-date 2023-05-23
+
+# Dry run to verify setup
+python -m instruments_service \
+  --category CEFI \
+  --start-date 2023-05-23 \
+  --end-date 2023-05-23 \
+  --dry-run
+```
+
+> **Note:** This is the first service in the data pipeline. No upstream dependencies required.
+
+### Troubleshooting
+
+If terminal fails with exit code 1, check Python version:
+```bash
+# What Python version is active?
+python --version
+
+# Should be Python 3.13.x
+# If not:
+pyenv local 3.13.1
+python --version
+```
 
 ### CLI Usage
 
