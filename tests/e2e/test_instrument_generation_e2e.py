@@ -51,9 +51,7 @@ async def test_instrument_generation_e2e(
     - Data integrity (can query back)
     """
     # Verify we're using test bucket (not prod)
-    assert (
-        "test" in test_bucket_name.lower()
-    ), f"Must use test bucket for E2E test, got {test_bucket_name}"
+    assert "test" in test_bucket_name.lower(), f"Must use test bucket for E2E test, got {test_bucket_name}"
 
     # Verify API key retrieved from Secret Manager
     assert tardis_api_key is not None, "Tardis API key must be retrieved from Secret Manager"
@@ -75,9 +73,9 @@ async def test_instrument_generation_e2e(
     InstrumentBatchProcessor(config)
 
     # Verify test bucket is being used
-    assert (
-        storage.cloud_target.gcs_bucket == test_bucket_name
-    ), f"Storage must use test bucket {test_bucket_name}, got {storage.cloud_target.gcs_bucket}"
+    assert storage.cloud_target.gcs_bucket == test_bucket_name, (
+        f"Storage must use test bucket {test_bucket_name}, got {storage.cloud_target.gcs_bucket}"
+    )
 
     # Get all supported exchanges
     venue_mapping = VenueMapping()
@@ -116,9 +114,7 @@ async def test_instrument_generation_e2e(
                 date=current_date,
             )
 
-            assert (
-                storage_result
-            ), f"Failed to store instruments for {current_date.strftime('%Y-%m-%d')}"
+            assert storage_result, f"Failed to store instruments for {current_date.strftime('%Y-%m-%d')}"
 
             # Verify CSV sample was generated (if enabled)
             if get_config("ENABLE_CSV_SAMPLING", "false").lower() == "true":
@@ -144,15 +140,13 @@ async def test_instrument_generation_e2e(
     test_date = dates_processed[0]
     queried_instruments = data_provider.get_instruments_from_gcs(test_date)
 
-    assert (
-        len(queried_instruments) > 0
-    ), "Should be able to download instruments back from test bucket"
+    assert len(queried_instruments) > 0, "Should be able to download instruments back from test bucket"
 
     # Verify test bucket isolation: Check that we're not writing to prod bucket
     prod_bucket = get_config("INSTRUMENTS_GCS_BUCKET", "market-data-tick")
-    assert (
-        storage.cloud_target.gcs_bucket != prod_bucket
-    ), f"Must not write to prod bucket {prod_bucket}, got {storage.cloud_target.gcs_bucket}"
+    assert storage.cloud_target.gcs_bucket != prod_bucket, (
+        f"Must not write to prod bucket {prod_bucket}, got {storage.cloud_target.gcs_bucket}"
+    )
 
     print("\n✅ E2E Test Summary:")
     print(f"   - Dates processed: {len(dates_processed)}")
@@ -164,13 +158,22 @@ async def test_instrument_generation_e2e(
 
 @pytest.mark.e2e
 def test_test_bucket_isolation(test_bucket_name, prod_bucket_name):
-    """Verify test bucket is different from prod bucket."""
-    assert (
-        test_bucket_name != prod_bucket_name
-    ), f"Test bucket ({test_bucket_name}) must be different from prod bucket ({prod_bucket_name})"
-    assert (
-        "test" in test_bucket_name.lower()
-    ), f"Test bucket name must contain 'test': {test_bucket_name}"
+    """Verify test bucket is different from prod bucket.
+
+    This test verifies real bucket configuration - it should be skipped
+    when running in mock mode without bucket env vars configured.
+    """
+    # Skip if bucket names not configured (e.g., CLOUD_MOCK_MODE without bucket env vars)
+    if not test_bucket_name or not prod_bucket_name:
+        pytest.skip(
+            "Bucket names not configured - set INSTRUMENTS_GCS_BUCKET and "
+            "INSTRUMENTS_GCS_BUCKET_TEST environment variables for this test"
+        )
+
+    assert test_bucket_name != prod_bucket_name, (
+        f"Test bucket ({test_bucket_name}) must be different from prod bucket ({prod_bucket_name})"
+    )
+    assert "test" in test_bucket_name.lower(), f"Test bucket name must contain 'test': {test_bucket_name}"
 
 
 @pytest.mark.e2e
