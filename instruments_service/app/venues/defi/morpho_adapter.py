@@ -118,10 +118,7 @@ class MorphoAdapter(BaseDefiAdapter):
         instruments = self.fetch_markets()
         return list(instruments.values())
 
-    def fetch_markets(
-        self,
-        target_date: Optional[datetime] = None
-    ) -> Dict[str, Dict[str, Any]]:
+    def fetch_markets(self, target_date: Optional[datetime] = None) -> Dict[str, Dict[str, Any]]:
         """
         Fetch Morpho markets and convert to instrument definitions.
 
@@ -388,7 +385,7 @@ class MorphoAdapter(BaseDefiAdapter):
                 2023, 6, 1
             ).isoformat(),  # Morpho launch date (June 2023)
             "available_to_datetime": None,
-            "data_types": "rate_indices,utilization",  # Raw data: supplyIndex, utilization rate
+            "data_types": "rate_indices",  # Raw data: supplyIndex (rate_indices includes utilization)
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
@@ -447,7 +444,7 @@ class MorphoAdapter(BaseDefiAdapter):
                 2023, 6, 1
             ).isoformat(),  # Morpho launch date (June 2023)
             "available_to_datetime": None,
-            "data_types": "rate_indices,utilization",  # Raw data: borrowIndex, utilization rate
+            "data_types": "rate_indices",  # Raw data: borrowIndex (rate_indices includes utilization)
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
