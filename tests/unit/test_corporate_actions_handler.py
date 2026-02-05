@@ -11,7 +11,7 @@ Tests for the CorporateActionsHandler class methods including:
 import pytest
 from datetime import date
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 import tempfile
 import shutil
 
@@ -118,10 +118,12 @@ class TestCorporateActionsHandler:
 
     def test_normalize_date_column_with_valid_dates(self, handler):
         """Normalize datetime column to date objects."""
-        df = pd.DataFrame({
-            "ticker": ["AAPL", "MSFT"],
-            "ex_date": pd.to_datetime(["2024-05-10", "2024-05-15"]),
-        })
+        df = pd.DataFrame(
+            {
+                "ticker": ["AAPL", "MSFT"],
+                "ex_date": pd.to_datetime(["2024-05-10", "2024-05-15"]),
+            }
+        )
 
         result = handler._normalize_date_column(df, "ex_date")
 
@@ -130,10 +132,12 @@ class TestCorporateActionsHandler:
 
     def test_normalize_date_column_with_string_dates(self, handler):
         """Normalize string dates to date objects."""
-        df = pd.DataFrame({
-            "ticker": ["AAPL"],
-            "ex_date": ["2024-05-10"],
-        })
+        df = pd.DataFrame(
+            {
+                "ticker": ["AAPL"],
+                "ex_date": ["2024-05-10"],
+            }
+        )
 
         result = handler._normalize_date_column(df, "ex_date")
 
@@ -153,16 +157,18 @@ class TestCorporateActionsHandler:
 
     def test_normalize_date_column_preserves_original(self, handler):
         """Original dataframe should not be modified."""
-        df = pd.DataFrame({
-            "ticker": ["AAPL"],
-            "ex_date": pd.to_datetime(["2024-05-10"]),
-        })
+        df = pd.DataFrame(
+            {
+                "ticker": ["AAPL"],
+                "ex_date": pd.to_datetime(["2024-05-10"]),
+            }
+        )
         original_type = type(df["ex_date"].iloc[0])
 
         handler._normalize_date_column(df, "ex_date")
 
         # Original should be unchanged
-        assert type(df["ex_date"].iloc[0]) == original_type
+        assert type(df["ex_date"].iloc[0]) is original_type
 
     # -------------------------------------------------------------------------
     # _filter_by_date tests
@@ -170,30 +176,30 @@ class TestCorporateActionsHandler:
 
     def test_filter_by_date_matching_records(self, handler):
         """Filter returns only matching records."""
-        df = pd.DataFrame({
-            "ticker": ["AAPL", "MSFT", "GOOGL"],
-            "ex_date": [date(2024, 5, 10), date(2024, 5, 10), date(2024, 5, 15)],
-            "amount": [0.24, 0.75, 0.50],
-        })
-
-        result = handler._filter_by_date(
-            df, "ex_date", date(2024, 5, 10), ["ticker", "ex_date", "amount"]
+        df = pd.DataFrame(
+            {
+                "ticker": ["AAPL", "MSFT", "GOOGL"],
+                "ex_date": [date(2024, 5, 10), date(2024, 5, 10), date(2024, 5, 15)],
+                "amount": [0.24, 0.75, 0.50],
+            }
         )
+
+        result = handler._filter_by_date(df, "ex_date", date(2024, 5, 10), ["ticker", "ex_date", "amount"])
 
         assert len(result) == 2
         assert set(result["ticker"].tolist()) == {"AAPL", "MSFT"}
 
     def test_filter_by_date_no_matches(self, handler):
         """Filter returns empty df with schema when no matches."""
-        df = pd.DataFrame({
-            "ticker": ["AAPL"],
-            "ex_date": [date(2024, 5, 10)],
-            "amount": [0.24],
-        })
-
-        result = handler._filter_by_date(
-            df, "ex_date", date(2024, 5, 15), ["ticker", "ex_date", "amount"]
+        df = pd.DataFrame(
+            {
+                "ticker": ["AAPL"],
+                "ex_date": [date(2024, 5, 10)],
+                "amount": [0.24],
+            }
         )
+
+        result = handler._filter_by_date(df, "ex_date", date(2024, 5, 15), ["ticker", "ex_date", "amount"])
 
         assert result.empty
         assert list(result.columns) == ["ticker", "ex_date", "amount"]
@@ -202,9 +208,7 @@ class TestCorporateActionsHandler:
         """Filter empty df returns empty df with schema."""
         df = pd.DataFrame(columns=["ticker", "ex_date", "amount"])
 
-        result = handler._filter_by_date(
-            df, "ex_date", date(2024, 5, 10), ["ticker", "ex_date", "amount"]
-        )
+        result = handler._filter_by_date(df, "ex_date", date(2024, 5, 10), ["ticker", "ex_date", "amount"])
 
         assert result.empty
         assert list(result.columns) == ["ticker", "ex_date", "amount"]
@@ -213,24 +217,22 @@ class TestCorporateActionsHandler:
         """Filter with missing column returns empty df with schema."""
         df = pd.DataFrame({"ticker": ["AAPL"]})
 
-        result = handler._filter_by_date(
-            df, "ex_date", date(2024, 5, 10), ["ticker", "ex_date", "amount"]
-        )
+        result = handler._filter_by_date(df, "ex_date", date(2024, 5, 10), ["ticker", "ex_date", "amount"])
 
         assert result.empty
         assert list(result.columns) == ["ticker", "ex_date", "amount"]
 
     def test_filter_by_date_partial_schema(self, handler):
         """Filter only includes available schema columns."""
-        df = pd.DataFrame({
-            "ticker": ["AAPL"],
-            "ex_date": [date(2024, 5, 10)],
-            # 'amount' missing
-        })
-
-        result = handler._filter_by_date(
-            df, "ex_date", date(2024, 5, 10), ["ticker", "ex_date", "amount"]
+        df = pd.DataFrame(
+            {
+                "ticker": ["AAPL"],
+                "ex_date": [date(2024, 5, 10)],
+                # 'amount' missing
+            }
         )
+
+        result = handler._filter_by_date(df, "ex_date", date(2024, 5, 10), ["ticker", "ex_date", "amount"])
 
         assert len(result) == 1
         assert "ticker" in result.columns
@@ -243,18 +245,17 @@ class TestCorporateActionsHandler:
 
     def test_save_results_creates_daily_directories(self, handler, temp_output_dir):
         """Save results creates by_date/day-{date}/ structure."""
-        dividends_df = pd.DataFrame({
-            "ticker": ["AAPL"],
-            "ex_date": [date(2024, 5, 10)],
-            "amount": [0.24],
-        })
+        dividends_df = pd.DataFrame(
+            {
+                "ticker": ["AAPL"],
+                "ex_date": [date(2024, 5, 10)],
+                "amount": [0.24],
+            }
+        )
         splits_df = pd.DataFrame(columns=SPLITS_SCHEMA)
         earnings_df = pd.DataFrame(columns=EARNINGS_SCHEMA)
 
-        handler._save_results(
-            dividends_df, splits_df, earnings_df,
-            date(2024, 5, 10), date(2024, 5, 10), "parquet"
-        )
+        handler._save_results(dividends_df, splits_df, earnings_df, date(2024, 5, 10), date(2024, 5, 10), "parquet")
 
         day_dir = temp_output_dir / "by_date" / "day-2024-05-10"
         assert day_dir.exists()
@@ -263,17 +264,18 @@ class TestCorporateActionsHandler:
     def test_save_results_skips_empty_days(self, handler, temp_output_dir):
         """Save results skips days with no corporate actions."""
         # Only has data for 2024-05-10, not 2024-05-11
-        dividends_df = pd.DataFrame({
-            "ticker": ["AAPL"],
-            "ex_date": [date(2024, 5, 10)],
-            "amount": [0.24],
-        })
+        dividends_df = pd.DataFrame(
+            {
+                "ticker": ["AAPL"],
+                "ex_date": [date(2024, 5, 10)],
+                "amount": [0.24],
+            }
+        )
         splits_df = pd.DataFrame(columns=SPLITS_SCHEMA)
         earnings_df = pd.DataFrame(columns=EARNINGS_SCHEMA)
 
         result = handler._save_results(
-            dividends_df, splits_df, earnings_df,
-            date(2024, 5, 10), date(2024, 5, 12), "parquet"
+            dividends_df, splits_df, earnings_df, date(2024, 5, 10), date(2024, 5, 12), "parquet"
         )
 
         # Should only have files for 2024-05-10
@@ -287,21 +289,24 @@ class TestCorporateActionsHandler:
 
     def test_save_results_multiple_action_types_same_day(self, handler, temp_output_dir):
         """Save results handles multiple action types on same day."""
-        dividends_df = pd.DataFrame({
-            "ticker": ["AAPL"],
-            "ex_date": [date(2024, 5, 10)],
-            "amount": [0.24],
-        })
-        splits_df = pd.DataFrame({
-            "ticker": ["NVDA"],
-            "effective_date": [date(2024, 5, 10)],
-            "ratio": [10.0],
-        })
+        dividends_df = pd.DataFrame(
+            {
+                "ticker": ["AAPL"],
+                "ex_date": [date(2024, 5, 10)],
+                "amount": [0.24],
+            }
+        )
+        splits_df = pd.DataFrame(
+            {
+                "ticker": ["NVDA"],
+                "effective_date": [date(2024, 5, 10)],
+                "ratio": [10.0],
+            }
+        )
         earnings_df = pd.DataFrame(columns=EARNINGS_SCHEMA)
 
         result = handler._save_results(
-            dividends_df, splits_df, earnings_df,
-            date(2024, 5, 10), date(2024, 5, 10), "parquet"
+            dividends_df, splits_df, earnings_df, date(2024, 5, 10), date(2024, 5, 10), "parquet"
         )
 
         # Should have both dividends and splits for same day
@@ -311,17 +316,18 @@ class TestCorporateActionsHandler:
 
     def test_save_results_csv_format(self, handler, temp_output_dir):
         """Save results works with CSV format."""
-        dividends_df = pd.DataFrame({
-            "ticker": ["AAPL"],
-            "ex_date": [date(2024, 5, 10)],
-            "amount": [0.24],
-        })
+        dividends_df = pd.DataFrame(
+            {
+                "ticker": ["AAPL"],
+                "ex_date": [date(2024, 5, 10)],
+                "amount": [0.24],
+            }
+        )
         splits_df = pd.DataFrame(columns=SPLITS_SCHEMA)
         earnings_df = pd.DataFrame(columns=EARNINGS_SCHEMA)
 
         result = handler._save_results(
-            dividends_df, splits_df, earnings_df,
-            date(2024, 5, 10), date(2024, 5, 10), "csv"
+            dividends_df, splits_df, earnings_df, date(2024, 5, 10), date(2024, 5, 10), "csv"
         )
 
         assert len(result) == 1
@@ -330,17 +336,18 @@ class TestCorporateActionsHandler:
 
     def test_save_results_returns_correct_structure(self, handler, temp_output_dir):
         """Save results returns list of dicts with required keys."""
-        dividends_df = pd.DataFrame({
-            "ticker": ["AAPL"],
-            "ex_date": [date(2024, 5, 10)],
-            "amount": [0.24],
-        })
+        dividends_df = pd.DataFrame(
+            {
+                "ticker": ["AAPL"],
+                "ex_date": [date(2024, 5, 10)],
+                "amount": [0.24],
+            }
+        )
         splits_df = pd.DataFrame(columns=SPLITS_SCHEMA)
         earnings_df = pd.DataFrame(columns=EARNINGS_SCHEMA)
 
         result = handler._save_results(
-            dividends_df, splits_df, earnings_df,
-            date(2024, 5, 10), date(2024, 5, 10), "parquet"
+            dividends_df, splits_df, earnings_df, date(2024, 5, 10), date(2024, 5, 10), "parquet"
         )
 
         assert isinstance(result, list)
@@ -358,8 +365,7 @@ class TestCorporateActionsHandler:
         earnings_df = pd.DataFrame(columns=EARNINGS_SCHEMA)
 
         result = handler._save_results(
-            dividends_df, splits_df, earnings_df,
-            date(2024, 5, 10), date(2024, 5, 12), "parquet"
+            dividends_df, splits_df, earnings_df, date(2024, 5, 10), date(2024, 5, 12), "parquet"
         )
 
         assert result == []
@@ -375,17 +381,16 @@ class TestCorporateActionsHandler:
         day_dir = temp_output_dir / "by_date" / "day-2024-05-10"
         day_dir.mkdir(parents=True)
 
-        dividends_df = pd.DataFrame({
-            "ticker": ["AAPL"],
-            "ex_date": [date(2024, 5, 10)],
-        })
+        dividends_df = pd.DataFrame(
+            {
+                "ticker": ["AAPL"],
+                "ex_date": [date(2024, 5, 10)],
+            }
+        )
         splits_df = pd.DataFrame(columns=SPLITS_SCHEMA)  # Empty
         earnings_df = pd.DataFrame(columns=EARNINGS_SCHEMA)  # Empty
 
-        result = handler._write_day_files(
-            day_dir, "2024-05-10", "parquet",
-            dividends_df, splits_df, earnings_df
-        )
+        result = handler._write_day_files(day_dir, "2024-05-10", "parquet", dividends_df, splits_df, earnings_df)
 
         # Only dividends file should be created
         assert len(result) == 1
