@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 
 class CorporateActionType(str, Enum):
     """Types of corporate actions."""
+
     DIVIDEND = "dividend"
     SPLIT = "split"
     EARNINGS = "earnings"
@@ -21,9 +22,10 @@ class CorporateActionType(str, Enum):
 
 class DividendType(str, Enum):
     """Types of dividends."""
-    REGULAR = "regular"          # Normal quarterly/monthly dividend
-    SPECIAL = "special"          # One-time special dividend
-    QUALIFIED = "qualified"      # Qualified for tax purposes
+
+    REGULAR = "regular"  # Normal quarterly/monthly dividend
+    SPECIAL = "special"  # One-time special dividend
+    QUALIFIED = "qualified"  # Qualified for tax purposes
     UNSPECIFIED = "unspecified"  # Unknown/not specified
 
 
@@ -36,6 +38,7 @@ class DividendRecord(BaseModel):
     - Dividend reinvestment modeling
     - Yield calculations
     """
+
     ticker: str = Field(..., description="Stock ticker symbol (e.g., AAPL)")
     ex_date: date = Field(..., description="Ex-dividend date (date after which buyers don't receive dividend)")
     pay_date: Optional[date] = Field(default=None, description="Payment date when dividend is distributed")
@@ -45,7 +48,9 @@ class DividendRecord(BaseModel):
     dividend_type: DividendType = Field(default=DividendType.UNSPECIFIED, description="Type of dividend")
     currency: str = Field(default="USD", description="Currency of dividend payment")
     source: str = Field(default="yfinance", description="Data source")
-    fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="When data was fetched")
+    fetched_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc), description="When data was fetched"
+    )
 
     # For canonical instrument key matching
     instrument_key: Optional[str] = Field(default=None, description="Canonical instrument key (e.g., NYSE:EQUITY:AAPL)")
@@ -63,6 +68,7 @@ class DividendRecord(BaseModel):
     def validate_amount(cls, v):
         """Handle NaN and None values."""
         import math
+
         if v is None or (isinstance(v, float) and math.isnan(v)):
             return 0.0
         return float(v)
@@ -97,13 +103,16 @@ class StockSplitRecord(BaseModel):
     - Forward split (e.g., 4:1): ratio = 4.0 (each share becomes 4)
     - Reverse split (e.g., 1:10): ratio = 0.1 (10 shares become 1)
     """
+
     ticker: str = Field(..., description="Stock ticker symbol (e.g., AAPL)")
     effective_date: date = Field(..., description="Date split takes effect")
     ratio: float = Field(..., gt=0, description="Split ratio (4.0 for 4:1 split, 0.1 for 1:10 reverse split)")
     split_from: int = Field(default=1, ge=1, description="Original share count (e.g., 1 in 4:1 split)")
     split_to: int = Field(default=1, ge=1, description="New share count (e.g., 4 in 4:1 split)")
     source: str = Field(default="yfinance", description="Data source")
-    fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="When data was fetched")
+    fetched_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc), description="When data was fetched"
+    )
 
     # For canonical instrument key matching
     instrument_key: Optional[str] = Field(default=None, description="Canonical instrument key")
@@ -121,8 +130,8 @@ class StockSplitRecord(BaseModel):
     def validate_ratio(cls, v):
         """Handle string ratios like '4:1'."""
         if isinstance(v, str):
-            if ':' in v:
-                parts = v.split(':')
+            if ":" in v:
+                parts = v.split(":")
                 if len(parts) == 2:
                     return float(parts[0]) / float(parts[1])
             return float(v)
@@ -167,14 +176,20 @@ class EarningsRecord(BaseModel):
     - Event-driven strategies
     - Fundamental analysis
     """
+
     ticker: str = Field(..., description="Stock ticker symbol (e.g., AAPL)")
     earnings_date: date = Field(..., description="Earnings announcement date")
-    earnings_time: Optional[str] = Field(default=None, description="Time of announcement: 'BMO' (before market open), 'AMC' (after market close), or None")
+    earnings_time: Optional[str] = Field(
+        default=None,
+        description="Time of announcement: 'BMO' (before market open), 'AMC' (after market close), or None",
+    )
     fiscal_quarter: Optional[str] = Field(default=None, description="Fiscal quarter (e.g., 'Q1 2024')")
     fiscal_year: Optional[int] = Field(default=None, description="Fiscal year")
     reported_eps: Optional[float] = Field(default=None, description="Actual reported EPS")
     estimated_eps: Optional[float] = Field(default=None, description="Consensus estimated EPS before announcement")
-    surprise_pct: Optional[float] = Field(default=None, description="Earnings surprise percentage ((actual-estimate)/estimate * 100)")
+    surprise_pct: Optional[float] = Field(
+        default=None, description="Earnings surprise percentage ((actual-estimate)/estimate * 100)"
+    )
     revenue: Optional[float] = Field(default=None, description="Reported revenue in USD")
     estimated_revenue: Optional[float] = Field(default=None, description="Estimated revenue in USD")
     source: str = Field(default="yfinance", description="Data source")
@@ -228,6 +243,7 @@ class CorporateActionsBundle(BaseModel):
 
     Used for batch fetching and storage.
     """
+
     ticker: str = Field(..., description="Stock ticker symbol")
     dividends: List[DividendRecord] = Field(default_factory=list)
     splits: List[StockSplitRecord] = Field(default_factory=list)

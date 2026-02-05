@@ -62,7 +62,6 @@ class UniswapV3Adapter(BaseDefiAdapter):
             # Check if TheGraphClient has cached it (module-level cache)
             # Import here to avoid circular dependency
             try:
-
                 project_id_check = self.project_id or instruments_config.gcp_project_id
                 if _API_KEY_CACHE and _API_KEY_PROJECT_ID == project_id_check:
                     self.api_key = _API_KEY_CACHE
@@ -89,9 +88,7 @@ class UniswapV3Adapter(BaseDefiAdapter):
                 }
             else:
                 # Fallback: Use Studio endpoint (rate-limited, for testing only)
-                logger.warning(
-                    "⚠️ No The Graph API key found - using Studio endpoint (rate-limited)"
-                )
+                logger.warning("⚠️ No The Graph API key found - using Studio endpoint (rate-limited)")
                 subgraph_urls = {
                     "ETHEREUM": instruments_config.uniswap_v3_graph_url,
                     "ARBITRUM": instruments_config.uniswap_v3_graph_arb_url,
@@ -104,7 +101,7 @@ class UniswapV3Adapter(BaseDefiAdapter):
             subgraph_url=subgraph_url,
             api_key=self.api_key,
             project_id=self.project_id,
-            secret_name=instruments_config.graph_secret_name
+            secret_name=instruments_config.graph_secret_name,
         )
         logger.info(f"✅ UniswapV3Adapter initialized for chain: {self.chain}")
 
@@ -163,11 +160,7 @@ class UniswapV3Adapter(BaseDefiAdapter):
                         # Check if base currency is in MVP list (or wrapped version)
                         base_in_mvp = base_upper in allowed_bases if allowed_bases else True
                         if not base_in_mvp and base_upper in wrapped_mappings:
-                            base_in_mvp = (
-                                wrapped_mappings[base_upper] in allowed_bases
-                                if allowed_bases
-                                else True
-                            )
+                            base_in_mvp = wrapped_mappings[base_upper] in allowed_bases if allowed_bases else True
                         if allowed_bases and not base_in_mvp:
                             continue
 
@@ -182,48 +175,32 @@ class UniswapV3Adapter(BaseDefiAdapter):
                         # CRITICAL: Quote MUST be in MVP list (or wrapped version)
                         quote_in_mvp = quote_symbol in allowed_quotes if allowed_quotes else True
                         if not quote_in_mvp and quote_symbol in wrapped_mappings:
-                            quote_in_mvp = (
-                                wrapped_mappings[quote_symbol] in allowed_quotes
-                                if allowed_quotes
-                                else True
-                            )
+                            quote_in_mvp = wrapped_mappings[quote_symbol] in allowed_quotes if allowed_quotes else True
                         if allowed_quotes and not quote_in_mvp:
                             continue
                     else:
                         # No specific base filter - require at least one token in base list AND one in quote list
                         token0_in_bases = token0_symbol in allowed_bases if allowed_bases else True
                         token1_in_bases = token1_symbol in allowed_bases if allowed_bases else True
-                        token0_in_quotes = (
-                            token0_symbol in allowed_quotes if allowed_quotes else True
-                        )
-                        token1_in_quotes = (
-                            token1_symbol in allowed_quotes if allowed_quotes else True
-                        )
+                        token0_in_quotes = token0_symbol in allowed_quotes if allowed_quotes else True
+                        token1_in_quotes = token1_symbol in allowed_quotes if allowed_quotes else True
 
                         # Check wrapped versions
                         if not token0_in_bases and token0_symbol in wrapped_mappings:
                             token0_in_bases = (
-                                wrapped_mappings[token0_symbol] in allowed_bases
-                                if allowed_bases
-                                else True
+                                wrapped_mappings[token0_symbol] in allowed_bases if allowed_bases else True
                             )
                         if not token1_in_bases and token1_symbol in wrapped_mappings:
                             token1_in_bases = (
-                                wrapped_mappings[token1_symbol] in allowed_bases
-                                if allowed_bases
-                                else True
+                                wrapped_mappings[token1_symbol] in allowed_bases if allowed_bases else True
                             )
                         if not token0_in_quotes and token0_symbol in wrapped_mappings:
                             token0_in_quotes = (
-                                wrapped_mappings[token0_symbol] in allowed_quotes
-                                if allowed_quotes
-                                else True
+                                wrapped_mappings[token0_symbol] in allowed_quotes if allowed_quotes else True
                             )
                         if not token1_in_quotes and token1_symbol in wrapped_mappings:
                             token1_in_quotes = (
-                                wrapped_mappings[token1_symbol] in allowed_quotes
-                                if allowed_quotes
-                                else True
+                                wrapped_mappings[token1_symbol] in allowed_quotes if allowed_quotes else True
                             )
 
                         # Require: (token0 in bases AND token1 in quotes) OR (token1 in bases AND token0 in quotes)

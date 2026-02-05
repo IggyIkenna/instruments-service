@@ -35,16 +35,24 @@ class TestDefiProtocolSupport:
     def test_aave_protocol_supported(self):
         """Test Aave protocol is supported."""
         defi_protocols = [
-            "aave_v3_eth", "uniswapv2_eth", "uniswapv3_eth",
-            "curve_eth", "balancer_eth", "morpho_eth",
-            "lido_eth", "etherfi_eth", "ethena_eth",
+            "aave_v3_eth",
+            "uniswapv2_eth",
+            "uniswapv3_eth",
+            "curve_eth",
+            "balancer_eth",
+            "morpho_eth",
+            "lido_eth",
+            "etherfi_eth",
+            "ethena_eth",
         ]
         assert "aave_v3_eth" in defi_protocols
 
     def test_uniswap_protocol_supported(self):
         """Test Uniswap protocol is supported."""
         defi_protocols = [
-            "aave_v3_eth", "uniswapv2_eth", "uniswapv3_eth",
+            "aave_v3_eth",
+            "uniswapv2_eth",
+            "uniswapv3_eth",
             "uniswapv4_eth",
         ]
         assert "uniswapv3_eth" in defi_protocols
