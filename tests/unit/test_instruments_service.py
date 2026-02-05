@@ -109,6 +109,7 @@ class TestGenerateInstrumentsSingleDate:
             mock_tardis_adapter = Mock()
             mock_tardis_adapter.check_venues_access = Mock(return_value={"binance": (True, None)})
             mock_proc.tardis_adapter = mock_tardis_adapter
+            mock_proc._get_tardis_adapter = Mock(return_value=mock_tardis_adapter)
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -145,6 +146,7 @@ class TestGenerateInstrumentsSingleDate:
                 side_effect=lambda exchanges: {ex: (True, None) for ex in exchanges}
             )
             mock_proc.tardis_adapter = mock_tardis_adapter
+            mock_proc._get_tardis_adapter = Mock(return_value=mock_tardis_adapter)
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -287,6 +289,7 @@ class TestGenerateInstrumentsSingleDate:
                 side_effect=lambda exchanges: {ex: (True, None) for ex in exchanges}
             )
             mock_proc.tardis_adapter = mock_tardis_adapter
+            mock_proc._get_tardis_adapter = Mock(return_value=mock_tardis_adapter)
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -318,6 +321,7 @@ class TestGenerateInstrumentsSingleDate:
             mock_tardis_adapter = Mock()
             mock_tardis_adapter.check_venues_access = Mock(return_value={"binance": (True, None)})
             mock_proc.tardis_adapter = mock_tardis_adapter
+            mock_proc._get_tardis_adapter = Mock(return_value=mock_tardis_adapter)
             mock_proc_class.return_value = mock_proc
 
             config = {"project_id": "test-project"}
@@ -350,6 +354,7 @@ class TestGenerateInstrumentsSingleDate:
             mock_tardis_adapter = Mock()
             mock_tardis_adapter.check_venues_access = Mock(return_value={"binance": (True, None)})
             mock_proc.tardis_adapter = mock_tardis_adapter
+            mock_proc._get_tardis_adapter = Mock(return_value=mock_tardis_adapter)
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -395,6 +400,7 @@ class TestGenerateInstrumentsSingleDate:
                 return_value={"binance": (True, None), "deribit": (True, None)}
             )
             mock_proc.tardis_adapter = mock_tardis_adapter
+            mock_proc._get_tardis_adapter = Mock(return_value=mock_tardis_adapter)
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -425,6 +431,7 @@ class TestGenerateInstrumentsSingleDate:
             mock_tardis_adapter = Mock()
             mock_tardis_adapter.check_venues_access = Mock(return_value={"binance": (True, None)})
             mock_proc.tardis_adapter = mock_tardis_adapter
+            mock_proc._get_tardis_adapter = Mock(return_value=mock_tardis_adapter)
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -679,6 +686,7 @@ class TestUpbitCoinbaseIntegration:
             mock_tardis_adapter = Mock()
             mock_tardis_adapter.check_venues_access = Mock(return_value={"upbit": (True, None)})
             mock_proc.tardis_adapter = mock_tardis_adapter
+            mock_proc._get_tardis_adapter = Mock(return_value=mock_tardis_adapter)
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -722,6 +730,7 @@ class TestUpbitCoinbaseIntegration:
             mock_tardis_adapter = Mock()
             mock_tardis_adapter.check_venues_access = Mock(return_value={"coinbase": (True, None)})
             mock_proc.tardis_adapter = mock_tardis_adapter
+            mock_proc._get_tardis_adapter = Mock(return_value=mock_tardis_adapter)
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
