@@ -135,6 +135,7 @@ class TestInstrumentsServiceVenueAccessIntegration:
                 "upbit": (False, "Cloudflare blocking access to upbit (HTTP 403)"),  # Blocked
             }
             mock_proc.tardis_adapter = mock_tardis_adapter
+            mock_proc._get_tardis_adapter = Mock(return_value=mock_tardis_adapter)
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -181,6 +182,7 @@ class TestInstrumentsServiceVenueAccessIntegration:
                 "upbit": (False, "Cloudflare blocking access to upbit (HTTP 403)"),
             }
             mock_proc.tardis_adapter = mock_tardis_adapter
+            mock_proc._get_tardis_adapter = Mock(return_value=mock_tardis_adapter)
             mock_proc_class.return_value = mock_proc
 
             config = {"project_id": "test-project"}
@@ -213,6 +215,7 @@ class TestInstrumentsServiceVenueAccessIntegration:
                 "upbit": (False, "Cloudflare blocking access to upbit (HTTP 403)"),
             }
             mock_proc.tardis_adapter = mock_tardis_adapter
+            mock_proc._get_tardis_adapter = Mock(return_value=mock_tardis_adapter)
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -254,6 +257,7 @@ class TestVenueAccessCheckErrorHandling:
                 "binance": (False, "Failed to check venue access for binance: Connection timeout"),
             }
             mock_proc.tardis_adapter = mock_tardis_adapter
+            mock_proc._get_tardis_adapter = Mock(return_value=mock_tardis_adapter)
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -291,6 +295,7 @@ class TestVenueAccessCheckErrorHandling:
                 ),
             }
             mock_proc.tardis_adapter = mock_tardis_adapter
+            mock_proc._get_tardis_adapter = Mock(return_value=mock_tardis_adapter)
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
