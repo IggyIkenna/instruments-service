@@ -11,7 +11,6 @@ import pytest
 from datetime import datetime, timezone
 
 
-
 @pytest.mark.e2e
 class TestTradfiInstrumentGeneration:
     """E2E tests for TradFi instrument generation."""

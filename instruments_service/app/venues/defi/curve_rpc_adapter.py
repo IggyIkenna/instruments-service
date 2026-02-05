@@ -253,11 +253,7 @@ class CurveRPCAdapter(BaseDefiAdapter):
                     try:
                         coins = metaregistry.functions.get_coins(pool_addr).call()
                         # Filter out zero addresses
-                        coins = [
-                            c
-                            for c in coins
-                            if c != "0x0000000000000000000000000000000000000000"
-                        ]
+                        coins = [c for c in coins if c != "0x0000000000000000000000000000000000000000"]
                     except Exception:
                         coins = []
 
@@ -268,9 +264,7 @@ class CurveRPCAdapter(BaseDefiAdapter):
                         {
                             "id": pool_addr,
                             "name": pool_name,
-                            "coins": [
-                                {"id": coin, "symbol": "", "decimals": 18} for coin in coins
-                            ],
+                            "coins": [{"id": coin, "symbol": "", "decimals": 18} for coin in coins],
                             "totalValueLockedUSD": None,
                             "createdAtTimestamp": None,
                         }
@@ -287,9 +281,7 @@ class CurveRPCAdapter(BaseDefiAdapter):
             logger.error(f"Failed to fetch Curve pools via MetaRegistry: {e}")
             return []
 
-    def fetch_markets(
-        self, target_date: Optional[datetime] = None
-    ) -> Dict[str, Dict[str, Any]]:
+    def fetch_markets(self, target_date: Optional[datetime] = None) -> Dict[str, Dict[str, Any]]:
         """
         Fetch Curve pools as instrument definitions.
 
@@ -302,8 +294,7 @@ class CurveRPCAdapter(BaseDefiAdapter):
         # Check date availability
         if target_date and target_date < self.CURVE_LAUNCH:
             logger.info(
-                f"Target date {target_date.date()} is before Curve launch "
-                f"({self.CURVE_LAUNCH.date()}), returning empty"
+                f"Target date {target_date.date()} is before Curve launch ({self.CURVE_LAUNCH.date()}), returning empty"
             )
             return {}
 
@@ -324,9 +315,7 @@ class CurveRPCAdapter(BaseDefiAdapter):
                 "pool_address": pool.get("id"),
                 "pool_name": pool_name,
                 "chain": self.chain,
-                "available_from_datetime": self.CURVE_LAUNCH.strftime(
-                    "%Y-%m-%dT%H:%M:%SZ"
-                ),
+                "available_from_datetime": self.CURVE_LAUNCH.strftime("%Y-%m-%dT%H:%M:%SZ"),
                 "data_types": "swaps,liquidity,volume",
                 # Required fields for market-tick-data-handler routing
                 "asset_class": "crypto",

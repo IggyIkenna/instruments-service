@@ -123,6 +123,7 @@ class DependencyChecker:
             project_id: GCP project ID (default from config)
         """
         from instruments_service.config import instruments_config
+
         self.project_id = project_id or instruments_config.gcp_project_id
 
     def get_upstream_dependencies(self) -> List[str]:
@@ -292,9 +293,7 @@ class DependencyChecker:
         if not report.required_available:
             missing = [c for c in report.checks if c.required and not c.available]
             missing_names = [m.name for m in missing]
-            raise RuntimeError(
-                f"instruments-service cannot run: missing required API keys: {missing_names}"
-            )
+            raise RuntimeError(f"instruments-service cannot run: missing required API keys: {missing_names}")
 
         if fail_on_optional and not report.all_available:
             logger.warning("Some optional API keys are missing")

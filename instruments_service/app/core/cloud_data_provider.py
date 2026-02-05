@@ -32,7 +32,6 @@ class CloudDataProvider:
             cloud_target: Optional CloudTarget configuration (auto-detects if not provided)
         """
         if cloud_target is None:
-
             # NOTE: This default is only used when no category is specified.
             # Production flow should always use category-specific buckets via get_bucket_for_category()
             from instruments_service.config import instruments_config
@@ -51,9 +50,7 @@ class CloudDataProvider:
 
         # Create instruments service (each domain has its own bucket and dataset)
         # Direct instantiation (canonical pattern per unified architecture)
-        self.cloud_service = StandardizedDomainCloudService(
-            domain="instruments", cloud_target=cloud_target
-        )
+        self.cloud_service = StandardizedDomainCloudService(domain="instruments", cloud_target=cloud_target)
         self.cloud_target = cloud_target
 
         logger.info(
@@ -84,9 +81,7 @@ class CloudDataProvider:
                 return self.get_instruments_from_category(date, category, gcs_path=gcs_path)
 
             logger.info(f"📥 Loading instruments from GCS: {gcs_path}")
-            df = self.cloud_service.download_from_gcs(
-                gcs_path=gcs_path, format="parquet", log_errors=False
-            )
+            df = self.cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
 
             if df.empty:
                 logger.warning(f"⚠️ No instruments found at {gcs_path}")
@@ -147,9 +142,7 @@ class CloudDataProvider:
             )
 
             logger.info(f"📥 Loading {category} instruments from GCS: {category_bucket}/{gcs_path}")
-            df = category_cloud_service.download_from_gcs(
-                gcs_path=gcs_path, format="parquet", log_errors=False
-            )
+            df = category_cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
 
             if df.empty:
                 logger.warning(f"⚠️ No {category} instruments found at {category_bucket}/{gcs_path}")
@@ -162,9 +155,7 @@ class CloudDataProvider:
             error_msg = str(e)
             # Handle 404/Not Found gracefully - this is an expected state when data hasn't been generated yet
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
-                logger.info(
-                    f"ℹ️ No {category} instruments found (404): {category_bucket}/{gcs_path}"
-                )
+                logger.info(f"ℹ️ No {category} instruments found (404): {category_bucket}/{gcs_path}")
                 return pd.DataFrame()
 
             logger.error(f"❌ Failed to load {category} instruments from GCS: {e}")
@@ -206,9 +197,7 @@ class CloudDataProvider:
             query += " ORDER BY instrument_key"
 
             logger.info(f"📥 Querying instruments from BigQuery: {table_name}")
-            result = self.cloud_service.query_bigquery(
-                query=query, parameters=parameters if parameters else None
-            )
+            result = self.cloud_service.query_bigquery(query=query, parameters=parameters if parameters else None)
 
             logger.info(f"✅ Queried {len(result)} instruments from BigQuery")
             return result
@@ -250,28 +239,24 @@ class CloudDataProvider:
         # When venues specified, use venue-level paths (new structure)
         # This enables granular skip logic matching the category x venue x date sharding
         if venues:
-            logger.debug(
-                f"🔍 Checking venue-level existence for {date_str}: categories={categories}, venues={venues}"
-            )
+            logger.debug(f"🔍 Checking venue-level existence for {date_str}: categories={categories}, venues={venues}")
             for category in categories:
                 for venue in venues:
                     # Sanitize venue name for folder (replace slashes, etc.)
                     venue_folder = venue.replace("/", "-").replace("\\", "-")
-                    gcs_path = f"instrument_availability/by_date/day-{date_str}/venue-{venue_folder}/instruments.parquet"
+                    gcs_path = (
+                        f"instrument_availability/by_date/day-{date_str}/venue-{venue_folder}/instruments.parquet"
+                    )
 
                     try:
                         df = self.get_instruments_from_category(date, category, gcs_path=gcs_path)
 
                         if df is not None and not df.empty:
-                            logger.debug(
-                                f"📊 Venue instruments found: {category}/{venue} for {date_str}"
-                            )
+                            logger.debug(f"📊 Venue instruments found: {category}/{venue} for {date_str}")
                             # For venue-level checks, we need ALL venues to exist
                             # (matches the sharding logic - each shard is a specific venue)
                         else:
-                            logger.debug(
-                                f"📊 Venue instruments NOT found: {category}/{venue} for {date_str}"
-                            )
+                            logger.debug(f"📊 Venue instruments NOT found: {category}/{venue} for {date_str}")
                             return False  # Any missing venue means data doesn't exist
                     except Exception as e:
                         logger.debug(f"Could not check {category}/{venue} for {date_str}: {e}")

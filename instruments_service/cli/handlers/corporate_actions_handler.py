@@ -160,9 +160,7 @@ class CorporateActionsHandler(ModeHandler):
 
             # If specific date provided, use it
             if reference_date is not None:
-                gcs_path = (
-                    f"instrument_availability/by_date/day-{reference_date}/instruments.parquet"
-                )
+                gcs_path = f"instrument_availability/by_date/day-{reference_date}/instruments.parquet"
                 tickers = try_load_tickers(gcs_path)
                 if tickers:
                     logger.info(f"📂 Using instruments from: day-{reference_date}")
@@ -196,9 +194,7 @@ class CorporateActionsHandler(ModeHandler):
             logger.error(f"❌ Failed to load tickers from GCS: {e}")
             return []
 
-    def _get_tickers(
-        self, tickers: Optional[List[str]] = None, reference_date: Optional[date] = None
-    ) -> List[str]:
+    def _get_tickers(self, tickers: Optional[List[str]] = None, reference_date: Optional[date] = None) -> List[str]:
         """
         Get list of tickers to process.
 
@@ -217,9 +213,7 @@ class CorporateActionsHandler(ModeHandler):
 
         # Fallback minimal list for testing (if GCS unavailable)
         logger.warning("⚠️ Could not load tickers from GCS, using minimal test list")
-        logger.warning(
-            "   Run --mode instruments first to populate GCS with instrument definitions"
-        )
+        logger.warning("   Run --mode instruments first to populate GCS with instrument definitions")
         return ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "BRK-B", "JPM", "V"]
 
     def _progress_callback(self, ticker: str, current: int, total: int):
@@ -341,13 +335,9 @@ class CorporateActionsHandler(ModeHandler):
             day_str = day_date.isoformat()
 
             # Filter data for this specific day
-            day_dividends = self._filter_by_date(
-                dividends_df, "ex_date", day_date, DIVIDENDS_SCHEMA
-            )
+            day_dividends = self._filter_by_date(dividends_df, "ex_date", day_date, DIVIDENDS_SCHEMA)
             day_splits = self._filter_by_date(splits_df, "effective_date", day_date, SPLITS_SCHEMA)
-            day_earnings = self._filter_by_date(
-                earnings_df, "earnings_date", day_date, EARNINGS_SCHEMA
-            )
+            day_earnings = self._filter_by_date(earnings_df, "earnings_date", day_date, EARNINGS_SCHEMA)
 
             # Skip days with no data to avoid empty file proliferation
             if day_dividends.empty and day_splits.empty and day_earnings.empty:

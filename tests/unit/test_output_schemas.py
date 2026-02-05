@@ -60,16 +60,18 @@ class TestInstrumentsSchema:
 
     def test_validate_valid_cefi_instruments(self):
         """Test validation with valid CEFI instruments."""
-        df = pd.DataFrame({
-            "instrument_key": ["BINANCE-FUTURES:PERPETUAL:BTC-USDT"],
-            "venue": ["BINANCE-FUTURES"],
-            "instrument_type": ["PERPETUAL"],
-            "symbol": ["BTC-USDT"],
-            "available_from_datetime": [pd.Timestamp("2020-01-01")],
-            "timestamp": [pd.Timestamp("2024-01-01")],
-            "tardis_exchange": ["binance-futures"],  # Required for CEFI
-            "databento_symbol": [None],  # Nullable for CEFI
-        })
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["BINANCE-FUTURES:PERPETUAL:BTC-USDT"],
+                "venue": ["BINANCE-FUTURES"],
+                "instrument_type": ["PERPETUAL"],
+                "symbol": ["BTC-USDT"],
+                "available_from_datetime": [pd.Timestamp("2020-01-01")],
+                "timestamp": [pd.Timestamp("2024-01-01")],
+                "tardis_exchange": ["binance-futures"],  # Required for CEFI
+                "databento_symbol": [None],  # Nullable for CEFI
+            }
+        )
 
         enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
         result = enforcer.validate_dataframe(df, {"category": "CEFI"})
@@ -78,15 +80,17 @@ class TestInstrumentsSchema:
 
     def test_validate_invalid_cefi_missing_tardis(self):
         """Test validation fails when CEFI instrument missing tardis_exchange."""
-        df = pd.DataFrame({
-            "instrument_key": ["BINANCE-FUTURES:PERPETUAL:BTC-USDT"],
-            "venue": ["BINANCE-FUTURES"],
-            "instrument_type": ["PERPETUAL"],
-            "symbol": ["BTC-USDT"],
-            "available_from_datetime": [pd.Timestamp("2020-01-01")],
-            "timestamp": [pd.Timestamp("2024-01-01")],
-            "tardis_exchange": [np.nan],  # Missing - should fail for CEFI
-        })
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["BINANCE-FUTURES:PERPETUAL:BTC-USDT"],
+                "venue": ["BINANCE-FUTURES"],
+                "instrument_type": ["PERPETUAL"],
+                "symbol": ["BTC-USDT"],
+                "available_from_datetime": [pd.Timestamp("2020-01-01")],
+                "timestamp": [pd.Timestamp("2024-01-01")],
+                "tardis_exchange": [np.nan],  # Missing - should fail for CEFI
+            }
+        )
 
         enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
         result = enforcer.validate_dataframe(df, {"category": "CEFI"})
@@ -96,18 +100,20 @@ class TestInstrumentsSchema:
 
     def test_validate_valid_tradfi_instruments(self):
         """Test validation with valid TRADFI instruments."""
-        df = pd.DataFrame({
-            "instrument_key": ["CME:FUTURE:ES.FUT"],
-            "venue": ["CME"],
-            "instrument_type": ["FUTURE"],
-            "symbol": ["ES.FUT"],
-            "available_from_datetime": [pd.Timestamp("2020-01-01")],
-            "timestamp": [pd.Timestamp("2024-01-01")],
-            "databento_symbol": ["ES.FUT"],  # Required for TRADFI
-            "trading_hours_open": ["09:30:00-05:00"],  # Optional (populated when exchange mapped)
-            "trading_hours_close": ["16:00:00-05:00"],  # Optional (populated when exchange mapped)
-            "tardis_exchange": [None],  # Nullable for TRADFI
-        })
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["CME:FUTURE:ES.FUT"],
+                "venue": ["CME"],
+                "instrument_type": ["FUTURE"],
+                "symbol": ["ES.FUT"],
+                "available_from_datetime": [pd.Timestamp("2020-01-01")],
+                "timestamp": [pd.Timestamp("2024-01-01")],
+                "databento_symbol": ["ES.FUT"],  # Required for TRADFI
+                "trading_hours_open": ["09:30:00-05:00"],  # Optional (populated when exchange mapped)
+                "trading_hours_close": ["16:00:00-05:00"],  # Optional (populated when exchange mapped)
+                "tardis_exchange": [None],  # Nullable for TRADFI
+            }
+        )
 
         enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
         result = enforcer.validate_dataframe(df, {"category": "TRADFI"})
@@ -116,17 +122,19 @@ class TestInstrumentsSchema:
 
     def test_validate_invalid_tradfi_missing_databento(self):
         """Test validation fails when TRADFI instrument missing databento_symbol."""
-        df = pd.DataFrame({
-            "instrument_key": ["CME:FUTURE:ES.FUT"],
-            "venue": ["CME"],
-            "instrument_type": ["FUTURE"],
-            "symbol": ["ES.FUT"],
-            "available_from_datetime": [pd.Timestamp("2020-01-01")],
-            "timestamp": [pd.Timestamp("2024-01-01")],
-            "databento_symbol": [np.nan],  # Missing - should fail for TRADFI
-            "trading_hours_open": ["09:30:00-05:00"],
-            "trading_hours_close": ["16:00:00-05:00"],
-        })
+        df = pd.DataFrame(
+            {
+                "instrument_key": ["CME:FUTURE:ES.FUT"],
+                "venue": ["CME"],
+                "instrument_type": ["FUTURE"],
+                "symbol": ["ES.FUT"],
+                "available_from_datetime": [pd.Timestamp("2020-01-01")],
+                "timestamp": [pd.Timestamp("2024-01-01")],
+                "databento_symbol": [np.nan],  # Missing - should fail for TRADFI
+                "trading_hours_open": ["09:30:00-05:00"],
+                "trading_hours_close": ["16:00:00-05:00"],
+            }
+        )
 
         enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
         result = enforcer.validate_dataframe(df, {"category": "TRADFI"})

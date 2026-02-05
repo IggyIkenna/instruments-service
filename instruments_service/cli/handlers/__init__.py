@@ -51,9 +51,7 @@ def get_handler_for_mode(mode: str, config: Dict[str, Any]) -> ModeHandler:
             raise
 
     if mode not in _handler_registry:
-        raise ValueError(
-            f"Unsupported mode: {mode}. Supported modes: {list(_handler_registry.keys())}"
-        )
+        raise ValueError(f"Unsupported mode: {mode}. Supported modes: {list(_handler_registry.keys())}")
 
     handler_class = _handler_registry[mode]
     return handler_class(config)

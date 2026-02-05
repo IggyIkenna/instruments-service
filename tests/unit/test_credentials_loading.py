@@ -62,9 +62,7 @@ class TestCredentialLoading:
             "tardis_api_key": "config-tardis-key",
         }
 
-        with patch(
-            "instruments_service.app.core.instrument_processing_service.get_secret_with_fallback"
-        ):
+        with patch("instruments_service.app.core.instrument_processing_service.get_secret_with_fallback"):
             service = InstrumentProcessingService(config)
             assert service.api_key == "config-tardis-key"
 
@@ -83,12 +81,8 @@ class TestCredentialLoading:
             databento_base_client.clear_databento_api_key_cache()
 
             with (
-                patch(
-                    "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-                ),
-                patch(
-                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
-                ),
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
                 patch(
                     "unified_cloud_services.clients.databento_base_client.get_secret_with_fallback",
                     return_value="test-databento-key",
@@ -116,12 +110,8 @@ class TestCredentialLoading:
 
             # get_secret_with_fallback checks env var as fallback, so we test that path
             with (
-                patch(
-                    "instruments_service.app.venues.databento.databento_adapter.db", mock_db_module
-                ),
-                patch(
-                    "unified_cloud_services.clients.databento_base_client.db", mock_db_module
-                ),
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
                 patch(
                     "unified_cloud_services.clients.databento_base_client.get_secret_with_fallback",
                     return_value="env-databento-key",
@@ -270,7 +260,6 @@ class TestCredentialLoading:
     def test_real_secret_manager_access(self):
         """Integration test: Verify Secret Manager is accessible with real credentials."""
         try:
-
             project_id = instruments_config.gcp_project_id
 
             # Try to access a secret (will return None if secret doesn't exist, but should not raise exception)

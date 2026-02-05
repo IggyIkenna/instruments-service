@@ -86,11 +86,9 @@ class BalancerAdapter(BaseDefiAdapter):
             subgraph_url=subgraph_url,
             api_key=None,
             project_id=project_id,
-            secret_name=instruments_config.graph_secret_name
+            secret_name=instruments_config.graph_secret_name,
         )  # Balancer API doesn't need API key, but we still want correct secret name for consistency
-        logger.info(
-            f"✅ BalancerAdapter initialized for chain: {self.chain} (using Balancer API v3)"
-        )
+        logger.info(f"✅ BalancerAdapter initialized for chain: {self.chain} (using Balancer API v3)")
 
     # Default minimum TVL to filter out inactive/low-liquidity pools
     DEFAULT_MIN_TVL = 100_000  # $100k minimum TVL
@@ -396,9 +394,7 @@ class BalancerAdapter(BaseDefiAdapter):
             return pools
 
         except Exception as e:
-            logger.warning(
-                f"⚠️ Failed to query Balancer API v3: {e}. Skipping Balancer instruments."
-            )
+            logger.warning(f"⚠️ Failed to query Balancer API v3: {e}. Skipping Balancer instruments.")
             return []
 
     def _convert_pool_to_instrument(

@@ -509,9 +509,7 @@ class TestVenueMappingExtended:
         ]
 
         for (venue, inst_type), expected_tardis in test_cases:
-            assert (
-                mapping.venue_instrument_type_to_tardis.get((venue, inst_type)) == expected_tardis
-            )
+            assert mapping.venue_instrument_type_to_tardis.get((venue, inst_type)) == expected_tardis
 
     def test_get_venue_to_tardis_exchanges(self):
         """Test get_venue_to_tardis_exchanges returns correct reverse mapping."""
@@ -721,9 +719,9 @@ class TestInstrumentsServiceConfig:
 
         # Test that bucket properties are accessible
         assert instruments_config.gcs_bucket is not None
-        assert hasattr(instruments_config, 'gcs_bucket_cefi')
-        assert hasattr(instruments_config, 'gcs_bucket_tradfi')
-        assert hasattr(instruments_config, 'gcs_bucket_defi')
+        assert hasattr(instruments_config, "gcs_bucket_cefi")
+        assert hasattr(instruments_config, "gcs_bucket_tradfi")
+        assert hasattr(instruments_config, "gcs_bucket_defi")
 
     def test_instruments_service_config_get_cloud_target(self):
         """Test get_cloud_target method."""

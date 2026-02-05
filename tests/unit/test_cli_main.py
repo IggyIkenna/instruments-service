@@ -23,9 +23,10 @@ class TestCLIMain:
 
     def test_main_success(self, mock_handler):
         """Test successful main execution."""
-        with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
-             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler):
-
+        with (
+            patch("instruments_service.cli.main.parse_arguments") as mock_parse,
+            patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler),
+        ):
             mock_args = Mock()
             mock_args.mode = "instruments"
             mock_args.log_level = "INFO"
@@ -54,9 +55,10 @@ class TestCLIMain:
 
     def test_main_with_categories(self, mock_handler):
         """Test main with market category flags."""
-        with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
-             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler):
-
+        with (
+            patch("instruments_service.cli.main.parse_arguments") as mock_parse,
+            patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler),
+        ):
             mock_args = Mock()
             mock_args.mode = "instruments"
             mock_args.log_level = "INFO"
@@ -89,9 +91,10 @@ class TestCLIMain:
 
     def test_main_with_venues_filter(self, mock_handler):
         """Test main with venues filter."""
-        with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
-             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler):
-
+        with (
+            patch("instruments_service.cli.main.parse_arguments") as mock_parse,
+            patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler),
+        ):
             mock_args = Mock()
             mock_args.mode = "instruments"
             mock_args.log_level = "INFO"
@@ -122,9 +125,10 @@ class TestCLIMain:
 
     def test_main_failure_status(self, mock_handler):
         """Test main with failure status."""
-        with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
-             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler):
-
+        with (
+            patch("instruments_service.cli.main.parse_arguments") as mock_parse,
+            patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler),
+        ):
             mock_args = Mock()
             mock_args.mode = "instruments"
             mock_args.log_level = "INFO"
@@ -163,9 +167,10 @@ class TestCLIMain:
 
     def test_run_cli_success(self, mock_handler):
         """Test run_cli with success - tests that run_cli calls main and returns result."""
-        with patch("instruments_service.cli.main.parse_arguments") as mock_parse, \
-             patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler):
-
+        with (
+            patch("instruments_service.cli.main.parse_arguments") as mock_parse,
+            patch("instruments_service.cli.main.get_handler_for_mode", return_value=mock_handler),
+        ):
             mock_args = Mock()
             mock_args.mode = "instruments"
             mock_args.log_level = "INFO"
@@ -191,6 +196,7 @@ class TestCLIMain:
 
     def test_run_cli_keyboard_interrupt(self):
         """Test run_cli handles KeyboardInterrupt correctly."""
+
         # Test the exception handling logic that run_cli implements
         def simulate_run_cli_with_interrupt():
             try:
@@ -211,6 +217,7 @@ class TestCLIMain:
 
     def test_run_cli_exception(self):
         """Test run_cli handles general exceptions correctly."""
+
         # Test the exception handling logic that run_cli implements
         def simulate_run_cli_with_exception():
             try:

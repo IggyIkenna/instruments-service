@@ -144,9 +144,7 @@ class EulerAdapter(BaseDefiAdapter):
                         "collateral_asset": market["collateral_asset"],
                         "borrow_asset": market["borrow_asset"],
                         "chain": self.chain,
-                        "available_from_datetime": self.EULER_V2_LAUNCH.strftime(
-                            "%Y-%m-%dT%H:%M:%SZ"
-                        ),
+                        "available_from_datetime": self.EULER_V2_LAUNCH.strftime("%Y-%m-%dT%H:%M:%SZ"),
                         "data_types": "rate_indices,oracle_prices",  # rate_indices includes utilization
                         "market_address": market.get("market_address"),
                         # Required fields for market-tick-data-handler routing

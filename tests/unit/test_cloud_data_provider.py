@@ -17,13 +17,9 @@ class TestCloudDataProvider:
         """Create mock cloud service."""
         service = Mock()
         service.download_from_gcs = Mock(
-            return_value=pd.DataFrame(
-                {"instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"], "venue": ["TEST"]}
-            )
+            return_value=pd.DataFrame({"instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"], "venue": ["TEST"]})
         )
-        service.query_bigquery = Mock(
-            return_value=pd.DataFrame({"instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"]})
-        )
+        service.query_bigquery = Mock(return_value=pd.DataFrame({"instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"]}))
         return service
 
     @pytest.fixture
@@ -70,9 +66,7 @@ class TestCloudDataProvider:
                 "instruments_service.app.core.cloud_data_provider.StandardizedDomainCloudService",
                 return_value=mock_cloud_service,
             ),
-            patch(
-                "instruments_service.app.core.cloud_data_provider.CloudTarget"
-            ) as mock_target_class,
+            patch("instruments_service.app.core.cloud_data_provider.CloudTarget") as mock_target_class,
         ):
             mock_target = Mock()
             mock_target.project_id = "test-project"
@@ -159,7 +153,7 @@ class TestCloudDataProvider:
         with patch.object(
             provider,
             "get_instruments_from_category",
-            return_value=pd.DataFrame({"instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"]})
+            return_value=pd.DataFrame({"instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"]}),
         ):
             result = provider.check_instruments_exist(date)
             assert result is True

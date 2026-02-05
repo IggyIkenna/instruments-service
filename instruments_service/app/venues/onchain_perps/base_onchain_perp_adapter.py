@@ -36,7 +36,7 @@ class BaseOnchainPerpAdapter(ABC):
         "trades",
         "derivative_ticker",  # Combines: funding_rate, mark_price, index_price, open_interest
         "liquidations",
-        "book_snapshot_5",    # L2 orderbook (5 levels)
+        "book_snapshot_5",  # L2 orderbook (5 levels)
     ]
 
     def __init__(
@@ -65,9 +65,7 @@ class BaseOnchainPerpAdapter(ABC):
 
     @abstractmethod
     def fetch_perpetuals(
-        self,
-        test_data_availability: bool = False,
-        target_date: Optional[datetime] = None
+        self, test_data_availability: bool = False, target_date: Optional[datetime] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all perpetual futures instruments.
@@ -83,9 +81,7 @@ class BaseOnchainPerpAdapter(ABC):
 
     @abstractmethod
     def fetch_spot_pairs(
-        self,
-        test_data_availability: bool = False,
-        target_date: Optional[datetime] = None
+        self, test_data_availability: bool = False, target_date: Optional[datetime] = None
     ) -> Dict[str, Dict[str, Any]]:
         """
         Fetch all spot trading pairs.
