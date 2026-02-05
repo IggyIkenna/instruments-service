@@ -45,8 +45,6 @@ jobs:
           if [ -n "$GH_PAT" ]; then
             git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-cloud-services.git ../unified-cloud-services
             echo "Cloned unified-cloud-services"
-            git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-trading-deployment-v2.git ../unified-trading-deployment-v2
-            echo "Cloned unified-trading-deployment-v2"
           else
             echo "GH_PAT not set, skipping unified-cloud-services clone"
           fi
@@ -61,11 +59,6 @@ jobs:
           # Install unified-cloud-services if cloned
           if [ -d "../unified-cloud-services" ]; then
             pip install -e ../unified-cloud-services || echo "Failed to install unified-cloud-services"
-          fi
-
-          # Install unified-trading-deployment-v2 if cloned (for smoke tests)
-          if [ -d "../unified-trading-deployment-v2" ]; then
-            pip install -e ../unified-trading-deployment-v2 || echo "Failed to install unified-trading-deployment-v2"
           fi
 
           # Install the package without dependencies first

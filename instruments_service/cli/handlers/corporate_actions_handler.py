@@ -9,6 +9,11 @@ traditional corporate actions like dividends or stock splits.
 
 Tickers are sourced from GCS instruments store (instruments-store-tradfi),
 ensuring the same universe as instrument definitions.
+
+Output Structure:
+    corporate_actions/by_date/day-{date}/dividends.parquet
+    corporate_actions/by_date/day-{date}/splits.parquet
+    corporate_actions/by_date/day-{date}/earnings.parquet
 """
 
 import logging
@@ -23,6 +28,57 @@ from instruments_service.corporate_actions.adapter import CorporateActionsAdapte
 from instruments_service.config import instruments_config
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# Schema Definitions
+# =============================================================================
+# Centralized column schemas for corporate actions output files.
+# Update these if the schema changes - they're used for filtering and
+# ensuring consistent output structure (including empty files).
+
+DIVIDENDS_SCHEMA: List[str] = [
+    "ticker",
+    "ex_date",
+    "pay_date",
+    "record_date",
+    "declaration_date",
+    "amount",
+    "dividend_type",
+    "currency",
+    "source",
+    "fetched_at",
+    "instrument_key",
+]
+
+SPLITS_SCHEMA: List[str] = [
+    "ticker",
+    "effective_date",
+    "ratio",
+    "split_from",
+    "split_to",
+    "is_reverse_split",
+    "adjustment_factor",
+    "source",
+    "fetched_at",
+    "instrument_key",
+]
+
+EARNINGS_SCHEMA: List[str] = [
+    "ticker",
+    "earnings_date",
+    "earnings_time",
+    "fiscal_quarter",
+    "fiscal_year",
+    "reported_eps",
+    "estimated_eps",
+    "surprise_pct",
+    "revenue",
+    "estimated_revenue",
+    "source",
+    "fetched_at",
+    "instrument_key",
+]
+
 
 # GCS bucket for TRADFI instruments - use config
 def _get_tradfi_bucket() -> str:
@@ -92,19 +148,21 @@ class CorporateActionsHandler(ModeHandler):
                 if not blob.exists():
                     return []
 
-                with tempfile.NamedTemporaryFile(suffix='.parquet', delete=False) as tmp:
+                with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
                     blob.download_to_filename(tmp.name)
                     df = pd.read_parquet(tmp.name)
 
                 # Filter for equities (NYSE, NASDAQ)
-                equities = df[df['venue'].isin(['NYSE', 'NASDAQ'])]
-                tickers = equities['exchange_raw_symbol'].dropna().unique().tolist()
+                equities = df[df["venue"].isin(["NYSE", "NASDAQ"])]
+                tickers = equities["exchange_raw_symbol"].dropna().unique().tolist()
                 tickers = [t.strip() for t in tickers if t and t.strip()]
                 return sorted(tickers)
 
             # If specific date provided, use it
             if reference_date is not None:
-                gcs_path = f"instrument_availability/by_date/day-{reference_date}/instruments.parquet"
+                gcs_path = (
+                    f"instrument_availability/by_date/day-{reference_date}/instruments.parquet"
+                )
                 tickers = try_load_tickers(gcs_path)
                 if tickers:
                     logger.info(f"📂 Using instruments from: day-{reference_date}")
@@ -138,7 +196,9 @@ class CorporateActionsHandler(ModeHandler):
             logger.error(f"❌ Failed to load tickers from GCS: {e}")
             return []
 
-    def _get_tickers(self, tickers: Optional[List[str]] = None, reference_date: Optional[date] = None) -> List[str]:
+    def _get_tickers(
+        self, tickers: Optional[List[str]] = None, reference_date: Optional[date] = None
+    ) -> List[str]:
         """
         Get list of tickers to process.
 
@@ -157,7 +217,9 @@ class CorporateActionsHandler(ModeHandler):
 
         # Fallback minimal list for testing (if GCS unavailable)
         logger.warning("⚠️ Could not load tickers from GCS, using minimal test list")
-        logger.warning("   Run --mode instruments first to populate GCS with instrument definitions")
+        logger.warning(
+            "   Run --mode instruments first to populate GCS with instrument definitions"
+        )
         return ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "BRK-B", "JPM", "V"]
 
     def _progress_callback(self, ticker: str, current: int, total: int):
@@ -218,12 +280,18 @@ class CorporateActionsHandler(ModeHandler):
             "date_range": f"{start} to {end}",
         }
 
-        logger.info(f"📈 Results: {stats['dividends_count']} dividends, {stats['splits_count']} splits, {stats['earnings_count']} earnings")
+        logger.info(
+            f"📈 Results: {stats['dividends_count']} dividends, {stats['splits_count']} splits, {stats['earnings_count']} earnings"
+        )
 
         # Save to files
         output_files = self._save_results(
-            dividends_df, splits_df, earnings_df,
-            start, end, output_format,
+            dividends_df,
+            splits_df,
+            earnings_df,
+            start,
+            end,
+            output_format,
         )
         stats["output_files"] = output_files
 
@@ -247,59 +315,168 @@ class CorporateActionsHandler(ModeHandler):
         start_date: date,
         end_date: date,
         output_format: str,
-    ) -> Dict[str, str]:
-        """Save results to local files."""
-        output_files = {}
+    ) -> List[Dict[str, str]]:
+        """
+        Save results to local files partitioned by day.
 
-        # Create output directory with date range
-        date_suffix = f"{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}"
+        Only creates files for days that have at least one corporate action.
+        Empty days are skipped to avoid proliferating empty files.
 
-        if output_format == "parquet":
-            if not dividends_df.empty:
-                path = self.output_dir / f"dividends_{date_suffix}.parquet"
+        Returns:
+            List of dicts with action_type, date, and path for each file created.
+        """
+        output_files: List[Dict[str, str]] = []
+
+        # Generate date range
+        date_range = pd.date_range(start=start_date, end=end_date, freq="D")
+
+        # Normalize date columns for filtering
+        dividends_df = self._normalize_date_column(dividends_df, "ex_date")
+        splits_df = self._normalize_date_column(splits_df, "effective_date")
+        earnings_df = self._normalize_date_column(earnings_df, "earnings_date")
+
+        days_with_data = 0
+        for day in date_range:
+            day_date = day.date()
+            day_str = day_date.isoformat()
+
+            # Filter data for this specific day
+            day_dividends = self._filter_by_date(
+                dividends_df, "ex_date", day_date, DIVIDENDS_SCHEMA
+            )
+            day_splits = self._filter_by_date(splits_df, "effective_date", day_date, SPLITS_SCHEMA)
+            day_earnings = self._filter_by_date(
+                earnings_df, "earnings_date", day_date, EARNINGS_SCHEMA
+            )
+
+            # Skip days with no data to avoid empty file proliferation
+            if day_dividends.empty and day_splits.empty and day_earnings.empty:
+                continue
+
+            days_with_data += 1
+
+            # Create day directory
+            day_dir = self.output_dir / "by_date" / f"day-{day_str}"
+            day_dir.mkdir(parents=True, exist_ok=True)
+
+            # Write files for this day
+            day_files = self._write_day_files(
+                day_dir=day_dir,
+                day_str=day_str,
+                output_format=output_format,
+                dividends_df=day_dividends,
+                splits_df=day_splits,
+                earnings_df=day_earnings,
+            )
+            output_files.extend(day_files)
+
+        logger.info(f"💾 Saved files for {days_with_data} days with corporate actions")
+        return output_files
+
+    def _normalize_date_column(self, df: pd.DataFrame, column: str) -> pd.DataFrame:
+        """Normalize a date column to datetime.date for consistent filtering."""
+        if df.empty or column not in df.columns:
+            return df
+        df = df.copy()
+        df[column] = pd.to_datetime(df[column], errors="coerce").dt.date
+        return df
+
+    def _filter_by_date(
+        self,
+        df: pd.DataFrame,
+        column: str,
+        target_date: date,
+        schema: List[str],
+    ) -> pd.DataFrame:
+        """
+        Filter dataframe by date, preserving schema for output.
+
+        Args:
+            df: DataFrame to filter
+            column: Date column to filter on
+            target_date: Date to match
+            schema: List of columns to include in output
+
+        Returns:
+            Filtered DataFrame with schema columns (may be empty)
+        """
+        if df.empty or column not in df.columns:
+            return pd.DataFrame(columns=schema)
+
+        filtered = df[df[column] == target_date]
+        if filtered.empty:
+            return pd.DataFrame(columns=schema)
+
+        # Select only schema columns that exist in the dataframe
+        available_cols = [c for c in schema if c in filtered.columns]
+        return filtered[available_cols]
+
+    def _write_day_files(
+        self,
+        day_dir: Path,
+        day_str: str,
+        output_format: str,
+        dividends_df: pd.DataFrame,
+        splits_df: pd.DataFrame,
+        earnings_df: pd.DataFrame,
+    ) -> List[Dict[str, str]]:
+        """
+        Write all corporate actions files for a specific day.
+
+        Only writes files for action types that have data.
+        """
+        output_files: List[Dict[str, str]] = []
+        suffix = "parquet" if output_format == "parquet" else "csv"
+
+        # Write dividends if present
+        if not dividends_df.empty:
+            path = day_dir / f"dividends.{suffix}"
+            if output_format == "parquet":
                 dividends_df.to_parquet(path, index=False)
-                output_files["dividends"] = str(path)
-                logger.info(f"💾 Saved dividends to {path}")
-
-            if not splits_df.empty:
-                path = self.output_dir / f"splits_{date_suffix}.parquet"
-                splits_df.to_parquet(path, index=False)
-                output_files["splits"] = str(path)
-                logger.info(f"💾 Saved splits to {path}")
-
-            if not earnings_df.empty:
-                path = self.output_dir / f"earnings_{date_suffix}.parquet"
-                earnings_df.to_parquet(path, index=False)
-                output_files["earnings"] = str(path)
-                logger.info(f"💾 Saved earnings to {path}")
-
-        elif output_format == "csv":
-            if not dividends_df.empty:
-                path = self.output_dir / f"dividends_{date_suffix}.csv"
+            else:
                 dividends_df.to_csv(path, index=False)
-                output_files["dividends"] = str(path)
+            output_files.append({"action_type": "dividends", "date": day_str, "path": str(path)})
+            logger.debug(f"💾 Saved {len(dividends_df)} dividends for {day_str}")
 
-            if not splits_df.empty:
-                path = self.output_dir / f"splits_{date_suffix}.csv"
+        # Write splits if present
+        if not splits_df.empty:
+            path = day_dir / f"splits.{suffix}"
+            if output_format == "parquet":
+                splits_df.to_parquet(path, index=False)
+            else:
                 splits_df.to_csv(path, index=False)
-                output_files["splits"] = str(path)
+            output_files.append({"action_type": "splits", "date": day_str, "path": str(path)})
+            logger.debug(f"💾 Saved {len(splits_df)} splits for {day_str}")
 
-            if not earnings_df.empty:
-                path = self.output_dir / f"earnings_{date_suffix}.csv"
+        # Write earnings if present
+        if not earnings_df.empty:
+            path = day_dir / f"earnings.{suffix}"
+            if output_format == "parquet":
+                earnings_df.to_parquet(path, index=False)
+            else:
                 earnings_df.to_csv(path, index=False)
-                output_files["earnings"] = str(path)
+            output_files.append({"action_type": "earnings", "date": day_str, "path": str(path)})
+            logger.debug(f"💾 Saved {len(earnings_df)} earnings for {day_str}")
 
         return output_files
 
-    def _upload_to_gcs(self, output_files: Dict[str, str]) -> Dict[str, str]:
+    def _upload_to_gcs(self, output_files: List[Dict[str, str]]) -> Dict[str, str]:
         """
         Upload corporate actions files to GCS TRADFI bucket.
 
-        Target path: gs://{tradfi_bucket}/corporate_actions/
-        """
-        from instruments_service.config import instruments_config
+        Target path: gs://{tradfi_bucket}/corporate_actions/by_date/day-{date}/{action_type}.parquet
 
-        gcs_paths = {}
+        Args:
+            output_files: List of dicts with action_type, date, and path keys
+
+        Returns:
+            Dict mapping "{action_type}:{date}" to full GCS path
+        """
+        gcs_paths: Dict[str, str] = {}
+
+        if not output_files:
+            logger.info("📭 No files to upload to GCS")
+            return gcs_paths
 
         try:
             # Get TRADFI bucket (corporate actions are TRADFI only)
@@ -310,21 +487,25 @@ class CorporateActionsHandler(ModeHandler):
 
             # Import GCS client
             from unified_cloud_services import get_gcs_client
+
             client = get_gcs_client(project_id=self.project_id)
             bucket = client.bucket(bucket_name)
 
-            for action_type, local_path in output_files.items():
-                # GCS path: corporate_actions/{action_type}.parquet
-                # e.g., corporate_actions/dividends_20200101_20260125.parquet
+            for entry in output_files:
+                action_type = entry["action_type"]
+                day_str = entry["date"]
+                local_path = entry["path"]
                 filename = Path(local_path).name
-                gcs_path = f"corporate_actions/{filename}"
+
+                # GCS path: corporate_actions/by_date/day-{date}/{action_type}.parquet
+                gcs_path = f"corporate_actions/by_date/day-{day_str}/{filename}"
 
                 blob = bucket.blob(gcs_path)
                 blob.upload_from_filename(local_path)
 
                 full_gcs_path = f"gs://{bucket_name}/{gcs_path}"
-                gcs_paths[action_type] = full_gcs_path
-                logger.info(f"☁️ Uploaded {action_type} to {full_gcs_path}")
+                gcs_paths[f"{action_type}:{day_str}"] = full_gcs_path
+                logger.debug(f"☁️ Uploaded {action_type} ({day_str}) to {full_gcs_path}")
 
             logger.info(f"✅ Uploaded {len(gcs_paths)} files to GCS")
             return gcs_paths
