@@ -154,6 +154,33 @@ class TardisAdapter:
         """
         return self._base_client.sync_warmup()
 
+    def check_venue_access(self, exchange: str) -> tuple[bool, str]:
+        """
+        Check if we have API access to a specific exchange/venue.
+
+        This detects Cloudflare blocks or subscription issues early,
+        before attempting to fetch instruments.
+
+        Args:
+            exchange: The Tardis exchange name (e.g., 'binance', 'upbit')
+
+        Returns:
+            Tuple of (success: bool, error_message: str)
+        """
+        return self._base_client.check_venue_access(exchange)
+
+    def check_venues_access(self, exchanges: list[str]) -> dict[str, tuple[bool, str]]:
+        """
+        Check API access for multiple exchanges/venues (pre-flight validation).
+
+        Args:
+            exchanges: List of Tardis exchange names
+
+        Returns:
+            Dict mapping exchange -> (success, error_message)
+        """
+        return self._base_client.check_venues_access(exchanges)
+
     def fetch_exchange_instruments(
         self,
         exchange: str,
@@ -183,7 +210,9 @@ class TardisAdapter:
         if not force_refresh:
             cached = get_cached_instruments(exchange)
             if cached is not None:
-                logger.info(f"📋 Using module-level cached Tardis data for {exchange} ({len(cached)} instruments)")
+                logger.info(
+                    f"📋 Using module-level cached Tardis data for {exchange} ({len(cached)} instruments)"
+                )
                 # Apply overrides to cached data (in case cache was populated before fix)
                 available_symbols = self._apply_metadata_overrides(exchange, cached)
             else:
