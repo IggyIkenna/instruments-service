@@ -82,22 +82,19 @@ def main() -> Dict[str, Any]:
     def cleanup_on_signal():
         """Cleanup function called on SIGTERM/SIGINT.
 
-        Note: During atexit, stdout/stderr may be closed, so we wrap logging
-        in try/except to avoid ValueError from closed streams.
+        Note: During atexit, stdout/stderr may be closed. We suppress logging
+        errors by setting logging.raiseExceptions = False, which prevents the
+        logging module from printing error messages when streams are closed.
         """
+        # Suppress logging error messages during interpreter shutdown
+        logging.raiseExceptions = False
+
         nonlocal mode_handler
         if mode_handler is not None:
             try:
                 mode_handler.cleanup()
-                try:
-                    logger.info("Cleanup completed on signal")
-                except ValueError:
-                    pass  # Streams closed during interpreter shutdown
-            except Exception as e:
-                try:
-                    logger.warning(f"Cleanup error on signal: {e}")
-                except ValueError:
-                    pass  # Streams closed during interpreter shutdown
+            except Exception:
+                pass  # Suppress all errors during shutdown
 
     # Initialize graceful shutdown handler (handles SIGTERM/SIGINT)
     _shutdown_handler = GracefulShutdownHandler(cleanup_callback=cleanup_on_signal)
