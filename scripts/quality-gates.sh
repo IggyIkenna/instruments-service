@@ -84,15 +84,57 @@ done
 # Track overall status
 LINT_STATUS=0
 TEST_STATUS=0
+CONFIG_STATUS=0
 
 # Source directories
 SOURCE_DIRS="instruments_service/ tests/"
 
 # ============================================================================
-# STEP 0: AUTO-FIX (ruff format + ruff check --fix)
+# STEP 0: CLOUD BUILD CONFIG VALIDATION
+# ============================================================================
+echo -e "\n${BLUE}[0/3] CLOUD BUILD CONFIG VALIDATION${NC}"
+echo "----------------------------------------------------------------------"
+
+# Check for unescaped shell variables in cloudbuild.yaml
+# In Cloud Build YAML, shell variables must be escaped with $$ not $
+if [ -f "cloudbuild.yaml" ]; then
+    # Check for $PYTEST_EXIT or $? that should be $$PYTEST_EXIT or $$?
+    # Exclude lines that already have $$ (properly escaped)
+    UNESCAPED=$(grep -E '\$PYTEST_EXIT|\$\?' cloudbuild.yaml | grep -v '\$\$' || true)
+    if [ -n "$UNESCAPED" ]; then
+        echo -e "${RED}❌ cloudbuild.yaml has unescaped shell variables:${NC}"
+        echo "$UNESCAPED"
+        echo -e "${YELLOW}Fix: Change \$PYTEST_EXIT to \$\$PYTEST_EXIT and \$? to \$\$?${NC}"
+        CONFIG_STATUS=1
+    else
+        echo -e "${GREEN}✅ cloudbuild.yaml shell variables properly escaped${NC}"
+    fi
+else
+    echo -e "${YELLOW}No cloudbuild.yaml found (skipping)${NC}"
+fi
+
+# Check Python version in pyproject.toml matches expected
+if [ -f "pyproject.toml" ]; then
+    PYTHON_VERSION=$(grep 'requires-python' pyproject.toml | head -1)
+    # Expected: >=3.12,<3.14 for most services (or >=3.11,<3.12 for execution-services)
+    if echo "$PYTHON_VERSION" | grep -q '>=3.12,<3.14'; then
+        echo -e "${GREEN}✅ pyproject.toml Python version correct: $PYTHON_VERSION${NC}"
+    elif echo "$PYTHON_VERSION" | grep -q '>=3.11,<3.12'; then
+        echo -e "${GREEN}✅ pyproject.toml Python version correct (execution-services): $PYTHON_VERSION${NC}"
+    else
+        echo -e "${RED}❌ pyproject.toml Python version may be incorrect: $PYTHON_VERSION${NC}"
+        echo -e "${YELLOW}Expected: requires-python = \">=3.12,<3.14\" (or >=3.11,<3.12 for execution-services)${NC}"
+        CONFIG_STATUS=1
+    fi
+else
+    echo -e "${YELLOW}No pyproject.toml found (skipping)${NC}"
+fi
+
+# ============================================================================
+# STEP 1: AUTO-FIX (ruff format + ruff check --fix)
 # ============================================================================
 if [ "$RUN_LINT" = true ] && [ "$AUTO_FIX" = true ]; then
-    echo -e "\n${BLUE}[0/2] AUTO-FIX (ruff format + ruff check --fix)${NC}"
+    echo -e "\n${BLUE}[1/3] AUTO-FIX (ruff format + ruff check --fix)${NC}"
     echo "----------------------------------------------------------------------"
 
     # Check if ruff is installed
@@ -113,10 +155,10 @@ if [ "$RUN_LINT" = true ] && [ "$AUTO_FIX" = true ]; then
 fi
 
 # ============================================================================
-# STEP 1: LINTING (ruff)
+# STEP 2: LINTING (ruff)
 # ============================================================================
 if [ "$RUN_LINT" = true ]; then
-    echo -e "\n${BLUE}[1/2] LINTING (ruff)${NC}"
+    echo -e "\n${BLUE}[2/3] LINTING (ruff)${NC}"
     echo "----------------------------------------------------------------------"
 
     # Check if ruff is installed
@@ -136,10 +178,10 @@ if [ "$RUN_LINT" = true ]; then
 fi
 
 # ============================================================================
-# STEP 2: TESTS (pytest)
+# STEP 3: TESTS (pytest)
 # ============================================================================
 if [ "$RUN_TESTS" = true ]; then
-    echo -e "\n${BLUE}[2/2] TESTS (pytest)${NC}"
+    echo -e "\n${BLUE}[3/3] TESTS (pytest)${NC}"
     echo "----------------------------------------------------------------------"
 
     # Check if pytest is installed
@@ -230,6 +272,13 @@ echo -e "${BLUE}QUALITY GATES SUMMARY${NC}"
 echo -e "${BLUE}======================================================================${NC}"
 
 OVERALL_STATUS=0
+
+if [ $CONFIG_STATUS -eq 0 ]; then
+    echo -e "Config:   ${GREEN}✅ PASSED${NC}"
+else
+    echo -e "Config:   ${RED}❌ FAILED${NC}"
+    OVERALL_STATUS=1
+fi
 
 if [ "$RUN_LINT" = true ]; then
     if [ $LINT_STATUS -eq 0 ]; then
