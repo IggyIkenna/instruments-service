@@ -6,10 +6,11 @@
 # Run this locally before pushing to catch issues early.
 #
 # Usage:
-#   ./scripts/quality-gates.sh           # Run all checks
-#   ./scripts/quality-gates.sh --lint    # Linting only
+#   ./scripts/quality-gates.sh           # Run all checks (with auto-fix)
+#   ./scripts/quality-gates.sh --lint    # Linting only (with auto-fix)
 #   ./scripts/quality-gates.sh --test    # Tests only
 #   ./scripts/quality-gates.sh --quick   # Unit tests only (fast)
+#   ./scripts/quality-gates.sh --no-fix  # Skip auto-fix (CI mode)
 #
 # Requirements:
 #   - Python 3.13+
@@ -44,6 +45,7 @@ echo ""
 RUN_LINT=true
 RUN_TESTS=true
 QUICK_MODE=false
+AUTO_FIX=true  # Default to auto-fix for local runs
 
 for arg in "$@"; do
     case $arg in
@@ -58,13 +60,21 @@ for arg in "$@"; do
         --quick)
             QUICK_MODE=true
             ;;
+        --no-fix)
+            AUTO_FIX=false
+            ;;
+        --fix)
+            AUTO_FIX=true
+            ;;
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --lint     Run linting only"
+            echo "  --lint     Run linting only (with auto-fix)"
             echo "  --test     Run tests only"
             echo "  --quick    Run unit tests only (faster)"
+            echo "  --fix      Auto-fix linting issues (default)"
+            echo "  --no-fix   Skip auto-fix (CI mode)"
             echo "  --help     Show this help message"
             exit 0
             ;;
@@ -74,6 +84,33 @@ done
 # Track overall status
 LINT_STATUS=0
 TEST_STATUS=0
+
+# Source directories
+SOURCE_DIRS="instruments_service/ tests/"
+
+# ============================================================================
+# STEP 0: AUTO-FIX (ruff format + ruff check --fix)
+# ============================================================================
+if [ "$RUN_LINT" = true ] && [ "$AUTO_FIX" = true ]; then
+    echo -e "\n${BLUE}[0/2] AUTO-FIX (ruff format + ruff check --fix)${NC}"
+    echo "----------------------------------------------------------------------"
+
+    # Check if ruff is installed
+    if ! command -v ruff &> /dev/null; then
+        echo -e "${YELLOW}Installing ruff...${NC}"
+        pip install ruff --quiet
+    fi
+
+    # Auto-format with ruff format
+    echo "Running: ruff format $SOURCE_DIRS"
+    ruff format $SOURCE_DIRS || true
+
+    # Auto-fix with ruff check --fix
+    echo "Running: ruff check --fix $SOURCE_DIRS"
+    ruff check --fix $SOURCE_DIRS || true
+
+    echo -e "${GREEN}✅ Auto-fix complete${NC}"
+fi
 
 # ============================================================================
 # STEP 1: LINTING (ruff)
@@ -89,8 +126,8 @@ if [ "$RUN_LINT" = true ]; then
     fi
 
     # Run ruff check (same as Cloud Build and GitHub Actions)
-    echo "Running: ruff check instruments_service/ tests/"
-    if ruff check instruments_service/ tests/; then
+    echo "Running: ruff check $SOURCE_DIRS"
+    if ruff check $SOURCE_DIRS; then
         echo -e "${GREEN}✅ Linting PASSED${NC}"
     else
         echo -e "${RED}❌ Linting FAILED${NC}"
