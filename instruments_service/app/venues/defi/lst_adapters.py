@@ -142,7 +142,7 @@ class EtherFiAdapter(BaseDefiAdapter):
             "ccxt_exchange": "",
             "available_from_datetime": datetime(2024, 2, 1).isoformat(),  # EtherFi weETH launch date (Feb 2024)
             "available_to_datetime": None,
-            "data_types": "yields,oracle_prices",  # LST APY from DefiLlama + oracle price
+            "data_types": "oracle_prices",  # Oracle price (yield computed from price change over time)
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
@@ -281,7 +281,7 @@ class LidoAdapter(BaseDefiAdapter):
             "ccxt_exchange": "",
             "available_from_datetime": datetime(2020, 12, 18).isoformat(),  # Lido stETH launch date (Dec 18, 2020)
             "available_to_datetime": None,
-            "data_types": "yields,oracle_prices",  # LST APY from DefiLlama + oracle price
+            "data_types": "oracle_prices",  # Oracle price (yield computed from price change over time)
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
