@@ -153,7 +153,7 @@ class EthenaAdapter(BaseDefiAdapter):
             "ccxt_exchange": "",
             "available_from_datetime": datetime(2024, 2, 16).isoformat(),  # Ethena mainnet launch (Feb 2024)
             "available_to_datetime": None,
-            "data_types": "yields,oracle_prices",  # sUSDe APY from DefiLlama + oracle price
+            "data_types": "oracle_prices",  # Oracle price (yield computed from price change over time)
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
