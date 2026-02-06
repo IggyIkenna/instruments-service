@@ -1,4 +1,4 @@
-# Instruments Service Architecture
+ # Instruments Service Architecture
 
 > **Related Documentation**:
 > - [`SETUP_GUIDE.md`](./SETUP_GUIDE.md) - Setup, installation, and quick start guide
