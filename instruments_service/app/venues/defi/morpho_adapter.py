@@ -379,7 +379,7 @@ class MorphoAdapter(BaseDefiAdapter):
             "ccxt_exchange": "",
             "available_from_datetime": datetime(2023, 6, 1).isoformat(),  # Morpho launch date (June 2023)
             "available_to_datetime": None,
-            "data_types": "rate_indices",  # Raw data: supplyIndex (rate_indices includes utilization)
+            "data_types": "rate_indices,oracle_prices",  # rate_indices + oracle prices for consistency with AAVE
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
@@ -436,7 +436,7 @@ class MorphoAdapter(BaseDefiAdapter):
             "ccxt_exchange": "",
             "available_from_datetime": datetime(2023, 6, 1).isoformat(),  # Morpho launch date (June 2023)
             "available_to_datetime": None,
-            "data_types": "rate_indices",  # Raw data: borrowIndex (rate_indices includes utilization)
+            "data_types": "rate_indices,oracle_prices",  # rate_indices + oracle prices for consistency with AAVE
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
