@@ -368,7 +368,7 @@ class CorporateActionsHandler(ModeHandler):
         if df.empty or column not in df.columns:
             return df
         df = df.copy()
-        df[column] = pd.to_datetime(df[column], errors="coerce").dt.date
+        df[column] = pd.to_datetime(df[column], errors="coerce", utc=True).dt.date
         return df
 
     def _filter_by_date(

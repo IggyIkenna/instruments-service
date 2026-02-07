@@ -758,16 +758,23 @@ class InstrumentsService:
                 all_instruments = filtered_instruments
 
             if not all_instruments:
-                logger.warning(f"⚠️ No instruments generated for {date_str}")
+                # With the always-produce architecture, the instruments service should
+                # always generate definitions (even on holidays, by querying previous session).
+                # If we reach here with zero instruments, it's a genuine error.
+                logger.error(
+                    f"❌ No instruments generated for {date_str}. "
+                    f"This is unexpected with always-produce architecture - "
+                    f"holidays/weekends should fall back to previous session definitions."
+                )
                 # Get error/warning counts before returning
                 error_count = error_warning_counter.error_count
                 warning_count = error_warning_counter.warning_count
                 root_logger.removeHandler(error_warning_counter)
                 return {
-                    "status": "warning",
+                    "status": "error",
                     "date": date_str,
                     "instruments_generated": 0,
-                    "message": "No instruments generated",
+                    "message": "No instruments generated - check adapter fallback logic",
                     "error_count": error_count,
                     "warning_count": warning_count,
                 }

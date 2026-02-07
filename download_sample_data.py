@@ -6,7 +6,7 @@ for Hyperliquid and Aster to CSV files.
 import logging
 import requests
 import csv
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import sys
 from typing import Optional
@@ -17,15 +17,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
 from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def find_earliest_available_data_hyperliquid(
-    coin: str, max_days_back: int = 365
-) -> Optional[datetime]:
+def find_earliest_available_data_hyperliquid(coin: str, max_days_back: int = 365) -> Optional[datetime]:
     """
     Find the earliest available data for a Hyperliquid coin by testing historical endpoints.
 
@@ -37,7 +33,7 @@ def find_earliest_available_data_hyperliquid(
         Earliest available datetime or None
     """
     api_base_url = "https://api.hyperliquid.xyz"
-    end_date = datetime.now()
+    end_date = datetime.now(timezone.utc)
 
     # Binary search for earliest available data
     earliest_found = None
@@ -98,9 +94,7 @@ def download_hyperliquid_data_to_csv(coin: str, target_date: datetime, output_di
     start_ms = int(start_date.timestamp() * 1000)
     end_ms = int(end_date.timestamp() * 1000)
 
-    logger.info(
-        f"📥 Downloading Hyperliquid data for {coin} on {target_date.strftime('%Y-%m-%d')}..."
-    )
+    logger.info(f"📥 Downloading Hyperliquid data for {coin} on {target_date.strftime('%Y-%m-%d')}...")
 
     # Download candles (trades data)
     candles_file = output_dir / f"hyperliquid_{coin}_candles_{target_date.strftime('%Y%m%d')}.csv"
@@ -146,12 +140,12 @@ def download_hyperliquid_data_to_csv(coin: str, target_date: datetime, output_di
                             {
                                 "timestamp": candle.get("t", ""),
                                 "open_time": (
-                                    datetime.fromtimestamp(candle.get("t", 0) / 1000).isoformat()
+                                    datetime.fromtimestamp(candle.get("t", 0) / 1000, tz=timezone.utc).isoformat()
                                     if candle.get("t")
                                     else ""
                                 ),
                                 "close_time": (
-                                    datetime.fromtimestamp(candle.get("T", 0) / 1000).isoformat()
+                                    datetime.fromtimestamp(candle.get("T", 0) / 1000, tz=timezone.utc).isoformat()
                                     if candle.get("T")
                                     else ""
                                 ),
@@ -267,7 +261,7 @@ def download_aster_data_to_csv(symbol: str, target_date: datetime, output_dir: P
                     writer.writeheader()
                     for trade in trades:
                         trade_time = (
-                            datetime.fromtimestamp(trade.get("time", 0) / 1000)
+                            datetime.fromtimestamp(trade.get("time", 0) / 1000, tz=timezone.utc)
                             if trade.get("time")
                             else None
                         )
@@ -339,9 +333,7 @@ def download_aster_data_to_csv(symbol: str, target_date: datetime, output_dir: P
                     for i, ask in enumerate(asks):
                         writer.writerow(["ask", i + 1, ask[0], ask[1], "", "", ""])
 
-                logger.info(
-                    f"  ✅ Saved book depth ({len(bids)} bids, {len(asks)} asks) to {book_file}"
-                )
+                logger.info(f"  ✅ Saved book depth ({len(bids)} bids, {len(asks)} asks) to {book_file}")
             else:
                 logger.warning(f"  ⚠️ Invalid book data for {symbol}")
         else:
@@ -375,9 +367,7 @@ def check_historical_metadata():
                     # Update available_from in instrument definition
                     perpetuals[inst_key]["available_from_datetime"] = earliest.isoformat()
                 else:
-                    logger.warning(
-                        f"  {coin}: Could not determine earliest data (may be very recent)"
-                    )
+                    logger.warning(f"  {coin}: Could not determine earliest data (may be very recent)")
 
     # Test Aster
     logger.info("\n📊 Aster Historical Metadata Check")
@@ -409,7 +399,7 @@ def main():
     logger.info("Downloading Sample Data (Last 24 Hours)")
     logger.info("=" * 80)
 
-    target_date = datetime.now() - timedelta(days=1)
+    target_date = datetime.now(timezone.utc) - timedelta(days=1)
 
     # Hyperliquid sample
     if hl_perpetuals:
