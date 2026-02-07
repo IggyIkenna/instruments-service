@@ -115,7 +115,8 @@ class DatabentoAdapter:
         return self._base_client.api_key
 
     # ============================================================================
-    # BATCH API - Re-downloads within 30 days are FREE!
+    # BATCH API - Delegates to DatabentoBaseClient for unified batch orchestration
+    # Re-downloads within 30 days are FREE!
     # ============================================================================
 
     def _fetch_with_batch_api(
@@ -128,10 +129,16 @@ class DatabentoAdapter:
         end: str,
     ) -> Any:
         """
-        Fetch data using Databento's Batch Jobs API.
+        Fetch data using Databento's Batch Jobs API via DatabentoBaseClient.
 
         KEY BENEFIT: Re-downloading the same data within 30 days is FREE!
         Unlike Historical Streaming which bills every request.
+
+        Delegates to DatabentoBaseClient.batch_download() which handles:
+        - Deterministic key selection (same params -> same API key)
+        - Expanded state checking (queued/processing/done)
+        - GCS job cache for cross-shard deduplication
+        - NO fallback to streaming API
 
         Args:
             dataset: Databento dataset ID
@@ -144,154 +151,32 @@ class DatabentoAdapter:
         Returns:
             DBNStore object with the data
         """
-        import tempfile
-
         logger.info(
-            f"📦 Using BATCH API for {dataset} {schema} ({len(symbols)} symbols) - FREE re-download within 30 days!"
+            f"Using BATCH API for {dataset} {schema} ({len(symbols)} symbols) - FREE re-download within 30 days!"
         )
 
-        try:
-            # Step 1: Check for existing batch job (free re-download!)
-            existing_job = self._find_matching_batch_job(
-                dataset=dataset,
-                schema=schema,
-                symbols=symbols,
-                stype_in=stype_in,
-                start=start,
-                end=end,
-            )
+        # Delegate to base client's unified batch orchestration
+        output_path = self._base_client.batch_download(
+            dataset=dataset,
+            schema=schema,
+            symbols=symbols,
+            stype_in=stype_in,
+            start=start,
+            end=end,
+        )
 
-            if existing_job:
-                job_id = existing_job["id"]
-                logger.info(f"   ♻️ Found existing batch job {job_id} - FREE re-download!")
-            else:
-                # Step 2: Submit new batch job
-                job = self.client.batch.submit_job(
-                    dataset=dataset,
-                    schema=schema,
-                    symbols=symbols,
-                    stype_in=stype_in,
-                    stype_out="instrument_id",
-                    start=start,
-                    end=end,
-                    encoding="dbn",
-                    compression="zstd",
-                    delivery="download",
-                )
-                job_id = job["id"]
-                logger.info(f"   📤 Submitted new batch job: {job_id}")
+        # Find the data file in the downloaded output
+        data_file = None
+        for f in output_path.iterdir():
+            if f.name.endswith(".dbn.zst") or f.name.endswith(".dbn"):
+                data_file = f
+                break
 
-                # Step 3: Wait for job completion
-                self._wait_for_batch_job(job_id)
-
-            # Step 4: Download to temp directory
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                downloaded_files = self.client.batch.download(
-                    job_id=job_id,
-                    output_dir=tmp_dir,
-                )
-
-                if not downloaded_files:
-                    logger.warning(f"⚠️ No files downloaded for batch job {job_id}")
-                    # Return empty DBNStore-like object
-                    return type("EmptyData", (), {"to_df": lambda: pd.DataFrame()})()
-
-                # Find the data file (not metadata files)
-                data_file = None
-                for f in downloaded_files:
-                    if str(f).endswith(".dbn.zst") or str(f).endswith(".dbn"):
-                        data_file = f
-                        break
-
-                if data_file:
-                    # Load and return DBNStore
-                    return db.DBNStore.from_file(str(data_file))
-                else:
-                    logger.warning("⚠️ No .dbn data file found in batch download")
-                    return type("EmptyData", (), {"to_df": lambda: pd.DataFrame()})()
-
-        except Exception as e:
-            logger.warning(f"⚠️ Batch API failed, falling back to streaming: {e}")
-            # Fallback to streaming API
-            return self.client.timeseries.get_range(
-                dataset=dataset,
-                schema=db.Schema.DEFINITION if schema == "definition" else schema,
-                symbols=symbols,
-                stype_in=stype_in,
-                stype_out="instrument_id",
-                start=start,
-                end=end,
-            )
-
-    def _find_matching_batch_job(
-        self,
-        dataset: str,
-        schema: str,
-        symbols: List[str],
-        stype_in: str,
-        start: str,
-        end: str,
-    ) -> Optional[Dict[str, Any]]:
-        """Find an existing batch job matching the query parameters."""
-        try:
-            # List recent batch jobs (last 30 days are downloadable)
-            jobs = self.client.batch.list_jobs(states=["done"])
-
-            # Match job parameters
-            symbols_set = set(symbols)
-            for job in jobs:
-                if (
-                    job.get("dataset") == dataset
-                    and job.get("schema") == schema
-                    and job.get("stype_in") == stype_in
-                    and str(job.get("start", "")).startswith(start)
-                    and str(job.get("end", "")).startswith(end)
-                ):
-                    # Check symbols match
-                    job_symbols = job.get("symbols", "")
-                    if isinstance(job_symbols, str):
-                        job_symbols_set = set(job_symbols.split(","))
-                    else:
-                        job_symbols_set = set(job_symbols) if job_symbols else set()
-
-                    if symbols_set == job_symbols_set or symbols_set.issubset(job_symbols_set):
-                        return job
-
-            return None
-        except Exception as e:
-            logger.debug(f"No matching batch job found: {e}")
-            return None
-
-    def _wait_for_batch_job(self, job_id: str, timeout_minutes: int = 30) -> None:
-        """Wait for a batch job to complete."""
-        import time
-
-        poll_interval = 5  # seconds
-        max_polls = (timeout_minutes * 60) // poll_interval
-
-        for i in range(max_polls):
-            jobs = self.client.batch.list_jobs()
-
-            # Find our job
-            job = next((j for j in jobs if j["id"] == job_id), None)
-
-            if not job:
-                raise RuntimeError(f"Batch job {job_id} not found")
-
-            state = job.get("state", "unknown")
-            progress = job.get("progress", 0)
-
-            if state == "done":
-                logger.info(f"   ✅ Batch job {job_id} completed!")
-                return
-            elif state in ("expired", "failed"):
-                raise RuntimeError(f"Batch job {job_id} {state}")
-            else:
-                if i % 6 == 0:  # Log every 30 seconds
-                    logger.info(f"   ⏳ Batch job {job_id}: {state} ({progress}%)")
-                time.sleep(poll_interval)
-
-        raise TimeoutError(f"Batch job {job_id} timed out after {timeout_minutes} minutes")
+        if data_file:
+            return db.DBNStore.from_file(str(data_file))
+        else:
+            logger.warning("No .dbn data file found in batch download")
+            return type("EmptyData", (), {"to_df": lambda: pd.DataFrame()})()
 
     def fetch_instrument_definitions(
         self,
@@ -331,6 +216,24 @@ class DatabentoAdapter:
             target_date = date.replace(tzinfo=timezone.utc)
         else:
             target_date = date.astimezone(timezone.utc)
+
+        # ---------------------------------------------------------------
+        # T+2 availability check: Databento historical data is only
+        # available ~2 calendar days after the trading date (published
+        # around UTC midnight, two days later).
+        # Skip early to avoid billable 422 errors from the API.
+        # ---------------------------------------------------------------
+        utc_today = datetime.now(timezone.utc).date()
+        databento_earliest_available = utc_today - timedelta(days=2)
+        target_date_only = target_date.date() if hasattr(target_date, "date") else target_date
+        if target_date_only > databento_earliest_available:
+            logger.warning(
+                f"⚠️ DATABENTO_T2: Skipping {exchange} on {target_date_only} - "
+                f"Databento historical data has T+2 availability "
+                f"(earliest queryable date today: {databento_earliest_available}). "
+                f"Try again after {target_date_only + timedelta(days=2)} UTC."
+            )
+            return {}
 
         # For Databento queries, we need to query the target date specifically
         # Databento DEFINITION schema returns instruments available on the queried date
@@ -400,6 +303,7 @@ class DatabentoAdapter:
                     )
                 else:
                     # Legacy streaming API (bills every request)
+                    self._base_client.ip_rate_limiter.acquire("timeseries")
                     zipped_data = self.client.timeseries.get_range(
                         dataset=symbol_dataset,
                         schema=db.Schema.DEFINITION,
@@ -414,18 +318,72 @@ class DatabentoAdapter:
                 df = zipped_data.to_df()
 
                 if df.empty:
-                    # Check if this is a US market holiday for better user feedback
-                    is_holiday, holiday_name = self.is_us_market_holiday(date.date() if hasattr(date, "date") else date)
-                    if is_holiday:
+                    # Check if this is a US market holiday or weekend
+                    target_date_only = date.date() if hasattr(date, "date") else date
+                    is_holiday, holiday_name = self.is_us_market_holiday(target_date_only)
+                    is_weekend = target_date_only.weekday() >= 5
+
+                    if is_holiday or is_weekend:
+                        reason = f"US market holiday ({holiday_name})" if is_holiday else "weekend"
                         logger.info(
-                            f"📅 No data for {exchange} on {start_date_str} - US market holiday ({holiday_name}). "
-                            f"This is expected behavior."
+                            f"📅 No data for {exchange} on {start_date_str} - {reason}. "
+                            f"Querying previous trading session for instrument definitions."
                         )
+
+                        # Find previous trading session and re-query to get instrument definitions
+                        # This ensures we ALWAYS produce instruments files, even on holidays/weekends
+                        prev_session_date = self._get_previous_trading_session(target_date_only, exchange)
+                        if prev_session_date:
+                            prev_start_str = prev_session_date.strftime("%Y-%m-%d")
+                            prev_end_str = (prev_session_date + timedelta(days=1)).strftime("%Y-%m-%d")
+                            logger.info(f"📅 Re-querying {exchange} with previous session date: {prev_start_str}")
+                            try:
+                                if use_batch_api:
+                                    fallback_data = self._fetch_with_batch_api(
+                                        dataset=symbol_dataset,
+                                        schema="definition",
+                                        symbols=symbol_group,
+                                        stype_in=stype_in,
+                                        start=prev_start_str,
+                                        end=prev_end_str,
+                                    )
+                                else:
+                                    self._base_client.ip_rate_limiter.acquire("timeseries")
+                                    fallback_data = self.client.timeseries.get_range(
+                                        dataset=symbol_dataset,
+                                        schema=db.Schema.DEFINITION,
+                                        symbols=symbol_group,
+                                        stype_in=stype_in,
+                                        stype_out="instrument_id",
+                                        start=prev_start_str,
+                                        end=prev_end_str,
+                                    )
+                                df = fallback_data.to_df()
+                                if not df.empty:
+                                    logger.info(
+                                        f"✅ Got {len(df)} instrument definitions from previous session "
+                                        f"({prev_start_str}) for {exchange} on {reason} {start_date_str}"
+                                    )
+                                    # df will be processed below with target_date metadata
+                                    # (is_trading_day will be set to False by _get_exchange_trading_hours)
+                                else:
+                                    logger.warning(
+                                        f"⚠️ Previous session {prev_start_str} also returned empty for {exchange}"
+                                    )
+                                    continue
+                            except Exception as fallback_err:
+                                logger.warning(
+                                    f"⚠️ Fallback query for {exchange} on {prev_start_str} failed: {fallback_err}"
+                                )
+                                continue
+                        else:
+                            logger.warning(f"⚠️ Could not find previous trading session for {exchange}")
+                            continue
                     else:
                         logger.warning(
                             f"No instrument definitions found for {exchange} {symbol_group} (stype_in={stype_in}) on {start_date_str}"
                         )
-                    continue
+                        continue
 
                 # Filter out non-trading instruments
                 # Use security_type for reliable filtering instead of instrument_class
@@ -1127,6 +1085,7 @@ class DatabentoAdapter:
 
             # Resolve instrument_id to raw_symbol
             # The API returns a mapping dict: {input_symbol: [output_symbols]}
+            self._base_client.ip_rate_limiter.acquire("symbology")
             resolved = self.client.symbology.resolve(
                 symbols=[str(instrument_id)],
                 stype_in="instrument_id",
@@ -2121,7 +2080,7 @@ class DatabentoAdapter:
                 if isinstance(ts_event, pd.Timestamp):
                     available_from = ts_event.isoformat()
                 elif isinstance(ts_event, str):
-                    available_from = pd.to_datetime(ts_event).isoformat()
+                    available_from = pd.to_datetime(ts_event, utc=True).isoformat()
                 logger.warning("Using ts_event for available_from_datetime - this may be today's date, not target date")
             except Exception as e:
                 logger.warning(f"Failed to parse ts_event: {e}")
@@ -2380,6 +2339,36 @@ class DatabentoAdapter:
                 open_utc = "holiday"
                 close_utc = "holiday"
 
+            # Check for early close days (e.g., day after Thanksgiving, Christmas Eve)
+            # exchange_calendars tracks early closes via the schedule DataFrame.
+            # On early close days, the actual close time is earlier than normal.
+            if is_trading_day and not is_holiday:
+                xcal = self._get_exchange_calendar(hours_config.get("holiday_calendar"))
+                if xcal:
+                    try:
+                        ts = pd.Timestamp(target_date.date())
+                        # Check if this date is in the early_closes index
+                        if hasattr(xcal, "early_closes") and ts in xcal.early_closes:
+                            # Get the actual close time from the schedule
+                            if ts in xcal.schedule.index:
+                                actual_close = xcal.schedule.loc[ts, "close"]
+                                if pd.notna(actual_close):
+                                    # actual_close is a tz-aware Timestamp (UTC)
+                                    early_close_utc_dt = (
+                                        actual_close.tz_convert(timezone.utc)
+                                        if actual_close.tzinfo
+                                        else actual_close.replace(tzinfo=timezone.utc)
+                                    )
+                                    close_utc = early_close_utc_dt.strftime("%H:%M:%S+00:00")
+                                    close_utc_dt = early_close_utc_dt
+                                    session_end_utc = early_close_utc_dt.isoformat()
+                                    logger.info(
+                                        f"📅 Early close detected for {exchange} on {target_date.date()}: "
+                                        f"closes at {close_utc} UTC"
+                                    )
+                    except Exception as early_close_err:
+                        logger.debug(f"Early close check not available for {exchange}: {early_close_err}")
+
         except Exception as e:
             logger.warning(f"Failed to convert trading hours to UTC for {exchange}: {e}")
             # Fallback to local time if conversion fails
@@ -2435,6 +2424,52 @@ class DatabentoAdapter:
             return cal
         except Exception as e:
             logger.warning(f"Failed to load exchange calendar {xcal_code}: {e}")
+            return None
+
+    def _get_previous_trading_session(self, date: datetime.date, exchange: str) -> Optional[datetime.date]:
+        """
+        Find the previous trading session date for an exchange using exchange_calendars.
+
+        Used when Databento returns empty data on holidays/weekends to fall back
+        to the previous session's instrument definitions.
+
+        Args:
+            date: The date for which Databento returned empty
+            exchange: Exchange name (e.g., 'CME', 'NYSE', 'NASDAQ')
+
+        Returns:
+            Previous trading session date, or None if not found
+        """
+        xcal = self._get_exchange_calendar(exchange)
+        if not xcal:
+            # Fallback: try going back day by day (max 7 days)
+            for days_back in range(1, 8):
+                prev = date - timedelta(days=days_back)
+                if prev.weekday() < 5:  # Weekday
+                    return prev
+            return None
+
+        try:
+            ts = pd.Timestamp(date)
+            # Use date_to_session with direction='previous' -- this works correctly
+            # even when the input date is NOT a valid session (holidays, weekends).
+            # Note: previous_session() requires input to BE a session, which fails
+            # on holidays/weekends with NotSessionError.
+            prev_session = xcal.date_to_session(ts, direction="previous")
+            result = prev_session.date()
+            # If date_to_session returned the same date (it IS a session), go back one more
+            if result == date:
+                # The date itself is a session, find the one before it
+                prev_session = xcal.previous_session(ts)
+                result = prev_session.date()
+            return result
+        except Exception as e:
+            logger.warning(f"Failed to get previous session for {exchange} from {date}: {e}")
+            # Fallback: go back day by day
+            for days_back in range(1, 8):
+                prev = date - timedelta(days=days_back)
+                if prev.weekday() < 5:
+                    return prev
             return None
 
     def _is_trading_holiday(self, date: datetime.date, calendar: Optional[str] = None) -> bool:

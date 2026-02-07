@@ -121,7 +121,7 @@ class GenerateDateViewsHandler(ModeHandler):
             return {}
 
         # Convert date column to date type
-        df[date_column] = pd.to_datetime(df[date_column]).dt.date
+        df[date_column] = pd.to_datetime(df[date_column], utc=True).dt.date
 
         # Group by date
         date_groups = df.groupby(date_column)

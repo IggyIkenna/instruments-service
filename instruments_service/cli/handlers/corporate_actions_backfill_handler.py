@@ -255,8 +255,8 @@ class CorporateActionsBackfillHandler(ModeHandler):
                 return new_df
 
             # Convert date columns to date for comparison
-            existing_df[date_column] = pd.to_datetime(existing_df[date_column]).dt.date
-            new_df[date_column] = pd.to_datetime(new_df[date_column]).dt.date
+            existing_df[date_column] = pd.to_datetime(existing_df[date_column], utc=True).dt.date
+            new_df[date_column] = pd.to_datetime(new_df[date_column], utc=True).dt.date
 
             # Get existing dates
             existing_dates = set(existing_df[date_column])
