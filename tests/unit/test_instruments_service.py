@@ -271,6 +271,73 @@ class TestGenerateInstrumentsSingleDate:
             assert "uniswap_v3" in protocols_called
 
     @pytest.mark.asyncio
+    async def test_generate_tradfi_holiday_placeholder_for_missing_venue(self):
+        """When TradFi is run with venue filter and one venue returns no instruments (e.g. holiday),
+        a placeholder row is added so a by-venue file is still written and missing-data checks pass."""
+        with (
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
+            patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig") as mock_config_class,
+            patch("instruments_service.app.core.instruments_service.DatabentoAdapter"),
+        ):
+            mock_config = Mock()
+            mock_config.get_symbols_for_venue.return_value = ["SPY"]
+            mock_config_class.return_value = mock_config
+
+            mock_proc = Mock()
+            mock_proc.process_exchange_instruments = AsyncMock(return_value={})
+
+            # Return instruments only for NASDAQ, none for NYSE (e.g. NYSE holiday)
+            def databento_side_effect(exchange, **kwargs):
+                if exchange == "NASDAQ":
+                    return {
+                        "NASDAQ:ETF:SPY-USD": Mock(
+                            model_dump=lambda: {
+                                "instrument_key": "NASDAQ:ETF:SPY-USD",
+                                "venue": "NASDAQ",
+                                "instrument_type": "ETF",
+                                "symbol": "SPY-USD",
+                                "available_from_datetime": "2024-01-01T00:00:00Z",
+                                "market_category": "TRADFI",
+                            }
+                        )
+                    }
+                return {}
+
+            mock_proc.fetch_databento_instruments = AsyncMock(side_effect=databento_side_effect)
+            mock_proc.fetch_defi_instruments = Mock(return_value={})
+            mock_proc_class.return_value = mock_proc
+
+            mock_storage = Mock()
+            stored_dfs = []
+
+            def capture_store(instruments_df=None, **kwargs):
+                stored_dfs.append(instruments_df)
+                return True
+
+            mock_storage.store_instruments = Mock(side_effect=capture_store)
+            mock_storage_class.return_value = mock_storage
+
+            config = {"project_id": "test-project"}
+            service = InstrumentsService(config)
+
+            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            result = await service.generate_instruments_for_date(date=date, tradfi=True, venues=["NYSE", "NASDAQ"])
+
+            assert result["status"] == "success"
+            assert len(stored_dfs) == 1
+            df = stored_dfs[0]
+            assert "venue" in df.columns
+            assert "NYSE" in df["venue"].values
+            assert "NASDAQ" in df["venue"].values
+            nyse_rows = df[df["venue"] == "NYSE"]
+            assert len(nyse_rows) == 1
+            assert nyse_rows.iloc[0]["instrument_type"] == "MARKET_CLOSED"
+            assert nyse_rows.iloc[0]["is_trading_day"] is False
+            assert nyse_rows.iloc[0].get("trading_hours_open") == "holiday"
+
+    @pytest.mark.asyncio
     async def test_generate_no_mode_specified_processes_all(self):
         """Test that when no mode flags are specified, all modes are processed."""
         with (
