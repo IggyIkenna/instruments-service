@@ -144,6 +144,18 @@ def main() -> Dict[str, Any]:
         if hasattr(args, "upload_to_gcs") and args.upload_to_gcs:
             handler_kwargs["upload_to_gcs"] = args.upload_to_gcs
 
+        # Backfill/update specific options
+        if hasattr(args, "parallel_workers") and args.parallel_workers:
+            handler_kwargs["parallel_workers"] = args.parallel_workers
+        if hasattr(args, "days_threshold") and args.days_threshold:
+            handler_kwargs["days_threshold"] = args.days_threshold
+        if hasattr(args, "input_dir") and args.input_dir:
+            handler_kwargs["input_dir"] = args.input_dir
+        if hasattr(args, "output_dir") and args.output_dir:
+            handler_kwargs["output_dir"] = args.output_dir
+        if hasattr(args, "max_retries") and args.max_retries:
+            handler_kwargs["max_retries"] = args.max_retries
+
         # Market type filters
         # Priority: --category flag takes precedence, then individual flags
         if hasattr(args, "category") and args.category:
