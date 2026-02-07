@@ -35,9 +35,16 @@ def parse_arguments() -> argparse.Namespace:
     # Mode selection
     parser.add_argument(
         "--mode",
-        choices=["instruments", "corporate_actions"],
+        choices=[
+            "instruments",
+            "corporate_actions",
+            "corporate_actions_backfill",
+            "generate_date_views",
+            "corporate_actions_update",
+            "corporate_actions_production",
+        ],
         required=True,
-        help="Operation mode: instruments (generate instrument definitions), corporate_actions (TRADFI only: fetch dividends, splits, earnings for equities)",
+        help="Operation mode: instruments (generate instrument definitions), corporate_actions (TRADFI only: fetch dividends, splits, earnings for equities), corporate_actions_backfill (fetch full history per ticker), generate_date_views (transform by_ticker to by_date), corporate_actions_update (incremental updates), corporate_actions_production (complete production pipeline)",
     )
 
     # Date range (required for instruments mode)
@@ -132,6 +139,36 @@ def parse_arguments() -> argparse.Namespace:
         "--upload-to-gcs",
         action="store_true",
         help="Upload corporate actions to GCS (default: save locally only)",
+    )
+
+    # Backfill/update options
+    parser.add_argument(
+        "--parallel-workers",
+        type=int,
+        default=2,  # Changed from 10 to 2 to avoid rate limiting
+        help="Number of parallel workers for backfill/update (default: 2)",
+    )
+    parser.add_argument(
+        "--days-threshold",
+        type=int,
+        default=7,
+        help="Days before ticker is considered outdated for updates (default: 7)",
+    )
+    parser.add_argument(
+        "--input-dir",
+        type=str,
+        help="Input directory for date views generation",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        help="Output directory for date views generation",
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=3,
+        help="Maximum retry attempts per ticker (default: 3)",
     )
 
     # Logging
