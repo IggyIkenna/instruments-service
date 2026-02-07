@@ -53,7 +53,7 @@ class HyperliquidAdapter(BaseDefiAdapter):
     """
 
     # Hyperliquid mainnet launch (December 2022)
-    HYPERLIQUID_LAUNCH_DATE = datetime(2022, 12, 1)
+    HYPERLIQUID_LAUNCH_DATE = datetime(2022, 12, 1, tzinfo=timezone.utc)
 
     def __init__(
         self,
@@ -278,7 +278,7 @@ class HyperliquidAdapter(BaseDefiAdapter):
         instrument_key = f"{self.venue}:SPOT_PAIR:{symbol}@HYPERLIQUID"
 
         # Use conservative default date
-        available_from = datetime(2023, 5, 1).isoformat()
+        available_from = datetime(2023, 5, 1, tzinfo=timezone.utc).isoformat()
 
         return {
             "instrument_key": instrument_key,
@@ -334,7 +334,7 @@ class HyperliquidAdapter(BaseDefiAdapter):
         # Use conservative default date - funding rate fetching is handled by market tick data handler service
         # Hyperliquid launched in early 2024, but some instruments may have been available earlier
         # Use a conservative default (2023-05-01) to avoid filtering out instruments incorrectly
-        available_from = datetime(2023, 5, 1).isoformat()
+        available_from = datetime(2023, 5, 1, tzinfo=timezone.utc).isoformat()
 
         # Extract metadata
         asset.get("szDecimals", 8)

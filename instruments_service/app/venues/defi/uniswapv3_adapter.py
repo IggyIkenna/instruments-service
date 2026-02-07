@@ -9,7 +9,7 @@ Reference: instruments-service/docs/MVP_INSTRUMENTS.md (DeFi section)
 
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
@@ -284,9 +284,9 @@ class UniswapV3Adapter(BaseDefiAdapter):
         # Get creation timestamp
         created_timestamp = pool.get("createdAtTimestamp")
         if created_timestamp:
-            available_from = datetime.fromtimestamp(int(created_timestamp)).isoformat()
+            available_from = datetime.fromtimestamp(int(created_timestamp), tz=timezone.utc).isoformat()
         else:
-            available_from = datetime.now().isoformat()
+            available_from = datetime.now(timezone.utc).isoformat()
 
         return {
             "instrument_key": instrument_key,

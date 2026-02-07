@@ -16,7 +16,7 @@ import sys
 import re
 from pathlib import Path
 from typing import Dict, List
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add parent directory to path to import clickup_import
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -85,15 +85,11 @@ class TasksMdParser:
                         if "th" in due_str or "st" in due_str or "nd" in due_str or "rd" in due_str:
                             # Format: "November 10th, 2025"
                             date_str = re.sub(r"(\d+)(st|nd|rd|th)", r"\1", due_str)
-                            current_task["due_date"] = datetime.strptime(
-                                date_str, "%B %d, %Y"
-                            ).strftime("%Y-%m-%d")
+                            current_task["due_date"] = datetime.strptime(date_str, "%B %d, %Y").strftime("%Y-%m-%d")
                         elif re.match(r"\w+ \d+", due_str):
                             # Format: "Nov 10" - assume current year
-                            date_str = f"{due_str}, {datetime.now().year}"
-                            current_task["due_date"] = datetime.strptime(
-                                date_str, "%b %d, %Y"
-                            ).strftime("%Y-%m-%d")
+                            date_str = f"{due_str}, {datetime.now(timezone.utc).year}"
+                            current_task["due_date"] = datetime.strptime(date_str, "%b %d, %Y").strftime("%Y-%m-%d")
                         else:
                             current_task["due_date"] = due_str
                     except (ValueError, TypeError):
@@ -106,11 +102,7 @@ class TasksMdParser:
                     continue
 
                 # Collect description lines (non-empty, non-metadata lines)
-                if (
-                    line.strip()
-                    and not line.strip().startswith("**")
-                    and not line.strip().startswith("|")
-                ):
+                if line.strip() and not line.strip().startswith("**") and not line.strip().startswith("|"):
                     current_task["description"].append(line.strip())
 
         # Don't forget the last task
@@ -174,9 +166,7 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
         active_tasks = client.get_tasks(list_id, archived=False, include_subtasks=True)
         archived_tasks = client.get_tasks(list_id, archived=True, include_subtasks=True)
         all_tasks = active_tasks + archived_tasks
-        print(
-            f"   Found {len(active_tasks)} active task(s) and {len(archived_tasks)} archived task(s) in list"
-        )
+        print(f"   Found {len(active_tasks)} active task(s) and {len(archived_tasks)} archived task(s) in list")
 
     if not all_tasks:
         print("   ✅ No tasks found")
@@ -220,9 +210,7 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
     subtask_count = sum(1 for t in tasks_to_delete if t["is_subtask"])
     parent_count = len(tasks_to_delete) - subtask_count
     completed_count = sum(
-        1
-        for t in tasks_to_delete
-        if t["status"].lower() in ["complete", "closed", "done", "resolved"]
+        1 for t in tasks_to_delete if t["status"].lower() in ["complete", "closed", "done", "resolved"]
     )
     archived_count = sum(1 for t in tasks_to_delete if t["is_archived"])
     print(f"   - {parent_count} parent task(s)")
@@ -238,9 +226,7 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
             task_type = "subtask" if task["is_subtask"] else "task"
             status_info = f" [{task['status']}]" if task["status"] != "unknown" else ""
             archived_info = " [ARCHIVED]" if task["is_archived"] else ""
-            print(
-                f"   - {task_type}: {task['name']}{status_info}{archived_info} (ID: {task['id']})"
-            )
+            print(f"   - {task_type}: {task['name']}{status_info}{archived_info} (ID: {task['id']})")
         if len(tasks_to_delete) > 20:
             print(f"   ... and {len(tasks_to_delete) - 20} more")
         return len(tasks_to_delete)
@@ -286,9 +272,7 @@ def main():
         action="store_true",
         help="Dry run mode (don't delete, just show what would be deleted)",
     )
-    parser.add_argument(
-        "--no-reimport", action="store_true", help="Don't re-import after cleanup (just delete)"
-    )
+    parser.add_argument("--no-reimport", action="store_true", help="Don't re-import after cleanup (just delete)")
     parser.add_argument(
         "--source",
         choices=["tasks.md", "STATUS.md"],
@@ -321,7 +305,9 @@ def main():
         print(f"   Checked: Secret Manager ({instruments_config.clickup_secret_name})")
         print("   Checked: Environment variables via settings.py")
         print("\n💡 To store API key in Secret Manager, run:")
-        print("   cd ../unified-cloud-services && python scripts/store_secret.py --secret-name clickup-api-key --secret-value YOUR_TOKEN")
+        print(
+            "   cd ../unified-cloud-services && python scripts/store_secret.py --secret-name clickup-api-key --secret-value YOUR_TOKEN"
+        )
         return 1
 
     # Get list ID from args or instruments_config

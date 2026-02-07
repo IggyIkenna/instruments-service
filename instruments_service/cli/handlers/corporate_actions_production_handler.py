@@ -269,7 +269,7 @@ class CorporateActionsProductionHandler(ModeHandler):
 
         # Process dividends
         if not all_dividends.empty:
-            all_dividends["ex_date"] = pd.to_datetime(all_dividends["ex_date"]).dt.date
+            all_dividends["ex_date"] = pd.to_datetime(all_dividends["ex_date"], utc=True).dt.date
 
             for day, group in all_dividends.groupby("ex_date"):
                 if pd.isna(day):
@@ -284,7 +284,7 @@ class CorporateActionsProductionHandler(ModeHandler):
 
         # Process splits
         if not all_splits.empty:
-            all_splits["effective_date"] = pd.to_datetime(all_splits["effective_date"]).dt.date
+            all_splits["effective_date"] = pd.to_datetime(all_splits["effective_date"], utc=True).dt.date
 
             for day, group in all_splits.groupby("effective_date"):
                 if pd.isna(day):
@@ -299,7 +299,7 @@ class CorporateActionsProductionHandler(ModeHandler):
 
         # Process earnings
         if not all_earnings.empty:
-            all_earnings["earnings_date"] = pd.to_datetime(all_earnings["earnings_date"]).dt.date
+            all_earnings["earnings_date"] = pd.to_datetime(all_earnings["earnings_date"], utc=True).dt.date
 
             for day, group in all_earnings.groupby("earnings_date"):
                 if pd.isna(day):

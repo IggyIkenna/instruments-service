@@ -17,7 +17,7 @@ import logging
 import asyncio
 import concurrent.futures
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 import aiohttp
 
@@ -85,8 +85,8 @@ class UniswapV4Adapter(BaseDefiAdapter):
 
         logger.info(f"✅ UniswapV4Adapter initialized for chain: {self.chain}")
 
-    # V4 launched late 2024 (mainnet: ~November 2024)
-    V4_LAUNCH_DATE = datetime(2024, 11, 1)
+    # V4 first subgraph activity Jan 23 2025; 14-day buffer -> Feb 7
+    V4_LAUNCH_DATE = datetime(2025, 2, 7, tzinfo=timezone.utc)
 
     def fetch_pools(
         self,
@@ -358,8 +358,8 @@ class UniswapV4Adapter(BaseDefiAdapter):
         chain_suffix = f"@{self.chain}"
         instrument_key = f"{self.venue}:POOL:{symbol}{chain_suffix}"
 
-        # V4 launched late 2024
-        available_from = "2024-11-01T00:00:00"
+        # V4 first subgraph activity Jan 2025, 14-day buffer for data reliability
+        available_from = "2025-02-07T00:00:00"
 
         return {
             "instrument_key": instrument_key,

@@ -17,7 +17,7 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 # Add parent directory to path for imports
@@ -27,7 +27,12 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 # Cloud project/account configuration (multi-cloud support)
-PROJECT_ID = os.environ.get("GCP_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("AWS_ACCOUNT_ID") or "central-element-323112"
+PROJECT_ID = (
+    os.environ.get("GCP_PROJECT_ID")
+    or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    or os.environ.get("AWS_ACCOUNT_ID")
+    or "central-element-323112"
+)
 CLOUD_PROVIDER = os.environ.get("CLOUD_PROVIDER", "gcp").lower()
 CATEGORIES = ["CEFI", "TRADFI", "DEFI"]
 
@@ -139,16 +144,19 @@ def get_gcs_client():
     try:
         # Use cloud-agnostic storage client factory
         from unified_cloud_services.core.client_factory import get_storage_client
+
         return get_storage_client()
     except ImportError:
         try:
             # Fallback to legacy method
             from unified_cloud_services import get_gcs_client
+
             return get_gcs_client(project_id=PROJECT_ID)
         except ImportError:
             try:
                 # Last resort: direct GCP client
                 from google.cloud import storage
+
                 return storage.Client(project=PROJECT_ID)
             except Exception as e:
                 logger.warning(f"Could not initialize storage client: {e}")
@@ -239,27 +247,31 @@ def generate_catalog(
                 missing_dates.append(date_str)
 
             if include_entries:
-                entries.append(CatalogEntry(
-                    category=category,
-                    date=date_str,
-                    exists=exists,
-                    gcs_path=gcs_path,
-                    file_size=size,
-                ))
+                entries.append(
+                    CatalogEntry(
+                        category=category,
+                        date=date_str,
+                        exists=exists,
+                        gcs_path=gcs_path,
+                        file_size=size,
+                    )
+                )
 
         total_expected += len(dates)
         total_existing += existing_count
 
         completion_pct = (existing_count / len(dates) * 100) if dates else 0
 
-        category_summaries.append(CategorySummary(
-            category=category,
-            total_dates=len(dates),
-            existing_dates=existing_count,
-            missing_dates=len(missing_dates),
-            completion_pct=round(completion_pct, 2),
-            missing_date_list=missing_dates,
-        ))
+        category_summaries.append(
+            CategorySummary(
+                category=category,
+                total_dates=len(dates),
+                existing_dates=existing_count,
+                missing_dates=len(missing_dates),
+                completion_pct=round(completion_pct, 2),
+                missing_date_list=missing_dates,
+            )
+        )
 
         logger.info(f"{category}: {existing_count}/{len(dates)} dates ({completion_pct:.1f}%)")
 
@@ -269,7 +281,7 @@ def generate_catalog(
         service="instruments-service",
         start_date=start_date.isoformat(),
         end_date=end_date.isoformat(),
-        generated_at=datetime.utcnow().isoformat() + "Z",
+        generated_at=datetime.now(timezone.utc).isoformat(),
         overall_completion=round(overall_completion, 2),
         category_summaries=category_summaries,
         entries=entries if include_entries else [],
@@ -289,7 +301,9 @@ def print_report(report: CatalogReport):
 
     for summary in report.category_summaries:
         status = "✅" if summary.completion_pct == 100 else "⏳" if summary.completion_pct > 0 else "❌"
-        print(f"{status} {summary.category}: {summary.completion_pct}% ({summary.existing_dates}/{summary.total_dates} dates)")
+        print(
+            f"{status} {summary.category}: {summary.completion_pct}% ({summary.existing_dates}/{summary.total_dates} dates)"
+        )
 
         if summary.missing_dates > 0 and summary.missing_date_list:
             print(f"   Missing: {', '.join(summary.missing_date_list[:5])}", end="")
