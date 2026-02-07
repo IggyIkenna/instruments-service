@@ -205,14 +205,16 @@ class CloudInstrumentStorage:
                 if ts_col in instruments_df.columns:
                     # Convert to timezone-naive UTC if needed
                     if instruments_df[ts_col].dtype.name.startswith("datetime64"):
-                        ts_series = pd.to_datetime(instruments_df[ts_col])
+                        ts_series = pd.to_datetime(instruments_df[ts_col], utc=True)
                         if ts_series.dt.tz is not None:
                             instruments_df[ts_col] = ts_series.dt.tz_convert("UTC").dt.tz_localize(None)
                         instruments_df[ts_col] = instruments_df[ts_col].astype("datetime64[ns]")
                     elif instruments_df[ts_col].dtype == "object":
                         # Try to parse string timestamps
                         try:
-                            instruments_df[ts_col] = pd.to_datetime(instruments_df[ts_col]).dt.tz_localize(None)
+                            instruments_df[ts_col] = pd.to_datetime(instruments_df[ts_col], utc=True).dt.tz_convert(
+                                None
+                            )
                         except (ValueError, TypeError, AttributeError) as e:
                             logger.debug(f"Could not parse timestamp column {ts_col}: {e}")
 
@@ -223,7 +225,7 @@ class CloudInstrumentStorage:
                 # Extract date from available_from_datetime if available
                 if "available_from_datetime" in instruments_df.columns:
                     try:
-                        first_date = pd.to_datetime(instruments_df["available_from_datetime"].iloc[0])
+                        first_date = pd.to_datetime(instruments_df["available_from_datetime"].iloc[0], utc=True)
                         date_str = first_date.strftime("%Y-%m-%d")
                     except (ValueError, TypeError, IndexError) as e:
                         logger.debug(f"Could not extract date from available_from_datetime: {e}")

@@ -11,7 +11,7 @@ NOTE: Venue start dates are centralized in unified_cloud_services.models.VenueMa
 
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from unified_cloud_services import VenueMapping
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
@@ -151,7 +151,9 @@ class EthenaAdapter(BaseDefiAdapter):
             "exchange_raw_symbol": symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(2024, 2, 16).isoformat(),  # Ethena mainnet launch (Feb 2024)
+            "available_from_datetime": datetime(
+                2024, 2, 16, tzinfo=timezone.utc
+            ).isoformat(),  # Ethena mainnet launch (Feb 2024)
             "available_to_datetime": None,
             "data_types": "oracle_prices",  # Oracle price (yield computed from price change over time)
             "inverse": False,
