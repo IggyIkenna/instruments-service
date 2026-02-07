@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # Source: Wikipedia S&P 500 list + manual ETF additions
 # Last updated: 2026-01-31
+corporate_actions_start_date: str = "2020-01-01"
 
 SP500_TICKERS = [
     "AAPL",
