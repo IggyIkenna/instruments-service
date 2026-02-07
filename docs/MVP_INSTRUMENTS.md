@@ -132,7 +132,7 @@ When running `--TRADFI` without specifying exchanges, the following are processe
 - **CBOE** - VIX index (static definition)
 - **NASDAQ** - Bitcoin ETFs and equities (via Databento DBEQ.BASIC)
 - **NYSE** - S&P 500 equities (via Databento DBEQ.BASIC)
-- **YAHOO_FINANCE** - KRW/USD forex pair (for kimchi premium calculations)
+- **FX** - KRW/USD forex pair (for kimchi premium calculations, data via Yahoo Finance)
 
 ### Bitcoin ETFs (via Databento DBEQ.BASIC)
 

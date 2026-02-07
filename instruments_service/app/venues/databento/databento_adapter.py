@@ -166,17 +166,24 @@ class DatabentoAdapter:
         )
 
         # Find the data file in the downloaded output
+        # Databento batch.download() creates output at output_path/JOB_ID/
+        # so we must search recursively (rglob) not just the top level (iterdir)
         data_file = None
-        for f in output_path.iterdir():
-            if f.name.endswith(".dbn.zst") or f.name.endswith(".dbn"):
+        for f in output_path.rglob("*.dbn.zst"):
+            data_file = f
+            break
+        if data_file is None:
+            for f in output_path.rglob("*.dbn"):
                 data_file = f
                 break
 
-        if data_file:
-            return db.DBNStore.from_file(str(data_file))
-        else:
-            logger.warning("No .dbn data file found in batch download")
-            return type("EmptyData", (), {"to_df": lambda: pd.DataFrame()})()
+        if data_file is None:
+            raise FileNotFoundError(
+                f"No .dbn or .dbn.zst data file found in batch download at {output_path}. "
+                f"Contents: {[str(p) for p in output_path.rglob('*')]}"
+            )
+
+        return db.DBNStore.from_file(str(data_file))
 
     def fetch_instrument_definitions(
         self,
@@ -561,7 +568,9 @@ class DatabentoAdapter:
         Returns:
             KRW/USD instrument definition dictionary or None
         """
-        venue = "YAHOO_FINANCE"
+        # Yahoo Finance is a DATA PROVIDER, not a venue.
+        # KRW/USD is a spot FX pair -- the venue is "FX" (OTC foreign exchange).
+        venue = "FX"
         instrument_type = "SPOT_PAIR"
         base_asset = "KRW"
         quote_asset = "USD"
@@ -589,7 +598,7 @@ class DatabentoAdapter:
             # ============================================================================
             # METADATA FIELDS (with defaults)
             # ============================================================================
-            "venue_type": "exchange",
+            "venue_type": "otc",  # FX spot is over-the-counter, not exchange-traded
             "tardis_exchange": "",
             "data_provider": "yahoo_finance",  # Data source is Yahoo Finance
             "asset_class": "traditional",

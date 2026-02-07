@@ -1,7 +1,7 @@
 # Instruments Service - Deployment Guide (Femi)
 
-**Last Updated:** January 25, 2026  
-**Owner:** Femi  
+**Last Updated:** January 25, 2026
+**Owner:** Femi
 **Service:** `instruments-service`
 
 ---
@@ -175,7 +175,7 @@ This date provides a baseline before Bitcoin ETFs and newer DeFi protocols.
 | Domain | File Size | Instruments | Top Venues |
 |--------|-----------|-------------|------------|
 | **CeFi** | **168.71 KB** | **2,905** | DERIBIT (1,299), BYBIT (523), OKX (503), BINANCE-SPOT (360), BINANCE-FUTURES (180), COINBASE (17), UPBIT (16) |
-| **TradFi** | **310.19 KB** | **9,577** | CME (9,010), NYSE (463), NASDAQ (102), CBOE (1), YAHOO_FINANCE (1) |
+| **TradFi** | **310.19 KB** | **9,577** | CME (9,010), NYSE (463), NASDAQ (102), CBOE (1), FX (1) |
 | **DeFi** | **45.81 KB** | **116** | HYPERLIQUID (38), UNISWAPV3-ETH (31), ASTER (20), BALANCER-ETH (18), AAVE_V3_ETH (7), LIDO (2) |
 
 **Total for 2023-05-23:** ~525 KB, **12,598 instruments**
@@ -195,7 +195,7 @@ This date shows the expanded universe after Bitcoin ETF launches and additional 
 | Domain | File Size | Instruments | Top Venues |
 |--------|-----------|-------------|------------|
 | **CeFi** | **253.69 KB** | **4,795** | DERIBIT (2,681), BYBIT (887), OKX (539), BINANCE-SPOT (385), BINANCE-FUTURES (262), COINBASE (18), UPBIT (16) |
-| **TradFi** | **360.26 KB** | **11,234** | CME (10,664), NYSE (468), NASDAQ (100), CBOE (1), YAHOO_FINANCE (1) |
+| **TradFi** | **360.26 KB** | **11,234** | CME (10,664), NYSE (468), NASDAQ (100), CBOE (1), FX (1) |
 | **DeFi** | **48.27 KB** | **128** | HYPERLIQUID (38), UNISWAPV3-ETH (37), ASTER (20), BALANCER-ETH (18), AAVE_V3_ETH (7), MORPHO (4), LIDO (2), ETHERFI (1), ETHENA (1) |
 
 **Total for 2024-07-01:** ~662 KB, **16,157 instruments**
@@ -209,7 +209,7 @@ This date shows the expanded universe after Bitcoin ETF launches and additional 
 
 ---
 
-**Note:** 
+**Note:**
 - File sizes and row counts vary by date based on:
   - **Earlier dates (2020-2023):** Fewer instruments existed (new exchanges/protocols launched over time)
   - **Recent dates (2024+):** More instruments as new assets, exchanges, and protocols are added
@@ -298,7 +298,7 @@ python -m instruments_service --mode instruments \
   --force
 ```
 
-**Note:** 
+**Note:**
 - Backfill ends on **Jan 5, 2026** (yesterday)
 - T+1 scheduler starts from **Jan 6, 2026** (today)
 - Always use `--force` to ensure data is regenerated with latest code
@@ -598,4 +598,3 @@ grep -i error /var/log/instruments-t1.log
 ---
 
 *Last updated: January 6, 2026*
-

@@ -235,8 +235,9 @@ class TestInstrumentsServiceExtended:
             defi=False,
         )
 
-        # Should handle exception gracefully
-        assert result["status"] in ["success", "warning"]
+        # Exception prevents instrument generation -> 0 instruments = error
+        # (always-produce architecture: 0 instruments is always an error)
+        assert result["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_generate_instruments_for_date_tradfi(self, service):
@@ -259,8 +260,8 @@ class TestInstrumentsServiceExtended:
                 "symbol": "VIX",
             }
             mock_adapter.create_krwusd_instrument_definition.return_value = {
-                "instrument_key": "YAHOO_FINANCE:SPOT_PAIR:KRW-USD",
-                "venue": "YAHOO_FINANCE",
+                "instrument_key": "FX:SPOT_PAIR:KRW-USD",
+                "venue": "FX",
                 "instrument_type": "SPOT_PAIR",
                 "symbol": "KRW-USD",
                 "exchange_raw_symbol": "KRWUSD=X",
@@ -293,6 +294,7 @@ class TestInstrumentsServiceExtended:
             assert result["status"] in ["success", "warning"]
 
     @pytest.mark.asyncio
+    @pytest.mark.asyncio
     async def test_generate_instruments_for_date_tradfi_cboe_only(self, service):
         """Test generating instruments for TradFi mode with CBOE only."""
         from datetime import datetime, timezone
@@ -302,20 +304,15 @@ class TestInstrumentsServiceExtended:
         with (
             patch("instruments_service.app.core.instruments_service.DatabentoAdapter") as mock_adapter_class,
             patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig") as mock_config_class,
-            patch("instruments_service.models.InstrumentDefinition") as mock_inst_def,
+            patch("instruments_service.app.core.instruments_service.InstrumentDefinition") as mock_inst_def,
         ):
             mock_adapter = Mock()
             mock_adapter.create_vix_instrument_definition.return_value = {
-                "instrument_key": "CBOE:INDEX:VIX",
+                "instrument_key": "CBOE:INDEX:VIX-USD",
                 "venue": "CBOE",
                 "instrument_type": "INDEX",
                 "symbol": "VIX",
-            }
-            mock_adapter.create_krwusd_instrument_definition.return_value = {
-                "instrument_key": "YAHOO_FINANCE:SPOT_PAIR:KRW-USD",
-                "venue": "YAHOO_FINANCE",
-                "instrument_type": "SPOT_PAIR",
-                "symbol": "KRW-USD",
+                "available_from_datetime": "2020-01-01T00:00:00+00:00",
             }
             mock_adapter_class.return_value = mock_adapter
 
@@ -324,8 +321,8 @@ class TestInstrumentsServiceExtended:
             mock_config_class.return_value = mock_config
 
             mock_vix_inst = Mock()
-            mock_vix_inst.instrument_key = "CBOE:INDEX:VIX"
-            mock_vix_inst.model_dump.return_value = {"instrument_key": "CBOE:INDEX:VIX"}
+            mock_vix_inst.instrument_key = "CBOE:INDEX:VIX-USD"
+            mock_vix_inst.model_dump.return_value = {"instrument_key": "CBOE:INDEX:VIX-USD", "venue": "CBOE"}
             mock_inst_def.return_value = mock_vix_inst
 
             service.cloud_storage.store_instruments = Mock(return_value=True)
@@ -335,6 +332,7 @@ class TestInstrumentsServiceExtended:
                 cefi=False,
                 tradfi=True,
                 defi=False,
+                venues=["CBOE"],  # Filter to CBOE only
             )
 
             assert result["status"] in ["success", "warning"]
@@ -401,8 +399,9 @@ class TestInstrumentsServiceExtended:
             defi=True,
         )
 
-        # Should handle exception gracefully
-        assert result["status"] in ["success", "warning"]
+        # Exception prevents instrument generation -> 0 instruments = error
+        # (always-produce architecture: 0 instruments is always an error)
+        assert result["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_generate_instruments_for_date_defi_with_venues(self, service):
@@ -540,7 +539,8 @@ class TestInstrumentsServiceExtended:
             defi=False,
         )
 
-        assert result["status"] == "warning"
+        # Always-produce architecture: 0 instruments is an error, not a warning
+        assert result["status"] == "error"
         assert result["instruments_generated"] == 0
 
     @pytest.mark.asyncio
