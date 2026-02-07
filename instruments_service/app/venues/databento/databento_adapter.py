@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import databento as db
 import exchange_calendars as xcals
+from databento.common.error import BentoClientError
 from instruments_service.config import instruments_config
 from unified_cloud_services import DatabentoBaseClient, DatabentoClientConfig, get_config
 from instruments_service.config import UnifiedInstrumentConfig
@@ -328,17 +329,27 @@ class DatabentoAdapter:
 
                     # Convert to DataFrame
                     df = zipped_data.to_df()
-                except Exception as fetch_err:
-                    err_str = str(fetch_err).lower()
-                    if "no_data" in err_str or "no data" in err_str or "422" in err_str:
-                        # Databento 422 "data_no_data_found_for_request" → treat as empty
-                        logger.info(
-                            f"📅 Databento returned no-data for {exchange} on {start_date_str} "
-                            f"(stype_in={stype_in}): {fetch_err}. Treating as empty for holiday fallback."
-                        )
-                        # df stays empty → holiday fallback below will trigger
+                except BentoClientError as fetch_err:
+                    # Databento 4xx client error -- only treat 422 "no data" as empty.
+                    # Other 4xx (400 bad request, 401 auth, 403 forbidden) must propagate.
+                    if fetch_err.http_status == 422:
+                        # Verify it's specifically "no data found" (not some other 422)
+                        case = ""
+                        if fetch_err.json_body and isinstance(fetch_err.json_body, dict):
+                            detail = fetch_err.json_body.get("detail", {})
+                            if isinstance(detail, dict):
+                                case = detail.get("case", "")
+                        if case == "data_no_data_found_for_request" or "no_data" in str(fetch_err).lower():
+                            logger.info(
+                                f"📅 Databento returned no-data for {exchange} on {start_date_str} "
+                                f"(stype_in={stype_in}): {fetch_err}. "
+                                f"Treating as empty for holiday fallback."
+                            )
+                            # df stays empty → holiday fallback below will trigger
+                        else:
+                            raise  # Unknown 422 → propagate
                     else:
-                        raise  # re-raise non-no-data errors to the outer except
+                        raise  # 400/401/403/etc → propagate (bad query, auth failure)
 
                 if df.empty:
                     # Check if this is a US market holiday or weekend
