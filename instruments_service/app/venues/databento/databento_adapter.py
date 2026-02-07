@@ -299,30 +299,46 @@ class DatabentoAdapter:
         ), symbol_group in symbols_by_dataset_and_stype.items():
             try:
                 # Fetch instrument definitions for this dataset/stype_in group
-                if use_batch_api:
-                    zipped_data = self._fetch_with_batch_api(
-                        dataset=symbol_dataset,
-                        schema="definition",
-                        symbols=symbol_group,
-                        stype_in=stype_in,
-                        start=start_date_str,
-                        end=end_date_str,
-                    )
-                else:
-                    # Legacy streaming API (bills every request)
-                    self._base_client.ip_rate_limiter.acquire("timeseries")
-                    zipped_data = self.client.timeseries.get_range(
-                        dataset=symbol_dataset,
-                        schema=db.Schema.DEFINITION,
-                        symbols=symbol_group,
-                        stype_in=stype_in,
-                        stype_out="instrument_id",
-                        start=start_date_str,
-                        end=end_date_str,
-                    )
+                # NOTE: Databento may raise a 422 "data_no_data_found_for_request"
+                # when there is genuinely no data (e.g. holidays). We catch that
+                # specifically and treat it as empty data so the holiday fallback runs.
+                df = pd.DataFrame()  # default empty
+                try:
+                    if use_batch_api:
+                        zipped_data = self._fetch_with_batch_api(
+                            dataset=symbol_dataset,
+                            schema="definition",
+                            symbols=symbol_group,
+                            stype_in=stype_in,
+                            start=start_date_str,
+                            end=end_date_str,
+                        )
+                    else:
+                        # Legacy streaming API (bills every request)
+                        self._base_client.ip_rate_limiter.acquire("timeseries")
+                        zipped_data = self.client.timeseries.get_range(
+                            dataset=symbol_dataset,
+                            schema=db.Schema.DEFINITION,
+                            symbols=symbol_group,
+                            stype_in=stype_in,
+                            stype_out="instrument_id",
+                            start=start_date_str,
+                            end=end_date_str,
+                        )
 
-                # Convert to DataFrame
-                df = zipped_data.to_df()
+                    # Convert to DataFrame
+                    df = zipped_data.to_df()
+                except Exception as fetch_err:
+                    err_str = str(fetch_err).lower()
+                    if "no_data" in err_str or "no data" in err_str or "422" in err_str:
+                        # Databento 422 "data_no_data_found_for_request" → treat as empty
+                        logger.info(
+                            f"📅 Databento returned no-data for {exchange} on {start_date_str} "
+                            f"(stype_in={stype_in}): {fetch_err}. Treating as empty for holiday fallback."
+                        )
+                        # df stays empty → holiday fallback below will trigger
+                    else:
+                        raise  # re-raise non-no-data errors to the outer except
 
                 if df.empty:
                     # Check if this is a US market holiday or weekend
@@ -334,16 +350,27 @@ class DatabentoAdapter:
                         reason = f"US market holiday ({holiday_name})" if is_holiday else "weekend"
                         logger.info(
                             f"📅 No data for {exchange} on {start_date_str} - {reason}. "
-                            f"Querying previous trading session for instrument definitions."
+                            f"Querying previous trading session(s) for instrument definitions."
                         )
 
-                        # Find previous trading session and re-query to get instrument definitions
-                        # This ensures we ALWAYS produce instruments files, even on holidays/weekends
-                        prev_session_date = self._get_previous_trading_session(target_date_only, exchange)
-                        if prev_session_date:
+                        # Try up to 10 previous trading sessions so we always produce a file
+                        # (handles consecutive holidays, e.g. Dec 31 + Jan 1, or API delays)
+                        session_to_try = target_date_only
+                        fallback_success = False
+                        for attempt in range(10):
+                            prev_session_date = self._get_previous_trading_session(session_to_try, exchange)
+                            if not prev_session_date:
+                                logger.warning(
+                                    f"⚠️ Could not find previous trading session for {exchange} "
+                                    f"(attempt {attempt + 1}, from {session_to_try})"
+                                )
+                                break
                             prev_start_str = prev_session_date.strftime("%Y-%m-%d")
                             prev_end_str = (prev_session_date + timedelta(days=1)).strftime("%Y-%m-%d")
-                            logger.info(f"📅 Re-querying {exchange} with previous session date: {prev_start_str}")
+                            logger.info(
+                                f"📅 Re-querying {exchange} with previous session date: {prev_start_str} "
+                                f"(attempt {attempt + 1}/10)"
+                            )
                             try:
                                 if use_batch_api:
                                     fallback_data = self._fetch_with_batch_api(
@@ -371,20 +398,23 @@ class DatabentoAdapter:
                                         f"✅ Got {len(df)} instrument definitions from previous session "
                                         f"({prev_start_str}) for {exchange} on {reason} {start_date_str}"
                                     )
-                                    # df will be processed below with target_date metadata
-                                    # (is_trading_day will be set to False by _get_exchange_trading_hours)
-                                else:
-                                    logger.warning(
-                                        f"⚠️ Previous session {prev_start_str} also returned empty for {exchange}"
-                                    )
-                                    continue
+                                    fallback_success = True
+                                    break
+                                logger.warning(
+                                    f"⚠️ Previous session {prev_start_str} also returned empty for {exchange}, "
+                                    f"trying earlier session"
+                                )
                             except Exception as fallback_err:
                                 logger.warning(
-                                    f"⚠️ Fallback query for {exchange} on {prev_start_str} failed: {fallback_err}"
+                                    f"⚠️ Fallback query for {exchange} on {prev_start_str} failed: {fallback_err}, "
+                                    f"trying earlier session"
                                 )
-                                continue
-                        else:
-                            logger.warning(f"⚠️ Could not find previous trading session for {exchange}")
+                            session_to_try = prev_session_date
+                        if not fallback_success:
+                            logger.warning(
+                                f"⚠️ All fallback attempts exhausted for {exchange} on {start_date_str} - "
+                                f"no instrument definitions from previous sessions"
+                            )
                             continue
                     else:
                         logger.warning(
