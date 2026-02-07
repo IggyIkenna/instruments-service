@@ -446,14 +446,15 @@ class InstrumentsService:
                             logger.info("🔍 No TRADFI venues in filter, skipping TRADFI processing")
                             databento_exchanges = []
                     else:
-                        # Default: All TradFi exchanges (CME, ICE, CBOE VIX, NASDAQ/NYSE equities, Yahoo Finance FX)
+                        # Default: All TradFi exchanges + FX venue
+                        # FX is OTC forex (KRW/USD via Yahoo Finance data provider)
                         databento_exchanges = [
                             "CME",
                             "ICE",
                             "CBOE",
                             "NASDAQ",
                             "NYSE",
-                            "YAHOO_FINANCE",
+                            "FX",
                         ]
                         logger.info(
                             f"🔍 No venue filter specified, processing default TRADFI exchanges: {databento_exchanges}"
@@ -479,8 +480,8 @@ class InstrumentsService:
                                         logger.info(f"✅ Created VIX: {vix_def.instrument_key}")
                                         return {vix_def.instrument_key: vix_def}
                                     return {}
-                                elif exchange == "YAHOO_FINANCE":
-                                    # Yahoo Finance only has KRW/USD (static definition)
+                                elif exchange == "FX":
+                                    # FX venue: OTC forex instruments (KRW/USD via Yahoo Finance data provider)
                                     # Create Databento adapter instance (reuses cached client)
                                     databento_adapter = DatabentoAdapter()
 

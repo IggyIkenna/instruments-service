@@ -238,14 +238,33 @@ class TestCLIMain:
 
     def test_main_entry_point_success(self):
         """Test __main__ entry point with success."""
-        # Test the exit code logic directly without patching run_cli
-        result = {"status": "success", "success": True}
-        exit_code = 0 if result.get("success", False) or result.get("status") == "success" else 1
+        # STRICT: Only status == "success" gives exit code 0
+        result = {"status": "success"}
+        exit_code = 0 if result.get("status") == "success" else 1
         assert exit_code == 0
 
     def test_main_entry_point_failure(self):
         """Test __main__ entry point with failure."""
-        # Test the exit code logic directly without patching run_cli
         result = {"status": "error", "success": False}
-        exit_code = 0 if result.get("success", False) or result.get("status") == "success" else 1
+        exit_code = 0 if result.get("status") == "success" else 1
+        assert exit_code == 1
+
+    def test_main_entry_point_partial_is_failure(self):
+        """Test __main__ entry point: partial status is NOT success (exit 1)."""
+        # "partial" means some dates failed -- this must exit non-zero
+        # to prevent silent failures in VM/Cloud Run deployments
+        result = {"status": "partial", "dates_successful": 5, "dates_failed": 1}
+        exit_code = 0 if result.get("status") == "success" else 1
+        assert exit_code == 1
+
+    def test_main_entry_point_warning_is_failure(self):
+        """Test __main__ entry point: warning status is NOT success (exit 1)."""
+        result = {"status": "warning", "instruments_generated": 0}
+        exit_code = 0 if result.get("status") == "success" else 1
+        assert exit_code == 1
+
+    def test_main_entry_point_missing_status_is_failure(self):
+        """Test __main__ entry point: missing status key is NOT success (exit 1)."""
+        result = {}
+        exit_code = 0 if result.get("status") == "success" else 1
         assert exit_code == 1

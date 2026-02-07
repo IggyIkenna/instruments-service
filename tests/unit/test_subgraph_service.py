@@ -71,14 +71,14 @@ class TestSubgraphService:
         """Test cache validity checking."""
         cache_key = "test_key"
         subgraph_service._subgraph_cache[cache_key] = "https://test.url"
-        # Use naive datetime to match SubgraphService._is_cache_valid() implementation
-        subgraph_service._cache_timestamps[cache_key] = datetime.now()
+        # Must use UTC-aware datetime to match SubgraphService._is_cache_valid()
+        subgraph_service._cache_timestamps[cache_key] = datetime.now(timezone.utc)
 
         # Cache should be valid immediately
         assert subgraph_service._is_cache_valid(cache_key) is True
 
         # Cache should be invalid after TTL expires
-        subgraph_service._cache_timestamps[cache_key] = datetime.now() - timedelta(hours=25)
+        subgraph_service._cache_timestamps[cache_key] = datetime.now(timezone.utc) - timedelta(hours=25)
         assert subgraph_service._is_cache_valid(cache_key) is False
 
     def test_clear_cache_all(self, subgraph_service):

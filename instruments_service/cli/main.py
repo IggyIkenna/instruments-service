@@ -186,11 +186,18 @@ def main() -> Dict[str, Any]:
         # Cleanup
         handler.cleanup()
 
-        # Log success
-        if result.get("status") == "success" or result.get("success", True):
+        # Determine success: status must be explicitly "success"
+        # "partial", "error", "warning" are all non-success states
+        is_success = result.get("status") == "success"
+
+        if is_success:
             logger.info(f"✅ {args.mode} operation completed successfully")
         else:
-            logger.error(f"❌ {args.mode} operation failed")
+            status = result.get("status", "unknown")
+            logger.error(
+                f"❌ {args.mode} operation failed (status={status}). "
+                f"Details: {result.get('error', result.get('message', 'no details'))}"
+            )
 
         return result
 
@@ -214,5 +221,8 @@ def run_cli():
 
 if __name__ == "__main__":
     result = run_cli()
-    exit_code = 0 if result.get("success", False) or result.get("status") == "success" else 1
+    # STRICT: Only exit 0 when status is explicitly "success"
+    # All other states (error, partial, warning, unknown) exit non-zero
+    # This prevents silent failures in VM/Cloud Run deployments
+    exit_code = 0 if result.get("status") == "success" else 1
     sys.exit(exit_code)
