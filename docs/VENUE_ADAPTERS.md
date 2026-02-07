@@ -139,7 +139,7 @@ These venues are filtered to only include the 21 MVP base assets (BTC, ETH, SOL,
 - **NASDAQ** - Equities, ETFs including Bitcoin ETFs (DBEQ.BASIC)
 - **NYSE** - S&P 500 equities (DBEQ.BASIC)
 - **CBOE** - VIX index (static definition)
-- **YAHOO_FINANCE** - KRW/USD forex pair (static definition)
+- **FX** - KRW/USD forex pair (static definition, data via Yahoo Finance)
 - **ICE** - Intercontinental Exchange (IFEU.IMPACT)
 
 **S&P 500 Historical Universe (2020-2025)**:
@@ -190,7 +190,7 @@ is_holiday, holiday_name = adapter.is_us_market_holiday(date(2025, 1, 1))
 - **Equities**: `NASDAQ:EQUITY:AAPL-USD`
 - **Bitcoin ETFs**: `NASDAQ:ETF:IBIT-USD`
 - **VIX Index**: `CBOE:INDEX:VIX-USD`
-- **Forex**: `YAHOO_FINANCE:SPOT_PAIR:KRW-USD`
+- **Forex**: `FX:SPOT_PAIR:KRW-USD`
 
 **Translation Logic**:
 - Maps Databento `security_type` to canonical `InstrumentType`:

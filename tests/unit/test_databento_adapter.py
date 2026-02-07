@@ -289,6 +289,41 @@ class TestDatabentoAdapter:
         finally:
             databento_base_client.clear_databento_client_cache()
 
+    def test_create_krwusd_instrument_definition(self):
+        """Test KRW/USD instrument definition: venue must be FX, not YAHOO_FINANCE."""
+        from instruments_service.app.venues.databento import databento_adapter
+        from unified_cloud_services.clients import databento_base_client
+
+        mock_db_module = MagicMock()
+        mock_client = Mock()
+        mock_db_module.Historical.return_value = mock_client
+
+        try:
+            databento_base_client.clear_databento_client_cache()
+
+            with (
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
+            ):
+                adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
+                target_date = datetime(2024, 11, 11, 12, 0, 0, tzinfo=timezone.utc)
+
+                krwusd_def = adapter.create_krwusd_instrument_definition(target_date)
+
+                assert krwusd_def is not None
+                # CRITICAL: venue must be "FX", not "YAHOO_FINANCE"
+                # Yahoo Finance is a data provider, not a venue
+                assert krwusd_def["venue"] == "FX"
+                assert krwusd_def["instrument_key"] == "FX:SPOT_PAIR:KRW-USD"
+                assert krwusd_def["instrument_type"] == "SPOT_PAIR"
+                assert krwusd_def["base_asset"] == "KRW"
+                assert krwusd_def["quote_asset"] == "USD"
+                assert krwusd_def["data_provider"] == "yahoo_finance"
+                assert krwusd_def["venue_type"] == "otc"
+                assert krwusd_def["exchange_raw_symbol"] == "KRWUSD=X"
+        finally:
+            databento_base_client.clear_databento_client_cache()
+
     def test_create_bitcoin_etf_instrument_definition_ibit(self):
         """Test IBIT (iShares Bitcoin ETF) instrument definition creation."""
         from instruments_service.app.venues.databento import databento_adapter
@@ -553,8 +588,8 @@ class TestBatchJobDelegation:
             databento_base_client.clear_databento_client_cache()
             databento_base_client.clear_databento_api_key_cache()
 
-    def test_fetch_with_batch_api_returns_empty_on_no_data_file(self):
-        """When batch download has no .dbn file, returns empty data object."""
+    def test_fetch_with_batch_api_raises_on_no_data_file(self):
+        """When batch download has no .dbn file, raises FileNotFoundError (no silent fallback)."""
         from pathlib import Path
         from unified_cloud_services.clients import databento_base_client
 
@@ -569,10 +604,52 @@ class TestBatchJobDelegation:
 
             with tempfile.TemporaryDirectory() as tmp_dir:
                 tmp_path = Path(tmp_dir)
-                # Create a non-.dbn file
+                # Create a non-.dbn file -- no valid data
                 (tmp_path / "metadata.json").write_text("{}")
 
                 with patch.object(adapter._base_client, "batch_download", return_value=tmp_path):
+                    with pytest.raises(FileNotFoundError, match="No .dbn or .dbn.zst data file found"):
+                        adapter._fetch_with_batch_api(
+                            dataset="GLBX.MDP3",
+                            schema="definition",
+                            symbols=["ES"],
+                            stype_in="raw_symbol",
+                            start="2024-01-15",
+                            end="2024-01-16",
+                        )
+        finally:
+            databento_base_client.clear_databento_client_cache()
+            databento_base_client.clear_databento_api_key_cache()
+
+    def test_fetch_with_batch_api_finds_dbn_in_subdirectory(self):
+        """batch.download() places files in output_path/JOB_ID/ -- rglob must find them."""
+        from pathlib import Path
+        from unified_cloud_services.clients import databento_base_client
+
+        mock_db_module = MagicMock()
+        mock_client = Mock()
+        mock_db_module.Historical.return_value = mock_client
+
+        try:
+            adapter = self._make_adapter(mock_db_module, mock_client)
+
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_path = Path(tmp_dir)
+                # Simulate Databento's batch download structure: output_path/JOB_ID/file.dbn.zst
+                job_dir = tmp_path / "GLBX-20260125-ABCDEF"
+                job_dir.mkdir()
+                data_file = job_dir / "data.dbn.zst"
+                data_file.write_bytes(b"fake-data")
+
+                mock_dbn_store = Mock()
+                mock_db_module.DBNStore.from_file.return_value = mock_dbn_store
+
+                with (
+                    patch.object(adapter._base_client, "batch_download", return_value=tmp_path),
+                    patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                ):
                     result = adapter._fetch_with_batch_api(
                         dataset="GLBX.MDP3",
                         schema="definition",
@@ -582,8 +659,9 @@ class TestBatchJobDelegation:
                         end="2024-01-16",
                     )
 
-                # Should return an object with to_df method
-                assert hasattr(result, "to_df")
+                # Should find the file in the subdirectory
+                mock_db_module.DBNStore.from_file.assert_called_once_with(str(data_file))
+                assert result is mock_dbn_store
         finally:
             databento_base_client.clear_databento_client_cache()
             databento_base_client.clear_databento_api_key_cache()

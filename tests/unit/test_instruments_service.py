@@ -202,7 +202,7 @@ class TestGenerateInstrumentsSingleDate:
             result = await service.generate_instruments_for_date(date=date, tradfi=True)
 
             assert result["status"] == "success"
-            # Should process CME, NASDAQ, NYSE, ICE, CBOE, YAHOO_FINANCE
+            # Should process CME, NASDAQ, NYSE, ICE, CBOE, FX
             # But NASDAQ/NYSE share DBEQ.BASIC, so NYSE is skipped
             assert mock_proc.fetch_databento_instruments.call_count >= 1
 
