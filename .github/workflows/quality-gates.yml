@@ -74,6 +74,13 @@ jobs:
           ruff check instruments_service/ tests/
           echo "✅ Linting passed"
 
+      # FORMATTING CHECK - MUST PASS
+      - name: Check formatting with ruff
+        run: |
+          echo "=== Checking formatting (ruff format) ==="
+          ruff format --check instruments_service/ tests/
+          echo "✅ Formatting check passed"
+
       # ========================================================================
       # UNIT TESTS - MUST PASS
       # ========================================================================
