@@ -790,6 +790,42 @@ class InstrumentsService:
 
             instruments_df = pd.DataFrame(instruments_list)
 
+            # Ensure every requested TradFi venue has at least one row (holiday/closed placeholder)
+            # so that by-venue files are always written and unified_trading_deployment missing-data checks pass
+            if tradfi and venues_filter:
+                requested_tradfi = [v for v in venues_filter if v in self.venue_mapping.all_databento_venues]
+                if requested_tradfi and "venue" in instruments_df.columns:
+                    if isinstance(date, datetime):
+                        target_dt = date.replace(hour=0, minute=0, second=0, microsecond=0)
+                    else:
+                        target_dt = datetime.combine(date, datetime.min.time(), tzinfo=timezone.utc)
+                    if target_dt.tzinfo is None:
+                        target_dt = target_dt.replace(tzinfo=timezone.utc)
+                    date_iso = target_dt.isoformat().replace("+00:00", "Z")
+                    for venue_name in requested_tradfi:
+                        if venue_name not in instruments_df["venue"].values:
+                            placeholder = {
+                                "instrument_key": f"{venue_name}:MARKET_CLOSED:PLACEHOLDER",
+                                "venue": venue_name,
+                                "instrument_type": "MARKET_CLOSED",
+                                "symbol": "PLACEHOLDER",
+                                "available_from_datetime": date_iso,
+                                "timestamp": target_dt,
+                                "market_category": "TRADFI",
+                                "is_trading_day": False,
+                                "trading_hours_open": "holiday",
+                                "trading_hours_close": "holiday",
+                                "holiday_calendar": venue_name,
+                            }
+                            logger.info(
+                                f"📅 Adding holiday/closed placeholder for {venue_name} on {date_str} "
+                                f"(no instruments from adapter so file would be missing)"
+                            )
+                            instruments_df = pd.concat(
+                                [instruments_df, pd.DataFrame([placeholder])],
+                                ignore_index=True,
+                            )
+
             # Store to cloud
             logger.info(f"📤 Storing {len(instruments_df)} instruments to cloud...")
             success = self.cloud_storage.store_instruments(
