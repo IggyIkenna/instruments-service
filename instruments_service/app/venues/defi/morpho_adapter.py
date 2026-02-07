@@ -11,7 +11,7 @@ NOTE: Venue start dates are centralized in unified_cloud_services.models.VenueMa
 
 import logging
 from typing import Dict, List, Optional, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from unified_cloud_services import get_secret_with_fallback, handle_api_errors, VenueMapping
 from instruments_service.config import instruments_config
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
@@ -377,7 +377,9 @@ class MorphoAdapter(BaseDefiAdapter):
             "exchange_raw_symbol": a_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(2023, 6, 1).isoformat(),  # Morpho launch date (June 2023)
+            "available_from_datetime": datetime(
+                2023, 6, 1, tzinfo=timezone.utc
+            ).isoformat(),  # Morpho launch date (June 2023)
             "available_to_datetime": None,
             "data_types": "rate_indices,oracle_prices",  # rate_indices + oracle prices for consistency with AAVE
             "inverse": False,
@@ -434,7 +436,9 @@ class MorphoAdapter(BaseDefiAdapter):
             "exchange_raw_symbol": debt_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(2023, 6, 1).isoformat(),  # Morpho launch date (June 2023)
+            "available_from_datetime": datetime(
+                2023, 6, 1, tzinfo=timezone.utc
+            ).isoformat(),  # Morpho launch date (June 2023)
             "available_to_datetime": None,
             "data_types": "rate_indices,oracle_prices",  # rate_indices + oracle prices for consistency with AAVE
             "inverse": False,

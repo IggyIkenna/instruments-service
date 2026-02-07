@@ -215,7 +215,7 @@ class CorporateActionsAdapter:
 
                     # Convert dates
                     if isinstance(ex_date, str):
-                        ex_date = pd.to_datetime(ex_date).date()
+                        ex_date = pd.to_datetime(ex_date, utc=True).date()
                     elif hasattr(ex_date, "date"):
                         ex_date = ex_date.date()
 
@@ -266,7 +266,7 @@ class CorporateActionsAdapter:
                 return []
 
             # Convert index to date for filtering
-            div_df.index = pd.to_datetime(div_df.index).date
+            div_df.index = pd.to_datetime(div_df.index, utc=True).date
 
             # Filter by date range
             mask = (div_df.index >= start_date) & (div_df.index <= end_date)
@@ -327,7 +327,7 @@ class CorporateActionsAdapter:
                 return []
 
             # Convert index to date for filtering
-            splits_df.index = pd.to_datetime(splits_df.index).date
+            splits_df.index = pd.to_datetime(splits_df.index, utc=True).date
 
             # Filter by date range
             mask = (splits_df.index >= start_date) & (splits_df.index <= end_date)
@@ -430,7 +430,7 @@ class CorporateActionsAdapter:
 
                     # Convert date
                     if isinstance(earnings_date, str):
-                        earnings_date = pd.to_datetime(earnings_date).date()
+                        earnings_date = pd.to_datetime(earnings_date, utc=True).date()
                     elif hasattr(earnings_date, "date"):
                         earnings_date = earnings_date.date()
 
@@ -522,7 +522,7 @@ class CorporateActionsAdapter:
                     for idx, row in earnings_df.iterrows():
                         try:
                             # idx is the earnings date (datetime)
-                            earnings_date = pd.to_datetime(idx).date()
+                            earnings_date = pd.to_datetime(idx, utc=True).date()
 
                             # Filter by date range
                             if earnings_date < start_date or earnings_date > end_date:
