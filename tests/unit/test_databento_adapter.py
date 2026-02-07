@@ -433,3 +433,395 @@ class TestDatabentoAdapter:
                 assert hours["session"] == "regular"
         finally:
             databento_base_client.clear_databento_client_cache()
+
+
+class TestBatchJobDelegation:
+    """Tests verifying DatabentoAdapter delegates batch logic to DatabentoBaseClient.
+
+    The actual batch orchestration logic (find/submit/wait/download, deterministic key
+    selection, expanded states, GCS cache) is tested in unified-cloud-services:
+    tests/unit/test_databento_batch.py
+
+    These tests verify the adapter correctly delegates to the base client.
+    """
+
+    # ---------------------------------------------------------------
+    # Helper to create adapter with a mocked client
+    # ---------------------------------------------------------------
+
+    def _make_adapter(self, mock_db_module, mock_client):
+        """Create a DatabentoAdapter with mocked db module and client."""
+        from instruments_service.app.venues.databento import databento_adapter
+        from unified_cloud_services.clients import databento_base_client
+
+        databento_base_client.clear_databento_client_cache()
+        databento_base_client.clear_databento_api_key_cache()
+
+        with (
+            patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+            patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
+        ):
+            adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
+
+        # Replace the underlying client with our mock so batch calls are captured
+        adapter._base_client._client = mock_client
+        return adapter
+
+    # ---------------------------------------------------------------
+    # _fetch_with_batch_api delegates to base_client.batch_download
+    # ---------------------------------------------------------------
+
+    def test_fetch_with_batch_api_delegates_to_base_client(self):
+        """_fetch_with_batch_api calls base_client.batch_download."""
+        from pathlib import Path
+        from unified_cloud_services.clients import databento_base_client
+
+        mock_db_module = MagicMock()
+        mock_client = Mock()
+        mock_db_module.Historical.return_value = mock_client
+
+        try:
+            adapter = self._make_adapter(mock_db_module, mock_client)
+
+            # Mock base_client.batch_download to return a temp dir with a .dbn file
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_path = Path(tmp_dir)
+                data_file = tmp_path / "data.dbn.zst"
+                data_file.write_bytes(b"fake-data")
+
+                mock_dbn_store = Mock()
+                mock_db_module.DBNStore.from_file.return_value = mock_dbn_store
+
+                with (
+                    patch.object(adapter._base_client, "batch_download", return_value=tmp_path) as mock_batch,
+                    patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                ):
+                    result = adapter._fetch_with_batch_api(
+                        dataset="GLBX.MDP3",
+                        schema="definition",
+                        symbols=["ES"],
+                        stype_in="raw_symbol",
+                        start="2024-01-15",
+                        end="2024-01-16",
+                    )
+
+                mock_batch.assert_called_once_with(
+                    dataset="GLBX.MDP3",
+                    schema="definition",
+                    symbols=["ES"],
+                    stype_in="raw_symbol",
+                    start="2024-01-15",
+                    end="2024-01-16",
+                )
+                mock_db_module.DBNStore.from_file.assert_called_once()
+                assert result is mock_dbn_store
+        finally:
+            databento_base_client.clear_databento_client_cache()
+            databento_base_client.clear_databento_api_key_cache()
+
+    def test_fetch_with_batch_api_no_streaming_fallback(self):
+        """_fetch_with_batch_api does NOT fall back to streaming API on error."""
+        from unified_cloud_services.clients import databento_base_client
+
+        mock_db_module = MagicMock()
+        mock_client = Mock()
+        mock_db_module.Historical.return_value = mock_client
+
+        try:
+            adapter = self._make_adapter(mock_db_module, mock_client)
+
+            with patch.object(
+                adapter._base_client,
+                "batch_download",
+                side_effect=RuntimeError("Batch failed"),
+            ):
+                with pytest.raises(RuntimeError, match="Batch failed"):
+                    adapter._fetch_with_batch_api(
+                        dataset="GLBX.MDP3",
+                        schema="definition",
+                        symbols=["ES"],
+                        stype_in="raw_symbol",
+                        start="2024-01-15",
+                        end="2024-01-16",
+                    )
+
+            # Streaming API should never be called
+            mock_client.timeseries.get_range.assert_not_called()
+        finally:
+            databento_base_client.clear_databento_client_cache()
+            databento_base_client.clear_databento_api_key_cache()
+
+    def test_fetch_with_batch_api_returns_empty_on_no_data_file(self):
+        """When batch download has no .dbn file, returns empty data object."""
+        from pathlib import Path
+        from unified_cloud_services.clients import databento_base_client
+
+        mock_db_module = MagicMock()
+        mock_client = Mock()
+        mock_db_module.Historical.return_value = mock_client
+
+        try:
+            adapter = self._make_adapter(mock_db_module, mock_client)
+
+            import tempfile
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_path = Path(tmp_dir)
+                # Create a non-.dbn file
+                (tmp_path / "metadata.json").write_text("{}")
+
+                with patch.object(adapter._base_client, "batch_download", return_value=tmp_path):
+                    result = adapter._fetch_with_batch_api(
+                        dataset="GLBX.MDP3",
+                        schema="definition",
+                        symbols=["ES"],
+                        stype_in="raw_symbol",
+                        start="2024-01-15",
+                        end="2024-01-16",
+                    )
+
+                # Should return an object with to_df method
+                assert hasattr(result, "to_df")
+        finally:
+            databento_base_client.clear_databento_client_cache()
+            databento_base_client.clear_databento_api_key_cache()
+
+
+class TestDatabentoT2Availability:
+    """Tests for the T+2 historical data availability guard.
+
+    Databento historical data is published ~2 calendar days after the
+    trading date (available around UTC midnight, two days later).
+    The adapter should skip dates that are too recent to avoid billable
+    422 errors from the Databento API.
+    """
+
+    # ---------------------------------------------------------------
+    # Helper to create adapter with mocked internals
+    # ---------------------------------------------------------------
+
+    def _make_adapter(self):
+        """Create a DatabentoAdapter with fully mocked Databento client."""
+        from instruments_service.app.venues.databento import databento_adapter
+        from unified_cloud_services.clients import databento_base_client
+
+        mock_db_module = MagicMock()
+        mock_client = Mock()
+        mock_db_module.Historical.return_value = mock_client
+
+        databento_base_client.clear_databento_client_cache()
+        databento_base_client.clear_databento_api_key_cache()
+
+        with (
+            patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+            patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
+        ):
+            adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
+
+        adapter._base_client._client = mock_client
+        return adapter, mock_client, databento_base_client
+
+    # ---------------------------------------------------------------
+    # T+2 guard: dates that should be SKIPPED
+    # ---------------------------------------------------------------
+
+    def test_t2_skips_today(self):
+        """Today's date should be skipped (T+0 < T+2)."""
+        adapter, mock_client, base_client = self._make_adapter()
+
+        try:
+            # Use a fixed "today" to avoid test flakiness
+            fake_now = datetime(2026, 2, 7, 12, 0, 0, tzinfo=timezone.utc)
+            today_date = datetime(2026, 2, 7, 0, 0, 0, tzinfo=timezone.utc)
+
+            with patch("instruments_service.app.venues.databento.databento_adapter.datetime") as mock_dt:
+                mock_dt.now.return_value = fake_now
+                mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+                result = adapter.fetch_instrument_definitions(
+                    exchange="CME",
+                    symbols=["ES.FUT"],
+                    date=today_date,
+                )
+
+            assert result == {}
+            # No Databento API calls should have been made
+            mock_client.batch.list_jobs.assert_not_called()
+            mock_client.timeseries.get_range.assert_not_called()
+        finally:
+            base_client.clear_databento_client_cache()
+            base_client.clear_databento_api_key_cache()
+
+    def test_t2_skips_yesterday(self):
+        """Yesterday's date should be skipped (T+1 < T+2)."""
+        adapter, mock_client, base_client = self._make_adapter()
+
+        try:
+            fake_now = datetime(2026, 2, 7, 12, 0, 0, tzinfo=timezone.utc)
+            yesterday = datetime(2026, 2, 6, 0, 0, 0, tzinfo=timezone.utc)
+
+            with patch("instruments_service.app.venues.databento.databento_adapter.datetime") as mock_dt:
+                mock_dt.now.return_value = fake_now
+                mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+                result = adapter.fetch_instrument_definitions(
+                    exchange="CME",
+                    symbols=["ES.FUT"],
+                    date=yesterday,
+                )
+
+            assert result == {}
+            mock_client.batch.list_jobs.assert_not_called()
+            mock_client.timeseries.get_range.assert_not_called()
+        finally:
+            base_client.clear_databento_client_cache()
+            base_client.clear_databento_api_key_cache()
+
+    def test_t2_skips_all_exchanges(self):
+        """T+2 guard should apply to all Databento exchanges (CME, NASDAQ, NYSE, ICE)."""
+        adapter, mock_client, base_client = self._make_adapter()
+
+        try:
+            fake_now = datetime(2026, 2, 7, 12, 0, 0, tzinfo=timezone.utc)
+            yesterday = datetime(2026, 2, 6, 0, 0, 0, tzinfo=timezone.utc)
+
+            for exchange in ["CME", "NASDAQ", "NYSE", "ICE"]:
+                with patch("instruments_service.app.venues.databento.databento_adapter.datetime") as mock_dt:
+                    mock_dt.now.return_value = fake_now
+                    mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+                    result = adapter.fetch_instrument_definitions(
+                        exchange=exchange,
+                        symbols=["ES.FUT"],
+                        date=yesterday,
+                    )
+
+                assert result == {}, f"Expected empty dict for {exchange} but got {result}"
+        finally:
+            base_client.clear_databento_client_cache()
+            base_client.clear_databento_api_key_cache()
+
+    # ---------------------------------------------------------------
+    # T+2 guard: dates that should be ALLOWED through
+    # ---------------------------------------------------------------
+
+    def test_t2_allows_two_days_ago(self):
+        """Date exactly 2 days ago should pass the T+2 check (boundary case)."""
+        adapter, mock_client, base_client = self._make_adapter()
+
+        try:
+            fake_now = datetime(2026, 2, 7, 12, 0, 0, tzinfo=timezone.utc)
+            two_days_ago = datetime(2026, 2, 5, 0, 0, 0, tzinfo=timezone.utc)
+
+            with (
+                patch("instruments_service.app.venues.databento.databento_adapter.datetime") as mock_dt,
+                patch("instruments_service.app.venues.databento.databento_adapter.logger") as mock_logger,
+            ):
+                mock_dt.now.return_value = fake_now
+                mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+                adapter.fetch_instrument_definitions(
+                    exchange="CME",
+                    symbols=["ES.FUT"],
+                    date=two_days_ago,
+                )
+
+            # The T+2 guard should NOT have fired — verify no DATABENTO_T2 warning
+            for call in mock_logger.warning.call_args_list:
+                assert "DATABENTO_T2" not in str(call), (
+                    f"T+2 guard should not block a date exactly 2 days ago, but got: {call}"
+                )
+        finally:
+            base_client.clear_databento_client_cache()
+            base_client.clear_databento_api_key_cache()
+
+    def test_t2_allows_old_dates(self):
+        """Historical dates well in the past should pass the T+2 check."""
+        adapter, mock_client, base_client = self._make_adapter()
+
+        try:
+            fake_now = datetime(2026, 2, 7, 12, 0, 0, tzinfo=timezone.utc)
+            old_date = datetime(2025, 1, 15, 0, 0, 0, tzinfo=timezone.utc)
+
+            with (
+                patch("instruments_service.app.venues.databento.databento_adapter.datetime") as mock_dt,
+                patch("instruments_service.app.venues.databento.databento_adapter.logger") as mock_logger,
+            ):
+                mock_dt.now.return_value = fake_now
+                mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+                adapter.fetch_instrument_definitions(
+                    exchange="CME",
+                    symbols=["ES.FUT"],
+                    date=old_date,
+                )
+
+            # The T+2 guard should NOT have fired
+            for call in mock_logger.warning.call_args_list:
+                assert "DATABENTO_T2" not in str(call), f"T+2 guard should not block an old date, but got: {call}"
+        finally:
+            base_client.clear_databento_client_cache()
+            base_client.clear_databento_api_key_cache()
+
+    # ---------------------------------------------------------------
+    # T+2 guard: warning message content
+    # ---------------------------------------------------------------
+
+    def test_t2_warning_message_content(self):
+        """Verify the warning message includes the correct dates and exchange."""
+        adapter, mock_client, base_client = self._make_adapter()
+
+        try:
+            fake_now = datetime(2026, 2, 7, 12, 0, 0, tzinfo=timezone.utc)
+            yesterday = datetime(2026, 2, 6, 0, 0, 0, tzinfo=timezone.utc)
+
+            with (
+                patch("instruments_service.app.venues.databento.databento_adapter.datetime") as mock_dt,
+                patch("instruments_service.app.venues.databento.databento_adapter.logger") as mock_logger,
+            ):
+                mock_dt.now.return_value = fake_now
+                mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+                adapter.fetch_instrument_definitions(
+                    exchange="NASDAQ",
+                    symbols=["SPY"],
+                    date=yesterday,
+                )
+
+            # Check the warning was logged with expected content
+            mock_logger.warning.assert_called_once()
+            warning_msg = mock_logger.warning.call_args[0][0]
+            assert "DATABENTO_T2" in warning_msg
+            assert "NASDAQ" in warning_msg
+            assert "2026-02-06" in warning_msg
+            assert "2026-02-05" in warning_msg  # earliest queryable date
+            assert "2026-02-08" in warning_msg  # try again after
+        finally:
+            base_client.clear_databento_client_cache()
+            base_client.clear_databento_api_key_cache()
+
+    def test_t2_naive_datetime_handled(self):
+        """Timezone-naive dates should still be handled correctly by the T+2 guard."""
+        adapter, mock_client, base_client = self._make_adapter()
+
+        try:
+            fake_now = datetime(2026, 2, 7, 12, 0, 0, tzinfo=timezone.utc)
+            # Pass a naive datetime (no timezone) - adapter converts to UTC
+            yesterday_naive = datetime(2026, 2, 6, 0, 0, 0)
+
+            with patch("instruments_service.app.venues.databento.databento_adapter.datetime") as mock_dt:
+                mock_dt.now.return_value = fake_now
+                mock_dt.side_effect = lambda *a, **kw: datetime(*a, **kw)
+
+                result = adapter.fetch_instrument_definitions(
+                    exchange="CME",
+                    symbols=["ES.FUT"],
+                    date=yesterday_naive,
+                )
+
+            assert result == {}
+        finally:
+            base_client.clear_databento_client_cache()
+            base_client.clear_databento_api_key_cache()

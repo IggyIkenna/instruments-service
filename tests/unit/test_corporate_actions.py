@@ -259,7 +259,7 @@ class TestCorporateActionsAdapter:
         mock_yf.Ticker.return_value = mock_ticker
 
         # Create sample dividend data
-        div_index = pd.to_datetime(["2024-05-10", "2024-08-12"])
+        div_index = pd.to_datetime(["2024-05-10", "2024-08-12"], utc=True)
         mock_ticker.dividends = pd.Series([0.24, 0.25], index=div_index)
 
         # Test adapter
@@ -284,7 +284,7 @@ class TestCorporateActionsAdapter:
         mock_yf.Ticker.return_value = mock_ticker
 
         # Create sample split data
-        split_index = pd.to_datetime(["2020-08-31", "2014-06-09"])
+        split_index = pd.to_datetime(["2020-08-31", "2014-06-09"], utc=True)
         mock_ticker.splits = pd.Series([4.0, 7.0], index=split_index)
 
         # Test adapter

@@ -53,7 +53,7 @@ class AsterAdapter(BaseOnchainPerpAdapter):
     """
 
     # Aster DEX launch (approximately Q4 2024)
-    ASTER_LAUNCH_DATE = datetime(2024, 10, 1)
+    ASTER_LAUNCH_DATE = datetime(2024, 10, 1, tzinfo=timezone.utc)
 
     def __init__(
         self,
@@ -306,7 +306,7 @@ class AsterAdapter(BaseOnchainPerpAdapter):
         instrument_key = f"{self.venue}:SPOT_PAIR:{canonical_symbol}@ASTER"
 
         # Use conservative default date
-        available_from = datetime(2021, 8, 1).isoformat()
+        available_from = datetime(2021, 8, 1, tzinfo=timezone.utc).isoformat()
 
         # Extract filters
         filters = symbol_info.get("filters", [])
@@ -392,7 +392,7 @@ class AsterAdapter(BaseOnchainPerpAdapter):
 
         # Use conservative default date - funding rate fetching is handled by market tick data handler service
         # Aster launched in 2021, but use a conservative default (2021-08-01) to avoid filtering out instruments incorrectly
-        available_from = datetime(2021, 8, 1).isoformat()
+        available_from = datetime(2021, 8, 1, tzinfo=timezone.utc).isoformat()
 
         # Extract filters
         filters = symbol_info.get("filters", [])

@@ -121,7 +121,7 @@ class TestCorporateActionsHandler:
         df = pd.DataFrame(
             {
                 "ticker": ["AAPL", "MSFT"],
-                "ex_date": pd.to_datetime(["2024-05-10", "2024-05-15"]),
+                "ex_date": pd.to_datetime(["2024-05-10", "2024-05-15"], utc=True),
             }
         )
 
@@ -160,7 +160,7 @@ class TestCorporateActionsHandler:
         df = pd.DataFrame(
             {
                 "ticker": ["AAPL"],
-                "ex_date": pd.to_datetime(["2024-05-10"]),
+                "ex_date": pd.to_datetime(["2024-05-10"], utc=True),
             }
         )
         original_type = type(df["ex_date"].iloc[0])

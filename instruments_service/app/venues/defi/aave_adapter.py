@@ -1934,7 +1934,9 @@ query GetEModeCategories {
             "exchange_raw_symbol": a_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(2023, 1, 27).isoformat(),  # AAVE V3 Ethereum launch date
+            "available_from_datetime": datetime(
+                2023, 1, 27, tzinfo=timezone.utc
+            ).isoformat(),  # AAVE V3 Ethereum launch date
             "available_to_datetime": None,
             "data_types": "rate_indices,oracle_prices",  # Raw data: supplyIndex, liquidityIndex, oracle prices (rate_indices includes utilization)
             "inverse": False,
@@ -2000,7 +2002,9 @@ query GetEModeCategories {
             "exchange_raw_symbol": debt_token_symbol,
             "ccxt_symbol": "",
             "ccxt_exchange": "",
-            "available_from_datetime": datetime(2023, 1, 27).isoformat(),  # AAVE V3 Ethereum launch date
+            "available_from_datetime": datetime(
+                2023, 1, 27, tzinfo=timezone.utc
+            ).isoformat(),  # AAVE V3 Ethereum launch date
             "available_to_datetime": None,
             "data_types": "rate_indices,oracle_prices",  # Raw data: borrowIndex, oracle prices (rate_indices includes utilization)
             "inverse": False,
