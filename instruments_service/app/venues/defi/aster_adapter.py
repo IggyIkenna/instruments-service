@@ -52,8 +52,8 @@ class AsterAdapter(BaseDefiAdapter):
     ASTER:PERPETUAL:BTC-USDT
     """
 
-    # Aster DEX launch (approximately Q4 2024)
-    ASTER_LAUNCH_DATE = datetime(2024, 10, 1, tzinfo=timezone.utc)
+    # Aster DEX earliest data availability
+    ASTER_LAUNCH_DATE = datetime(2021, 8, 30, tzinfo=timezone.utc)
 
     def __init__(
         self,
@@ -158,8 +158,8 @@ class AsterAdapter(BaseDefiAdapter):
                         inst_def = self._convert_symbol_to_instrument(symbol_info)
                         if inst_def:
                             # Set default data types - actual data fetching happens in market tick data handler
-                            # Aster supports 1m candles, funding rates (derivative_ticker), and liquidations
-                            inst_def["data_types"] = "ohlcv_1m,derivative_ticker,liquidations"
+                            # Aster only supports trades data
+                            inst_def["data_types"] = "trades"
 
                             instruments[inst_def["instrument_key"]] = inst_def
                 except Exception as e:
