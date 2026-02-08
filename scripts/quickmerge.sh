@@ -6,7 +6,7 @@
 #
 # What it does:
 #   1. Creates a timestamped branch from main
-#   2. Commits all staged/unstaged changes
+#   2. Commits all changes (pre-commit hooks run — ruff format, linting, etc.)
 #   3. Pushes the branch
 #   4. Creates a PR with auto-merge enabled (squash)
 #   5. Returns to main branch
@@ -41,9 +41,10 @@ git checkout main --quiet 2>/dev/null || true
 git pull --quiet 2>/dev/null || true
 
 # Create branch, commit, push
+# NOTE: No --no-verify. Pre-commit hooks (ruff, linting) run on commit.
 git checkout -b "$BRANCH" --quiet
 git add -A
-git commit --no-verify -m "$COMMIT_MSG" --quiet
+git commit -m "$COMMIT_MSG" --quiet
 
 git push -u origin "$BRANCH" --quiet 2>/dev/null
 
