@@ -64,7 +64,7 @@ steps:
         pip install --quiet --no-deps -e .
         pip install --quiet ccxt databento web3 eth-abi exchange-calendars yfinance plotly boto3 numpy pandas polars pydantic pydantic-settings python-dateutil python-dotenv requests
 
-        pip install --quiet ruff pytest pytest-asyncio pytest-mock pytest-timeout
+        pip install --quiet ruff==0.15.0 pytest pytest-asyncio pytest-mock pytest-timeout
 
         # ====================================================================
         # LINTING (ruff) - MUST PASS

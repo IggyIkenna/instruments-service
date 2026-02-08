@@ -140,7 +140,7 @@ if [ "$RUN_LINT" = true ] && [ "$AUTO_FIX" = true ]; then
     # Check if ruff is installed
     if ! command -v ruff &> /dev/null; then
         echo -e "${YELLOW}Installing ruff...${NC}"
-        pip install ruff --quiet
+        pip install ruff==0.15.0 --quiet
     fi
 
     # Auto-format with ruff format
@@ -164,7 +164,7 @@ if [ "$RUN_LINT" = true ]; then
     # Check if ruff is installed
     if ! command -v ruff &> /dev/null; then
         echo -e "${YELLOW}Installing ruff...${NC}"
-        pip install ruff --quiet
+        pip install ruff==0.15.0 --quiet
     fi
 
     # Run ruff check (same as Cloud Build and GitHub Actions)

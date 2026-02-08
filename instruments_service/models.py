@@ -479,6 +479,9 @@ class InstrumentDefinition(BaseModel):
                 "oracle_prices",  # Protocol oracle price feeds (LSTs, sUSDe yield calculation)
                 "yields",  # LST/yield-bearing token yields (Lido, EtherFi, Ethena)
                 "liquidity",  # AMM pool liquidity (Uniswap, Curve) for slippage simulation
+                "risk_params",  # LTV, liquidation_threshold, reserve_factor (AAVE)
+                "flash_loan_availability",  # Flash loan liquidity (Morpho)
+                "rewards",  # EIGEN/ETHFI reward distributions (EtherFi)
             ]
             types = [t.strip() for t in self.data_types.split(",")]
             for data_type in types:
