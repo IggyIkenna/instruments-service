@@ -24,8 +24,8 @@ Uses Balancer's official GraphQL API: https://api-v3.balancer.fi/graphql
 """
 
 import logging
-from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 from instruments_service.app.venues.defi.the_graph_client import TheGraphClient

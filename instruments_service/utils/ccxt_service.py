@@ -12,9 +12,10 @@ Used by:
 """
 
 import logging
-import ccxt
-from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional
+
+import ccxt
 
 logger = logging.getLogger(__name__)
 

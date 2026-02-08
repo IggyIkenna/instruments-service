@@ -4,9 +4,11 @@ Unit tests for InstrumentProcessingService.
 Tests service orchestration logic with mocked dependencies.
 """
 
-import pytest
-from unittest.mock import patch, AsyncMock
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from instruments_service.app.core.instrument_processing_service import (
     InstrumentProcessingService,
 )

@@ -5,18 +5,19 @@ Coordinates instrument processing, storage, and batch operations.
 Follows unified repository structure pattern.
 """
 
-import logging
-import pandas as pd
-from typing import Dict, Any, List, Optional
-from datetime import datetime, timezone
 import asyncio
+import logging
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
-from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
-from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
-from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
+import pandas as pd
 from unified_cloud_services import VenueMapping
-from instruments_service.config import UnifiedInstrumentConfig
+
+from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
+from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
+from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
 from instruments_service.app.venues.databento.databento_adapter import DatabentoAdapter
+from instruments_service.config import UnifiedInstrumentConfig
 from instruments_service.models import InstrumentDefinition
 
 logger = logging.getLogger(__name__)

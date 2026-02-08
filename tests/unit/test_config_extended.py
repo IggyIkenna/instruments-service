@@ -3,10 +3,11 @@ Extended unit tests for configuration to increase coverage to 80%+.
 """
 
 from unified_cloud_services import (
-    VenueMapping,
-    ExchangeInstrumentConfig,
     DataTypeConfig,
+    ExchangeInstrumentConfig,
+    VenueMapping,
 )
+
 from instruments_service.config import UnifiedInstrumentConfig
 
 

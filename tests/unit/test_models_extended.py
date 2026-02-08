@@ -3,11 +3,12 @@ Extended unit tests for models to increase coverage to 80%+.
 """
 
 import pytest
+
 from instruments_service.models import (
-    Venue,
-    InstrumentType,
-    InstrumentKey,
     InstrumentDefinition,
+    InstrumentKey,
+    InstrumentType,
+    Venue,
 )
 
 

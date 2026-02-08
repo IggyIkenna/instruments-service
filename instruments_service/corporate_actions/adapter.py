@@ -31,26 +31,26 @@ traditional corporate actions like dividends or stock splits.
 """
 
 import logging
-from datetime import date
-from typing import Dict, List, Optional, Tuple, Literal
 import time
+from datetime import date
+from typing import Dict, List, Literal, Optional, Tuple
 
 import pandas as pd
 
 from instruments_service.corporate_actions.models import (
-    DividendRecord,
-    StockSplitRecord,
-    EarningsRecord,
     CorporateActionsBundle,
+    DividendRecord,
     DividendType,
+    EarningsRecord,
+    StockSplitRecord,
 )
 
 # Check for OpenBB availability
 try:
     from unified_cloud_services.clients import (
+        OPENBB_AVAILABLE,
         OpenBBBaseClient,
         OpenBBClientConfig,
-        OPENBB_AVAILABLE,
     )
 except ImportError:
     OPENBB_AVAILABLE = False

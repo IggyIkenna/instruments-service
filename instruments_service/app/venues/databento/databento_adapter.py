@@ -16,17 +16,17 @@ See instruments-service/docs/DATABENTO_ADAPTER_GUIDE.md for implementation detai
 
 import logging
 import re
-from typing import Dict, List, Optional, Any
-from datetime import datetime, timedelta, timezone, time
+from datetime import datetime, time, timedelta, timezone
+from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-import pandas as pd
 import databento as db
 import exchange_calendars as xcals
+import pandas as pd
 from databento.common.error import BentoClientError
-from instruments_service.config import instruments_config
 from unified_cloud_services import DatabentoBaseClient, DatabentoClientConfig, get_config
-from instruments_service.config import UnifiedInstrumentConfig
+
+from instruments_service.config import UnifiedInstrumentConfig, instruments_config
 
 logger = logging.getLogger(__name__)
 
