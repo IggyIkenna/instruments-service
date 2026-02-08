@@ -70,4 +70,3 @@ def pytest_load_initial_conftests(early_config, parser, args):
         print("⚠️  python-dotenv not available, skipping .env file loading")
     except Exception as e:
         print(f"⚠️  Error loading .env file: {e}")
-
