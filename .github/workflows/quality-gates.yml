@@ -66,20 +66,18 @@ jobs:
           pip install pytest pytest-asyncio pytest-mock pytest-timeout ruff==0.15.0
 
       # ========================================================================
-      # LINTING (ruff) - MUST PASS
+      # LINT + FORMAT - auto-fix then verify no diff (catches unformatted code)
       # ========================================================================
-      - name: Lint with ruff
+      - name: Lint and format check
         run: |
-          echo "=== Running linting (ruff) ==="
-          ruff check instruments_service/ tests/
-          echo "✅ Linting passed"
-
-      # FORMATTING CHECK - MUST PASS
-      - name: Check formatting with ruff
-        run: |
-          echo "=== Checking formatting (ruff format) ==="
-          ruff format --check instruments_service/ tests/
-          echo "✅ Formatting check passed"
+          ruff check --fix instruments_service/ tests/
+          ruff format instruments_service/ tests/
+          git diff --exit-code || {
+            echo "❌ Code not formatted. Run locally: ruff check --fix . && ruff format ."
+            git diff
+            exit 1
+          }
+          echo "✅ Lint and format check passed"
 
       # ========================================================================
       # UNIT TESTS - MUST PASS
