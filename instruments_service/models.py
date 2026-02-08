@@ -480,6 +480,7 @@ class InstrumentDefinition(BaseModel):
                 "oracle_prices",  # Protocol oracle price feeds (LSTs, sUSDe yield calculation)
                 "yields",  # LST/yield-bearing token yields (Lido, EtherFi, Ethena)
                 "liquidity",  # AMM pool liquidity (Uniswap, Curve) for slippage simulation
+                "volume",  # AMM pool volume (Curve, Uniswap) for volume-based metrics
                 "risk_params",  # LTV, liquidation_threshold, reserve_factor (AAVE)
                 "flash_loan_availability",  # Flash loan liquidity (Morpho)
                 "rewards",  # EIGEN/ETHFI reward distributions (EtherFi)
