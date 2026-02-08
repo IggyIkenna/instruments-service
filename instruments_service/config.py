@@ -10,16 +10,16 @@ This file contains TradFiInstrument dataclass for static TradFi instrument confi
 
 import logging
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Tuple
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
-from pydantic import Field, AliasChoices
+from pydantic import AliasChoices, Field
 from pydantic_settings import SettingsConfigDict
 
 # Import from unified-cloud-services (required dependency)
 from unified_cloud_services import (
-    UnifiedCloudServicesConfig,
     CloudTarget,
+    UnifiedCloudServicesConfig,
 )
 
 logger = logging.getLogger(__name__)

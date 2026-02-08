@@ -7,10 +7,10 @@ Local implementations kept only for instruments-specific functionality.
 
 # Re-export from unified-cloud-services (centralized implementations)
 from unified_cloud_services import (
+    DateFilterService,
+    SubgraphService,
     get_http_session,
     get_web3_client,
-    SubgraphService,
-    DateFilterService,
 )
 
 # Import local clear functions that wrap UCS internals

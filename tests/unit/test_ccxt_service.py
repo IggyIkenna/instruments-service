@@ -4,12 +4,13 @@ Unit tests for CCXTService.
 Tests centralized CCXT integration, market loading, caching, and metadata extraction.
 """
 
-import pytest
-from unittest.mock import Mock, patch
 from datetime import datetime, timedelta, timezone
+from unittest.mock import Mock, patch
+
+import pytest
+from unified_cloud_services import VenueMapping
 
 from instruments_service.utils.ccxt_service import CCXTService
-from unified_cloud_services import VenueMapping
 
 
 class TestCCXTService:

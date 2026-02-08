@@ -13,19 +13,20 @@ Reference: instruments-service/docs/MVP_INSTRUMENTS.md (DeFi section)
 """
 
 import logging
-from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
-from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 from unified_cloud_services import (
-    get_secret_with_fallback,
     AlchemyBaseClient,
     TheGraphBaseClient,
     TheGraphClientConfig,
     get_http_session,  # Centralized HTTP session pool
+    get_secret_with_fallback,
 )
-from instruments_service.config import instruments_config
 from web3 import Web3
+
+from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
+from instruments_service.config import instruments_config
 
 logger = logging.getLogger(__name__)
 

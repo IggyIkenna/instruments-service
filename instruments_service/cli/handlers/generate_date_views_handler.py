@@ -34,8 +34,8 @@ Output Structure:
 """
 
 import logging
-from typing import Dict, Any
 from pathlib import Path
+from typing import Any, Dict
 
 import pandas as pd
 

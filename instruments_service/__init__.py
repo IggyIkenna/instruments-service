@@ -44,8 +44,8 @@ def __getattr__(name):
         from instruments_service.models import (
             InstrumentDefinition,
             InstrumentKey,
-            Venue,
             InstrumentType,
+            Venue,
         )
 
         return {
@@ -61,10 +61,10 @@ def __getattr__(name):
         "UnifiedInstrumentConfig",
     ):
         from instruments_service.config import (
-            VenueMapping,
-            ExchangeInstrumentConfig,
             DataTypeConfig,
+            ExchangeInstrumentConfig,
             UnifiedInstrumentConfig,
+            VenueMapping,
         )
 
         return {
