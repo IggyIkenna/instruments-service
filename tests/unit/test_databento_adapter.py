@@ -924,3 +924,79 @@ class TestDatabentoT2Availability:
         finally:
             base_client.clear_databento_client_cache()
             base_client.clear_databento_api_key_cache()
+
+
+class TestDatabentoAdapterHardening:
+    """Regression tests for data hardening — ensure silent defaults cannot be reintroduced."""
+
+    def test_unknown_exchange_raises_valueerror(self):
+        """Regression: unknown exchange must raise ValueError, not default to GLBX.MDP3."""
+        from instruments_service.app.venues.databento import databento_adapter
+
+        mock_db_module = MagicMock()
+        mock_client = Mock()
+        mock_db_module.Historical.return_value = mock_client
+
+        original_db = getattr(databento_adapter, "db", None)
+
+        try:
+            with (
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch(
+                    "unified_cloud_services.clients.databento_base_client.get_secret_with_fallback",
+                    return_value="test-key",
+                ),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
+            ):
+                from unified_cloud_services.clients import databento_base_client
+
+                databento_base_client.clear_databento_api_key_cache()
+                databento_base_client.clear_databento_client_cache()
+
+                adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
+
+                with pytest.raises(ValueError, match="Unknown exchange"):
+                    adapter._get_dataset_for_exchange("FAKE_EXCHANGE_THAT_DOES_NOT_EXIST")
+        finally:
+            if original_db is not None:
+                databento_adapter.db = original_db
+            from unified_cloud_services.clients import databento_base_client
+
+            databento_base_client.clear_databento_api_key_cache()
+            databento_base_client.clear_databento_client_cache()
+
+    def test_known_exchanges_resolve_correctly(self):
+        """Sanity check: known exchanges still map to correct datasets."""
+        from instruments_service.app.venues.databento import databento_adapter
+
+        mock_db_module = MagicMock()
+        mock_client = Mock()
+        mock_db_module.Historical.return_value = mock_client
+
+        original_db = getattr(databento_adapter, "db", None)
+
+        try:
+            with (
+                patch("instruments_service.app.venues.databento.databento_adapter.db", mock_db_module),
+                patch(
+                    "unified_cloud_services.clients.databento_base_client.get_secret_with_fallback",
+                    return_value="test-key",
+                ),
+                patch("unified_cloud_services.clients.databento_base_client.db", mock_db_module),
+            ):
+                from unified_cloud_services.clients import databento_base_client
+
+                databento_base_client.clear_databento_api_key_cache()
+                databento_base_client.clear_databento_client_cache()
+
+                adapter = databento_adapter.DatabentoAdapter(api_key="test-key")
+
+                assert adapter._get_dataset_for_exchange("CME") == "GLBX.MDP3"
+                assert adapter._get_dataset_for_exchange("NASDAQ") == "DBEQ.BASIC"
+        finally:
+            if original_db is not None:
+                databento_adapter.db = original_db
+            from unified_cloud_services.clients import databento_base_client
+
+            databento_base_client.clear_databento_api_key_cache()
+            databento_base_client.clear_databento_client_cache()

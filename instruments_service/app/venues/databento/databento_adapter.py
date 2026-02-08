@@ -409,6 +409,10 @@ class DatabentoAdapter:
                                         f"✅ Got {len(df)} instrument definitions from previous session "
                                         f"({prev_start_str}) for {exchange} on {reason} {start_date_str}"
                                     )
+                                    # Mark as non-trading day so downstream knows these are
+                                    # reused from a previous session, not live instruments
+                                    df["trading_status"] = "CLOSED"
+                                    df["trading_status_reason"] = reason
                                     fallback_success = True
                                     break
                                 logger.warning(
@@ -933,7 +937,14 @@ class DatabentoAdapter:
         }
 
         exchange_upper = exchange.upper()
-        return dataset_mapping.get(exchange_upper, "GLBX.MDP3")  # Default to CME
+        dataset = dataset_mapping.get(exchange_upper)
+        if dataset is None:
+            raise ValueError(
+                f"Unknown exchange '{exchange}' — no Databento dataset mapping exists. "
+                f"Known exchanges: {', '.join(sorted(dataset_mapping.keys()))}. "
+                f"Add the exchange to _get_dataset_for_exchange() mapping."
+            )
+        return dataset
 
     def _get_query_date_for_databento(self, target_date: datetime) -> datetime:
         """
@@ -1298,14 +1309,26 @@ class DatabentoAdapter:
             # Use exchange_raw_symbol (which is the Databento symbol) as fallback for equities
             asset_raw = exchange_raw_symbol
 
-        currency_raw = row.get("currency", "USD")
-        currency_raw = "USD" if pd.isna(currency_raw) else str(currency_raw)
+        currency_raw = row.get("currency")
+        if pd.isna(currency_raw) or not currency_raw:
+            logger.warning(
+                f"Currency missing for {asset_raw or exchange_raw_symbol} on {exchange}, defaulting to USD"
+            )
+            currency_raw = "USD"
+        else:
+            currency_raw = str(currency_raw)
 
         security_type = row.get("security_type", "")
         security_type = "" if pd.isna(security_type) else str(security_type)
 
-        min_price_increment = row.get("min_price_increment", 0.01)
-        min_price_increment = 0.01 if pd.isna(min_price_increment) else float(min_price_increment)
+        min_price_increment = row.get("min_price_increment")
+        if pd.isna(min_price_increment) or min_price_increment is None:
+            logger.warning(
+                f"min_price_increment missing for {asset_raw or exchange_raw_symbol} on {exchange}, defaulting to 0.01"
+            )
+            min_price_increment = 0.01
+        else:
+            min_price_increment = float(min_price_increment)
 
         # Determine instrument type FIRST (needed for underlying extraction and quote_asset logic)
         # CRITICAL: Check databento_symbol first (e.g., "ES.OPT", "SPY.OPT") as Databento may not

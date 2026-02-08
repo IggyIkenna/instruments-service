@@ -4,6 +4,8 @@ Unit tests for DeFi adapters (Balancer, Hyperliquid, EtherFi, Lido, Morpho, Curv
 
 from unittest.mock import Mock, patch
 
+import pytest
+
 
 class TestBalancerAdapter:
     """Tests for BalancerAdapter."""
@@ -659,3 +661,67 @@ class TestAsterAdapterExtended:
 
                 result = adapter.fetch_spot_pairs()
                 assert isinstance(result, dict)
+
+
+class TestMorphoAdapterHardening:
+    """Regression tests for Morpho adapter data hardening."""
+
+    def test_morpho_no_mvp_fallback_on_api_failure(self):
+        """Regression: Morpho must fail when API returns no markets, not use _get_mvp_markets_fallback."""
+        with patch(
+            "instruments_service.app.venues.defi.morpho_adapter.BaseDefiAdapter.__init__",
+            return_value=None,
+        ):
+            from instruments_service.app.venues.defi.morpho_adapter import MorphoAdapter
+
+            adapter = MorphoAdapter.__new__(MorphoAdapter)
+            adapter.chain = "ETHEREUM"
+            adapter.project_id = "test-project"
+            adapter.venue = "MORPHO-ETHEREUM"
+
+            # Mock API to return empty markets
+            adapter._fetch_markets_from_api = Mock(return_value=[])
+
+            with pytest.raises(RuntimeError, match="MORPHO-ETHEREUM venue failed"):
+                adapter.fetch_markets()
+
+    def test_morpho_mvp_fallback_removed(self):
+        """Regression: _get_mvp_markets_fallback must not be callable."""
+        from instruments_service.app.venues.defi.morpho_adapter import MorphoAdapter
+
+        fallback = getattr(MorphoAdapter, "_get_mvp_markets_fallback", None)
+        assert fallback is None or not callable(fallback), (
+            "_get_mvp_markets_fallback was reintroduced. Static fallback markets are forbidden."
+        )
+
+    def test_morpho_venue_level_failure(self):
+        """Regression: if any Morpho instrument fails, the entire venue must fail."""
+        with patch(
+            "instruments_service.app.venues.defi.morpho_adapter.BaseDefiAdapter.__init__",
+            return_value=None,
+        ):
+            from instruments_service.app.venues.defi.morpho_adapter import MorphoAdapter
+
+            adapter = MorphoAdapter.__new__(MorphoAdapter)
+            adapter.chain = "ETHEREUM"
+            adapter.project_id = "test-project"
+            adapter.venue = "MORPHO-ETHEREUM"
+
+            market1 = {"symbol": "USDT", "underlyingAsset": "0x123", "aToken": {"address": ""}, "variableDebtToken": {"address": ""}}
+            market2 = {"symbol": "WETH", "underlyingAsset": "0x456", "aToken": {"address": ""}, "variableDebtToken": {"address": ""}}
+            adapter._fetch_markets_from_api = Mock(return_value=[market1, market2])
+
+            call_count = 0
+
+            def create_a_token_side_effect(market):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    return {"instrument_key": "MORPHO-ETHEREUM:A_TOKEN:AUSDT@ETHEREUM"}
+                raise RuntimeError("Contract call failed for WETH")
+
+            adapter._create_a_token_instrument = Mock(side_effect=create_a_token_side_effect)
+            adapter._create_debt_token_instrument = Mock(return_value=None)
+
+            with pytest.raises(RuntimeError, match="MORPHO-ETHEREUM venue failed"):
+                adapter.fetch_markets()

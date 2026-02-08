@@ -384,8 +384,9 @@ class InstrumentProcessingService:
             else:
                 # Default to linear if unclear (most common case)
                 perp_flavor = "LIN"
-                logger.debug(
-                    f"⚠️ Could not determine perpetual flavor for {symbol_id}, defaulting to @LIN (settle_asset={settle_asset}, quote={clean_quote}, base={clean_base})"
+                logger.warning(
+                    f"Could not determine perpetual flavor for {symbol_id}, defaulting to @LIN "
+                    f"(settle_asset={settle_asset}, quote={clean_quote}, base={clean_base})"
                 )
 
             return f"{venue}:PERPETUAL:{clean_base}-{clean_quote}@{perp_flavor}"
@@ -453,8 +454,9 @@ class InstrumentProcessingService:
                 else:
                     # Default to linear if unclear (most common case)
                     future_flavor = "LIN"
-                    logger.debug(
-                        f"⚠️ Could not determine future flavor for {symbol_id}, defaulting to @LIN (settle_asset={settle_asset}, quote={clean_quote}, base={clean_base})"
+                    logger.warning(
+                        f"Could not determine future flavor for {symbol_id}, defaulting to @LIN "
+                        f"(settle_asset={settle_asset}, quote={clean_quote}, base={clean_base})"
                     )
 
                 return f"{venue}:FUTURE:{clean_base}-{clean_quote}-{expiry_str}@{future_flavor}"
@@ -522,8 +524,9 @@ class InstrumentProcessingService:
             else:
                 # Default to linear if unclear (most common case)
                 option_flavor = "LIN"
-                logger.debug(
-                    f"⚠️ Could not determine option flavor for {symbol_id}, defaulting to @LIN (settle_asset={settle_asset}, quote={clean_quote}, base={clean_base})"
+                logger.warning(
+                    f"Could not determine option flavor for {symbol_id}, defaulting to @LIN "
+                    f"(settle_asset={settle_asset}, quote={clean_quote}, base={clean_base})"
                 )
 
             return (

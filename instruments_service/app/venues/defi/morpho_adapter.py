@@ -160,37 +160,44 @@ class MorphoAdapter(BaseDefiAdapter):
             return {}
 
         instruments = {}
+        instrument_errors = []
 
-        try:
-            # Fetch markets from Morpho Blue API + on-chain contract
-            markets = self._fetch_markets_from_api()
+        # Fetch markets from Morpho Blue API + on-chain contract
+        # Let exceptions propagate — venue must fail if market fetch fails
+        markets = self._fetch_markets_from_api()
 
-            if not markets:
-                logger.warning("⚠️ No markets from Morpho API, falling back to MVP defaults")
-                markets = self._get_mvp_markets_fallback()
+        if not markets:
+            raise RuntimeError(
+                "MORPHO-ETHEREUM venue failed: No markets returned from Morpho API. "
+                "Cannot generate instruments without live market data."
+            )
 
-            for market in markets:
-                try:
-                    # Generate aToken instrument (supply position)
-                    a_token_def = self._create_a_token_instrument(market)
-                    if a_token_def:
-                        instruments[a_token_def["instrument_key"]] = a_token_def
+        for market in markets:
+            try:
+                # Generate aToken instrument (supply position)
+                a_token_def = self._create_a_token_instrument(market)
+                if a_token_def:
+                    instruments[a_token_def["instrument_key"]] = a_token_def
 
-                    # Generate debtToken instrument (borrow position)
-                    debt_token_def = self._create_debt_token_instrument(market)
-                    if debt_token_def:
-                        instruments[debt_token_def["instrument_key"]] = debt_token_def
+                # Generate debtToken instrument (borrow position)
+                debt_token_def = self._create_debt_token_instrument(market)
+                if debt_token_def:
+                    instruments[debt_token_def["instrument_key"]] = debt_token_def
 
-                except Exception as e:
-                    logger.warning(f"Failed to process Morpho market {market.get('symbol')}: {e}")
-                    continue
+            except Exception as e:
+                error_msg = f"Failed to process Morpho market {market.get('symbol')}: {e}"
+                logger.error(error_msg)
+                instrument_errors.append(error_msg)
 
-            logger.info(f"✅ Generated {len(instruments)} Morpho instruments")
-            return instruments
+        # Venue-level failure: if ANY instrument failed, fail the entire venue
+        if instrument_errors:
+            raise RuntimeError(
+                f"MORPHO-ETHEREUM venue failed: {len(instrument_errors)} instrument(s) had errors. "
+                f"Errors: {'; '.join(instrument_errors)}"
+            )
 
-        except Exception as e:
-            logger.error(f"Failed to fetch Morpho markets: {e}")
-            return {}
+        logger.info(f"✅ Generated {len(instruments)} Morpho instruments")
+        return instruments
 
     def _fetch_markets_from_api(self) -> List[Dict[str, Any]]:
         """
@@ -367,38 +374,8 @@ class MorphoAdapter(BaseDefiAdapter):
         logger.debug(f"Unknown IRM address {irm_address}, using AdaptiveCurveIRM defaults")
         return ADAPTIVE_CURVE_IRM_PARAMS.copy()
 
-    def _get_mvp_markets_fallback(self) -> List[Dict[str, Any]]:
-        """
-        Fallback MVP markets when API is unavailable.
-        Uses hardcoded market data with known IRM parameters.
-
-        Returns:
-            List of market dictionaries
-        """
-        return [
-            {
-                "symbol": "WETH",
-                "underlyingAsset": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-                "aToken": {"address": ""},
-                "variableDebtToken": {"address": ""},
-                "marketId": "",
-                "ltv": 0.86,  # Common LLTV for WETH markets on Morpho
-                "liquidation_threshold": 0.86,
-                "liquidation_bonus": 0.1628,  # 1/0.86 - 1
-                **ADAPTIVE_CURVE_IRM_PARAMS,
-            },
-            {
-                "symbol": "USDT",
-                "underlyingAsset": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-                "aToken": {"address": ""},
-                "variableDebtToken": {"address": ""},
-                "marketId": "",
-                "ltv": 0.86,
-                "liquidation_threshold": 0.86,
-                "liquidation_bonus": 0.1628,
-                **ADAPTIVE_CURVE_IRM_PARAMS,
-            },
-        ]
+    # _get_mvp_markets_fallback REMOVED: Static fallback markets were producing
+    # instruments from stale hardcoded data. The venue must fail if API is unavailable.
 
     def _extract_lending_metadata(self, market: Dict[str, Any]) -> Dict[str, Any]:
         """

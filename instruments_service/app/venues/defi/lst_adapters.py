@@ -90,14 +90,23 @@ class EtherFiAdapter(BaseDefiAdapter):
             }
         ]
 
+        instrument_errors = []
         for token in lst_tokens:
             try:
                 inst_def = self._create_lst_instrument(token)
                 if inst_def:
                     instruments[inst_def["instrument_key"]] = inst_def
             except Exception as e:
-                logger.warning(f"Failed to create EtherFi instrument for {token['symbol']}: {e}")
-                continue
+                error_msg = f"Failed to create EtherFi instrument for {token['symbol']}: {e}"
+                logger.error(error_msg)
+                instrument_errors.append(error_msg)
+
+        # Venue-level failure: if ANY instrument failed, fail the entire venue
+        if instrument_errors:
+            raise RuntimeError(
+                f"ETHERFI venue failed: {len(instrument_errors)} instrument(s) had errors. "
+                f"Errors: {'; '.join(instrument_errors)}"
+            )
 
         logger.info(f"✅ Generated {len(instruments)} EtherFi instruments")
         return instruments
@@ -231,14 +240,23 @@ class LidoAdapter(BaseDefiAdapter):
             },
         ]
 
+        instrument_errors = []
         for token in lst_tokens:
             try:
                 inst_def = self._create_lst_instrument(token)
                 if inst_def:
                     instruments[inst_def["instrument_key"]] = inst_def
             except Exception as e:
-                logger.warning(f"Failed to create Lido instrument for {token['symbol']}: {e}")
-                continue
+                error_msg = f"Failed to create Lido instrument for {token['symbol']}: {e}"
+                logger.error(error_msg)
+                instrument_errors.append(error_msg)
+
+        # Venue-level failure: if ANY instrument failed, fail the entire venue
+        if instrument_errors:
+            raise RuntimeError(
+                f"LIDO venue failed: {len(instrument_errors)} instrument(s) had errors. "
+                f"Errors: {'; '.join(instrument_errors)}"
+            )
 
         logger.info(f"✅ Generated {len(instruments)} Lido instruments")
         return instruments
