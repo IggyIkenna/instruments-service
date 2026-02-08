@@ -141,6 +141,14 @@ def parse_arguments() -> argparse.Namespace:
         help="Upload corporate actions to GCS (default: save locally only)",
     )
 
+    # Concurrency options
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=4,
+        help="Maximum number of parallel workers for processing (default: 4)",
+    )
+
     # Backfill/update options
     parser.add_argument(
         "--parallel-workers",
