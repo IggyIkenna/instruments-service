@@ -90,7 +90,7 @@ line-length = 120
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "W"]
+select = ["E", "F", "W", "I"]
 ignore = [
     "E501",  # Line too long - handled by ruff format
     "E722",  # Do not use bare `except` - allowed in scripts for simplicity
