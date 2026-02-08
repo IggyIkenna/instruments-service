@@ -144,7 +144,7 @@ class EtherFiAdapter(BaseDefiAdapter):
                 2024, 2, 1, tzinfo=timezone.utc
             ).isoformat(),  # EtherFi weETH launch date (Feb 2024)
             "available_to_datetime": None,
-            "data_types": "oracle_prices",  # Oracle price (yield computed from price change over time)
+            "data_types": "oracle_prices,rewards",  # Oracle price + EIGEN/ETHFI reward distributions
             "inverse": False,
             "contract_size": None,
             "tick_size": "",

@@ -381,7 +381,7 @@ class MorphoAdapter(BaseDefiAdapter):
                 2023, 6, 1, tzinfo=timezone.utc
             ).isoformat(),  # Morpho launch date (June 2023)
             "available_to_datetime": None,
-            "data_types": "rate_indices,oracle_prices",  # rate_indices + oracle prices for consistency with AAVE
+            "data_types": "rate_indices,utilization,flash_loan_availability",
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
@@ -440,7 +440,7 @@ class MorphoAdapter(BaseDefiAdapter):
                 2023, 6, 1, tzinfo=timezone.utc
             ).isoformat(),  # Morpho launch date (June 2023)
             "available_to_datetime": None,
-            "data_types": "rate_indices,oracle_prices",  # rate_indices + oracle prices for consistency with AAVE
+            "data_types": "rate_indices,utilization,flash_loan_availability",
             "inverse": False,
             "contract_size": None,
             "tick_size": "",
