@@ -73,9 +73,9 @@ steps:
         echo "=== Running lint and format check ==="
         ruff check --fix instruments_service/ tests/ || true
         ruff format instruments_service/ tests/
-        git diff --exit-code || {
+        git diff --exit-code -- instruments_service/ tests/ || {
           echo "❌ Code not formatted. Run locally: ruff check --fix . && ruff format ."
-          git diff
+          git diff -- instruments_service/ tests/
           exit 1
         }
         echo "✅ Lint and format check passed"
