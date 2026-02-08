@@ -96,7 +96,8 @@ ENV ENVIRONMENT=production \
     GCS_LOCATION=asia-northeast1 \
     INSTRUMENTS_GCS_BUCKET_CEFI=instruments-store-cefi-central-element-323112 \
     INSTRUMENTS_GCS_BUCKET_TRADFI=instruments-store-tradfi-central-element-323112 \
-    INSTRUMENTS_GCS_BUCKET_DEFI=instruments-store-defi-central-element-323112
+    INSTRUMENTS_GCS_BUCKET_DEFI=instruments-store-defi-central-element-323112 \
+    DATABENTO_BATCH_REGISTRY_BUCKET=databento-batch-registry-asia-central-element-323112
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
