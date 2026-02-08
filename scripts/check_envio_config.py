@@ -12,18 +12,26 @@ Supports multi-cloud via CLOUD_PROVIDER environment variable.
 
 import os
 import sys
+
 import requests
+
 from instruments_service.config import instruments_config
 
 
 def get_envio_secret():
     """Get Envio API token from Secret Manager (GCP or AWS)."""
-    project_id = os.environ.get("GCP_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("AWS_ACCOUNT_ID") or "central-element-323112"
+    project_id = (
+        os.environ.get("GCP_PROJECT_ID")
+        or os.environ.get("GOOGLE_CLOUD_PROJECT")
+        or os.environ.get("AWS_ACCOUNT_ID")
+        or "central-element-323112"
+    )
     secret_id = "envio-api-key"
 
     try:
         # Try unified-cloud-services first (multi-cloud)
         from unified_cloud_services.core.client_factory import get_secret_client
+
         secret_client = get_secret_client()
         token = secret_client.get_secret(secret_id)
         if token:
@@ -33,6 +41,7 @@ def get_envio_secret():
         # Fallback to direct GCP Secret Manager
         try:
             from google.cloud import secretmanager
+
             client = secretmanager.SecretManagerServiceClient()
             name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
             response = client.access_secret_version(name=name)
@@ -72,9 +81,7 @@ def test_envio_endpoint(api_url: str, api_token: str):
             return False
 
         print("✅ Endpoint is accessible and responding!")
-        print(
-            f"   Query type: {data.get('data', {}).get('__schema', {}).get('queryType', {}).get('name', 'Unknown')}"
-        )
+        print(f"   Query type: {data.get('data', {}).get('__schema', {}).get('queryType', {}).get('name', 'Unknown')}")
         return True
 
     except requests.exceptions.RequestException as e:

@@ -11,7 +11,9 @@ Usage:
 
 import sys
 from pathlib import Path
+
 from unified_cloud_services import get_secret_with_fallback
+
 from instruments_service.config import instruments_config
 
 # Add parent directory to path for imports
@@ -38,7 +40,6 @@ def get_clickup_user_ids():
     if not api_token:
         # Try Secret Manager via unified-cloud-services
         try:
-
             project_id = instruments_config.gcp_project_id
             secret_name = instruments_config.clickup_secret_name
             api_token = get_secret_with_fallback(
@@ -66,14 +67,14 @@ def get_clickup_user_ids():
                     break
 
     if not api_token:
-        print(
-            "❌ API token not found. Set CLICKUP_API_TOKEN env var or add clickup_api_token=... to .env.clickup"
-        )
+        print("❌ API token not found. Set CLICKUP_API_TOKEN env var or add clickup_api_token=... to .env.clickup")
         print("   Checked: Secret Manager (clickup-api-key)")
         print(f"   Checked: {service_env_file}")
         print(f"   Checked: {root_env_file}")
         print("\n💡 To store API key in Secret Manager, run:")
-        print("   cd ../unified-cloud-services && python scripts/store_secret.py --secret-name clickup-api-key --secret-value YOUR_TOKEN")
+        print(
+            "   cd ../unified-cloud-services && python scripts/store_secret.py --secret-name clickup-api-key --secret-value YOUR_TOKEN"
+        )
         return 1
 
     print(f"✅ Using API token: {api_token[:20]}...")
@@ -171,9 +172,7 @@ def get_clickup_user_ids():
             print("If Ikenna or Harsh weren't found above, check the list below:")
             print("Look for your email address or name in the list.")
             print()
-            for username_lower, user_info in sorted(
-                all_users.items(), key=lambda x: x[1].get("username", "") or ""
-            ):
+            for username_lower, user_info in sorted(all_users.items(), key=lambda x: x[1].get("username", "") or ""):
                 print(f"   👤 Username: '{user_info.get('username', 'N/A')}'")
                 if user_info.get("name") and user_info["name"] != "N/A":
                     print(f"      Full Name: '{user_info['name']}'")
@@ -189,9 +188,7 @@ def get_clickup_user_ids():
         if ikenna_id:
             print(f"clickup_user_id_ikenna={ikenna_id}")
         else:
-            print(
-                "⚠️  Ikenna not found - check username spelling (looking for 'ikenna' or 'igboaka')"
-            )
+            print("⚠️  Ikenna not found - check username spelling (looking for 'ikenna' or 'igboaka')")
             print("clickup_user_id_ikenna=")
 
         if harsh_id:
