@@ -8,23 +8,22 @@ Tests for the CorporateActionsHandler class methods including:
 - Schema constants
 """
 
-import pytest
+import shutil
+import tempfile
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
-import tempfile
-import shutil
 
 import pandas as pd
+import pytest
 
 from instruments_service.cli.handlers.corporate_actions_handler import (
-    CorporateActionsHandler,
     DIVIDENDS_SCHEMA,
-    SPLITS_SCHEMA,
     EARNINGS_SCHEMA,
+    SPLITS_SCHEMA,
+    CorporateActionsHandler,
     parse_date,
 )
-
 
 # =============================================================================
 # Schema Tests

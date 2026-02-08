@@ -8,16 +8,16 @@ Reference: instruments-service/docs/MVP_INSTRUMENTS.md (DeFi section)
 """
 
 import logging
-from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
-from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
-from instruments_service.config import instruments_config
 from instruments_service.app.venues.defi.the_graph_client import (
     _API_KEY_CACHE,
     _API_KEY_PROJECT_ID,
+    TheGraphClient,
 )
+from instruments_service.config import instruments_config
 
 logger = logging.getLogger(__name__)
 

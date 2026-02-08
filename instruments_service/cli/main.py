@@ -10,10 +10,10 @@ Query functionality has been moved to unified-cloud-services.
 Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 """
 
-import sys
 import logging
+import sys
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict
 
 
 # CRITICAL: Load .env file explicitly before any other imports
@@ -64,9 +64,9 @@ except ImportError:
 except Exception as e:
     logger.warning(f"⚠️ Failed to patch unified_cloud_services config: {e}")
 
-from instruments_service.cli.parser import parse_arguments
-from instruments_service.cli.handlers import get_handler_for_mode
 from instruments_service.cli.base_handler import ModeHandler
+from instruments_service.cli.handlers import get_handler_for_mode
+from instruments_service.cli.parser import parse_arguments
 
 
 def main() -> Dict[str, Any]:

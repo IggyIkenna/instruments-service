@@ -2,10 +2,12 @@
 Extended unit tests for InstrumentsService to increase coverage.
 """
 
-import pytest
-from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime, timezone
+from unittest.mock import AsyncMock, Mock, patch
+
 import pandas as pd
+import pytest
+
 from instruments_service.app.core.instruments_service import InstrumentsService
 
 

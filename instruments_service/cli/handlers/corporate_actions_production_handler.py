@@ -18,20 +18,20 @@ Usage:
         --upload-to-gcs
 """
 
-import logging
 import json
-import time
+import logging
 import subprocess
-from datetime import datetime, date, timezone
-from typing import Dict, Any, List, Optional
-from pathlib import Path
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
 from instruments_service.cli.base_handler import ModeHandler
+from instruments_service.config import SP500_TICKERS, corporate_actions_start_date, instruments_config
 from instruments_service.corporate_actions.adapter import CorporateActionsAdapter
-from instruments_service.config import instruments_config, SP500_TICKERS, corporate_actions_start_date
 
 logger = logging.getLogger(__name__)
 
@@ -125,8 +125,9 @@ class CorporateActionsProductionHandler(ModeHandler):
             List of ticker symbols
         """
         try:
-            from unified_cloud_services import get_gcs_client
             import tempfile
+
+            from unified_cloud_services import get_gcs_client
 
             client = get_gcs_client(project_id=self.project_id)
             bucket_name = instruments_config.gcs_bucket_tradfi or instruments_config.get_bucket_for_category("tradfi")

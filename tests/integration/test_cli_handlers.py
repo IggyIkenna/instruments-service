@@ -7,9 +7,10 @@ Note: Query functionality has been moved to unified-cloud-services.
 Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 """
 
-import pytest
 import os
 from datetime import datetime, timezone
+
+import pytest
 
 from instruments_service.cli.handlers.instrument_handler import InstrumentHandler
 

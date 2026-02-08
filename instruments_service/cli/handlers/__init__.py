@@ -7,15 +7,17 @@ Note: Query functionality has been moved to unified-cloud-services.
 Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 """
 
-from typing import Dict, Any
 import logging
-from .instrument_handler import InstrumentHandler
-from .corporate_actions_handler import CorporateActionsHandler
-from .corporate_actions_backfill_handler import CorporateActionsBackfillHandler
-from .generate_date_views_handler import GenerateDateViewsHandler
-from .corporate_actions_update_handler import CorporateActionsUpdateHandler
-from .corporate_actions_production_handler import CorporateActionsProductionHandler
+from typing import Any, Dict
+
 from instruments_service.cli.base_handler import ModeHandler
+
+from .corporate_actions_backfill_handler import CorporateActionsBackfillHandler
+from .corporate_actions_handler import CorporateActionsHandler
+from .corporate_actions_production_handler import CorporateActionsProductionHandler
+from .corporate_actions_update_handler import CorporateActionsUpdateHandler
+from .generate_date_views_handler import GenerateDateViewsHandler
+from .instrument_handler import InstrumentHandler
 
 logger = logging.getLogger(__name__)
 

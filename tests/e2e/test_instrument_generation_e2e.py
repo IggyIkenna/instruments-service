@@ -9,21 +9,21 @@ Tests the complete workflow:
 5. Verify data integrity (can query back from test bucket)
 """
 
-import pytest
-import pandas as pd
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pandas as pd
+import pytest
+from unified_cloud_services import VenueMapping
+
+from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
+from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.instrument_processing_service import (
     InstrumentProcessingService,
 )
-from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
-from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
-from unified_cloud_services import VenueMapping
 
 # Import get_config from conftest (avoids circular import issues)
 from tests.conftest import get_config
-
 
 # Test configuration
 START_DATE = datetime(2023, 5, 23, tzinfo=timezone.utc)

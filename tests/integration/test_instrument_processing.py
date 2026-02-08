@@ -5,12 +5,14 @@ Tests Tardis API integration, CCXT enrichment, and end-to-end processing
 with test bucket and real credentials.
 """
 
-import pytest
 from datetime import datetime, timezone
+
+import pytest
+from unified_cloud_services import VenueMapping
+
 from instruments_service.app.core.instrument_processing_service import (
     InstrumentProcessingService,
 )
-from unified_cloud_services import VenueMapping
 
 
 @pytest.mark.integration
