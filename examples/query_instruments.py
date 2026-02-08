@@ -17,9 +17,7 @@ import logging
 from unified_cloud_services import create_instruments_client
 
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -34,9 +32,7 @@ def query_instruments_example():
 
     # Query instruments
     date = "2023-05-23"
-    instruments_df = client.get_instruments_for_date(
-        date=date, venue="BINANCE-FUTURES", instrument_type="PERPETUAL"
-    )
+    instruments_df = client.get_instruments_for_date(date=date, venue="BINANCE-FUTURES", instrument_type="PERPETUAL")
 
     print(f"\n✅ Retrieved {len(instruments_df)} instruments for {date}")
     if not instruments_df.empty:

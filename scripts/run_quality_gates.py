@@ -11,10 +11,10 @@ Usage:
     --skip-performance: Skip performance tests (faster for development)
 """
 
-import sys
-import subprocess
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 # Load .env file if it exists (for local development)
@@ -181,17 +181,13 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
             result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
 
             if result.returncode == 0:
-                print(
-                    "✅ unified-cloud-services installed successfully from checked-out repository"
-                )
+                print("✅ unified-cloud-services installed successfully from checked-out repository")
                 installed = True
             else:
                 print(f"⚠️  Checked-out repository installation failed: {result.stderr[:200]}")
                 print("   Will try GitHub Packages and GitHub repository as fallback")
         else:
-            print(
-                "   Checked-out repository not found, will try GitHub Packages and GitHub repository"
-            )
+            print("   Checked-out repository not found, will try GitHub Packages and GitHub repository")
     else:
         # Priority: Local monorepo (editable) > GitHub Packages > GitHub repo
         # Note: PyPI is skipped - unified-cloud-services is a private package
@@ -304,9 +300,7 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
         print("To fix this:")
         print("  1. Ensure unified-cloud-services is available in the monorepo, OR")
         print("  2. Set GH_PAT in .env file or as environment variable")
-        print(
-            "     - Add GH_PAT=your_token to instruments-service/.env file (recommended for local dev)"
-        )
+        print("     - Add GH_PAT=your_token to instruments-service/.env file (recommended for local dev)")
         print("     - Or export GH_PAT=your_token in your shell")
         print("     Create token at: https://github.com/settings/tokens/new")
         print("     Required scopes: repo, read:packages")
@@ -333,9 +327,7 @@ def check_dependencies() -> bool:
 
     # Check pytest
     print("\n🔍 Checking pytest...")
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", "--version"], capture_output=True, text=True
-    )
+    result = subprocess.run([sys.executable, "-m", "pytest", "--version"], capture_output=True, text=True)
 
     if result.returncode != 0:
         print("❌ pytest is not installed")
