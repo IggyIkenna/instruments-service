@@ -4,8 +4,9 @@ Unit tests for DateFilterService.
 Tests uniform date filtering logic for instruments.
 """
 
-import pytest
 from datetime import datetime, timezone
+
+import pytest
 
 from instruments_service.utils import DateFilterService
 

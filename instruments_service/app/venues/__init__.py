@@ -9,15 +9,15 @@ Contains venue adapters for fetching instruments from various sources:
 """
 
 # Import all venue adapters (active only)
-from instruments_service.app.venues.tardis import TardisAdapter
 from instruments_service.app.venues.databento import DatabentoAdapter
 from instruments_service.app.venues.defi import (
-    TheGraphClient,
-    UniswapV3Adapter,
     AaveV3Adapter,
     EtherFiAdapter,
     LidoAdapter,
+    TheGraphClient,
+    UniswapV3Adapter,
 )
+from instruments_service.app.venues.tardis import TardisAdapter
 
 __all__ = [
     "TardisAdapter",

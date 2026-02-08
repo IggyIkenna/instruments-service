@@ -4,9 +4,10 @@ Unit tests for DatabentoAdapter.
 REFACTORED: Tests updated to work with DatabentoBaseClient architecture.
 """
 
-import pytest
-from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime, timezone
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
 
 
 class TestDatabentoAdapter:
@@ -34,8 +35,9 @@ class TestDatabentoAdapter:
 
     def test_init_without_api_key(self):
         """Test initialization without API key (uses Secret Manager via base client)."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -101,8 +103,9 @@ class TestDatabentoAdapter:
 
     def test_get_dataset_for_exchange_cme(self):
         """Test dataset mapping for CME."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -123,8 +126,9 @@ class TestDatabentoAdapter:
 
     def test_get_dataset_for_exchange_cboe(self):
         """Test dataset mapping for CBOE (VIX via Barchart)."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -145,8 +149,9 @@ class TestDatabentoAdapter:
 
     def test_get_dataset_for_exchange_nasdaq(self):
         """Test dataset mapping for NASDAQ."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -168,8 +173,9 @@ class TestDatabentoAdapter:
 
     def test_get_dataset_for_exchange_nyse(self):
         """Test dataset mapping for NYSE."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -191,8 +197,9 @@ class TestDatabentoAdapter:
 
     def test_client_reuse(self):
         """Test that client is reused via DatabentoBaseClient caching."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -223,8 +230,9 @@ class TestDatabentoAdapter:
 
     def test_api_key_caching(self):
         """Test that API key is cached via DatabentoBaseClient."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -261,8 +269,9 @@ class TestDatabentoAdapter:
 
     def test_create_vix_instrument_definition(self):
         """Test VIX instrument definition creation."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -291,8 +300,9 @@ class TestDatabentoAdapter:
 
     def test_create_krwusd_instrument_definition(self):
         """Test KRW/USD instrument definition: venue must be FX, not YAHOO_FINANCE."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -326,8 +336,9 @@ class TestDatabentoAdapter:
 
     def test_create_bitcoin_etf_instrument_definition_ibit(self):
         """Test IBIT (iShares Bitcoin ETF) instrument definition creation."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -358,8 +369,9 @@ class TestDatabentoAdapter:
 
     def test_create_bitcoin_etf_instrument_definition_unsupported(self):
         """Test unsupported Bitcoin ETF ticker returns None."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -385,9 +397,11 @@ class TestDatabentoAdapter:
 
     def test_is_us_market_holiday(self):
         """Test US market holiday detection."""
-        from instruments_service.app.venues.databento import databento_adapter
-        from unified_cloud_services.clients import databento_base_client
         from datetime import date
+
+        from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -417,8 +431,9 @@ class TestDatabentoAdapter:
 
     def test_get_query_date_for_databento_weekend(self):
         """Test query date adjustment for weekends."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -444,8 +459,9 @@ class TestDatabentoAdapter:
 
     def test_get_exchange_trading_hours_cme(self):
         """Test CME trading hours extraction."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -486,8 +502,9 @@ class TestBatchJobDelegation:
 
     def _make_adapter(self, mock_db_module, mock_client):
         """Create a DatabentoAdapter with mocked db module and client."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         databento_base_client.clear_databento_client_cache()
         databento_base_client.clear_databento_api_key_cache()
@@ -509,6 +526,7 @@ class TestBatchJobDelegation:
     def test_fetch_with_batch_api_delegates_to_base_client(self):
         """_fetch_with_batch_api calls base_client.batch_download."""
         from pathlib import Path
+
         from unified_cloud_services.clients import databento_base_client
 
         mock_db_module = MagicMock()
@@ -591,6 +609,7 @@ class TestBatchJobDelegation:
     def test_fetch_with_batch_api_raises_on_no_data_file(self):
         """When batch download has no .dbn file, raises FileNotFoundError (no silent fallback)."""
         from pathlib import Path
+
         from unified_cloud_services.clients import databento_base_client
 
         mock_db_module = MagicMock()
@@ -624,6 +643,7 @@ class TestBatchJobDelegation:
     def test_fetch_with_batch_api_finds_dbn_in_subdirectory(self):
         """batch.download() places files in output_path/JOB_ID/ -- rglob must find them."""
         from pathlib import Path
+
         from unified_cloud_services.clients import databento_base_client
 
         mock_db_module = MagicMock()
@@ -682,8 +702,9 @@ class TestDatabentoT2Availability:
 
     def _make_adapter(self):
         """Create a DatabentoAdapter with fully mocked Databento client."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()

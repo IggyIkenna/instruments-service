@@ -4,8 +4,10 @@ Extended unit tests for InstrumentProcessingService to increase coverage to 80%+
 Tests additional functionality not covered in basic tests.
 """
 
-import pytest
 from datetime import datetime, timezone
+
+import pytest
+
 from instruments_service.app.core.instrument_processing_service import (
     InstrumentProcessingService,
 )

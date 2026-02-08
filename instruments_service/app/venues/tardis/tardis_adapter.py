@@ -14,18 +14,18 @@ making the architecture consistent with Databento and DeFi adapters.
 """
 
 import logging
-from typing import Dict, List, Optional, Any, Tuple
-from datetime import datetime, timezone, timedelta, date
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
 
 from unified_cloud_services import TardisBaseClient, TardisClientConfig
 from unified_cloud_services.clients.tardis_base_client import (
-    get_cached_instruments,
-    set_cached_instruments,
     clear_instruments_cache,
     clear_tardis_api_key_cache,
+    get_cached_instruments,
+    set_cached_instruments,
 )
-from instruments_service.config import instruments_config
 
+from instruments_service.config import instruments_config
 
 logger = logging.getLogger(__name__)
 

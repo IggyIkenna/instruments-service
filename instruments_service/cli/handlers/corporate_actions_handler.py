@@ -17,15 +17,15 @@ Output Structure:
 """
 
 import logging
-from datetime import datetime, date
-from typing import Dict, Any, List, Optional
+from datetime import date, datetime
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
 from instruments_service.cli.base_handler import ModeHandler
-from instruments_service.corporate_actions.adapter import CorporateActionsAdapter
 from instruments_service.config import instruments_config
+from instruments_service.corporate_actions.adapter import CorporateActionsAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -135,8 +135,9 @@ class CorporateActionsHandler(ModeHandler):
             List of ticker symbols (e.g., ['AAPL', 'MSFT', ...])
         """
         try:
-            from unified_cloud_services import get_gcs_client
             import tempfile
+
+            from unified_cloud_services import get_gcs_client
 
             client = get_gcs_client(project_id=self.project_id)
             bucket_name = instruments_config.gcs_bucket_tradfi or _get_tradfi_bucket()

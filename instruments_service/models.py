@@ -7,14 +7,15 @@ INSTRUMENT_KEY_SPEC.md format with proper expiry, call/put, and margin currency 
 Note: InstrumentKey is imported from unified-cloud-services (shared across services).
 """
 
-from typing import Optional, Dict, Any, List
-from datetime import datetime
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 import logging
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Import shared types from unified-cloud-services
-from unified_cloud_services.models.instrument import Venue, InstrumentType
+from unified_cloud_services.models.instrument import InstrumentType, Venue
 from unified_cloud_services.models.schemas import InstrumentKey  # Shared InstrumentKey
 
 logger = logging.getLogger(__name__)

@@ -3,13 +3,13 @@ Unit tests for Parquet schema definitions.
 """
 
 from instruments_service.schemas.parquet import (
-    get_required_columns,
-    get_optional_columns,
-    get_column_info,
-    validate_schema_compliance,
-    get_schema_summary,
     INSTRUMENTS_PARQUET_SCHEMA,
     SCHEMA_METADATA,
+    get_column_info,
+    get_optional_columns,
+    get_required_columns,
+    get_schema_summary,
+    validate_schema_compliance,
 )
 
 

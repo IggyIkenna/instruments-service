@@ -54,13 +54,14 @@ _load_env_early()
 # ============================================================================
 # Now safe to import modules that depend on environment variables
 # ============================================================================
-import pytest
 import json
 from typing import Optional
 
+import pytest
 from google.cloud import storage
 from google.oauth2 import service_account
 from unified_cloud_services import CloudTarget, get_secret_with_fallback
+
 from instruments_service.config import instruments_config
 
 

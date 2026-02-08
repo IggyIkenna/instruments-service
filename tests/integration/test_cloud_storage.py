@@ -4,9 +4,11 @@ Integration tests for CloudInstrumentStorage.
 Tests GCS/BigQuery operations with test bucket and real credentials.
 """
 
-import pytest
-import pandas as pd
 from datetime import datetime, timezone
+
+import pandas as pd
+import pytest
+
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 
 
