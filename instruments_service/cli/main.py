@@ -136,6 +136,10 @@ def main() -> Dict[str, Any]:
         if hasattr(args, "dry_run") and args.dry_run:
             handler_kwargs["dry_run"] = args.dry_run
 
+        # Concurrency
+        if hasattr(args, "max_workers") and args.max_workers:
+            handler_kwargs["max_workers"] = args.max_workers
+
         # Corporate actions specific options
         if hasattr(args, "tickers") and args.tickers:
             handler_kwargs["tickers"] = args.tickers
