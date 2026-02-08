@@ -34,19 +34,19 @@ Storage Structure:
         └── coverage_report.json
 """
 
-import logging
-import yaml
 import json
-from datetime import datetime, date, timezone
-from typing import Dict, Any, List, Optional
-from pathlib import Path
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import date, datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
+import yaml
 
 from instruments_service.cli.base_handler import ModeHandler
-from instruments_service.corporate_actions.adapter import CorporateActionsAdapter
 from instruments_service.config import instruments_config
+from instruments_service.corporate_actions.adapter import CorporateActionsAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +90,9 @@ class CorporateActionsBackfillHandler(ModeHandler):
         Same logic as original corporate_actions_handler.
         """
         try:
-            from unified_cloud_services import get_gcs_client
             import tempfile
+
+            from unified_cloud_services import get_gcs_client
 
             client = get_gcs_client(project_id=self.project_id)
             bucket_name = instruments_config.gcs_bucket_tradfi or instruments_config.get_bucket_for_category("tradfi")

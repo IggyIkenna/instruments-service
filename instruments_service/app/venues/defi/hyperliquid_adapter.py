@@ -8,12 +8,13 @@ Reference: https://hyperliquid.gitbook.io/hyperliquid-docs/
 """
 
 import logging
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
+
 import requests
-from typing import Dict, List, Optional, Any, Tuple
-from datetime import datetime, timezone, timedelta
+from unified_cloud_services import handle_api_errors
 
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
-from unified_cloud_services import handle_api_errors
 
 logger = logging.getLogger(__name__)
 

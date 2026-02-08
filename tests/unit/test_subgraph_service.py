@@ -4,8 +4,9 @@ Unit tests for SubgraphService.
 Tests subgraph URL resolution and caching.
 """
 
-import pytest
 from datetime import datetime, timedelta, timezone
+
+import pytest
 
 from instruments_service.utils import SubgraphService
 

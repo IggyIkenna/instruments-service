@@ -7,12 +7,12 @@ Note: Query functionality has been moved to unified-cloud-services.
 Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 """
 
-import pytest
 import sys
 from unittest.mock import patch
 
-from instruments_service.cli.parser import parse_arguments, validate_arguments
+import pytest
 
+from instruments_service.cli.parser import parse_arguments, validate_arguments
 
 # =============================================================================
 # Instruments Mode Tests

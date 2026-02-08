@@ -7,7 +7,8 @@ These are reference data tied to equity instruments for price normalization.
 
 from datetime import date, datetime, timezone
 from enum import Enum
-from typing import Optional, List
+from typing import List, Optional
+
 from pydantic import BaseModel, Field, field_validator
 
 

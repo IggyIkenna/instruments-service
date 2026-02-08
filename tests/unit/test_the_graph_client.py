@@ -3,6 +3,7 @@ Unit tests for TheGraphClient.
 """
 
 from unittest.mock import patch
+
 from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
 
 

@@ -2,8 +2,9 @@
 Unit tests for AaveV3Adapter.
 """
 
-from unittest.mock import Mock, patch
 from datetime import datetime, timezone
+from unittest.mock import Mock, patch
+
 from instruments_service.app.venues.defi.aave_adapter import AaveV3Adapter
 
 

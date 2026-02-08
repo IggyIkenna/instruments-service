@@ -17,23 +17,23 @@ NOTE: On-chain CLOB-style perpetual DEXes (Hyperliquid, Aster) have been moved t
       venues/onchain_perps/ because their data model matches Tardis/CeFi schema.
 """
 
-from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
+from instruments_service.app.venues.defi.aave_adapter import AaveV3Adapter
+from instruments_service.app.venues.defi.balancer_adapter import BalancerAdapter
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
+from instruments_service.app.venues.defi.curve_rpc_adapter import CurveRPCAdapter
+from instruments_service.app.venues.defi.ethena_adapter import EthenaAdapter
+from instruments_service.app.venues.defi.euler_adapter import EulerAdapter
+from instruments_service.app.venues.defi.fluid_adapter import FluidAdapter
+from instruments_service.app.venues.defi.lst_adapters import EtherFiAdapter, LidoAdapter
+from instruments_service.app.venues.defi.morpho_adapter import MorphoAdapter
+from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
 from instruments_service.app.venues.defi.uniswapv2_adapter import UniswapV2Adapter
 from instruments_service.app.venues.defi.uniswapv3_adapter import UniswapV3Adapter
 from instruments_service.app.venues.defi.uniswapv4_adapter import UniswapV4Adapter
-from instruments_service.app.venues.defi.balancer_adapter import BalancerAdapter
-from instruments_service.app.venues.defi.aave_adapter import AaveV3Adapter
-from instruments_service.app.venues.defi.lst_adapters import EtherFiAdapter, LidoAdapter
-from instruments_service.app.venues.defi.ethena_adapter import EthenaAdapter
-from instruments_service.app.venues.defi.morpho_adapter import MorphoAdapter
-from instruments_service.app.venues.defi.curve_rpc_adapter import CurveRPCAdapter
-from instruments_service.app.venues.defi.euler_adapter import EulerAdapter
-from instruments_service.app.venues.defi.fluid_adapter import FluidAdapter
 
 # Backwards-compatible imports from onchain_perps
 # DEPRECATED: Import from instruments_service.app.venues.onchain_perps instead
-from instruments_service.app.venues.onchain_perps import HyperliquidAdapter, AsterAdapter
+from instruments_service.app.venues.onchain_perps import AsterAdapter, HyperliquidAdapter
 
 __all__ = [
     "TheGraphClient",

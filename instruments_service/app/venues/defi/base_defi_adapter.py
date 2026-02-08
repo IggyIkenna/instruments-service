@@ -6,14 +6,15 @@ Re-exports the shared BaseDefiAdapter from unified-cloud-services.
 """
 
 import logging
-from typing import Dict, List, Optional, Any
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 import aiohttp
 from aiohttp.resolver import ThreadedResolver
 
 # Import shared base adapter from unified-cloud-services
 from unified_cloud_services.adapters.defi import BaseDefiAdapter as SharedBaseDefiAdapter
+
 from instruments_service.config import instruments_config
 
 logger = logging.getLogger(__name__)

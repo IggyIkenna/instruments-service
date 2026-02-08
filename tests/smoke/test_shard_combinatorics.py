@@ -38,9 +38,9 @@ if DEPLOYMENT_PATH.exists():
 pytest.importorskip("unified_trading_deployment")
 
 from unified_trading_deployment import (  # noqa: E402
+    ShardCalculator,
     ShardCombinatoricsGenerator,
     SmokeTestRunner,
-    ShardCalculator,
 )
 
 SERVICE_NAME = "instruments-service"

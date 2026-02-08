@@ -5,17 +5,17 @@ Stores instrument definitions to instruments domain (each domain has its own buc
 Uses unified-cloud-services directly for cloud operations.
 """
 
-import pandas as pd
 import logging
-from typing import Optional, Any
-from datetime import datetime, timezone
 import os
+from datetime import datetime, timezone
+from typing import Any, Optional
 
+import pandas as pd
 from unified_cloud_services import (
-    get_config,
+    ParquetSchemaEnforcer,
     determine_market_category,
     get_bucket_for_category,
-    ParquetSchemaEnforcer,
+    get_config,
     handle_storage_errors,
 )
 from unified_cloud_services.domain import validate_timestamp_date_alignment
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 # Import unified-cloud-services (direct dependency)
 try:
-    from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
+    from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
 
     UNIFIED_CLOUD_SERVICES_AVAILABLE = True
     logger.info("unified-cloud-services is available")
@@ -174,6 +174,7 @@ class CloudInstrumentStorage:
             # Domain-specific schema definition provides required columns list
             try:
                 from unified_cloud_services import SchemaValidator
+
                 from instruments_service.schemas.parquet import get_required_columns
 
                 validator = SchemaValidator()
