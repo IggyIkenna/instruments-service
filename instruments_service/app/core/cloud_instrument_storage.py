@@ -279,6 +279,39 @@ class CloudInstrumentStorage:
                     )
                     venue_df_to_store = venue_df.copy()
 
+                    # Coerce nullable float64/bool columns to correct dtypes
+                    # When all values are None, pandas infers 'object' dtype
+                    _FLOAT64_COLS = [
+                        "contract_size",
+                        "max_position_size",
+                        "max_leverage",
+                        "initial_margin_rate",
+                        "maintenance_margin_rate",
+                        "ltv",
+                        "liquidation_threshold",
+                        "liquidation_bonus",
+                        "reserve_factor",
+                        "emode_liquidation_threshold",
+                        "emode_liquidation_bonus",
+                        "optimal_utilization_rate",
+                        "base_variable_borrow_rate",
+                        "variable_rate_slope1",
+                        "variable_rate_slope2",
+                    ]
+                    _INT64_COLS = ["pool_fee_tier", "emode_category_id"]
+                    _BOOL_COLS = ["is_trading_day"]
+                    for col in _FLOAT64_COLS:
+                        if col in venue_df_to_store.columns:
+                            venue_df_to_store[col] = pd.to_numeric(venue_df_to_store[col], errors="coerce")
+                    for col in _INT64_COLS:
+                        if col in venue_df_to_store.columns:
+                            venue_df_to_store[col] = pd.to_numeric(venue_df_to_store[col], errors="coerce").astype(
+                                "Int64"
+                            )
+                    for col in _BOOL_COLS:
+                        if col in venue_df_to_store.columns:
+                            venue_df_to_store[col] = venue_df_to_store[col].astype("boolean")
+
                     # Validate schema before upload
                     dimensions = {"category": category}
                     validation_result = schema_enforcer.validate_dataframe(venue_df_to_store, dimensions)
