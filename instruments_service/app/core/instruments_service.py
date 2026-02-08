@@ -629,8 +629,8 @@ class InstrumentsService:
                         "UNISWAPV2-ETH": ("uniswap_v2", "ETHEREUM"),
                         "UNISWAPV3-ETH": ("uniswap_v3", "ETHEREUM"),
                         "UNISWAPV4-ETH": ("uniswap_v4", "ETHEREUM"),
-                        # FUTURE IMPLEMENTATION - NOT MVP (The Graph deprecated, RPC fallback needs work)
-                        # "CURVE-ETH": ("curve", "ETHEREUM"),
+                        "CURVE-ETH": ("curve", "ETHEREUM"),
+                        # FUTURE IMPLEMENTATION - NOT MVP
                         # "BALANCER-ETH": ("balancer", "ETHEREUM"),
                         "AAVE_V3_ETH": ("aave_v3", "ETHEREUM"),
                         "ETHERFI": ("etherfi", "ETHEREUM"),
