@@ -39,59 +39,9 @@ class AaveV3Adapter(BaseDefiAdapter):
     AAVE_V3_ETH:A_TOKEN:AUSDT@ETHEREUM
     AAVE_V3_ETH:DEBT_TOKEN:DEBTWETH@ETHEREUM
 
-    OPTIMIZATION: Uses static risk parameters as fallback when RPC/Graph unavailable.
-
-    TODO: Replace static risk parameters with actual AAVE-generated parameters.
-    Currently using STATIC_RISK_PARAMS for eMode and standard risk parameters.
-    Should fetch these dynamically from AAVE contracts via RPC or The Graph subgraph.
-    See instruments-service/issues/aave-dynamic-params.md for details.
+    Risk parameters are fetched dynamically from AAVE contracts via RPC or The Graph subgraph.
+    If dynamic fetching fails, the venue fails loudly instead of using stale static defaults.
     """
-
-    # Static risk parameters used as fallback when RPC/Graph queries fail.
-    # These are fetched dynamically when available via _fetch_emode_categories_from_graph()
-    # and _fetch_reserve_config_from_graph() methods. See instruments-service/issues/aave-dynamic-params.md
-    STATIC_RISK_PARAMS = {
-        "emode": {
-            "ltv_limits": {
-                "weETH_WETH": 0.93,
-                "wstETH_WETH": 0.93,
-                "ETH_WETH": 0.93,
-            },
-            "liquidation_thresholds": {
-                "weETH_WETH": 0.95,
-                "wstETH_WETH": 0.95,
-                "ETH_WETH": 0.95,
-            },
-            "liquidation_bonus": {
-                "weETH_WETH": 0.01,
-                "wstETH_WETH": 0.01,
-                "ETH_WETH": 0.01,
-            },
-        },
-        "standard": {
-            "ltv_limits": {
-                "weETH_WETH": 0.80,
-                "wstETH_WETH": 0.80,
-                "ETH_WETH": 0.80,
-            },
-            "liquidation_thresholds": {
-                "weETH_WETH": 0.85,
-                "wstETH_WETH": 0.85,
-                "ETH_WETH": 0.85,
-            },
-            "liquidation_bonus": {
-                "weETH_WETH": 0.05,
-                "wstETH_WETH": 0.05,
-                "ETH_WETH": 0.05,
-            },
-        },
-        "reserve_factors": {
-            "weETH": 0.10,
-            "wstETH": 0.10,
-            "WETH": 0.10,
-            "USDT": 0.10,
-        },
-    }
 
     def __init__(
         self,
@@ -137,8 +87,10 @@ class AaveV3Adapter(BaseDefiAdapter):
                 if self.api_key:
                     logger.info(f"✅ Retrieved AaveScan API key from Secret Manager (secret: {secret_name})")
             except Exception as e:
-                logger.warning(f"⚠️ Failed to retrieve API key from Secret Manager: {e}")
-                self.api_key = instruments_config.aavescan_secret_name
+                raise RuntimeError(
+                    f"Failed to retrieve AaveScan API key from Secret Manager: {e}. "
+                    f"Set AAVESCAN_API_KEY env var or fix Secret Manager access."
+                ) from e
 
         if not self.api_key:
             logger.warning("AaveScan API key not found. Some features may be limited.")
@@ -203,84 +155,42 @@ class AaveV3Adapter(BaseDefiAdapter):
             Dictionary mapping instrument_key to instrument definition
         """
         instruments = {}
+        instrument_errors = []
 
-        try:
-            # Fetch reserves from AaveScan API (or use historical data if target_date provided)
-            reserves = self._fetch_reserves(target_date=target_date)
+        # Fetch reserves from AaveScan API (or use historical data if target_date provided)
+        # Let exceptions propagate — venue must fail if reserve fetch fails
+        reserves = self._fetch_reserves(target_date=target_date)
 
-            for reserve in reserves:
-                try:
-                    # Generate aToken instrument
-                    a_token_def = self._create_a_token_instrument(reserve, target_date=target_date)
-                    if a_token_def:
-                        instruments[a_token_def["instrument_key"]] = a_token_def
+        for reserve in reserves:
+            try:
+                # Generate aToken instrument
+                a_token_def = self._create_a_token_instrument(reserve, target_date=target_date)
+                if a_token_def:
+                    instruments[a_token_def["instrument_key"]] = a_token_def
 
-                    # Generate debtToken instrument
-                    debt_token_def = self._create_debt_token_instrument(reserve, target_date=target_date)
-                    if debt_token_def:
-                        instruments[debt_token_def["instrument_key"]] = debt_token_def
+                # Generate debtToken instrument
+                debt_token_def = self._create_debt_token_instrument(reserve, target_date=target_date)
+                if debt_token_def:
+                    instruments[debt_token_def["instrument_key"]] = debt_token_def
 
-                except Exception as e:
-                    logger.warning(f"Failed to process reserve {reserve.get('symbol')}: {e}")
-                    continue
+            except Exception as e:
+                symbol = reserve.get("asset", {}).get("symbol", reserve.get("symbol", "UNKNOWN"))
+                error_msg = f"Failed to process reserve {symbol}: {e}"
+                logger.error(error_msg)
+                instrument_errors.append(error_msg)
 
-            logger.info(f"✅ Generated {len(instruments)} AAVE V3 instruments")
-            return instruments
+        # Venue-level failure: if ANY instrument failed, fail the entire venue
+        if instrument_errors:
+            raise RuntimeError(
+                f"AAVE_V3_ETH venue failed: {len(instrument_errors)} instrument(s) had errors. "
+                f"Errors: {'; '.join(instrument_errors)}"
+            )
 
-        except Exception as e:
-            logger.error(f"Failed to fetch AAVE markets: {e}")
-            return {}
+        logger.info(f"✅ Generated {len(instruments)} AAVE V3 instruments")
+        return instruments
 
-    def _get_fallback_reserves(self) -> List[Dict[str, Any]]:
-        """
-        Get static fallback reserves for AAVE V3 when APIs fail.
-
-        Uses MVP tokens: USDT, WETH, weETH, wstETH
-        Emode params will be populated from STATIC_RISK_PARAMS later.
-
-        Returns:
-            List of reserve dictionaries with minimal required fields
-        """
-        # MVP tokens for AAVE V3 Ethereum
-        static_reserves = [
-            {
-                "reserve": "0xdAC17F958D2ee523a2206206994597C13D831ec7",  # USDT
-                "asset": {
-                    "symbol": "USDT",
-                    "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
-                    "decimals": 6,
-                },
-            },
-            {
-                "reserve": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",  # WETH
-                "asset": {
-                    "symbol": "WETH",
-                    "address": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-                    "decimals": 18,
-                },
-            },
-            {
-                "reserve": "0xCd5fE23C85820F7B72D0926FC9b05b43E359b7ee",  # weETH
-                "asset": {
-                    "symbol": "weETH",
-                    "address": "0xCd5fE23C85820F7B72D0926FC9b05b43E359b7ee",
-                    "decimals": 18,
-                },
-            },
-            {
-                "reserve": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",  # wstETH
-                "asset": {
-                    "symbol": "wstETH",
-                    "address": "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0",
-                    "decimals": 18,
-                },
-            },
-        ]
-
-        logger.warning(
-            f"⚠️ Using static fallback reserves for AAVE V3 ({len(static_reserves)} reserves) - API/RPC unavailable"
-        )
-        return static_reserves
+    # _get_fallback_reserves REMOVED: Static fallback reserves were producing
+    # instruments from stale hardcoded data. The venue must fail if APIs are unavailable.
 
     def _fetch_reserves(self, target_date: Optional[datetime] = None) -> List[Dict[str, Any]]:
         """
@@ -391,16 +301,10 @@ class AaveV3Adapter(BaseDefiAdapter):
             return filtered_reserves
 
         except Exception as e:
-            logger.error(f"Failed to fetch reserves from AaveScan: {e}")
-            logger.info("🔍 [METHOD_TRACE] Falling back to _get_fallback_reserves (static reserves)")
-            # Fallback: return empty list or use hardcoded known reserves
-            fallback_reserves = self._get_fallback_reserves()
-
-            # Cache fallback reserves too
-            self._reserves_cache = fallback_reserves
-            self._reserves_cache_date = cache_date
-
-            return fallback_reserves
+            raise RuntimeError(
+                f"Failed to fetch AAVE reserves from AaveScan API: {e}. "
+                f"Venue AAVE_V3_ETH cannot generate instruments without live reserve data."
+            ) from e
 
     def _date_to_block_number(self, target_date: datetime) -> Optional[int]:
         """
@@ -1137,11 +1041,8 @@ query GetReserve($underlyingAddress: Bytes!) {
                 emode_price_source = None
                 emode_oracle_id = None
 
-                # TODO: Fetch eMode category details dynamically from AAVE contracts
-                # Currently using STATIC_RISK_PARAMS instead - see instruments-service/issues/aave-dynamic-params.md
+                # eMode category details are fetched dynamically from The Graph in _extract_lending_metadata
                 if emode_category_id:
-                    # eMode category details are now fetched from STATIC_RISK_PARAMS in _extract_lending_metadata
-                    # This code path is no longer used but kept for reference
                     emode_label = None
                     emode_liquidation_threshold = None
                     emode_liquidation_bonus = None
@@ -1543,9 +1444,8 @@ query GetEModeCategories {
         Returns:
             Dictionary with lending protocol metadata fields including reserve_mode and emode
 
-        TODO: Currently uses STATIC_RISK_PARAMS for eMode and standard risk parameters.
-        Should be replaced with dynamic fetching from AAVE contracts via RPC or The Graph.
-        See instruments-service/issues/aave-dynamic-params.md for implementation plan.
+        Risk parameters are fetched dynamically from AaveScan API, The Graph, or RPC.
+        If any critical parameter is missing, the instrument fails loudly.
         """
         asset = reserve.get("asset", {})
         underlying_address = reserve.get("reserve", "") or asset.get("address", "")
@@ -1695,12 +1595,14 @@ query GetEModeCategories {
             emode_category_id_from_rpc or e_mode_category_id_from_reserve or emode_category_id_from_config
         )
 
-        # STATIC FALLBACK: If still no emode_category_id, use hardcoded values for known ETH correlation assets
-        # Category 1 = ETH Correlation (weETH, wstETH vs WETH)
+        # Fail loudly if emode_category_id cannot be determined for ETH correlation assets
         asset_symbol = reserve.get("asset", {}).get("symbol", "")
         if not emode_category_id and asset_symbol in ["weETH", "wstETH", "WETH"]:
-            emode_category_id = 1  # ETH correlation emode
-            logger.info(f"  ✅ Using STATIC emode_category_id=1 (ETH correlation) for {asset_symbol}")
+            raise RuntimeError(
+                f"Cannot determine emode_category_id for {asset_symbol}. "
+                f"RPC, reserve data, and Graph config all failed. "
+                f"Fix RPC or Graph API access to fetch eMode category."
+            )
 
         # Fetch eMode category details if we have an ID
         emode_label = None
@@ -1716,7 +1618,7 @@ query GetEModeCategories {
 
         logger.debug(f"🔍 eMode params for {asset_symbol}: emode_category_id={emode_category_id}")
 
-        # Priority: 1) The Graph eMode categories, 2) reserve_config, 3) STATIC_RISK_PARAMS
+        # Priority: 1) The Graph eMode categories, 2) reserve_config — no static fallbacks
         if emode_category_id:
             symbol = reserve.get("asset", {}).get("symbol", "")
 
@@ -1733,17 +1635,10 @@ query GetEModeCategories {
                     f"label={emode_label}, liq_threshold={emode_liquidation_threshold}"
                 )
             elif symbol and emode_category_id == 1:
-                # Fallback to STATIC_RISK_PARAMS for ETH correlation mode
-                logger.info(
-                    "🔍 [METHOD_TRACE] _extract_lending_metadata using STATIC_RISK_PARAMS (Graph eMode unavailable)"
-                )
-                emode_label = "ETH_CORRELATION"
-                pair_key = f"{symbol}_WETH"
-                emode_liquidation_threshold = self.STATIC_RISK_PARAMS["emode"]["liquidation_thresholds"].get(pair_key)
-                emode_liquidation_bonus = self.STATIC_RISK_PARAMS["emode"]["liquidation_bonus"].get(pair_key)
-                logger.debug(
-                    f"  ✅ Using STATIC eMode params for {symbol}: "
-                    f"liq_threshold={emode_liquidation_threshold}, bonus={emode_liquidation_bonus}"
+                # eMode params not available from The Graph — fail loudly
+                raise RuntimeError(
+                    f"Cannot fetch eMode parameters for {symbol} (category {emode_category_id}): "
+                    f"The Graph eMode categories unavailable. Fix Graph API access."
                 )
         elif reserve_config:
             # Fallback: use values from reserve_config if available
@@ -1809,7 +1704,7 @@ query GetEModeCategories {
             base_variable_borrow_rate = base_variable_borrow_rate_from_config
         # Otherwise use the value extracted from API response above
 
-        # Use AaveScan data as primary source, Graph config as fallback, STATIC_RISK_PARAMS as final fallback
+        # Use AaveScan data as primary source, Graph config as fallback — fail if both missing
         ltv = ltv_from_aavescan or (reserve_config.get("ltv") if reserve_config else None)
         liquidation_threshold = liquidation_threshold_from_aavescan or (
             reserve_config.get("liquidation_threshold") if reserve_config else None
@@ -1821,43 +1716,24 @@ query GetEModeCategories {
             reserve_config.get("reserve_factor") if reserve_config else None
         )
 
-        # Final fallback to STATIC_RISK_PARAMS if still missing
+        # Fail loudly if critical risk params are missing — no static fallbacks
         asset_symbol = reserve.get("asset", {}).get("symbol", "")
-        if asset_symbol and (not ltv or not liquidation_threshold or not liquidation_bonus or not reserve_factor):
-            logger.info(f"  🔄 Attempting static fallback for {asset_symbol} risk params")
+        missing_params = []
+        if not ltv:
+            missing_params.append("ltv")
+        if not liquidation_threshold:
+            missing_params.append("liquidation_threshold")
+        if not liquidation_bonus:
+            missing_params.append("liquidation_bonus")
+        if not reserve_factor:
+            missing_params.append("reserve_factor")
 
-            # Use emode params if in emode (ETH correlation mode)
-            if emode_category_id == 1:
-                pair_key = f"{asset_symbol}_WETH"
-                if not ltv:
-                    ltv = self.STATIC_RISK_PARAMS["emode"]["ltv_limits"].get(pair_key)
-                if not liquidation_threshold:
-                    liquidation_threshold = self.STATIC_RISK_PARAMS["emode"]["liquidation_thresholds"].get(pair_key)
-                if not liquidation_bonus:
-                    liquidation_bonus = self.STATIC_RISK_PARAMS["emode"]["liquidation_bonus"].get(pair_key)
-                if ltv:
-                    logger.info(
-                        f"  ✅ Using STATIC eMode risk params for {pair_key}: ltv={ltv}, liq_threshold={liquidation_threshold}"
-                    )
-            else:
-                # Use standard params if not in emode
-                pair_key = f"{asset_symbol}_WETH"
-                if not ltv:
-                    ltv = self.STATIC_RISK_PARAMS["standard"]["ltv_limits"].get(pair_key)
-                if not liquidation_threshold:
-                    liquidation_threshold = self.STATIC_RISK_PARAMS["standard"]["liquidation_thresholds"].get(pair_key)
-                if not liquidation_bonus:
-                    liquidation_bonus = self.STATIC_RISK_PARAMS["standard"]["liquidation_bonus"].get(pair_key)
-                if ltv:
-                    logger.info(
-                        f"  ✅ Using STATIC standard risk params for {pair_key}: ltv={ltv}, liq_threshold={liquidation_threshold}"
-                    )
-
-            # Reserve factor fallback
-            if not reserve_factor:
-                reserve_factor = self.STATIC_RISK_PARAMS["reserve_factors"].get(asset_symbol)
-                if reserve_factor:
-                    logger.info(f"  ✅ Using STATIC reserve_factor for {asset_symbol}: {reserve_factor}")
+        if missing_params:
+            raise RuntimeError(
+                f"Missing risk parameters for {asset_symbol}: {', '.join(missing_params)}. "
+                f"Could not fetch from AaveScan API or The Graph. "
+                f"Venue AAVE_V3_ETH cannot generate instruments with incomplete risk data."
+            )
 
         return {
             "flash_loan_providers": flash_loan_providers,
