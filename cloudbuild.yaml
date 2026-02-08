@@ -70,14 +70,15 @@ steps:
         # LINTING (ruff) - MUST PASS
         # ====================================================================
         echo ""
-        echo "=== Running linting (ruff) ==="
-        ruff check instruments_service/ tests/ || exit 1
-        echo "✅ Linting passed"
-
-        echo ""
-        echo "=== Checking formatting (ruff format) ==="
-        ruff format --check instruments_service/ tests/ || exit 1
-        echo "✅ Formatting check passed"
+        echo "=== Running lint and format check ==="
+        ruff check --fix instruments_service/ tests/
+        ruff format instruments_service/ tests/
+        git diff --exit-code || {
+          echo "❌ Code not formatted. Run locally: ruff check --fix . && ruff format ."
+          git diff
+          exit 1
+        }
+        echo "✅ Lint and format check passed"
 
         # Set environment variables for tests
         export DEPLOYMENT_CONFIG_DIR=/workspace/unified-trading-deployment-v2/configs
