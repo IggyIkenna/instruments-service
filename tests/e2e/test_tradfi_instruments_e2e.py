@@ -7,8 +7,9 @@ Tests the complete workflow for TradFi instruments:
 3. Verify data integrity
 """
 
-import pytest
 from datetime import datetime, timezone
+
+import pytest
 
 
 @pytest.mark.e2e

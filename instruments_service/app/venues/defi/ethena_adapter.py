@@ -10,10 +10,11 @@ NOTE: Venue start dates are centralized in unified_cloud_services.models.VenueMa
 """
 
 import logging
-from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 from unified_cloud_services import VenueMapping
+
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 
 logger = logging.getLogger(__name__)

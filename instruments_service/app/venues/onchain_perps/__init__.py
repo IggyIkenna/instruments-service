@@ -11,14 +11,14 @@ These are NOT AMM-style DEXes - they have order books and produce:
 Kept separate from defi/ because data model matches CeFi (Tardis schema).
 """
 
+from instruments_service.app.venues.onchain_perps.aster_adapter import (
+    AsterAdapter,
+)
 from instruments_service.app.venues.onchain_perps.base_onchain_perp_adapter import (
     BaseOnchainPerpAdapter,
 )
 from instruments_service.app.venues.onchain_perps.hyperliquid_adapter import (
     HyperliquidAdapter,
-)
-from instruments_service.app.venues.onchain_perps.aster_adapter import (
-    AsterAdapter,
 )
 
 __all__ = [

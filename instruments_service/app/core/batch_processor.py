@@ -8,6 +8,7 @@ Handles instrument downloads with lookback computation, date range calculation, 
 import logging
 from datetime import datetime, timedelta
 from typing import Any
+
 from unified_cloud_services import GenericBatchProcessor
 
 logger = logging.getLogger(__name__)  # logging

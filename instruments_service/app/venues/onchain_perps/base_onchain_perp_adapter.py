@@ -11,8 +11,8 @@ This is different from DeFi protocols which produce:
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Optional, Any
 from datetime import datetime
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 

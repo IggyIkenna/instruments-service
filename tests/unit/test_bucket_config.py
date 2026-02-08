@@ -6,11 +6,13 @@ and configuration, preventing 'BaseServiceConfig' object has no attribute errors
 """
 
 import os
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
-from instruments_service.config import InstrumentsServiceConfig
 from unified_cloud_services import get_bucket_for_category
+
 from instruments_service.app.core.cloud_data_provider import CloudDataProvider
+from instruments_service.config import InstrumentsServiceConfig
 
 
 class TestBucketConfiguration:

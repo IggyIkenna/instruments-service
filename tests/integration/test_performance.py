@@ -7,10 +7,12 @@ Uses November 10, 2025 as standard test date.
 These tests use real services and require GCP credentials.
 """
 
-import pytest
 import os
 import time
 from datetime import datetime, timezone
+
+import pytest
+
 from instruments_service.app.core.instruments_service import InstrumentsService
 
 # Import get_config from conftest (avoids circular import issues)

@@ -3,19 +3,20 @@ Script to check historical metadata availability and download 1 day of raw data
 for Hyperliquid and Aster to CSV files.
 """
 
-import logging
-import requests
 import csv
+import logging
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import sys
 from typing import Optional
+
+import requests
 
 # Add instruments_service to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
 from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
+from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
