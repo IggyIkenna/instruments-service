@@ -20,26 +20,23 @@ Note: For production batch processing, use the CLI instead:
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, Any
+from typing import Any, Dict
+
+from unified_cloud_services import VenueMapping
 
 # Simple imports - assumes packages are installed
 from instruments_service import (
-    InstrumentProcessingService,
     CloudInstrumentStorage,
     InstrumentBatchProcessor,
+    InstrumentProcessingService,
 )
-from unified_cloud_services import VenueMapping
 
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-async def generate_instruments_batch(
-    start_date: str, end_date: str, force: bool = False
-):
+async def generate_instruments_batch(start_date: str, end_date: str, force: bool = False):
     """
     Generate instruments for a date range.
 
@@ -80,9 +77,9 @@ async def generate_instruments_batch(
 
     while current_date <= end_dt:
         date_str = current_date.strftime("%Y-%m-%d")
-        logger.info(f"\n{'='*60}")
+        logger.info(f"\n{'=' * 60}")
         logger.info(f"📅 Processing date: {date_str}")
-        logger.info(f"{'='*60}")
+        logger.info(f"{'=' * 60}")
 
         try:
             # Generate instruments for all exchanges
@@ -140,9 +137,9 @@ async def generate_instruments_batch(
         current_date += timedelta(days=1)
 
     # Summary
-    logger.info(f"\n{'='*60}")
+    logger.info(f"\n{'=' * 60}")
     logger.info("📊 Batch Processing Summary")
-    logger.info(f"{'='*60}")
+    logger.info(f"{'=' * 60}")
     logger.info(f"  Dates processed: {total_dates}")
     logger.info(f"  Total instruments: {total_instruments}")
     logger.info(f"  Errors: {len(errors)}")
