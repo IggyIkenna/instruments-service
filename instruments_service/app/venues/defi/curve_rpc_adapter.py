@@ -1,26 +1,12 @@
 """
 Curve RPC Adapter
 
-================================================================================
-FUTURE IMPLEMENTATION - NOT MVP
-================================================================================
-This adapter is preserved for future implementation but is NOT part of the MVP.
-DO NOT include CURVE-ETH in any deployment configurations or validation.
-
-Reason: The Graph hosted service has been deprecated. The MetaRegistry RPC approach
-requires additional development for reliable pool discovery and historical data
-retrieval.
-
-When revisiting:
-1. Test MetaRegistry pool enumeration for active pools
-2. Verify exchange event decoding from pool contracts
-3. Add rate limiting for RPC calls
-================================================================================
-
 Fetches Curve pools directly from Ethereum contracts via RPC.
 Uses the Curve MetaRegistry architecture:
 1. AddressProvider (0x0000000022D53366457F9d5E68Ec105046FC4383) - entry point
 2. MetaRegistry (obtained via AddressProvider.get_address(7)) - pool enumeration
+
+The Graph hosted service is deprecated; this adapter uses MetaRegistry RPC instead.
 
 Reference: https://docs.curve.fi/registry/metaregistry/
 """
