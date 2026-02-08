@@ -13,20 +13,20 @@ Uniswap V4 introduces:
 - Pool IDs are keccak256 hashes of poolKey (not contract addresses)
 """
 
-import logging
 import asyncio
 import concurrent.futures
-from typing import Dict, List, Optional, Any
+import logging
 from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 import aiohttp
+from unified_cloud_services import get_secret_with_fallback
 
 from instruments_service.app.venues.defi.base_defi_adapter import (
     BaseDefiAdapter,
     create_aiohttp_session,
 )
 from instruments_service.config import instruments_config
-from unified_cloud_services import get_secret_with_fallback
 
 logger = logging.getLogger(__name__)
 

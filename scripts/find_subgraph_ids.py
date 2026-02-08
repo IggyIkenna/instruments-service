@@ -5,9 +5,10 @@ Script to find The Graph subgraph IDs for Ethereum subgraphs.
 This script queries The Graph Explorer API to find subgraph IDs for popular DeFi protocols.
 """
 
-import requests
 import os
 from typing import Optional
+
+import requests
 
 # Subgraph names we need IDs for (Ethereum only)
 SUBDGRAPH_NAMES = {

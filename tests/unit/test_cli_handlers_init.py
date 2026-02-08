@@ -5,8 +5,10 @@ Note: Query functionality has been moved to unified-cloud-services.
 Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 """
 
-import pytest
 from unittest.mock import Mock, patch
+
+import pytest
+
 from instruments_service.cli.handlers import get_handler_for_mode, register_handler
 
 

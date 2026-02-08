@@ -10,14 +10,14 @@ traditional corporate actions like dividends or stock splits.
 Data source: yfinance (free, no API key required, 20+ years history)
 """
 
-from instruments_service.corporate_actions.models import (
-    DividendRecord,
-    StockSplitRecord,
-    EarningsRecord,
-    CorporateActionType,
-    DividendType,
-)
 from instruments_service.corporate_actions.adapter import CorporateActionsAdapter
+from instruments_service.corporate_actions.models import (
+    CorporateActionType,
+    DividendRecord,
+    DividendType,
+    EarningsRecord,
+    StockSplitRecord,
+)
 
 __all__ = [
     "DividendRecord",

@@ -5,9 +5,9 @@ Abstract base class for all CLI mode handlers following unified repository struc
 Provides the common interface contract that all handlers must implement.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict
-import logging
 
 logger = logging.getLogger(__name__)
 

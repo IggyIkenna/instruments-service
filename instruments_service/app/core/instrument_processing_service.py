@@ -18,50 +18,53 @@ This service replaces functionality from:
 - Instrument metadata processing and validation
 """
 
+import asyncio
 import logging
 import re
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass, field
-import asyncio
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Tuple
+
+import unified_cloud_services.core.subgraph_service as sg_module
 
 # Import centralized models and configs (DRY principle)
 from unified_cloud_services import (
-    get_secret_with_fallback,
-    SubgraphService,
+    DataTypeConfig,
     DateFilterService,
+    ExchangeInstrumentConfig,
+    SubgraphService,
+    VenueMapping,
     determine_market_category,
+    get_secret_with_fallback,
     handle_api_errors,
 )
 
-from instruments_service.config import instruments_config
-from instruments_service.models import InstrumentDefinition
-from unified_cloud_services import VenueMapping, ExchangeInstrumentConfig, DataTypeConfig
-from instruments_service.utils.ccxt_service import CCXTService
-import unified_cloud_services.core.subgraph_service as sg_module
 import instruments_service.app.venues.defi.the_graph_client as tgc_module
-from instruments_service.app.venues.tardis import TardisAdapter
 from instruments_service.app.venues.databento import DatabentoAdapter
 from instruments_service.app.venues.defi import (
+    AaveV3Adapter,
+    BalancerAdapter,
+    CurveRPCAdapter,
+    EthenaAdapter,
+    EtherFiAdapter,
+    EulerAdapter,
+    FluidAdapter,
+    LidoAdapter,
+    MorphoAdapter,
     UniswapV2Adapter,
     UniswapV3Adapter,
     UniswapV4Adapter,
-    BalancerAdapter,
-    AaveV3Adapter,
-    EtherFiAdapter,
-    LidoAdapter,
-    MorphoAdapter,
-    EthenaAdapter,
-    CurveRPCAdapter,
-    EulerAdapter,
-    FluidAdapter,
 )
 
 # On-chain CLOB perps (Tardis-compatible data schema)
 from instruments_service.app.venues.onchain_perps import (
-    HyperliquidAdapter,
     AsterAdapter,
+    HyperliquidAdapter,
 )
+from instruments_service.app.venues.tardis import TardisAdapter
+from instruments_service.config import instruments_config
+from instruments_service.models import InstrumentDefinition
+from instruments_service.utils.ccxt_service import CCXTService
 
 # Import Secret Manager for API key retrieval
 logger = logging.getLogger(__name__)

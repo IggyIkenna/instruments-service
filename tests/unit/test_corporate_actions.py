@@ -4,20 +4,20 @@ Unit Tests for Corporate Actions Module
 Tests for corporate actions models and adapter.
 """
 
-import pytest
 from datetime import date
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 import pandas as pd
+import pytest
 
-from instruments_service.corporate_actions.models import (
-    DividendRecord,
-    StockSplitRecord,
-    EarningsRecord,
-    CorporateActionsBundle,
-    DividendType,
-)
 from instruments_service.corporate_actions.adapter import CorporateActionsAdapter
-
+from instruments_service.corporate_actions.models import (
+    CorporateActionsBundle,
+    DividendRecord,
+    DividendType,
+    EarningsRecord,
+    StockSplitRecord,
+)
 
 # =============================================================================
 # Model Tests

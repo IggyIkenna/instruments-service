@@ -2,13 +2,15 @@
 Comprehensive unit tests for InstrumentHandler to increase coverage to 80%+.
 """
 
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, Mock, patch
+
 import pytest
-from unittest.mock import Mock, patch, AsyncMock
-from datetime import datetime, timezone, timedelta
+
 from instruments_service.cli.handlers.instrument_handler import (
     InstrumentHandler,
-    parse_date,
     get_date_range,
+    parse_date,
 )
 
 

@@ -4,12 +4,14 @@ Tests for credential loading and API key retrieval.
 Ensures all required API keys can be loaded from Secret Manager or environment variables.
 """
 
-import pytest
 import os
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
+
+import pytest
 
 # Import get_config from conftest (avoids circular import issues)
 from unified_cloud_services import get_secret_with_fallback
+
 from instruments_service.config import instruments_config
 
 
@@ -68,8 +70,9 @@ class TestCredentialLoading:
 
     def test_databento_api_key_loading(self):
         """Test Databento API key can be loaded from Secret Manager via DatabentoBaseClient."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -96,8 +99,9 @@ class TestCredentialLoading:
 
     def test_databento_api_key_from_env(self):
         """Test Databento API key can be loaded from environment variable via DatabentoBaseClient."""
-        from instruments_service.app.venues.databento import databento_adapter
         from unified_cloud_services.clients import databento_base_client
+
+        from instruments_service.app.venues.databento import databento_adapter
 
         mock_db_module = MagicMock()
         mock_client = Mock()
@@ -125,8 +129,9 @@ class TestCredentialLoading:
 
     def test_the_graph_api_key_loading(self):
         """Test The Graph API key can be loaded from Secret Manager via TheGraphBaseClient."""
-        from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
         from unified_cloud_services.clients import thegraph_base_client
+
+        from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
 
         try:
             # Clear cache
@@ -144,8 +149,9 @@ class TestCredentialLoading:
 
     def test_the_graph_api_key_from_env(self):
         """Test The Graph API key can be loaded from environment variable via TheGraphBaseClient."""
-        from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
         from unified_cloud_services.clients import thegraph_base_client
+
+        from instruments_service.app.venues.defi.the_graph_client import TheGraphClient
 
         try:
             # Clear cache
