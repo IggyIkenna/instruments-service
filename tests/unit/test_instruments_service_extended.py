@@ -539,10 +539,10 @@ class TestInstrumentsServiceExtended:
             defi=False,
         )
 
-        # Changed behavior: 0 instruments no longer returns error
-        # Placeholder creation ensures files written for TradFi holidays
-        assert result["status"] == "success"
-        assert result["instruments_generated"] >= 0
+        # CeFi with no instruments = ERROR (unexpected)
+        # Only TradFi with venue filter creates placeholders and returns success
+        assert result["status"] == "error"
+        assert result["instruments_generated"] == 0
 
     @pytest.mark.asyncio
     async def test_generate_instruments_for_date_dict_instruments(self, service):

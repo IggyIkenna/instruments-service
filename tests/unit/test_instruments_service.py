@@ -398,11 +398,11 @@ class TestGenerateInstrumentsSingleDate:
             date = datetime(2024, 1, 1, tzinfo=timezone.utc)
             result = await service.generate_instruments_for_date(date=date, exchanges=["binance"], cefi=True)
 
-            # Changed behavior: Zero instruments no longer returns error
-            # Placeholder logic ensures files are written (especially for TradFi holidays)
-            # For CeFi with no instruments, returns success with 0 instruments
-            assert result["status"] == "success"
-            assert result["instruments_generated"] >= 0
+            # CeFi with no instruments = ERROR (unexpected)
+            # Only TradFi holidays create placeholders and return success
+            assert result["status"] == "error"
+            assert result["instruments_generated"] == 0
+            assert "message" in result
 
     @pytest.mark.asyncio
     async def test_generate_storage_failure(self):
