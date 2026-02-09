@@ -244,7 +244,7 @@ class CloudDataProvider:
                     # Sanitize venue name for folder (replace slashes, etc.)
                     venue_folder = venue.replace("/", "-").replace("\\", "-")
                     gcs_path = (
-                        f"instrument_availability/by_date/day={date_str}/venue-{venue_folder}/instruments.parquet"
+                        f"instrument_availability/by_date/day={date_str}/venue={venue_folder}/instruments.parquet"
                     )
 
                     try:
