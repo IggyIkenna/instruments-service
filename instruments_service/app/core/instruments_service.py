@@ -769,13 +769,36 @@ class InstrumentsService:
 
             instruments_df = pd.DataFrame(instruments_list)
 
-            # Log if no instruments generated (will add placeholders below)
+            # Handle case where no instruments generated
             if not all_instruments:
-                logger.warning(
-                    f"⚠️ No instruments generated from adapters for {date_str}. "
-                    f"This can happen on weekday holidays when Databento returns empty. "
-                    f"Placeholder logic will ensure files are still written for requested venues."
-                )
+                # For TradFi: Check if this is expected (holiday) or unexpected (error)
+                if tradfi and venues_filter:
+                    # Placeholder logic will handle holiday case below
+                    # Log as warning for now - placeholder creation determines if it's valid
+                    logger.warning(
+                        f"⚠️ No instruments generated from adapters for {date_str}. "
+                        f"This can happen on weekday holidays when Databento returns empty. "
+                        f"Placeholder logic will ensure files are written for requested TradFi venues."
+                    )
+                else:
+                    # CeFi/DeFi with no instruments is unexpected (should have data)
+                    # Or TradFi with no venue filter
+                    logger.error(
+                        f"❌ No instruments generated for {date_str}. "
+                        f"This is unexpected - check adapter/API connectivity."
+                    )
+                    # Get error/warning counts before returning
+                    error_count = error_warning_counter.error_count
+                    warning_count = error_warning_counter.warning_count
+                    root_logger.removeHandler(error_warning_counter)
+                    return {
+                        "status": "error",
+                        "date": date_str,
+                        "instruments_generated": 0,
+                        "message": "No instruments generated - check adapter/API connectivity",
+                        "error_count": error_count,
+                        "warning_count": warning_count,
+                    }
 
             # Ensure every requested TradFi venue has at least one row (holiday/closed placeholder)
             # so that by-venue files are always written and unified_trading_deployment missing-data checks pass
