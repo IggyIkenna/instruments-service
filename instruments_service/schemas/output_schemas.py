@@ -468,6 +468,12 @@ INSTRUMENTS_SCHEMA = SchemaDefinition(
             nullable=True,
             description="Early close time as ISO datetime in UTC on shortened days (TRADFI only, None on normal days)",
         ),
+        ColumnSchema(
+            name="session_date_tag",
+            dtype="string",
+            nullable=True,
+            description="UTC midnight spanning tag: 'close_date' (primary/full session) or 'open_date' (duplicate for prev day ticks). Only for CME/ICE.",
+        ),
     ],
 )
 
