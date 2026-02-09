@@ -98,7 +98,7 @@ steps:
         # ====================================================================
         echo ""
         echo "=== Running lint and format check ==="
-        ruff check --fix instruments_service/ tests/ || true
+        ruff check --fix instruments_service/ tests/
         ruff format instruments_service/ tests/
         git diff --exit-code || {
           echo "❌ Code not formatted. Run locally: ruff check --fix . && ruff format ."
