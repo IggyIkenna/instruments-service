@@ -12,17 +12,17 @@ The instruments-service generates instrument definitions for all market categori
 
 | Category | Bucket Name |
 |----------|-------------|
-| CEFI | `gs://instruments-store-cefi-central-element-323112/` |
-| TRADFI | `gs://instruments-store-tradfi-central-element-323112/` |
-| DEFI | `gs://instruments-store-defi-central-element-323112/` |
+| CEFI | `gs://instruments-store-cefi-{project_id}/` |
+| TRADFI | `gs://instruments-store-tradfi-{project_id}/` |
+| DEFI | `gs://instruments-store-defi-{project_id}/` |
 
 ### Test Buckets (for E2E tests)
 
 | Category | Bucket Name |
 |----------|-------------|
-| CEFI | `gs://instruments-store-test-cefi-central-element-323112/` |
-| TRADFI | `gs://instruments-store-test-tradfi-central-element-323112/` |
-| DEFI | `gs://instruments-store-test-defi-central-element-323112/` |
+| CEFI | `gs://instruments-store-test-cefi-{project_id}/` |
+| TRADFI | `gs://instruments-store-test-tradfi-{project_id}/` |
+| DEFI | `gs://instruments-store-test-defi-{project_id}/` |
 
 ## Path Structure
 
@@ -30,12 +30,12 @@ The instruments-service generates instrument definitions for all market categori
 
 **Pattern:**
 ```
-instrument_availability/by_date/day-{YYYY-MM-DD}/instruments.parquet
+instrument_availability/by_date/day={YYYY-MM-DD}/instruments.parquet
 ```
 
 **Full Path Example:**
 ```
-gs://instruments-store-cefi-central-element-323112/instrument_availability/by_date/day-2024-01-15/instruments.parquet
+gs://instruments-store-cefi-{project_id}/instrument_availability/by_date/day=2024-01-15/instruments.parquet
 ```
 
 ### Path Components
@@ -44,7 +44,7 @@ gs://instruments-store-cefi-central-element-323112/instrument_availability/by_da
 |-----------|-------------|---------|
 | `instrument_availability/` | Top-level prefix for instrument data | - |
 | `by_date/` | Date-partitioned data | - |
-| `day-{YYYY-MM-DD}/` | Specific date partition | `day-2024-01-15/` |
+| `day={YYYY-MM-DD}/` | Specific date partition | `day=2024-01-15/` |
 | `instruments.parquet` | Parquet file with instrument definitions | - |
 
 ## File Format
@@ -71,15 +71,18 @@ The `instruments.parquet` file contains the following key columns:
 ### Reading Instrument Definitions
 
 ```python
-from unified_cloud_services import get_gcs_client
-import polars as pl
+from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
 
-# Get client
-client = get_gcs_client()
+# Create cloud-agnostic service
+target = CloudTarget(
+    project_id="your-project-id",
+    gcs_bucket="instruments-store-cefi-your-project-id",
+)
+service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
 
 # Read instruments for a specific date
-bucket = "instruments-store-cefi-central-element-323112"
-path = "instrument_availability/by_date/day-2024-01-15/instruments.parquet"
+bucket = "instruments-store-cefi-{project_id}"  # Replace {project_id} with actual project ID
+path = "instrument_availability/by_date/day=2024-01-15/instruments.parquet"
 
 # Using polars
 df = pl.read_parquet(f"gs://{bucket}/{path}")
@@ -95,7 +98,7 @@ binance_instruments = df.filter(pl.col("venue") == "BINANCE-FUTURES")
 python scripts/data_catalog.py --start-date 2024-01-01 --end-date 2024-01-31 --category CEFI
 
 # Using gsutil
-gsutil ls gs://instruments-store-cefi-central-element-323112/instrument_availability/by_date/day-2024-01-15/
+gsutil ls gs://instruments-store-cefi-{project_id}/instrument_availability/by_date/day=2024-01-15/
 ```
 
 ## Downstream Dependencies
