@@ -69,6 +69,64 @@ from instruments_service.cli.handlers import get_handler_for_mode
 from instruments_service.cli.parser import parse_arguments
 
 
+def validate_startup(config) -> bool:
+    """
+    Validate cloud connections and buckets before processing.
+
+    CRITICAL: Fail fast if cloud connectivity or bucket access is unavailable.
+    This prevents silent failures and wasted compute time.
+
+    Args:
+        config: Service config object
+
+    Returns:
+        True if validation passes, False otherwise
+    """
+    try:
+        from unified_cloud_services import get_storage_client
+
+        logger.info("🔍 Validating cloud connectivity and bucket access...")
+
+        # Check storage connection
+        try:
+            project_id = config.gcp_project_id if hasattr(config, "gcp_project_id") else None
+            storage_client = get_storage_client(project_id=project_id)
+            if storage_client is None:
+                logger.error("❌ Failed to initialize storage client")
+                return False
+        except Exception as e:
+            logger.error(f"❌ Failed to connect to cloud storage: {e}")
+            return False
+
+        # Check output buckets exist and are accessible
+        # Use config to get bucket names for each category
+        categories = ["CEFI", "TRADFI", "DEFI"]
+        for category in categories:
+            try:
+                # Get bucket name from config
+                bucket_name = config.get_bucket_for_category(category.lower())
+
+                if bucket_name:
+                    # Try to list blobs (checks bucket access)
+                    try:
+                        list(storage_client.list_blobs(bucket=bucket_name, prefix="", max_results=1))
+                        logger.info(f"✅ Bucket accessible: {bucket_name}")
+                    except Exception as e:
+                        logger.error(f"❌ Cannot access bucket {bucket_name}: {e}")
+                        return False
+
+            except Exception as e:
+                logger.error(f"❌ Error checking bucket for {category}: {e}")
+                return False
+
+        logger.info("✅ Startup validation passed - cloud connectivity and bucket access verified")
+        return True
+
+    except Exception as e:
+        logger.error(f"❌ Startup validation failed: {e}", exc_info=True)
+        return False
+
+
 def main() -> Dict[str, Any]:
     """
     Main CLI entry point for instruments-service.
@@ -105,6 +163,13 @@ def main() -> Dict[str, Any]:
 
         # Setup logging level
         logging.getLogger().setLevel(getattr(logging, args.log_level.upper()))
+
+        # CRITICAL: Validate cloud connectivity and bucket access before processing
+        # Skip validation in dry-run mode (no cloud operations)
+        if not (hasattr(args, "dry_run") and args.dry_run):
+            if not validate_startup(instruments_config):
+                logger.error("❌ Startup validation failed - cannot proceed without cloud connectivity")
+                sys.exit(1)
 
         logger.info(f"🚀 Starting {args.mode} operation")
         if args.start_date:
