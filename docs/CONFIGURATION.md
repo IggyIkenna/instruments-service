@@ -14,7 +14,7 @@ from pydantic import Field, AliasChoices
 
 class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
     """Configuration for instruments-service."""
-    
+
     # Category-specific buckets
     instruments_gcs_bucket_cefi: str = Field(
         default="",
@@ -28,7 +28,7 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
         default="",
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_DEFI"),
     )
-    
+
     # Secret names
     tardis_secret_name: str = Field(
         default="tardis-api-key",
@@ -121,9 +121,9 @@ instruments-store-{category}-{project_id}
 ```
 
 Examples:
-- `instruments-store-cefi-central-element-323112`
-- `instruments-store-tradfi-central-element-323112`
-- `instruments-store-defi-central-element-323112`
+- `instruments-store-cefi-{project_id}`
+- `instruments-store-tradfi-{project_id}`
+- `instruments-store-defi-{project_id}`
 
 ### AWS
 
@@ -148,13 +148,13 @@ bucket = config.instruments_gcs_bucket_cefi
 CLOUD_PROVIDER=gcp
 
 # GCP Configuration
-GCP_PROJECT_ID=central-element-323112
+GCP_PROJECT_ID={project_id}  # Replace with actual project ID
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
 
 # Bucket Configuration
-INSTRUMENTS_GCS_BUCKET_CEFI=instruments-store-cefi-central-element-323112
-INSTRUMENTS_GCS_BUCKET_TRADFI=instruments-store-tradfi-central-element-323112
-INSTRUMENTS_GCS_BUCKET_DEFI=instruments-store-defi-central-element-323112
+INSTRUMENTS_GCS_BUCKET_CEFI=instruments-store-cefi-{project_id}
+INSTRUMENTS_GCS_BUCKET_TRADFI=instruments-store-tradfi-{project_id}
+INSTRUMENTS_GCS_BUCKET_DEFI=instruments-store-defi-{project_id}
 
 # Secret Names (defaults usually sufficient)
 TARDIS_SECRET_NAME=tardis-api-key

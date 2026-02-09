@@ -63,7 +63,7 @@ All adapters follow the same pattern:
 ```python
 from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
 
-service = InstrumentProcessingService(config={'project_id': 'central-element-323112'})
+service = InstrumentProcessingService(config={'project_id': '{project_id}'})  # Replace {project_id} with actual project ID
 
 # TardisAdapter is used automatically for crypto exchanges
 instruments = await service.process_exchange_instruments(

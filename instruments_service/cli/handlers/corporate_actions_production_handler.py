@@ -125,33 +125,35 @@ class CorporateActionsProductionHandler(ModeHandler):
             List of ticker symbols
         """
         try:
-            import tempfile
+            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
 
-            from unified_cloud_services import get_gcs_client
-
-            client = get_gcs_client(project_id=self.project_id)
             bucket_name = instruments_config.gcs_bucket_tradfi or instruments_config.get_bucket_for_category("tradfi")
-            bucket = client.bucket(bucket_name)
+
+            # Create cloud-agnostic service
+            target = CloudTarget(
+                project_id=self.project_id,
+                gcs_bucket=bucket_name,
+            )
+            service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
 
             # Try known good dates
             known_good_dates = ["2024-07-01", "2024-06-01", "2024-05-01", "2023-05-23"]
 
             for date_str in known_good_dates:
-                gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
-                blob = bucket.blob(gcs_path)
+                gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
 
-                if blob.exists():
-                    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-                        blob.download_to_filename(tmp.name)
-                        df = pd.read_parquet(tmp.name)
+                try:
+                    df = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    if not df.empty:
+                        # Filter for equities
+                        equities = df[df["venue"].isin(["NYSE", "NASDAQ"])]
+                        tickers = equities["exchange_raw_symbol"].dropna().unique().tolist()
+                        tickers = [t.strip() for t in tickers if t and t.strip()]
 
-                    # Filter for equities
-                    equities = df[df["venue"].isin(["NYSE", "NASDAQ"])]
-                    tickers = equities["exchange_raw_symbol"].dropna().unique().tolist()
-                    tickers = [t.strip() for t in tickers if t and t.strip()]
-
-                    logger.info(f"📂 Loaded {len(tickers)} tickers from GCS (day-{date_str})")
-                    return sorted(tickers)
+                        logger.info(f"📂 Loaded {len(tickers)} tickers from GCS (day={date_str})")
+                        return sorted(tickers)
+                except Exception:
+                    continue
 
             logger.warning("⚠️ No equity tickers found in GCS")
             return []
@@ -277,7 +279,7 @@ class CorporateActionsProductionHandler(ModeHandler):
                     continue
 
                 day_str = day.isoformat()
-                day_dir = self.by_date_dir / f"day-{day_str}"
+                day_dir = self.by_date_dir / f"day={day_str}"
                 day_dir.mkdir(exist_ok=True)
 
                 group.to_parquet(day_dir / "dividends.parquet", index=False)
@@ -292,7 +294,7 @@ class CorporateActionsProductionHandler(ModeHandler):
                     continue
 
                 day_str = day.isoformat()
-                day_dir = self.by_date_dir / f"day-{day_str}"
+                day_dir = self.by_date_dir / f"day={day_str}"
                 day_dir.mkdir(exist_ok=True)
 
                 group.to_parquet(day_dir / "splits.parquet", index=False)
@@ -307,7 +309,7 @@ class CorporateActionsProductionHandler(ModeHandler):
                     continue
 
                 day_str = day.isoformat()
-                day_dir = self.by_date_dir / f"day-{day_str}"
+                day_dir = self.by_date_dir / f"day={day_str}"
                 day_dir.mkdir(exist_ok=True)
 
                 group.to_parquet(day_dir / "earnings.parquet", index=False)
@@ -386,7 +388,11 @@ class CorporateActionsProductionHandler(ModeHandler):
             True if upload successful, False otherwise
         """
         try:
-            bucket_name = instruments_config.gcs_bucket_tradfi or "instruments-store-tradfi-central-element-323112"
+            # Use config or generate bucket name with project ID (cloud-agnostic)
+            bucket_name = instruments_config.gcs_bucket_tradfi or instruments_config.get_bucket_for_category("tradfi")
+            if not bucket_name:
+                # Fallback: construct bucket name using project ID
+                bucket_name = f"instruments-store-tradfi-{self.project_id}"
             gcs_path = f"gs://{bucket_name}/corporate_actions/"
 
             logger.info("\n📤 STEP 8: Uploading to GCS...")
