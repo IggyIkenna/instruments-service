@@ -74,17 +74,24 @@ steps:
         git config --global url."https://x-access-token:$${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
 
         echo "=== Installing dependencies ==="
-        pip install --quiet --upgrade pip setuptools wheel
+        python -m pip install --upgrade pip setuptools wheel
 
         # Install unified-cloud-services from local clone FIRST
-        pip install --quiet -e /workspace/unified-cloud-services
-        pip install --quiet -e /workspace/unified-trading-deployment-v2 || true
+        pip install -e /workspace/unified-cloud-services
 
-        # Install instruments-service deps (skip git-based ucs, already installed)
-        pip install --quiet --no-deps -e .
-        pip install --quiet ccxt databento web3 eth-abi exchange-calendars yfinance plotly boto3 numpy pandas polars pydantic pydantic-settings python-dateutil python-dotenv requests
+        # Install unified-trading-deployment-v2 (optional - for smoke tests)
+        pip install -e /workspace/unified-trading-deployment-v2 2>/dev/null || echo "⚠️ unified-trading-deployment-v2 not available"
 
-        pip install --quiet ruff==0.15.0 pytest pytest-asyncio pytest-mock pytest-timeout
+        # Install instruments-service without deps first
+        pip install -e . --no-deps
+
+        # Install core dependencies
+        pip install pydantic pydantic-settings pandas numpy python-dateutil \
+          python-dotenv requests ccxt plotly web3 eth-abi databento boto3 \
+          exchange-calendars yfinance polars
+
+        # Install test dependencies
+        pip install pytest pytest-asyncio pytest-mock pytest-timeout ruff==0.15.0
 
         # ====================================================================
         # LINTING (ruff) - MUST PASS
@@ -111,7 +118,7 @@ steps:
         echo ""
         echo "=== Running unit tests ==="
         if [ -d "tests/unit" ]; then
-          pytest tests/unit/ -v --tb=short --timeout=60 || exit 1
+          python -m pytest tests/unit/ -v --tb=short --timeout=60 || exit 1
           echo "✅ Unit tests passed"
         else
           echo "No unit tests directory found, skipping"
@@ -123,7 +130,7 @@ steps:
         echo ""
         echo "=== Running integration tests ==="
         if [ -d "tests/integration" ]; then
-          pytest tests/integration/ -v --tb=short --timeout=120 \
+          python -m pytest tests/integration/ -v --tb=short --timeout=120 \
             --ignore=tests/integration/test_performance.py \
             -k "not api and not live and not download" || exit 1
           echo "✅ Integration tests passed"
@@ -137,7 +144,7 @@ steps:
         echo ""
         echo "=== Running e2e tests ==="
         if [ -d "tests/e2e" ]; then
-          pytest tests/e2e/ -v --tb=short --timeout=180 || exit 1
+          python -m pytest tests/e2e/ -v --tb=short --timeout=180 || exit 1
           echo "✅ E2E tests passed"
         else
           echo "No e2e tests directory found, skipping"
@@ -149,7 +156,7 @@ steps:
         echo ""
         echo "=== Running smoke tests ==="
         if [ -d "tests/smoke" ]; then
-          pytest tests/smoke/ -v --tb=short --timeout=180 || exit 1
+          python -m pytest tests/smoke/ -v --tb=short --timeout=180 || exit 1
           echo "✅ Smoke tests passed"
         else
           echo "No smoke tests directory found, skipping"
