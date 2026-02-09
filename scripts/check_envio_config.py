@@ -22,10 +22,13 @@ def get_envio_secret():
     """Get Envio API token from Secret Manager (GCP or AWS)."""
     project_id = (
         os.environ.get("GCP_PROJECT_ID")
+        or os.environ.get("AWS_PROJECT_ID")
         or os.environ.get("GOOGLE_CLOUD_PROJECT")
         or os.environ.get("AWS_ACCOUNT_ID")
-        or "central-element-323112"
     )
+    if not project_id:
+        print("❌ Error: PROJECT_ID not found. Set GCP_PROJECT_ID or AWS_PROJECT_ID environment variable.")
+        return None
     secret_id = "envio-api-key"
 
     try:

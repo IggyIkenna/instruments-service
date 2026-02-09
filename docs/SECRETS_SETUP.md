@@ -35,7 +35,7 @@ The service searches for credentials files in these locations (in order of prefe
 4. **Home directory**
 
 It looks for these filenames:
-- `central-element-323112-e35fb0ddafe2.json` (project-specific)
+- `{project_id}-e35fb0ddafe2.json` (project-specific, replace {project_id} with actual project ID)
 - `credentials.json`
 - `gcp-credentials.json`
 - `service-account.json`
@@ -47,7 +47,7 @@ It looks for these filenames:
 If you prefer to set credentials manually:
 
 ```bash
-export GOOGLE_APPLICATION_CREDENTIALS=/path/to/central-element-323112-e35fb0ddafe2.json
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/{project_id}-e35fb0ddafe2.json  # Replace {project_id} with actual project ID
 ```
 
 ---
@@ -63,7 +63,7 @@ This is the service account JSON file content needed for GCP authentication in G
 2. Navigate to **Settings** → **Secrets and variables** → **Actions**
 3. Click **New repository secret**
 4. Name: `GCP_SERVICE_ACCOUNT_JSON`
-5. Value: Copy the **entire contents** of `central-element-323112-e35fb0ddafe2.json` file
+5. Value: Copy the **entire contents** of `{project_id}-e35fb0ddafe2.json` file (replace {project_id} with actual project ID)
 6. Click **Add secret**
 
 ### Required: GH_PAT (for private unified-cloud-services)
@@ -93,14 +93,14 @@ A GitHub Personal Access Token (PAT) with access to the private `unified-cloud-s
 
 These secrets have defaults built into the workflow:
 
-- `GCP_PROJECT_ID` (default: `central-element-323112`)
+- `GCP_PROJECT_ID` (default: `{project_id}` - replace with actual project ID)
 - `GCS_REGION` (default: `asia-northeast1-c`)
 - `GCS_LOCATION` (default: `asia-northeast1`)
-- `INSTRUMENTS_GCS_BUCKET` (default: `instruments-store-central-element-323112`)
-- `INSTRUMENTS_GCS_BUCKET_TEST` (default: `instruments-store-test-central-element-323112`)
-- `INSTRUMENTS_GCS_BUCKET_CEFI` (default: `instruments-store-cefi-central-element-323112`)
-- `INSTRUMENTS_GCS_BUCKET_TRADFI` (default: `instruments-store-tradfi-central-element-323112`)
-- `INSTRUMENTS_GCS_BUCKET_DEFI` (default: `instruments-store-defi-central-element-323112`)
+- `INSTRUMENTS_GCS_BUCKET` (default: `instruments-store-{project_id}`)
+- `INSTRUMENTS_GCS_BUCKET_TEST` (default: `instruments-store-test-{project_id}`)
+- `INSTRUMENTS_GCS_BUCKET_CEFI` (default: `instruments-store-cefi-{project_id}`)
+- `INSTRUMENTS_GCS_BUCKET_TRADFI` (default: `instruments-store-tradfi-{project_id}`)
+- `INSTRUMENTS_GCS_BUCKET_DEFI` (default: `instruments-store-defi-{project_id}`)
 - `INSTRUMENTS_BIGQUERY_DATASET` (default: `instruments`)
 - `BIGQUERY_LOCATION` (default: `asia-northeast1`)
 
@@ -115,32 +115,32 @@ All API keys are retrieved from Secret Manager (not environment variables).
 ```bash
 # Tardis API key (CeFi crypto data)
 echo "YOUR_TARDIS_API_KEY" | gcloud secrets create tardis-api-key \
-  --project=central-element-323112 \
+  --project={project_id} \
   --data-file=-
 
 # Databento API key (TradFi data)
 echo "YOUR_DATABENTO_API_KEY" | gcloud secrets create databento-api-key \
-  --project=central-element-323112 \
+  --project={project_id} \
   --data-file=-
 
 # The Graph API key (DeFi subgraphs)
 echo "YOUR_GRAPH_API_KEY" | gcloud secrets create graph-api-key \
-  --project=central-element-323112 \
+  --project={project_id} \
   --data-file=-
 
 # Alchemy API key (DeFi RPC)
 echo "YOUR_ALCHEMY_API_KEY" | gcloud secrets create alchemy-api-key \
-  --project=central-element-323112 \
+  --project={project_id} \
   --data-file=-
 
 # Envio API key (Uniswap V4 fallback)
 echo "YOUR_ENVIO_API_KEY" | gcloud secrets create envio-api-key \
-  --project=central-element-323112 \
+  --project={project_id} \
   --data-file=-
 
 # AaveScan API key (AAVE fallback - optional)
 echo "YOUR_AAVESCAN_API_KEY" | gcloud secrets create aavescan-api-key \
-  --project=central-element-323112 \
+  --project={project_id} \
   --data-file=-
 ```
 
@@ -148,7 +148,7 @@ echo "YOUR_AAVESCAN_API_KEY" | gcloud secrets create aavescan-api-key \
 
 ```bash
 echo "NEW_API_KEY" | gcloud secrets versions add graph-api-key \
-  --project=central-element-323112 \
+  --project={project_id} \
   --data-file=-
 ```
 
@@ -156,16 +156,16 @@ echo "NEW_API_KEY" | gcloud secrets versions add graph-api-key \
 
 ```bash
 # List all secrets
-gcloud secrets list --project=central-element-323112
+gcloud secrets list --project={project_id}
 
 # View secret metadata
-gcloud secrets describe tardis-api-key --project=central-element-323112
+gcloud secrets describe tardis-api-key --project={project_id}
 
 # Test secret access
 python3 -c "
 from unified_cloud_services import get_secret_with_fallback
 api_key = get_secret_with_fallback(
-    project_id='central-element-323112',
+    project_id='{project_id}',  # Replace {project_id} with actual project ID
     secret_name='tardis-api-key',
     fallback_env_var='TARDIS_API_KEY',
 )
@@ -181,8 +181,8 @@ Configure secret names (not the actual keys!) in `.env`:
 
 ```bash
 # GCP Configuration
-GOOGLE_APPLICATION_CREDENTIALS=../central-element-323112-e35fb0ddafe2.json
-GCP_PROJECT_ID=central-element-323112
+GOOGLE_APPLICATION_CREDENTIALS=../{project_id}-e35fb0ddafe2.json  # Replace {project_id} with actual project ID
+GCP_PROJECT_ID={project_id}  # Replace with actual project ID
 
 # Secret Manager secret names (actual keys stored in GCP Secret Manager)
 TARDIS_SECRET_NAME=tardis-api-key
@@ -235,8 +235,8 @@ ENVIRONMENT=development
 Ensure service account has `Secret Manager Secret Accessor` role:
 
 ```bash
-gcloud projects add-iam-policy-binding central-element-323112 \
-  --member="serviceAccount:YOUR_SERVICE_ACCOUNT@central-element-323112.iam.gserviceaccount.com" \
+gcloud projects add-iam-policy-binding {project_id} \
+  --member="serviceAccount:YOUR_SERVICE_ACCOUNT@{project_id}.iam.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 ```
 
@@ -246,7 +246,7 @@ Create the secret:
 
 ```bash
 echo "YOUR_API_KEY" | gcloud secrets create SECRET_NAME \
-  --project=central-element-323112 \
+  --project={project_id} \
   --data-file=-
 ```
 
@@ -390,4 +390,3 @@ git push origin main
 ---
 
 *Last Updated: December 2025*
-

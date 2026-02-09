@@ -72,7 +72,7 @@ class CloudDataProvider:
         """
         if gcs_path is None:
             date_str = date.strftime("%Y-%m-%d")
-            gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
+            gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
 
         try:
             # If category specified, use category-specific bucket
@@ -115,7 +115,7 @@ class CloudDataProvider:
         """
         if gcs_path is None:
             date_str = date.strftime("%Y-%m-%d")
-            gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
+            gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
 
         try:
             # Detect test mode
@@ -244,7 +244,7 @@ class CloudDataProvider:
                     # Sanitize venue name for folder (replace slashes, etc.)
                     venue_folder = venue.replace("/", "-").replace("\\", "-")
                     gcs_path = (
-                        f"instrument_availability/by_date/day-{date_str}/venue-{venue_folder}/instruments.parquet"
+                        f"instrument_availability/by_date/day={date_str}/venue-{venue_folder}/instruments.parquet"
                     )
 
                     try:
@@ -265,7 +265,7 @@ class CloudDataProvider:
             return True
 
         # Legacy behavior: check date-level aggregate file
-        gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
+        gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
         found_categories = []
 
         for category in categories:

@@ -90,29 +90,31 @@ class CorporateActionsBackfillHandler(ModeHandler):
         Same logic as original corporate_actions_handler.
         """
         try:
-            import tempfile
+            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
 
-            from unified_cloud_services import get_gcs_client
-
-            client = get_gcs_client(project_id=self.project_id)
             bucket_name = instruments_config.gcs_bucket_tradfi or instruments_config.get_bucket_for_category("tradfi")
-            bucket = client.bucket(bucket_name)
+
+            # Create cloud-agnostic service
+            target = CloudTarget(
+                project_id=self.project_id,
+                gcs_bucket=bucket_name,
+            )
+            service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
 
             def try_load_tickers(gcs_path: str) -> List[str]:
                 """Try to load tickers from a specific GCS path."""
-                blob = bucket.blob(gcs_path)
-                if not blob.exists():
+                try:
+                    df = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    if df.empty:
+                        return []
+
+                    # Filter for equities (NYSE, NASDAQ)
+                    equities = df[df["venue"].isin(["NYSE", "NASDAQ"])]
+                    tickers = equities["exchange_raw_symbol"].dropna().unique().tolist()
+                    tickers = [t.strip() for t in tickers if t and t.strip()]
+                    return sorted(tickers)
+                except Exception:
                     return []
-
-                with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-                    blob.download_to_filename(tmp.name)
-                    df = pd.read_parquet(tmp.name)
-
-                # Filter for equities (NYSE, NASDAQ)
-                equities = df[df["venue"].isin(["NYSE", "NASDAQ"])]
-                tickers = equities["exchange_raw_symbol"].dropna().unique().tolist()
-                tickers = [t.strip() for t in tickers if t and t.strip()]
-                return sorted(tickers)
 
             # Try known good dates
             known_good_dates = [
@@ -123,10 +125,10 @@ class CorporateActionsBackfillHandler(ModeHandler):
             ]
 
             for date_str in known_good_dates:
-                gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
+                gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
                 tickers = try_load_tickers(gcs_path)
                 if tickers:
-                    logger.info(f"📂 Using instruments from: day-{date_str}")
+                    logger.info(f"📂 Using instruments from: day={date_str}")
                     logger.info(f"📊 Loaded {len(tickers)} equity tickers from GCS")
                     return tickers
 
