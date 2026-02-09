@@ -325,7 +325,7 @@ graph TB
 │          │                                                              │
 │          ├─▶ Upload to GCS                                             │
 │          │   gcs_path = f"instrument_availability/by_date/             │
-│          │                day-{date_str}/instruments.parquet"          │
+│          │                day={date_str}/instruments.parquet"          │
 │          │                                                              │
 │          │   self.cloud_service.upload_to_gcs(                         │
 │          │     data=category_df,                                       │
@@ -481,22 +481,22 @@ graph TB
 │  │  GCS Storage                                                  │     │
 │  │                                                               │     │
 │  │  gs://instruments-store-cefi/                                │     │
-│  │    instrument_availability/by_date/day-2023-05-23/           │     │
+│  │    instrument_availability/by_date/day=2023-05-23/           │     │
 │  │      └─▶ instruments.parquet                                 │     │
 │  │                                                               │     │
 │  │  gs://instruments-store-tradfi/                              │     │
-│  │    instrument_availability/by_date/day-2023-05-23/           │     │
+│  │    instrument_availability/by_date/day=2023-05-23/           │     │
 │  │      └─▶ instruments.parquet                                 │     │
 │  │                                                               │     │
 │  │  gs://instruments-store-defi/                                │     │
-│  │    instrument_availability/by_date/day-2023-05-23/           │     │
+│  │    instrument_availability/by_date/day=2023-05-23/           │     │
 │  │      └─▶ instruments.parquet                                 │     │
 │  └──────────────────────────────────────────────────────────────┘     │
 │                                                                          │
 │  ┌──────────────────────────────────────────────────────────────┐     │
 │  │  BigQuery                                                     │     │
 │  │                                                               │     │
-│  │  central-element-323112.instruments.instruments               │     │
+│  │  {project_id}.instruments.instruments                         │     │
 │  │    ├─▶ Partitioned by timestamp (DAILY)                      │     │
 │  │    ├─▶ Clustered by venue, instrument_type                   │     │
 │  │    └─▶ Rows: [instrument_key, venue, instrument_type, ...]   │     │
@@ -540,7 +540,7 @@ graph TB
 
 5. UPLOAD TO GCS
    └─▶ gs://instruments-store-cefi/
-       instrument_availability/by_date/day-2023-05-23/
+       instrument_availability/by_date/day=2023-05-23/
        instruments.parquet
 
        Row: {
@@ -555,7 +555,7 @@ graph TB
        }
 
 6. UPLOAD TO BIGQUERY
-   └─▶ central-element-323112.instruments.instruments
+   └─▶ {project_id}.instruments.instruments
        Partition: DATE(timestamp) = '2023-05-23'
 
        Same row as GCS
@@ -612,7 +612,7 @@ for category in categories:
 ```python
 # Category-specific CloudTarget
 category_target = CloudTarget(
-    project_id="central-element-323112",
+    project_id="{project_id}",  # Replace with actual project ID
     gcs_bucket="instruments-store-cefi",  # Category-specific
     bigquery_dataset="instruments",
     bigquery_location="asia-northeast1",

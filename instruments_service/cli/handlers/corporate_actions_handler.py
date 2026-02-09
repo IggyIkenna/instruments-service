@@ -11,9 +11,9 @@ Tickers are sourced from GCS instruments store (instruments-store-tradfi),
 ensuring the same universe as instrument definitions.
 
 Output Structure:
-    corporate_actions/by_date/day-{date}/dividends.parquet
-    corporate_actions/by_date/day-{date}/splits.parquet
-    corporate_actions/by_date/day-{date}/earnings.parquet
+    corporate_actions/by_date/day={date}/dividends.parquet
+    corporate_actions/by_date/day={date}/splits.parquet
+    corporate_actions/by_date/day={date}/earnings.parquet
 """
 
 import logging
@@ -135,36 +135,38 @@ class CorporateActionsHandler(ModeHandler):
             List of ticker symbols (e.g., ['AAPL', 'MSFT', ...])
         """
         try:
-            import tempfile
+            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
 
-            from unified_cloud_services import get_gcs_client
-
-            client = get_gcs_client(project_id=self.project_id)
             bucket_name = instruments_config.gcs_bucket_tradfi or _get_tradfi_bucket()
-            bucket = client.bucket(bucket_name)
+
+            # Create cloud-agnostic service
+            target = CloudTarget(
+                project_id=self.project_id,
+                gcs_bucket=bucket_name,
+            )
+            service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
 
             def try_load_tickers(gcs_path: str) -> List[str]:
                 """Try to load tickers from a specific GCS path."""
-                blob = bucket.blob(gcs_path)
-                if not blob.exists():
+                try:
+                    df = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    if df.empty:
+                        return []
+
+                    # Filter for equities (NYSE, NASDAQ)
+                    equities = df[df["venue"].isin(["NYSE", "NASDAQ"])]
+                    tickers = equities["exchange_raw_symbol"].dropna().unique().tolist()
+                    tickers = [t.strip() for t in tickers if t and t.strip()]
+                    return sorted(tickers)
+                except Exception:
                     return []
-
-                with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
-                    blob.download_to_filename(tmp.name)
-                    df = pd.read_parquet(tmp.name)
-
-                # Filter for equities (NYSE, NASDAQ)
-                equities = df[df["venue"].isin(["NYSE", "NASDAQ"])]
-                tickers = equities["exchange_raw_symbol"].dropna().unique().tolist()
-                tickers = [t.strip() for t in tickers if t and t.strip()]
-                return sorted(tickers)
 
             # If specific date provided, use it
             if reference_date is not None:
-                gcs_path = f"instrument_availability/by_date/day-{reference_date}/instruments.parquet"
+                gcs_path = f"instrument_availability/by_date/day={reference_date}/instruments.parquet"
                 tickers = try_load_tickers(gcs_path)
                 if tickers:
-                    logger.info(f"📂 Using instruments from: day-{reference_date}")
+                    logger.info(f"📂 Using instruments from: day={reference_date}")
                     logger.info(f"📊 Loaded {len(tickers)} equity tickers from GCS")
                     return tickers
                 logger.warning(f"⚠️ No equities found for {reference_date}")
@@ -178,10 +180,10 @@ class CorporateActionsHandler(ModeHandler):
             ]
 
             for date_str in known_good_dates:
-                gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
+                gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
                 tickers = try_load_tickers(gcs_path)
                 if tickers:
-                    logger.info(f"📂 Using instruments from: day-{date_str}")
+                    logger.info(f"📂 Using instruments from: day={date_str}")
                     logger.info(f"📊 Loaded {len(tickers)} equity tickers from GCS")
                     return tickers
 
@@ -189,7 +191,7 @@ class CorporateActionsHandler(ModeHandler):
             return []
 
         except ImportError:
-            logger.error("❌ google-cloud-storage not installed")
+            logger.error("❌ unified-cloud-services not available")
             return []
         except Exception as e:
             logger.error(f"❌ Failed to load tickers from GCS: {e}")
@@ -347,7 +349,7 @@ class CorporateActionsHandler(ModeHandler):
             days_with_data += 1
 
             # Create day directory
-            day_dir = self.output_dir / "by_date" / f"day-{day_str}"
+            day_dir = self.output_dir / "by_date" / f"day={day_str}"
             day_dir.mkdir(parents=True, exist_ok=True)
 
             # Write files for this day
@@ -455,7 +457,7 @@ class CorporateActionsHandler(ModeHandler):
         """
         Upload corporate actions files to GCS TRADFI bucket.
 
-        Target path: gs://{tradfi_bucket}/corporate_actions/by_date/day-{date}/{action_type}.parquet
+        Target path: gs://{tradfi_bucket}/corporate_actions/by_date/day={date}/{action_type}.parquet
 
         Args:
             output_files: List of dicts with action_type, date, and path keys
@@ -476,11 +478,14 @@ class CorporateActionsHandler(ModeHandler):
                 logger.warning("⚠️ TRADFI GCS bucket not configured - skipping GCS upload")
                 return {}
 
-            # Import GCS client
-            from unified_cloud_services import get_gcs_client
+            # Use cloud-agnostic service for uploads
+            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
 
-            client = get_gcs_client(project_id=self.project_id)
-            bucket = client.bucket(bucket_name)
+            target = CloudTarget(
+                project_id=self.project_id,
+                gcs_bucket=bucket_name,
+            )
+            service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
 
             for entry in output_files:
                 action_type = entry["action_type"]
@@ -488,11 +493,12 @@ class CorporateActionsHandler(ModeHandler):
                 local_path = entry["path"]
                 filename = Path(local_path).name
 
-                # GCS path: corporate_actions/by_date/day-{date}/{action_type}.parquet
-                gcs_path = f"corporate_actions/by_date/day-{day_str}/{filename}"
+                # GCS path: corporate_actions/by_date/day={date}/{action_type}.parquet
+                gcs_path = f"corporate_actions/by_date/day={day_str}/{filename}"
 
-                blob = bucket.blob(gcs_path)
-                blob.upload_from_filename(local_path)
+                # Read file as DataFrame and upload (cloud-agnostic)
+                df = pd.read_parquet(local_path)
+                service.upload_to_gcs(df=df, gcs_path=gcs_path, format="parquet")
 
                 full_gcs_path = f"gs://{bucket_name}/{gcs_path}"
                 gcs_paths[f"{action_type}:{day_str}"] = full_gcs_path

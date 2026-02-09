@@ -457,9 +457,9 @@ class TestCloudInstrumentStorage:
         call_args = storage._mock_category_service.upload_to_gcs_batch.call_args
         uploads = call_args[0][0]
 
-        # Verify path format: instrument_availability/by_date/day-YYYY-MM-DD/venue-{VENUE}/instruments.parquet
+        # Verify path format: instrument_availability/by_date/day=YYYY-MM-DD/venue-{VENUE}/instruments.parquet
         path = uploads[0]["gcs_path"]
-        assert "instrument_availability/by_date/day-2024-01-01" in path
+        assert "instrument_availability/by_date/day=2024-01-01" in path
         assert "venue-TEST-VENUE" in path
         assert "instruments.parquet" in path
 

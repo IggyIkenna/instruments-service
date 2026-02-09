@@ -6,7 +6,7 @@ These files contain instrument definitions (batch historical data).
 
 Storage Location:
 - GCS Bucket: `instruments-store` (or `instruments-store-test` for tests)
-- Path Format: `instrument_availability/by_date/day-{YYYY-MM-DD}/instruments.parquet`
+- Path Format: `instrument_availability/by_date/day={YYYY-MM-DD}/instruments.parquet`
 - Format: Parquet (with headers/column names)
 
 Schema Source:

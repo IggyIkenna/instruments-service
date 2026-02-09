@@ -132,7 +132,7 @@ class GenerateDateViewsHandler(ModeHandler):
                 continue
 
             day_str = day.isoformat()
-            day_dir = output_dir / f"day-{day_str}"
+            day_dir = output_dir / f"day={day_str}"
             day_dir.mkdir(parents=True, exist_ok=True)
 
             # Save as Parquet

@@ -99,7 +99,7 @@ class DependencyChecker:
     }
 
     # Output path template
-    OUTPUT_PATH_TEMPLATE = "instrument_availability/by_date/day-{date}/instruments.parquet"
+    OUTPUT_PATH_TEMPLATE = "instrument_availability/by_date/day={date}/instruments.parquet"
 
     # External API dependencies by category
     EXTERNAL_APIS = {
@@ -254,15 +254,21 @@ class DependencyChecker:
             True if output file exists
         """
         try:
-            from unified_cloud_services import get_gcs_client
+            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
 
-            client = get_gcs_client(project_id=self.project_id)
             bucket_name = self.OUTPUT_BUCKETS[category].format(project_id=self.project_id)
             blob_path = self.OUTPUT_PATH_TEMPLATE.format(date=date)
 
-            bucket = client.bucket(bucket_name)
-            blob = bucket.blob(blob_path)
-            return blob.exists()
+            # Use cloud-agnostic service to check existence
+            target = CloudTarget(
+                project_id=self.project_id,
+                gcs_bucket=bucket_name,
+            )
+            service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
+
+            # Check if file exists by attempting download with log_errors=False
+            df = service.download_from_gcs(gcs_path=blob_path, format="parquet", log_errors=False)
+            return not df.empty
         except Exception as e:
             logger.warning(f"Error checking output: {e}")
             return False
