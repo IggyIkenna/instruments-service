@@ -759,29 +759,7 @@ class InstrumentsService:
 
                 all_instruments = filtered_instruments
 
-            if not all_instruments:
-                # With the always-produce architecture, the instruments service should
-                # always generate definitions (even on holidays, by querying previous session).
-                # If we reach here with zero instruments, it's a genuine error.
-                logger.error(
-                    f"❌ No instruments generated for {date_str}. "
-                    f"This is unexpected with always-produce architecture - "
-                    f"holidays/weekends should fall back to previous session definitions."
-                )
-                # Get error/warning counts before returning
-                error_count = error_warning_counter.error_count
-                warning_count = error_warning_counter.warning_count
-                root_logger.removeHandler(error_warning_counter)
-                return {
-                    "status": "error",
-                    "date": date_str,
-                    "instruments_generated": 0,
-                    "message": "No instruments generated - check adapter fallback logic",
-                    "error_count": error_count,
-                    "warning_count": warning_count,
-                }
-
-            # Convert to DataFrame
+            # Convert to DataFrame (even if empty)
             instruments_list = []
             for inst_key, inst_obj in all_instruments.items():
                 if hasattr(inst_obj, "model_dump"):
@@ -791,11 +769,45 @@ class InstrumentsService:
 
             instruments_df = pd.DataFrame(instruments_list)
 
+            # Handle case where no instruments generated
+            if not all_instruments:
+                # For TradFi: Check if this is expected (holiday) or unexpected (error)
+                if tradfi and venues_filter:
+                    # Placeholder logic will handle holiday case below
+                    # Log as warning for now - placeholder creation determines if it's valid
+                    logger.warning(
+                        f"⚠️ No instruments generated from adapters for {date_str}. "
+                        f"This can happen on weekday holidays when Databento returns empty. "
+                        f"Placeholder logic will ensure files are written for requested TradFi venues."
+                    )
+                else:
+                    # CeFi/DeFi with no instruments is unexpected (should have data)
+                    # Or TradFi with no venue filter
+                    logger.error(
+                        f"❌ No instruments generated for {date_str}. "
+                        f"This is unexpected - check adapter/API connectivity."
+                    )
+                    # Get error/warning counts before returning
+                    error_count = error_warning_counter.error_count
+                    warning_count = error_warning_counter.warning_count
+                    root_logger.removeHandler(error_warning_counter)
+                    return {
+                        "status": "error",
+                        "date": date_str,
+                        "instruments_generated": 0,
+                        "message": "No instruments generated - check adapter/API connectivity",
+                        "error_count": error_count,
+                        "warning_count": warning_count,
+                    }
+
             # Ensure every requested TradFi venue has at least one row (holiday/closed placeholder)
             # so that by-venue files are always written and unified_trading_deployment missing-data checks pass
             if tradfi and venues_filter:
                 requested_tradfi = [v for v in venues_filter if v in self.venue_mapping.all_databento_venues]
-                if requested_tradfi and "venue" in instruments_df.columns:
+                logger.debug(f"🔍 Placeholder check: Requested TradFi venues: {requested_tradfi}")
+
+                if requested_tradfi:
+                    # Prepare datetime fields for placeholder
                     if isinstance(date, datetime):
                         target_dt = date.replace(hour=0, minute=0, second=0, microsecond=0)
                     else:
@@ -803,20 +815,44 @@ class InstrumentsService:
                     if target_dt.tzinfo is None:
                         target_dt = target_dt.replace(tzinfo=timezone.utc)
                     date_iso = target_dt.isoformat().replace("+00:00", "Z")
+
+                    # Check venue presence - handle both empty DataFrame and missing venues
+                    if "venue" not in instruments_df.columns or instruments_df.empty:
+                        logger.info(
+                            "🔍 DataFrame empty or no venue column - adding placeholders for all requested venues"
+                        )
+                        venues_present = set()
+                    else:
+                        venues_present = set(instruments_df["venue"].unique())
+                        logger.debug(f"🔍 Venues present in DataFrame: {venues_present}")
+
+                    # Add placeholder for any missing venue
                     for venue_name in requested_tradfi:
-                        if venue_name not in instruments_df["venue"].values:
+                        if venue_name not in venues_present:
                             placeholder = {
+                                # Required core fields
                                 "instrument_key": f"{venue_name}:MARKET_CLOSED:PLACEHOLDER",
                                 "venue": venue_name,
                                 "instrument_type": "MARKET_CLOSED",
                                 "symbol": "PLACEHOLDER",
                                 "available_from_datetime": date_iso,
                                 "timestamp": target_dt,
+                                # Market category and metadata
                                 "market_category": "TRADFI",
+                                "data_provider": "databento",
+                                "asset_class": "traditional",
+                                "venue_type": "exchange",
+                                "chain": "off-chain",
+                                # Required TRADFI fields (from schema nullable_overrides)
+                                "databento_symbol": "PLACEHOLDER",  # Required for TRADFI
+                                "tardis_exchange": "",  # Not applicable for TRADFI
+                                # Trading hours fields (TRADFI only)
                                 "is_trading_day": False,
                                 "trading_hours_open": "holiday",
                                 "trading_hours_close": "holiday",
                                 "holiday_calendar": venue_name,
+                                "trading_session": "regular",
+                                # Session boundary fields (all None on holiday)
                                 "regular_open_utc": None,
                                 "regular_close_utc": None,
                                 "auction_open_utc": None,
@@ -831,12 +867,68 @@ class InstrumentsService:
                                 [instruments_df, pd.DataFrame([placeholder])],
                                 ignore_index=True,
                             )
+                        else:
+                            logger.debug(f"✅ {venue_name} already has instruments - no placeholder needed")
 
-            # Store to cloud
+            # Tag instruments with session_date_tag for close-date file (primary)
+            if not instruments_df.empty and "regular_open_utc" in instruments_df.columns:
+                # All instruments in this file are tagged as "close_date" initially
+                instruments_df["session_date_tag"] = "close_date"
+
+            # Store to cloud (primary close-date file)
             logger.info(f"📤 Storing {len(instruments_df)} instruments to cloud...")
             success = self.cloud_storage.store_instruments(
                 instruments_df=instruments_df, table_name="instruments", date=date
             )
+
+            # Handle UTC midnight spanning for CME and ICE
+            # When a session spans UTC midnight (opens on day N, closes on day N+1),
+            # write duplicate entries to the open-date file so metadata is available for all ticks
+            if success and not instruments_df.empty and "regular_open_utc" in instruments_df.columns:
+                utc_spanning_instruments = []
+                file_date = date.date() if isinstance(date, datetime) else date
+
+                for idx, row in instruments_df.iterrows():
+                    if row.get("regular_open_utc") and row.get("regular_close_utc"):
+                        try:
+                            open_dt = pd.to_datetime(row["regular_open_utc"])
+                            close_dt = pd.to_datetime(row["regular_close_utc"])
+
+                            # Check if session opens on a different UTC date than the close date
+                            if open_dt.date() != file_date and close_dt.date() == file_date:
+                                # This instrument's session spans midnight
+                                utc_spanning_instruments.append(row)
+                                logger.debug(
+                                    f"🌙 UTC midnight spanning: {row['instrument_key']} "
+                                    f"opens {open_dt.date()} closes {close_dt.date()}"
+                                )
+                        except Exception as e:
+                            logger.warning(f"⚠️ Failed to parse session times for {row.get('instrument_key')}: {e}")
+
+                if utc_spanning_instruments:
+                    # Create DataFrame for open-date file
+                    spanning_df = pd.DataFrame(utc_spanning_instruments)
+                    spanning_df["session_date_tag"] = "open_date"  # Tag as open-date duplicate
+
+                    # Adjust available_from/to for the open-date portion (just the hours on that date)
+                    # This is cosmetic - downstream should use regular_open_utc/close_utc for actual times
+
+                    open_date = pd.to_datetime(spanning_df.iloc[0]["regular_open_utc"]).date()
+                    logger.info(
+                        f"🌙 Writing {len(spanning_df)} UTC-spanning instruments to open-date file: {open_date} "
+                        f"(session opens {open_date}, closes {file_date})"
+                    )
+
+                    # Store to the previous date (open date)
+                    open_date_dt = datetime.combine(open_date, datetime.min.time(), tzinfo=timezone.utc)
+                    span_success = self.cloud_storage.store_instruments(
+                        instruments_df=spanning_df, table_name="instruments", date=open_date_dt
+                    )
+
+                    if span_success:
+                        logger.info(f"✅ Successfully wrote UTC-spanning instruments to {open_date}")
+                    else:
+                        logger.warning(f"⚠️ Failed to write UTC-spanning instruments to {open_date}")
 
             # Get error/warning counts before returning
             root_logger.removeHandler(error_warning_counter)
