@@ -66,7 +66,7 @@ instruments_service/
 ### Integration Points:
 
 - Uses `unified-cloud-services` for cloud operations
-- Stores instruments to `market-data-tick` GCS bucket (market_data domain)
+- Stores instruments to `instruments-store-{category}-{project}` GCS buckets (e.g. `instruments-store-cefi-central-element-323112`)
 - Instruments are part of market_data domain (not separate domain)
 - Uses Secret Manager for API key retrieval (no env var required)
 
