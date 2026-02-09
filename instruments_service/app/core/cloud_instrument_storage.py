@@ -124,6 +124,10 @@ class CloudInstrumentStorage:
         BigQuery uploads removed - batch data now goes to GCS only.
         Live streaming data (analytics mode) will upload to BigQuery separately.
 
+        Handles UTC midnight spanning for CME/ICE: When a session spans UTC midnight
+        (opens on day N, closes on day N+1), the instrument is written to BOTH dates
+        with session_date_tag to distinguish the entries.
+
         Args:
             instruments_df: DataFrame with instrument definitions
             table_name: Table name (kept for compatibility, not used for BigQuery)
