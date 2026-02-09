@@ -243,7 +243,7 @@ class TestCorporateActionsHandler:
     # -------------------------------------------------------------------------
 
     def test_save_results_creates_daily_directories(self, handler, temp_output_dir):
-        """Save results creates by_date/day-{date}/ structure."""
+        """Save results creates by_date/day={date}/ structure."""
         dividends_df = pd.DataFrame(
             {
                 "ticker": ["AAPL"],
@@ -256,7 +256,7 @@ class TestCorporateActionsHandler:
 
         handler._save_results(dividends_df, splits_df, earnings_df, date(2024, 5, 10), date(2024, 5, 10), "parquet")
 
-        day_dir = temp_output_dir / "by_date" / "day-2024-05-10"
+        day_dir = temp_output_dir / "by_date" / "day=2024-05-10"
         assert day_dir.exists()
         assert (day_dir / "dividends.parquet").exists()
 
@@ -283,8 +283,8 @@ class TestCorporateActionsHandler:
         assert not any(f["date"] == "2024-05-12" for f in result)
 
         # Directories for empty days should not exist
-        assert not (temp_output_dir / "by_date" / "day-2024-05-11").exists()
-        assert not (temp_output_dir / "by_date" / "day-2024-05-12").exists()
+        assert not (temp_output_dir / "by_date" / "day=2024-05-11").exists()
+        assert not (temp_output_dir / "by_date" / "day=2024-05-12").exists()
 
     def test_save_results_multiple_action_types_same_day(self, handler, temp_output_dir):
         """Save results handles multiple action types on same day."""
@@ -331,7 +331,7 @@ class TestCorporateActionsHandler:
 
         assert len(result) == 1
         assert result[0]["path"].endswith(".csv")
-        assert (temp_output_dir / "by_date" / "day-2024-05-10" / "dividends.csv").exists()
+        assert (temp_output_dir / "by_date" / "day=2024-05-10" / "dividends.csv").exists()
 
     def test_save_results_returns_correct_structure(self, handler, temp_output_dir):
         """Save results returns list of dicts with required keys."""
@@ -377,7 +377,7 @@ class TestCorporateActionsHandler:
 
     def test_write_day_files_only_writes_non_empty(self, handler, temp_output_dir):
         """Write day files only creates files for non-empty dataframes."""
-        day_dir = temp_output_dir / "by_date" / "day-2024-05-10"
+        day_dir = temp_output_dir / "by_date" / "day=2024-05-10"
         day_dir.mkdir(parents=True)
 
         dividends_df = pd.DataFrame(

@@ -39,7 +39,7 @@ pip install -e .
 
 ### Credentials Setup
 
-**Automatic**: Place your GCP credentials file (`central-element-323112-e35fb0ddafe2.json`) in:
+**Automatic**: Place your GCP credentials file (`{project_id}-e35fb0ddafe2.json`, replace {project_id} with actual project ID) in:
 - Current directory
 - Parent directory
 - Grandparent directory (unified-trading-system-repos root)
@@ -59,7 +59,7 @@ export GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
 python -c "from instruments_service import InstrumentProcessingService; print('✅ Import successful')"
 
 # Test Secret Manager access
-python -c "from unified_cloud_services import get_secret_with_fallback; key = get_secret_with_fallback('central-element-323112', 'tardis-api-key'); print('✅ Secret Manager works' if key else '❌ Secret Manager failed')"
+python -c "from unified_cloud_services import get_secret_with_fallback; key = get_secret_with_fallback('{project_id}', 'tardis-api-key'); print('✅ Secret Manager works' if key else '❌ Secret Manager failed')"  # Replace {project_id} with actual project ID
 ```
 
 ### Generate Instruments
@@ -148,12 +148,12 @@ Create `instruments-service/.env`:
 
 ```bash
 # GCP Configuration
-GOOGLE_APPLICATION_CREDENTIALS=../central-element-323112-e35fb0ddafe2.json
-GCP_PROJECT_ID=central-element-323112
+GOOGLE_APPLICATION_CREDENTIALS=../{project_id}-e35fb0ddafe2.json  # Replace {project_id} with actual project ID
+GCP_PROJECT_ID={project_id}  # Replace with actual project ID
 
 # Instruments Service Configuration
-INSTRUMENTS_GCS_BUCKET=instruments-store-central-element-323112
-INSTRUMENTS_GCS_BUCKET_TEST=instruments-store-test-central-element-323112
+INSTRUMENTS_GCS_BUCKET=instruments-store-{project_id}
+INSTRUMENTS_GCS_BUCKET_TEST=instruments-store-test-{project_id}
 INSTRUMENTS_BIGQUERY_DATASET=instruments
 BIGQUERY_LOCATION=asia-northeast1
 
@@ -188,7 +188,7 @@ python -c "from instruments_service.app.core.instrument_processing_service impor
 ### Test Secret Manager Access
 
 ```bash
-python -c "from unified_cloud_services import get_secret_with_fallback; key = get_secret_with_fallback('central-element-323112', 'tardis-api-key'); print('✅ Secret Manager access works' if key else '❌ Secret Manager access failed')"
+python -c "from unified_cloud_services import get_secret_with_fallback; key = get_secret_with_fallback('{project_id}', 'tardis-api-key'); print('✅ Secret Manager access works' if key else '❌ Secret Manager access failed')"  # Replace {project_id} with actual project ID
 ```
 
 ### Run Tests

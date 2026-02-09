@@ -1,10 +1,10 @@
 #!/bin/bash
 # Migration script: instruments-service to by-venue folder structure
-# 
+#
 # This script helps migrate from the legacy single-file instruments.parquet
 # to the new by-venue folder structure:
-#   - Old: instrument_availability/by_date/day-{date}/instruments.parquet
-#   - New: instrument_availability/by_date/day-{date}/venue-{venue}/instruments.parquet
+#   - Old: instrument_availability/by_date/day={date}/instruments.parquet
+#   - New: instrument_availability/by_date/day={date}/venue={venue}/instruments.parquet
 #
 # Prerequisites:
 #   - instruments-service code updated with by-venue storage (already done)
@@ -15,7 +15,13 @@
 
 set -e
 
-PROJECT_ID="central-element-323112"
+# Get project ID from environment (supports both GCP and AWS)
+PROJECT_ID="${GCP_PROJECT_ID:-${AWS_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-${AWS_ACCOUNT_ID}}}}"
+if [ -z "$PROJECT_ID" ]; then
+    echo "❌ Error: PROJECT_ID not found. Set GCP_PROJECT_ID or AWS_PROJECT_ID environment variable."
+    exit 1
+fi
+
 BUCKETS=(
     "instruments-store-cefi-${PROJECT_ID}"
     "instruments-store-tradfi-${PROJECT_ID}"
@@ -42,24 +48,24 @@ echo ""
 if [ "$VERIFY_ONLY" = true ]; then
     echo "Mode: VERIFY ONLY (no changes)"
     echo ""
-    
+
     for BUCKET in "${BUCKETS[@]}"; do
         echo "--- Checking $BUCKET ---"
-        
+
         # Check for new by-venue structure
         VENUE_COUNT=$(gsutil ls "gs://${BUCKET}/instrument_availability/by_date/" 2>/dev/null | grep "venue-" | head -20 | wc -l || echo "0")
         echo "  By-venue folders found: ~$VENUE_COUNT+"
-        
+
         # Check for legacy single-file structure
         LEGACY_COUNT=$(gsutil ls "gs://${BUCKET}/instrument_availability/by_date/day-*/instruments.parquet" 2>/dev/null | wc -l || echo "0")
         echo "  Legacy single-files found: $LEGACY_COUNT"
-        
+
         # Sample the structure
         echo "  Sample paths:"
-        gsutil ls "gs://${BUCKET}/instrument_availability/by_date/day-2024-01-15/" 2>/dev/null | head -5 || echo "    (no data for 2024-01-15)"
+        gsutil ls "gs://${BUCKET}/instrument_availability/by_date/day=2024-01-15/" 2>/dev/null | head -5 || echo "    (no data for 2024-01-15)"
         echo ""
     done
-    
+
     exit 0
 fi
 
@@ -70,32 +76,32 @@ if [ "$CLEANUP_OLD" = true ]; then
     echo "             Make sure by-venue folders exist before running this."
     echo ""
     read -p "Are you sure? (yes/no): " CONFIRM
-    
+
     if [ "$CONFIRM" != "yes" ]; then
         echo "Aborted."
         exit 1
     fi
-    
+
     for BUCKET in "${BUCKETS[@]}"; do
         echo "--- Cleaning up $BUCKET ---"
-        
+
         # First verify by-venue folders exist
         VENUE_COUNT=$(gsutil ls "gs://${BUCKET}/instrument_availability/by_date/" 2>/dev/null | grep "venue-" | wc -l || echo "0")
-        
+
         if [ "$VENUE_COUNT" -lt 100 ]; then
             echo "  ⚠️  Only $VENUE_COUNT by-venue folders found. Skipping cleanup for safety."
             continue
         fi
-        
+
         echo "  Found $VENUE_COUNT by-venue folders. Proceeding with cleanup..."
-        
+
         # Delete legacy single-file instruments.parquet (not inside venue folders)
         gsutil -m rm "gs://${BUCKET}/instrument_availability/by_date/day-*/instruments.parquet" 2>/dev/null || echo "  No legacy files to delete"
-        
+
         echo "  ✅ Cleanup complete"
         echo ""
     done
-    
+
     exit 0
 fi
 

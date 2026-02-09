@@ -52,7 +52,7 @@ pytest tests/e2e/ -v -m e2e
 ## Environment Variables
 
 - `GOOGLE_APPLICATION_CREDENTIALS`: Path to GCP credentials JSON (required)
-- `GCP_PROJECT_ID`: GCP project ID (default: 'central-element-323112')
+- `GCP_PROJECT_ID`: GCP project ID (default: '{project_id}' - replace with actual project ID)
 - `INSTRUMENTS_GCS_BUCKET_TEST`: Test bucket name (default: 'market-data-tick-test')
 - `ENABLE_CSV_SAMPLING`: Enable CSV samples (default: 'true' in tests)
 - `CSV_SAMPLE_DIR`: CSV sample directory (default: './data/samples')
@@ -66,8 +66,8 @@ pytest tests/e2e/ -v -m e2e
 **Same service account as production** - No separate test account needed.
 
 **Location**: Service account JSON file should be in one of these locations:
-- `central-element-323112-e35fb0ddafe2.json` in project root
-- `instruments-service/central-element-323112-e35fb0ddafe2.json`
+- `{project_id}-e35fb0ddafe2.json` in project root (replace {project_id} with actual project ID)
+- `instruments-service/{project_id}-e35fb0ddafe2.json`
 - Path specified in `GOOGLE_APPLICATION_CREDENTIALS` environment variable
 
 **Required Permissions**:
@@ -89,10 +89,10 @@ The test fixtures in `tests/conftest.py` automatically:
 **Manual Setup** (only needed if auto-creation fails):
 ```bash
 # Create test bucket (if it doesn't exist) - use asia-northeast1 region
-gsutil mb -p central-element-323112 -l asia-northeast1 gs://market-data-tick-test
+gsutil mb -p {project_id} -l asia-northeast1 gs://market-data-tick-test
 
 # Grant service account permissions
-gsutil iam ch serviceAccount:YOUR_SERVICE_ACCOUNT@central-element-323112.iam.gserviceaccount.com:roles/storage.objectAdmin gs://market-data-tick-test
+gsutil iam ch serviceAccount:YOUR_SERVICE_ACCOUNT@{project_id}.iam.gserviceaccount.com:roles/storage.objectAdmin gs://market-data-tick-test
 ```
 
 **Why separate test bucket?**
@@ -107,10 +107,10 @@ gsutil iam ch serviceAccount:YOUR_SERVICE_ACCOUNT@central-element-323112.iam.gse
 **Setup**:
 ```bash
 # Create test dataset (if needed) - use asia-northeast1 region
-bq mk --dataset --location=asia-northeast1 central-element-323112:market_data_hft_test
+bq mk --dataset --location=asia-northeast1 {project_id}:market_data_hft_test
 
 # Grant service account permissions
-bq show --format=prettyjson central-element-323112:market_data_hft_test
+bq show --format=prettyjson {project_id}:market_data_hft_test
 ```
 
 **Note**: Tests use the same dataset as production, but write to test tables (e.g., `instruments_integration_test`).
@@ -123,13 +123,13 @@ bq show --format=prettyjson central-element-323112:market_data_hft_test
 ```bash
 # Create secret (if it doesn't exist)
 echo -n "your-api-key" | gcloud secrets create tardis-api-key \
-  --project=central-element-323112 \
+  --project={project_id} \
   --data-file=-
 
 # Grant service account access
 gcloud secrets add-iam-policy-binding tardis-api-key \
-  --project=central-element-323112 \
-  --member="serviceAccount:YOUR_SERVICE_ACCOUNT@central-element-323112.iam.gserviceaccount.com" \
+  --project={project_id} \
+  --member="serviceAccount:YOUR_SERVICE_ACCOUNT@{project_id}.iam.gserviceaccount.com" \
   --role="roles/secretmanager.secretAccessor"
 ```
 
@@ -314,7 +314,7 @@ See [`ARCHITECTURE.md`](./ARCHITECTURE.md) for details on the static data abstra
 2. Verify credentials file is correct
 3. Manually create bucket:
 ```bash
-gsutil mb -p central-element-323112 -l asia-northeast1 gs://market-data-tick-test
+gsutil mb -p {project_id} -l asia-northeast1 gs://market-data-tick-test
 ```
 
 ### Error: "Permission denied"
@@ -324,21 +324,21 @@ gsutil mb -p central-element-323112 -l asia-northeast1 gs://market-data-tick-tes
 2. Verify service account email is correct
 3. Manually grant permissions:
 ```bash
-gsutil iam ch serviceAccount:YOUR_SERVICE_ACCOUNT@central-element-323112.iam.gserviceaccount.com:roles/storage.objectAdmin gs://market-data-tick-test
+gsutil iam ch serviceAccount:YOUR_SERVICE_ACCOUNT@{project_id}.iam.gserviceaccount.com:roles/storage.objectAdmin gs://market-data-tick-test
 ```
 
 ### Error: "Secret not found"
 
 **Solution**: Create secret or check secret name:
 ```bash
-gcloud secrets describe tardis-api-key --project=central-element-323112
+gcloud secrets describe tardis-api-key --project={project_id}
 ```
 
 ### Error: "Credentials not found"
 
 **Solution**: Place service account JSON file in one of:
-- Project root: `central-element-323112-e35fb0ddafe2.json`
-- Service directory: `instruments-service/central-element-323112-e35fb0ddafe2.json`
+- Project root: `{project_id}-e35fb0ddafe2.json` (replace {project_id} with actual project ID)
+- Service directory: `instruments-service/{project_id}-e35fb0ddafe2.json`
 - Or set `GOOGLE_APPLICATION_CREDENTIALS` environment variable
 
 ## Sampling Service
