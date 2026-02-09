@@ -237,8 +237,7 @@ class TestInstrumentsServiceExtended:
             defi=False,
         )
 
-        # Exception prevents instrument generation -> 0 instruments = error
-        # (always-produce architecture: 0 instruments is always an error)
+        # Exception during processing returns error status
         assert result["status"] == "error"
 
     @pytest.mark.asyncio
@@ -401,8 +400,7 @@ class TestInstrumentsServiceExtended:
             defi=True,
         )
 
-        # Exception prevents instrument generation -> 0 instruments = error
-        # (always-produce architecture: 0 instruments is always an error)
+        # Exception during processing returns error status
         assert result["status"] == "error"
 
     @pytest.mark.asyncio
@@ -541,7 +539,8 @@ class TestInstrumentsServiceExtended:
             defi=False,
         )
 
-        # Always-produce architecture: 0 instruments is an error, not a warning
+        # CeFi with no instruments = ERROR (unexpected)
+        # Only TradFi with venue filter creates placeholders and returns success
         assert result["status"] == "error"
         assert result["instruments_generated"] == 0
 
