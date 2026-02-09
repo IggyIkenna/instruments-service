@@ -37,7 +37,9 @@ BRANCH="auto/$(date +%Y%m%d-%H%M%S)-$$"
 echo "[$REPO_NAME] Creating branch $BRANCH"
 
 # Ensure on main and up to date
-git checkout main --quiet 2>/dev/null || true
+echo "[$REPO_NAME] Staying on branch $BRANCH (PR will auto-merge when CI passes)"
+echo "[$REPO_NAME] Current branch: $BRANCH"
+echo "[$REPO_NAME] To sync with main later: git checkout main && git pull"
 git pull --quiet 2>/dev/null || true
 
 # Create branch, commit, push
@@ -65,5 +67,8 @@ gh pr merge "$PR_NUM" --auto --squash --delete-branch 2>/dev/null || true
 
 echo "[$REPO_NAME] PR created: $PR_URL (auto-merge enabled)"
 
-# Return to main
-git checkout main --quiet 2>/dev/null || true
+# STAY ON PR BRANCH (enhanced workflow - don't return to main)
+# This allows you to continue working while CI runs
+echo "[$REPO_NAME] Staying on branch $BRANCH (PR will auto-merge when CI passes)"
+echo "[$REPO_NAME] Current branch: $BRANCH"
+echo "[$REPO_NAME] To sync with main later: git checkout main && git pull"
