@@ -29,10 +29,12 @@ logger = logging.getLogger(__name__)
 # Cloud project/account configuration (multi-cloud support)
 PROJECT_ID = (
     os.environ.get("GCP_PROJECT_ID")
+    or os.environ.get("AWS_PROJECT_ID")
     or os.environ.get("GOOGLE_CLOUD_PROJECT")
     or os.environ.get("AWS_ACCOUNT_ID")
-    or "central-element-323112"
 )
+if not PROJECT_ID:
+    raise ValueError("PROJECT_ID not found. Set GCP_PROJECT_ID or AWS_PROJECT_ID environment variable.")
 CLOUD_PROVIDER = os.environ.get("CLOUD_PROVIDER", "gcp").lower()
 CATEGORIES = ["CEFI", "TRADFI", "DEFI"]
 
@@ -61,8 +63,8 @@ GCS_BUCKETS = {
     "DEFI": _get_bucket_name("DEFI"),
 }
 
-# Path pattern: instrument_availability/by_date/day-{YYYY-MM-DD}/instruments.parquet
-PATH_TEMPLATE = "instrument_availability/by_date/day-{date}/instruments.parquet"
+# Path pattern: instrument_availability/by_date/day={YYYY-MM-DD}/instruments.parquet
+PATH_TEMPLATE = "instrument_availability/by_date/day={date}/instruments.parquet"
 
 
 @dataclass
@@ -133,8 +135,8 @@ class CatalogReport:
         }
 
 
-def get_gcs_client():
-    """Get cloud storage client (GCS or S3), with fallback for mock mode."""
+def get_cloud_service(bucket_name: str):
+    """Get cloud-agnostic service for a bucket."""
     mock_mode = os.environ.get("CLOUD_MOCK_MODE", "").lower() == "true"
 
     if mock_mode:
@@ -142,44 +144,35 @@ def get_gcs_client():
         return None
 
     try:
-        # Use cloud-agnostic storage client factory
-        from unified_cloud_services.core.client_factory import get_storage_client
+        from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
 
-        return get_storage_client()
-    except ImportError:
-        try:
-            # Fallback to legacy method
-            from unified_cloud_services import get_gcs_client
-
-            return get_gcs_client(project_id=PROJECT_ID)
-        except ImportError:
-            try:
-                # Last resort: direct GCP client
-                from google.cloud import storage
-
-                return storage.Client(project=PROJECT_ID)
-            except Exception as e:
-                logger.warning(f"Could not initialize storage client: {e}")
-                return None
+        target = CloudTarget(
+            project_id=PROJECT_ID,
+            gcs_bucket=bucket_name,
+        )
+        return StandardizedDomainCloudService(domain="instruments", cloud_target=target)
+    except Exception as e:
+        logger.warning(f"Could not initialize cloud service: {e}")
+        return None
 
 
-def check_file_exists(client, bucket_name: str, blob_path: str) -> tuple:
+def check_file_exists(service, bucket_name: str, blob_path: str) -> tuple:
     """
-    Check if a file exists in GCS.
+    Check if a file exists using cloud-agnostic service.
 
     Returns:
         Tuple of (exists: bool, size: Optional[int])
     """
-    if client is None:
+    if service is None:
         return False, None
 
     try:
-        bucket = client.bucket(bucket_name)
-        blob = bucket.blob(blob_path)
-
-        if blob.exists():
-            blob.reload()
-            return True, blob.size
+        # Try to download (with log_errors=False to avoid logging expected misses)
+        df = service.download_from_gcs(gcs_path=blob_path, format="parquet", log_errors=False)
+        if not df.empty:
+            # Estimate size (approximate)
+            size = len(df) * len(df.columns) * 8  # Rough estimate
+            return True, size
         return False, None
     except Exception as e:
         logger.debug(f"Error checking {bucket_name}/{blob_path}: {e}")
@@ -217,7 +210,6 @@ def generate_catalog(
     if categories is None:
         categories = CATEGORIES
 
-    client = get_gcs_client()
     dates = generate_date_range(start_date, end_date)
 
     entries = []
@@ -231,6 +223,12 @@ def generate_catalog(
             logger.warning(f"No bucket configured for category: {category}")
             continue
 
+        # Create cloud service for this bucket
+        service = get_cloud_service(bucket_name)
+        if service is None:
+            logger.warning(f"Could not initialize cloud service for {bucket_name}")
+            continue
+
         existing_count = 0
         missing_dates = []
 
@@ -239,7 +237,7 @@ def generate_catalog(
             blob_path = PATH_TEMPLATE.format(date=date_str)
             gcs_path = f"gs://{bucket_name}/{blob_path}"
 
-            exists, size = check_file_exists(client, bucket_name, blob_path)
+            exists, size = check_file_exists(service, bucket_name, blob_path)
 
             if exists:
                 existing_count += 1
