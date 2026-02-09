@@ -43,6 +43,11 @@ git pull --quiet 2>/dev/null || true
 # Create branch, commit, push
 # NOTE: No --no-verify. Pre-commit hooks (ruff, linting) run on commit.
 git checkout -b "$BRANCH" --quiet
+# Flush filesystem buffers to ensure all editor saves are on disk
+# This prevents stale file versions from being committed when an IDE
+# (e.g., Cursor, VSCode) has pending writes in its buffer
+sync 2>/dev/null || true
+sleep 0.5
 git add -A
 git commit -m "$COMMIT_MSG" --quiet
 
