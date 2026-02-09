@@ -435,6 +435,39 @@ INSTRUMENTS_SCHEMA = SchemaDefinition(
             nullable=True,
             description="Exchange holiday calendar identifier (TRADFI only)",
         ),
+        # ==========================================================================
+        # SESSION BOUNDARY TIMES (TRADFI only - uniform across all 5 venues)
+        # ==========================================================================
+        ColumnSchema(
+            name="regular_open_utc",
+            dtype="string",
+            nullable=True,
+            description="Regular session open as ISO datetime in UTC (TRADFI only)",
+        ),
+        ColumnSchema(
+            name="regular_close_utc",
+            dtype="string",
+            nullable=True,
+            description="Regular session close as ISO datetime in UTC (TRADFI only)",
+        ),
+        ColumnSchema(
+            name="auction_open_utc",
+            dtype="string",
+            nullable=True,
+            description="Opening auction start as ISO datetime in UTC (TRADFI only, None if no auction)",
+        ),
+        ColumnSchema(
+            name="auction_close_utc",
+            dtype="string",
+            nullable=True,
+            description="Closing auction start as ISO datetime in UTC (TRADFI only, None if no auction)",
+        ),
+        ColumnSchema(
+            name="early_close_utc",
+            dtype="string",
+            nullable=True,
+            description="Early close time as ISO datetime in UTC on shortened days (TRADFI only, None on normal days)",
+        ),
     ],
 )
 
