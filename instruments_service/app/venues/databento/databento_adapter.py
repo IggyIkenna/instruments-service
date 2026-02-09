@@ -593,6 +593,12 @@ class DatabentoAdapter:
             "trading_session": trading_hours.get("session"),
             "is_trading_day": trading_hours.get("is_trading_day"),
             "holiday_calendar": trading_hours.get("holiday_calendar"),
+            # Session boundary times (uniform across all TradFi venues)
+            "regular_open_utc": trading_hours.get("regular_open_utc"),
+            "regular_close_utc": trading_hours.get("regular_close_utc"),
+            "auction_open_utc": trading_hours.get("auction_open_utc"),
+            "auction_close_utc": trading_hours.get("auction_close_utc"),
+            "early_close_utc": trading_hours.get("early_close_utc"),
         }
 
     def create_krwusd_instrument_definition(self, target_date: datetime) -> Optional[Dict[str, Any]]:
@@ -726,6 +732,12 @@ class DatabentoAdapter:
             "trading_session": "24/7",  # Forex market trades continuously
             "is_trading_day": True,  # Forex trades every day (including weekends)
             "holiday_calendar": None,  # No holidays for forex market
+            # Session boundary times (not applicable for forex - 24/7)
+            "regular_open_utc": None,
+            "regular_close_utc": None,
+            "auction_open_utc": None,
+            "auction_close_utc": None,
+            "early_close_utc": None,
             # ============================================================================
             # ADDITIONAL METADATA
             # ============================================================================
@@ -888,6 +900,12 @@ class DatabentoAdapter:
             "trading_session": trading_hours.get("session"),
             "is_trading_day": trading_hours.get("is_trading_day"),
             "holiday_calendar": trading_hours.get("holiday_calendar"),
+            # Session boundary times (uniform across all TradFi venues)
+            "regular_open_utc": trading_hours.get("regular_open_utc"),
+            "regular_close_utc": trading_hours.get("regular_close_utc"),
+            "auction_open_utc": trading_hours.get("auction_open_utc"),
+            "auction_close_utc": trading_hours.get("auction_close_utc"),
+            "early_close_utc": trading_hours.get("early_close_utc"),
         }
 
     def _get_exchange_expiry_time(
@@ -2190,6 +2208,12 @@ class DatabentoAdapter:
             "trading_session": trading_hours.get("session"),
             "is_trading_day": trading_hours.get("is_trading_day"),
             "holiday_calendar": trading_hours.get("holiday_calendar"),
+            # Session boundary times (uniform across all TradFi venues)
+            "regular_open_utc": trading_hours.get("regular_open_utc"),
+            "regular_close_utc": trading_hours.get("regular_close_utc"),
+            "auction_open_utc": trading_hours.get("auction_open_utc"),
+            "auction_close_utc": trading_hours.get("auction_close_utc"),
+            "early_close_utc": trading_hours.get("early_close_utc"),
         }
 
     def _normalize_venue(self, exchange: str) -> str:
@@ -2242,35 +2266,59 @@ class DatabentoAdapter:
                 target_date = target_date.replace(tzinfo=timezone.utc)
 
         # Exchange-specific trading hours (in exchange local timezone)
-        # Format: "HH:MM:SS+TZ" where TZ is timezone offset
+        # Uniform format for all 5 TradFi venues: regular open/close + auction open/close
+        # Auction times are static per venue (only vary by DST).
         trading_hours_map = {
             "CME": {
-                "open_local": "17:00:00-06:00",  # 5:00 PM CT (previous day for next-day trading)
-                "close_local": "16:00:00-06:00",  # 4:00 PM CT
+                "open_local": "17:00:00",  # 5:00 PM CT (previous day for next-day trading)
+                "close_local": "16:00:00",  # 4:00 PM CT
                 "timezone": "America/Chicago",  # Central Time
                 "session": "regular",
                 "holiday_calendar": "CME",
+                # CME electronic (Globex) has no formal opening/closing auction
+                # but has a settlement window around 4:00 PM CT
+                "auction_open_local": None,
+                "auction_close_local": None,
+            },
+            "ICE": {
+                "open_local": "20:00:00",  # 8:00 PM ET (previous day for next-day trading)
+                "close_local": "17:00:00",  # 5:00 PM ET
+                "timezone": "America/New_York",  # Eastern Time
+                "session": "regular",
+                "holiday_calendar": "ICE",
+                # ICE has no formal opening/closing auction for futures
+                "auction_open_local": None,
+                "auction_close_local": None,
             },
             "CBOE": {
-                "open_local": "09:30:00-05:00",  # 9:30 AM ET
-                "close_local": "16:15:00-05:00",  # 4:15 PM ET (VIX index trading hours)
+                "open_local": "09:30:00",  # 9:30 AM ET
+                "close_local": "16:15:00",  # 4:15 PM ET (VIX index trading hours)
                 "timezone": "America/New_York",  # Eastern Time
                 "session": "regular",
                 "holiday_calendar": "CBOE",
+                # CBOE has opening rotation and closing auction
+                "auction_open_local": "09:28:00",  # Opening rotation 9:28 AM ET
+                "auction_close_local": "16:00:00",  # Closing auction starts at 4:00 PM ET
             },
             "NASDAQ": {
-                "open_local": "09:30:00-05:00",  # 9:30 AM ET
-                "close_local": "16:00:00-05:00",  # 4:00 PM ET
+                "open_local": "09:30:00",  # 9:30 AM ET
+                "close_local": "16:00:00",  # 4:00 PM ET
                 "timezone": "America/New_York",  # Eastern Time (DST-aware)
                 "session": "regular",
                 "holiday_calendar": "NASDAQ",
+                # NASDAQ opening cross at 9:28 AM, closing cross at 3:50 PM
+                "auction_open_local": "09:28:00",
+                "auction_close_local": "15:50:00",
             },
             "NYSE": {
-                "open_local": "09:30:00-05:00",  # 9:30 AM ET
-                "close_local": "16:00:00-05:00",  # 4:00 PM ET
+                "open_local": "09:30:00",  # 9:30 AM ET
+                "close_local": "16:00:00",  # 4:00 PM ET
                 "timezone": "America/New_York",  # Eastern Time (DST-aware)
                 "session": "regular",
                 "holiday_calendar": "NYSE",
+                # NYSE opening auction at 9:28 AM, closing auction (MOC/LOC) at 3:50 PM
+                "auction_open_local": "09:28:00",
+                "auction_close_local": "15:50:00",
             },
         }
 
@@ -2284,28 +2332,32 @@ class DatabentoAdapter:
                 "session": "regular",
                 "is_trading_day": None,
                 "holiday_calendar": None,
+                "session_start_utc": None,
+                "session_end_utc": None,
+                "regular_open_utc": None,
+                "regular_close_utc": None,
+                "auction_open_utc": None,
+                "auction_close_utc": None,
+                "early_close_utc": None,
             }
 
         # Convert local time to UTC
         open_utc = None
         close_utc = None
+        auction_open_utc_iso = None
+        auction_close_utc_iso = None
+        early_close_utc_iso = None
 
         try:
             # Get timezone object for DST-aware conversion
             exchange_tz = ZoneInfo(hours_config["timezone"])
 
-            # Extract time components from local time string (format: "HH:MM:SS-OO:OO")
+            # Parse time components (format: "HH:MM:SS")
             open_time_str = hours_config["open_local"]
             close_time_str = hours_config["close_local"]
 
-            # Remove timezone offset part (everything after '-' or '+')
-            # Format is "HH:MM:SS-OO:OO", we want "HH:MM:SS"
-            open_time_only = open_time_str.split("-")[0] if "-" in open_time_str else open_time_str.split("+")[0]
-            close_time_only = close_time_str.split("-")[0] if "-" in close_time_str else close_time_str.split("+")[0]
-
-            # Parse time components (HH:MM:SS)
-            open_parts = open_time_only.split(":")
-            close_parts = close_time_only.split(":")
+            open_parts = open_time_str.split(":")
+            close_parts = close_time_str.split(":")
             open_hour, open_min, open_sec = (
                 int(open_parts[0]),
                 int(open_parts[1]),
@@ -2319,27 +2371,19 @@ class DatabentoAdapter:
 
             # Determine if open time is on previous day (for sessions that span UTC days)
             # CME: opens at 5pm CT previous day, closes at 4pm CT same day
-            # CBOE: opens and closes same day
-
-            # For CME: The session that CLOSES on target_date is the one we want
-            # That session STARTS on the previous day (Sunday evening for Monday's session)
-            # For CBOE: Session opens and closes same day
+            # ICE: opens at 8pm ET previous day, closes at 5pm ET same day
+            # CBOE/NASDAQ/NYSE: opens and closes same day
 
             # Check if open time is before close time (same day) or after (previous day)
             open_time_of_day = open_hour * 3600 + open_min * 60 + open_sec
             close_time_of_day = close_hour * 3600 + close_min * 60 + close_sec
 
             # If open time is after close time, it's on the previous day
-            # This means the session that CLOSES on target_date STARTED the previous day
             open_date = target_date.date()
             if open_time_of_day > close_time_of_day:
-                # Session spans UTC days: open is previous day
-                # This is the session that CLOSES on target_date
                 open_date = open_date - timedelta(days=1)
 
             # Create datetime objects in exchange local timezone (DST-aware)
-            # open_date is the day the session STARTS (may be previous day for CME)
-            # target_date is the day the session CLOSES (the day we're querying for)
             open_local_dt = datetime(
                 open_date.year,
                 open_date.month,
@@ -2371,18 +2415,49 @@ class DatabentoAdapter:
             session_start_utc = open_utc_dt.isoformat()
             session_end_utc = close_utc_dt.isoformat()
 
-            # Check if it's a holiday (simplified check - can be enhanced with holiday calendar)
+            # Compute auction times in UTC (if venue has auctions)
+            auction_open_local_str = hours_config.get("auction_open_local")
+            auction_close_local_str = hours_config.get("auction_close_local")
+
+            if auction_open_local_str:
+                ao_parts = auction_open_local_str.split(":")
+                ao_h, ao_m, ao_s = int(ao_parts[0]), int(ao_parts[1]), int(ao_parts[2])
+                # Auction open is always on target_date (same day as regular session for equity venues)
+                ao_local_dt = datetime(
+                    target_date.year,
+                    target_date.month,
+                    target_date.day,
+                    ao_h,
+                    ao_m,
+                    ao_s,
+                    tzinfo=exchange_tz,
+                )
+                auction_open_utc_iso = ao_local_dt.astimezone(timezone.utc).isoformat()
+
+            if auction_close_local_str:
+                ac_parts = auction_close_local_str.split(":")
+                ac_h, ac_m, ac_s = int(ac_parts[0]), int(ac_parts[1]), int(ac_parts[2])
+                ac_local_dt = datetime(
+                    target_date.year,
+                    target_date.month,
+                    target_date.day,
+                    ac_h,
+                    ac_m,
+                    ac_s,
+                    tzinfo=exchange_tz,
+                )
+                auction_close_utc_iso = ac_local_dt.astimezone(timezone.utc).isoformat()
+
+            # Check if it's a holiday
             is_holiday = self._is_trading_holiday(target_date.date(), hours_config.get("holiday_calendar"))
 
-            # For CME: Sunday is NOT a holiday (Sunday evening is when Monday session starts)
-            # But Sunday itself is NOT a trading day - it's when Monday's session starts
-            # So if target_date is Sunday, is_trading_day should be False
+            # For CME/ICE: Sunday is NOT a holiday but is NOT a trading day
             is_trading_day = not is_holiday
             holiday_calendar = hours_config.get("holiday_calendar")
-            if holiday_calendar == "CME":
+            if holiday_calendar in ("CME", "ICE"):
                 weekday = target_date.date().weekday()
                 if weekday == 6:  # Sunday
-                    is_trading_day = False  # Sunday is not a trading day (but not a holiday)
+                    is_trading_day = False
 
             # If holiday, set trading hours to "holiday"
             if is_holiday:
@@ -2390,43 +2465,57 @@ class DatabentoAdapter:
                 close_utc = "holiday"
 
             # Check for early close days (e.g., day after Thanksgiving, Christmas Eve)
-            # exchange_calendars tracks early closes via the schedule DataFrame.
-            # On early close days, the actual close time is earlier than normal.
             if is_trading_day and not is_holiday:
                 xcal = self._get_exchange_calendar(hours_config.get("holiday_calendar"))
                 if xcal:
                     try:
                         ts = pd.Timestamp(target_date.date())
-                        # Check if this date is in the early_closes index
                         if hasattr(xcal, "early_closes") and ts in xcal.early_closes:
-                            # Get the actual close time from the schedule
                             if ts in xcal.schedule.index:
                                 actual_close = xcal.schedule.loc[ts, "close"]
                                 if pd.notna(actual_close):
-                                    # actual_close is a tz-aware Timestamp (UTC)
                                     early_close_utc_dt = (
                                         actual_close.tz_convert(timezone.utc)
                                         if actual_close.tzinfo
                                         else actual_close.replace(tzinfo=timezone.utc)
                                     )
+                                    # Update close time to early close
                                     close_utc = early_close_utc_dt.strftime("%H:%M:%S+00:00")
                                     close_utc_dt = early_close_utc_dt
                                     session_end_utc = early_close_utc_dt.isoformat()
+                                    early_close_utc_iso = early_close_utc_dt.isoformat()
                                     logger.info(
-                                        f"📅 Early close detected for {exchange} on {target_date.date()}: "
+                                        f"Early close detected for {exchange} on {target_date.date()}: "
                                         f"closes at {close_utc} UTC"
                                     )
+                                    # On early close days, closing auction may also shift
+                                    # Nullify auction_close if it would be after early close
+                                    if auction_close_utc_iso:
+                                        ac_dt = datetime.fromisoformat(auction_close_utc_iso)
+                                        if ac_dt >= early_close_utc_dt:
+                                            auction_close_utc_iso = None
                     except Exception as early_close_err:
                         logger.debug(f"Early close check not available for {exchange}: {early_close_err}")
 
+            # Build regular_open_utc / regular_close_utc ISO strings
+            regular_open_utc_iso = session_start_utc if not is_holiday else None
+            regular_close_utc_iso = session_end_utc if not is_holiday else None
+
+            # Nullify auction times on non-trading days
+            if not is_trading_day or is_holiday:
+                auction_open_utc_iso = None
+                auction_close_utc_iso = None
+                early_close_utc_iso = None
+
         except Exception as e:
             logger.warning(f"Failed to convert trading hours to UTC for {exchange}: {e}")
-            # Fallback to local time if conversion fails
             open_utc = hours_config.get("open_local")
             close_utc = hours_config.get("close_local")
             session_start_utc = None
             session_end_utc = None
             is_holiday = False
+            regular_open_utc_iso = None
+            regular_close_utc_iso = None
 
         return {
             "open": open_utc,
@@ -2440,6 +2529,12 @@ class DatabentoAdapter:
             "holiday_calendar": hours_config.get("holiday_calendar"),
             "session_start_utc": session_start_utc if "session_start_utc" in locals() else None,
             "session_end_utc": session_end_utc if "session_end_utc" in locals() else None,
+            # New uniform session boundary fields
+            "regular_open_utc": regular_open_utc_iso if "regular_open_utc_iso" in locals() else None,
+            "regular_close_utc": regular_close_utc_iso if "regular_close_utc_iso" in locals() else None,
+            "auction_open_utc": auction_open_utc_iso,
+            "auction_close_utc": auction_close_utc_iso,
+            "early_close_utc": early_close_utc_iso,
         }
 
     def _get_exchange_calendar(self, calendar_name: str) -> Optional[Any]:
