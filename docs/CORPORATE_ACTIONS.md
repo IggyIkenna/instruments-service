@@ -85,7 +85,7 @@ data/temp/corporate_actions/
 │   │   └── splits.parquet
 │   └── ... (503 tickers)
 ├── by_date/                # Query-optimized date partitions
-│   ├── day-2020-01-03/
+│   ├── day=2020-01-03/
 │   │   ├── dividends.parquet
 │   │   └── earnings.parquet
 │   └── ... (~2,000+ date folders)
@@ -96,7 +96,7 @@ data/temp/corporate_actions/
 
 #### GCS (after upload)
 ```
-gs://instruments-store-tradfi-central-element-323112/corporate_actions/
+gs://instruments-store-tradfi-{project_id}/corporate_actions/
 ├── by_ticker/      # Same structure as local
 ├── by_date/        # Same structure as local
 └── metadata/       # Same structure as local
@@ -311,13 +311,13 @@ find data/temp/corporate_actions -name "*.parquet" | wc -l
 
 ```bash
 # List GCS structure
-gsutil ls gs://instruments-store-tradfi-central-element-323112/corporate_actions/
+gsutil ls gs://instruments-store-tradfi-{project_id}/corporate_actions/
 
 # Check storage size
-gsutil du -sh gs://instruments-store-tradfi-central-element-323112/corporate_actions/
+gsutil du -sh gs://instruments-store-tradfi-{project_id}/corporate_actions/
 
 # Verify metadata
-gsutil cat gs://instruments-store-tradfi-central-element-323112/corporate_actions/metadata/coverage_report.json
+gsutil cat gs://instruments-store-tradfi-{project_id}/corporate_actions/metadata/coverage_report.json
 ```
 
 ---
@@ -346,7 +346,7 @@ gsutil cat gs://instruments-store-tradfi-central-element-323112/corporate_action
 **Solution**: Manual upload:
 ```bash
 gsutil -m cp -r data/temp/corporate_actions/* \
-  gs://instruments-store-tradfi-central-element-323112/corporate_actions/
+  gs://instruments-store-tradfi-{project_id}/corporate_actions/
 ```
 
 ### Some Tickers Have No Dividends
@@ -385,18 +385,18 @@ from google.cloud import storage
 
 # Read by_ticker data
 df = pd.read_parquet(
-    "gs://instruments-store-tradfi-central-element-323112/corporate_actions/by_ticker/AAPL/dividends.parquet"
+    "gs://instruments-store-tradfi-{project_id}/corporate_actions/by_ticker/AAPL/dividends.parquet"
 )
 
 # Read by_date data
 df = pd.read_parquet(
-    "gs://instruments-store-tradfi-central-element-323112/corporate_actions/by_date/day-2024-01-15/dividends.parquet"
+    "gs://instruments-store-tradfi-{project_id}/corporate_actions/by_date/day=2024-01-15/dividends.parquet"
 )
 
 # Read metadata
 import json
 client = storage.Client()
-bucket = client.bucket("instruments-store-tradfi-central-element-323112")
+bucket = client.bucket("instruments-store-tradfi-{project_id}")  # Replace {project_id} with actual project ID
 blob = bucket.blob("corporate_actions/metadata/coverage_report.json")
 metadata = json.loads(blob.download_as_string())
 ```
