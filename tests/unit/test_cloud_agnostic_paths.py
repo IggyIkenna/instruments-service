@@ -180,22 +180,21 @@ class TestCloudAgnosticPaths:
         """Test that instruments-service code doesn't directly import get_gcs_client from unified_cloud_services."""
         from pathlib import Path
 
-        # Find all Python files in the instruments_service/ source directory only
-        # This avoids scanning dependency code in deps/ or /workspace/
-        service_root = Path(__file__).parent.parent.parent.resolve()
-        source_dir = service_root / "instruments_service"
+        # Use the package's actual installation path (invariant across environments).
+        # Path(__file__) breaks in Cloud Build: workspace root can be /workspace with
+        # deps at /workspace/unified-cloud-services, so parent.parent.parent may
+        # incorrectly span the workspace and pick up dependency code.
+        import instruments_service
+
+        source_dir = Path(instruments_service.__file__).parent.resolve()
 
         if not source_dir.exists():
-            pytest.skip("instruments_service/ directory not found")
+            pytest.skip("instruments_service package directory not found")
 
-        python_files = list(source_dir.rglob("*.py"))
-
-        # Exclude __pycache__ and ensure we're only checking service code
         python_files = [
             f
-            for f in python_files
-            if "__pycache__" not in str(f)
-            and f.resolve().is_relative_to(source_dir)  # Only files within source directory
+            for f in source_dir.rglob("*.py")
+            if "__pycache__" not in str(f) and f.resolve().is_relative_to(source_dir)
         ]
 
         violations = []
