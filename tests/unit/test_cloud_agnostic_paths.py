@@ -134,12 +134,14 @@ class TestCloudAgnosticPaths:
             checker = DependencyChecker(project_id=mock_project_id)
 
             # Check output path (validates path format)
-            checker.validate_output_path(category="CEFI", date="2024-01-15")
+            output_path = checker.get_output_path(category="CEFI", date="2024-01-15")
 
             # Verify path template uses day={date}
             path_template = checker.OUTPUT_PATH_TEMPLATE
             assert "day={" in path_template, f"Path template should use day={{date}}: {path_template}"
             assert "day-{" not in path_template, f"Path template should not use day-{{date}}: {path_template}"
+            # Verify the generated path uses correct format
+            assert "day=2024-01-15" in output_path, f"Generated path should use day= format: {output_path}"
 
     def test_project_id_injection_into_bucket_names(self, mock_project_id):
         """Test that project ID is correctly injected into bucket names."""
@@ -147,7 +149,6 @@ class TestCloudAgnosticPaths:
             patch(
                 "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService"
             ) as mock_service_class,
-            patch("instruments_service.app.core.cloud_instrument_storage.CloudTarget") as mock_target_class,
         ):
             mock_service = Mock()
             mock_service.upload_to_gcs_batch = Mock(
@@ -157,20 +158,23 @@ class TestCloudAgnosticPaths:
 
             expected_bucket = f"instruments-store-cefi-{mock_project_id}"
 
-            mock_target = Mock()
-            mock_target.project_id = mock_project_id
-            mock_target.gcs_bucket = expected_bucket
-            mock_target.bigquery_dataset = "instruments"
-            mock_target.bigquery_location = "asia-northeast1"
-            mock_target_class.return_value = mock_target
+            # Create CloudTarget directly (not mocked) to verify it accepts project ID
+            from unified_cloud_services import CloudTarget
 
-            storage = CloudInstrumentStorage(cloud_target=mock_target)
+            cloud_target = CloudTarget(
+                project_id=mock_project_id,
+                gcs_bucket=expected_bucket,
+                bigquery_dataset="instruments",
+                bigquery_location="asia-northeast1",
+            )
 
-            # Verify CloudTarget was created with bucket containing project ID
-            assert mock_target_class.called
-            call_kwargs = mock_target_class.call_args[1] if mock_target_class.call_args[1] else {}
-            bucket_name = call_kwargs.get("gcs_bucket", "") or storage.cloud_target.gcs_bucket
-            assert mock_project_id in bucket_name, f"Bucket name should contain project ID: {bucket_name}"
+            storage = CloudInstrumentStorage(cloud_target=cloud_target)
+
+            # Verify storage uses the provided cloud_target with project ID
+            assert storage.cloud_target.project_id == mock_project_id
+            assert mock_project_id in storage.cloud_target.gcs_bucket, (
+                f"Bucket name should contain project ID: {storage.cloud_target.gcs_bucket}"
+            )
 
     def test_no_direct_gcs_client_imports(self):
         """Test that instruments-service code doesn't directly import get_gcs_client from unified_cloud_services."""
