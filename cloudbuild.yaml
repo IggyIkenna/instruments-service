@@ -91,7 +91,7 @@ steps:
           exchange-calendars yfinance polars
 
         # Install test dependencies
-        pip install pytest pytest-asyncio pytest-mock pytest-timeout ruff==0.15.0
+        pip install pytest pytest-asyncio pytest-mock pytest-timeout pytest-cov ruff==0.15.0
 
         # ====================================================================
         # LINTING (ruff) - MUST PASS

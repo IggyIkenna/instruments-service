@@ -7,7 +7,6 @@ No missing data report dependencies - pure force/skip logic.
 
 import asyncio
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -17,13 +16,9 @@ from instruments_service.app.core.cloud_data_provider import CloudDataProvider
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.instruments_service import InstrumentsService
 from instruments_service.cli.base_handler import ModeHandler
+from instruments_service.config import instruments_config
 
 logger = logging.getLogger(__name__)
-
-# Deployment context from environment (set by VM startup script)
-# Used to detect race conditions when data appears after shard launch
-DEPLOYMENT_ID = os.getenv("DEPLOYMENT_ID", "")
-SHARD_LAUNCHED_AT = os.getenv("SHARD_LAUNCHED_AT", "")
 
 
 class InstrumentHandler(ModeHandler):
@@ -33,9 +28,7 @@ class InstrumentHandler(ModeHandler):
         super().__init__(config)
 
         # Initialize services directly (no ServiceContainer)
-        from instruments_service.config import get_config as get_service_config
-
-        project_id = config.get("project_id") or get_service_config().gcp_project_id
+        project_id = config.get("project_id") or instruments_config.gcp_project_id
 
         # Initialize InstrumentsService (orchestration wrapper)
         service_config = {
@@ -140,15 +133,15 @@ class InstrumentHandler(ModeHandler):
                             date_str = date.strftime("%Y-%m-%d")
 
                             # Detect race condition: data appeared after shard was launched
-                            # SHARD_LAUNCHED_AT is set by VM startup script - if present, this
+                            # shard_launched_at is set by VM startup script - if present, this
                             # VM was launched because data was reported as MISSING, but now exists
-                            if SHARD_LAUNCHED_AT:
+                            if instruments_config.shard_launched_at:
                                 # Race condition detected: another deployment completed while we were launching
                                 skip_msg = f"⚠️ RACE_CONDITION: Skipping {date_str} - data appeared after launch"
                                 if venues_to_check:
                                     skip_msg += f" for {categories_to_check}/{venues_to_check}"
-                                if DEPLOYMENT_ID:
-                                    skip_msg += f" (deployment={DEPLOYMENT_ID}, launched_at={SHARD_LAUNCHED_AT})"
+                                if instruments_config.deployment_id:
+                                    skip_msg += f" (deployment={instruments_config.deployment_id}, launched_at={instruments_config.shard_launched_at})"
                                 logger.warning(skip_msg)
                             else:
                                 # Normal expected skip (resume scenario or data already exists)
@@ -161,9 +154,9 @@ class InstrumentHandler(ModeHandler):
 
                             total_skipped += 1
                             continue
-                    except Exception:
-                        # File doesn't exist, proceed with generation
-                        pass
+                    except (OSError, ConnectionError, ValueError) as e:
+                        # File doesn't exist or transient error - proceed with generation
+                        logger.debug(f"Check existence failed (proceeding): {e}")
 
                 logger.info(f"📅 Processing {date.strftime('%Y-%m-%d')}")
 

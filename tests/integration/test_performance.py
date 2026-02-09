@@ -14,16 +14,14 @@ from datetime import datetime, timezone
 import pytest
 
 from instruments_service.app.core.instruments_service import InstrumentsService
-
-# Import get_config from conftest (avoids circular import issues)
-from tests.conftest import get_config
+from instruments_service.config import instruments_config
 
 
 class TestPerformance:
     """Performance benchmarks for instrument generation."""
 
     @pytest.mark.skipif(
-        not get_config("GCP_PROJECT_ID")
+        not instruments_config.gcp_project_id
         and not os.path.exists(os.path.expanduser("~/.config/gcloud/application_default_credentials.json")),
         reason="Requires GCP credentials for performance testing",
     )
@@ -31,7 +29,7 @@ class TestPerformance:
     async def test_cefi_performance(self):
         """Test CEFI instrument generation performance (target: <45s)."""
         config = {
-            "project_id": get_config("GCP_PROJECT_ID", "central-element-323112"),
+            "project_id": instruments_config.gcp_project_id,
         }
         service = InstrumentsService(config)
         test_date = datetime(2025, 11, 10, tzinfo=timezone.utc)
@@ -56,7 +54,7 @@ class TestPerformance:
         assert instruments_count > 0, "No CEFI instruments generated"
 
     @pytest.mark.skipif(
-        not get_config("GCP_PROJECT_ID")
+        not instruments_config.gcp_project_id
         and not os.path.exists(os.path.expanduser("~/.config/gcloud/application_default_credentials.json")),
         reason="Requires GCP credentials for performance testing",
     )
@@ -64,7 +62,7 @@ class TestPerformance:
     async def test_tradfi_performance(self):
         """Test TRADFI instrument generation performance (target: <30s)."""
         config = {
-            "project_id": get_config("GCP_PROJECT_ID", "central-element-323112"),
+            "project_id": instruments_config.gcp_project_id,
         }
         service = InstrumentsService(config)
         test_date = datetime(2025, 11, 10, tzinfo=timezone.utc)
@@ -89,7 +87,7 @@ class TestPerformance:
         assert instruments_count > 0, "No TRADFI instruments generated"
 
     @pytest.mark.skipif(
-        not get_config("GCP_PROJECT_ID")
+        not instruments_config.gcp_project_id
         and not os.path.exists(os.path.expanduser("~/.config/gcloud/application_default_credentials.json")),
         reason="Requires GCP credentials for performance testing",
     )
@@ -102,7 +100,7 @@ class TestPerformance:
         The 180s target accounts for cold-start scenarios with API fallbacks.
         """
         config = {
-            "project_id": get_config("GCP_PROJECT_ID", "central-element-323112"),
+            "project_id": instruments_config.gcp_project_id,
         }
         service = InstrumentsService(config)
         test_date = datetime(2025, 11, 10, tzinfo=timezone.utc)
@@ -127,7 +125,7 @@ class TestPerformance:
         assert instruments_count > 0, "No DEFI instruments generated"
 
     @pytest.mark.skipif(
-        not get_config("GCP_PROJECT_ID")
+        not instruments_config.gcp_project_id
         and not os.path.exists(os.path.expanduser("~/.config/gcloud/application_default_credentials.json")),
         reason="Requires GCP credentials for performance testing",
     )
@@ -143,7 +141,7 @@ class TestPerformance:
         With some parallelism, total is usually <150s.
         """
         config = {
-            "project_id": get_config("GCP_PROJECT_ID", "central-element-323112"),
+            "project_id": instruments_config.gcp_project_id,
         }
         service = InstrumentsService(config)
         test_date = datetime(2025, 11, 10, tzinfo=timezone.utc)

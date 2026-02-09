@@ -24,7 +24,12 @@ import databento as db
 import exchange_calendars as xcals
 import pandas as pd
 from databento.common.error import BentoClientError
-from unified_cloud_services import DatabentoBaseClient, DatabentoClientConfig, get_config
+from unified_cloud_services import (
+    DatabentoBaseClient,
+    DatabentoClientConfig,
+    clear_databento_api_key_cache,
+    clear_databento_client_cache,
+)
 
 from instruments_service.config import UnifiedInstrumentConfig, instruments_config
 
@@ -48,8 +53,6 @@ _EXCHANGE_CALENDARS_CACHE: Dict[str, Any] = {}
 def clear_databento_cache():
     """Clear module-level cache (useful for testing or credential rotation)"""
     global _UNIFIED_CONFIG_CACHE, _EXCHANGE_CALENDARS_CACHE
-    from unified_cloud_services import clear_databento_api_key_cache, clear_databento_client_cache
-
     clear_databento_api_key_cache()
     clear_databento_client_cache()
     _UNIFIED_CONFIG_CACHE = None
@@ -291,7 +294,7 @@ class DatabentoAdapter:
 
         # Fetch instruments for each (dataset, stype_in) group
         # Use BATCH API if configured (re-downloads within 30 days are FREE!)
-        use_batch_api = get_config("DATABENTO_USE_BATCH_API", "true").lower() == "true"
+        use_batch_api = instruments_config.databento_use_batch_api
 
         all_instruments = {}
         for (
@@ -1257,7 +1260,7 @@ class DatabentoAdapter:
                                 result = str(value)
                                 if result and result != "None":
                                     return result
-                            except Exception:
+                            except (TypeError, ValueError):
                                 pass
                 elif isinstance(resolved, list):
                     # Response is a list of symbols
@@ -1343,53 +1346,13 @@ class DatabentoAdapter:
         else:
             instrument_type = "EQUITY"  # Default
 
-        # Override: Known ETFs that Databento returns as STK (Stock)
+        # Override: Known ETFs that Databento returns as STK (Stock) - from UnifiedInstrumentConfig
         # SPY, QQQ, IVV, etc. are ETFs but security_type="STK" from Databento
-        KNOWN_ETFS = {
-            "SPY",
-            "QQQ",
-            "IVV",
-            "VOO",
-            "VTI",
-            "DIA",
-            "IWM",
-            "EEM",
-            "VEA",
-            "VWO",
-            "GLD",
-            "SLV",
-            "USO",
-            "UNG",
-            "TLT",
-            "IEF",
-            "SHY",
-            "LQD",
-            "HYG",
-            "JNK",
-            "XLF",
-            "XLE",
-            "XLK",
-            "XLV",
-            "XLI",
-            "XLY",
-            "XLP",
-            "XLB",
-            "XLU",
-            "XLRE",
-            "VNQ",
-            "IBB",
-            "SMH",
-            "IBIT",
-            "FBTC",
-            "ARKB",
-            "GBTC",
-            "BITO",
-        }
         # Check if symbol (without -USD suffix) is a known ETF
         symbol_clean = asset_raw.replace("-USD", "").upper() if asset_raw else ""
         if not symbol_clean and exchange_raw_symbol:
             symbol_clean = exchange_raw_symbol.replace("-USD", "").upper()
-        if symbol_clean in KNOWN_ETFS:
+        if symbol_clean in unified_config.KNOWN_ETFS:
             instrument_type = "ETF"
             logger.debug(f"Overriding {symbol_clean} from STK to ETF (known ETF)")
 

@@ -15,6 +15,7 @@ import requests
 from unified_cloud_services import handle_api_errors
 
 from instruments_service.app.venues.onchain_perps.base_onchain_perp_adapter import BaseOnchainPerpAdapter
+from instruments_service.config import instruments_config
 
 logger = logging.getLogger(__name__)
 
@@ -76,8 +77,6 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
             api_key: Optional API key (not used by Hyperliquid but required by base class)
             project_id: GCP project ID for Secret Manager
         """
-        from instruments_service.config import instruments_config
-
         api_url = api_base_url or instruments_config.hyperliquid_api_url
         super().__init__(venue="HYPERLIQUID", chain=chain, api_url=api_url, api_key=api_key, project_id=project_id)
         self.api_base_url = api_url

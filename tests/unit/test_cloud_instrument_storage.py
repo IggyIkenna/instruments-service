@@ -432,11 +432,11 @@ class TestCloudInstrumentStorage:
         # Verify we have 3 venue folders
         assert len(uploads) == 3
 
-        # Verify the paths contain venue folders
+        # Verify the paths contain venue folders (key=value format: venue=VENUE)
         paths = [u["gcs_path"] for u in uploads]
-        assert any("venue-BINANCE-FUTURES" in p for p in paths)
-        assert any("venue-DERIBIT" in p for p in paths)
-        assert any("venue-OKX" in p for p in paths)
+        assert any("venue=BINANCE-FUTURES" in p for p in paths)
+        assert any("venue=DERIBIT" in p for p in paths)
+        assert any("venue=OKX" in p for p in paths)
 
     def test_store_instruments_venue_path_format(self, storage, mock_cloud_service):
         """Test that GCS path follows by-venue folder structure."""
@@ -457,10 +457,10 @@ class TestCloudInstrumentStorage:
         call_args = storage._mock_category_service.upload_to_gcs_batch.call_args
         uploads = call_args[0][0]
 
-        # Verify path format: instrument_availability/by_date/day=YYYY-MM-DD/venue-{VENUE}/instruments.parquet
+        # Verify path format: instrument_availability/by_date/day=YYYY-MM-DD/venue={VENUE}/instruments.parquet
         path = uploads[0]["gcs_path"]
         assert "instrument_availability/by_date/day=2024-01-01" in path
-        assert "venue-TEST-VENUE" in path
+        assert "venue=TEST-VENUE" in path
         assert "instruments.parquet" in path
 
     def test_store_instruments_venue_with_special_chars(self, storage, mock_cloud_service):
@@ -484,4 +484,4 @@ class TestCloudInstrumentStorage:
 
         # Verify venue folder is properly sanitized
         path = uploads[0]["gcs_path"]
-        assert "venue-UNISWAPV3-ETHEREUM" in path
+        assert "venue=UNISWAPV3-ETHEREUM" in path

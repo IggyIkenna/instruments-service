@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
 
 from instruments_service.cli.base_handler import ModeHandler
 from instruments_service.config import instruments_config
@@ -135,8 +136,6 @@ class CorporateActionsHandler(ModeHandler):
             List of ticker symbols (e.g., ['AAPL', 'MSFT', ...])
         """
         try:
-            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
-
             bucket_name = instruments_config.gcs_bucket_tradfi or _get_tradfi_bucket()
 
             # Create cloud-agnostic service
@@ -171,15 +170,8 @@ class CorporateActionsHandler(ModeHandler):
                     return tickers
                 logger.warning(f"⚠️ No equities found for {reference_date}")
 
-            # Try known good dates that have equities (2024-07-01 verified to have 596 equities)
-            known_good_dates = [
-                "2024-07-01",  # Verified: 596 equities
-                "2024-06-01",
-                "2024-05-01",
-                "2023-05-23",  # Benchmark date
-            ]
-
-            for date_str in known_good_dates:
+            # Try known good dates that have equities (from config)
+            for date_str in instruments_config.corporate_actions_known_good_dates:
                 gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
                 tickers = try_load_tickers(gcs_path)
                 if tickers:

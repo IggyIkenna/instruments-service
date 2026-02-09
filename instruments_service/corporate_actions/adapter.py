@@ -511,7 +511,7 @@ class CorporateActionsAdapter:
                     if "Earnings Date" in calendar.index:
                         calendar.loc["Earnings Date"]
                         # This is typically future dates, not historical
-            except Exception:
+            except (KeyError, AttributeError, TypeError):
                 pass
 
             # Get historical earnings from earnings_history or quarterly_earnings
