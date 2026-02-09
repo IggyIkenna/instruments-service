@@ -145,11 +145,11 @@ if [ "$RUN_LINT" = true ] && [ "$AUTO_FIX" = true ]; then
 
     # Auto-format with ruff format
     echo "Running: ruff format $SOURCE_DIRS"
-    ruff format $SOURCE_DIRS || true
+    ruff format $SOURCE_DIRS
 
     # Auto-fix with ruff check --fix
     echo "Running: ruff check --fix $SOURCE_DIRS"
-    ruff check --fix $SOURCE_DIRS || true
+    ruff check --fix $SOURCE_DIRS
 
     echo -e "${GREEN}✅ Auto-fix complete${NC}"
 fi
