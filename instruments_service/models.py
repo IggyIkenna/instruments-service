@@ -289,6 +289,13 @@ class InstrumentDefinition(BaseModel):
         "(e.g., day after Thanksgiving, Christmas Eve). None on normal trading days.",
     )
 
+    # UTC midnight spanning tag (for CME/ICE sessions that span midnight)
+    session_date_tag: Optional[str] = Field(
+        default=None,
+        description="Tag for UTC midnight spanning sessions: 'close_date' (primary file with full session), "
+        "'open_date' (duplicate entry for ticks on previous UTC date). Only populated for CME/ICE.",
+    )
+
     # Note: validation_warnings removed to avoid circular reference issues
 
     @field_validator("instrument_key")
