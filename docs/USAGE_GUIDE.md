@@ -22,7 +22,7 @@ from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
 service = StandardizedDomainCloudService(
     domain='market_data',
     cloud_target=CloudTarget(
-        project_id='central-element-323112',
+        project_id='{project_id}',  # Replace with actual project ID
         gcs_bucket='market-data-tick',
         bigquery_dataset='market_data_hft'
     )
@@ -30,7 +30,7 @@ service = StandardizedDomainCloudService(
 
 # Download instruments for a specific date
 instruments_df = service.download_from_gcs(
-    gcs_path='instrument_availability/by_date/day-2023-05-23/instruments.parquet',
+    gcs_path='instrument_availability/by_date/day=2023-05-23/instruments.parquet',
     format='parquet'
 )
 ```
@@ -126,7 +126,7 @@ from instruments_service.config import VenueMapping
 
 async def generate_batch(start_date: str, end_date: str):
     config = {
-        'project_id': 'central-element-323112',
+        'project_id': '{project_id}',  # Replace {project_id} with actual project ID
         'gcs_bucket': 'instruments-store',
         'bigquery_dataset': 'instruments'
     }
@@ -189,7 +189,7 @@ from instruments_service.app.core.instruments_service import InstrumentsService
 
 # Initialize orchestration service
 config = {
-    'project_id': 'central-element-323112',
+    'project_id': '{project_id}',  # Replace with actual project ID
     'enable_ccxt_integration': True,
     'enable_metadata_caching': True
 }
@@ -229,7 +229,7 @@ from instruments_service.config import VenueMapping
 
 # Initialize processing service (uses Secret Manager for API key)
 config = {
-    'project_id': 'central-element-323112',
+    'project_id': '{project_id}',  # Replace with actual project ID
     'enable_ccxt_integration': True
 }
 processing_service = InstrumentProcessingService(config)
@@ -258,7 +258,7 @@ from instruments_service.clients.instruments_client import InstrumentsClient
 
 # Initialize client
 client = InstrumentsClient(
-    project_id='central-element-323112',
+    project_id='{project_id}',  # Replace with actual project ID
     bucket_name='market-data-tick'
 )
 

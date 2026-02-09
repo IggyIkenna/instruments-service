@@ -73,7 +73,7 @@ Services that depend on instruments-service output:
 
 **Check Path:**
 ```
-gs://instruments-store-{category}-{project_id}/instrument_availability/by_date/day-{date}/instruments.parquet
+gs://instruments-store-{category}-{project_id}/instrument_availability/by_date/day={date}/instruments.parquet
 ```
 
 ### 2. strategy-service
@@ -82,7 +82,7 @@ gs://instruments-store-{category}-{project_id}/instrument_availability/by_date/d
 
 **Check Path:**
 ```
-gs://instruments-store-{category}-{project_id}/instrument_availability/by_date/day-{date}/instruments.parquet
+gs://instruments-store-{category}-{project_id}/instrument_availability/by_date/day={date}/instruments.parquet
 ```
 
 ### 3. execution-services
@@ -91,7 +91,7 @@ gs://instruments-store-{category}-{project_id}/instrument_availability/by_date/d
 
 **Check Path:**
 ```
-gs://instruments-store-{category}-{project_id}/instrument_availability/by_date/day-{date}/instruments.parquet
+gs://instruments-store-{category}-{project_id}/instrument_availability/by_date/day={date}/instruments.parquet
 ```
 
 ## Dependency Check Implementation

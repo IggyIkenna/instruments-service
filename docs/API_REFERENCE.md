@@ -15,7 +15,7 @@ Initialize the service.
 
 **Parameters:**
 - `config`: Configuration dictionary
-  - `project_id` (str, optional): GCP project ID (default: 'central-element-323112')
+  - `project_id` (str, optional): GCP project ID (default: '{project_id}' - replace with actual project ID)
   - `tardis_api_key` (str, optional): Tardis API key (if not provided, uses Secret Manager)
   - `enable_ccxt_integration` (bool, optional): Enable CCXT enrichment (default: True)
   - `enable_metadata_caching` (bool, optional): Enable metadata caching (default: True)
@@ -116,7 +116,7 @@ Initialize the orchestration service.
 
 **Parameters:**
 - `config`: Configuration dictionary
-  - `project_id` (str, optional): GCP project ID (default: 'central-element-323112')
+  - `project_id` (str, optional): GCP project ID (default: '{project_id}' - replace with actual project ID)
   - `enable_ccxt_integration` (bool, optional): Enable CCXT enrichment (default: True)
   - `enable_metadata_caching` (bool, optional): Enable metadata caching (default: True)
   - `max_batch_size` (int, optional): Maximum batch size (default: 1000)
@@ -220,7 +220,7 @@ Validate a DataFrame of instruments.
 
 Convenience client for downstream integration (downstream should prefer unified-cloud-services directly).
 
-### `__init__(project_id: str = 'central-element-323112', bucket_name: str = 'market-data-tick')`
+### `__init__(project_id: str = '{project_id}', bucket_name: str = 'market-data-tick')`  # Replace {project_id} with actual project ID
 
 Initialize client.
 
