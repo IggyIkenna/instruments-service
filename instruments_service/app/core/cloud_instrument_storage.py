@@ -6,7 +6,6 @@ Uses unified-cloud-services directly for cloud operations.
 """
 
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -15,7 +14,6 @@ from unified_cloud_services import (
     ParquetSchemaEnforcer,
     determine_market_category,
     get_bucket_for_category,
-    get_config,
     handle_storage_errors,
 )
 from unified_cloud_services.domain import validate_timestamp_date_alignment
@@ -68,34 +66,20 @@ class CloudInstrumentStorage:
         # Detect test environment and use test bucket if applicable
         if cloud_target is None:
             # Check if we're in test mode (pytest or test environment)
-            # Priority: ENVIRONMENT=test > pytest detection > default to prod
-            environment = get_config("ENVIRONMENT", "development").lower()
-            test_bucket = get_config("INSTRUMENTS_GCS_BUCKET_TEST", "")
-            # NOTE: This default is only used when no category is specified.
-            # Production flow should always use category-specific buckets via get_bucket_for_category()
-            prod_bucket = get_config("INSTRUMENTS_GCS_BUCKET_CEFI", instruments_config.get_bucket_for_category("cefi"))
-
-            # Only use test bucket if explicitly in test environment
-            is_test = (
-                environment in ["test", "testing"]  # Explicit test environment
-                or "pytest" in os.environ.get("_", "")
-                or get_config("PYTEST_CURRENT_TEST", "") != ""
-            )
+            is_test = instruments_config.is_test_environment() or instruments_config.is_pytest()
 
             # Use test bucket if in test mode, otherwise use prod bucket
             if is_test:
-                bucket_name = test_bucket or "instruments-store-test"
+                bucket_name = instruments_config.gcs_bucket_test or "instruments-store-test"
                 logger.info(f"🧪 Test mode detected: Using test bucket {bucket_name}")
             else:
-                bucket_name = prod_bucket
+                bucket_name = instruments_config.get_bucket_for_category("cefi")
 
             cloud_target = CloudTarget(
-                project_id=get_config("GCP_PROJECT_ID", instruments_config.gcp_project_id),
+                project_id=instruments_config.gcp_project_id,
                 gcs_bucket=bucket_name,
-                bigquery_dataset=get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
-                bigquery_location=get_config(
-                    "BIGQUERY_LOCATION", "asia-northeast1"
-                ),  # Default to asia-northeast1 per .env
+                bigquery_dataset=instruments_config.bigquery_dataset,
+                bigquery_location=instruments_config.bigquery_location,
             )
 
         # Create instruments service using direct instantiation (canonical pattern)
@@ -255,12 +239,7 @@ class CloudInstrumentStorage:
             all_successful = True
 
             # Detect test mode for bucket selection
-            environment = get_config("ENVIRONMENT", "development").lower()
-            is_test = (
-                environment in ["test", "testing"]
-                or "pytest" in os.environ.get("_", "")
-                or get_config("PYTEST_CURRENT_TEST", "") != ""
-            )
+            is_test = instruments_config.is_test_environment() or instruments_config.is_pytest()
 
             # Group uploads by bucket to use batch upload per bucket
             # (each bucket needs its own cloud service)

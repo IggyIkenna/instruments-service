@@ -434,21 +434,23 @@ This is where the connection to `unified-cloud-services` happens.
 #### 7.1 Initialization (Lines 41-100)
 
 ```python
+from instruments_service.config import instruments_config
+
 class CloudInstrumentStorage:
     def __init__(self, cloud_target: CloudTarget = None):
         # Import unified-cloud-services
         from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
 
-        # Detect test environment
-        environment = get_config("ENVIRONMENT", "development").lower()
+        # Detect test environment (via instruments_config helpers)
+        is_test = instruments_config.is_test_environment() or instruments_config.is_pytest()
 
         # Configure CloudTarget
         if cloud_target is None:
             cloud_target = CloudTarget(
-                project_id=get_config("GCP_PROJECT_ID", "{project_id}"),  # Replace {project_id} with actual project ID
-                gcs_bucket=get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
-                bigquery_dataset=get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
-                bigquery_location=get_config("BIGQUERY_LOCATION", "asia-northeast1"),
+                project_id=instruments_config.gcp_project_id,
+                gcs_bucket=instruments_config.get_bucket_for_category("cefi"),
+                bigquery_dataset=instruments_config.bigquery_dataset,
+                bigquery_location=instruments_config.bigquery_location,
             )
 
         # Create domain cloud service
@@ -1075,10 +1077,10 @@ is_test = (
 ### Test Bucket Usage
 
 ```python
-if is_test:
-    bucket = get_config("INSTRUMENTS_GCS_BUCKET_TEST", "instruments-store-test")
+if instruments_config.is_test_environment() or instruments_config.is_pytest():
+    bucket = instruments_config.gcs_bucket_test
 else:
-    bucket = get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store")
+    bucket = instruments_config.get_bucket_for_category("cefi")
 ```
 
 ---

@@ -116,15 +116,8 @@ class CorporateActionsBackfillHandler(ModeHandler):
                 except Exception:
                     return []
 
-            # Try known good dates
-            known_good_dates = [
-                "2024-07-01",  # Verified: 596 equities
-                "2024-06-01",
-                "2024-05-01",
-                "2023-05-23",
-            ]
-
-            for date_str in known_good_dates:
+            # Try known good dates (from config)
+            for date_str in instruments_config.corporate_actions_known_good_dates:
                 gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
                 tickers = try_load_tickers(gcs_path)
                 if tickers:

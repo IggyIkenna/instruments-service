@@ -231,18 +231,18 @@ class CurveRPCAdapter(BaseDefiAdapter):
                     if pool_addr == "0x0000000000000000000000000000000000000000":
                         continue
 
-                    # Get pool name
+                    # Get pool name (Web3 contract call may fail for invalid/custom pools)
                     try:
                         pool_name = metaregistry.functions.get_pool_name(pool_addr).call()
-                    except Exception:
+                    except (ValueError, TypeError, AttributeError):
                         pool_name = f"Curve Pool {pool_addr[:10]}"
 
-                    # Get pool coins
+                    # Get pool coins (Web3 contract call may fail for invalid/custom pools)
                     try:
                         coins = metaregistry.functions.get_coins(pool_addr).call()
                         # Filter out zero addresses
                         coins = [c for c in coins if c != "0x0000000000000000000000000000000000000000"]
-                    except Exception:
+                    except (ValueError, TypeError, AttributeError):
                         coins = []
 
                     if not coins and not pool_name:

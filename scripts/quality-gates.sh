@@ -187,7 +187,7 @@ if [ "$RUN_TESTS" = true ]; then
     # Check if pytest is installed
     if ! python3 -c "import pytest" &> /dev/null; then
         echo -e "${YELLOW}Installing pytest...${NC}"
-        pip install pytest pytest-asyncio pytest-mock --quiet
+        pip install pytest pytest-asyncio pytest-mock pytest-cov --quiet
     fi
 
     # Set environment variables for smoke tests

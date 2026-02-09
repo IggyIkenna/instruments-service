@@ -58,8 +58,6 @@ import json
 from typing import Optional
 
 import pytest
-from google.cloud import storage
-from google.oauth2 import service_account
 from unified_cloud_services import CloudTarget, get_secret_with_fallback
 
 from instruments_service.config import instruments_config
@@ -149,18 +147,17 @@ def ensure_test_bucket_exists(
     Ensure test bucket exists and service account has permissions.
 
     Creates bucket if it doesn't exist and grants storage.objectAdmin role
-    to the service account.
-
-    Returns:
-        True if bucket exists and is accessible, False otherwise
+    to the service account. Uses get_storage_client for cloud-agnostic design.
+    Bucket creation/IAM require GCP-specific APIs (lazy imported when needed).
     """
     try:
-        # Load credentials
-        credentials = service_account.Credentials.from_service_account_file(credentials_file)
-        storage_client = storage.Client(project=project_id, credentials=credentials)
+        # Lazy import: bucket creation/IAM are GCP-specific, not in cloud-agnostic abstraction
+        from google.cloud import storage
+        from google.oauth2 import service_account
 
-        # Check if bucket exists
-        bucket = storage_client.bucket(bucket_name)
+        credentials = service_account.Credentials.from_service_account_file(credentials_file)
+        gcs_client = storage.Client(project=project_id, credentials=credentials)
+        bucket = gcs_client.bucket(bucket_name)
         if bucket.exists():
             # Bucket exists, verify we can access it
             try:

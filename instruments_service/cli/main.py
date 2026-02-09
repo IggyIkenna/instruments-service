@@ -15,28 +15,27 @@ import sys
 from pathlib import Path
 from typing import Any, Dict
 
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None  # type: ignore
+
 
 # CRITICAL: Load .env file explicitly before any other imports
 def _load_env_early():
-    try:
-        from dotenv import load_dotenv
-
-        # Find .env file in current directory or project root
-        env_path = Path(".env")
-        if not env_path.exists():
-            # Try parent directory once
-            env_path = Path(__file__).parent.parent.parent / ".env"
-
-        if env_path.exists():
-            load_dotenv(dotenv_path=env_path, override=True)
-    except ImportError:
-        pass
+    if load_dotenv is None:
+        return
+    env_path = Path(".env")
+    if not env_path.exists():
+        env_path = Path(__file__).parent.parent.parent / ".env"
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=True)
 
 
 _load_env_early()
 
 # Setup structured JSON logging for Cloud Run visibility with resource monitoring
-from unified_cloud_services import setup_cloud_logging
+from unified_cloud_services import get_storage_client, setup_cloud_logging
 from unified_cloud_services.core.signal_handler import GracefulShutdownHandler
 
 setup_cloud_logging(
@@ -83,8 +82,6 @@ def validate_startup(config) -> bool:
         True if validation passes, False otherwise
     """
     try:
-        from unified_cloud_services import get_storage_client
-
         logger.info("🔍 Validating cloud connectivity and bucket access...")
 
         # Check storage connection

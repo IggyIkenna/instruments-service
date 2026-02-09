@@ -9,6 +9,7 @@ This file contains TradFiInstrument dataclass for static TradFi instrument confi
 """
 
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -1807,6 +1808,33 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
         description="ClickUp User ID for Daniel",
     )
 
+    # =========================================================================
+    # DEPLOYMENT CONTEXT (set by VM startup script for race-condition detection)
+    # =========================================================================
+    deployment_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("DEPLOYMENT_ID"),
+        description="Deployment ID from VM startup",
+    )
+    shard_launched_at: str = Field(
+        default="",
+        validation_alias=AliasChoices("SHARD_LAUNCHED_AT"),
+        description="Shard launch timestamp",
+    )
+    databento_use_batch_api: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("DATABENTO_USE_BATCH_API"),
+        description="Use Databento batch API",
+    )
+
+    # =========================================================================
+    # CORPORATE ACTIONS - Known good dates for fallback ticker loading
+    # =========================================================================
+    corporate_actions_known_good_dates: List[str] = Field(
+        default=["2024-07-01", "2024-06-01", "2024-05-01", "2023-05-23"],
+        description="Fallback dates when loading equity tickers from GCS",
+    )
+
     def get_cloud_target(self, category: str | None = None) -> CloudTarget:
         """
         Get CloudTarget for instruments service.
@@ -1841,6 +1869,10 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
     def is_test_environment(self) -> bool:
         """Check if the current environment is a test environment."""
         return self.environment.lower() in ["test", "testing"]
+
+    def is_pytest(self) -> bool:
+        """Check if running under pytest (for test-mode detection)."""
+        return os.environ.get("PYTEST_CURRENT_TEST", "") != "" or "pytest" in os.environ.get("_", "")
 
     # Properties for uppercase bucket names (compatibility with unified-cloud-services)
     @property

@@ -29,6 +29,10 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from unified_cloud_services import CloudTarget, StandardizedDomainCloudService, get_secret
+
+from instruments_service.config import instruments_config
+
 logger = logging.getLogger(__name__)
 
 
@@ -122,8 +126,6 @@ class DependencyChecker:
         Args:
             project_id: GCP project ID (default from config)
         """
-        from instruments_service.config import instruments_config
-
         self.project_id = project_id or instruments_config.gcp_project_id
 
     def get_upstream_dependencies(self) -> List[str]:
@@ -191,8 +193,6 @@ class DependencyChecker:
     def _check_api_key(self, api_name: str, secret_name: str) -> DependencyStatus:
         """Check if an API key is available in Secret Manager."""
         try:
-            from unified_cloud_services import get_secret
-
             secret = get_secret(secret_name, project_id=self.project_id)
             if secret:
                 return DependencyStatus(
@@ -254,8 +254,6 @@ class DependencyChecker:
             True if output file exists
         """
         try:
-            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
-
             bucket_name = self.OUTPUT_BUCKETS[category].format(project_id=self.project_id)
             blob_path = self.OUTPUT_PATH_TEMPLATE.format(date=date)
 

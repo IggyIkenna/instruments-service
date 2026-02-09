@@ -134,11 +134,10 @@ unified-trading-instruments-{category}-{account_id}
 ## Singleton Pattern
 
 ```python
-from instruments_service.config import get_config
+from instruments_service.config import instruments_config
 
-config = get_config()
-project_id = config.gcp_project_id
-bucket = config.instruments_gcs_bucket_cefi
+project_id = instruments_config.gcp_project_id
+bucket = instruments_config.get_bucket_for_category("cefi")
 ```
 
 ## Example .env File

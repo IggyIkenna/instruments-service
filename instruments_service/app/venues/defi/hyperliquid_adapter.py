@@ -15,6 +15,7 @@ import requests
 from unified_cloud_services import handle_api_errors
 
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
+from instruments_service.config import instruments_config
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +79,6 @@ class HyperliquidAdapter(BaseDefiAdapter):
         """
         super().__init__(chain=chain, api_key=api_key, project_id=project_id)
         self.venue = "HYPERLIQUID"
-        from instruments_service.config import instruments_config
-
         self.api_base_url = api_base_url or instruments_config.hyperliquid_api_url
         self.mvp_only = mvp_only
         # Use provided base_currency_list or empty set (no filtering)

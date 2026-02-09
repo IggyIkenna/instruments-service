@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
 
 from instruments_service.cli.base_handler import ModeHandler
 from instruments_service.config import SP500_TICKERS, corporate_actions_start_date, instruments_config
@@ -125,8 +126,6 @@ class CorporateActionsProductionHandler(ModeHandler):
             List of ticker symbols
         """
         try:
-            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
-
             bucket_name = instruments_config.gcs_bucket_tradfi or instruments_config.get_bucket_for_category("tradfi")
 
             # Create cloud-agnostic service
@@ -136,10 +135,8 @@ class CorporateActionsProductionHandler(ModeHandler):
             )
             service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
 
-            # Try known good dates
-            known_good_dates = ["2024-07-01", "2024-06-01", "2024-05-01", "2023-05-23"]
-
-            for date_str in known_good_dates:
+            # Try known good dates (from config)
+            for date_str in instruments_config.corporate_actions_known_good_dates:
                 gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
 
                 try:
