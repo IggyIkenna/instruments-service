@@ -39,7 +39,7 @@ _EXCHANGE_CALENDAR_MAPPING = {
     "NASDAQ": "XNAS",  # NASDAQ Stock Market
     "NYSE": "XNYS",  # New York Stock Exchange
     "CME": "CMES",  # CME (uses same calendar as NYSE with some variations)
-    "CBOE": "XNYS",  # CBOE uses NYSE calendar for equity products
+    "CBOE": "XCBF",  # CBOE Options Exchange (use CBOE-specific calendar for VIX)
     "ICE": "XNYS",  # ICE US uses NYSE calendar
 }
 _EXCHANGE_CALENDARS_CACHE: Dict[str, Any] = {}
