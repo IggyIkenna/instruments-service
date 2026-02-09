@@ -174,48 +174,51 @@ class FluidAdapter(BaseDefiAdapter):
 
         Returns curated list of high-liquidity Fluid vaults.
         """
-        # Major Fluid vaults on Ethereum
-        # Fluid uses a vault-based architecture for lending
+        # Major Fluid (Instadapp) vaults on Ethereum mainnet
+        # Addresses from VaultResolver.getAllVaultsAddresses() + constantsView()
+        # Source: on-chain enumeration via VaultResolver 0xA5C3E16523eeeDDcC34706b0E6bE88b4c6EA95cC
+        # Verified Feb 2026
+        # Note: 0xEeeeeEee... = native ETH (treated as WETH for our purposes)
         mvp_markets = [
             {
-                "collateral_asset": "WETH",
+                "collateral_asset": "ETH",
                 "borrow_asset": "USDC",
-                "vault_address": None,  # TODO: Add actual vault address
+                "vault_address": "0xeAbBfca72F8a8bf14C4ac59e69ECB2eB69F0811C",  # Vault #1
             },
             {
-                "collateral_asset": "WETH",
+                "collateral_asset": "ETH",
                 "borrow_asset": "USDT",
-                "vault_address": None,
+                "vault_address": "0xbEC491FeF7B4f666b270F9D5E5C3f443cBf20991",  # Vault #2
             },
             {
                 "collateral_asset": "WSTETH",
-                "borrow_asset": "WETH",
-                "vault_address": None,
+                "borrow_asset": "ETH",
+                "vault_address": "0xA0F83Fc5885cEBc0420ce7C7b139Adc80c4F4D91",  # Vault #3
             },
             {
                 "collateral_asset": "WSTETH",
                 "borrow_asset": "USDC",
-                "vault_address": None,
+                "vault_address": "0x51197586F6A9e2571868b6ffaef308f3bdfEd3aE",  # Vault #4
             },
             {
-                "collateral_asset": "WBTC",
-                "borrow_asset": "USDC",
-                "vault_address": None,
-            },
-            {
-                "collateral_asset": "WEETH",
-                "borrow_asset": "WETH",
-                "vault_address": None,
+                "collateral_asset": "WSTETH",
+                "borrow_asset": "USDT",
+                "vault_address": "0x1c2bB46f36561bc4F05A94BD50916496aa501078",  # Vault #5
             },
             {
                 "collateral_asset": "WEETH",
-                "borrow_asset": "USDC",
-                "vault_address": None,
+                "borrow_asset": "WSTETH",
+                "vault_address": "0x40D9b8417E6E1DcD358f04E3328bCEd061018A82",  # Vault #6
             },
             {
-                "collateral_asset": "CBETH",
-                "borrow_asset": "WETH",
-                "vault_address": None,
+                "collateral_asset": "SUSDE",
+                "borrow_asset": "USDC",
+                "vault_address": "0x4045720a33193b4Fe66c94DFbc8D37B0b4D9B469",  # Vault #7
+            },
+            {
+                "collateral_asset": "SUSDE",
+                "borrow_asset": "USDT",
+                "vault_address": "0xBFADEA65591235f38809076e14803Ac84AcF3F97",  # Vault #8
             },
         ]
 
