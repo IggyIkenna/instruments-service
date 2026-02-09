@@ -115,6 +115,11 @@ class TestCloudAgnosticPaths:
                 assert "day-2024-01-15" not in gcs_path, f"Path should not use day- format: {gcs_path}"
                 assert "day=2024-01-15" in gcs_path, f"Path should contain day=2024-01-15: {gcs_path}"
 
+                # Verify venue path format uses venue={venue} not venue-{venue}
+                if "venue" in gcs_path:
+                    assert "venue=" in gcs_path, f"Path should use venue= format: {gcs_path}"
+                    assert "venue-" not in gcs_path, f"Path should not use venue- format: {gcs_path}"
+
     def test_dependency_checker_path_format(self, mock_project_id):
         """Test that DependencyChecker uses day={date} format."""
         # Patch at the point where StandardizedDomainCloudService is imported (inside method)
@@ -180,18 +185,20 @@ class TestCloudAgnosticPaths:
         """Test that instruments-service code doesn't directly import get_gcs_client from unified_cloud_services."""
         from pathlib import Path
 
-        # Find all Python files in the service (NOT in deps/)
-        service_root = Path(__file__).parent.parent.parent
-        python_files = list(service_root.rglob("*.py"))
+        # Use package path - invariant across environments. Path(__file__) breaks in Cloud Build
+        # where workspace root can include sibling /workspace/unified-cloud-services and
+        # /workspace/unified-trading-deployment-v2, causing false violations from dependency code.
+        import instruments_service
 
-        # Exclude test files, __pycache__, and deps/ (unified-cloud-services code)
+        source_dir = Path(instruments_service.__file__).parent.resolve()
+
+        if not source_dir.exists():
+            pytest.skip("instruments_service package directory not found")
+
         python_files = [
             f
-            for f in python_files
-            if "test_" not in f.name
-            and "__pycache__" not in str(f)
-            and "tests/" not in str(f)
-            and "deps/" not in str(f)  # Don't check unified-cloud-services code
+            for f in source_dir.rglob("*.py")
+            if "__pycache__" not in str(f) and f.resolve().is_relative_to(source_dir)
         ]
 
         violations = []
@@ -258,3 +265,73 @@ class TestCloudAgnosticPaths:
                         assert "central-element-323112" not in bucket_cefi, (
                             f"Bucket should not contain hardcoded project ID: {bucket_cefi}"
                         )
+
+    def test_venue_path_format_uses_key_equals_value(self, mock_cloud_service, mock_cloud_target):
+        """Test that venue paths use venue={venue} format, not venue-{venue}."""
+        import pandas as pd
+
+        with (
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
+                return_value=mock_cloud_service,
+            ),
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.CloudTarget",
+                return_value=mock_cloud_target,
+            ),
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.determine_market_category",
+                return_value="CEFI",
+            ),
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.get_bucket_for_category",
+                return_value=f"instruments-store-cefi-{mock_cloud_target.project_id}",
+            ),
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.create_sampling_service",
+                return_value=Mock(),
+            ),
+            patch(
+                "unified_cloud_services.SchemaValidator",
+                return_value=Mock(validate_dataframe_schema=Mock(return_value=Mock(valid=True, errors=[]))),
+            ),
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.ParquetSchemaEnforcer",
+                return_value=Mock(validate_dataframe=Mock(return_value=Mock(valid=True, errors=[], warnings=[]))),
+            ),
+        ):
+            storage = CloudInstrumentStorage(cloud_target=mock_cloud_target)
+            storage.cloud_service = mock_cloud_service
+
+            # Create test data with venue
+            test_date = date(2024, 1, 15)
+            test_df = pd.DataFrame(
+                {
+                    "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                    "venue": ["TEST-VENUE"],
+                    "market_category": "CEFI",
+                    "available_from_datetime": pd.Timestamp("2024-01-15", tz="UTC"),
+                    "instrument_type": "SPOT_PAIR",
+                }
+            )
+
+            # Store instruments
+            storage.store_instruments(
+                instruments_df=test_df,
+                date=test_date,
+            )
+
+            # Verify upload was called
+            assert mock_cloud_service.upload_to_gcs_batch.called
+
+            # Get the call arguments
+            call_args = mock_cloud_service.upload_to_gcs_batch.call_args
+            uploads = call_args[0][0] if call_args[0] else call_args[1].get("uploads", [])
+
+            # Verify venue path format uses venue={venue} not venue-{venue}
+            for upload in uploads:
+                gcs_path = upload.get("gcs_path", "")
+                if "venue" in gcs_path:
+                    assert "venue=" in gcs_path, f"Path should use venue= format for BigQuery partitioning: {gcs_path}"
+                    assert "venue-TEST-VENUE" not in gcs_path, f"Path should not use venue- format: {gcs_path}"
+                    assert "venue=TEST-VENUE" in gcs_path, f"Path should contain venue=TEST-VENUE: {gcs_path}"
