@@ -36,10 +36,30 @@ steps:
         GITHUB_TOKEN=$(cat /workspace/github_token.txt)
         git clone https://x-access-token:$${GITHUB_TOKEN}@github.com/IggyIkenna/unified-trading-deployment-v2.git /workspace/unified-trading-deployment-v2
 
-  # Step 3: Run quality gates (lint + tests) - MUST PASS before build
+  # Step 3: Verify ruff version consistency (prevents quality gate failures)
+  - name: 'bash:5'
+    id: 'check-ruff-versions'
+    waitFor: ['-']  # Start immediately
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "=== Checking ruff version consistency ==="
+        if [ -f "scripts/check-ruff-versions.sh" ]; then
+          bash scripts/check-ruff-versions.sh || {
+            echo "❌ Ruff version mismatch detected!"
+            echo "Run locally: Update .pre-commit-config.yaml to match pyproject.toml"
+            exit 1
+          }
+        else
+          echo "⚠️  check-ruff-versions.sh not found, skipping version check"
+        fi
+
+  # Step 4: Run quality gates (lint + tests) - MUST PASS before build
   # Uses Python 3.13 to match local and GitHub Actions
   - name: 'python:3.13-slim'
     id: 'quality-gates'
+    waitFor: ['check-ruff-versions']  # Wait for version check to pass
     entrypoint: 'bash'
     args:
       - '-c'
@@ -140,7 +160,7 @@ steps:
         echo "✅ ALL QUALITY GATES PASSED - Proceeding to build"
         echo "======================================================================"
 
-  # Step 4: Build Docker image (only runs if quality-gates pass)
+  # Step 5: Build Docker image (only runs if quality-gates pass)
   - name: 'gcr.io/cloud-builders/docker'
     id: 'build'
     entrypoint: 'bash'
@@ -154,7 +174,7 @@ steps:
           -t asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service:latest \
           .
 
-  # Step 5: Push images to Artifact Registry
+  # Step 6: Push images to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     id: 'push'
     args:
@@ -162,7 +182,7 @@ steps:
       - '--all-tags'
       - 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service'
 
-  # Step 6: Cleanup token
+  # Step 7: Cleanup token
   - name: 'gcr.io/cloud-builders/gcloud'
     id: 'cleanup'
     entrypoint: 'bash'
