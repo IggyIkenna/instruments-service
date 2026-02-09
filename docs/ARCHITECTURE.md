@@ -247,7 +247,7 @@ gs://market-data-tick/instrument_availability/by_date/day-YYYY-MM-DD/instruments
 **Path Components**:
 - `instrument_availability`: Top-level prefix
 - `by_date`: Date-based partitioning
-- `day-YYYY-MM-DD`: Daily partitions (e.g., `day-2025-01-15`)
+- `day=YYYY-MM-DD`: Daily partitions (e.g., `day=2025-01-15`)
 - `instruments.parquet`: Parquet file with all instruments for that date
 
 ### BigQuery Table

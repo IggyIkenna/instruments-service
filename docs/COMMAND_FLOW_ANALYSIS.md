@@ -445,7 +445,7 @@ class CloudInstrumentStorage:
         # Configure CloudTarget
         if cloud_target is None:
             cloud_target = CloudTarget(
-                project_id=get_config("GCP_PROJECT_ID", "central-element-323112"),
+                project_id=get_config("GCP_PROJECT_ID", "{project_id}"),  # Replace {project_id} with actual project ID
                 gcs_bucket=get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
                 bigquery_dataset=get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
                 bigquery_location=get_config("BIGQUERY_LOCATION", "asia-northeast1"),
@@ -526,7 +526,7 @@ for category in categories:
     )
 
     # Upload to GCS
-    gcs_path = f"instrument_availability/by_date/day-{date_str}/instruments.parquet"
+    gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
     self.cloud_service.upload_to_gcs(
         data=category_df,
         gcs_path=gcs_path,
@@ -549,7 +549,7 @@ for category in categories:
 
 **Storage Paths**:
 
-- **GCS**: `gs://<category-bucket>/instrument_availability/by_date/day-2023-05-23/instruments.parquet`
+- **GCS**: `gs://<category-bucket>/instrument_availability/by_date/day=2023-05-23/instruments.parquet`
 - **BigQuery**: `<project>.<dataset>.instruments` (partitioned by timestamp)
 
 ---
@@ -973,7 +973,7 @@ unified_cloud_services/
 
 ```bash
 # GCP Configuration
-GCP_PROJECT_ID=central-element-323112
+GCP_PROJECT_ID={project_id}  # Replace with actual project ID
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
 
 # GCS Configuration

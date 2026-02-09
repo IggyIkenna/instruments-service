@@ -87,7 +87,7 @@ May 23rd, 2023 is used as the benchmark/litmus test date to verify the system is
 | **Bybit** | March 2018 | **Nov 2019** | Available from Tardis start |
 | **Deribit** | 2016 | **Nov 2019** | Options exchange |
 
-**Earliest CeFi data in GCS:** `day-2019-11-17`
+**Earliest CeFi data in GCS:** `day=2019-11-17`
 
 ### TradFi (via Databento)
 
@@ -100,7 +100,7 @@ May 23rd, 2023 is used as the benchmark/litmus test date to verify the system is
 | **Bitcoin ETFs (IBIT, etc.)** | **Jan 2024** | Spot Bitcoin ETFs approved Jan 10, 2024 |
 | **Bitcoin Futures ETF (BITO)** | Oct 2021+ | First futures-based BTC ETF |
 
-**Earliest TradFi data in GCS:** `day-2020-01-01`
+**Earliest TradFi data in GCS:** `day=2020-01-01`
 
 ### DeFi (via The Graph / Protocol SDKs)
 
@@ -117,7 +117,7 @@ May 23rd, 2023 is used as the benchmark/litmus test date to verify the system is
 | **Ethena (USDe)** | **2024** | Synthetic dollar |
 | **Morpho** | 2022 | Lending optimizer |
 
-**Earliest DeFi data in GCS:** `day-2020-12-18`
+**Earliest DeFi data in GCS:** `day=2020-12-18`
 
 ---
 
@@ -132,7 +132,7 @@ May 23rd, 2023 is used as the benchmark/litmus test date to verify the system is
 # - Compute Instance Admin (for VM deployment)
 
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
-export GCS_PROJECT_ID=central-element-323112
+export GCP_PROJECT_ID={project_id}  # Or AWS_PROJECT_ID for AWS deployments
 ```
 
 ### 2. API Keys (in Secret Manager)
@@ -162,9 +162,9 @@ pip install git+https://github.com/IggyIkenna/unified-cloud-services.git
 
 | Domain | Bucket | Path Pattern |
 |--------|--------|--------------|
-| **CeFi** | `gs://instruments-store-cefi-central-element-323112/` | `instrument_availability/by_date/day-{YYYY-MM-DD}/instruments.parquet` |
-| **TradFi** | `gs://instruments-store-tradfi-central-element-323112/` | `instrument_availability/by_date/day-{YYYY-MM-DD}/instruments.parquet` |
-| **DeFi** | `gs://instruments-store-defi-central-element-323112/` | `instrument_availability/by_date/day-{YYYY-MM-DD}/instruments.parquet` |
+| **CeFi** | `gs://instruments-store-cefi-{project_id}/` | `instrument_availability/by_date/day={YYYY-MM-DD}/instruments.parquet` |
+| **TradFi** | `gs://instruments-store-tradfi-{project_id}/` | `instrument_availability/by_date/day={YYYY-MM-DD}/instruments.parquet` |
+| **DeFi** | `gs://instruments-store-defi-{project_id}/` | `instrument_availability/by_date/day={YYYY-MM-DD}/instruments.parquet` |
 
 ### Expected File Sizes & Row Counts (Benchmarks)
 
@@ -339,7 +339,7 @@ Corporate actions (dividends, stock splits, earnings dates) are reference data f
 ### GCS Output Path
 
 ```
-gs://instruments-store-tradfi-central-element-323112/corporate_actions/
+gs://instruments-store-tradfi-{project_id}/corporate_actions/
 ├── dividends_20200101_20260125.parquet
 ├── splits_20200101_20260125.parquet
 └── earnings_20200101_20260125.parquet
@@ -416,7 +416,7 @@ gcloud compute instances create instruments-service-vm \
   --image-family=debian-11 \
   --image-project=debian-cloud \
   --boot-disk-size=50GB \
-  --service-account=instruments-service@central-element-323112.iam.gserviceaccount.com \
+  --service-account=instruments-service@{project_id}.iam.gserviceaccount.com \
   --scopes=cloud-platform
 ```
 
@@ -467,7 +467,7 @@ gcloud scheduler jobs create http instruments-daily-t1 \
   --location=asia-northeast1 \
   --schedule="0 9 * * *" \
   --time-zone="UTC" \
-  --uri="https://asia-northeast1-central-element-323112.cloudfunctions.net/instruments-t1" \
+  --uri="https://asia-northeast1-{project_id}.cloudfunctions.net/instruments-t1" \
   --http-method=POST \
   --message-body='{"mode": "instruments", "start_date": "yesterday"}'
 ```
@@ -490,13 +490,13 @@ crontab -e
 
 ```bash
 # List CeFi output files
-gsutil ls "gs://instruments-store-cefi-central-element-323112/instrument_availability/by_date/" | head -20
+gsutil ls "gs://instruments-store-cefi-{project_id}/instrument_availability/by_date/" | head -20
 
 # Check specific date
-gsutil cat "gs://instruments-store-cefi-central-element-323112/instrument_availability/by_date/day-2024-01-15/instruments.parquet" | head
+gsutil cat "gs://instruments-store-cefi-{project_id}/instrument_availability/by_date/day=2024-01-15/instruments.parquet" | head
 
 # Count files
-gsutil ls "gs://instruments-store-cefi-central-element-323112/instrument_availability/by_date/" | wc -l
+gsutil ls "gs://instruments-store-cefi-{project_id}/instrument_availability/by_date/" | wc -l
 ```
 
 ### Expected Output
@@ -515,14 +515,14 @@ After successful backfill:
 
 ```bash
 # Check specific date (2023-05-23 benchmark)
-gsutil ls gs://instruments-store-cefi-central-element-323112/instrument_availability/by_date/day-2023-05-23/
-gsutil ls gs://instruments-store-tradfi-central-element-323112/instrument_availability/by_date/day-2023-05-23/
-gsutil ls gs://instruments-store-defi-central-element-323112/instrument_availability/by_date/day-2023-05-23/
+gsutil ls gs://instruments-store-cefi-{project_id}/instrument_availability/by_date/day=2023-05-23/
+gsutil ls gs://instruments-store-tradfi-{project_id}/instrument_availability/by_date/day=2023-05-23/
+gsutil ls gs://instruments-store-defi-{project_id}/instrument_availability/by_date/day=2023-05-23/
 
 # Download and verify file sizes and row counts
-gsutil cp gs://instruments-store-cefi-central-element-323112/instrument_availability/by_date/day-2023-05-23/instruments.parquet /tmp/cefi.parquet
-gsutil cp gs://instruments-store-tradfi-central-element-323112/instrument_availability/by_date/day-2023-05-23/instruments.parquet /tmp/tradfi.parquet
-gsutil cp gs://instruments-store-defi-central-element-323112/instrument_availability/by_date/day-2023-05-23/instruments.parquet /tmp/defi.parquet
+gsutil cp gs://instruments-store-cefi-{project_id}/instrument_availability/by_date/day=2023-05-23/instruments.parquet /tmp/cefi.parquet
+gsutil cp gs://instruments-store-tradfi-{project_id}/instrument_availability/by_date/day=2023-05-23/instruments.parquet /tmp/tradfi.parquet
+gsutil cp gs://instruments-store-defi-{project_id}/instrument_availability/by_date/day=2023-05-23/instruments.parquet /tmp/defi.parquet
 
 # Check file sizes
 ls -lh /tmp/*.parquet
