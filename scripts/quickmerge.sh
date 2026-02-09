@@ -5,11 +5,11 @@
 #   ./scripts/quickmerge.sh "commit message"
 #
 # What it does:
-#   1. Creates a timestamped branch from main
-#   2. Commits all changes (pre-commit hooks run — ruff format, linting, etc.)
-#   3. Pushes the branch
-#   4. Creates a PR with auto-merge enabled (squash)
-#   5. Returns to main branch
+#   1. Stashes changes, checkouts main, pulls latest
+#   2. Creates timestamped branch FROM main (avoids merge conflicts)
+#   3. Reapplies stashed changes, commits (pre-commit hooks run)
+#   4. Pushes branch, creates PR with auto-merge (squash)
+#   5. Stays on PR branch
 #
 # The PR auto-merges once quality gates pass.
 # The branch is auto-deleted after merge.
@@ -32,19 +32,26 @@ if [ -z "$(git status --porcelain)" ]; then
     exit 0
 fi
 
-# Create branch
+# Stash changes, sync with main, create branch from main, reapply (cursor rules compliance)
+# This ensures we never branch from a stale PR branch and avoids merge conflicts.
+echo "[$REPO_NAME] Stashing changes and syncing with main..."
+git stash push -u -m "quickmerge-$$" --quiet
+
+git checkout main --quiet
+git pull origin main --quiet
+
 BRANCH="auto/$(date +%Y%m%d-%H%M%S)-$$"
-echo "[$REPO_NAME] Creating branch $BRANCH"
+echo "[$REPO_NAME] Creating branch $BRANCH from main"
 
-# Ensure on main and up to date
-echo "[$REPO_NAME] Staying on branch $BRANCH (PR will auto-merge when CI passes)"
-echo "[$REPO_NAME] Current branch: $BRANCH"
-echo "[$REPO_NAME] To sync with main later: git checkout main && git pull"
-git pull --quiet 2>/dev/null || true
-
-# Create branch, commit, push
-# NOTE: No --no-verify. Pre-commit hooks (ruff, linting) run on commit.
 git checkout -b "$BRANCH" --quiet
+
+# Restore stashed changes
+if git stash list | grep -q "quickmerge-$$"; then
+    git stash pop --quiet
+fi
+
+# Commit and push
+# NOTE: No --no-verify. Pre-commit hooks (ruff, linting) run on commit.
 # Flush filesystem buffers to ensure all editor saves are on disk
 # This prevents stale file versions from being committed when an IDE
 # (e.g., Cursor, VSCode) has pending writes in its buffer
