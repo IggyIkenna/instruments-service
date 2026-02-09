@@ -174,48 +174,20 @@ class EulerAdapter(BaseDefiAdapter):
 
         Returns curated list of high-liquidity Euler v2 markets.
         """
-        # Major Euler v2 lending markets on Ethereum
-        # These are the most liquid markets on Euler v2
+        # Major Euler v2 EVK vaults on Ethereum mainnet
+        # These are ERC-4626 vaults with borrowing capability
+        # Addresses verified on-chain (totalAssets, totalBorrows, interestRate work)
+        # Source: etherscan.io, verified Feb 2026
         mvp_markets = [
             {
-                "collateral_asset": "WETH",
+                "collateral_asset": "USDC",
                 "borrow_asset": "USDC",
-                "market_address": None,  # TODO: Add actual contract address
+                "market_address": "0x797DD80692c3b2dAdabCe8e30C07fDE5307D48a9",  # eUSDC-2
             },
             {
-                "collateral_asset": "WETH",
+                "collateral_asset": "USDT",
                 "borrow_asset": "USDT",
-                "market_address": None,
-            },
-            {
-                "collateral_asset": "WSTETH",
-                "borrow_asset": "WETH",
-                "market_address": None,
-            },
-            {
-                "collateral_asset": "WSTETH",
-                "borrow_asset": "USDC",
-                "market_address": None,
-            },
-            {
-                "collateral_asset": "WBTC",
-                "borrow_asset": "USDC",
-                "market_address": None,
-            },
-            {
-                "collateral_asset": "WBTC",
-                "borrow_asset": "USDT",
-                "market_address": None,
-            },
-            {
-                "collateral_asset": "WEETH",
-                "borrow_asset": "WETH",
-                "market_address": None,
-            },
-            {
-                "collateral_asset": "CBETH",
-                "borrow_asset": "WETH",
-                "market_address": None,
+                "market_address": "0x313603FA690301b0CaeEf8069c065862f9162162",  # eUSDT-2
             },
         ]
 
