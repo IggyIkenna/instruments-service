@@ -259,6 +259,36 @@ class InstrumentDefinition(BaseModel):
         description="Exchange holiday calendar identifier (e.g., 'NYSE', 'CME', 'NASDAQ'). Only populated for TradFi instruments.",
     )
 
+    # Session boundary times (TradFi instruments only) - uniform format across all venues
+    # These are ISO datetime strings for the specific date, DST-aware, converted to UTC
+    regular_open_utc: Optional[str] = Field(
+        default=None,
+        description="Regular session open time as ISO datetime in UTC (DST-aware, computed daily). "
+        "E.g., '2024-01-15T14:30:00+00:00' for NYSE 9:30 AM ET. Only populated for TradFi.",
+    )
+    regular_close_utc: Optional[str] = Field(
+        default=None,
+        description="Regular session close time as ISO datetime in UTC (DST-aware, computed daily). "
+        "E.g., '2024-01-15T21:00:00+00:00' for NYSE 4:00 PM ET. Only populated for TradFi.",
+    )
+    auction_open_utc: Optional[str] = Field(
+        default=None,
+        description="Opening auction start time as ISO datetime in UTC. "
+        "E.g., '2024-01-15T14:28:00+00:00' for NYSE/NASDAQ opening auction at 9:28 AM ET. "
+        "None for venues without a formal opening auction (e.g., CME electronic).",
+    )
+    auction_close_utc: Optional[str] = Field(
+        default=None,
+        description="Closing auction start time as ISO datetime in UTC. "
+        "E.g., '2024-01-15T20:50:00+00:00' for NYSE closing auction at 3:50 PM ET. "
+        "None for venues without a formal closing auction.",
+    )
+    early_close_utc: Optional[str] = Field(
+        default=None,
+        description="Early close time as ISO datetime in UTC on shortened trading days "
+        "(e.g., day after Thanksgiving, Christmas Eve). None on normal trading days.",
+    )
+
     # Note: validation_warnings removed to avoid circular reference issues
 
     @field_validator("instrument_key")
