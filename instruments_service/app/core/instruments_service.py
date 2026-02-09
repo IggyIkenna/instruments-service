@@ -817,6 +817,11 @@ class InstrumentsService:
                                 "trading_hours_open": "holiday",
                                 "trading_hours_close": "holiday",
                                 "holiday_calendar": venue_name,
+                                "regular_open_utc": None,
+                                "regular_close_utc": None,
+                                "auction_open_utc": None,
+                                "auction_close_utc": None,
+                                "early_close_utc": None,
                             }
                             logger.info(
                                 f"📅 Adding holiday/closed placeholder for {venue_name} on {date_str} "
