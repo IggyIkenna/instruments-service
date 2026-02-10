@@ -1257,8 +1257,9 @@ class DatabentoAdapter:
                                 result = str(value)
                                 if result and result != "None":
                                     return result
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f"Failed to convert value {value} to string: {e}")
+                                continue
                 elif isinstance(resolved, list):
                     # Response is a list of symbols
                     if len(resolved) > 0:

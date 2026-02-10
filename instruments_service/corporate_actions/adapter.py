@@ -4,26 +4,15 @@ Corporate Actions Adapter
 Fetches corporate actions data for US equities (TRADFI).
 Supports dividends, stock splits, and earnings dates.
 
-Data Sources:
+Data Source:
 - yfinance: Free, no API key, good historical coverage (20+ years)
-- OpenBB: Multiple providers (FMP, Polygon, Intrinio), better reliability
 
 Usage:
-    # Default (yfinance)
     adapter = CorporateActionsAdapter()
-
-    # Use OpenBB provider
-    adapter = CorporateActionsAdapter(provider="openbb")
-
-    # Fetch all corporate actions for a ticker
     bundle = adapter.fetch_corporate_actions("AAPL", start_date, end_date)
-
-    # Fetch specific types
     dividends = adapter.fetch_dividends("AAPL", start_date, end_date)
     splits = adapter.fetch_splits("AAPL", start_date, end_date)
     earnings = adapter.fetch_earnings("AAPL", start_date, end_date)
-
-    # Batch fetch for multiple tickers
     bundles = adapter.fetch_batch(["AAPL", "MSFT", "GOOGL"], start_date, end_date)
 
 Note: Corporate actions are TRADFI-only (equities). Crypto/DeFi do not have
@@ -33,7 +22,7 @@ traditional corporate actions like dividends or stock splits.
 import logging
 import time
 from datetime import date
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -45,68 +34,39 @@ from instruments_service.corporate_actions.models import (
     StockSplitRecord,
 )
 
-# Check for OpenBB availability
-try:
-    from unified_cloud_services.clients import (
-        OPENBB_AVAILABLE,
-        OpenBBBaseClient,
-        OpenBBClientConfig,
-    )
-except ImportError:
-    OPENBB_AVAILABLE = False
-    OpenBBBaseClient = None  # type: ignore
-    OpenBBClientConfig = None  # type: ignore
-
 logger = logging.getLogger(__name__)
 
 # Rate limiting for yfinance (to avoid IP blocks)
 YFINANCE_RATE_LIMIT_DELAY = 0.1  # 100ms between requests
 
-# Supported providers
-ProviderType = Literal["yfinance", "openbb"]
-
 
 class CorporateActionsAdapter:
     """
-    Adapter for fetching corporate actions data from multiple providers.
+    Adapter for fetching corporate actions data from yfinance.
 
     TRADFI-only: Corporate actions (dividends, splits, earnings) apply to
     equities only. Crypto and DeFi do not have traditional corporate actions.
-
-    Providers:
-    - yfinance (default): Free, no API key, good historical coverage
-    - openbb: Multiple providers (FMP, Polygon), better reliability and data quality
     """
 
     def __init__(
         self,
-        provider: ProviderType = "yfinance",
         rate_limit_delay: float = YFINANCE_RATE_LIMIT_DELAY,
-        project_id: Optional[str] = None,
-        fallback_to_yfinance: bool = True,
     ):
         """
         Initialize corporate actions adapter.
 
         Args:
-            provider: Data provider ("yfinance" or "openbb")
             rate_limit_delay: Delay between requests in seconds (default: 100ms)
-            project_id: GCP project ID for OpenBB credentials (Secret Manager)
-            fallback_to_yfinance: If True, fall back to yfinance when OpenBB fails
         """
-        self.provider = provider
         self.rate_limit_delay = rate_limit_delay
-        self.project_id = project_id
-        self.fallback_to_yfinance = fallback_to_yfinance
 
         # Track last request time for rate limiting
         self._last_request_time: float = 0
 
         # Import providers lazily
         self._yf = None
-        self._openbb_client: Optional[OpenBBBaseClient] = None
 
-        logger.info(f"CorporateActionsAdapter initialized (provider={provider})")
+        logger.info("CorporateActionsAdapter initialized")
 
     @property
     def yf(self):
@@ -116,23 +76,6 @@ class CorporateActionsAdapter:
 
             self._yf = yf
         return self._yf
-
-    @property
-    def openbb_client(self) -> Optional[OpenBBBaseClient]:
-        """Lazy load OpenBB client."""
-        if self._openbb_client is None and OPENBB_AVAILABLE and OpenBBBaseClient is not None:
-            try:
-                config = OpenBBClientConfig()
-                self._openbb_client = OpenBBBaseClient(
-                    config=config,
-                    project_id=self.project_id,
-                )
-                self._openbb_client.initialize()
-                logger.info("OpenBB client initialized for corporate actions")
-            except Exception as e:
-                logger.warning(f"Could not initialize OpenBB client: {e}")
-                self._openbb_client = None
-        return self._openbb_client
 
     def _rate_limit(self, delay: Optional[float] = None):
         """Apply rate limiting between requests."""
@@ -167,84 +110,7 @@ class CorporateActionsAdapter:
         Returns:
             List of DividendRecord objects
         """
-        # Try OpenBB first if configured
-        if self.provider == "openbb" and OPENBB_AVAILABLE:
-            dividends = self._fetch_dividends_openbb(ticker, start_date, end_date, instrument_key)
-            if dividends or not self.fallback_to_yfinance:
-                return dividends
-            logger.debug(f"OpenBB returned no dividends for {ticker}, falling back to yfinance")
-
-        # Use yfinance
         return self._fetch_dividends_yfinance(ticker, start_date, end_date, instrument_key)
-
-    def _fetch_dividends_openbb(
-        self,
-        ticker: str,
-        start_date: date,
-        end_date: date,
-        instrument_key: Optional[str] = None,
-    ) -> List[DividendRecord]:
-        """Fetch dividends using OpenBB."""
-        dividends = []
-
-        if self.openbb_client is None:
-            return dividends
-
-        try:
-            div_df = self.openbb_client.get_dividends(
-                symbol=ticker,
-                start_date=start_date,
-                end_date=end_date,
-            )
-
-            if div_df is None or div_df.empty:
-                logger.debug(f"No dividends from OpenBB for {ticker}")
-                return dividends
-
-            for _, row in div_df.iterrows():
-                try:
-                    # OpenBB returns various column names depending on provider
-                    ex_date = row.get("ex_dividend_date") or row.get("ex_date") or row.get("date")
-                    amount = row.get("amount") or row.get("dividend") or row.get("cash_amount")
-                    pay_date = row.get("pay_date") or row.get("payment_date")
-                    record_date = row.get("record_date")
-                    declaration_date = row.get("declaration_date")
-
-                    if ex_date is None or amount is None:
-                        continue
-
-                    # Convert dates
-                    if isinstance(ex_date, str):
-                        ex_date = pd.to_datetime(ex_date, utc=True).date()
-                    elif hasattr(ex_date, "date"):
-                        ex_date = ex_date.date()
-
-                    if pd.isna(amount) or amount <= 0:
-                        continue
-
-                    record = DividendRecord(
-                        ticker=ticker,
-                        ex_date=ex_date,
-                        pay_date=pay_date.date() if hasattr(pay_date, "date") else pay_date,
-                        record_date=record_date.date() if hasattr(record_date, "date") else record_date,
-                        declaration_date=declaration_date.date()
-                        if hasattr(declaration_date, "date")
-                        else declaration_date,
-                        amount=float(amount),
-                        dividend_type=DividendType.UNSPECIFIED,
-                        source="openbb",
-                        instrument_key=instrument_key,
-                    )
-                    dividends.append(record)
-                except Exception as e:
-                    logger.warning(f"Failed to parse OpenBB dividend for {ticker}: {e}")
-
-            logger.debug(f"Fetched {len(dividends)} dividends from OpenBB for {ticker}")
-
-        except Exception as e:
-            logger.error(f"Failed to fetch dividends from OpenBB for {ticker}: {e}")
-
-        return dividends
 
     def _fetch_dividends_yfinance(
         self,
@@ -390,104 +256,7 @@ class CorporateActionsAdapter:
         Returns:
             List of EarningsRecord objects
         """
-        # Try OpenBB first if configured
-        if self.provider == "openbb" and OPENBB_AVAILABLE:
-            earnings = self._fetch_earnings_openbb(ticker, start_date, end_date, instrument_key)
-            if earnings or not self.fallback_to_yfinance:
-                return earnings
-            logger.debug(f"OpenBB returned no earnings for {ticker}, falling back to yfinance")
-
-        # Use yfinance
         return self._fetch_earnings_yfinance(ticker, start_date, end_date, instrument_key)
-
-    def _fetch_earnings_openbb(
-        self,
-        ticker: str,
-        start_date: date,
-        end_date: date,
-        instrument_key: Optional[str] = None,
-    ) -> List[EarningsRecord]:
-        """Fetch earnings using OpenBB."""
-        earnings = []
-
-        if self.openbb_client is None:
-            return earnings
-
-        try:
-            earnings_df = self.openbb_client.get_earnings_history(symbol=ticker)
-
-            if earnings_df is None or earnings_df.empty:
-                logger.debug(f"No earnings from OpenBB for {ticker}")
-                return earnings
-
-            for _, row in earnings_df.iterrows():
-                try:
-                    # OpenBB returns various column names depending on provider
-                    earnings_date = row.get("date") or row.get("report_date") or row.get("fiscal_date_ending")
-
-                    if earnings_date is None:
-                        continue
-
-                    # Convert date
-                    if isinstance(earnings_date, str):
-                        earnings_date = pd.to_datetime(earnings_date, utc=True).date()
-                    elif hasattr(earnings_date, "date"):
-                        earnings_date = earnings_date.date()
-
-                    # Filter by date range
-                    if earnings_date < start_date or earnings_date > end_date:
-                        continue
-
-                    # Extract earnings data
-                    reported_eps = row.get("actual_eps") or row.get("reported_eps") or row.get("eps_actual")
-                    estimated_eps = row.get("estimated_eps") or row.get("eps_estimate") or row.get("consensus_eps")
-                    surprise_pct = (
-                        row.get("surprise_percent") or row.get("surprise_pct") or row.get("eps_surprise_percent")
-                    )
-
-                    # Also get revenue if available
-                    revenue = row.get("revenue") or row.get("actual_revenue")
-                    estimated_revenue = row.get("estimated_revenue") or row.get("revenue_estimate")
-
-                    # Fiscal info
-                    fiscal_quarter = row.get("fiscal_quarter") or row.get("period")
-                    fiscal_year = row.get("fiscal_year")
-
-                    # Clean up NaN values
-                    if pd.isna(reported_eps):
-                        reported_eps = None
-                    if pd.isna(estimated_eps):
-                        estimated_eps = None
-                    if pd.isna(surprise_pct):
-                        # Calculate surprise if we have both values
-                        if reported_eps is not None and estimated_eps is not None and estimated_eps != 0:
-                            surprise_pct = ((reported_eps - estimated_eps) / abs(estimated_eps)) * 100
-                        else:
-                            surprise_pct = None
-
-                    record = EarningsRecord(
-                        ticker=ticker,
-                        earnings_date=earnings_date,
-                        reported_eps=reported_eps,
-                        estimated_eps=estimated_eps,
-                        surprise_pct=surprise_pct,
-                        revenue=revenue if not pd.isna(revenue) else None,
-                        estimated_revenue=estimated_revenue if not pd.isna(estimated_revenue) else None,
-                        fiscal_quarter=fiscal_quarter,
-                        fiscal_year=int(fiscal_year) if fiscal_year and not pd.isna(fiscal_year) else None,
-                        source="openbb",
-                        instrument_key=instrument_key,
-                    )
-                    earnings.append(record)
-                except Exception as e:
-                    logger.warning(f"Failed to parse OpenBB earnings for {ticker}: {e}")
-
-            logger.debug(f"Fetched {len(earnings)} earnings from OpenBB for {ticker}")
-
-        except Exception as e:
-            logger.error(f"Failed to fetch earnings from OpenBB for {ticker}: {e}")
-
-        return earnings
 
     def _fetch_earnings_yfinance(
         self,
@@ -511,7 +280,9 @@ class CorporateActionsAdapter:
                     if "Earnings Date" in calendar.index:
                         calendar.loc["Earnings Date"]
                         # This is typically future dates, not historical
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Failed to process earnings date from calendar: {e}")
+                # Error handled, continue processing next calendar entry
                 pass
 
             # Get historical earnings from earnings_history or quarterly_earnings

@@ -58,10 +58,6 @@ dev = [
     "mypy>=1.19.0",
     "pre-commit>=4.4.0",
 ]
-# OpenBB for enhanced corporate actions data (better earnings, dividends)
-openbb = [
-    "openbb>=4.0.0",
-]
 
 [project.scripts]
 instruments-service = "instruments_service.cli.main:run_cli"
