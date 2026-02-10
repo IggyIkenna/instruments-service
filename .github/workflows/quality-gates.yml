@@ -63,7 +63,7 @@ jobs:
             exchange-calendars yfinance polars
 
           # Install test dependencies
-          pip install pytest pytest-asyncio pytest-mock pytest-timeout ruff==0.15.0
+          pip install pytest pytest-asyncio pytest-mock pytest-timeout pytest-xdist ruff==0.15.0
 
       # ========================================================================
       # LINT + FORMAT - auto-fix then verify no diff (catches unformatted code)
