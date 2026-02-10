@@ -195,10 +195,17 @@ if [ "$RUN_TESTS" = true ]; then
     export CLOUD_MOCK_MODE="true"
     export GOOGLE_CLOUD_PROJECT="test-project"
 
+    # Use parallel execution if pytest-xdist available
+    if python3 -c "import xdist" 2>/dev/null || python3 -c "import pytest_xdist" 2>/dev/null; then
+        PARALLEL_ARGS="-n auto"
+    else
+        PARALLEL_ARGS=""
+    fi
+
     if [ "$QUICK_MODE" = true ]; then
         # Quick mode: unit tests only
-        echo "Running: pytest tests/unit/ -v --tb=short (quick mode)"
-        if python3 -m pytest tests/unit/ -v --tb=short; then
+        echo "Running: pytest tests/unit/ -v --tb=short $PARALLEL_ARGS (quick mode)"
+        if python3 -m pytest tests/unit/ -v --tb=short $PARALLEL_ARGS; then
             echo -e "${GREEN}✅ Unit tests PASSED${NC}"
         else
             echo -e "${RED}❌ Unit tests FAILED${NC}"
@@ -207,10 +214,10 @@ if [ "$RUN_TESTS" = true ]; then
     else
         # Full mode: all tests (matching GitHub Actions - most exhaustive)
 
-        # Unit tests
+        # Unit tests (parallel with pytest-xdist when available)
         echo -e "\n${YELLOW}Running unit tests...${NC}"
         if [ -d "tests/unit" ]; then
-            if python3 -m pytest tests/unit/ -v --tb=short --timeout=60; then
+            if python3 -m pytest tests/unit/ -v --tb=short --timeout=60 $PARALLEL_ARGS; then
                 echo -e "${GREEN}✅ Unit tests PASSED${NC}"
             else
                 echo -e "${RED}❌ Unit tests FAILED${NC}"
