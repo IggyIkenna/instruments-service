@@ -5,14 +5,20 @@
 #   ./scripts/quickmerge.sh "commit message"
 #
 # What it does:
-#   1. Stashes changes, checkouts main, pulls latest
-#   2. Creates timestamped branch FROM main (avoids merge conflicts)
-#   3. Reapplies stashed changes, commits (pre-commit hooks run)
-#   4. Pushes branch, creates PR with auto-merge (squash)
-#   5. Stays on PR branch
+#   1. Runs quality gates FIRST (scripts/quality-gates.sh --no-fix)
+#      - If quality gates fail, script exits immediately (fail fast)
+#      - Does NOT proceed with merge if quality gates fail
+#   2. Stashes changes, checkouts main, pulls latest
+#   3. Creates timestamped branch FROM main (avoids merge conflicts)
+#   4. Reapplies stashed changes, commits (pre-commit hooks run)
+#   5. Pushes branch, creates PR with auto-merge (squash)
+#   6. Stays on PR branch
 #
-# The PR auto-merges once quality gates pass.
+# The PR auto-merges once CI quality gates pass.
 # The branch is auto-deleted after merge.
+#
+# IMPORTANT: Quality gates MUST pass before any branch/PR is created.
+# If quality gates fail, fix issues and re-run quickmerge.
 #
 # Prerequisites:
 #   - gh CLI installed and authenticated (gh auth login)
