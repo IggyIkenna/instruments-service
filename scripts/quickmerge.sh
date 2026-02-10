@@ -3,6 +3,11 @@
 #
 # Usage:
 #   ./scripts/quickmerge.sh "commit message"
+#   ./scripts/quickmerge.sh "commit message" --files "path1 path2 path3"
+#
+# When --files is provided: only stage and commit those paths (repo-relative).
+# When --files is omitted: stage all changes (git add -A).
+# Agents MUST use --files with the list of files they changed.
 #
 # What it does:
 #   1. Runs quality gates FIRST (scripts/quality-gates.sh --no-fix)
@@ -26,7 +31,22 @@
 
 set -e
 
-COMMIT_MSG="${1:-chore: automated update}"
+# Parse arguments: COMMIT_MSG and optional --files "path1 path2"
+COMMIT_MSG="chore: automated update"
+FILES_ARG=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --files)
+            FILES_ARG="$2"
+            shift 2
+            ;;
+        *)
+            COMMIT_MSG="$1"
+            shift
+            ;;
+    esac
+done
+
 REPO_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 REPO_NAME=$(basename "$REPO_DIR")
 
@@ -71,14 +91,26 @@ if git stash list | grep -q "quickmerge-$$"; then
     git stash pop --quiet
 fi
 
-# Commit and push
-# NOTE: No --no-verify. Pre-commit hooks (ruff, linting) run on commit.
-# Flush filesystem buffers to ensure all editor saves are on disk
-# This prevents stale file versions from being committed when an IDE
-# (e.g., Cursor, VSCode) has pending writes in its buffer
+# Stage: --files for selective add, else add all
 sync 2>/dev/null || true
 sleep 0.5
-git add -A
+if [ -n "$FILES_ARG" ]; then
+    ADDED_ANY=0
+    for f in $FILES_ARG; do
+        if [ -e "$f" ]; then
+            git add "$f"
+            ADDED_ANY=1
+        else
+            echo "[$REPO_NAME] ⚠️  Path not found: $f"
+        fi
+    done
+    if [ "$ADDED_ANY" = 0 ]; then
+        echo "[$REPO_NAME] ❌ No valid paths from --files. Nothing to commit."
+        exit 1
+    fi
+else
+    git add -A
+fi
 git commit -m "$COMMIT_MSG" --quiet
 
 git push -u origin "$BRANCH" --quiet 2>/dev/null
