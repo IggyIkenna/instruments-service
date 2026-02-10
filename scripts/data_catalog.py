@@ -149,6 +149,7 @@ def get_cloud_service(bucket_name: str):
         target = CloudTarget(
             project_id=PROJECT_ID,
             gcs_bucket=bucket_name,
+            bigquery_dataset="instruments",
         )
         return StandardizedDomainCloudService(domain="instruments", cloud_target=target)
     except Exception as e:

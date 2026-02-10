@@ -263,6 +263,7 @@ class DependencyChecker:
             target = CloudTarget(
                 project_id=self.project_id,
                 gcs_bucket=bucket_name,
+                bigquery_dataset="instruments",
             )
             service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
 

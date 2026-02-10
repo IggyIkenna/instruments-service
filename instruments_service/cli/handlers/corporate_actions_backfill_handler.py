@@ -98,6 +98,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
             target = CloudTarget(
                 project_id=self.project_id,
                 gcs_bucket=bucket_name,
+                bigquery_dataset=instruments_config.bigquery_dataset,
             )
             service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
 
