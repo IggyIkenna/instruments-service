@@ -243,8 +243,9 @@ class CloudDataProvider:
                 for venue in venues:
                     # Sanitize venue name for folder (replace slashes, etc.)
                     venue_folder = venue.replace("/", "-").replace("\\", "-")
+                    # Use key=value format for BigQuery hive partitioning
                     gcs_path = (
-                        f"instrument_availability/by_date/day={date_str}/venue-{venue_folder}/instruments.parquet"
+                        f"instrument_availability/by_date/day={date_str}/venue={venue_folder}/instruments.parquet"
                     )
 
                     try:
