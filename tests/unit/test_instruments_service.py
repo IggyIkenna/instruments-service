@@ -21,52 +21,45 @@ from instruments_service.app.core.instruments_service import InstrumentsService
 class TestInstrumentsServiceInitialization:
     """Tests for service initialization."""
 
-    def test_initialization_minimal_config(self):
+    def test_initialization_minimal_config(self, mock_instruments_service_dependencies):
         """Test initialization with minimal configuration."""
-        with (
-            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService"),
-            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage"),
-            patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-        ):
-            config = {"project_id": "test-project"}
-            service = InstrumentsService(config)
+        # Use shared fixture instead of patching individually
+        config = {"project_id": "test-project"}
+        service = InstrumentsService(config)
 
-            assert service.config == config
-            assert hasattr(service, "processing_service")
-            assert hasattr(service, "cloud_storage")
-            assert hasattr(service, "batch_processor")
-            assert hasattr(service, "venue_mapping")
+        assert service.config == config
+        assert hasattr(service, "processing_service")
+        assert hasattr(service, "cloud_storage")
+        assert hasattr(service, "batch_processor")
+        assert hasattr(service, "venue_mapping")
 
-    def test_initialization_full_config(self):
+    def test_initialization_full_config(self, mock_instruments_service_dependencies):
         """Test initialization with full configuration."""
-        with (
-            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc,
-            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage"),
-            patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor") as mock_batch,
-        ):
-            config = {
-                "project_id": "test-project",
-                "gcs_bucket": "test-bucket",
-                "bigquery_dataset": "test-dataset",
-                "enable_ccxt_integration": False,
-                "enable_metadata_caching": False,
-                "max_batch_size": 500,
-                "lookback_days": 7,
-            }
-            InstrumentsService(config)
+        # Use shared fixture instead of patching individually
+        mocks = mock_instruments_service_dependencies
+        config = {
+            "project_id": "test-project",
+            "gcs_bucket": "test-bucket",
+            "bigquery_dataset": "test-dataset",
+            "enable_ccxt_integration": False,
+            "enable_metadata_caching": False,
+            "max_batch_size": 500,
+            "lookback_days": 7,
+        }
+        InstrumentsService(config)
 
-            # Verify processing service initialized with correct config
-            mock_proc.assert_called_once()
-            proc_config = mock_proc.call_args[0][0]
-            assert proc_config["project_id"] == "test-project"
-            assert proc_config["enable_ccxt_integration"] is False
-            assert proc_config["enable_metadata_caching"] is False
+        # Verify processing service initialized with correct config
+        mocks["processing"].assert_called_once()
+        proc_config = mocks["processing"].call_args[0][0]
+        assert proc_config["project_id"] == "test-project"
+        assert proc_config["enable_ccxt_integration"] is False
+        assert proc_config["enable_metadata_caching"] is False
 
-            # Verify batch processor initialized with correct config
-            mock_batch.assert_called_once()
-            batch_config = mock_batch.call_args[0][0]
-            assert batch_config["max_batch_size"] == 500
-            assert batch_config["lookback_days"] == 7
+        # Verify batch processor initialized with correct config
+        mocks["batch"].assert_called_once()
+        batch_config = mocks["batch"].call_args[0][0]
+        assert batch_config["max_batch_size"] == 500
+        assert batch_config["lookback_days"] == 7
 
     def test_initialization_default_project_id(self):
         """Test initialization uses default project ID if not provided."""

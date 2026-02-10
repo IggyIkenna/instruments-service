@@ -63,7 +63,7 @@ jobs:
             exchange-calendars yfinance polars
 
           # Install test dependencies
-          pip install pytest pytest-asyncio pytest-mock pytest-timeout ruff==0.15.0
+          pip install pytest pytest-asyncio pytest-mock pytest-timeout pytest-xdist ruff==0.15.0
 
       # ========================================================================
       # LINT + FORMAT - auto-fix then verify no diff (catches unformatted code)
@@ -80,12 +80,13 @@ jobs:
           echo "✅ Lint and format check passed"
 
       # ========================================================================
-      # UNIT TESTS - MUST PASS
+      # UNIT TESTS - MUST PASS (with parallel execution)
       # ========================================================================
       - name: Run unit tests
         run: |
           echo "=== Running unit tests ==="
-          python -m pytest tests/unit/ -v --tb=short --timeout=60
+          # Use auto-detected CPU cores for parallel execution (GitHub Actions provides 2 cores)
+          python -m pytest tests/unit/ -v --tb=short --timeout=60 -n auto
           echo "✅ Unit tests passed"
 
       # ========================================================================

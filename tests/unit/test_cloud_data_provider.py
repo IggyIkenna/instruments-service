@@ -160,6 +160,7 @@ class TestCloudDataProvider:
             result = provider.check_instruments_exist(date)
             assert result is True
 
+    @pytest.mark.slow
     def test_check_instruments_exist_false(self, provider, mock_cloud_service):
         """Test checking if instruments exist when they don't."""
         mock_cloud_service.download_from_gcs.return_value = pd.DataFrame()
@@ -169,6 +170,7 @@ class TestCloudDataProvider:
 
         assert result is False
 
+    @pytest.mark.slow
     def test_check_instruments_exist_exception(self, provider, mock_cloud_service):
         """Test checking if instruments exist with exception."""
         mock_cloud_service.download_from_gcs.side_effect = Exception("Download error")

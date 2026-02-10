@@ -474,6 +474,26 @@ class InstrumentsService:
                                     # Create Databento adapter instance (reuses cached client)
                                     databento_adapter = DatabentoAdapter()
 
+                                    # On US market holidays, return empty so placeholder is added
+                                    # (consistent with NYSE/CME/ICE which get placeholders when Databento returns empty)
+                                    target_date = date.date() if hasattr(date, "date") else date
+                                    try:
+                                        result = databento_adapter.is_us_market_holiday(target_date)
+                                        is_holiday = (
+                                            result[0] if isinstance(result, (tuple, list)) and len(result) >= 1 else False
+                                        )
+                                        holiday_name = (
+                                            result[1] if isinstance(result, (tuple, list)) and len(result) >= 2 else None
+                                        )
+                                    except (TypeError, IndexError, AttributeError):
+                                        is_holiday, holiday_name = False, None
+                                    if is_holiday:
+                                        logger.info(
+                                            f"📅 Skipping CBOE VIX on {date} - US market holiday ({holiday_name}). "
+                                            f"Placeholder will be added."
+                                        )
+                                        return {}
+
                                     # Create VIX instrument definition
                                     vix_def_dict = databento_adapter.create_vix_instrument_definition(date)
                                     if vix_def_dict:
@@ -502,14 +522,28 @@ class InstrumentsService:
                                     # Get ETF symbols for this venue from config
                                     symbols = databento_config.get_symbols_for_venue(exchange)
 
+                                    # On US market holidays, skip static Bitcoin ETFs so placeholder is added
+                                    # (consistent with NYSE/CME/ICE - Databento returns empty on holidays)
+                                    target_date = date.date() if hasattr(date, "date") else date
+                                    try:
+                                        result = databento_adapter.is_us_market_holiday(target_date)
+                                        is_holiday = (
+                                            result[0] if isinstance(result, (tuple, list)) and len(result) >= 1 else False
+                                        )
+                                        holiday_name = (
+                                            result[1] if isinstance(result, (tuple, list)) and len(result) >= 2 else None
+                                        )
+                                    except (TypeError, IndexError, AttributeError):
+                                        is_holiday, holiday_name = False, None
+
                                     # Process Bitcoin ETFs using static definitions
                                     # (more reliable for new ETFs like IBIT, FBTC, ARKB)
                                     # IMPORTANT: Bitcoin ETFs launched January 11, 2024 - skip for earlier dates
                                     bitcoin_etf_launch_date = datetime(2024, 1, 11, tzinfo=timezone.utc)
                                     bitcoin_etf_tickers = ["IBIT", "FBTC", "ARKB"]
 
-                                    # Only process Bitcoin ETFs if date is on or after launch date
-                                    if date >= bitcoin_etf_launch_date:
+                                    # Only process Bitcoin ETFs if date is on or after launch date AND not holiday
+                                    if date >= bitcoin_etf_launch_date and not is_holiday:
                                         for ticker in bitcoin_etf_tickers:
                                             # Check if this ticker is in the symbols for this venue
                                             if ticker in symbols:
@@ -522,6 +556,11 @@ class InstrumentsService:
                                                     etf_def = InstrumentDefinition(**etf_def_dict)
                                                     instruments[etf_def.instrument_key] = etf_def
                                                     logger.info(f"✅ Created Bitcoin ETF: {etf_def.instrument_key}")
+                                    elif is_holiday:
+                                        logger.info(
+                                            f"📅 Skipping Bitcoin ETFs for {exchange} on {date} - "
+                                            f"US market holiday ({holiday_name}). Placeholder will be added."
+                                        )
                                     else:
                                         logger.debug(
                                             f"⏭️ Skipping Bitcoin ETFs - date {date.strftime('%Y-%m-%d')} is before launch (2024-01-11)"
