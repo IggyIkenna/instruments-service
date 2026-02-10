@@ -38,13 +38,14 @@ if [ -z "$(git status --porcelain)" ]; then
     exit 0
 fi
 
-# Run quality gates FIRST (fail fast if they don't pass)
-# This ensures we don't waste time creating branches/PRs if code quality checks fail
+# Run quality gates in two phases: (1) auto-fix ruff format/lint, (2) verify
+# Uses same ruff version as Cloud Build and GitHub Actions - prevents CI format failures
 if [ -f "scripts/quality-gates.sh" ]; then
-    echo "[$REPO_NAME] Running quality gates before merge..."
+    echo "[$REPO_NAME] Phase 1: Running quality gates (auto-fix ruff format + check)..."
+    bash scripts/quality-gates.sh
+    echo "[$REPO_NAME] Phase 2: Verifying quality gates (--no-fix)..."
     if ! bash scripts/quality-gates.sh --no-fix; then
-        echo "[$REPO_NAME] ❌ Quality gates FAILED - Fix issues before merging"
-        echo "[$REPO_NAME] Run 'bash scripts/quality-gates.sh' to see details and auto-fix"
+        echo "[$REPO_NAME] ❌ Quality gates FAILED - Fix remaining issues before merging"
         exit 1
     fi
     echo "[$REPO_NAME] ✅ Quality gates PASSED - Proceeding with merge"
