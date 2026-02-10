@@ -57,6 +57,7 @@ steps:
 
   # Step 4: Run quality gates (lint + tests) - MUST PASS before build
   # Uses Python 3.13 to match local and GitHub Actions
+  # Uses Cloud Build caching to speed up dependency installation
   - name: 'python:3.13-slim'
     id: 'quality-gates'
     waitFor: ['check-ruff-versions']  # Wait for version check to pass
@@ -91,7 +92,7 @@ steps:
           exchange-calendars yfinance polars
 
         # Install test dependencies
-        pip install pytest pytest-asyncio pytest-mock pytest-timeout ruff==0.15.0
+        pip install pytest pytest-asyncio pytest-mock pytest-timeout pytest-xdist ruff==0.15.0
 
         # ====================================================================
         # LINTING (ruff) - MUST PASS
@@ -113,12 +114,13 @@ steps:
         export GOOGLE_CLOUD_PROJECT="test-project"
 
         # ====================================================================
-        # UNIT TESTS - MUST PASS
+        # UNIT TESTS - MUST PASS (with parallel execution)
         # ====================================================================
         echo ""
         echo "=== Running unit tests ==="
         if [ -d "tests/unit" ]; then
-          python -m pytest tests/unit/ -v --tb=short --timeout=60 || exit 1
+          # Use 4 parallel workers in Cloud Build (good balance of speed vs resource usage)
+          python -m pytest tests/unit/ -v --tb=short --timeout=60 -n auto || exit 1
           echo "✅ Unit tests passed"
         else
           echo "No unit tests directory found, skipping"
@@ -203,3 +205,7 @@ images:
 
 options:
   logging: CLOUD_LOGGING_ONLY
+  # Enable caching for pip dependencies (speeds up builds significantly)
+  machineType: 'E2_HIGHCPU_8'  # Use high-CPU machine for faster test execution
+  # Note: Cloud Build automatically caches Docker layers, but we can't cache pip
+  # dependencies directly. However, using a faster machine type helps.

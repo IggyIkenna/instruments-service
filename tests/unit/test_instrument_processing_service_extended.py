@@ -85,6 +85,7 @@ class TestInstrumentProcessingServiceExtended:
         result = service._convert_to_tardis_symbol("BTC-PERPETUAL", "deribit")
         assert "btc" in result.lower() and "perpetual" in result.lower()
 
+    @pytest.mark.slow
     def test_is_problematic_binance_instrument(self):
         """Test problematic Binance instrument detection."""
         config = {"tardis_api_key": "test-key"}
