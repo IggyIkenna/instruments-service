@@ -32,6 +32,21 @@ if [ -z "$(git status --porcelain)" ]; then
     exit 0
 fi
 
+# Run quality gates in two phases: (1) auto-fix ruff format/lint, (2) verify
+# Uses same ruff version as Cloud Build and GitHub Actions - prevents CI format failures
+if [ -f "scripts/quality-gates.sh" ]; then
+    echo "[$REPO_NAME] Phase 1: Running quality gates (auto-fix ruff format + check)..."
+    bash scripts/quality-gates.sh
+    echo "[$REPO_NAME] Phase 2: Verifying quality gates (--no-fix)..."
+    if ! bash scripts/quality-gates.sh --no-fix; then
+        echo "[$REPO_NAME] ❌ Quality gates FAILED - Fix remaining issues before merging"
+        exit 1
+    fi
+    echo "[$REPO_NAME] ✅ Quality gates PASSED - Proceeding with merge"
+else
+    echo "[$REPO_NAME] ⚠️  No quality-gates.sh found (skipping quality gate check)"
+fi
+
 # Stash changes, sync with main, create branch from main, reapply (cursor rules compliance)
 # This ensures we never branch from a stale PR branch and avoids merge conflicts.
 echo "[$REPO_NAME] Stashing changes and syncing with main..."
