@@ -8,18 +8,15 @@ Verifies instruments-service uses cloud-agnostic patterns:
 - Path ordering (day first, then other dimensions)
 """
 
-from pathlib import Path
-
 
 class TestCloudAgnosticArchitecture:
     """Test cloud-agnostic patterns in instruments-service code."""
 
-    def test_no_direct_gcp_imports(self):
+    def test_no_direct_gcp_imports(self, cached_service_python_files):
         """Verify instruments-service doesn't use direct google.cloud imports."""
-        service_dir = Path(__file__).parent.parent.parent / "instruments_service"
-
+        # Use cached file list instead of rglob() every time
         violations = []
-        for py_file in service_dir.rglob("*.py"):
+        for py_file in cached_service_python_files:
             if "test" in str(py_file):
                 continue  # Skip test files
 
@@ -71,36 +68,28 @@ class TestCloudAgnosticArchitecture:
             # Bucket should contain project ID or be a test bucket
             assert config.gcp_project_id in bucket_cefi or "test" in bucket_cefi.lower()
 
-    def test_path_format_uses_key_equals_value(self):
+    def test_path_format_uses_key_equals_value(self, cached_cloud_storage_source):
         """Verify instruments-service GCS paths use key=value format for BigQuery hive partitioning."""
-        import inspect
-
-        from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
-
-        source = inspect.getsource(CloudInstrumentStorage)
+        # Use cached source instead of calling inspect.getsource() every time
+        source = cached_cloud_storage_source
 
         # Should contain day={date} pattern
         assert "day={" in source or "day='" in source or 'day="' in source, (
             "Path format should use day={date} not day-{date} for BigQuery compatibility"
         )
 
-    def test_path_ordering_day_first(self):
+    def test_path_ordering_day_first(self, cached_cloud_storage_source):
         """Verify instruments-service paths have day as first dimension (for partitioning)."""
-        import inspect
-
-        from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
-
-        source = inspect.getsource(CloudInstrumentStorage)
+        # Use cached source instead of calling inspect.getsource() every time
+        source = cached_cloud_storage_source
 
         # Check that by_date comes before any other dimensions
         # and day= immediately follows by_date/
         assert "by_date/day=" in source, "Day should immediately follow by_date/ for partitioning"
 
-    def test_no_hardcoded_project_ids(self):
+    def test_no_hardcoded_project_ids(self, cached_service_python_files):
         """Verify no hardcoded GCP project IDs in instruments-service production code."""
-        service_dir = Path(__file__).parent.parent.parent / "instruments_service"
-
-        # Search for hardcoded project ID
+        # Use cached file list instead of rglob() every time
         hardcoded_patterns = [
             "central-element-323112",
             "project_id='",
@@ -108,7 +97,7 @@ class TestCloudAgnosticArchitecture:
         ]
 
         found_hardcoded = []
-        for py_file in service_dir.rglob("*.py"):
+        for py_file in cached_service_python_files:
             if "test" in str(py_file):
                 continue  # Skip test files
 
@@ -130,26 +119,20 @@ class TestCloudAgnosticArchitecture:
 class TestPathFormatCompliance:
     """Test specific path format requirements in instruments-service code."""
 
-    def test_instrument_availability_path_format(self):
+    def test_instrument_availability_path_format(self, cached_cloud_storage_source):
         """Test instrument availability path uses correct format in instruments-service."""
-        import inspect
-
-        from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
-
-        source = inspect.getsource(CloudInstrumentStorage)
+        # Use cached source instead of calling inspect.getsource() every time
+        source = cached_cloud_storage_source
 
         # Should contain the expected format
         assert "day={" in source, "Should use day={date} format"
         assert "instrument_availability" in source, "Should write to instrument_availability/"
         assert "by_date/" in source, "Should use by_date/ prefix"
 
-    def test_path_no_hardcoded_dates(self):
+    def test_path_no_hardcoded_dates(self, cached_cloud_storage_source):
         """Verify instruments-service paths use date variables, not hardcoded dates."""
-        import inspect
-
-        from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
-
-        source = inspect.getsource(CloudInstrumentStorage)
+        # Use cached source instead of calling inspect.getsource() every time
+        source = cached_cloud_storage_source
 
         # Should NOT contain hardcoded dates like "2023-01-01"
         assert "day=2023" not in source, "Should not have hardcoded dates"

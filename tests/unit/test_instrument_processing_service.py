@@ -143,6 +143,7 @@ class TestUpbitCoinbaseMVPFiltering:
         service = InstrumentProcessingService(config)
         assert "COINBASE" in service.venue_mapping.spot_mvp_filtered_venues
 
+    @pytest.mark.slow
     def test_mvp_base_assets_for_filtering(self):
         """Test MVP base assets list used for filtering."""
         config = {"tardis_api_key": "test-key"}

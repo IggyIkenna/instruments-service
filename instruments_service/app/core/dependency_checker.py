@@ -259,11 +259,13 @@ class DependencyChecker:
             bucket_name = self.OUTPUT_BUCKETS[category].format(project_id=self.project_id)
             blob_path = self.OUTPUT_PATH_TEMPLATE.format(date=date)
 
+            from instruments_service.config import instruments_config
+
             # Use cloud-agnostic service to check existence
             target = CloudTarget(
                 project_id=self.project_id,
                 gcs_bucket=bucket_name,
-                bigquery_dataset="instruments",
+                bigquery_dataset=instruments_config.bigquery_dataset,
             )
             service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
 

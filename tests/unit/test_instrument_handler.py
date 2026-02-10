@@ -155,6 +155,7 @@ class TestInstrumentHandler:
         # Should skip future date
         assert result["dates_skipped"] >= 0
 
+    @pytest.mark.slow
     def test_execute_instrument_generation_skip_existing(self, handler, mock_data_provider):
         """Test skipping existing instruments when force=False."""
         # Patch CloudDataProvider where it's imported (inside the method)

@@ -146,10 +146,12 @@ def get_cloud_service(bucket_name: str):
     try:
         from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
 
+        from instruments_service.config import instruments_config
+
         target = CloudTarget(
             project_id=PROJECT_ID,
             gcs_bucket=bucket_name,
-            bigquery_dataset="instruments",
+            bigquery_dataset=instruments_config.bigquery_dataset,
         )
         return StandardizedDomainCloudService(domain="instruments", cloud_target=target)
     except Exception as e:

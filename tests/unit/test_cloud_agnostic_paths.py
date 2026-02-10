@@ -181,28 +181,11 @@ class TestCloudAgnosticPaths:
                 f"Bucket name should contain project ID: {storage.cloud_target.gcs_bucket}"
             )
 
-    def test_no_direct_gcs_client_imports(self):
+    def test_no_direct_gcs_client_imports(self, cached_service_python_files):
         """Test that instruments-service code doesn't directly import get_gcs_client from unified_cloud_services."""
-        from pathlib import Path
-
-        # Use package path - invariant across environments. Path(__file__) breaks in Cloud Build
-        # where workspace root can include sibling /workspace/unified-cloud-services and
-        # /workspace/unified-trading-deployment-v2, causing false violations from dependency code.
-        import instruments_service
-
-        source_dir = Path(instruments_service.__file__).parent.resolve()
-
-        if not source_dir.exists():
-            pytest.skip("instruments_service package directory not found")
-
-        python_files = [
-            f
-            for f in source_dir.rglob("*.py")
-            if "__pycache__" not in str(f) and f.resolve().is_relative_to(source_dir)
-        ]
-
+        # Use cached file list instead of rglob() every time - significant performance improvement
         violations = []
-        for file_path in python_files:
+        for file_path in cached_service_python_files:
             try:
                 with open(file_path, "r") as f:
                     content = f.read()
