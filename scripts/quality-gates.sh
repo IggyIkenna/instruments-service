@@ -187,18 +187,33 @@ if [ "$RUN_TESTS" = true ]; then
     # Check if pytest is installed
     if ! python3 -c "import pytest" &> /dev/null; then
         echo -e "${YELLOW}Installing pytest...${NC}"
-        pip install pytest pytest-asyncio pytest-mock --quiet
+        pip install pytest pytest-asyncio pytest-mock pytest-timeout --quiet
     fi
 
-    # Set environment variables for smoke tests
+    # Check if pytest-xdist is available for parallel execution
+    if python3 -c "import xdist" 2>/dev/null || python3 -c "import pytest_xdist" 2>/dev/null; then
+        CPU_CORES=$(python3 -c "import os; print(max(1, int(os.cpu_count() * 0.75)))")
+        PARALLEL_FLAG="-n $CPU_CORES"
+        echo "✅ Using parallel execution with $CPU_CORES workers (pytest-xdist)"
+    else
+        PARALLEL_FLAG=""
+        echo "⚠️  pytest-xdist not available, running tests sequentially"
+        echo "   Install with: pip install pytest-xdist"
+    fi
+
+    # Set environment variables for tests (required for config.get_cloud_target in unit tests)
     export DEPLOYMENT_CONFIG_DIR="${REPO_ROOT}/unified-trading-deployment-v2/configs"
     export CLOUD_MOCK_MODE="true"
     export GOOGLE_CLOUD_PROJECT="test-project"
+    export INSTRUMENTS_GCS_BUCKET="test-instruments-bucket"
+    export INSTRUMENTS_GCS_BUCKET_CEFI="test-instruments-cefi"
+    export INSTRUMENTS_GCS_BUCKET_TRADFI="test-instruments-tradfi"
+    export INSTRUMENTS_GCS_BUCKET_DEFI="test-instruments-defi"
 
     if [ "$QUICK_MODE" = true ]; then
-        # Quick mode: unit tests only
-        echo "Running: pytest tests/unit/ -v --tb=short (quick mode)"
-        if python3 -m pytest tests/unit/ -v --tb=short; then
+        # Quick mode: unit tests only, use parallel if available
+        echo "Running: pytest tests/unit/ -v --tb=short $PARALLEL_FLAG (quick mode)"
+        if python3 -m pytest tests/unit/ -v --tb=short $PARALLEL_FLAG; then
             echo -e "${GREEN}✅ Unit tests PASSED${NC}"
         else
             echo -e "${RED}❌ Unit tests FAILED${NC}"
@@ -207,10 +222,10 @@ if [ "$RUN_TESTS" = true ]; then
     else
         # Full mode: all tests (matching GitHub Actions - most exhaustive)
 
-        # Unit tests
+        # Unit tests (with parallel execution)
         echo -e "\n${YELLOW}Running unit tests...${NC}"
         if [ -d "tests/unit" ]; then
-            if python3 -m pytest tests/unit/ -v --tb=short --timeout=60; then
+            if python3 -m pytest tests/unit/ -v --tb=short --timeout=60 $PARALLEL_FLAG; then
                 echo -e "${GREEN}✅ Unit tests PASSED${NC}"
             else
                 echo -e "${RED}❌ Unit tests FAILED${NC}"
@@ -220,12 +235,16 @@ if [ "$RUN_TESTS" = true ]; then
             echo "No unit tests directory found"
         fi
 
-        # Integration tests (excluding performance tests)
+        # Integration tests (with parallel when xdist available)
         echo -e "\n${YELLOW}Running integration tests...${NC}"
         if [ -d "tests/integration" ]; then
+            INTEGRATION_WORKERS=$(python3 -c "import os; print(max(2, min(3, int(os.cpu_count() * 0.3))))")
+            INTEGRATION_PARALLEL="-n $INTEGRATION_WORKERS"
+            [ -z "$PARALLEL_FLAG" ] && INTEGRATION_PARALLEL=""
             if python3 -m pytest tests/integration/ -v --tb=short --timeout=120 \
                 --ignore=tests/integration/test_performance.py \
-                -k "not api and not live and not download"; then
+                -k "not api and not live and not download" \
+                $INTEGRATION_PARALLEL; then
                 echo -e "${GREEN}✅ Integration tests PASSED${NC}"
             else
                 echo -e "${RED}❌ Integration tests FAILED${NC}"
@@ -235,10 +254,13 @@ if [ "$RUN_TESTS" = true ]; then
             echo "No integration tests directory found"
         fi
 
-        # E2E tests
+        # E2E tests (with parallel when xdist available)
         echo -e "\n${YELLOW}Running e2e tests...${NC}"
         if [ -d "tests/e2e" ]; then
-            if python3 -m pytest tests/e2e/ -v --tb=short --timeout=180; then
+            E2E_WORKERS=$(python3 -c "import os; print(max(2, min(3, int(os.cpu_count() * 0.3))))")
+            E2E_PARALLEL="-n $E2E_WORKERS"
+            [ -z "$PARALLEL_FLAG" ] && E2E_PARALLEL=""
+            if python3 -m pytest tests/e2e/ -v --tb=short --timeout=180 $E2E_PARALLEL; then
                 echo -e "${GREEN}✅ E2E tests PASSED${NC}"
             else
                 echo -e "${RED}❌ E2E tests FAILED${NC}"
@@ -248,10 +270,10 @@ if [ "$RUN_TESTS" = true ]; then
             echo "No e2e tests directory found"
         fi
 
-        # Smoke tests (shard combinatorics)
+        # Smoke tests (fast, can run in parallel)
         echo -e "\n${YELLOW}Running smoke tests...${NC}"
         if [ -d "tests/smoke" ]; then
-            if python3 -m pytest tests/smoke/ -v --tb=short --timeout=180; then
+            if python3 -m pytest tests/smoke/ -v --tb=short --timeout=180 $PARALLEL_FLAG; then
                 echo -e "${GREEN}✅ Smoke tests PASSED${NC}"
             else
                 echo -e "${RED}❌ Smoke tests FAILED${NC}"

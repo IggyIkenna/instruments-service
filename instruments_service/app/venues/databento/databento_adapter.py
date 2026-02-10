@@ -24,7 +24,7 @@ import databento as db
 import exchange_calendars as xcals
 import pandas as pd
 from databento.common.error import BentoClientError
-from unified_cloud_services import DatabentoBaseClient, DatabentoClientConfig, get_config
+from unified_cloud_services import DatabentoBaseClient, DatabentoClientConfig
 
 from instruments_service.config import UnifiedInstrumentConfig, instruments_config
 
@@ -291,7 +291,7 @@ class DatabentoAdapter:
 
         # Fetch instruments for each (dataset, stype_in) group
         # Use BATCH API if configured (re-downloads within 30 days are FREE!)
-        use_batch_api = get_config("DATABENTO_USE_BATCH_API", "true").lower() == "true"
+        use_batch_api = instruments_config.databento_use_batch_api
 
         all_instruments = {}
         for (

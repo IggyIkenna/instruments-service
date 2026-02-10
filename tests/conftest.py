@@ -278,7 +278,53 @@ def csv_sample_dir():
     return sample_dir
 
 
-@pytest.fixture(autouse=True)
+# ============================================================================
+# OPTIMIZATION: Cache expensive operations for reuse across tests
+# ============================================================================
+
+
+@pytest.fixture(scope="session")
+def cached_cloud_storage_source():
+    """Cache inspect.getsource(CloudInstrumentStorage) result - expensive operation (20KB source)."""
+    import inspect
+
+    from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
+
+    return inspect.getsource(CloudInstrumentStorage)
+
+
+@pytest.fixture(scope="session")
+def cached_service_python_files():
+    """Cache list of Python files in instruments_service directory - expensive rglob operation."""
+    from pathlib import Path
+
+    import instruments_service
+
+    source_dir = Path(instruments_service.__file__).parent.resolve()
+    return [
+        f for f in source_dir.rglob("*.py") if "__pycache__" not in str(f) and f.resolve().is_relative_to(source_dir)
+    ]
+
+
+@pytest.fixture
+def mock_instruments_service_dependencies():
+    """Shared fixture for mocking InstrumentsService dependencies - used by 30+ tests (function-scoped for isolation)."""
+    from unittest.mock import patch
+
+    with (
+        patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_processing,
+        patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage,
+        patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor") as mock_batch,
+    ):
+        mock_processing.return_value.get_processing_stats.return_value = {"exchanges_processed": 0}
+        yield {
+            "processing": mock_processing,
+            "storage": mock_storage,
+            "batch": mock_batch,
+        }
+
+
+@pytest.fixture(scope="session", autouse=True)
 def setup_test_environment(gcp_credentials, test_bucket_name):
     """Automatically setup test environment for all tests."""
     # Ensure test bucket is used (not prod)

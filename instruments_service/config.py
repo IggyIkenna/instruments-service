@@ -1684,6 +1684,11 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
     # =========================================================================
     # INSTRUMENTS-SPECIFIC PROCESSING CONFIGURATION
     # =========================================================================
+    databento_use_batch_api: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("DATABENTO_USE_BATCH_API"),
+        description="Use Databento batch API for instrument definitions (free re-download within 30 days)",
+    )
     enable_ccxt_integration: bool = Field(default=True, description="Enable CCXT metadata enrichment")
     enable_metadata_caching: bool = Field(default=True, description="Enable metadata caching")
     cache_ttl_hours: int = Field(default=24, description="Cache TTL in hours")
