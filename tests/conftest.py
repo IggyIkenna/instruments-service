@@ -47,6 +47,18 @@ def _load_env_early():
             # python-dotenv not installed, skip
             pass
 
+    # Set test defaults for CI/unit tests when .env is absent (CloudTarget requires non-empty gcs_bucket)
+    for key, default in [
+        ("INSTRUMENTS_GCS_BUCKET", "instruments-store-test"),
+        ("INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-test"),
+        ("INSTRUMENTS_GCS_BUCKET_TRADFI", "instruments-store-tradfi-test"),
+        ("INSTRUMENTS_GCS_BUCKET_DEFI", "instruments-store-defi-test"),
+        ("GCP_PROJECT_ID", "test-project"),
+        ("INSTRUMENTS_BIGQUERY_DATASET", "instruments_test"),
+    ]:
+        if not (os.getenv(key) or "").strip():
+            os.environ[key] = default
+
 
 # Load env vars immediately at import time
 _load_env_early()
