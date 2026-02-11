@@ -52,6 +52,44 @@ REPO_NAME=$(basename "$REPO_DIR")
 
 cd "$REPO_DIR"
 
+# Install project dependencies before quality gates.
+# Keep this aligned with CI/Cloud Build install behavior.
+if [ -f "pyproject.toml" ]; then
+    echo "[$REPO_NAME] Installing project dependencies..."
+    PYTHON_BIN=""
+    if [ "$REPO_NAME" = "execution-services" ]; then
+        for cand in python3.11 python3; do
+            if command -v "$cand" >/dev/null 2>&1; then
+                PYTHON_BIN="$cand"
+                break
+            fi
+        done
+    else
+        for cand in python3.13 python3.12 python3; do
+            if command -v "$cand" >/dev/null 2>&1; then
+                PYTHON_BIN="$cand"
+                break
+            fi
+        done
+    fi
+    if [ -z "$PYTHON_BIN" ]; then
+        echo "[$REPO_NAME] ❌ No compatible python interpreter found for dependency install"
+        exit 1
+    fi
+    if [ "$REPO_NAME" = "unified-cloud-services" ]; then
+        "$PYTHON_BIN" -m pip install -e ".[databento]" || "$PYTHON_BIN" -m pip install -e ".[dev]" || "$PYTHON_BIN" -m pip install -e .
+    elif [ "$REPO_NAME" = "instruments-service" ]; then
+        "$PYTHON_BIN" -m pip install -e . --no-deps || "$PYTHON_BIN" -m pip install -e .
+    elif [ "$REPO_NAME" = "execution-services" ]; then
+        "$PYTHON_BIN" -m pip install -e ".[dev]" --no-deps || "$PYTHON_BIN" -m pip install -e ".[dev]" || "$PYTHON_BIN" -m pip install -e .
+    elif [ "$REPO_NAME" = "unified-trading-deployment-v2" ]; then
+        "$PYTHON_BIN" -m pip install -e ".[dev]" || "$PYTHON_BIN" -m pip install -e .
+        "$PYTHON_BIN" -m pip install fastapi
+    else
+        "$PYTHON_BIN" -m pip install -e ".[dev]" || "$PYTHON_BIN" -m pip install -e .
+    fi
+fi
+
 # Check for changes
 if [ -z "$(git status --porcelain)" ]; then
     echo "No changes to commit in $REPO_NAME"
@@ -79,7 +117,8 @@ echo "[$REPO_NAME] Stashing changes and syncing with main..."
 git stash push -u -m "quickmerge-$$" --quiet
 
 git checkout main --quiet
-git pull origin main --quiet
+git fetch origin main --quiet
+git reset --hard origin/main --quiet
 
 BRANCH="auto/$(date +%Y%m%d-%H%M%S)-$$"
 echo "[$REPO_NAME] Creating branch $BRANCH from main"
