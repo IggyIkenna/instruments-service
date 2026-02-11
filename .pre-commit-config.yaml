@@ -1,5 +1,5 @@
 # Pre-commit hooks - auto-format on commit
-# Setup: pip install pre-commit && pre-commit install
+# Setup: pip install prek && prek install
 
 repos:
   # Ruff - Fast Python linter AND formatter
@@ -14,7 +14,7 @@ repos:
 
   # Basic file checks
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: trailing-whitespace
       - id: end-of-file-fixer
