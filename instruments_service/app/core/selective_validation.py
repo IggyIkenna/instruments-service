@@ -1,0 +1,120 @@
+"""
+Selective API Key Validation
+
+Only validates API keys for data sources required by requested venues.
+Prevents misleading API key errors and reduces Secret Manager API calls.
+
+Complies with:
+- Cursor rules: cloud-agnostic (use get_secret_with_fallback)
+- Codex: 07-security/secrets-management.md
+- Audit: SEC-01, SEC-02 (secrets from Secret Manager)
+"""
+
+import logging
+from typing import Dict, List, Optional
+
+from unified_cloud_services import get_secret_with_fallback
+from unified_cloud_services.domain import DataSourceMapping
+
+from instruments_service.config import instruments_config
+
+logger = logging.getLogger(__name__)
+
+
+def validate_required_api_keys(venues: List[str], project_id: Optional[str] = None) -> Dict[str, str]:
+    """
+    Validate and fetch API keys for requested venues only.
+
+    Args:
+        venues: List of venues to process
+        project_id: GCP project ID (defaults to config)
+
+    Returns:
+        Dict mapping data source to API key
+
+    Raises:
+        ValueError: If required API key is missing for a venue
+    """
+    if not project_id:
+        project_id = instruments_config.gcp_project_id
+
+    # Get required secrets for venues
+    required_secrets = DataSourceMapping.get_required_secrets(venues)
+
+    if not required_secrets:
+        logger.info("No API keys required for requested venues")
+        return {}
+
+    logger.info(f"Validating API keys for data sources: {list(required_secrets.keys())}")
+
+    api_keys = {}
+    errors = []
+
+    for data_source, secret_name in required_secrets.items():
+        try:
+            # Map data source to config secret name
+            if data_source == "tardis":
+                config_secret_name = instruments_config.tardis_secret_name
+                fallback_env = "TARDIS_API_KEY"
+            elif data_source == "databento":
+                config_secret_name = instruments_config.databento_secret_name
+                fallback_env = "DATABENTO_API_KEY"
+            elif data_source == "thegraph":
+                config_secret_name = instruments_config.graph_secret_name
+                fallback_env = "THE_GRAPH_API_KEY"
+            elif data_source == "alchemy":
+                config_secret_name = "alchemy-api-key"  # Not in config yet
+                fallback_env = "ALCHEMY_API_KEY"
+            elif data_source == "barchart":
+                config_secret_name = "barchart-api-key"  # Not in config yet
+                fallback_env = "BARCHART_API_KEY"
+            else:
+                logger.warning(f"Unknown data source: {data_source}")
+                continue
+
+            # Fetch API key
+            api_key = get_secret_with_fallback(
+                project_id=project_id,
+                secret_name=config_secret_name,
+                fallback_env_var=fallback_env,
+            )
+
+            if api_key:
+                api_keys[data_source] = api_key.strip()
+                logger.info(f"✅ Validated API key for {data_source}")
+            else:
+                error_msg = f"Missing API key for {data_source} (venues: {[v for v in venues if DataSourceMapping.get_data_source_for_venue(v) == data_source]})"
+                errors.append(error_msg)
+                logger.error(error_msg)
+
+        except Exception as e:
+            error_msg = f"Failed to fetch API key for {data_source}: {e}"
+            errors.append(error_msg)
+            logger.error(error_msg)
+
+    if errors:
+        raise ValueError(f"API key validation failed: {'; '.join(errors)}")
+
+    logger.info(f"✅ Validated {len(api_keys)} API keys for {len(venues)} venues")
+    return api_keys
+
+
+def get_venues_for_category(category: str, venue_mapping) -> List[str]:
+    """
+    Get all venues for a category.
+
+    Args:
+        category: Category name ("CEFI", "TRADFI", "DEFI")
+        venue_mapping: VenueMapping instance
+
+    Returns:
+        List of venue names
+    """
+    if category == "CEFI":
+        return venue_mapping.all_tardis_exchanges
+    elif category == "TRADFI":
+        return venue_mapping.all_databento_venues
+    elif category == "DEFI":
+        return venue_mapping.all_defi_venues
+    else:
+        raise ValueError(f"Unknown category: {category}")
