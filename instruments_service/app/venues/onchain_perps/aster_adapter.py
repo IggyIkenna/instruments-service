@@ -2,53 +2,25 @@
 Aster Adapter
 
 Fetches Aster perpetual futures instruments and tests historical data availability.
-Uses Aster REST API for historical data.
+Uses AsterBaseClient from unified-cloud-services for network management.
 
 Reference: https://github.com/asterdex/api-docs
 """
 
 import logging
-import time
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
 import requests
-from unified_cloud_services import handle_api_errors
+from unified_cloud_services import AsterBaseClient, AsterClientConfig, handle_api_errors
+from unified_cloud_services.clients.aster_base_client import (
+    get_cached_response,
+    set_cached_response,
+)
 
 from instruments_service.app.venues.onchain_perps.base_onchain_perp_adapter import BaseOnchainPerpAdapter
 
 logger = logging.getLogger(__name__)
-
-# Retry configuration for Aster API calls
-_ASTER_MAX_RETRIES = 3
-_ASTER_INITIAL_BACKOFF_SECONDS = 2.0
-_ASTER_BACKOFF_MULTIPLIER = 2.0
-
-# Module-level cache for Aster API responses (instrument lists rarely change)
-# Format: {cache_key: (data, timestamp)}
-_ASTER_CACHE: Dict[str, Tuple[Any, datetime]] = {}
-_ASTER_CACHE_TTL = timedelta(hours=4)  # 4 hour TTL
-
-
-def _get_cached_response(cache_key: str) -> Optional[Any]:
-    """Get cached API response if still valid."""
-    if cache_key in _ASTER_CACHE:
-        data, timestamp = _ASTER_CACHE[cache_key]
-        if datetime.now(timezone.utc) - timestamp < _ASTER_CACHE_TTL:
-            return data
-    return None
-
-
-def _set_cached_response(cache_key: str, data: Any):
-    """Cache an API response."""
-    _ASTER_CACHE[cache_key] = (data, datetime.now(timezone.utc))
-
-
-def clear_aster_cache():
-    """Clear all Aster caches."""
-    global _ASTER_CACHE
-    _ASTER_CACHE.clear()
-    logger.info("🧹 Cleared Aster cache")
 
 
 class AsterAdapter(BaseOnchainPerpAdapter):
@@ -64,8 +36,7 @@ class AsterAdapter(BaseOnchainPerpAdapter):
 
     def __init__(
         self,
-        futures_api_base_url: Optional[str] = None,
-        spot_api_base_url: Optional[str] = None,
+        base_client: Optional[AsterBaseClient] = None,
         base_currency_list: Optional[List[str]] = None,
         mvp_only: bool = True,
         chain: str = "off-chain",  # CEFI classification for bucket routing
@@ -76,26 +47,22 @@ class AsterAdapter(BaseOnchainPerpAdapter):
         Initialize Aster adapter.
 
         Args:
-            futures_api_base_url: Optional custom futures API base URL
-                (defaults to https://fapi.asterdex.com)
-            spot_api_base_url: Optional custom spot API base URL
-                (defaults to https://sapi.asterdex.com for spot trading)
+            base_client: Optional AsterBaseClient instance (creates default if not provided)
             base_currency_list: List of MVP base currencies from config (defaults to None, uses all if not provided)
             mvp_only: If True, only include MVP coins (default: True)
             chain: Chain identifier (default: 'ASTER' - Aster DEX proprietary chain)
             api_key: Optional API key (not used by Aster but required by base class)
             project_id: GCP project ID for Secret Manager
         """
-        futures_url = futures_api_base_url or "https://fapi.asterdex.com"
         super().__init__(
             venue="ASTER",
             chain=chain,
-            api_url=futures_url,  # Primary API is futures
+            api_url="https://fapi.asterdex.com",  # Primary API is futures
             api_key=api_key,
             project_id=project_id,
         )
-        self.futures_api_base_url = futures_url
-        self.spot_api_base_url = spot_api_base_url or "https://sapi.asterdex.com"
+        self._base_client = base_client
+        self._project_id = project_id
         self.mvp_only = mvp_only
         # Use provided base_currency_list or empty set (no filtering)
         self.mvp_base_currencies = {c.upper() for c in base_currency_list} if base_currency_list else set()
@@ -103,64 +70,16 @@ class AsterAdapter(BaseOnchainPerpAdapter):
             f"✅ AsterAdapter initialized (MVP only: {mvp_only}, base currencies: {len(self.mvp_base_currencies) if self.mvp_base_currencies else 'all'})"
         )
 
-    def _request_with_retry(self, url: str, params: Optional[Dict] = None, timeout: int = 30) -> requests.Response:
-        """
-        Make an HTTP GET request with exponential backoff retry.
-
-        Retries on DNS resolution failures, connection errors, and transient HTTP errors.
-        This prevents single transient failures (especially DNS in Docker containers)
-        from causing the entire instrument generation to fail.
-
-        Args:
-            url: The URL to request
-            params: Optional query parameters
-            timeout: Request timeout in seconds
-
-        Returns:
-            requests.Response on success
-
-        Raises:
-            requests.exceptions.RequestException: After all retries exhausted
-        """
-        last_exception = None
-        backoff = _ASTER_INITIAL_BACKOFF_SECONDS
-
-        for attempt in range(1, _ASTER_MAX_RETRIES + 1):
-            try:
-                response = requests.get(url, params=params, timeout=timeout)
-                response.raise_for_status()
-                return response
-            except (
-                requests.exceptions.ConnectionError,
-                requests.exceptions.Timeout,
-            ) as e:
-                last_exception = e
-                if attempt < _ASTER_MAX_RETRIES:
-                    logger.warning(
-                        f"⚠️ Aster API request failed (attempt {attempt}/{_ASTER_MAX_RETRIES}): {e}. "
-                        f"Retrying in {backoff:.1f}s..."
-                    )
-                    time.sleep(backoff)
-                    backoff *= _ASTER_BACKOFF_MULTIPLIER
-                else:
-                    logger.error(f"❌ Aster API request failed after {_ASTER_MAX_RETRIES} attempts: {e}")
-            except requests.exceptions.HTTPError as e:
-                # Retry on 5xx server errors, fail immediately on 4xx client errors
-                if e.response is not None and e.response.status_code >= 500:
-                    last_exception = e
-                    if attempt < _ASTER_MAX_RETRIES:
-                        logger.warning(
-                            f"⚠️ Aster API server error {e.response.status_code} "
-                            f"(attempt {attempt}/{_ASTER_MAX_RETRIES}). Retrying in {backoff:.1f}s..."
-                        )
-                        time.sleep(backoff)
-                        backoff *= _ASTER_BACKOFF_MULTIPLIER
-                    else:
-                        logger.error(f"❌ Aster API server error after {_ASTER_MAX_RETRIES} attempts: {e}")
-                else:
-                    raise  # 4xx errors are not retryable
-
-        raise last_exception  # type: ignore[misc]
+    @property
+    def client(self) -> AsterBaseClient:
+        """Lazy-load AsterBaseClient (singleton pattern per adapter instance)."""
+        if self._base_client is None:
+            self._base_client = AsterBaseClient(
+                config=AsterClientConfig.from_env(),
+                project_id=self._project_id,
+            )
+            logger.debug("Lazy-loaded AsterBaseClient")
+        return self._base_client
 
     @handle_api_errors(max_retries=3)
     async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
@@ -198,16 +117,18 @@ class AsterAdapter(BaseOnchainPerpAdapter):
         try:
             # Check cache first (instrument lists rarely change)
             cache_key = "aster_futures_exchange_info"
-            cached_data = _get_cached_response(cache_key)
+            cached_data = get_cached_response(cache_key)
 
             if cached_data is not None:
                 logger.info("📋 Using cached Aster perpetual exchange info")
                 exchange_info = cached_data
             else:
-                # Get exchange info to get all symbols (with retry for DNS/connection failures)
-                response = self._request_with_retry(f"{self.futures_api_base_url}/fapi/v1/exchangeInfo", timeout=30)
+                # Get exchange info to get all symbols (retries handled by BaseClient)
+                url = self.client.get_futures_url("/fapi/v1/exchangeInfo")
+                response = self.client.sync_session.get(url, timeout=30)
+                response.raise_for_status()
                 exchange_info = response.json()
-                _set_cached_response(cache_key, exchange_info)
+                set_cached_response(cache_key, exchange_info)
 
             instruments = {}
             symbols = exchange_info.get("symbols", [])
@@ -274,17 +195,19 @@ class AsterAdapter(BaseOnchainPerpAdapter):
         try:
             # Check cache first
             cache_key = "aster_spot_exchange_info"
-            cached_data = _get_cached_response(cache_key)
+            cached_data = get_cached_response(cache_key)
 
             if cached_data is not None:
                 logger.debug("📋 Using cached Aster spot exchange info")
                 exchange_info = cached_data
             else:
-                # Get exchange info from spot API (sapi.asterdex.com) with retry
+                # Get exchange info from spot API (retries handled by BaseClient)
                 # Note: Aster spot API uses /api/v1/exchangeInfo endpoint
-                response = self._request_with_retry(f"{self.spot_api_base_url}/api/v1/exchangeInfo", timeout=30)
+                url = self.client.get_spot_url("/api/v1/exchangeInfo")
+                response = self.client.sync_session.get(url, timeout=30)
+                response.raise_for_status()
                 exchange_info = response.json()
-                _set_cached_response(cache_key, exchange_info)
+                set_cached_response(cache_key, exchange_info)
 
             instruments = {}
             symbols = exchange_info.get("symbols", [])
@@ -519,8 +442,9 @@ class AsterAdapter(BaseOnchainPerpAdapter):
             start_ms = int(start_date.timestamp() * 1000)
             end_ms = int(end_date.timestamp() * 1000)
 
-            response = self._request_with_retry(
-                f"{self.futures_api_base_url}/fapi/v1/klines",
+            url = self.client.get_futures_url("/fapi/v1/klines")
+            response = self.client.sync_session.get(
+                url,
                 params={
                     "symbol": symbol,
                     "interval": interval,
