@@ -2,47 +2,24 @@
 Hyperliquid Adapter
 
 Fetches Hyperliquid perpetual futures instruments and tests historical data availability.
-Uses Hyperliquid REST API and S3 archive for historical data.
+Uses HyperliquidBaseClient from unified-cloud-services for network management.
 
 Reference: https://hyperliquid.gitbook.io/hyperliquid-docs/
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
 
-import requests
-from unified_cloud_services import handle_api_errors
+from unified_cloud_services import HyperliquidBaseClient, HyperliquidClientConfig, handle_api_errors
+from unified_cloud_services.clients.hyperliquid_base_client import (
+    get_cached_response,
+    set_cached_response,
+)
 
 from instruments_service.app.venues.onchain_perps.base_onchain_perp_adapter import BaseOnchainPerpAdapter
 
 logger = logging.getLogger(__name__)
-
-# Module-level cache for Hyperliquid API responses (instrument lists rarely change)
-# Format: {cache_key: (data, timestamp)}
-_HYPERLIQUID_CACHE: Dict[str, Tuple[Any, datetime]] = {}
-_HYPERLIQUID_CACHE_TTL = timedelta(hours=4)  # 4 hour TTL
-
-
-def _get_cached_response(cache_key: str) -> Optional[Any]:
-    """Get cached API response if still valid."""
-    if cache_key in _HYPERLIQUID_CACHE:
-        data, timestamp = _HYPERLIQUID_CACHE[cache_key]
-        if datetime.now(timezone.utc) - timestamp < _HYPERLIQUID_CACHE_TTL:
-            return data
-    return None
-
-
-def _set_cached_response(cache_key: str, data: Any):
-    """Cache an API response."""
-    _HYPERLIQUID_CACHE[cache_key] = (data, datetime.now(timezone.utc))
-
-
-def clear_hyperliquid_cache():
-    """Clear all Hyperliquid caches."""
-    global _HYPERLIQUID_CACHE
-    _HYPERLIQUID_CACHE.clear()
-    logger.info("🧹 Cleared Hyperliquid cache")
 
 
 class HyperliquidAdapter(BaseOnchainPerpAdapter):
@@ -58,7 +35,7 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
 
     def __init__(
         self,
-        api_base_url: Optional[str] = None,
+        base_client: Optional[HyperliquidBaseClient] = None,
         base_currency_list: Optional[List[str]] = None,
         mvp_only: bool = True,
         chain: str = "off-chain",  # CEFI classification for bucket routing
@@ -69,24 +46,39 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
         Initialize Hyperliquid adapter.
 
         Args:
-            api_base_url: Optional custom API base URL (default from config)
+            base_client: Optional HyperliquidBaseClient instance (creates default if not provided)
             base_currency_list: List of MVP base currencies from config (defaults to None, uses all if not provided)
             mvp_only: If True, only include MVP coins (default: True)
             chain: Chain identifier (default: 'HYPERLIQUID')
             api_key: Optional API key (not used by Hyperliquid but required by base class)
             project_id: GCP project ID for Secret Manager
         """
-        from instruments_service.config import instruments_config
-
-        api_url = api_base_url or instruments_config.hyperliquid_api_url
-        super().__init__(venue="HYPERLIQUID", chain=chain, api_url=api_url, api_key=api_key, project_id=project_id)
-        self.api_base_url = api_url
+        super().__init__(
+            venue="HYPERLIQUID",
+            chain=chain,
+            api_url="https://api.hyperliquid.xyz",
+            api_key=api_key,
+            project_id=project_id,
+        )
+        self._base_client = base_client
+        self._project_id = project_id
         self.mvp_only = mvp_only
         # Use provided base_currency_list or empty set (no filtering)
         self.mvp_base_currencies = {c.upper() for c in base_currency_list} if base_currency_list else set()
         logger.info(
             f"✅ HyperliquidAdapter initialized (MVP only: {mvp_only}, base currencies: {len(self.mvp_base_currencies) if self.mvp_base_currencies else 'all'})"
         )
+
+    @property
+    def client(self) -> HyperliquidBaseClient:
+        """Lazy-load HyperliquidBaseClient (singleton pattern per adapter instance)."""
+        if self._base_client is None:
+            self._base_client = HyperliquidBaseClient(
+                config=HyperliquidClientConfig.from_env(),
+                project_id=self._project_id,
+            )
+            logger.debug("Lazy-loaded HyperliquidBaseClient")
+        return self._base_client
 
     @handle_api_errors(max_retries=3)
     async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
@@ -124,22 +116,23 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
         try:
             # Check cache first (instrument lists rarely change)
             cache_key = "hyperliquid_perp_meta"
-            cached_metadata = _get_cached_response(cache_key)
+            cached_metadata = get_cached_response(cache_key)
 
             if cached_metadata is not None:
                 logger.info("📋 Using cached Hyperliquid perpetual metadata")
                 metadata = cached_metadata
             else:
                 # Get perpetual metadata (use "meta" not "perpetualMetadata")
-                response = requests.post(
-                    f"{self.api_base_url}/info",
+                url = self.client.get_api_url("/info")
+                response = self.client.sync_session.post(
+                    url,
                     json={"type": "meta"},
                     headers={"Content-Type": "application/json"},
                     timeout=30,
                 )
                 response.raise_for_status()
                 metadata = response.json()
-                _set_cached_response(cache_key, metadata)
+                set_cached_response(cache_key, metadata)
 
             instruments = {}
             universe = metadata.get("universe", [])
@@ -241,22 +234,23 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
         try:
             # Check cache first (reuses same metadata as perpetuals)
             cache_key = "hyperliquid_perp_meta"
-            cached_metadata = _get_cached_response(cache_key)
+            cached_metadata = get_cached_response(cache_key)
 
             if cached_metadata is not None:
                 logger.debug("📋 Using cached Hyperliquid metadata for spot pairs")
                 metadata = cached_metadata
             else:
                 # Get perpetual metadata (same endpoint, but we'll create SPOT_PAIR instruments)
-                response = requests.post(
-                    f"{self.api_base_url}/info",
+                url = self.client.get_api_url("/info")
+                response = self.client.sync_session.post(
+                    url,
                     json={"type": "meta"},
                     headers={"Content-Type": "application/json"},
                     timeout=30,
                 )
                 response.raise_for_status()
                 metadata = response.json()
-                _set_cached_response(cache_key, metadata)
+                set_cached_response(cache_key, metadata)
 
             instruments = {}
             universe = metadata.get("universe", [])
@@ -449,8 +443,9 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
             start_ms = int(start_date.timestamp() * 1000)
             end_ms = int(end_date.timestamp() * 1000)
 
-            response = requests.post(
-                f"{self.api_base_url}/info",
+            url = self.client.get_api_url("/info")
+            response = self.client.sync_session.post(
+                url,
                 json={
                     "type": "candleSnapshot",
                     "req": {
