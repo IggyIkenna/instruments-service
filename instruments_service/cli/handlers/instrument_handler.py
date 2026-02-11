@@ -99,6 +99,7 @@ class InstrumentHandler(ModeHandler):
 
     def _execute_instrument_generation(self, start_date, end_date, force=False, **kwargs):
         """Generate instruments with direct GCS existence checks."""
+        log_event("STARTED")
         log_event("VALIDATION_STARTED")
         try:
             # Parse dates
@@ -137,6 +138,7 @@ class InstrumentHandler(ModeHandler):
             log_event("VALIDATION_COMPLETED")
         except Exception as e:
             log_event("VALIDATION_FAILED", str(e))
+            log_event("FAILED", f"Validation error: {str(e)}")
             raise
 
         # Observability metrics tracking
@@ -350,6 +352,12 @@ class InstrumentHandler(ModeHandler):
         logger.info(f"   Date-level errors: {total_errors}")
         logger.info(f"   Processing errors: {total_processing_errors}")
         logger.info(f"   Processing warnings: {total_processing_warnings}")
+
+        # Log completion status
+        if total_errors == 0:
+            log_event("STOPPED")
+        else:
+            log_event("FAILED", f"{total_errors} date-level errors, {total_processing_errors} processing errors")
 
         return {
             "status": "success" if total_errors == 0 else "partial",
