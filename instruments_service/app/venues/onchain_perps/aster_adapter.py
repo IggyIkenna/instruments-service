@@ -8,6 +8,7 @@ Reference: https://github.com/asterdex/api-docs
 """
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -17,6 +18,11 @@ from unified_cloud_services import handle_api_errors
 from instruments_service.app.venues.onchain_perps.base_onchain_perp_adapter import BaseOnchainPerpAdapter
 
 logger = logging.getLogger(__name__)
+
+# Retry configuration for Aster API calls
+_ASTER_MAX_RETRIES = 3
+_ASTER_INITIAL_BACKOFF_SECONDS = 2.0
+_ASTER_BACKOFF_MULTIPLIER = 2.0
 
 # Module-level cache for Aster API responses (instrument lists rarely change)
 # Format: {cache_key: (data, timestamp)}
@@ -97,6 +103,65 @@ class AsterAdapter(BaseOnchainPerpAdapter):
             f"✅ AsterAdapter initialized (MVP only: {mvp_only}, base currencies: {len(self.mvp_base_currencies) if self.mvp_base_currencies else 'all'})"
         )
 
+    def _request_with_retry(self, url: str, params: Optional[Dict] = None, timeout: int = 30) -> requests.Response:
+        """
+        Make an HTTP GET request with exponential backoff retry.
+
+        Retries on DNS resolution failures, connection errors, and transient HTTP errors.
+        This prevents single transient failures (especially DNS in Docker containers)
+        from causing the entire instrument generation to fail.
+
+        Args:
+            url: The URL to request
+            params: Optional query parameters
+            timeout: Request timeout in seconds
+
+        Returns:
+            requests.Response on success
+
+        Raises:
+            requests.exceptions.RequestException: After all retries exhausted
+        """
+        last_exception = None
+        backoff = _ASTER_INITIAL_BACKOFF_SECONDS
+
+        for attempt in range(1, _ASTER_MAX_RETRIES + 1):
+            try:
+                response = requests.get(url, params=params, timeout=timeout)
+                response.raise_for_status()
+                return response
+            except (
+                requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+            ) as e:
+                last_exception = e
+                if attempt < _ASTER_MAX_RETRIES:
+                    logger.warning(
+                        f"⚠️ Aster API request failed (attempt {attempt}/{_ASTER_MAX_RETRIES}): {e}. "
+                        f"Retrying in {backoff:.1f}s..."
+                    )
+                    time.sleep(backoff)
+                    backoff *= _ASTER_BACKOFF_MULTIPLIER
+                else:
+                    logger.error(f"❌ Aster API request failed after {_ASTER_MAX_RETRIES} attempts: {e}")
+            except requests.exceptions.HTTPError as e:
+                # Retry on 5xx server errors, fail immediately on 4xx client errors
+                if e.response is not None and e.response.status_code >= 500:
+                    last_exception = e
+                    if attempt < _ASTER_MAX_RETRIES:
+                        logger.warning(
+                            f"⚠️ Aster API server error {e.response.status_code} "
+                            f"(attempt {attempt}/{_ASTER_MAX_RETRIES}). Retrying in {backoff:.1f}s..."
+                        )
+                        time.sleep(backoff)
+                        backoff *= _ASTER_BACKOFF_MULTIPLIER
+                    else:
+                        logger.error(f"❌ Aster API server error after {_ASTER_MAX_RETRIES} attempts: {e}")
+                else:
+                    raise  # 4xx errors are not retryable
+
+        raise last_exception  # type: ignore[misc]
+
     @handle_api_errors(max_retries=3)
     async def get_instrument_metadata(self) -> List[Dict[str, Any]]:
         """
@@ -139,9 +204,8 @@ class AsterAdapter(BaseOnchainPerpAdapter):
                 logger.info("📋 Using cached Aster perpetual exchange info")
                 exchange_info = cached_data
             else:
-                # Get exchange info to get all symbols
-                response = requests.get(f"{self.futures_api_base_url}/fapi/v1/exchangeInfo", timeout=30)
-                response.raise_for_status()
+                # Get exchange info to get all symbols (with retry for DNS/connection failures)
+                response = self._request_with_retry(f"{self.futures_api_base_url}/fapi/v1/exchangeInfo", timeout=30)
                 exchange_info = response.json()
                 _set_cached_response(cache_key, exchange_info)
 
@@ -216,10 +280,9 @@ class AsterAdapter(BaseOnchainPerpAdapter):
                 logger.debug("📋 Using cached Aster spot exchange info")
                 exchange_info = cached_data
             else:
-                # Get exchange info from spot API (sapi.asterdex.com)
+                # Get exchange info from spot API (sapi.asterdex.com) with retry
                 # Note: Aster spot API uses /api/v1/exchangeInfo endpoint
-                response = requests.get(f"{self.spot_api_base_url}/api/v1/exchangeInfo", timeout=30)
-                response.raise_for_status()
+                response = self._request_with_retry(f"{self.spot_api_base_url}/api/v1/exchangeInfo", timeout=30)
                 exchange_info = response.json()
                 _set_cached_response(cache_key, exchange_info)
 
@@ -456,7 +519,7 @@ class AsterAdapter(BaseOnchainPerpAdapter):
             start_ms = int(start_date.timestamp() * 1000)
             end_ms = int(end_date.timestamp() * 1000)
 
-            response = requests.get(
+            response = self._request_with_retry(
                 f"{self.futures_api_base_url}/fapi/v1/klines",
                 params={
                     "symbol": symbol,
@@ -468,15 +531,12 @@ class AsterAdapter(BaseOnchainPerpAdapter):
                 timeout=30,
             )
 
-            if response.status_code == 200:
-                klines = response.json()
-                if klines and len(klines) > 0:
-                    logger.info(f"✅ Historical candles ({interval}) available for {symbol}")
-                    return True
-                else:
-                    logger.warning(f"⚠️ No candles found for {symbol} in date range")
+            klines = response.json()
+            if klines and len(klines) > 0:
+                logger.info(f"✅ Historical candles ({interval}) available for {symbol}")
+                return True
             else:
-                logger.warning(f"⚠️ Failed to fetch candles for {symbol}: {response.status_code}")
+                logger.warning(f"⚠️ No candles found for {symbol} in date range")
         except Exception as e:
             logger.warning(f"⚠️ Error testing candles for {symbol}: {e}")
 
