@@ -76,10 +76,11 @@ class TestCBOECalendar:
         """Verify CBOE has correct session configuration (closes 15 min later than NYSE)."""
         import inspect
 
-        from instruments_service.app.venues.databento.databento_adapter import DatabentoAdapter
+        from instruments_service.app.venues.databento.converters.instrument_converter import (
+            get_exchange_trading_hours,
+        )
 
-        adapter = DatabentoAdapter.__new__(DatabentoAdapter)
-        source = inspect.getsource(adapter._get_exchange_trading_hours)
+        source = inspect.getsource(get_exchange_trading_hours)
 
         # CBOE should have close at 16:15 (4:15 PM ET)
         assert '"CBOE"' in source
