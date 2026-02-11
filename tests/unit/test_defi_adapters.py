@@ -1,5 +1,7 @@
 """
-Unit tests for DeFi adapters (Balancer, Hyperliquid, EtherFi, Lido, Morpho, Curve, Uniswap V3, Aster).
+Unit tests for DeFi adapters (Balancer, EtherFi, Lido, Morpho, Curve, Uniswap V3).
+
+Note: Aster and Hyperliquid tests are in test_onchain_perp_adapters.py (moved to onchain_perps/).
 """
 
 from unittest.mock import Mock, patch
@@ -94,99 +96,8 @@ class TestBalancerAdapter:
             assert isinstance(result, dict)
 
 
-class TestHyperliquidAdapter:
-    """Tests for HyperliquidAdapter."""
-
-    def test_init_default(self):
-        """Test default initialization."""
-        with patch(
-            "instruments_service.app.venues.defi.hyperliquid_adapter.BaseDefiAdapter.__init__",
-            return_value=None,
-        ):
-            from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
-
-            adapter = HyperliquidAdapter.__new__(HyperliquidAdapter)
-            adapter.chain = "off-chain"
-            adapter.project_id = "test-project"
-            adapter.venue = "HYPERLIQUID"
-            adapter.api_base_url = "https://api.hyperliquid.xyz"
-            adapter.mvp_only = True
-            adapter.mvp_base_currencies = set()
-
-            assert adapter.venue == "HYPERLIQUID"
-            assert adapter.api_base_url == "https://api.hyperliquid.xyz"
-
-    def test_init_with_mvp_currencies(self):
-        """Test initialization with MVP base currencies."""
-        with patch(
-            "instruments_service.app.venues.defi.hyperliquid_adapter.BaseDefiAdapter.__init__",
-            return_value=None,
-        ):
-            from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
-
-            adapter = HyperliquidAdapter.__new__(HyperliquidAdapter)
-            adapter.chain = "off-chain"
-            adapter.project_id = "test-project"
-            adapter.venue = "HYPERLIQUID"
-            adapter.api_base_url = "https://api.hyperliquid.xyz"
-            adapter.mvp_only = True
-            base_currency_list = ["BTC", "ETH", "SOL"]
-            adapter.mvp_base_currencies = {c.upper() for c in base_currency_list}
-
-            assert "BTC" in adapter.mvp_base_currencies
-            assert "ETH" in adapter.mvp_base_currencies
-            assert "SOL" in adapter.mvp_base_currencies
-
-    def test_fetch_perpetuals_empty(self):
-        """Test fetch_perpetuals with empty API response."""
-        with patch(
-            "instruments_service.app.venues.defi.hyperliquid_adapter.BaseDefiAdapter.__init__",
-            return_value=None,
-        ):
-            from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
-
-            adapter = HyperliquidAdapter.__new__(HyperliquidAdapter)
-            adapter.chain = "off-chain"
-            adapter.venue = "HYPERLIQUID"
-            adapter.api_base_url = "https://api.hyperliquid.xyz"
-            adapter.mvp_only = False
-            adapter.mvp_base_currencies = set()
-            adapter.project_id = "test-project"
-
-            with patch("requests.post") as mock_post:
-                mock_response = Mock()
-                mock_response.json.return_value = []
-                mock_response.raise_for_status = Mock()
-                mock_post.return_value = mock_response
-
-                result = adapter.fetch_perpetuals()
-                assert isinstance(result, dict)
-
-    def test_fetch_perpetuals_with_data(self):
-        """Test fetch_perpetuals with API data."""
-        with patch(
-            "instruments_service.app.venues.defi.hyperliquid_adapter.BaseDefiAdapter.__init__",
-            return_value=None,
-        ):
-            from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
-
-            adapter = HyperliquidAdapter.__new__(HyperliquidAdapter)
-            adapter.chain = "off-chain"
-            adapter.venue = "HYPERLIQUID"
-            adapter.api_base_url = "https://api.hyperliquid.xyz"
-            adapter.mvp_only = False
-            adapter.mvp_base_currencies = set()
-            adapter.project_id = "test-project"
-
-            with patch("requests.post") as mock_post:
-                mock_meta = [{"universe": [{"name": "BTC", "szDecimals": 3}]}]
-                mock_response = Mock()
-                mock_response.json.return_value = mock_meta
-                mock_response.raise_for_status = Mock()
-                mock_post.return_value = mock_response
-
-                result = adapter.fetch_perpetuals()
-                assert isinstance(result, dict)
+# NOTE: Hyperliquid and Aster adapter tests moved to test_onchain_perp_adapters.py
+# These adapters are now in venues/onchain_perps/ and use BaseClients from unified-cloud-services
 
 
 class TestEtherFiAdapter:
@@ -415,10 +326,10 @@ class TestAsterAdapter:
     def test_init_default(self):
         """Test default initialization."""
         with patch(
-            "instruments_service.app.venues.defi.aster_adapter.BaseDefiAdapter.__init__",
+            "instruments_service.app.venues.onchain_perps.aster_adapter.BaseOnchainPerpAdapter.__init__",
             return_value=None,
         ):
-            from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
+            from instruments_service.app.venues.onchain_perps.aster_adapter import AsterAdapter
 
             adapter = AsterAdapter.__new__(AsterAdapter)
             adapter.chain = "off-chain"
@@ -433,10 +344,10 @@ class TestAsterAdapter:
     def test_fetch_perpetuals_empty(self):
         """Test fetch_perpetuals with empty response."""
         with patch(
-            "instruments_service.app.venues.defi.aster_adapter.BaseDefiAdapter.__init__",
+            "instruments_service.app.venues.onchain_perps.aster_adapter.BaseOnchainPerpAdapter.__init__",
             return_value=None,
         ):
-            from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
+            from instruments_service.app.venues.onchain_perps.aster_adapter import AsterAdapter
 
             adapter = AsterAdapter.__new__(AsterAdapter)
             adapter.chain = "off-chain"
@@ -458,10 +369,10 @@ class TestAsterAdapter:
     def test_fetch_spot_pairs_empty(self):
         """Test fetch_spot_pairs with empty response."""
         with patch(
-            "instruments_service.app.venues.defi.aster_adapter.BaseDefiAdapter.__init__",
+            "instruments_service.app.venues.onchain_perps.aster_adapter.BaseOnchainPerpAdapter.__init__",
             return_value=None,
         ):
-            from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
+            from instruments_service.app.venues.onchain_perps.aster_adapter import AsterAdapter
 
             adapter = AsterAdapter.__new__(AsterAdapter)
             adapter.chain = "off-chain"
@@ -576,16 +487,19 @@ class TestUniswapV3AdapterExtended:
             assert isinstance(result, dict)
 
 
-class TestHyperliquidAdapterExtended:
+# NOTE: Hyperliquid extended tests moved to test_onchain_perp_adapters.py
+
+
+class TestRemovedHyperliquidAdapterExtended:
     """Extended tests for HyperliquidAdapter."""
 
     def test_fetch_spot_pairs_empty(self):
         """Test fetch_spot_pairs with empty response."""
         with patch(
-            "instruments_service.app.venues.defi.hyperliquid_adapter.BaseDefiAdapter.__init__",
+            "instruments_service.app.venues.onchain_perps.hyperliquid_adapter.BaseOnchainPerpAdapter.__init__",
             return_value=None,
         ):
-            from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
+            from instruments_service.app.venues.onchain_perps.hyperliquid_adapter import HyperliquidAdapter
 
             adapter = HyperliquidAdapter.__new__(HyperliquidAdapter)
             adapter.chain = "off-chain"
@@ -605,16 +519,19 @@ class TestHyperliquidAdapterExtended:
                 assert isinstance(result, dict)
 
 
-class TestAsterAdapterExtended:
+# NOTE: Aster extended tests moved to test_onchain_perp_adapters.py
+
+
+class TestRemovedAsterAdapterExtended:
     """Extended tests for AsterAdapter."""
 
     def test_fetch_perpetuals_with_data(self):
         """Test fetch_perpetuals with API data."""
         with patch(
-            "instruments_service.app.venues.defi.aster_adapter.BaseDefiAdapter.__init__",
+            "instruments_service.app.venues.onchain_perps.aster_adapter.BaseOnchainPerpAdapter.__init__",
             return_value=None,
         ):
-            from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
+            from instruments_service.app.venues.onchain_perps.aster_adapter import AsterAdapter
 
             adapter = AsterAdapter.__new__(AsterAdapter)
             adapter.chain = "off-chain"
@@ -637,10 +554,10 @@ class TestAsterAdapterExtended:
     def test_fetch_spot_pairs_with_data(self):
         """Test fetch_spot_pairs with API data."""
         with patch(
-            "instruments_service.app.venues.defi.aster_adapter.BaseDefiAdapter.__init__",
+            "instruments_service.app.venues.onchain_perps.aster_adapter.BaseOnchainPerpAdapter.__init__",
             return_value=None,
         ):
-            from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
+            from instruments_service.app.venues.onchain_perps.aster_adapter import AsterAdapter
 
             adapter = AsterAdapter.__new__(AsterAdapter)
             adapter.chain = "off-chain"
