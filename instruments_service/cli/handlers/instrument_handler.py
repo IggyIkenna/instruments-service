@@ -9,13 +9,22 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from unified_cloud_services import VenueMapping, get_date_range, parse_date
+
+try:
+    from unified_cloud_services.observability import log_event
+except ImportError:
+
+    def log_event(event_name: str, details: str = "") -> None:
+        pass  # noqa: ARG001
+
 
 from instruments_service.app.core.cloud_data_provider import CloudDataProvider
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.instruments_service import InstrumentsService
+from instruments_service.app.core.selective_validation import validate_required_api_keys
 from instruments_service.cli.base_handler import ModeHandler
 
 logger = logging.getLogger(__name__)
@@ -53,20 +62,84 @@ class InstrumentHandler(ModeHandler):
 
         logger.debug("✅ InstrumentHandler initialized")
 
+    def _get_venues_to_process(
+        self, requested_venues: Optional[List[str]], cefi: bool, tradfi: bool, defi: bool
+    ) -> List[str]:
+        """
+        Get list of venues to process based on CLI args.
+
+        Args:
+            requested_venues: Explicit venues from --venues flag (optional)
+            cefi: Whether to process CEFI venues
+            tradfi: Whether to process TRADFI venues
+            defi: Whether to process DEFI venues
+
+        Returns:
+            List of venue names to process
+        """
+        venues = []
+
+        # If explicit venues requested, use those (takes precedence)
+        if requested_venues:
+            return requested_venues
+
+        # Otherwise, build from categories
+        if cefi:
+            venues.extend(self.venue_mapping.all_tardis_exchanges)
+        if tradfi:
+            venues.extend(self.venue_mapping.all_databento_venues)
+        if defi:
+            venues.extend(self.venue_mapping.all_defi_venues)
+
+        return venues
+
     def run(self, start_date, end_date, force=False, **kwargs) -> Dict[str, Any]:
         """Execute instrument generation."""
         return self._execute_instrument_generation(start_date, end_date, force, **kwargs)
 
     def _execute_instrument_generation(self, start_date, end_date, force=False, **kwargs):
         """Generate instruments with direct GCS existence checks."""
-        # Parse dates
-        if isinstance(start_date, str):
-            start_date = parse_date(start_date)
-        if isinstance(end_date, str):
-            end_date = parse_date(end_date)
+        log_event("STARTED")
+        log_event("VALIDATION_STARTED")
+        try:
+            # Parse dates
+            if isinstance(start_date, str):
+                start_date = parse_date(start_date)
+            if isinstance(end_date, str):
+                end_date = parse_date(end_date)
 
-        # Generate date range
-        date_range = get_date_range(start_date, end_date)
+            # Generate date range
+            date_range = get_date_range(start_date, end_date)
+
+            # Get requested venues (from --venues CLI arg or default to all)
+            requested_venues = kwargs.get("venues")
+
+            # Determine market categories to process
+            cefi = kwargs.get("cefi", False)
+            tradfi = kwargs.get("tradfi", False)
+            defi = kwargs.get("defi", False)
+
+            # Default: process ALL if no flags specified
+            if not cefi and not tradfi and not defi:
+                cefi = tradfi = defi = True
+
+            # Build venue list based on categories + explicit venues
+            venues_to_process = self._get_venues_to_process(requested_venues, cefi, tradfi, defi)
+
+            # Selective API key validation (only for requested venues)
+            try:
+                # Validate API keys (result not used yet, but validation ensures keys exist)
+                _ = validate_required_api_keys(venues_to_process)
+                logger.info(f"✅ Validated API keys for {len(venues_to_process)} venues")
+            except ValueError as e:
+                log_event("VALIDATION_FAILED", f"API key validation: {str(e)}")
+                raise
+
+            log_event("VALIDATION_COMPLETED")
+        except Exception as e:
+            log_event("VALIDATION_FAILED", str(e))
+            log_event("FAILED", f"Validation error: {str(e)}")
+            raise
 
         # Observability metrics tracking
         total_generated = 0
@@ -108,7 +181,11 @@ class InstrumentHandler(ModeHandler):
         else:
             exchanges_to_process = []
 
-        for date in date_range:
+        # Compute day-venue combinations for 3-level event counters
+        total_combinations = len(date_range) * len(venues_to_process)
+        total_dates = len(date_range)
+
+        for date_idx, date in enumerate(date_range, start=1):
             # Skip future dates
             if date.date() > today:
                 logger.warning(f"⚠️ Skipping future date: {date.strftime('%Y-%m-%d')}")
@@ -165,7 +242,31 @@ class InstrumentHandler(ModeHandler):
                         # File doesn't exist, proceed with generation
                         pass
 
-                logger.info(f"📅 Processing {date.strftime('%Y-%m-%d')}")
+                # Level 1: Day-venue combination counters (shows overall progress)
+                # Calculate day-venue progress: this date processes ALL venues_to_process
+                start_combination = (date_idx - 1) * len(venues_to_process) + 1
+                end_combination = date_idx * len(venues_to_process)
+
+                # Level 2: Daily progress (dates being processed)
+                log_event("DATE_PROCESSING_STARTED", f"{date.strftime('%Y-%m-%d')} ({date_idx}/{total_dates})")
+
+                # Level 3: Venues for this date (will process all in single call)
+                venues_str = ", ".join(venues_to_process[:3])
+                if len(venues_to_process) > 3:
+                    venues_str += f" + {len(venues_to_process) - 3} more"
+                log_event(
+                    "VENUE_PROCESSING_STARTED",
+                    f"{len(venues_to_process)} venues for {date.strftime('%Y-%m-%d')}: {venues_str}",
+                )
+
+                logger.info(
+                    f"📅 Processing {date.strftime('%Y-%m-%d')} ({start_combination}-{end_combination}/{total_combinations} day-venue combinations)"
+                )
+
+                log_event("DATA_INGESTION_STARTED")
+                log_event("ADAPTER_FETCH_STARTED", "instruments")
+                log_event("PROCESSING_STARTED")
+                log_event("CLASSIFICATION_STARTED")
 
                 # Delegate to InstrumentsService for orchestration
                 result = asyncio.run(
@@ -188,6 +289,20 @@ class InstrumentHandler(ModeHandler):
                 total_processing_errors += processing_errors
                 total_processing_warnings += processing_warnings
 
+                log_event("CLASSIFICATION_COMPLETED", str(result.get("instruments_generated", 0)))
+                log_event("PROCESSING_COMPLETED")
+                log_event("ADAPTER_FETCH_COMPLETED", str(result.get("instruments_generated", 0)))
+                log_event("DATA_INGESTION_COMPLETED", str(result.get("instruments_generated", 0)))
+                log_event("UPLOAD_STARTED")
+                log_event("UPLOAD_COMPLETED")
+
+                # Venue completion event
+                log_event(
+                    "VENUE_PROCESSING_COMPLETED", f"{len(venues_to_process)} venues for {date.strftime('%Y-%m-%d')}"
+                )
+
+                # Date completion event
+                log_event("DATE_PROCESSING_COMPLETED", date.strftime("%Y-%m-%d"))
                 if result.get("status") == "success":
                     total_generated += result.get("instruments_generated", 0)
                     total_dates_processed += 1
@@ -237,6 +352,12 @@ class InstrumentHandler(ModeHandler):
         logger.info(f"   Date-level errors: {total_errors}")
         logger.info(f"   Processing errors: {total_processing_errors}")
         logger.info(f"   Processing warnings: {total_processing_warnings}")
+
+        # Log completion status
+        if total_errors == 0:
+            log_event("STOPPED")
+        else:
+            log_event("FAILED", f"{total_errors} date-level errors, {total_processing_errors} processing errors")
 
         return {
             "status": "success" if total_errors == 0 else "partial",

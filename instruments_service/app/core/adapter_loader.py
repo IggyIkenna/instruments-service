@@ -1,0 +1,176 @@
+"""
+Lazy Adapter Loader
+
+Provides on-demand loading of venue adapters with singleton caching.
+Only loads adapters for requested venues, improving startup time and reducing dependencies.
+
+Complies with:
+- Cursor rules: imports at top
+- Codex: 06-coding-standards/README.md#imports
+- Audit: DOM-02 (asset class taxonomy)
+"""
+
+import logging
+from typing import Any, Dict, Optional
+
+from unified_cloud_services.domain import DataSourceMapping
+
+logger = logging.getLogger(__name__)
+
+# Singleton adapter cache (one instance per data source)
+_ADAPTER_CACHE: Dict[str, Any] = {}
+
+
+def get_adapter_for_venue(venue: str, api_keys: Optional[Dict[str, str]] = None) -> Any:
+    """
+    Lazy-load adapter for a venue.
+
+    Args:
+        venue: Venue name (e.g., "BINANCE-FUTURES", "ASTER")
+        api_keys: Optional dict of data_source -> API key
+
+    Returns:
+        Adapter instance (cached singleton per data source)
+
+    Raises:
+        ValueError: If venue is unknown or adapter initialization fails
+    """
+    data_source = DataSourceMapping.get_data_source_for_venue(venue)
+    if not data_source:
+        raise ValueError(f"Unknown venue: {venue}")
+
+    # For DeFi venues (thegraph), each venue gets its own adapter instance
+    # For other data sources (tardis, databento), single shared instance
+    cache_key = f"{data_source}:{venue.upper()}" if data_source == "thegraph" else data_source
+
+    # Return cached adapter if already loaded
+    if cache_key in _ADAPTER_CACHE:
+        logger.debug(f"Reusing cached adapter for {data_source}")
+        return _ADAPTER_CACHE[cache_key]
+
+    # Lazy import and instantiate adapter
+    logger.info(f"Lazy-loading adapter for {data_source} (venue: {venue})")
+
+    try:
+        if data_source == "tardis":
+            from instruments_service.app.venues.tardis import TardisAdapter
+
+            api_key = api_keys.get("tardis") if api_keys else None
+            adapter = TardisAdapter(api_key=api_key)
+
+        elif data_source == "databento":
+            from instruments_service.app.venues.databento import DatabentoAdapter
+
+            api_key = api_keys.get("databento") if api_keys else None
+            adapter = DatabentoAdapter(api_key=api_key)
+
+        elif data_source == "aster":
+            from unified_cloud_services import AsterBaseClient
+
+            from instruments_service.app.venues.onchain_perps import AsterAdapter
+
+            adapter = AsterAdapter(base_client=AsterBaseClient())
+
+        elif data_source == "hyperliquid":
+            from unified_cloud_services import HyperliquidBaseClient
+
+            from instruments_service.app.venues.onchain_perps import HyperliquidAdapter
+
+            adapter = HyperliquidAdapter(base_client=HyperliquidBaseClient())
+
+        elif data_source == "thegraph":
+            # DeFi adapters - load specific adapter based on venue
+            adapter = _load_defi_adapter(venue, api_keys)
+
+        elif data_source == "yfinance":
+            # FX adapter (no API key required)
+            # Import will be added when FX adapter is implemented
+            raise NotImplementedError("yfinance adapter not yet implemented")
+
+        elif data_source == "barchart":
+            # VIX adapter
+            # Import will be added when Barchart adapter is implemented
+            raise NotImplementedError("barchart adapter not yet implemented")
+
+        else:
+            raise ValueError(f"Unsupported data source: {data_source}")
+
+        # Cache and return
+        _ADAPTER_CACHE[cache_key] = adapter
+        logger.info(f"✅ Loaded adapter for {data_source}")
+        return adapter
+
+    except ImportError as e:
+        logger.error(f"Failed to import adapter for {data_source}: {e}")
+        raise
+    except Exception as e:
+        logger.error(f"Failed to initialize adapter for {data_source}: {e}")
+        raise
+
+
+def _load_defi_adapter(venue: str, api_keys: Optional[Dict[str, str]]) -> Any:
+    """Load DeFi adapter based on venue."""
+    venue_upper = venue.upper()
+
+    if venue_upper == "UNISWAP-V2":
+        from instruments_service.app.venues.defi import UniswapV2Adapter
+
+        return UniswapV2Adapter()
+    elif venue_upper == "UNISWAP-V3":
+        from instruments_service.app.venues.defi import UniswapV3Adapter
+
+        return UniswapV3Adapter()
+    elif venue_upper == "UNISWAP-V4":
+        from instruments_service.app.venues.defi import UniswapV4Adapter
+
+        return UniswapV4Adapter()
+    elif venue_upper == "AAVE-V3":
+        from instruments_service.app.venues.defi import AaveV3Adapter
+
+        return AaveV3Adapter()
+    elif venue_upper == "CURVE":
+        from instruments_service.app.venues.defi import CurveRPCAdapter
+
+        return CurveRPCAdapter()
+    elif venue_upper == "BALANCER":
+        from instruments_service.app.venues.defi import BalancerAdapter
+
+        return BalancerAdapter()
+    elif venue_upper == "MORPHO":
+        from instruments_service.app.venues.defi import MorphoAdapter
+
+        return MorphoAdapter()
+    elif venue_upper == "EULER":
+        from instruments_service.app.venues.defi import EulerAdapter
+
+        return EulerAdapter()
+    elif venue_upper == "FLUID":
+        from instruments_service.app.venues.defi import FluidAdapter
+
+        return FluidAdapter()
+    elif venue_upper == "LIDO":
+        from instruments_service.app.venues.defi import LidoAdapter
+
+        return LidoAdapter()
+    elif venue_upper == "ETHERFI":
+        from instruments_service.app.venues.defi import EtherFiAdapter
+
+        return EtherFiAdapter()
+    elif venue_upper == "ETHENA":
+        from instruments_service.app.venues.defi import EthenaAdapter
+
+        return EthenaAdapter()
+    else:
+        raise ValueError(f"Unknown DeFi venue: {venue}")
+
+
+def clear_adapter_cache():
+    """Clear adapter cache (useful for testing)."""
+    global _ADAPTER_CACHE
+    _ADAPTER_CACHE.clear()
+    logger.debug("Adapter cache cleared")
+
+
+def get_cached_adapters() -> Dict[str, Any]:
+    """Get currently cached adapters (for testing/debugging)."""
+    return _ADAPTER_CACHE.copy()
