@@ -34,11 +34,19 @@ REPO_ROOT="$(dirname "$PROJECT_ROOT")"
 # Change to project root
 cd "$PROJECT_ROOT"
 
+# Source shared Python detection script (ensures 3.12+ is used)
+if [ -f "$REPO_ROOT/.scripts/detect-python.sh" ]; then
+    source "$REPO_ROOT/.scripts/detect-python.sh"
+else
+    echo -e "${RED}❌ ERROR: .scripts/detect-python.sh not found${NC}"
+    exit 1
+fi
+
 echo -e "${BLUE}======================================================================${NC}"
 echo -e "${BLUE}INSTRUMENTS-SERVICE QUALITY GATES${NC}"
 echo -e "${BLUE}======================================================================${NC}"
 echo -e "Project: ${PROJECT_ROOT}"
-echo -e "Python:  $(python3 --version)"
+echo -e "Python:  $PYTHON_VERSION (using: $PYTHON_CMD)"
 echo ""
 
 # Parse arguments
@@ -185,7 +193,7 @@ if [ "$RUN_TESTS" = true ]; then
     echo "----------------------------------------------------------------------"
 
     # Check if pytest is installed
-    if ! python3 -c "import pytest" &> /dev/null; then
+    if ! $PYTHON_CMD -c "import pytest" &> /dev/null; then
         echo -e "${YELLOW}Installing pytest...${NC}"
         pip install pytest pytest-asyncio pytest-mock --quiet
     fi
@@ -196,7 +204,7 @@ if [ "$RUN_TESTS" = true ]; then
     export GOOGLE_CLOUD_PROJECT="test-project"
 
     # Use parallel execution if pytest-xdist available
-    if python3 -c "import xdist" 2>/dev/null || python3 -c "import pytest_xdist" 2>/dev/null; then
+    if $PYTHON_CMD -c "import xdist" 2>/dev/null || $PYTHON_CMD -c "import pytest_xdist" 2>/dev/null; then
         PARALLEL_ARGS="-n auto"
     else
         PARALLEL_ARGS=""
@@ -205,7 +213,7 @@ if [ "$RUN_TESTS" = true ]; then
     if [ "$QUICK_MODE" = true ]; then
         # Quick mode: unit tests only
         echo "Running: pytest tests/unit/ -v --tb=short $PARALLEL_ARGS (quick mode)"
-        if python3 -m pytest tests/unit/ -v --tb=short $PARALLEL_ARGS; then
+        if $PYTHON_CMD -m pytest tests/unit/ -v --tb=short $PARALLEL_ARGS; then
             echo -e "${GREEN}✅ Unit tests PASSED${NC}"
         else
             echo -e "${RED}❌ Unit tests FAILED${NC}"
@@ -217,7 +225,7 @@ if [ "$RUN_TESTS" = true ]; then
         # Unit tests (parallel with pytest-xdist when available)
         echo -e "\n${YELLOW}Running unit tests...${NC}"
         if [ -d "tests/unit" ]; then
-            if python3 -m pytest tests/unit/ -v --tb=short --timeout=60 $PARALLEL_ARGS; then
+            if $PYTHON_CMD -m pytest tests/unit/ -v --tb=short --timeout=60 $PARALLEL_ARGS; then
                 echo -e "${GREEN}✅ Unit tests PASSED${NC}"
             else
                 echo -e "${RED}❌ Unit tests FAILED${NC}"
@@ -230,7 +238,7 @@ if [ "$RUN_TESTS" = true ]; then
         # Integration tests (excluding performance tests)
         echo -e "\n${YELLOW}Running integration tests...${NC}"
         if [ -d "tests/integration" ]; then
-            if python3 -m pytest tests/integration/ -v --tb=short --timeout=120 \
+            if $PYTHON_CMD -m pytest tests/integration/ -v --tb=short --timeout=120 \
                 --ignore=tests/integration/test_performance.py \
                 -k "not api and not live and not download"; then
                 echo -e "${GREEN}✅ Integration tests PASSED${NC}"
@@ -245,7 +253,7 @@ if [ "$RUN_TESTS" = true ]; then
         # E2E tests
         echo -e "\n${YELLOW}Running e2e tests...${NC}"
         if [ -d "tests/e2e" ]; then
-            if python3 -m pytest tests/e2e/ -v --tb=short --timeout=180; then
+            if $PYTHON_CMD -m pytest tests/e2e/ -v --tb=short --timeout=180; then
                 echo -e "${GREEN}✅ E2E tests PASSED${NC}"
             else
                 echo -e "${RED}❌ E2E tests FAILED${NC}"
@@ -258,7 +266,7 @@ if [ "$RUN_TESTS" = true ]; then
         # Smoke tests (shard combinatorics)
         echo -e "\n${YELLOW}Running smoke tests...${NC}"
         if [ -d "tests/smoke" ]; then
-            if python3 -m pytest tests/smoke/ -v --tb=short --timeout=180; then
+            if $PYTHON_CMD -m pytest tests/smoke/ -v --tb=short --timeout=180; then
                 echo -e "${GREEN}✅ Smoke tests PASSED${NC}"
             else
                 echo -e "${RED}❌ Smoke tests FAILED${NC}"
