@@ -12,9 +12,6 @@ Contains adapters for AMM-style DeFi protocols:
 - Ethena (sUSDe yield-bearing)
 - Morpho (lending protocol)
 - Curve (stablecoin DEX)
-
-NOTE: On-chain CLOB-style perpetual DEXes (Hyperliquid, Aster) have been moved to
-      venues/onchain_perps/ because their data model matches Tardis/CeFi schema.
 """
 
 from instruments_service.app.venues.defi.aave_adapter import AaveV3Adapter
@@ -31,10 +28,6 @@ from instruments_service.app.venues.defi.uniswapv2_adapter import UniswapV2Adapt
 from instruments_service.app.venues.defi.uniswapv3_adapter import UniswapV3Adapter
 from instruments_service.app.venues.defi.uniswapv4_adapter import UniswapV4Adapter
 
-# Backwards-compatible imports from onchain_perps
-# DEPRECATED: Import from instruments_service.app.venues.onchain_perps instead
-from instruments_service.app.venues.onchain_perps import AsterAdapter, HyperliquidAdapter
-
 __all__ = [
     "TheGraphClient",
     "BaseDefiAdapter",
@@ -50,7 +43,4 @@ __all__ = [
     "CurveRPCAdapter",
     "EulerAdapter",
     "FluidAdapter",
-    # Deprecated - import from onchain_perps
-    "HyperliquidAdapter",
-    "AsterAdapter",
 ]
