@@ -15,8 +15,8 @@ import requests
 # Add instruments_service to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from instruments_service.app.venues.defi.aster_adapter import AsterAdapter
-from instruments_service.app.venues.defi.hyperliquid_adapter import HyperliquidAdapter
+from instruments_service.app.venues.onchain_perps.aster_adapter import AsterAdapter
+from instruments_service.app.venues.onchain_perps.hyperliquid_adapter import HyperliquidAdapter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
