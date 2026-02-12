@@ -1,0 +1,1582 @@
+"""
+Venue configuration for instruments-service.
+
+TradFi tickers, instruments, exchange mappings, and UnifiedInstrumentConfig.
+"""
+
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# S&P 500 TICKERS (Embedded - no external JSON file needed)
+# ============================================================================
+# Source: Wikipedia S&P 500 list + manual ETF additions
+# Last updated: 2026-01-31
+corporate_actions_start_date: str = "2020-01-01"
+
+SP500_TICKERS = [
+    "AAPL",
+    "ABBV",
+    "ABT",
+    "ACN",
+    "ADBE",
+    "ADI",
+    "ADM",
+    "ADP",
+    "ADSK",
+    "AEE",
+    "AEP",
+    "AES",
+    "AFL",
+    "AIG",
+    "AIZ",
+    "AJG",
+    "AKAM",
+    "ALB",
+    "ALGN",
+    "ALL",
+    "ALLE",
+    "AMAT",
+    "AMCR",
+    "AMD",
+    "AME",
+    "AMGN",
+    "AMP",
+    "AMT",
+    "AMZN",
+    "ANET",
+    "ANSS",
+    "AON",
+    "AOS",
+    "APA",
+    "APD",
+    "APH",
+    "APTV",
+    "ARE",
+    "ATO",
+    "AVB",
+    "AVGO",
+    "AVY",
+    "AWK",
+    "AXON",
+    "AXP",
+    "AZO",
+    "BA",
+    "BAC",
+    "BALL",
+    "BAX",
+    "BBWI",
+    "BBY",
+    "BDX",
+    "BEN",
+    "BF.B",
+    "BG",
+    "BIIB",
+    "BIO",
+    "BK",
+    "BKNG",
+    "BKR",
+    "BLDR",
+    "BLK",
+    "BMY",
+    "BR",
+    "BRK.B",
+    "BRO",
+    "BSX",
+    "BWA",
+    "BX",
+    "BXP",
+    "C",
+    "CAG",
+    "CAH",
+    "CARR",
+    "CAT",
+    "CB",
+    "CBOE",
+    "CBRE",
+    "CCI",
+    "CCL",
+    "CDNS",
+    "CDW",
+    "CE",
+    "CEG",
+    "CF",
+    "CFG",
+    "CHD",
+    "CHRW",
+    "CHTR",
+    "CI",
+    "CINF",
+    "CL",
+    "CLX",
+    "CMA",
+    "CMCSA",
+    "CME",
+    "CMG",
+    "CMI",
+    "CMS",
+    "CNC",
+    "CNP",
+    "COF",
+    "COO",
+    "COP",
+    "COR",
+    "COST",
+    "CPAY",
+    "CPB",
+    "CPRT",
+    "CPT",
+    "CRL",
+    "CRM",
+    "CSCO",
+    "CSGP",
+    "CSX",
+    "CTAS",
+    "CTLT",
+    "CTRA",
+    "CTSH",
+    "CTVA",
+    "CVS",
+    "CVX",
+    "CZR",
+    "D",
+    "DAL",
+    "DAY",
+    "DD",
+    "DE",
+    "DECK",
+    "DFS",
+    "DG",
+    "DGX",
+    "DHI",
+    "DHR",
+    "DIS",
+    "DLR",
+    "DLTR",
+    "DOC",
+    "DOV",
+    "DOW",
+    "DPZ",
+    "DRI",
+    "DTE",
+    "DUK",
+    "DVA",
+    "DVN",
+    "DXCM",
+    "EA",
+    "EBAY",
+    "ECL",
+    "ED",
+    "EFX",
+    "EG",
+    "EIX",
+    "EL",
+    "ELV",
+    "EMN",
+    "EMR",
+    "ENPH",
+    "EOG",
+    "EPAM",
+    "EQIX",
+    "EQR",
+    "EQT",
+    "ES",
+    "ESS",
+    "ETN",
+    "ETR",
+    "EVRG",
+    "EW",
+    "EXC",
+    "EXPD",
+    "EXPE",
+    "EXR",
+    "F",
+    "FANG",
+    "FAST",
+    "FCX",
+    "FDS",
+    "FDX",
+    "FE",
+    "FFIV",
+    "FI",
+    "FICO",
+    "FIS",
+    "FITB",
+    "FLT",
+    "FMC",
+    "FOX",
+    "FOXA",
+    "FRT",
+    "FSLR",
+    "FTNT",
+    "FTV",
+    "GD",
+    "GDDY",
+    "GE",
+    "GEHC",
+    "GEN",
+    "GEV",
+    "GILD",
+    "GIS",
+    "GL",
+    "GLW",
+    "GM",
+    "GNRC",
+    "GOOG",
+    "GOOGL",
+    "GPC",
+    "GPN",
+    "GRMN",
+    "GS",
+    "GWW",
+    "HAL",
+    "HAS",
+    "HBAN",
+    "HCA",
+    "HD",
+    "HES",
+    "HIG",
+    "HII",
+    "HLT",
+    "HOLX",
+    "HON",
+    "HPE",
+    "HPQ",
+    "HRL",
+    "HSIC",
+    "HST",
+    "HSY",
+    "HUBB",
+    "HUM",
+    "HWM",
+    "IBM",
+    "ICE",
+    "IDXX",
+    "IEX",
+    "IFF",
+    "INCY",
+    "INTC",
+    "INTU",
+    "INVH",
+    "IP",
+    "IPG",
+    "IQV",
+    "IR",
+    "IRM",
+    "ISRG",
+    "IT",
+    "ITW",
+    "IVZ",
+    "J",
+    "JBHT",
+    "JBL",
+    "JCI",
+    "JKHY",
+    "JNJ",
+    "JNPR",
+    "JPM",
+    "K",
+    "KDP",
+    "KEY",
+    "KEYS",
+    "KHC",
+    "KIM",
+    "KKR",
+    "KLAC",
+    "KMB",
+    "KMI",
+    "KMX",
+    "KO",
+    "KR",
+    "KVUE",
+    "L",
+    "LDOS",
+    "LEN",
+    "LH",
+    "LHX",
+    "LIN",
+    "LKQ",
+    "LLY",
+    "LMT",
+    "LNT",
+    "LOW",
+    "LRCX",
+    "LULU",
+    "LUV",
+    "LVS",
+    "LW",
+    "LYB",
+    "LYV",
+    "MA",
+    "MAA",
+    "MAR",
+    "MAS",
+    "MCD",
+    "MCHP",
+    "MCK",
+    "MCO",
+    "MDLZ",
+    "MDT",
+    "MET",
+    "META",
+    "MGM",
+    "MHK",
+    "MKC",
+    "MKTX",
+    "MLM",
+    "MMC",
+    "MMM",
+    "MNST",
+    "MO",
+    "MOH",
+    "MOS",
+    "MPC",
+    "MPWR",
+    "MRK",
+    "MRNA",
+    "MRO",
+    "MS",
+    "MSCI",
+    "MSFT",
+    "MSI",
+    "MTB",
+    "MTCH",
+    "MTD",
+    "MU",
+    "NCLH",
+    "NDAQ",
+    "NDSN",
+    "NEE",
+    "NEM",
+    "NFLX",
+    "NI",
+    "NKE",
+    "NOC",
+    "NOW",
+    "NRG",
+    "NSC",
+    "NTAP",
+    "NTRS",
+    "NUE",
+    "NVDA",
+    "NVR",
+    "NWS",
+    "NWSA",
+    "NXPI",
+    "O",
+    "ODFL",
+    "OKE",
+    "OMC",
+    "ON",
+    "ORCL",
+    "ORLY",
+    "OTIS",
+    "OXY",
+    "PANW",
+    "PARA",
+    "PAYC",
+    "PAYX",
+    "PCAR",
+    "PCG",
+    "PEG",
+    "PEP",
+    "PFE",
+    "PFG",
+    "PG",
+    "PGR",
+    "PH",
+    "PHM",
+    "PKG",
+    "PLD",
+    "PLTR",
+    "PM",
+    "PNC",
+    "PNR",
+    "PNW",
+    "PODD",
+    "POOL",
+    "PPG",
+    "PPL",
+    "PRU",
+    "PSA",
+    "PSX",
+    "PTC",
+    "PWR",
+    "PYPL",
+    "QCOM",
+    "QRVO",
+    "RCL",
+    "REG",
+    "REGN",
+    "RF",
+    "RJF",
+    "RL",
+    "RMD",
+    "ROK",
+    "ROL",
+    "ROP",
+    "ROST",
+    "RSG",
+    "RTX",
+    "RVTY",
+    "SBAC",
+    "SBUX",
+    "SCHW",
+    "SHW",
+    "SJM",
+    "SLB",
+    "SMCI",
+    "SNA",
+    "SNPS",
+    "SO",
+    "SOLV",
+    "SPG",
+    "SPGI",
+    "SRE",
+    "STE",
+    "STLD",
+    "STT",
+    "STX",
+    "STZ",
+    "SW",
+    "SWK",
+    "SWKS",
+    "SYF",
+    "SYK",
+    "SYY",
+    "T",
+    "TAP",
+    "TDG",
+    "TDY",
+    "TECH",
+    "TEL",
+    "TER",
+    "TFC",
+    "TFX",
+    "TGT",
+    "TJX",
+    "TMO",
+    "TMUS",
+    "TPR",
+    "TRGP",
+    "TRMB",
+    "TROW",
+    "TRV",
+    "TSCO",
+    "TSLA",
+    "TSN",
+    "TT",
+    "TTWO",
+    "TXN",
+    "TXT",
+    "TYL",
+    "UAL",
+    "UBER",
+    "UDR",
+    "UHS",
+    "ULTA",
+    "UNH",
+    "UNP",
+    "UPS",
+    "URI",
+    "USB",
+    "V",
+    "VICI",
+    "VLO",
+    "VLTO",
+    "VMC",
+    "VRSK",
+    "VRSN",
+    "VRTX",
+    "VST",
+    "VTR",
+    "VTRS",
+    "VZ",
+    "WAB",
+    "WAT",
+    "WBA",
+    "WBD",
+    "WDC",
+    "WEC",
+    "WELL",
+    "WFC",
+    "WM",
+    "WMB",
+    "WMT",
+    "WRB",
+    "WST",
+    "WTW",
+    "WY",
+    "WYNN",
+    "XEL",
+    "XOM",
+    "XYL",
+    "YUM",
+    "ZBH",
+    "ZBRA",
+    "ZTS",
+]
+
+# ETF tickers including Bitcoin ETFs
+ETF_TICKERS = [
+    "SPY",
+    "QQQ",
+    "IVV",
+    "VOO",
+    "VTI",
+    "DIA",
+    "IWM",
+    "IBIT",
+    "FBTC",
+    "ARKB",
+    "GBTC",
+    "BITO",  # Bitcoin ETFs
+    "GLD",
+    "SLV",
+    "USO",  # Commodity ETFs
+    "XLF",
+    "XLE",
+    "XLK",
+    "XLV",  # Sector ETFs
+]
+
+# NASDAQ-listed tickers (subset of S&P 500 that trade on NASDAQ vs NYSE)
+NASDAQ_TICKERS = [
+    "AAPL",
+    "ADBE",
+    "ADI",
+    "ADP",
+    "ADSK",
+    "AEP",
+    "ALGN",
+    "AMAT",
+    "AMD",
+    "AMGN",
+    "AMZN",
+    "ANSS",
+    "ASML",
+    "AVGO",
+    "AZN",
+    "BIDU",
+    "BIIB",
+    "BKNG",
+    "CDNS",
+    "CDW",
+    "CEG",
+    "CHTR",
+    "CMCSA",
+    "COST",
+    "CPRT",
+    "CRWD",
+    "CSCO",
+    "CSGP",
+    "CSX",
+    "CTAS",
+    "CTSH",
+    "DDOG",
+    "DLTR",
+    "DXCM",
+    "EA",
+    "EBAY",
+    "ENPH",
+    "EXC",
+    "FANG",
+    "FAST",
+    "FTNT",
+    "GEHC",
+    "GFS",
+    "GILD",
+    "GOOG",
+    "GOOGL",
+    "HON",
+    "IDXX",
+    "ILMN",
+    "INTC",
+    "INTU",
+    "ISRG",
+    "JD",
+    "KDP",
+    "KHC",
+    "KLAC",
+    "LRCX",
+    "LULU",
+    "MAR",
+    "MCHP",
+    "MDLZ",
+    "MELI",
+    "META",
+    "MNST",
+    "MRNA",
+    "MRVL",
+    "MSFT",
+    "MU",
+    "NFLX",
+    "NVDA",
+    "NXPI",
+    "ODFL",
+    "ON",
+    "ORLY",
+    "PANW",
+    "PAYX",
+    "PCAR",
+    "PDD",
+    "PEP",
+    "PYPL",
+    "QCOM",
+    "REGN",
+    "RIVN",
+    "ROST",
+    "SBUX",
+    "SIRI",
+    "SNPS",
+    "TEAM",
+    "TMUS",
+    "TSLA",
+    "TTD",
+    "TXN",
+    "VRSK",
+    "VRTX",
+    "WBA",
+    "WDAY",
+    "XEL",
+    "ZM",
+    "ZS",
+    # Bitcoin ETFs also trade on NASDAQ
+    "IBIT",
+    "FBTC",
+    "ARKB",
+]
+
+# ============================================================================
+# DATA LOADING (now uses embedded constants, no external JSON)
+# ============================================================================
+
+# Caches for loaded data (for backward compatibility)
+_sp500_tickers_cache: Optional[List[str]] = None
+_nasdaq_tickers_cache: Optional[List[str]] = None
+_tradfi_instruments_cache: Optional[List[Dict]] = None
+_exchange_code_to_name_cache: Optional[Dict[str, str]] = None
+
+
+def _get_data_dir() -> Path:
+    """Get the data directory path (instruments_service/data)."""
+    return Path(__file__).parent.parent / "data"
+
+
+# ============================================================================
+# TRADFI INSTRUMENTS CONFIG (Inline - no external JSON file needed)
+# ============================================================================
+# This maps Databento symbols to venues and datasets for TradFi instruments.
+#
+# DATASETS:
+# - GLBX.MDP3: CME Globex (ES, NQ, CL, NG, GC, SI, HG, ZC, ZW, ZS, currencies)
+# - IFUS.IMPACT: ICE Futures US (Cotton, Coffee, Sugar, Cocoa, OJ, Dollar Index)
+# - IFEU.IMPACT: ICE Futures Europe (Brent Crude, Gasoil, etc.)
+# - NDEX.IMPACT: ICE Endex (European natural gas)
+# - OPRA.PILLAR: US Options (equities, indices)
+# - DBEQ.BASIC: US Equities
+#
+# PARENT SYMBOLOGY: Use [ROOT].FUT for futures, [ROOT].OPT for options
+# See: https://databento.com/docs/standards-and-conventions/symbology
+
+TRADFI_INSTRUMENTS_CONFIG: List[Dict] = [
+    # =========================================================================
+    # CME Globex Futures (GLBX.MDP3) - Index, Energy, Metals, Grains, Currencies
+    # =========================================================================
+    {
+        "symbol": "ES.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "SP500",
+        "code": "ES",
+    },
+    {
+        "symbol": "NQ.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "NASDAQ100",
+        "code": "NQ",
+    },
+    {
+        "symbol": "RTY.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "RUSSELL2000",
+        "code": "RTY",
+    },
+    {
+        "symbol": "YM.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "DOW",
+        "code": "YM",
+    },
+    # Energy (CME/NYMEX)
+    {
+        "symbol": "CL.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "CRUDE",
+        "code": "CL",
+    },
+    {
+        "symbol": "NG.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "NATGAS",
+        "code": "NG",
+    },
+    {
+        "symbol": "RB.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "GASOLINE",
+        "code": "RB",
+    },
+    {
+        "symbol": "HO.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "HEATINGOIL",
+        "code": "HO",
+    },
+    # Metals (CME/COMEX)
+    {
+        "symbol": "GC.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "GOLD",
+        "code": "GC",
+    },
+    {
+        "symbol": "SI.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "SILVER",
+        "code": "SI",
+    },
+    {
+        "symbol": "HG.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "COPPER",
+        "code": "HG",
+    },
+    {
+        "symbol": "PL.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "PLATINUM",
+        "code": "PL",
+    },
+    # Grains (CME/CBOT)
+    {
+        "symbol": "ZC.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "CORN",
+        "code": "ZC",
+    },
+    {
+        "symbol": "ZW.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "WHEAT",
+        "code": "ZW",
+    },
+    {
+        "symbol": "ZS.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "SOYBEAN",
+        "code": "ZS",
+    },
+    {
+        "symbol": "ZM.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "SOYMEAL",
+        "code": "ZM",
+    },
+    {
+        "symbol": "ZL.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "SOYOIL",
+        "code": "ZL",
+    },
+    # Interest Rates (CME/CBOT)
+    {
+        "symbol": "ZB.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "TBOND",
+        "code": "ZB",
+    },
+    {
+        "symbol": "ZN.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "TNOTE10Y",
+        "code": "ZN",
+    },
+    {
+        "symbol": "ZF.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "TNOTE5Y",
+        "code": "ZF",
+    },
+    {
+        "symbol": "ZT.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "TNOTE2Y",
+        "code": "ZT",
+    },
+    # Currencies (CME)
+    {
+        "symbol": "6E.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "EUR",
+        "code": "6E",
+    },
+    {
+        "symbol": "6J.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "JPY",
+        "code": "6J",
+    },
+    {
+        "symbol": "6B.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "GBP",
+        "code": "6B",
+    },
+    {
+        "symbol": "6C.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "CAD",
+        "code": "6C",
+    },
+    {
+        "symbol": "6A.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "AUD",
+        "code": "6A",
+    },
+    {
+        "symbol": "6S.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "CHF",
+        "code": "6S",
+    },
+    {
+        "symbol": "6L.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "BRL",
+        "code": "6L",
+    },
+    {
+        "symbol": "6N.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "NZD",
+        "code": "6N",
+    },
+    {
+        "symbol": "6Z.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "ZAR",
+        "code": "6Z",
+    },
+    {
+        "symbol": "6M.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "MXN",
+        "code": "6M",
+    },
+    # =========================================================================
+    # CME Options (GLBX.MDP3)
+    # =========================================================================
+    {
+        "symbol": "ES.OPT",
+        "venue": "CME",
+        "type": "OPTION",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "SP500",
+        "code": "ES",
+    },
+    {
+        "symbol": "NQ.OPT",
+        "venue": "CME",
+        "type": "OPTION",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "NASDAQ100",
+        "code": "NQ",
+    },
+    {
+        "symbol": "CL.OPT",
+        "venue": "CME",
+        "type": "OPTION",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "CRUDE",
+        "code": "CL",
+    },
+    {
+        "symbol": "GC.OPT",
+        "venue": "CME",
+        "type": "OPTION",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "GOLD",
+        "code": "GC",
+    },
+    # Weekly ES options (EW1-EW4)
+    {
+        "symbol": "EW1.OPT",
+        "venue": "CME",
+        "type": "OPTION",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "SP500",
+        "code": "EW1",
+        "underlying": "ES",
+    },
+    {
+        "symbol": "EW2.OPT",
+        "venue": "CME",
+        "type": "OPTION",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "SP500",
+        "code": "EW2",
+        "underlying": "ES",
+    },
+    {
+        "symbol": "EW3.OPT",
+        "venue": "CME",
+        "type": "OPTION",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "SP500",
+        "code": "EW3",
+        "underlying": "ES",
+    },
+    {
+        "symbol": "EW4.OPT",
+        "venue": "CME",
+        "type": "OPTION",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "SP500",
+        "code": "EW4",
+        "underlying": "ES",
+    },
+    # =========================================================================
+    # ICE Futures US (IFUS.IMPACT) - Soft Commodities & Dollar Index
+    # Available from: December 23, 2018 (historical coverage start)
+    # https://databento.com/blog/introducing-ice-futures-us
+    # =========================================================================
+    {
+        "symbol": "CT.FUT",
+        "venue": "ICE",
+        "type": "FUTURE",
+        "dataset": "IFUS.IMPACT",
+        "stype": "parent",
+        "base": "COTTON",
+        "code": "CT",
+    },
+    {
+        "symbol": "CC.FUT",
+        "venue": "ICE",
+        "type": "FUTURE",
+        "dataset": "IFUS.IMPACT",
+        "stype": "parent",
+        "base": "COCOA",
+        "code": "CC",
+    },
+    {
+        "symbol": "KC.FUT",
+        "venue": "ICE",
+        "type": "FUTURE",
+        "dataset": "IFUS.IMPACT",
+        "stype": "parent",
+        "base": "COFFEE",
+        "code": "KC",
+    },
+    {
+        "symbol": "SB.FUT",
+        "venue": "ICE",
+        "type": "FUTURE",
+        "dataset": "IFUS.IMPACT",
+        "stype": "parent",
+        "base": "SUGAR",
+        "code": "SB",
+    },
+    {
+        "symbol": "OJ.FUT",
+        "venue": "ICE",
+        "type": "FUTURE",
+        "dataset": "IFUS.IMPACT",
+        "stype": "parent",
+        "base": "ORANGEJUICE",
+        "code": "OJ",
+    },
+    {
+        "symbol": "DX.FUT",
+        "venue": "ICE",
+        "type": "FUTURE",
+        "dataset": "IFUS.IMPACT",
+        "stype": "parent",
+        "base": "DOLLARINDEX",
+        "code": "DX",
+    },
+    # =========================================================================
+    # ICE Futures Europe (IFEU.IMPACT) - Energy commodities
+    # Available from: December 23, 2018 (same as ICE US)
+    # NOTE: Brent crude symbol on ICE Europe is "BRN", not "B"
+    # =========================================================================
+    {
+        "symbol": "BRN.FUT",
+        "venue": "ICE",
+        "type": "FUTURE",
+        "dataset": "IFEU.IMPACT",
+        "stype": "parent",
+        "base": "BRENT",
+        "code": "BRN",
+    },
+    {
+        "symbol": "G.FUT",
+        "venue": "ICE",
+        "type": "FUTURE",
+        "dataset": "IFEU.IMPACT",
+        "stype": "parent",
+        "base": "GASOIL",
+        "code": "G",
+    },
+    {
+        "symbol": "T.FUT",
+        "venue": "ICE",
+        "type": "FUTURE",
+        "dataset": "IFEU.IMPACT",
+        "stype": "parent",
+        "base": "WTI",
+        "code": "T",
+    },
+]
+
+# ============================================================================
+# VALID DATABENTO PARENT SYMBOLS - Used for validation in market-tick-data-handler
+# ============================================================================
+# Maps canonical underlying -> (databento_parent_symbol, dataset)
+# Only symbols in this map are valid for parent symbology downloads
+DATABENTO_VALID_PARENT_SYMBOLS: Dict[str, Tuple[str, str]] = {
+    # CME Index Futures
+    "ES": ("ES.FUT", "GLBX.MDP3"),
+    "SP500": ("ES.FUT", "GLBX.MDP3"),
+    "NQ": ("NQ.FUT", "GLBX.MDP3"),
+    "NASDAQ100": ("NQ.FUT", "GLBX.MDP3"),
+    "RTY": ("RTY.FUT", "GLBX.MDP3"),
+    "RUSSELL2000": ("RTY.FUT", "GLBX.MDP3"),
+    "YM": ("YM.FUT", "GLBX.MDP3"),
+    "DOW": ("YM.FUT", "GLBX.MDP3"),
+    # CME Energy
+    "CL": ("CL.FUT", "GLBX.MDP3"),
+    "CRUDE": ("CL.FUT", "GLBX.MDP3"),
+    "NG": ("NG.FUT", "GLBX.MDP3"),
+    "NATGAS": ("NG.FUT", "GLBX.MDP3"),
+    "RB": ("RB.FUT", "GLBX.MDP3"),
+    "GASOLINE": ("RB.FUT", "GLBX.MDP3"),
+    "HO": ("HO.FUT", "GLBX.MDP3"),
+    "HEATINGOIL": ("HO.FUT", "GLBX.MDP3"),
+    # CME Metals
+    "GC": ("GC.FUT", "GLBX.MDP3"),
+    "GOLD": ("GC.FUT", "GLBX.MDP3"),
+    "SI": ("SI.FUT", "GLBX.MDP3"),
+    "SILVER": ("SI.FUT", "GLBX.MDP3"),
+    "HG": ("HG.FUT", "GLBX.MDP3"),
+    "COPPER": ("HG.FUT", "GLBX.MDP3"),
+    "PL": ("PL.FUT", "GLBX.MDP3"),
+    "PLATINUM": ("PL.FUT", "GLBX.MDP3"),
+    # CME Grains
+    "ZC": ("ZC.FUT", "GLBX.MDP3"),
+    "CORN": ("ZC.FUT", "GLBX.MDP3"),
+    "ZW": ("ZW.FUT", "GLBX.MDP3"),
+    "WHEAT": ("ZW.FUT", "GLBX.MDP3"),
+    "ZS": ("ZS.FUT", "GLBX.MDP3"),
+    "SOYBEAN": ("ZS.FUT", "GLBX.MDP3"),
+    "ZM": ("ZM.FUT", "GLBX.MDP3"),
+    "SOYMEAL": ("ZM.FUT", "GLBX.MDP3"),
+    "ZL": ("ZL.FUT", "GLBX.MDP3"),
+    "SOYOIL": ("ZL.FUT", "GLBX.MDP3"),
+    # CME Interest Rates
+    "ZB": ("ZB.FUT", "GLBX.MDP3"),
+    "TBOND": ("ZB.FUT", "GLBX.MDP3"),
+    "ZN": ("ZN.FUT", "GLBX.MDP3"),
+    "TNOTE10Y": ("ZN.FUT", "GLBX.MDP3"),
+    "ZF": ("ZF.FUT", "GLBX.MDP3"),
+    "TNOTE5Y": ("ZF.FUT", "GLBX.MDP3"),
+    "ZT": ("ZT.FUT", "GLBX.MDP3"),
+    "TNOTE2Y": ("ZT.FUT", "GLBX.MDP3"),
+    # CME Currencies
+    "6E": ("6E.FUT", "GLBX.MDP3"),
+    "EUR": ("6E.FUT", "GLBX.MDP3"),
+    "6J": ("6J.FUT", "GLBX.MDP3"),
+    "JPY": ("6J.FUT", "GLBX.MDP3"),
+    "6B": ("6B.FUT", "GLBX.MDP3"),
+    "GBP": ("6B.FUT", "GLBX.MDP3"),
+    "6C": ("6C.FUT", "GLBX.MDP3"),
+    "CAD": ("6C.FUT", "GLBX.MDP3"),
+    "6A": ("6A.FUT", "GLBX.MDP3"),
+    "AUD": ("6A.FUT", "GLBX.MDP3"),
+    "6S": ("6S.FUT", "GLBX.MDP3"),
+    "CHF": ("6S.FUT", "GLBX.MDP3"),
+    "6M": ("6M.FUT", "GLBX.MDP3"),
+    "MXN": ("6M.FUT", "GLBX.MDP3"),
+    "6N": ("6N.FUT", "GLBX.MDP3"),
+    "NZD": ("6N.FUT", "GLBX.MDP3"),
+    "6L": ("6L.FUT", "GLBX.MDP3"),
+    "BRL": ("6L.FUT", "GLBX.MDP3"),
+    "6Z": ("6Z.FUT", "GLBX.MDP3"),
+    "ZAR": ("6Z.FUT", "GLBX.MDP3"),
+    # ICE Futures US (IFUS.IMPACT) - Available from 2018-12-23
+    "CT": ("CT.FUT", "IFUS.IMPACT"),
+    "COTTON": ("CT.FUT", "IFUS.IMPACT"),
+    "CC": ("CC.FUT", "IFUS.IMPACT"),
+    "COCOA": ("CC.FUT", "IFUS.IMPACT"),
+    "KC": ("KC.FUT", "IFUS.IMPACT"),
+    "COFFEE": ("KC.FUT", "IFUS.IMPACT"),
+    "SB": ("SB.FUT", "IFUS.IMPACT"),
+    "SUGAR": ("SB.FUT", "IFUS.IMPACT"),
+    "OJ": ("OJ.FUT", "IFUS.IMPACT"),
+    "ORANGEJUICE": ("OJ.FUT", "IFUS.IMPACT"),
+    "DX": ("DX.FUT", "IFUS.IMPACT"),
+    "DOLLARINDEX": ("DX.FUT", "IFUS.IMPACT"),
+    # ICE Futures Europe - Energy (available from Dec 23, 2018)
+    "BRN": ("BRN.FUT", "IFEU.IMPACT"),
+    "BRENT": ("BRN.FUT", "IFEU.IMPACT"),
+    "G": ("G.FUT", "IFEU.IMPACT"),
+    "GASOIL": ("G.FUT", "IFEU.IMPACT"),
+    "T": ("T.FUT", "IFEU.IMPACT"),
+    "WTI": ("T.FUT", "IFEU.IMPACT"),
+}
+
+# Options parent symbol mapping
+DATABENTO_VALID_OPTIONS_SYMBOLS: Dict[str, Tuple[str, str]] = {
+    "ES": ("ES.OPT", "GLBX.MDP3"),
+    "SP500": ("ES.OPT", "GLBX.MDP3"),
+    "NQ": ("NQ.OPT", "GLBX.MDP3"),
+    "NASDAQ100": ("NQ.OPT", "GLBX.MDP3"),
+    "CL": ("CL.OPT", "GLBX.MDP3"),
+    "CRUDE": ("CL.OPT", "GLBX.MDP3"),
+    "GC": ("GC.OPT", "GLBX.MDP3"),
+    "GOLD": ("GC.OPT", "GLBX.MDP3"),
+}
+
+EXCHANGE_CODE_TO_NAME: Dict[str, str] = {
+    # CME Index
+    "ES": "SP500",
+    "NQ": "NASDAQ100",
+    "RTY": "RUSSELL2000",
+    "YM": "DOW",
+    # CME Energy
+    "CL": "CRUDE",
+    "NG": "NATGAS",
+    "RB": "GASOLINE",
+    "HO": "HEATINGOIL",
+    # CME Metals
+    "GC": "GOLD",
+    "SI": "SILVER",
+    "HG": "COPPER",
+    "PL": "PLATINUM",
+    # CME Grains
+    "ZC": "CORN",
+    "ZW": "WHEAT",
+    "ZS": "SOYBEAN",
+    "ZM": "SOYMEAL",
+    "ZL": "SOYOIL",
+    # CME Interest Rates
+    "ZB": "TBOND",
+    "ZN": "TNOTE10Y",
+    "ZF": "TNOTE5Y",
+    "ZT": "TNOTE2Y",
+    # CME Currencies
+    "6E": "EUR",
+    "6J": "JPY",
+    "6B": "GBP",
+    "6C": "CAD",
+    "6A": "AUD",
+    "6S": "CHF",
+    "6L": "BRL",
+    "6N": "NZD",
+    "6Z": "ZAR",
+    "6M": "MXN",
+    # CME Options (weekly)
+    "EW1": "SP500",
+    "EW2": "SP500",
+    "EW3": "SP500",
+    "EW4": "SP500",
+    # ICE US
+    "CT": "COTTON",
+    "CC": "COCOA",
+    "KC": "COFFEE",
+    "SB": "SUGAR",
+    "OJ": "ORANGEJUICE",
+    "DX": "DOLLARINDEX",
+    # ICE Europe
+    "BRN": "BRENT",
+    "G": "GASOIL",
+    "T": "WTI",
+}
+
+
+def _load_sp500_tickers() -> Tuple[List[str], List[str]]:
+    """Load S&P 500 tickers and ETF tickers from embedded constants.
+
+    Returns both regular tickers and ETF tickers (including Bitcoin ETFs like IBIT, FBTC)
+    combined into a single list for instrument generation.
+
+    Note: Data is now embedded in config.py (SP500_TICKERS, ETF_TICKERS, NASDAQ_TICKERS)
+    instead of loading from sp500_tickers.json to ensure it's version-controlled
+    and available in all deployment environments (per centralized config checklist).
+    """
+    global _sp500_tickers_cache, _nasdaq_tickers_cache
+
+    if _sp500_tickers_cache is not None:
+        return _sp500_tickers_cache, _nasdaq_tickers_cache or []
+
+    # Use embedded constants instead of JSON file
+    _nasdaq_tickers_cache = list(NASDAQ_TICKERS)
+
+    # Combine S&P 500 tickers and ETF tickers, avoiding duplicates
+    all_tickers = list(SP500_TICKERS)
+    for etf in ETF_TICKERS:
+        if etf not in all_tickers:
+            all_tickers.append(etf)
+
+    _sp500_tickers_cache = all_tickers
+    logger.debug(
+        f"Loaded {len(SP500_TICKERS)} S&P 500 tickers + {len(ETF_TICKERS)} ETF tickers = "
+        f"{len(_sp500_tickers_cache)} total from embedded config"
+    )
+
+    return _sp500_tickers_cache, _nasdaq_tickers_cache
+
+
+def _load_tradfi_instruments() -> Tuple[List[Dict], Dict[str, str]]:
+    """Load TradFi instruments and exchange code mappings from inline config.
+
+    Previously loaded from data/tradfi_instruments.json, now uses inline
+    TRADFI_INSTRUMENTS_CONFIG and EXCHANGE_CODE_TO_NAME for version control.
+    """
+    global _tradfi_instruments_cache, _exchange_code_to_name_cache
+
+    if _tradfi_instruments_cache is not None:
+        return _tradfi_instruments_cache, _exchange_code_to_name_cache or {}
+
+    # Use inline config instead of external JSON file
+    _tradfi_instruments_cache = TRADFI_INSTRUMENTS_CONFIG
+    _exchange_code_to_name_cache = EXCHANGE_CODE_TO_NAME
+    logger.debug(f"Loaded {len(_tradfi_instruments_cache)} TradFi instruments from inline config")
+
+    return _tradfi_instruments_cache, _exchange_code_to_name_cache
+
+
+@dataclass
+class TradFiInstrument:
+    """
+    Single TradFi instrument definition with metadata.
+
+    Note: This is different from instruments_service.models.InstrumentDefinition (Pydantic model).
+    This dataclass is for static TradFi instrument configuration (Databento symbols).
+    """
+
+    symbol: str  # Databento symbol (e.g., "ES.FUT", "SPY", "BRN.FUT", "SPY.OPT")
+    venue: str  # Canonical venue (e.g., "CME", "NASDAQ", "ICE")
+    instrument_type: str  # "FUTURE", "EQUITY", "OPTION", "ETF"
+    dataset: str  # Databento dataset (e.g., "GLBX.MDP3", "DBEQ.BASIC")
+    stype_in: str  # "parent" for futures/options, "raw_symbol" for equities/ETFs
+    base_asset: Optional[str] = None  # Human-readable base asset name
+    quote_asset: str = "USD"  # Quote currency (default USD for TradFi)
+    exchange_code: Optional[str] = None  # Databento exchange code (e.g., "ES", "CL")
+    underlying: Optional[str] = None  # Underlying asset (e.g., "BTC" for Bitcoin ETFs)
+
+
+# Backward compatibility alias
+InstrumentDefinition = TradFiInstrument
+
+
+@dataclass
+class UnifiedInstrumentConfig:
+    """
+    Unified instrument configuration - single source of truth for all TradFi instruments.
+
+    Loads instruments and exchange code mappings from external JSON files.
+    All TradFi instruments are loaded from data/tradfi_instruments.json.
+    """
+
+    # Cached instruments loaded from JSON (initialized lazily)
+    _instruments: Optional[List[TradFiInstrument]] = field(default=None, repr=False)
+    _exchange_code_to_name: Optional[Dict[str, str]] = field(default=None, repr=False)
+
+    def __post_init__(self):
+        """Load instruments from JSON on first access."""
+        self._load_data()
+
+    def _load_data(self) -> None:
+        """Load TradFi instruments and exchange mappings from JSON file."""
+        if self._instruments is not None:
+            return
+
+        raw_instruments, exchange_mappings = _load_tradfi_instruments()
+
+        # Convert raw JSON to TradFiInstrument objects
+        self._instruments = []
+        for inst in raw_instruments:
+            self._instruments.append(
+                TradFiInstrument(
+                    symbol=inst["symbol"],
+                    venue=inst["venue"],
+                    instrument_type=inst["type"],
+                    dataset=inst["dataset"],
+                    stype_in=inst["stype"],
+                    base_asset=inst.get("base"),
+                    quote_asset="USD",
+                    exchange_code=inst.get("code"),
+                    underlying=inst.get("underlying"),
+                )
+            )
+
+        self._exchange_code_to_name = exchange_mappings
+
+    @property
+    def instruments(self) -> List[TradFiInstrument]:
+        """Get base TradFi instruments (futures, options, ETFs)."""
+        if self._instruments is None:
+            self._load_data()
+        return self._instruments or []
+
+    @property
+    def exchange_code_to_name(self) -> Dict[str, str]:
+        """Get exchange code to human-readable name mapping."""
+        if self._exchange_code_to_name is None:
+            self._load_data()
+        return self._exchange_code_to_name or {}
+
+    def get_symbols_for_venue(self, venue: str) -> List[str]:
+        """Get all symbols for a venue (e.g., 'CME', 'NASDAQ', 'ICE')"""
+        all_insts = self.get_all_instruments()
+        return [inst.symbol for inst in all_insts if inst.venue == venue.upper()]
+
+    def get_symbols_for_dataset(self, dataset: str) -> List[str]:
+        """Get all symbols for a dataset (e.g., 'GLBX.MDP3', 'DBEQ.BASIC')"""
+        all_insts = self.get_all_instruments()
+        return [inst.symbol for inst in all_insts if inst.dataset == dataset]
+
+    def get_symbols_by_type(self, instrument_type: str) -> List[str]:
+        """Get all symbols for an instrument type (e.g., 'FUTURE', 'EQUITY', 'OPTION')"""
+        all_insts = self.get_all_instruments()
+        return [inst.symbol for inst in all_insts if inst.instrument_type == instrument_type.upper()]
+
+    def get_dataset_and_stype(self, symbol: str) -> Optional[Tuple[str, str]]:
+        """Get dataset and stype_in for a symbol"""
+        all_insts = self.get_all_instruments()
+        for inst in all_insts:
+            if inst.symbol == symbol:
+                return (inst.dataset, inst.stype_in)
+        return None
+
+    def get_instrument(self, symbol: str, venue: Optional[str] = None) -> Optional[InstrumentDefinition]:
+        """Get instrument definition by symbol (optionally filtered by venue)"""
+        all_insts = self.get_all_instruments()
+        for inst in all_insts:
+            if inst.symbol == symbol:
+                if venue is None or inst.venue == venue.upper():
+                    return inst
+        return None
+
+    def get_human_readable_name(self, exchange_code: str) -> str:
+        """Convert Databento exchange code to human-readable name"""
+        if exchange_code in self.exchange_code_to_name:
+            return self.exchange_code_to_name[exchange_code]
+        # Check micro version (M prefix)
+        if exchange_code.startswith("M") and len(exchange_code) > 1:
+            base_code = exchange_code[1:]
+            if base_code in self.exchange_code_to_name:
+                return self.exchange_code_to_name[base_code]
+        return exchange_code
+
+    # ETFs that are in the S&P 500 or commonly traded (should NOT be classified as EQUITY)
+    KNOWN_ETFS = {
+        "SPY",
+        "QQQ",
+        "IVV",
+        "VOO",
+        "VTI",
+        "DIA",
+        "IWM",
+        "EEM",
+        "VEA",
+        "VWO",
+        "GLD",
+        "SLV",
+        "USO",
+        "UNG",
+        "TLT",
+        "IEF",
+        "SHY",
+        "LQD",
+        "HYG",
+        "JNK",
+        "XLF",
+        "XLE",
+        "XLK",
+        "XLV",
+        "XLI",
+        "XLY",
+        "XLP",
+        "XLB",
+        "XLU",
+        "XLRE",
+        "VNQ",
+        "IBB",
+        "SMH",
+        "ARKK",
+        "ARKG",
+        "ARKW",
+        "ARKF",
+        "ARKQ",
+        "IBIT",
+        "FBTC",
+        "ARKB",
+        "GBTC",
+        "BITO",  # Bitcoin ETFs
+    }
+
+    # Symbols with spaces that need dot format for Databento API
+    # Databento uses "BRK.B" not "BRK B"
+    SPACE_TO_DOT_SYMBOLS = {
+        "BRK B": "BRK.B",  # Berkshire Hathaway Class B
+        "BF B": "BF.B",  # Brown-Forman Class B
+        "BRK A": "BRK.A",  # Berkshire Hathaway Class A
+        "BF A": "BF.A",  # Brown-Forman Class A
+    }
+
+    def _get_sp500_equities(self) -> List[TradFiInstrument]:
+        """Generate S&P 500 equity/ETF instrument definitions from external data file."""
+        sp500_tickers, nasdaq_tickers = _load_sp500_tickers()
+
+        if not sp500_tickers:
+            logger.warning("No S&P 500 tickers loaded - returning empty list")
+            return []
+
+        instruments = []
+        for ticker in sp500_tickers:
+            # Convert space symbols to dot format for Databento
+            databento_symbol = self.SPACE_TO_DOT_SYMBOLS.get(ticker, ticker)
+
+            # Determine venue (NASDAQ for known tech stocks, NYSE for others)
+            venue = "NASDAQ" if ticker in nasdaq_tickers else "NYSE"
+
+            # Determine instrument type (ETF vs EQUITY)
+            instrument_type = "ETF" if ticker in self.KNOWN_ETFS else "EQUITY"
+
+            instruments.append(
+                TradFiInstrument(
+                    symbol=databento_symbol,  # Use Databento-compatible symbol (BRK.B not BRK B)
+                    venue=venue,
+                    instrument_type=instrument_type,  # ETF or EQUITY
+                    dataset="DBEQ.BASIC",
+                    stype_in="raw_symbol",
+                    base_asset=ticker,  # Keep original ticker as base_asset for display
+                    quote_asset="USD",
+                )
+            )
+        return instruments
+
+    def get_all_instruments(self) -> List[TradFiInstrument]:
+        """Get all instruments (base instruments + dynamically generated S&P 500 equities)"""
+        # Combine base instruments with dynamically generated S&P 500 equities
+        all_insts = list(self.instruments)
+        sp500_equities = self._get_sp500_equities()
+        all_insts.extend(sp500_equities)
+        return all_insts

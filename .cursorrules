@@ -1,0 +1,69 @@
+# instruments-service Development Rules
+
+This is instruments-service: canonical instrument definitions for CeFi, TradFi, and DeFi across all venues.
+
+## Codex References
+
+This service follows unified-trading-codex principles:
+- 01-domain/batch/per-service/instruments-service.md
+- 01-domain/live/per-service/instruments-service.md
+- 04-architecture/batch-live-symmetry.md, concurrency.md
+- Plus all universal principles in codex top-level READMEs
+
+## Workspace Rules
+
+Inherits all rules from workspace `.cursorrules`: quality gates, quickmerge, config standards, cloud-agnostic design, event logging.
+
+## Quality Gates (Three-Stage Consistency)
+
+**CRITICAL**: Same `ruff==0.15.0` across all three stages:
+1. **Local**: `pyproject.toml` dev deps + pre-commit hooks (`v0.15.0`)
+2. **GitHub Actions**: `.github/workflows/quality-gates.yml` (`ruff==0.15.0`)
+3. **Cloud Build**: Tests run INSIDE Docker image with `.[dev]` deps
+
+**Package Manager**: Use `uv` for all installs:
+```dockerfile
+RUN uv pip install --system -e ".[dev]"
+```
+
+**Cloud Build Architecture** (test-in-image):
+- Pull `unified-cloud-services:latest` base (requires auth step)
+- Build image (includes source + tests + dev deps)
+- Run `scripts/quality-gates.sh --no-fix --quick` inside image
+- Push ONLY if tests pass
+
+Verify consistency: `cd unified-trading-deployment-v2 && ./scripts/check-ruff-versions.sh`
+
+## Service-Specific Patterns
+
+- **Venue adapter plugin pattern**: Lazy loading per venue (Tardis, Databento, The Graph, protocol SDKs).
+- **corporate-actions as embedded sub-mode**: Runs as `--mode corporate_actions` (same Docker image, TradFi equities only: dividends, splits, earnings).
+- **Selective venue initialization**: Only connect to venues specified in CLI args; never fetch all venues at once.
+- **MAX_WORKERS: 16** (I/O-bound venue API calls; can over-subscribe CPU).
+- **Category-specific buckets**: CEFI, TRADFI, DEFI each have dedicated GCS buckets.
+
+## Service-Specific Anti-Patterns
+
+- NEVER fetch all venues at once; use selective init via `--venues`.
+- NEVER use `os.getenv()` for config; extend InstrumentsServiceConfig.
+- ALWAYS validate `instrument_id` format before writing to GCS.
+- corporate-actions is TradFi equities only (not CeFi/DeFi).
+
+## Dependencies
+
+- **Upstream**: None (root service).
+- **Downstream**: All services (market-tick-data-handler, market-data-processing, features, strategy, execution).
+- See: unified-trading-deployment-v2/configs/dependencies.yaml
+
+## Context7
+
+Append "use context7" when working with:
+- Tardis API (instrument metadata, exchange mappings)
+- Databento API (TradFi symbology, datasets, parent symbols)
+- The Graph (DeFi subgraphs, Uniswap, Aave)
+
+## Testing
+
+- tests/unit/test_event_logging.py MUST exist.
+- Use synthetic fixtures for venue adapters; mock external APIs.
+- validate_timestamp_date_alignment() before every GCS write.
