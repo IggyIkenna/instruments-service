@@ -302,12 +302,12 @@ CODEX_VIOLATIONS=0
 
 # Check: ripgrep (rg) availability
 if ! command -v rg &> /dev/null; then
-    echo -e "${YELLOW}⚠️  ripgrep (rg) not found - skipping some checks${NC}"
-    echo -e "${YELLOW}   Install with: brew install ripgrep (macOS) or apt install ripgrep (Linux)${NC}"
-    USE_RG=false
-else
-    USE_RG=true
+    echo -e "${RED}❌ ERROR: ripgrep (rg) required for codex compliance checks${NC}"
+    echo -e "${YELLOW}   Install: brew install ripgrep (macOS) or apt install ripgrep (Linux)${NC}"
+    echo -e "${YELLOW}   Or add to Dockerfile: RUN apt-get install -y ripgrep${NC}"
+    exit 1
 fi
+USE_RG=true
 
 # Check 1: print() statements in production code
 if [ "$USE_RG" = true ]; then
