@@ -59,11 +59,13 @@ steps:
         set -e
         echo "Running quality gates inside instruments-service image..."
         docker run --rm \
+          --entrypoint "" \
+          -e CLOUD_BUILD=true \
           -e CLOUD_MOCK_MODE=true \
           -e GOOGLE_CLOUD_PROJECT=$PROJECT_ID \
           -e INSTRUMENTS_STORE_GCS_BUCKET=mock-instruments-bucket \
           asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service:$SHORT_SHA \
-          bash scripts/quality-gates.sh --no-fix --quick
+          /bin/bash -c "scripts/quality-gates.sh --no-fix --quick"
     waitFor: ['build']
 
   # Step 6: Push image ONLY if quality gates passed
