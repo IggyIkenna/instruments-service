@@ -53,40 +53,22 @@ REPO_NAME=$(basename "$REPO_DIR")
 cd "$REPO_DIR"
 
 # Install project dependencies before quality gates.
-# Keep this aligned with CI/Cloud Build install behavior.
+# Use UV only (never pip except bootstrap). See .cursor/rules/uv-package-manager.mdc
 if [ -f "pyproject.toml" ]; then
     echo "[$REPO_NAME] Installing project dependencies..."
-    PYTHON_BIN=""
-    if [ "$REPO_NAME" = "execution-services" ]; then
-        for cand in python3.11 python3; do
-            if command -v "$cand" >/dev/null 2>&1; then
-                PYTHON_BIN="$cand"
-                break
-            fi
-        done
-    else
-        for cand in python3.13 python3.12 python3; do
-            if command -v "$cand" >/dev/null 2>&1; then
-                PYTHON_BIN="$cand"
-                break
-            fi
-        done
-    fi
-    if [ -z "$PYTHON_BIN" ]; then
-        echo "[$REPO_NAME] ❌ No compatible python interpreter found for dependency install"
-        exit 1
-    fi
+    command -v uv >/dev/null 2>&1 || pip install uv --quiet
     if [ "$REPO_NAME" = "unified-cloud-services" ]; then
-        "$PYTHON_BIN" -m pip install -e ".[databento]" || "$PYTHON_BIN" -m pip install -e ".[dev]" || "$PYTHON_BIN" -m pip install -e .
+        uv pip install -e ".[databento]" || uv pip install -e ".[dev]" || uv pip install -e .
     elif [ "$REPO_NAME" = "instruments-service" ]; then
-        "$PYTHON_BIN" -m pip install -e . --no-deps || "$PYTHON_BIN" -m pip install -e .
+        uv pip install -e . --no-deps || uv pip install -e .
     elif [ "$REPO_NAME" = "execution-services" ]; then
-        "$PYTHON_BIN" -m pip install -e ".[dev]" --no-deps || "$PYTHON_BIN" -m pip install -e ".[dev]" || "$PYTHON_BIN" -m pip install -e .
+        [ -d "../unified-cloud-services" ] && uv pip install -e ../unified-cloud-services -q 2>/dev/null || true
+        uv pip install -e ".[dev]" --no-deps || uv pip install -e ".[dev]" || uv pip install -e .
     elif [ "$REPO_NAME" = "unified-trading-deployment-v2" ]; then
-        "$PYTHON_BIN" -m pip install -e ".[dev]" || "$PYTHON_BIN" -m pip install -e .
-        "$PYTHON_BIN" -m pip install fastapi
+        uv pip install -e ".[dev]" || uv pip install -e .
+        uv pip install fastapi
     else
-        "$PYTHON_BIN" -m pip install -e ".[dev]" || "$PYTHON_BIN" -m pip install -e .
+        uv pip install -e ".[dev]" || uv pip install -e .
     fi
 fi
 
@@ -155,9 +137,15 @@ git commit -m "$COMMIT_MSG" --quiet
 git push -u origin "$BRANCH" --quiet 2>/dev/null
 
 # Create PR with auto-merge
+# Extract issue references from commit message for PR body
+ISSUE_REFS=$(echo "$COMMIT_MSG" | grep -o -E "(Fixes|Closes|Resolves) [^#]*#[0-9]+" || echo "")
+PR_BODY="Automated PR. Will auto-merge once quality gates pass.
+
+$ISSUE_REFS"
+
 PR_URL=$(gh pr create \
     --title "$COMMIT_MSG" \
-    --body "Automated PR. Will auto-merge once quality gates pass." \
+    --body "$PR_BODY" \
     --base main \
     --head "$BRANCH" 2>/dev/null)
 
