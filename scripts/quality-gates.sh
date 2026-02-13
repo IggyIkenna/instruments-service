@@ -134,8 +134,20 @@ LINT_STATUS=0
 TEST_STATUS=0
 CONFIG_STATUS=0
 
-# Source directories
+# Source directories (default: check all)
 SOURCE_DIRS="instruments_service/ tests/"
+
+# Git-aware: If files are staged (e.g., via quickmerge --files), check ONLY staged files
+# This prevents deadlock when fixing COD issues with other unrelated linter errors
+STAGED_PY_FILES=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep '\.py$' | tr '\n' ' ' || true)
+
+if [ -n "$STAGED_PY_FILES" ]; then
+    # Staged files detected → Differential quality gates (check only staged files)
+    SOURCE_DIRS="$STAGED_PY_FILES"
+    echo -e "${YELLOW}🔍 Git-aware mode: Checking ONLY staged files (${#STAGED_PY_FILES[@]} files)${NC}"
+    echo -e "${YELLOW}   Staged: $STAGED_PY_FILES${NC}"
+    echo ""
+fi
 
 # ============================================================================
 # STEP 0: CLOUD BUILD CONFIG VALIDATION
