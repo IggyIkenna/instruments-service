@@ -46,24 +46,14 @@ jobs:
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip setuptools wheel
-
-          # Install unified-cloud-services first
-          pip install -e deps/unified-cloud-services
-
-          # Install unified-trading-deployment-v2 (optional - for smoke tests)
-          pip install -e deps/unified-trading-deployment-v2 2>/dev/null || echo "⚠️ unified-trading-deployment-v2 not available"
-
-          # Install instruments-service without deps first
-          pip install -e . --no-deps
-
-          # Install core dependencies
-          pip install pydantic pydantic-settings pandas numpy python-dateutil \
+          pip install uv
+          uv pip install --system -e deps/unified-cloud-services
+          uv pip install --system -e deps/unified-trading-deployment-v2 2>/dev/null || echo "⚠️ unified-trading-deployment-v2 not available"
+          uv pip install --system -e . --no-deps
+          uv pip install --system pydantic pydantic-settings pandas numpy python-dateutil \
             python-dotenv requests ccxt plotly web3 eth-abi databento boto3 \
             exchange-calendars yfinance polars
-
-          # Install test dependencies
-          pip install pytest pytest-asyncio pytest-mock pytest-timeout pytest-xdist ruff==0.15.0
+          uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout pytest-xdist ruff==0.15.0
 
       # ========================================================================
       # LINT + FORMAT - auto-fix then verify no diff (catches unformatted code)

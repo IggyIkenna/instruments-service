@@ -13,9 +13,9 @@
 #   ./scripts/quality-gates.sh --no-fix  # Skip auto-fix (CI mode)
 #
 # Requirements:
-#   - Python 3.13 (>=3.13,<3.14)
+#   - Python 3.12+
 #   - ruff, pytest, pytest-asyncio, pytest-mock installed
-#   - unified-cloud-services available (local or via GH_PAT)
+#   - unified-cloud-services available (from UCS base image or local)
 #
 set -e  # Exit on any error
 
@@ -34,52 +34,12 @@ REPO_ROOT="$(dirname "$PROJECT_ROOT")"
 # Change to project root
 cd "$PROJECT_ROOT"
 
-# ============================================================================
-# ENSURE ENVIRONMENT (venv + uv + deps) - single command, no setup needed first
-# Skips in CI (GitHub Actions, Cloud Build use their own setup)
-# ============================================================================
-if [ -z "${GITHUB_ACTIONS:-}" ] && [ -z "${CI:-}" ] && [ -z "${CLOUD_BUILD:-}" ]; then
-    # Update lock file when pyproject.toml changes (cross-platform, fast; no-op when deps unchanged)
-    if [ -f "pyproject.toml" ]; then
-        command -v uv &>/dev/null || pip install uv --quiet
-        uv lock 2>/dev/null || true
-        if [ -f "uv.lock" ] && ! git diff --quiet uv.lock 2>/dev/null; then
-            echo -e "${YELLOW}ℹ uv.lock was updated — include it in your commit.${NC}"
-        fi
-    fi
-    if [ ! -d ".venv" ]; then
-        echo -e "${YELLOW}Creating .venv...${NC}"
-        command -v uv &>/dev/null || pip install uv --quiet
-        uv venv .venv
-    fi
-    if [ -f ".venv/bin/activate" ]; then
-        # shellcheck source=/dev/null
-        source .venv/bin/activate
-    elif [ -f ".venv/Scripts/activate" ]; then
-        # shellcheck source=/dev/null
-        source .venv/Scripts/activate
-    fi
-    command -v uv &>/dev/null || pip install uv --quiet
-    if [ -f "pyproject.toml" ]; then
-        UCS_PATH=""
-        [ -d "${REPO_ROOT:-/dev/null}/unified-cloud-services" ] && UCS_PATH="${REPO_ROOT}/unified-cloud-services"
-        [ -z "$UCS_PATH" ] && [ -d "deps/unified-cloud-services" ] && UCS_PATH="deps/unified-cloud-services"
-        if [ -n "$UCS_PATH" ] && [ -f "$UCS_PATH/pyproject.toml" ]; then
-            uv pip install -e "$UCS_PATH" --quiet 2>/dev/null || true
-        fi
-        uv pip install -e ".[dev]" --quiet 2>/dev/null || uv pip install -e . --quiet 2>/dev/null || true
-    fi
-fi
-
-# Python for tests (venv if activated, else detect-python)
-if command -v python &>/dev/null && python -c "import sys; exit(0 if sys.version_info >= (3, 13) else 1)" 2>/dev/null; then
-    PYTHON_CMD="python"
-    PYTHON_VERSION="$(python --version 2>&1)"
-elif [ -f "$REPO_ROOT/.scripts/detect-python.sh" ]; then
+# Source shared Python detection script (ensures 3.12+ is used)
+if [ -f "$REPO_ROOT/.scripts/detect-python.sh" ]; then
     source "$REPO_ROOT/.scripts/detect-python.sh"
 else
-    PYTHON_CMD="python3"
-    PYTHON_VERSION="$(python3 --version 2>&1)"
+    echo -e "${RED}❌ ERROR: .scripts/detect-python.sh not found${NC}"
+    exit 1
 fi
 
 echo -e "${BLUE}======================================================================${NC}"
@@ -132,23 +92,10 @@ done
 # Track overall status
 LINT_STATUS=0
 TEST_STATUS=0
-CODEX_STATUS=0
 CONFIG_STATUS=0
 
-# Source directories (default: check all)
+# Source directories
 SOURCE_DIRS="instruments_service/ tests/"
-
-# Git-aware: If files are staged (e.g., via quickmerge --files), check ONLY staged files
-# This prevents deadlock when fixing COD issues with other unrelated linter errors
-STAGED_PY_FILES=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep '\.py$' | tr '\n' ' ' || true)
-
-if [ -n "$STAGED_PY_FILES" ]; then
-    FILE_COUNT=$(echo "$STAGED_PY_FILES" | wc -w | tr -d ' ')
-    SOURCE_DIRS="$STAGED_PY_FILES"
-    echo -e "${YELLOW}🔍 Git-aware mode: Checking ONLY staged files ($FILE_COUNT files)${NC}"
-    echo -e "${YELLOW}   Staged: $STAGED_PY_FILES${NC}"
-    echo ""
-fi
 
 # ============================================================================
 # STEP 0: CLOUD BUILD CONFIG VALIDATION
@@ -177,15 +124,25 @@ fi
 # Check Python version in pyproject.toml matches expected
 if [ -f "pyproject.toml" ]; then
     PYTHON_VERSION=$(grep 'requires-python' pyproject.toml | head -1)
-    if echo "$PYTHON_VERSION" | grep -q '>=3.13,<3.14'; then
+    # Expected: >=3.12,<3.13 for most services (or >=3.11,<3.12 for execution-services)
+    if echo "$PYTHON_VERSION" | grep -q '>=3.12,<3.13'; then
         echo -e "${GREEN}✅ pyproject.toml Python version correct: $PYTHON_VERSION${NC}"
+    elif echo "$PYTHON_VERSION" | grep -q '>=3.11,<3.12'; then
+        echo -e "${GREEN}✅ pyproject.toml Python version correct (execution-services): $PYTHON_VERSION${NC}"
     else
         echo -e "${RED}❌ pyproject.toml Python version may be incorrect: $PYTHON_VERSION${NC}"
-        echo -e "${YELLOW}Expected: requires-python = \">=3.13,<3.14\"${NC}"
+        echo -e "${YELLOW}Expected: requires-python = \">=3.12,<3.13\" (or >=3.11,<3.12 for execution-services)${NC}"
         CONFIG_STATUS=1
     fi
 else
     echo -e "${YELLOW}No pyproject.toml found (skipping)${NC}"
+fi
+
+# Check/install uv for faster dependency management
+if ! command -v uv &> /dev/null; then
+    echo -e "${YELLOW}Installing uv (10-100x faster than pip)...${NC}"
+    pip install uv --quiet
+    echo -e "${GREEN}✅ uv installed${NC}"
 fi
 
 # ============================================================================
@@ -198,7 +155,6 @@ if [ "$RUN_LINT" = true ] && [ "$AUTO_FIX" = true ]; then
     # Check if ruff is installed
     if ! command -v ruff &> /dev/null; then
         echo -e "${YELLOW}Installing ruff...${NC}"
-        command -v uv >/dev/null 2>&1 || pip install uv --quiet
         uv pip install ruff==0.15.0 --quiet
     fi
 
@@ -223,7 +179,6 @@ if [ "$RUN_LINT" = true ]; then
     # Check if ruff is installed
     if ! command -v ruff &> /dev/null; then
         echo -e "${YELLOW}Installing ruff...${NC}"
-        command -v uv >/dev/null 2>&1 || pip install uv --quiet
         uv pip install ruff==0.15.0 --quiet
     fi
 
@@ -241,13 +196,12 @@ fi
 # STEP 3: TESTS (pytest)
 # ============================================================================
 if [ "$RUN_TESTS" = true ]; then
-    echo -e "\n${BLUE}[3/4] TESTS (pytest)${NC}"
+    echo -e "\n${BLUE}[3/3] TESTS (pytest)${NC}"
     echo "----------------------------------------------------------------------"
 
     # Check if pytest is installed
     if ! $PYTHON_CMD -c "import pytest" &> /dev/null; then
         echo -e "${YELLOW}Installing pytest...${NC}"
-        command -v uv >/dev/null 2>&1 || pip install uv --quiet
         uv pip install pytest pytest-asyncio pytest-mock --quiet
     fi
 
@@ -293,138 +247,6 @@ if [ "$RUN_TESTS" = true ]; then
 fi
 
 # ============================================================================
-# STEP 4: CODEX COMPLIANCE (Coding Standards)
-# ============================================================================
-echo -e "\n${BLUE}[4/4] CODEX COMPLIANCE (Coding Standards)${NC}"
-echo "----------------------------------------------------------------------"
-
-CODEX_VIOLATIONS=0
-
-# Check: ripgrep (rg) availability
-if ! command -v rg &> /dev/null; then
-    echo -e "${YELLOW}⚠️  ripgrep (rg) not found - skipping some checks${NC}"
-    echo -e "${YELLOW}   Install with: brew install ripgrep (macOS) or apt install ripgrep (Linux)${NC}"
-    USE_RG=false
-else
-    USE_RG=true
-fi
-
-# Check 1: print() statements in production code
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for print() statements... "
-    if rg "print\(" --type py --glob "!tests/**" --glob "!scripts/**" . >/dev/null 2>&1; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Found print() in production code (use logger.info() instead):${NC}"
-        rg "print\(" --type py --glob "!tests/**" --glob "!scripts/**" . | head -5
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 2: os.getenv() usage
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for os.getenv() usage... "
-    if rg "os\.getenv" --type py --glob "!tests/**" --glob "!scripts/**" . >/dev/null 2>&1; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Found os.getenv() (use config class instead):${NC}"
-        rg "os\.getenv" --type py --glob "!tests/**" --glob "!scripts/**" . | head -5
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 3: datetime.now() without UTC
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for datetime.now() without UTC... "
-    if rg "datetime\.now\(\)" --type py . >/dev/null 2>&1; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Found datetime.now() (use datetime.now(timezone.utc) instead):${NC}"
-        rg "datetime\.now\(\)" --type py . | head -5
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 4: Bare except clauses
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for bare except clauses... "
-    if rg "except:" --type py --glob "!tests/**" . >/dev/null 2>&1; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Found bare except: (use specific exceptions or @handle_api_errors):${NC}"
-        rg "except:" --type py --glob "!tests/**" . | head -5
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 5: requests library in async code
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for requests library in async code... "
-    HAS_REQUESTS=$(rg "import\s+requests" --type py . 2>/dev/null | wc -l | tr -d ' ')
-    HAS_ASYNC=$(rg "async\s+def" --type py . 2>/dev/null | wc -l | tr -d ' ')
-    if [ "${HAS_REQUESTS:-0}" -gt 0 ] && [ "${HAS_ASYNC:-0}" -gt 0 ]; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Found requests library with async code (use aiohttp instead):${NC}"
-        rg "import\s+requests" --type py . | head -3
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 6: asyncio.run() in loops (simplified check)
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for asyncio.run() in loops... "
-    FILES_WITH_ASYNCIO_RUN=$(rg "asyncio\.run\(" --type py --files-with-matches . 2>/dev/null || true)
-    if [ -n "$FILES_WITH_ASYNCIO_RUN" ]; then
-        for file in $FILES_WITH_ASYNCIO_RUN; do
-            if grep -q "for \|while " "$file" 2>/dev/null; then
-                echo -e "${YELLOW}WARN${NC}"
-                echo -e "${YELLOW}Found asyncio.run() in file with loops (verify not in loop - use asyncio.gather() instead):${NC}"
-                echo "  $file"
-                CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-                break
-            fi
-        done
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 7: time.sleep() in async functions (simplified check)
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for time.sleep() in async code... "
-    FILES_WITH_TIME_SLEEP=$(rg "time\.sleep\(" --type py --files-with-matches . 2>/dev/null || true)
-    if [ -n "$FILES_WITH_TIME_SLEEP" ]; then
-        for file in $FILES_WITH_TIME_SLEEP; do
-            if grep -q "async def" "$file" 2>/dev/null; then
-                echo -e "${YELLOW}WARN${NC}"
-                echo -e "${YELLOW}Found time.sleep() in file with async functions (verify not in async - use asyncio.sleep() instead):${NC}"
-                echo "  $file"
-                CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-                break
-            fi
-        done
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Summary
-if [ $CODEX_VIOLATIONS -eq 0 ]; then
-    echo -e "\n${GREEN}✅ Codex compliance PASSED${NC}"
-    CODEX_STATUS=0
-else
-    echo -e "\n${RED}❌ Codex compliance FAILED: $CODEX_VIOLATIONS violations${NC}"
-    echo -e "${YELLOW}See: unified-trading-codex/06-coding-standards/README.md${NC}"
-    CODEX_STATUS=1
-fi
-
-# ============================================================================
 # FINAL SUMMARY
 # ============================================================================
 echo ""
@@ -457,14 +279,6 @@ if [ "$RUN_TESTS" = true ]; then
         echo -e "Tests:    ${RED}❌ FAILED${NC}"
         OVERALL_STATUS=1
     fi
-fi
-
-if [ $CODEX_STATUS -eq 0 ]; then
-    echo -e "Codex:    ${GREEN}✅ PASSED${NC}"
-else
-    echo -e "Codex:    ${RED}❌ FAILED${NC}"
-    OVERALL_STATUS=1
-
 fi
 
 echo -e "${BLUE}======================================================================${NC}"
