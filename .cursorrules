@@ -14,6 +14,12 @@ This service follows unified-trading-codex principles:
 
 Inherits all rules from workspace `.cursorrules`: quality gates, quickmerge, config standards, cloud-agnostic design, event logging.
 
+## Python and Package Manager
+
+- **Python**: 3.13 (`.python-version`, `pyproject.toml`, CI, Cursor `python.defaultInterpreterPath`)
+- **Package Manager**: UV only. NEVER use `pip install` (except `pip install uv` bootstrap).
+- Use `uv pip install -e ".[dev]"` locally; `uv pip install --system -e ".[dev]"` in Docker.
+
 ## Quality Gates (Three-Stage Consistency)
 
 **CRITICAL**: Same `ruff==0.15.0` across all three stages:
