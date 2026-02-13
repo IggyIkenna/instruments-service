@@ -15,7 +15,7 @@ env:
 phases:
   install:
     runtime-versions:
-      python: 3.11
+      python: 3.13
     commands:
       - pip install --upgrade pip setuptools wheel
 
@@ -24,13 +24,13 @@ phases:
       - echo "=== Cloning dependencies ==="
       - git clone https://x-access-token:${GITHUB_TOKEN}@github.com/IggyIkenna/unified-cloud-services.git /tmp/unified-cloud-services
       - git clone https://x-access-token:${GITHUB_TOKEN}@github.com/IggyIkenna/unified-trading-deployment-v2.git /tmp/unified-trading-deployment-v2 || true
-      
+
       - echo "=== Installing packages ==="
       - pip install -e /tmp/unified-cloud-services
       - pip install -e /tmp/unified-trading-deployment-v2 || true
       - pip install -e . || pip install -e ".[dev]"
       - pip install ruff pytest
-      
+
       - echo "=== ECR login ==="
       - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
 
@@ -38,10 +38,10 @@ phases:
     commands:
       - echo "=== Running linting ==="
       - ruff check instruments_service/ tests/ --ignore E501 || exit 1
-      
+
       - echo "=== Running tests ==="
       - pytest tests/ -v --tb=short || exit 1
-      
+
       - echo "=== Building Docker image ==="
       - export IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION:0:7}
       - export ECR_REPO=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/${REPOSITORY}
