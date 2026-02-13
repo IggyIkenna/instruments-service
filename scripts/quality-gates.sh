@@ -132,6 +132,7 @@ done
 # Track overall status
 LINT_STATUS=0
 TEST_STATUS=0
+CODEX_STATUS=0
 CONFIG_STATUS=0
 
 # Source directories (default: check all)
@@ -142,9 +143,9 @@ SOURCE_DIRS="instruments_service/ tests/"
 STAGED_PY_FILES=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep '\.py$' | tr '\n' ' ' || true)
 
 if [ -n "$STAGED_PY_FILES" ]; then
-    # Staged files detected → Differential quality gates (check only staged files)
+    FILE_COUNT=$(echo "$STAGED_PY_FILES" | wc -w | tr -d ' ')
     SOURCE_DIRS="$STAGED_PY_FILES"
-    echo -e "${YELLOW}🔍 Git-aware mode: Checking ONLY staged files (${#STAGED_PY_FILES[@]} files)${NC}"
+    echo -e "${YELLOW}🔍 Git-aware mode: Checking ONLY staged files ($FILE_COUNT files)${NC}"
     echo -e "${YELLOW}   Staged: $STAGED_PY_FILES${NC}"
     echo ""
 fi
@@ -240,7 +241,7 @@ fi
 # STEP 3: TESTS (pytest)
 # ============================================================================
 if [ "$RUN_TESTS" = true ]; then
-    echo -e "\n${BLUE}[3/3] TESTS (pytest)${NC}"
+    echo -e "\n${BLUE}[3/4] TESTS (pytest)${NC}"
     echo "----------------------------------------------------------------------"
 
     # Check if pytest is installed
@@ -292,6 +293,138 @@ if [ "$RUN_TESTS" = true ]; then
 fi
 
 # ============================================================================
+# STEP 4: CODEX COMPLIANCE (Coding Standards)
+# ============================================================================
+echo -e "\n${BLUE}[4/4] CODEX COMPLIANCE (Coding Standards)${NC}"
+echo "----------------------------------------------------------------------"
+
+CODEX_VIOLATIONS=0
+
+# Check: ripgrep (rg) availability
+if ! command -v rg &> /dev/null; then
+    echo -e "${YELLOW}⚠️  ripgrep (rg) not found - skipping some checks${NC}"
+    echo -e "${YELLOW}   Install with: brew install ripgrep (macOS) or apt install ripgrep (Linux)${NC}"
+    USE_RG=false
+else
+    USE_RG=true
+fi
+
+# Check 1: print() statements in production code
+if [ "$USE_RG" = true ]; then
+    echo -n "Checking for print() statements... "
+    if rg "print\(" --type py --glob "!tests/**" --glob "!scripts/**" . >/dev/null 2>&1; then
+        echo -e "${RED}FAIL${NC}"
+        echo -e "${YELLOW}Found print() in production code (use logger.info() instead):${NC}"
+        rg "print\(" --type py --glob "!tests/**" --glob "!scripts/**" . | head -5
+        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
+    else
+        echo -e "${GREEN}PASS${NC}"
+    fi
+fi
+
+# Check 2: os.getenv() usage
+if [ "$USE_RG" = true ]; then
+    echo -n "Checking for os.getenv() usage... "
+    if rg "os\.getenv" --type py --glob "!tests/**" --glob "!scripts/**" . >/dev/null 2>&1; then
+        echo -e "${RED}FAIL${NC}"
+        echo -e "${YELLOW}Found os.getenv() (use config class instead):${NC}"
+        rg "os\.getenv" --type py --glob "!tests/**" --glob "!scripts/**" . | head -5
+        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
+    else
+        echo -e "${GREEN}PASS${NC}"
+    fi
+fi
+
+# Check 3: datetime.now() without UTC
+if [ "$USE_RG" = true ]; then
+    echo -n "Checking for datetime.now() without UTC... "
+    if rg "datetime\.now\(\)" --type py . >/dev/null 2>&1; then
+        echo -e "${RED}FAIL${NC}"
+        echo -e "${YELLOW}Found datetime.now() (use datetime.now(timezone.utc) instead):${NC}"
+        rg "datetime\.now\(\)" --type py . | head -5
+        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
+    else
+        echo -e "${GREEN}PASS${NC}"
+    fi
+fi
+
+# Check 4: Bare except clauses
+if [ "$USE_RG" = true ]; then
+    echo -n "Checking for bare except clauses... "
+    if rg "except:" --type py --glob "!tests/**" . >/dev/null 2>&1; then
+        echo -e "${RED}FAIL${NC}"
+        echo -e "${YELLOW}Found bare except: (use specific exceptions or @handle_api_errors):${NC}"
+        rg "except:" --type py --glob "!tests/**" . | head -5
+        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
+    else
+        echo -e "${GREEN}PASS${NC}"
+    fi
+fi
+
+# Check 5: requests library in async code
+if [ "$USE_RG" = true ]; then
+    echo -n "Checking for requests library in async code... "
+    HAS_REQUESTS=$(rg "import\s+requests" --type py . 2>/dev/null | wc -l | tr -d ' ')
+    HAS_ASYNC=$(rg "async\s+def" --type py . 2>/dev/null | wc -l | tr -d ' ')
+    if [ "${HAS_REQUESTS:-0}" -gt 0 ] && [ "${HAS_ASYNC:-0}" -gt 0 ]; then
+        echo -e "${RED}FAIL${NC}"
+        echo -e "${YELLOW}Found requests library with async code (use aiohttp instead):${NC}"
+        rg "import\s+requests" --type py . | head -3
+        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
+    else
+        echo -e "${GREEN}PASS${NC}"
+    fi
+fi
+
+# Check 6: asyncio.run() in loops (simplified check)
+if [ "$USE_RG" = true ]; then
+    echo -n "Checking for asyncio.run() in loops... "
+    FILES_WITH_ASYNCIO_RUN=$(rg "asyncio\.run\(" --type py --files-with-matches . 2>/dev/null || true)
+    if [ -n "$FILES_WITH_ASYNCIO_RUN" ]; then
+        for file in $FILES_WITH_ASYNCIO_RUN; do
+            if grep -q "for \|while " "$file" 2>/dev/null; then
+                echo -e "${YELLOW}WARN${NC}"
+                echo -e "${YELLOW}Found asyncio.run() in file with loops (verify not in loop - use asyncio.gather() instead):${NC}"
+                echo "  $file"
+                CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
+                break
+            fi
+        done
+    else
+        echo -e "${GREEN}PASS${NC}"
+    fi
+fi
+
+# Check 7: time.sleep() in async functions (simplified check)
+if [ "$USE_RG" = true ]; then
+    echo -n "Checking for time.sleep() in async code... "
+    FILES_WITH_TIME_SLEEP=$(rg "time\.sleep\(" --type py --files-with-matches . 2>/dev/null || true)
+    if [ -n "$FILES_WITH_TIME_SLEEP" ]; then
+        for file in $FILES_WITH_TIME_SLEEP; do
+            if grep -q "async def" "$file" 2>/dev/null; then
+                echo -e "${YELLOW}WARN${NC}"
+                echo -e "${YELLOW}Found time.sleep() in file with async functions (verify not in async - use asyncio.sleep() instead):${NC}"
+                echo "  $file"
+                CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
+                break
+            fi
+        done
+    else
+        echo -e "${GREEN}PASS${NC}"
+    fi
+fi
+
+# Summary
+if [ $CODEX_VIOLATIONS -eq 0 ]; then
+    echo -e "\n${GREEN}✅ Codex compliance PASSED${NC}"
+    CODEX_STATUS=0
+else
+    echo -e "\n${RED}❌ Codex compliance FAILED: $CODEX_VIOLATIONS violations${NC}"
+    echo -e "${YELLOW}See: unified-trading-codex/06-coding-standards/README.md${NC}"
+    CODEX_STATUS=1
+fi
+
+# ============================================================================
 # FINAL SUMMARY
 # ============================================================================
 echo ""
@@ -324,6 +457,13 @@ if [ "$RUN_TESTS" = true ]; then
         echo -e "Tests:    ${RED}❌ FAILED${NC}"
         OVERALL_STATUS=1
     fi
+fi
+
+if [ $CODEX_STATUS -eq 0 ]; then
+    echo -e "Codex:    ${GREEN}✅ PASSED${NC}"
+else
+    echo -e "Codex:    ${YELLOW}⚠️  FAILED (warn only - not blocking)${NC}"
+    # Codex violations (print, os.getenv, datetime.now, etc.) are non-blocking for now
 fi
 
 echo -e "${BLUE}======================================================================${NC}"
