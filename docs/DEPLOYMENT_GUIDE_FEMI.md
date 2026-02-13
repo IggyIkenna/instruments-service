@@ -427,13 +427,13 @@ gcloud compute instances create instruments-service-vm \
 ```bash
 gcloud compute ssh instruments-service-vm --zone=asia-northeast1-c
 
-# Install Python 3.11+
-sudo apt update && sudo apt install -y python3.11 python3.11-venv git
+# Install Python 3.13+
+sudo apt update && sudo apt install -y python3.13 python3.13-venv git
 
 # Clone and install
 git clone https://github.com/IggyIkenna/instruments-service.git
 cd instruments-service
-python3.11 -m venv venv
+python3.13 -m venv venv
 source venv/bin/activate
 pip install -e .
 pip install git+https://github.com/IggyIkenna/unified-cloud-services.git
