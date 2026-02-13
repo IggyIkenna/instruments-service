@@ -13,7 +13,7 @@
 #   ./scripts/quality-gates.sh --no-fix  # Skip auto-fix (CI mode)
 #
 # Requirements:
-#   - Python 3.13+
+#   - Python 3.13 (>=3.13,<3.14)
 #   - ruff, pytest, pytest-asyncio, pytest-mock installed
 #   - unified-cloud-services available (local or via GH_PAT)
 #
@@ -34,12 +34,52 @@ REPO_ROOT="$(dirname "$PROJECT_ROOT")"
 # Change to project root
 cd "$PROJECT_ROOT"
 
-# Source shared Python detection script (ensures 3.12+ is used)
-if [ -f "$REPO_ROOT/.scripts/detect-python.sh" ]; then
+# ============================================================================
+# ENSURE ENVIRONMENT (venv + uv + deps) - single command, no setup needed first
+# Skips in CI (GitHub Actions, Cloud Build use their own setup)
+# ============================================================================
+if [ -z "${GITHUB_ACTIONS:-}" ] && [ -z "${CI:-}" ] && [ -z "${CLOUD_BUILD:-}" ]; then
+    # Update lock file when pyproject.toml changes (cross-platform, fast; no-op when deps unchanged)
+    if [ -f "pyproject.toml" ]; then
+        command -v uv &>/dev/null || pip install uv --quiet
+        uv lock 2>/dev/null || true
+        if [ -f "uv.lock" ] && ! git diff --quiet uv.lock 2>/dev/null; then
+            echo -e "${YELLOW}ℹ uv.lock was updated — include it in your commit.${NC}"
+        fi
+    fi
+    if [ ! -d ".venv" ]; then
+        echo -e "${YELLOW}Creating .venv...${NC}"
+        command -v uv &>/dev/null || pip install uv --quiet
+        uv venv .venv
+    fi
+    if [ -f ".venv/bin/activate" ]; then
+        # shellcheck source=/dev/null
+        source .venv/bin/activate
+    elif [ -f ".venv/Scripts/activate" ]; then
+        # shellcheck source=/dev/null
+        source .venv/Scripts/activate
+    fi
+    command -v uv &>/dev/null || pip install uv --quiet
+    if [ -f "pyproject.toml" ]; then
+        UCS_PATH=""
+        [ -d "${REPO_ROOT:-/dev/null}/unified-cloud-services" ] && UCS_PATH="${REPO_ROOT}/unified-cloud-services"
+        [ -z "$UCS_PATH" ] && [ -d "deps/unified-cloud-services" ] && UCS_PATH="deps/unified-cloud-services"
+        if [ -n "$UCS_PATH" ] && [ -f "$UCS_PATH/pyproject.toml" ]; then
+            uv pip install -e "$UCS_PATH" --quiet 2>/dev/null || true
+        fi
+        uv pip install -e ".[dev]" --quiet 2>/dev/null || uv pip install -e . --quiet 2>/dev/null || true
+    fi
+fi
+
+# Python for tests (venv if activated, else detect-python)
+if command -v python &>/dev/null && python -c "import sys; exit(0 if sys.version_info >= (3, 13) else 1)" 2>/dev/null; then
+    PYTHON_CMD="python"
+    PYTHON_VERSION="$(python --version 2>&1)"
+elif [ -f "$REPO_ROOT/.scripts/detect-python.sh" ]; then
     source "$REPO_ROOT/.scripts/detect-python.sh"
 else
-    echo -e "${RED}❌ ERROR: .scripts/detect-python.sh not found${NC}"
-    exit 1
+    PYTHON_CMD="python3"
+    PYTHON_VERSION="$(python3 --version 2>&1)"
 fi
 
 echo -e "${BLUE}======================================================================${NC}"
@@ -124,14 +164,11 @@ fi
 # Check Python version in pyproject.toml matches expected
 if [ -f "pyproject.toml" ]; then
     PYTHON_VERSION=$(grep 'requires-python' pyproject.toml | head -1)
-    # Expected: >=3.13,<3.14 for most services (or >=3.11,<3.12 for execution-services)
     if echo "$PYTHON_VERSION" | grep -q '>=3.13,<3.14'; then
         echo -e "${GREEN}✅ pyproject.toml Python version correct: $PYTHON_VERSION${NC}"
-    elif echo "$PYTHON_VERSION" | grep -q '>=3.11,<3.12'; then
-        echo -e "${GREEN}✅ pyproject.toml Python version correct (execution-services): $PYTHON_VERSION${NC}"
     else
         echo -e "${RED}❌ pyproject.toml Python version may be incorrect: $PYTHON_VERSION${NC}"
-        echo -e "${YELLOW}Expected: requires-python = \">=3.13,<3.14\" (or >=3.11,<3.12 for execution-services)${NC}"
+        echo -e "${YELLOW}Expected: requires-python = \">=3.13,<3.14\"${NC}"
         CONFIG_STATUS=1
     fi
 else
@@ -148,7 +185,8 @@ if [ "$RUN_LINT" = true ] && [ "$AUTO_FIX" = true ]; then
     # Check if ruff is installed
     if ! command -v ruff &> /dev/null; then
         echo -e "${YELLOW}Installing ruff...${NC}"
-        pip install ruff==0.15.0 --quiet
+        command -v uv >/dev/null 2>&1 || pip install uv --quiet
+        uv pip install ruff==0.15.0 --quiet
     fi
 
     # Auto-format with ruff format
@@ -172,7 +210,8 @@ if [ "$RUN_LINT" = true ]; then
     # Check if ruff is installed
     if ! command -v ruff &> /dev/null; then
         echo -e "${YELLOW}Installing ruff...${NC}"
-        pip install ruff==0.15.0 --quiet
+        command -v uv >/dev/null 2>&1 || pip install uv --quiet
+        uv pip install ruff==0.15.0 --quiet
     fi
 
     # Run ruff check (same as Cloud Build and GitHub Actions)
@@ -195,7 +234,8 @@ if [ "$RUN_TESTS" = true ]; then
     # Check if pytest is installed
     if ! $PYTHON_CMD -c "import pytest" &> /dev/null; then
         echo -e "${YELLOW}Installing pytest...${NC}"
-        pip install pytest pytest-asyncio pytest-mock --quiet
+        command -v uv >/dev/null 2>&1 || pip install uv --quiet
+        uv pip install pytest pytest-asyncio pytest-mock --quiet
     fi
 
     # Set environment variables for smoke tests
