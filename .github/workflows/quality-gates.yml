@@ -45,6 +45,10 @@ jobs:
           fi
 
       - name: Install dependencies
+
+      - name: Install ripgrep (required for codex checks)
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
         run: |
           pip install uv
           uv pip install --system -e deps/unified-cloud-services
