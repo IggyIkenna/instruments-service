@@ -23,8 +23,8 @@ def parse_arguments() -> argparse.Namespace:
 
     Example:
         >>> args = parse_arguments()
-        >>> print(f"Mode: {args.mode}")
-        >>> print(f"Date range: {args.start_date} to {args.end_date}")
+        >>> logger.info(f"Mode: {args.mode}")
+        >>> logger.info(f"Date range: {args.start_date} to {args.end_date}")
     """
     parser = argparse.ArgumentParser(
         description="Instruments Service - Generate canonical instrument definitions",
