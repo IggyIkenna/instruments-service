@@ -44,11 +44,11 @@ jobs:
             echo "❌ GH_PAT not set" && exit 1
           fi
 
-      - name: Install dependencies
-
       - name: Install ripgrep (required for codex checks)
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
+
+      - name: Install dependencies
         run: |
           pip install uv
           uv pip install --system -e deps/unified-cloud-services
