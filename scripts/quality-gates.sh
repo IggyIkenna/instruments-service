@@ -361,7 +361,20 @@ if [ "$USE_RG" = true ]; then
     fi
 fi
 
-# Check 5: requests library in async code
+# Check 5: Imports inside functions
+if [ "$USE_RG" = true ]; then
+    echo -n "Checking for imports inside functions... "
+    violations=$(rg "^[[:space:]]+import |^[[:space:]]+from .* import" --type py --glob "!tests/**" --glob "!scripts/**" . 2>/dev/null || true)
+    if [ -n "$violations" ]; then
+        violation_count=$(echo "$violations" | wc -l | tr -d " ")
+        echo -e "${YELLOW}WARN${NC} ($violation_count found)"
+        echo -e "${YELLOW}Note: Tracked in cleanup issue${NC}"
+    else
+        echo -e "${GREEN}PASS${NC}"
+    fi
+fi
+
+# Check 6: requests library in async code
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for requests library in async code... "
     HAS_REQUESTS=$(rg "import\s+requests" --type py . 2>/dev/null | wc -l | tr -d ' ')
@@ -376,7 +389,7 @@ if [ "$USE_RG" = true ]; then
     fi
 fi
 
-# Check 6: asyncio.run() in loops (simplified check)
+# Check 7: asyncio.run() in loops (simplified check)
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for asyncio.run() in loops... "
     FILES_WITH_ASYNCIO_RUN=$(rg "asyncio\.run\(" --type py --files-with-matches . 2>/dev/null || true)
@@ -395,7 +408,7 @@ if [ "$USE_RG" = true ]; then
     fi
 fi
 
-# Check 7: time.sleep() in async functions (simplified check)
+# Check 8: time.sleep() in async functions (simplified check)
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for time.sleep() in async code... "
     FILES_WITH_TIME_SLEEP=$(rg "time\.sleep\(" --type py --files-with-matches . 2>/dev/null || true)
