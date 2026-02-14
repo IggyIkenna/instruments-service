@@ -79,7 +79,7 @@ jobs:
       - name: Run unit tests
         run: |
           echo "=== Running unit tests ==="
-          python -m pytest tests/unit/ -v --tb=short --timeout=60
+          python -m pytest tests/unit/ -v --tb=short --timeout=60 -n auto
           echo "✅ Unit tests passed"
 
       # ========================================================================
@@ -89,7 +89,7 @@ jobs:
         run: |
           echo "=== Running integration tests ==="
           if [ -d "tests/integration" ]; then
-            python -m pytest tests/integration/ -v --tb=short --timeout=120 \
+            python -m pytest tests/integration/ -v --tb=short --timeout=120 -n auto \
               --ignore=tests/integration/test_performance.py \
               -k "not api and not live and not download"
             echo "✅ Integration tests passed"
@@ -107,7 +107,7 @@ jobs:
         run: |
           echo "=== Running e2e tests ==="
           if [ -d "tests/e2e" ]; then
-            python -m pytest tests/e2e/ -v --tb=short --timeout=180
+            python -m pytest tests/e2e/ -v --tb=short --timeout=180 -n auto
             echo "✅ E2E tests passed"
           else
             echo "No e2e tests directory found"
@@ -124,7 +124,7 @@ jobs:
         run: |
           echo "=== Running smoke tests ==="
           if [ -d "tests/smoke" ] && [ -d "deps/unified-trading-deployment-v2/configs" ]; then
-            python -m pytest tests/smoke/ -v --tb=short --timeout=180
+            python -m pytest tests/smoke/ -v --tb=short --timeout=180 -n auto
             echo "✅ Smoke tests passed"
           else
             echo "⚠️ Skipping smoke tests (deployment configs not available)"
