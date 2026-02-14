@@ -1,6 +1,7 @@
 # Instrument Specification
 
 > **Related Documentation**:
+>
 > - [`ARCHITECTURE.md`](./ARCHITECTURE.md) - Service architecture
 > - [`VENUE_ADAPTERS.md`](./VENUE_ADAPTERS.md) - Venue adapter pattern
 > - [`USAGE_GUIDE.md`](./USAGE_GUIDE.md) - Usage examples
@@ -69,6 +70,7 @@ This document provides the complete specification for canonical instrument IDs u
 **Format**: `VENUE:SPOT_ASSET:ASSET`
 
 **Examples**:
+
 - `CEFI:BINANCE-SPOT:SPOT_ASSET:BTC` (actual BTC position on Binance, with asset class prefix)
 - `BINANCE-SPOT:SPOT_ASSET:BTC` (backward compatible, no prefix)
 - `WALLET:SPOT_ASSET:ETH` (ETH held in wallet)
@@ -83,6 +85,7 @@ This document provides the complete specification for canonical instrument IDs u
 **Format**: `VENUE:SPOT_PAIR:BASE-QUOTE`
 
 **Examples**:
+
 - `CEFI:BINANCE-SPOT:SPOT_PAIR:BTC-USDT` (trading route, never stored as position, with asset class prefix)
 - `BINANCE-SPOT:SPOT_PAIR:BTC-USDT` (backward compatible, no prefix)
 - `DEFI:UNISWAPV3-ETH:SPOT_PAIR:USDC-ETH@ETHEREUM` (DEX trading route, with asset class prefix)
@@ -90,6 +93,7 @@ This document provides the complete specification for canonical instrument IDs u
 **Key Principle**: SPOT_PAIR is routing-only, never stored as a position. Trades result in SPOT_ASSET deltas.
 
 **Trading Flow**:
+
 1. Execute trade: Use `SPOT_PAIR` to find best route (e.g., `BINANCE-SPOT:SPOT_PAIR:BTC-USDT`)
 2. Update positions: After trade, track `SPOT_ASSET` positions (e.g., `BINANCE-SPOT:SPOT_ASSET:BTC`, `BINANCE-SPOT:SPOT_ASSET:USDT`)
 
@@ -100,12 +104,15 @@ This document provides the complete specification for canonical instrument IDs u
 **Format**: `VENUE:PERPETUAL:BASE-QUOTE[@LIN|@INV]`
 
 **Linear (`@LIN`)**: Quote asset == margin currency (settle_asset)
+
 - Example: `BINANCE-FUTURES:PERPETUAL:BTC-USDT@LIN` (USDT margin)
 
 **Inverse (`@INV`)**: Margin currency == base asset
+
 - Example: `DERIBIT:PERPETUAL:BTC-USD@INV` (BTC margin)
 
 **Examples**:
+
 - `BINANCE-FUTURES:PERPETUAL:ETH-USDT@LIN` (linear - USDT margin)
 - `DERIBIT:PERPETUAL:BTC-USD@INV` (inverse - BTC margin)
 - `HYPERLIQUID:PERPETUAL:BTC-USDC@LIN@HYPERLIQUID` (linear - USDC margin, Hyperliquid chain)
@@ -119,6 +126,7 @@ This document provides the complete specification for canonical instrument IDs u
 **Required Attributes**: `expiry` (datetime), `contract_size` (float)
 
 **Examples**:
+
 - `DERIBIT:FUTURE:BTC-USD-241225@INV` (inverse - BTC margin, expires Dec 25, 2024)
 - `BINANCE-FUTURES:FUTURE:BTC-USDT-241225@LIN` (linear - USDT margin)
 - `CME:FUTURE:ES-USD-241225` (TradFi futures)
@@ -132,6 +140,7 @@ This document provides the complete specification for canonical instrument IDs u
 **Required Attributes**: `expiry` (datetime), `strike` (string), `option_type` ("CALL" or "PUT")
 
 **Examples**:
+
 - `DERIBIT:OPTION:BTC-USD-241225-50000-CALL@INV` (inverse - BTC margin)
 - `DERIBIT:OPTION:BTC-USD-241225-50000-CALL@LIN` (linear - USD margin)
 - `CME:OPTION:ES-USD-241225-4500-CALL` (TradFi options)
@@ -145,6 +154,7 @@ This document provides the complete specification for canonical instrument IDs u
 **Fee Tier**: In basis points (100 = 0.01%, 500 = 0.05%, 3000 = 0.3%, 10000 = 1%)
 
 **Examples**:
+
 - `UNISWAPV3-ETH:POOL:ETH-USDT:3000@ETHEREUM` (Uniswap V3 pool, 0.3% fee)
 - `UNISWAPV3-ETH:POOL:ETH-USDT:500@ETHEREUM` (Uniswap V3 pool, 0.05% fee)
 - `CURVE-ETH:POOL:ETH-USDT@ETHEREUM` (Curve pool)
@@ -158,6 +168,7 @@ This document provides the complete specification for canonical instrument IDs u
 **Format**: `VENUE:LST:ASSET[@CHAIN]`
 
 **Examples**:
+
 - `ETHERFI:LST:WEETH@ETHEREUM` (EtherFi wrapped eETH)
 - `LIDO:LST:STETH@ETHEREUM` (Lido staked ETH)
 - `LIDO:LST:WSTETH@ETHEREUM` (Lido wrapped stETH)
@@ -169,6 +180,7 @@ This document provides the complete specification for canonical instrument IDs u
 **Format**: `VENUE:A_TOKEN:TOKEN[@CHAIN]`
 
 **Examples**:
+
 - `AAVE_V3_ETH:A_TOKEN:AUSDT@ETHEREUM` (AAVE USDT supply position)
 - `AAVE_V3_ETH:A_TOKEN:AWETH@ETHEREUM` (AAVE WETH supply position)
 
@@ -179,6 +191,7 @@ This document provides the complete specification for canonical instrument IDs u
 **Format**: `VENUE:DEBT_TOKEN:TOKEN[@CHAIN]`
 
 **Examples**:
+
 - `AAVE_V3_ETH:DEBT_TOKEN:DEBTWETH@ETHEREUM` (AAVE WETH borrow position)
 
 ### EQUITY
@@ -188,6 +201,7 @@ This document provides the complete specification for canonical instrument IDs u
 **Format**: `VENUE:EQUITY:SYMBOL`
 
 **Examples**:
+
 - `NASDAQ:EQUITY:AAPL` (Apple stock)
 - `NYSE:EQUITY:SPY` (S&P 500 ETF)
 
@@ -198,6 +212,7 @@ This document provides the complete specification for canonical instrument IDs u
 **Format**: `VENUE:INDEX:SYMBOL`
 
 **Examples**:
+
 - `CME:INDEX:ES` (S&P 500 index)
 
 ## Chain Attribute
@@ -227,36 +242,40 @@ For DeFi instruments on specific chains, the chain is included in the instrument
 
 ## Symbol Formats Summary
 
-| Instrument Type | Symbol Format | Example |
-|----------------|---------------|---------|
-| **SPOT_ASSET** | `ASSET` | `BTC`, `ETH`, `USDT`, `WEETH` |
-| **SPOT_PAIR** | `BASE-QUOTE` | `BTC-USDT`, `ETH-USDT` |
-| **PERPETUAL** | `BASE-QUOTE@LIN\|@INV` | `ETH-USDT@LIN`, `BTC-USD@INV` |
-| **FUTURE** | `BASE-QUOTE-YYMMDD@LIN\|@INV` | `BTC-USD-241225@LIN` |
-| **OPTION** | `BASE-QUOTE-YYMMDD-STRIKE-CALL\|PUT@LIN\|@INV` | `BTC-USD-241225-50000-CALL@LIN` |
-| **POOL** | `BASE-QUOTE[:FEE_TIER]` | `ETH-USDT:3000`, `BTC-USDC:500` |
-| **LST** | `ASSET` | `WEETH`, `STETH`, `WSTETH` |
-| **A_TOKEN** | `TOKEN` | `AUSDT`, `AWETH` |
-| **DEBT_TOKEN** | `TOKEN` | `DEBTWETH` |
+| Instrument Type | Symbol Format                                  | Example                         |
+| --------------- | ---------------------------------------------- | ------------------------------- |
+| **SPOT_ASSET**  | `ASSET`                                        | `BTC`, `ETH`, `USDT`, `WEETH`   |
+| **SPOT_PAIR**   | `BASE-QUOTE`                                   | `BTC-USDT`, `ETH-USDT`          |
+| **PERPETUAL**   | `BASE-QUOTE@LIN\|@INV`                         | `ETH-USDT@LIN`, `BTC-USD@INV`   |
+| **FUTURE**      | `BASE-QUOTE-YYMMDD@LIN\|@INV`                  | `BTC-USD-241225@LIN`            |
+| **OPTION**      | `BASE-QUOTE-YYMMDD-STRIKE-CALL\|PUT@LIN\|@INV` | `BTC-USD-241225-50000-CALL@LIN` |
+| **POOL**        | `BASE-QUOTE[:FEE_TIER]`                        | `ETH-USDT:3000`, `BTC-USDC:500` |
+| **LST**         | `ASSET`                                        | `WEETH`, `STETH`, `WSTETH`      |
+| **A_TOKEN**     | `TOKEN`                                        | `AUSDT`, `AWETH`                |
+| **DEBT_TOKEN**  | `TOKEN`                                        | `DEBTWETH`                      |
 
 ## Venue Names
 
 Venue names follow the pattern `VENUE` or `VENUE-CHAIN`:
 
 **CEX Venues**:
+
 - `BINANCE-SPOT`, `BINANCE-FUTURES`
 - `BYBIT`, `OKX`, `DERIBIT`
 
 **TradFi Venues**:
+
 - `CME`, `NASDAQ`, `NYSE`, `ICE`
 
 **DeFi Venues**:
+
 - `UNISWAPV2-ETH`, `UNISWAPV3-ETH`, `UNISWAPV4-ETH`
 - `CURVE-ETH`, `BALANCER-ETH`
 - `AAVE_V3_ETH`, `ETHERFI`, `LIDO`
 - `MORPHO-ETHEREUM`
 
 **Special Venues**:
+
 - `WALLET` - For on-chain wallet positions
 
 ## Attributes Schema
@@ -382,6 +401,7 @@ Exchange API 'option' → Canonical 'OPTION'
 ### Problem Statement
 
 DeFi instruments need contract addresses and pool information for execution, but:
+
 - Contract addresses are long and not user-intuitive
 - Same trading pair can exist on multiple pools (e.g., ETH-USDT on Uniswap V3 with fees 500, 3000, 10000)
 - Different pool versions coexist (Uniswap V2 and V3 both have ETH-USDT pools)
@@ -392,6 +412,7 @@ DeFi instruments need contract addresses and pool information for execution, but
 **Differentiate pool versions and fee tiers in instrument ID, store contract addresses in attributes.**
 
 **Recommended Pattern**: Version + Fee in Venue Name
+
 ```
 UNISWAPV3-ETH:POOL:ETH-USDT:3000@ETHEREUM  # Uniswap V3, 0.3% fee
 UNISWAPV3-ETH:POOL:ETH-USDT:500@ETHEREUM   # Uniswap V3, 0.05% fee
@@ -399,6 +420,7 @@ UNISWAPV2-ETH:POOL:ETH-USDT@ETHEREUM       # Uniswap V2 (0.3% fee implied)
 ```
 
 **Execution Attributes** (stored in instrument definition):
+
 ```python
 {
     "instrument_key": "UNISWAPV3-ETH:POOL:ETH-USDT:3000@ETHEREUM",
@@ -413,6 +435,7 @@ UNISWAPV2-ETH:POOL:ETH-USDT@ETHEREUM       # Uniswap V2 (0.3% fee implied)
 ```
 
 **Benefits**:
+
 - Explicit routing: Middleware knows exactly which pool to use
 - No inference needed: Direct pool address from instrument ID lookup
 - Position tracking: Each pool can be tracked separately

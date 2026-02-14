@@ -5,24 +5,29 @@ Welcome to the Instruments Service documentation. This directory contains compre
 ## Documentation Structure (12 docs)
 
 ### Getting Started
+
 - **[SETUP_GUIDE.md](./SETUP_GUIDE.md)** - Quick start and detailed setup instructions
 - **[SECRETS_SETUP.md](./SECRETS_SETUP.md)** - API keys and secrets configuration
 
 ### Core Documentation
+
 - **[ARCHITECTURE.md](./ARCHITECTURE.md)** - Service architecture, design decisions, and system context
 - **[INSTRUMENT_SPECIFICATION.md](./INSTRUMENT_SPECIFICATION.md)** - Complete instrument ID specification and formats
 - **[VENUE_ADAPTERS.md](./VENUE_ADAPTERS.md)** - Venue adapter pattern and supported data sources
 - **[DEFI_GUIDE.md](./DEFI_GUIDE.md)** - DeFi protocols, data sources, and integration guide
 
 ### Usage & Reference
+
 - **[USAGE_GUIDE.md](./USAGE_GUIDE.md)** - Comprehensive usage examples including batch processing
 - **[API_REFERENCE.md](./API_REFERENCE.md)** - Complete API documentation
 
 ### Testing & Status
+
 - **[TESTING.md](./TESTING.md)** - Testing strategy, procedures, and GCP setup
 - **[STATUS.md](./STATUS.md)** - Current implementation status, milestones, and quality gates
 
 ### MVP & Performance
+
 - **[MVP_INSTRUMENTS.md](./MVP_INSTRUMENTS.md)** - MVP instrument lists and performance benchmarks
 
 ## Quick Links
@@ -47,10 +52,11 @@ Welcome to the Instruments Service documentation. This directory contains compre
 ## Examples
 
 See the `examples/` directory in the repository root for:
+
 - Batch generation examples
 - Query examples
 - Usage patterns
 
 ---
 
-*Last Updated: December 2025*
+_Last Updated: December 2025_

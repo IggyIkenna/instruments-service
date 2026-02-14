@@ -9,6 +9,7 @@ Utility scripts for instruments-service.
 **Purpose**: Import STATUS.md data into ClickUp via API
 
 **Features**:
+
 - ✅ Parses STATUS.md automatically
 - ✅ Creates milestone tasks
 - ✅ Creates subtasks with proper hierarchy
@@ -18,6 +19,7 @@ Utility scripts for instruments-service.
 - ✅ Dry run mode for testing
 
 **Usage**:
+
 ```bash
 # Dry run first (recommended)
 python scripts/clickup_import.py \
@@ -34,6 +36,7 @@ python scripts/clickup_import.py \
 **Setup**: See `scripts/CLICKUP_GUIDE.md` for complete setup and usage guide.
 
 **Requirements**:
+
 - ClickUp API token (get from https://app.clickup.com/settings/apps)
 - ClickUp List ID (from URL)
 - `requests` library (already in requirements.txt)
@@ -45,6 +48,7 @@ python scripts/clickup_import.py \
 **Purpose**: Run quality gates (tests, coverage, performance tests)
 
 **Usage**:
+
 ```bash
 # Run all quality gates (coverage threshold: 65%)
 python scripts/run_quality_gates.py
@@ -64,6 +68,7 @@ python scripts/run_quality_gates.py --coverage-threshold 65 --use-github --skip-
 ```
 
 **Arguments**:
+
 - `--coverage-threshold <percentage>`: Minimum coverage percentage required (default: 65%)
 - `--skip-performance`: Skip performance tests for faster execution during development
 - `--use-github`: Force GitHub installation mode
@@ -75,16 +80,19 @@ python scripts/run_quality_gates.py --coverage-threshold 65 --use-github --skip-
 **Coverage Threshold**: 65% (default)
 
 **Installation Sources** (when `--use-github` is NOT used):
+
 1. Local monorepo (`../unified-cloud-services`) - editable install
 2. PyPI (if package is published)
 3. GitHub Packages (requires `GH_PAT`)
 4. GitHub repository (requires `GH_PAT`)
 
 **Installation Sources** (when `--use-github` IS used):
+
 1. GitHub Packages (requires `GH_PAT` from `.env` or environment)
 2. GitHub repository (requires `GH_PAT` from `.env` or environment)
 
 **Environment Variables**:
+
 - `GH_PAT`: GitHub Personal Access Token for accessing private repositories and GitHub Packages
   - Can be set in `instruments-service/.env` file (recommended for local dev)
   - Or exported as environment variable: `export GH_PAT="your_token"`

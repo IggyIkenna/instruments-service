@@ -16,10 +16,10 @@ This guide covers deploying `instruments-service` to GCP for batch historical ba
 
 **instruments-service has two modes that MUST be run in order:**
 
-| Step | Mode | Description | Dependency |
-|------|------|-------------|------------|
-| 1️⃣ | `--mode instruments` | Generate instrument definitions (CeFi, TradFi, DeFi) | None |
-| 2️⃣ | `--mode corporate_actions` | Fetch dividends, splits, earnings (TradFi only) | Requires Step 1 |
+| Step | Mode                       | Description                                          | Dependency      |
+| ---- | -------------------------- | ---------------------------------------------------- | --------------- |
+| 1️⃣   | `--mode instruments`       | Generate instrument definitions (CeFi, TradFi, DeFi) | None            |
+| 2️⃣   | `--mode corporate_actions` | Fetch dividends, splits, earnings (TradFi only)      | Requires Step 1 |
 
 **Why?** Corporate actions mode reads the equity ticker list from GCS instruments store (populated by instruments mode). This ensures both modes use the same universe of instruments.
 
@@ -39,13 +39,13 @@ python -m instruments_service --mode corporate_actions \
 
 ## Success Criteria
 
-| Criteria | Target | Notes |
-|----------|--------|-------|
-| **CeFi Mode** | All dates from **Nov 17, 2019** to today | Tardis.dev started recording late 2019 |
-| **TradFi Mode** | All dates from **Jan 1, 2020** to today | Databento API - historical equity/futures data |
-| **DeFi Mode** | All dates from **Dec 18, 2020** to today | Most DeFi protocols launched 2020-2021 |
-| **GCS Output** | Data in correct buckets | See bucket paths below |
-| **T+1 Scheduler** | Running after 8am UTC daily | Cloud Scheduler configured |
+| Criteria          | Target                                   | Notes                                          |
+| ----------------- | ---------------------------------------- | ---------------------------------------------- |
+| **CeFi Mode**     | All dates from **Nov 17, 2019** to today | Tardis.dev started recording late 2019         |
+| **TradFi Mode**   | All dates from **Jan 1, 2020** to today  | Databento API - historical equity/futures data |
+| **DeFi Mode**     | All dates from **Dec 18, 2020** to today | Most DeFi protocols launched 2020-2021         |
+| **GCS Output**    | Data in correct buckets                  | See bucket paths below                         |
+| **T+1 Scheduler** | Running after 8am UTC daily              | Cloud Scheduler configured                     |
 
 **Note:** You CAN try running from Jan 1, 2019 but expect empty results for dates before the data sources have coverage. The system will handle missing data gracefully.
 
@@ -79,43 +79,43 @@ May 23rd, 2023 is used as the benchmark/litmus test date to verify the system is
 
 ### CeFi (via Tardis.dev)
 
-| Exchange | Launch Date | Tardis Recording Start | Notes |
-|----------|-------------|------------------------|-------|
-| **Binance** | July 2017 | **Nov 2019** | Tardis.dev started recording late 2019 |
-| **Binance Futures** | Sept 2019 | **Nov 2019** | Available from Tardis start |
-| **OKX (OKEx)** | 2017 | **Nov 2019** | Available from Tardis start |
-| **Bybit** | March 2018 | **Nov 2019** | Available from Tardis start |
-| **Deribit** | 2016 | **Nov 2019** | Options exchange |
+| Exchange            | Launch Date | Tardis Recording Start | Notes                                  |
+| ------------------- | ----------- | ---------------------- | -------------------------------------- |
+| **Binance**         | July 2017   | **Nov 2019**           | Tardis.dev started recording late 2019 |
+| **Binance Futures** | Sept 2019   | **Nov 2019**           | Available from Tardis start            |
+| **OKX (OKEx)**      | 2017        | **Nov 2019**           | Available from Tardis start            |
+| **Bybit**           | March 2018  | **Nov 2019**           | Available from Tardis start            |
+| **Deribit**         | 2016        | **Nov 2019**           | Options exchange                       |
 
 **Earliest CeFi data in GCS:** `day=2019-11-17`
 
 ### TradFi (via Databento)
 
-| Asset Class | Availability | Notes |
-|-------------|--------------|-------|
-| **Equities (NYSE, NASDAQ)** | 2000+ | Historical data available |
-| **Futures (CME, CBOT)** | 2000+ | E-mini S&P, commodities |
-| **Micro Futures** | 2019+ | Micro E-mini launched May 2019 |
-| **Bitcoin Futures (CME)** | Dec 2017+ | BTC futures launched Dec 2017 |
-| **Bitcoin ETFs (IBIT, etc.)** | **Jan 2024** | Spot Bitcoin ETFs approved Jan 10, 2024 |
-| **Bitcoin Futures ETF (BITO)** | Oct 2021+ | First futures-based BTC ETF |
+| Asset Class                    | Availability | Notes                                   |
+| ------------------------------ | ------------ | --------------------------------------- |
+| **Equities (NYSE, NASDAQ)**    | 2000+        | Historical data available               |
+| **Futures (CME, CBOT)**        | 2000+        | E-mini S&P, commodities                 |
+| **Micro Futures**              | 2019+        | Micro E-mini launched May 2019          |
+| **Bitcoin Futures (CME)**      | Dec 2017+    | BTC futures launched Dec 2017           |
+| **Bitcoin ETFs (IBIT, etc.)**  | **Jan 2024** | Spot Bitcoin ETFs approved Jan 10, 2024 |
+| **Bitcoin Futures ETF (BITO)** | Oct 2021+    | First futures-based BTC ETF             |
 
 **Earliest TradFi data in GCS:** `day=2020-01-01`
 
 ### DeFi (via The Graph / Protocol SDKs)
 
-| Protocol | Launch Date | Notes |
-|----------|-------------|-------|
-| **Uniswap V2** | May 2020 | First major DEX |
-| **Uniswap V3** | May 2021 | Concentrated liquidity |
-| **Lido (stETH)** | **Dec 2020** | Liquid staking |
-| **AAVE V2** | Dec 2020 | Lending protocol |
-| **AAVE V3** | March 2022 | Multi-chain |
-| **Curve** | Aug 2020 | Stablecoin DEX |
-| **Balancer** | March 2020 | Weighted pools |
-| **EtherFi** | 2023 | Restaking |
-| **Ethena (USDe)** | **2024** | Synthetic dollar |
-| **Morpho** | 2022 | Lending optimizer |
+| Protocol          | Launch Date  | Notes                  |
+| ----------------- | ------------ | ---------------------- |
+| **Uniswap V2**    | May 2020     | First major DEX        |
+| **Uniswap V3**    | May 2021     | Concentrated liquidity |
+| **Lido (stETH)**  | **Dec 2020** | Liquid staking         |
+| **AAVE V2**       | Dec 2020     | Lending protocol       |
+| **AAVE V3**       | March 2022   | Multi-chain            |
+| **Curve**         | Aug 2020     | Stablecoin DEX         |
+| **Balancer**      | March 2020   | Weighted pools         |
+| **EtherFi**       | 2023         | Restaking              |
+| **Ethena (USDe)** | **2024**     | Synthetic dollar       |
+| **Morpho**        | 2022         | Lending optimizer      |
 
 **Earliest DeFi data in GCS:** `day=2020-12-18`
 
@@ -137,12 +137,12 @@ export GCP_PROJECT_ID={project_id}  # Or AWS_PROJECT_ID for AWS deployments
 
 ### 2. API Keys (in Secret Manager)
 
-| Secret Name | Purpose |
-|-------------|---------|
-| `tardis-api-key` | CeFi crypto exchange data |
+| Secret Name         | Purpose                    |
+| ------------------- | -------------------------- |
+| `tardis-api-key`    | CeFi crypto exchange data  |
 | `databento-api-key` | TradFi equity/futures data |
-| `alchemy-api-key` | DeFi on-chain data |
-| `the-graph-api-key` | DeFi DEX pool enumeration |
+| `alchemy-api-key`   | DeFi on-chain data         |
+| `the-graph-api-key` | DeFi DEX pool enumeration  |
 
 ### 3. Python Environment
 
@@ -160,11 +160,11 @@ pip install git+https://github.com/IggyIkenna/unified-cloud-services.git
 
 ### Output Buckets
 
-| Domain | Bucket | Path Pattern |
-|--------|--------|--------------|
-| **CeFi** | `gs://instruments-store-cefi-{project_id}/` | `instrument_availability/by_date/day={YYYY-MM-DD}/instruments.parquet` |
+| Domain     | Bucket                                        | Path Pattern                                                           |
+| ---------- | --------------------------------------------- | ---------------------------------------------------------------------- |
+| **CeFi**   | `gs://instruments-store-cefi-{project_id}/`   | `instrument_availability/by_date/day={YYYY-MM-DD}/instruments.parquet` |
 | **TradFi** | `gs://instruments-store-tradfi-{project_id}/` | `instrument_availability/by_date/day={YYYY-MM-DD}/instruments.parquet` |
-| **DeFi** | `gs://instruments-store-defi-{project_id}/` | `instrument_availability/by_date/day={YYYY-MM-DD}/instruments.parquet` |
+| **DeFi**   | `gs://instruments-store-defi-{project_id}/`   | `instrument_availability/by_date/day={YYYY-MM-DD}/instruments.parquet` |
 
 ### Expected File Sizes & Row Counts (Benchmarks)
 
@@ -172,15 +172,16 @@ pip install git+https://github.com/IggyIkenna/unified-cloud-services.git
 
 This date provides a baseline before Bitcoin ETFs and newer DeFi protocols.
 
-| Domain | File Size | Instruments | Top Venues |
-|--------|-----------|-------------|------------|
-| **CeFi** | **168.71 KB** | **2,905** | DERIBIT (1,299), BYBIT (523), OKX (503), BINANCE-SPOT (360), BINANCE-FUTURES (180), COINBASE (17), UPBIT (16) |
-| **TradFi** | **310.19 KB** | **9,577** | CME (9,010), NYSE (463), NASDAQ (102), CBOE (1), FX (1) |
-| **DeFi** | **45.81 KB** | **116** | HYPERLIQUID (38), UNISWAPV3-ETH (31), ASTER (20), BALANCER-ETH (18), AAVE_V3_ETH (7), LIDO (2) |
+| Domain     | File Size     | Instruments | Top Venues                                                                                                    |
+| ---------- | ------------- | ----------- | ------------------------------------------------------------------------------------------------------------- |
+| **CeFi**   | **168.71 KB** | **2,905**   | DERIBIT (1,299), BYBIT (523), OKX (503), BINANCE-SPOT (360), BINANCE-FUTURES (180), COINBASE (17), UPBIT (16) |
+| **TradFi** | **310.19 KB** | **9,577**   | CME (9,010), NYSE (463), NASDAQ (102), CBOE (1), FX (1)                                                       |
+| **DeFi**   | **45.81 KB**  | **116**     | HYPERLIQUID (38), UNISWAPV3-ETH (31), ASTER (20), BALANCER-ETH (18), AAVE_V3_ETH (7), LIDO (2)                |
 
 **Total for 2023-05-23:** ~525 KB, **12,598 instruments**
 
 **What you'll see:**
+
 - ✅ CeFi: All crypto exchanges (Binance, OKX, Bybit, Deribit, Coinbase, Upbit)
 - ✅ TradFi: Equities, CME futures, KRW/USD FX
 - ✅ DeFi: Uniswap V3, AAVE V3, Hyperliquid, Aster, Balancer, Lido
@@ -192,15 +193,16 @@ This date provides a baseline before Bitcoin ETFs and newer DeFi protocols.
 
 This date shows the expanded universe after Bitcoin ETF launches and additional DeFi protocol support.
 
-| Domain | File Size | Instruments | Top Venues |
-|--------|-----------|-------------|------------|
-| **CeFi** | **253.69 KB** | **4,795** | DERIBIT (2,681), BYBIT (887), OKX (539), BINANCE-SPOT (385), BINANCE-FUTURES (262), COINBASE (18), UPBIT (16) |
-| **TradFi** | **360.26 KB** | **11,234** | CME (10,664), NYSE (468), NASDAQ (100), CBOE (1), FX (1) |
-| **DeFi** | **48.27 KB** | **128** | HYPERLIQUID (38), UNISWAPV3-ETH (37), ASTER (20), BALANCER-ETH (18), AAVE_V3_ETH (7), MORPHO (4), LIDO (2), ETHERFI (1), ETHENA (1) |
+| Domain     | File Size     | Instruments | Top Venues                                                                                                                          |
+| ---------- | ------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| **CeFi**   | **253.69 KB** | **4,795**   | DERIBIT (2,681), BYBIT (887), OKX (539), BINANCE-SPOT (385), BINANCE-FUTURES (262), COINBASE (18), UPBIT (16)                       |
+| **TradFi** | **360.26 KB** | **11,234**  | CME (10,664), NYSE (468), NASDAQ (100), CBOE (1), FX (1)                                                                            |
+| **DeFi**   | **48.27 KB**  | **128**     | HYPERLIQUID (38), UNISWAPV3-ETH (37), ASTER (20), BALANCER-ETH (18), AAVE_V3_ETH (7), MORPHO (4), LIDO (2), ETHERFI (1), ETHENA (1) |
 
 **Total for 2024-07-01:** ~662 KB, **16,157 instruments**
 
 **What July 2024 has that May 2023 doesn't:**
+
 - ✅ Bitcoin ETFs: IBIT, FBTC, ARKB (NASDAQ:ETF)
 - ✅ EtherFi (weETH) - more mature by 2024
 - ✅ Ethena (sUSDe) - launched 2024
@@ -210,6 +212,7 @@ This date shows the expanded universe after Bitcoin ETF launches and additional 
 ---
 
 **Note:**
+
 - File sizes and row counts vary by date based on:
   - **Earlier dates (2020-2023):** Fewer instruments existed (new exchanges/protocols launched over time)
   - **Recent dates (2024+):** More instruments as new assets, exchanges, and protocols are added
@@ -218,6 +221,7 @@ This date shows the expanded universe after Bitcoin ETF launches and additional 
   - **DeFi:** Smallest domain with curated protocol instruments
 
 **Success Criteria for Deployment:**
+
 - Verify files exist in GCS for target dates
 - Check file sizes are within expected ranges (see benchmarks above)
 - Confirm row counts match expected instrument counts per domain
@@ -232,6 +236,7 @@ This date shows the expanded universe after Bitcoin ETF launches and additional 
 **Runtime per day**: ~2 minutes per day (for all domains: CeFi, TradFi, DeFi combined)
 
 **Notes**:
+
 - Runtime is consistent across dates (processes all domains in single run)
 - Runtime may vary slightly based on:
   - Number of instruments discovered per domain
@@ -243,6 +248,7 @@ This date shows the expanded universe after Bitcoin ETF launches and additional 
   - 5 years (~1,825 days) ≈ ~61 hours (~2.5 days)
 
 **Example Runtime Estimates**:
+
 - Single day (2023-05-23): ~2 minutes
 - One month (May 2023): ~60 minutes (~1 hour)
 - One year (2023): ~12 hours
@@ -299,6 +305,7 @@ python -m instruments_service --mode instruments \
 ```
 
 **Note:**
+
 - Backfill ends on **Jan 5, 2026** (yesterday)
 - T+1 scheduler starts from **Jan 6, 2026** (today)
 - Always use `--force` to ensure data is regenerated with latest code
@@ -325,11 +332,11 @@ Corporate actions (dividends, stock splits, earnings dates) are reference data f
 
 ### What It Fetches
 
-| Data Type | Description | Use Case |
-|-----------|-------------|----------|
-| **Dividends** | Ex-date, amount, pay date | Price adjustment, yield calculation |
-| **Stock Splits** | Effective date, ratio (e.g., 4:1) | Historical price normalization |
-| **Earnings** | Earnings date, EPS (reported vs estimated) | Volatility modeling, event strategies |
+| Data Type        | Description                                | Use Case                              |
+| ---------------- | ------------------------------------------ | ------------------------------------- |
+| **Dividends**    | Ex-date, amount, pay date                  | Price adjustment, yield calculation   |
+| **Stock Splits** | Effective date, ratio (e.g., 4:1)          | Historical price normalization        |
+| **Earnings**     | Earnings date, EPS (reported vs estimated) | Volatility modeling, event strategies |
 
 ### Data Sources
 
@@ -388,11 +395,11 @@ corporate_actions_output/
 
 Tickers sourced from GCS instruments store (NYSE + NASDAQ equities).
 
-| Data Type | Records | Unique Tickers | File Size |
-|-----------|---------|----------------|-----------|
-| **Dividends** | ~9,500 | ~420 | ~106 KB |
-| **Splits** | ~86 | ~74 | ~9 KB |
-| **Earnings** | ~11,700 | ~497 | ~202 KB |
+| Data Type     | Records | Unique Tickers | File Size |
+| ------------- | ------- | -------------- | --------- |
+| **Dividends** | ~9,500  | ~420           | ~106 KB   |
+| **Splits**    | ~86     | ~74            | ~9 KB     |
+| **Earnings**  | ~11,700 | ~497           | ~202 KB   |
 
 **Runtime**: ~13 minutes for full backfill (596 tickers, 6 years)
 
@@ -503,11 +510,11 @@ gsutil ls "gs://instruments-store-cefi-{project_id}/instrument_availability/by_d
 
 After successful backfill:
 
-| Domain | Expected Days | Start Date | Notes |
-|--------|---------------|------------|-------|
-| **CeFi** | ~1,880+ | **2019-11-17** | Tardis.dev recording start |
-| **TradFi** | ~2,190+ | **2020-01-01** | Databento historical data |
-| **DeFi** | ~1,480+ | **2020-12-18** | Most protocols launched 2020-2021 |
+| Domain     | Expected Days | Start Date     | Notes                             |
+| ---------- | ------------- | -------------- | --------------------------------- |
+| **CeFi**   | ~1,880+       | **2019-11-17** | Tardis.dev recording start        |
+| **TradFi** | ~2,190+       | **2020-01-01** | Databento historical data         |
+| **DeFi**   | ~1,480+       | **2020-12-18** | Most protocols launched 2020-2021 |
 
 **Total storage estimate:** ~600 MB (CeFi) + ~600 MB (TradFi) + ~65 MB (DeFi) = ~1.3 GB
 
@@ -540,6 +547,7 @@ for domain in ['cefi', 'tradfi', 'defi']:
 ```
 
 **Expected Results for 2023-05-23:**
+
 - CeFi: ~2,905 rows, ~169 KB
 - TradFi: ~9,577 rows, ~310 KB
 - DeFi: ~116 rows, ~46 KB
@@ -550,12 +558,12 @@ for domain in ['cefi', 'tradfi', 'defi']:
 
 ### Common Issues
 
-| Issue | Cause | Solution |
-|-------|-------|----------|
+| Issue                      | Cause                        | Solution                        |
+| -------------------------- | ---------------------------- | ------------------------------- |
 | `TARDIS_API_KEY not found` | Secret not in Secret Manager | Add via `gcloud secrets create` |
-| `Permission denied on GCS` | Missing Storage Admin role | Update service account IAM |
-| `Rate limit exceeded` | API throttling | Add retry logic or slow down |
-| `No instruments found` | Date before exchange existed | Expected - log and continue |
+| `Permission denied on GCS` | Missing Storage Admin role   | Update service account IAM      |
+| `Rate limit exceeded`      | API throttling               | Add retry logic or slow down    |
+| `No instruments found`     | Date before exchange existed | Expected - log and continue     |
 
 ### Logs
 
@@ -571,9 +579,9 @@ grep -i error /var/log/instruments-t1.log
 
 ## Milestones (Femi Contract)
 
-| Milestone | Description | Due | Payment |
-|-----------|-------------|-----|---------|
-| **B2** | instruments-service batch deployed + T+1 | Jan 2 | Part of $625 |
+| Milestone | Description                              | Due   | Payment      |
+| --------- | ---------------------------------------- | ----- | ------------ |
+| **B2**    | instruments-service batch deployed + T+1 | Jan 2 | Part of $625 |
 
 ### Acceptance Criteria for B2
 
@@ -597,4 +605,4 @@ grep -i error /var/log/instruments-t1.log
 
 ---
 
-*Last updated: January 6, 2026*
+_Last updated: January 6, 2026_

@@ -1,0 +1,31 @@
+# Prettier ignore patterns
+# Dependencies
+node_modules/
+.venv/
+venv/
+
+# Build outputs
+dist/
+build/
+*.pyc
+__pycache__/
+
+# Lock files (don't format these)
+package-lock.json
+poetry.lock
+yarn.lock
+pnpm-lock.yaml
+uv.lock
+
+# Generated files
+*.min.js
+*.min.css
+
+# Data files
+data/
+*.csv
+*.parquet
+
+# IDE
+.vscode/
+.idea/

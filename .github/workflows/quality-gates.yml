@@ -26,8 +26,8 @@ jobs:
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
-          cache: 'pip'
+          python-version: "3.13"
+          cache: "pip"
 
       - name: Checkout dependencies
         env:
@@ -46,7 +46,6 @@ jobs:
 
       - name: Install ripgrep (required for codex checks)
         run: sudo apt-get update && sudo apt-get install -y ripgrep
-
 
       - name: Install dependencies
         run: |

@@ -5,10 +5,12 @@ This directory contains examples demonstrating how to use the **instruments-serv
 ## Purpose
 
 The `examples/` directory serves two purposes:
+
 1. **Service Usage**: Demonstrate how to run and use THIS service locally
 2. **Dependency Access**: Show how to access dependency service data (if applicable)
 
 **Note**:
+
 - `instruments-service` has no dependencies (it provides instruments to all other services), so dependency access examples are not needed here.
 - Instrument definitions are relatively static and don't change frequently, so batch processing for historical dates is the primary use case.
 
@@ -21,6 +23,7 @@ The `examples/` directory serves two purposes:
 Generate instruments for a date range in batch mode. This is the primary way to generate instruments since instrument definitions are relatively static and don't change frequently.
 
 **Usage:**
+
 ```bash
 # Generate for date range
 python examples/batch_generation.py --start-date 2023-05-23 --end-date 2023-05-24
@@ -39,6 +42,7 @@ python examples/batch_generation.py \
 ```
 
 **Features:**
+
 - Date range processing
 - Batch processing with progress tracking
 - Error handling and reporting
@@ -51,12 +55,14 @@ python examples/batch_generation.py \
 Query instruments data using unified-cloud-services domain clients.
 
 **Usage:**
+
 ```bash
 # Run all query examples
 python examples/query_instruments.py
 ```
 
 **Features:**
+
 - Query instruments for specific date
 - Filter by venue, instrument type, base/quote currency
 - Get instrument details
@@ -65,6 +71,7 @@ python examples/query_instruments.py
 - Date range queries
 
 **Example Code:**
+
 ```python
 from unified_cloud_services import create_instruments_client
 
@@ -79,6 +86,7 @@ instruments_df = client.get_instruments_for_date(
 ## Prerequisites
 
 1. **Install packages**:
+
    ```bash
    # Install instruments-service
    cd /path/to/instruments-service

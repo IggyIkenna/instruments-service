@@ -55,7 +55,7 @@ dev = [
     "pytest-mock>=3.14.0",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.6.0",
-    "ruff>=0.15.0",
+    "ruff==0.15.0",
     "mypy>=1.19.1",
     "prek>=0.3.2",
 ]

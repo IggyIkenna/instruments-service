@@ -26,6 +26,7 @@
 File uses os.getenv() which violates coding standards. Should extend UnifiedCloudServicesConfig instead.
 
 **Affected Files**:
+
 - `instruments-service/pytest_load_env.py`
 
 **Codex Reference**: `06-coding-standards/README.md#configuration`
@@ -43,6 +44,7 @@ File uses os.getenv() which violates coding standards. Should extend UnifiedClou
 File contains print() statement. Should use logger.info() instead.
 
 **Affected Files**:
+
 - `instruments-service/pytest_load_env.py`
 
 **Codex Reference**: `06-coding-standards/README.md`
@@ -60,6 +62,7 @@ File contains print() statement. Should use logger.info() instead.
 Import statement found inside function at line 124. All imports should be at top of file.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/app/core/dependency_checker.py`
 
 **Codex Reference**: `06-coding-standards/README.md#imports`
@@ -77,6 +80,7 @@ Import statement found inside function at line 124. All imports should be at top
 Import statement found inside function at line 193. All imports should be at top of file.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/app/core/dependency_checker.py`
 
 **Codex Reference**: `06-coding-standards/README.md#imports`
@@ -94,6 +98,7 @@ Import statement found inside function at line 193. All imports should be at top
 Import statement found inside function at line 256. All imports should be at top of file.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/app/core/dependency_checker.py`
 
 **Codex Reference**: `06-coding-standards/README.md#imports`
@@ -111,6 +116,7 @@ Import statement found inside function at line 256. All imports should be at top
 Import statement found inside function at line 69. All imports should be at top of file.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/app/core/instruments_service.py`
 
 **Codex Reference**: `06-coding-standards/README.md#imports`
@@ -128,6 +134,7 @@ Import statement found inside function at line 69. All imports should be at top 
 Import statement found inside function at line 35. All imports should be at top of file.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/app/core/cloud_data_provider.py`
 
 **Codex Reference**: `06-coding-standards/README.md#imports`
@@ -145,6 +152,7 @@ Import statement found inside function at line 35. All imports should be at top 
 File imports requests library and has async functions. Should use aiohttp for async HTTP operations.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/app/venues/onchain_perps/aster_adapter.py`
 
 **Codex Reference**: `06-coding-standards/PERFORMANCE_STANDARDS.md#async-http`
@@ -162,6 +170,7 @@ File imports requests library and has async functions. Should use aiohttp for as
 File imports requests library and has async functions. Should use aiohttp for async HTTP operations.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/app/venues/defi/morpho_adapter.py`
 
 **Codex Reference**: `06-coding-standards/PERFORMANCE_STANDARDS.md#async-http`
@@ -179,6 +188,7 @@ File imports requests library and has async functions. Should use aiohttp for as
 Import statement found inside function at line 77. All imports should be at top of file.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/app/venues/defi/the_graph_client.py`
 
 **Codex Reference**: `06-coding-standards/README.md#imports`
@@ -196,6 +206,7 @@ Import statement found inside function at line 77. All imports should be at top 
 Import statement found inside function at line 66. All imports should be at top of file.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/utils/ccxt_service.py`
 
 **Codex Reference**: `06-coding-standards/README.md#imports`
@@ -213,6 +224,7 @@ Import statement found inside function at line 66. All imports should be at top 
 File contains print() statement. Should use logger.info() instead.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/cli/parser.py`
 
 **Codex Reference**: `06-coding-standards/README.md`
@@ -230,6 +242,7 @@ File contains print() statement. Should use logger.info() instead.
 File uses os.getenv() which violates coding standards. Should extend UnifiedCloudServicesConfig instead.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/cli/handlers/instrument_handler.py`
 
 **Codex Reference**: `06-coding-standards/README.md#configuration`
@@ -247,6 +260,7 @@ File uses os.getenv() which violates coding standards. Should extend UnifiedClou
 Import statement found inside function at line 44. All imports should be at top of file.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/cli/handlers/instrument_handler.py`
 
 **Codex Reference**: `06-coding-standards/README.md#imports`
@@ -264,6 +278,7 @@ Import statement found inside function at line 44. All imports should be at top 
 Import statement found inside function at line 127. All imports should be at top of file.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/cli/handlers/corporate_actions_production_handler.py`
 
 **Codex Reference**: `06-coding-standards/README.md#imports`
@@ -281,6 +296,7 @@ Import statement found inside function at line 127. All imports should be at top
 Import statement found inside function at line 137. All imports should be at top of file.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/cli/handlers/corporate_actions_handler.py`
 
 **Codex Reference**: `06-coding-standards/README.md#imports`
@@ -298,6 +314,7 @@ Import statement found inside function at line 137. All imports should be at top
 Import statement found inside function at line 92. All imports should be at top of file.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/cli/handlers/corporate_actions_backfill_handler.py`
 
 **Codex Reference**: `06-coding-standards/README.md#imports`
@@ -315,6 +332,7 @@ Import statement found inside function at line 92. All imports should be at top 
 Import statement found inside function at line 70. All imports should be at top of file.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/corporate_actions/models.py`
 
 **Codex Reference**: `06-coding-standards/README.md#imports`
@@ -332,6 +350,7 @@ Import statement found inside function at line 70. All imports should be at top 
 Import statement found inside function at line 74. All imports should be at top of file.
 
 **Affected Files**:
+
 - `instruments-service/instruments_service/corporate_actions/adapter.py`
 
 **Codex Reference**: `06-coding-standards/README.md#imports`
@@ -349,6 +368,7 @@ Import statement found inside function at line 74. All imports should be at top 
 File contains print() statement. Should use logger.info() instead.
 
 **Affected Files**:
+
 - `instruments-service/examples/query_instruments.py`
 
 **Codex Reference**: `06-coding-standards/README.md`
@@ -366,6 +386,7 @@ File contains print() statement. Should use logger.info() instead.
 File contains bare `except:` clause which violates coding standards. Should use `@handle_api_errors` decorator or specific exception types.
 
 **Affected Files**:
+
 - `instruments-service/build/lib/instruments_service/app/venues/defi/curve_rpc_adapter.py`
 
 **Codex Reference**: `06-coding-standards/README.md#error-handling`
@@ -383,6 +404,7 @@ File contains bare `except:` clause which violates coding standards. Should use 
 File imports requests library and has async functions. Should use aiohttp for async HTTP operations.
 
 **Affected Files**:
+
 - `instruments-service/build/lib/instruments_service/app/venues/defi/aster_adapter.py`
 
 **Codex Reference**: `06-coding-standards/PERFORMANCE_STANDARDS.md#async-http`
@@ -400,6 +422,7 @@ File imports requests library and has async functions. Should use aiohttp for as
 File imports requests library and has async functions. Should use aiohttp for async HTTP operations.
 
 **Affected Files**:
+
 - `instruments-service/build/lib/instruments_service/app/venues/defi/hyperliquid_adapter.py`
 
 **Codex Reference**: `06-coding-standards/PERFORMANCE_STANDARDS.md#async-http`
@@ -417,6 +440,7 @@ File imports requests library and has async functions. Should use aiohttp for as
 File uses datetime.now() without timezone.utc. Should use datetime.now(timezone.utc).
 
 **Affected Files**:
+
 - `instruments-service/build/lib/instruments_service/app/venues/defi/uniswapv3_adapter.py`
 
 **Codex Reference**: `06-coding-standards/README.md#utc`
@@ -434,6 +458,7 @@ File uses datetime.now() without timezone.utc. Should use datetime.now(timezone.
 File contains print() statement. Should use logger.info() instead.
 
 **Affected Files**:
+
 - `instruments-service/build/lib/instruments_service/cli/parser.py`
 
 **Codex Reference**: `06-coding-standards/README.md`

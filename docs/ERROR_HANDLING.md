@@ -10,23 +10,23 @@ Instruments-service is the **ROOT of the data pipeline** with no upstream GCS de
 
 ### Error Categories Used
 
-| Category | When It Occurs | Recovery Strategy |
-|----------|----------------|-------------------|
-| `API` | External API errors (Tardis, Databento, The Graph) | RETRY with exponential backoff |
-| `AUTHENTICATION` | Invalid API keys | MANUAL_INTERVENTION |
-| `RATE_LIMIT` | API rate limits exceeded | RETRY with longer delays |
-| `DATA_VALIDATION` | Invalid instrument data | SKIP and continue |
-| `STORAGE` | GCS write errors | RETRY with exponential backoff |
-| `NETWORK` | Network connectivity issues | RETRY with exponential backoff |
+| Category          | When It Occurs                                     | Recovery Strategy              |
+| ----------------- | -------------------------------------------------- | ------------------------------ |
+| `API`             | External API errors (Tardis, Databento, The Graph) | RETRY with exponential backoff |
+| `AUTHENTICATION`  | Invalid API keys                                   | MANUAL_INTERVENTION            |
+| `RATE_LIMIT`      | API rate limits exceeded                           | RETRY with longer delays       |
+| `DATA_VALIDATION` | Invalid instrument data                            | SKIP and continue              |
+| `STORAGE`         | GCS write errors                                   | RETRY with exponential backoff |
+| `NETWORK`         | Network connectivity issues                        | RETRY with exponential backoff |
 
 ### Error Severity Levels
 
-| Severity | When Used |
-|----------|-----------|
-| `LOW` | Missing optional instrument fields |
-| `MEDIUM` | Individual instrument processing errors |
-| `HIGH` | Venue adapter failures |
-| `CRITICAL` | Missing required API keys |
+| Severity   | When Used                               |
+| ---------- | --------------------------------------- |
+| `LOW`      | Missing optional instrument fields      |
+| `MEDIUM`   | Individual instrument processing errors |
+| `HIGH`     | Venue adapter failures                  |
+| `CRITICAL` | Missing required API keys               |
 
 ## Custom Exceptions
 
@@ -57,11 +57,11 @@ async def upload_to_gcs():
 
 ### Venue-Specific Retry Configuration
 
-| Venue | Max Retries | Notes |
-|-------|-------------|-------|
-| Tardis (CeFi) | 3 | Contact for rate limits |
-| Databento (TradFi) | 3 | 5 requests/second limit |
-| The Graph (DeFi) | 3 | Varies by plan |
+| Venue              | Max Retries | Notes                   |
+| ------------------ | ----------- | ----------------------- |
+| Tardis (CeFi)      | 3           | Contact for rate limits |
+| Databento (TradFi) | 3           | 5 requests/second limit |
+| The Graph (DeFi)   | 3           | Varies by plan          |
 
 ## Dependency Checking
 

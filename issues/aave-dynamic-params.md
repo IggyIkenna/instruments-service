@@ -63,6 +63,7 @@ The AAVE adapter currently uses `STATIC_RISK_PARAMS` for eMode and standard risk
 ### RPC Method: `getEModeCategoryData(uint8 id)`
 
 Returns:
+
 - `uint16 ltv` - Loan-to-value ratio (in basis points, divide by 10000)
 - `uint16 liquidationThreshold` - Liquidation threshold (in basis points)
 - `uint16 liquidationBonus` - Liquidation bonus (in basis points)
@@ -72,6 +73,7 @@ Returns:
 ### RPC Method: `getReserveData(address asset)`
 
 Returns tuple with:
+
 - `configuration` (uint256) - Configuration bitmap containing:
   - LTV (bits 0-15)
   - Liquidation threshold (bits 16-31)
@@ -83,14 +85,14 @@ Returns tuple with:
 
 ```graphql
 query GetEModeCategory($categoryId: Int!, $blockNumber: Int) {
-    eModeCategories(where: { id: $categoryId }, block: { number: $blockNumber }) {
-        id
-        label
-        liquidationThreshold
-        liquidationBonus
-        priceSource
-        oracleId
-    }
+  eModeCategories(where: { id: $categoryId }, block: { number: $blockNumber }) {
+    id
+    label
+    liquidationThreshold
+    liquidationBonus
+    priceSource
+    oracleId
+  }
 }
 ```
 
@@ -144,4 +146,3 @@ query GetEModeCategory($categoryId: Int!, $blockNumber: Int) {
 - **Priority**: Medium
 - **Estimated Effort**: 2-3 days
 - **Dependencies**: None
-

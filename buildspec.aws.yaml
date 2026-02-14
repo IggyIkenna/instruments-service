@@ -55,4 +55,4 @@ phases:
 
 cache:
   paths:
-    - '/root/.cache/pip/**/*'
+    - "/root/.cache/pip/**/*"

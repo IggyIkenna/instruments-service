@@ -3,6 +3,7 @@
 Comprehensive usage guide for instruments-service.
 
 > **Related Documentation**:
+>
 > - [`ARCHITECTURE.md`](./ARCHITECTURE.md) - Service overview and architecture
 > - [`API_REFERENCE.md`](./API_REFERENCE.md) - Complete API documentation
 > - [`INSTRUMENT_SPECIFICATION.md`](./INSTRUMENT_SPECIFICATION.md) - Instrument ID format and examples
@@ -285,9 +286,10 @@ stats = client.get_summary_stats('2023-05-23')
 ## Examples
 
 See `examples/` directory for complete working examples:
+
 - `batch_generation.py` - Batch instrument generation using orchestration service
 - `query_instruments.py` - Query instruments using unified-cloud-services client
 
 ---
 
-*Last Updated: December 2025*
+_Last Updated: December 2025_

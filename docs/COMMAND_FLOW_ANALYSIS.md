@@ -817,18 +817,15 @@ async def upload_to_bigquery(
 ### Key Integration Points
 
 1. **Configuration Patching** (main.py:42-52)
-
    - Ensures `unified-cloud-services` uses `instruments-service` config
    - Critical for category-based bucket routing
 
 2. **CloudInstrumentStorage** (cloud_instrument_storage.py)
-
    - Bridge between `instruments-service` and `unified-cloud-services`
    - Creates `StandardizedDomainCloudService` instance
    - Manages category-based storage routing
 
 3. **Market Category Classification** (unified-cloud-services)
-
    - `determine_market_category()`: Classifies instruments as CEFI/TRADFI/DEFI
    - `get_bucket_for_category()`: Routes to category-specific GCS buckets
    - Enables independent batch processing per category
@@ -1035,19 +1032,16 @@ async with self._upload_semaphore:
 ### Levels of Error Handling
 
 1. **CLI Level** (main.py)
-
    - Catches top-level exceptions
    - Logs errors with full traceback
    - Returns exit code
 
 2. **Handler Level** (instrument_handler.py)
-
    - Tracks error counts per date
    - Continues processing on error
    - Provides summary statistics
 
 3. **Service Level** (instruments_service.py)
-
    - Catches per-exchange errors
    - Logs with context
    - Returns partial results
