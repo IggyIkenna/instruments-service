@@ -22,9 +22,8 @@ def parse_arguments() -> argparse.Namespace:
         Parsed arguments namespace with all CLI options
 
     Example:
-        >>> args = parse_arguments()
-        >>> print(f"Mode: {args.mode}")
-        >>> print(f"Date range: {args.start_date} to {args.end_date}")
+        args = parse_arguments()
+        # Access: args.mode, args.start_date, args.end_date
     """
     parser = argparse.ArgumentParser(
         description="Instruments Service - Generate canonical instrument definitions",
