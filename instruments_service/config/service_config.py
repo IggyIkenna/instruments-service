@@ -165,6 +165,18 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
     clickup_user_id_femi: str = Field(default="100698756")
     clickup_user_id_daniel: str = Field(default="36559682")
 
+    # Deployment orchestration metadata (set by VM startup scripts)
+    deployment_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("DEPLOYMENT_ID"),
+        description="Deployment ID for race condition detection",
+    )
+    shard_launched_at: str = Field(
+        default="",
+        validation_alias=AliasChoices("SHARD_LAUNCHED_AT"),
+        description="Shard launch timestamp for race condition detection",
+    )
+
     def get_cloud_target(self, category: str | None = None) -> CloudTarget:
         """Get CloudTarget for instruments service."""
         if category:
