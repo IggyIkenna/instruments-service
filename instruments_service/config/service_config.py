@@ -165,6 +165,17 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
     clickup_user_id_femi: str = Field(default="100698756")
     clickup_user_id_daniel: str = Field(default="36559682")
 
+    deployment_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("DEPLOYMENT_ID"),
+        description="Deployment ID (set by VM startup script)",
+    )
+    shard_launched_at: str = Field(
+        default="",
+        validation_alias=AliasChoices("SHARD_LAUNCHED_AT"),
+        description="Shard launch timestamp (set by VM startup script)",
+    )
+
     def get_cloud_target(self, category: str | None = None) -> CloudTarget:
         """Get CloudTarget for instruments service."""
         if category:
