@@ -7,7 +7,6 @@ No missing data report dependencies - pure force/skip logic.
 
 import asyncio
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -26,13 +25,9 @@ from instruments_service.app.core.cloud_instrument_storage import CloudInstrumen
 from instruments_service.app.core.instruments_service import InstrumentsService
 from instruments_service.app.core.selective_validation import validate_required_api_keys
 from instruments_service.cli.base_handler import ModeHandler
+from instruments_service.config import get_config
 
 logger = logging.getLogger(__name__)
-
-# Deployment context from environment (set by VM startup script)
-# Used to detect race conditions when data appears after shard launch
-DEPLOYMENT_ID = os.getenv("DEPLOYMENT_ID", "")
-SHARD_LAUNCHED_AT = os.getenv("SHARD_LAUNCHED_AT", "")
 
 
 class InstrumentHandler(ModeHandler):
@@ -219,13 +214,16 @@ class InstrumentHandler(ModeHandler):
                             # Detect race condition: data appeared after shard was launched
                             # SHARD_LAUNCHED_AT is set by VM startup script - if present, this
                             # VM was launched because data was reported as MISSING, but now exists
-                            if SHARD_LAUNCHED_AT:
+                            config = get_config()
+                            if config.shard_launched_at:
                                 # Race condition detected: another deployment completed while we were launching
                                 skip_msg = f"⚠️ RACE_CONDITION: Skipping {date_str} - data appeared after launch"
                                 if venues_to_check:
                                     skip_msg += f" for {categories_to_check}/{venues_to_check}"
-                                if DEPLOYMENT_ID:
-                                    skip_msg += f" (deployment={DEPLOYMENT_ID}, launched_at={SHARD_LAUNCHED_AT})"
+                                if config.deployment_id:
+                                    skip_msg += (
+                                        f" (deployment={config.deployment_id}, launched_at={config.shard_launched_at})"
+                                    )
                                 logger.warning(skip_msg)
                             else:
                                 # Normal expected skip (resume scenario or data already exists)
