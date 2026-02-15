@@ -63,7 +63,9 @@ steps:
           -e CLOUD_BUILD=true \
           -e CLOUD_MOCK_MODE=true \
           -e GOOGLE_CLOUD_PROJECT=$PROJECT_ID \
-          -e INSTRUMENTS_STORE_GCS_BUCKET=mock-instruments-bucket \
+          -e INSTRUMENTS_GCS_BUCKET=mock-instruments-bucket \
+          -e INSTRUMENTS_GCS_BUCKET_CEFI=mock-instruments-bucket \
+          -e GCP_PROJECT_ID=mock-project \
           asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service:$SHORT_SHA \
           /bin/bash -c "scripts/quality-gates.sh --no-fix --quick"
     waitFor: ['build']
