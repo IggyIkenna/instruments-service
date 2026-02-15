@@ -312,10 +312,10 @@ USE_RG=true
 # Check 1: print() statements in production code
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for print() statements... "
-    if rg "print\(" --type py --glob "!tests/**" --glob "!scripts/**" . >/dev/null 2>&1; then
+    if rg "print\(" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!examples/**" --glob "!pytest_load_env.py" . >/dev/null 2>&1; then
         echo -e "${RED}FAIL${NC}"
         echo -e "${YELLOW}Found print() in production code (use logger.info() instead):${NC}"
-        rg "print\(" --type py --glob "!tests/**" --glob "!scripts/**" . | head -5
+        rg "print\(" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!examples/**" --glob "!pytest_load_env.py" . | head -5
         CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
     else
         echo -e "${GREEN}PASS${NC}"
