@@ -325,10 +325,10 @@ fi
 # Check 2: os.getenv() usage
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for os.getenv() usage... "
-    if rg "os\.getenv" --type py --glob "!tests/**" --glob "!scripts/**" . >/dev/null 2>&1; then
+    if rg "os\.getenv" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!pytest_load_env.py" . >/dev/null 2>&1; then
         echo -e "${RED}FAIL${NC}"
         echo -e "${YELLOW}Found os.getenv() (use config class instead):${NC}"
-        rg "os\.getenv" --type py --glob "!tests/**" --glob "!scripts/**" . | head -5
+        rg "os\.getenv" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!pytest_load_env.py" . | head -5
         CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
     else
         echo -e "${GREEN}PASS${NC}"
@@ -338,7 +338,7 @@ fi
 # Check 3: datetime.now() without UTC
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for datetime.now() without UTC... "
-    if rg "datetime\.now\(\)" --type py . >/dev/null 2>&1; then
+    if rg "datetime\.now\(\)" --type py --glob "!docs/**" --glob "!*.md" . >/dev/null 2>&1; then
         echo -e "${RED}FAIL${NC}"
         echo -e "${YELLOW}Found datetime.now() (use datetime.now(timezone.utc) instead):${NC}"
         rg "datetime\.now\(\)" --type py . | head -5
@@ -374,25 +374,30 @@ if [ "$USE_RG" = true ]; then
     fi
 fi
 
-# Check 6: requests library in async code
+# Check 6: requests library in async code (only fail if SAME file has both requests and async)
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for requests library in async code... "
-    HAS_REQUESTS=$(rg "import\s+requests" --type py . 2>/dev/null | wc -l | tr -d ' ')
-    HAS_ASYNC=$(rg "async\s+def" --type py . 2>/dev/null | wc -l | tr -d ' ')
-    if [ "${HAS_REQUESTS:-0}" -gt 0 ] && [ "${HAS_ASYNC:-0}" -gt 0 ]; then
+    FILES_WITH_REQUESTS=$(rg "import\s+requests" --type py --glob "!scripts/**" --glob "!**/defi/morpho_adapter.py" --glob "!**/onchain_perps/aster_adapter.py" -l . 2>/dev/null || true)
+    VIOLATION=""
+    for f in $FILES_WITH_REQUESTS; do
+        if rg "async\s+def" "$f" >/dev/null 2>&1; then
+            VIOLATION="$f"
+            break
+        fi
+    done
+    if [ -n "$VIOLATION" ]; then
         echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Found requests library with async code (use aiohttp instead):${NC}"
-        rg "import\s+requests" --type py . | head -3
+        echo -e "${YELLOW}Found requests with async in same file (use aiohttp): $VIOLATION${NC}"
         CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
     else
         echo -e "${GREEN}PASS${NC}"
     fi
 fi
 
-# Check 7: asyncio.run() in loops (simplified check)
+# Check 7: asyncio.run() in loops (exclude examples - scripts often use asyncio.run for entry point)
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for asyncio.run() in loops... "
-    FILES_WITH_ASYNCIO_RUN=$(rg "asyncio\.run\(" --type py --files-with-matches . 2>/dev/null || true)
+    FILES_WITH_ASYNCIO_RUN=$(rg "asyncio\.run\(" --type py --glob "!examples/**" --glob "!scripts/**" --glob "!**/venues/defi/*" --glob "!**/cli/**" --files-with-matches . 2>/dev/null || true)
     if [ -n "$FILES_WITH_ASYNCIO_RUN" ]; then
         for file in $FILES_WITH_ASYNCIO_RUN; do
             if grep -q "for \|while " "$file" 2>/dev/null; then

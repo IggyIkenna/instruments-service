@@ -50,6 +50,7 @@ class TestCloudAgnosticPaths:
         """Test that CloudInstrumentStorage uses day={date} format."""
         import pandas as pd
 
+        # Must patch StandardizedDomainCloudService so store_instruments uses our mock
         with (
             patch(
                 "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
@@ -83,11 +84,12 @@ class TestCloudAgnosticPaths:
             storage = CloudInstrumentStorage(cloud_target=mock_cloud_target)
             storage.cloud_service = mock_cloud_service
 
-            # Create test data
+            # Create test data (include symbol - required by INSTRUMENTS_SCHEMA)
             test_date = date(2024, 1, 15)
             test_df = pd.DataFrame(
                 {
                     "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                    "symbol": ["BTC-USDT"],
                     "venue": ["TEST"],
                     "market_category": "CEFI",
                     "available_from_datetime": pd.Timestamp("2024-01-15", tz="UTC"),
@@ -303,11 +305,12 @@ class TestCloudAgnosticPaths:
             storage = CloudInstrumentStorage(cloud_target=mock_cloud_target)
             storage.cloud_service = mock_cloud_service
 
-            # Create test data with venue
+            # Create test data with venue (include symbol - required by INSTRUMENTS_SCHEMA)
             test_date = date(2024, 1, 15)
             test_df = pd.DataFrame(
                 {
                     "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
+                    "symbol": ["BTC-USDT"],
                     "venue": ["TEST-VENUE"],
                     "market_category": "CEFI",
                     "available_from_datetime": pd.Timestamp("2024-01-15", tz="UTC"),
