@@ -12,6 +12,7 @@ Used by:
 """
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -64,8 +65,6 @@ class CCXTService:
         Returns:
             Dictionary mapping ccxt_exchange_id to success status
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-
         # Get unique CCXT exchange IDs (avoid loading same exchange multiple times)
         ccxt_exchange_ids = set()
         for venue in venues:

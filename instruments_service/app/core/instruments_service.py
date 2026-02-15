@@ -17,7 +17,7 @@ from instruments_service.app.core.batch_processor import InstrumentBatchProcesso
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
 from instruments_service.app.venues.databento.databento_adapter import DatabentoAdapter
-from instruments_service.config import UnifiedInstrumentConfig
+from instruments_service.config import UnifiedInstrumentConfig, instruments_config
 from instruments_service.models import InstrumentDefinition
 
 logger = logging.getLogger(__name__)
@@ -67,8 +67,6 @@ class InstrumentsService:
         self.config = config
 
         # Initialize processing service
-        from instruments_service.config import instruments_config
-
         processing_config = {
             "project_id": config.get("project_id") or instruments_config.gcp_project_id,
             "enable_ccxt_integration": config.get("enable_ccxt_integration", True),

@@ -271,8 +271,7 @@ Corporate Actions (dividends, splits, earnings):
 
 Query Instruments (use unified-cloud-services):
 
-  # Query instruments from Python
-  from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
-  service = StandardizedDomainCloudService(domain='instruments', cloud_target=CloudTarget(...))
-  df = service.download_from_gcs(gcs_path='CEFI/by_date/day-2023-05-23/instruments.parquet')
+  >>> from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
+  >>> service = StandardizedDomainCloudService(domain='instruments', cloud_target=CloudTarget(...))
+  >>> df = service.download_from_gcs(gcs_path='CEFI/by_date/day-2023-05-23/instruments.parquet')
 """

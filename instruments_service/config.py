@@ -1717,6 +1717,20 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
         validation_alias=AliasChoices("UNISWAP_V3_GRAPH_URL"),
         description="Uniswap V3 Graph URL",
     )
+
+    # =========================================================================
+    # DEPLOYMENT CONTEXT (set by VM startup script for race condition detection)
+    # =========================================================================
+    deployment_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("DEPLOYMENT_ID"),
+        description="Deployment ID from VM startup",
+    )
+    shard_launched_at: str = Field(
+        default="",
+        validation_alias=AliasChoices("SHARD_LAUNCHED_AT"),
+        description="Shard launch timestamp from VM startup",
+    )
     uniswap_v3_graph_arb_url: str = Field(
         default="https://api.studio.thegraph.com/query/50688/uniswap-v3-arbitrum/version/latest",
         validation_alias=AliasChoices("UNISWAP_V3_GRAPH_ARB_URL"),

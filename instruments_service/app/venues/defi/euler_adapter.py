@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from unified_cloud_services import VenueMapping, get_secret_with_fallback, handle_api_errors
+from web3 import Web3
 
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter
 from instruments_service.config import instruments_config
@@ -23,15 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Centralized venue config
 _venue_mapping = VenueMapping()
-
-# Try to import web3 for contract interaction
-try:
-    from web3 import Web3
-
-    WEB3_AVAILABLE = True
-except ImportError:
-    WEB3_AVAILABLE = False
-    logger.warning("⚠️ web3 not available - Euler contract interaction disabled")
+WEB3_AVAILABLE = True
 
 
 class EulerAdapter(BaseDefiAdapter):

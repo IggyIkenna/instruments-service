@@ -12,18 +12,13 @@ Usage:
 import sys
 from pathlib import Path
 
+import requests
 from unified_cloud_services import get_secret_with_fallback
 
 from instruments_service.config import instruments_config
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
-
-try:
-    import requests
-except ImportError:
-    print("❌ Error: requests library not found. Install with: pip install requests")
-    sys.exit(1)
 
 
 def get_clickup_user_ids():

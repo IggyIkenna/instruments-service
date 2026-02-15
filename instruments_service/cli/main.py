@@ -12,28 +12,7 @@ Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 
 import logging
 import sys
-from pathlib import Path
 from typing import Any, Dict
-
-
-# CRITICAL: Load .env file explicitly before any other imports
-def _load_env_early():
-    try:
-        from dotenv import load_dotenv
-
-        # Find .env file in current directory or project root
-        env_path = Path(".env")
-        if not env_path.exists():
-            # Try parent directory once
-            env_path = Path(__file__).parent.parent.parent / ".env"
-
-        if env_path.exists():
-            load_dotenv(dotenv_path=env_path, override=True)
-    except ImportError:
-        pass
-
-
-_load_env_early()
 
 # Setup structured JSON logging for Cloud Run visibility with resource monitoring
 from unified_cloud_services import setup_cloud_logging
@@ -49,20 +28,13 @@ logger = logging.getLogger(__name__)
 # Global shutdown handler (initialized in main())
 _shutdown_handler = None
 
+import unified_cloud_services.core.market_category
+
 from instruments_service.config import instruments_config
 
 # CRITICAL: Patch unified_cloud_services config to use instruments_config
-# This ensures that get_bucket_for_category() uses the correct bucket configuration
-# from instruments-service instead of the default BaseServiceConfig
-try:
-    import unified_cloud_services.core.market_category
-
-    unified_cloud_services.core.market_category.unified_config = instruments_config
-    logger.info("✅ Patched unified_cloud_services config with instruments_config")
-except ImportError:
-    logger.warning("⚠️ Could not patch unified_cloud_services config (module not found)")
-except Exception as e:
-    logger.warning(f"⚠️ Failed to patch unified_cloud_services config: {e}")
+unified_cloud_services.core.market_category.unified_config = instruments_config
+logger.info("✅ Patched unified_cloud_services config with instruments_config")
 
 from instruments_service.cli.base_handler import ModeHandler
 from instruments_service.cli.handlers import get_handler_for_mode

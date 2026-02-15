@@ -298,9 +298,7 @@ class CloudInstrumentStorage:
 
                     # Validate timestamp-date alignment (item_22c)
                     # Instruments use available_from_datetime which should align with the date folder
-                    from datetime import date as date_type
-
-                    expected_date = date_type.fromisoformat(date_str)
+                    expected_date = datetime.fromisoformat(date_str).date()
                     alignment_result = validate_timestamp_date_alignment(
                         venue_df_to_store,
                         expected_date=expected_date,

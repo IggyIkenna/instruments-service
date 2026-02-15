@@ -13,6 +13,8 @@ from typing import Optional
 import pandas as pd
 from unified_cloud_services import CloudTarget, StandardizedDomainCloudService, get_bucket_for_category, get_config
 
+from instruments_service.config import instruments_config
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,8 +35,6 @@ class CloudDataProvider:
         if cloud_target is None:
             # NOTE: This default is only used when no category is specified.
             # Production flow should always use category-specific buckets via get_bucket_for_category()
-            from instruments_service.config import instruments_config
-
             cloud_target = CloudTarget(
                 project_id=get_config("GCP_PROJECT_ID", instruments_config.gcp_project_id),
                 gcs_bucket=get_config(

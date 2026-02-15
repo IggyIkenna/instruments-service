@@ -18,6 +18,8 @@ from unified_cloud_services import (
     clear_thegraph_api_key_cache,
 )
 
+from instruments_service.config import instruments_config
+
 logger = logging.getLogger(__name__)
 
 # Re-export for backward compatibility
@@ -31,8 +33,6 @@ _API_KEY_PROJECT_ID = None  # Managed by TheGraphBaseClient
 # Default subgraph URLs - use config for flexibility
 def _get_default_uniswap_v3_url() -> str:
     """Get default Uniswap V3 URL from config."""
-    from instruments_service.config import instruments_config
-
     return instruments_config.thegraph_uniswap_v3_studio_url
 
 
@@ -75,8 +75,6 @@ class TheGraphClient:
         """
         # Get secret name from config if not provided
         if secret_name is None:
-            from instruments_service.config import instruments_config
-
             secret_name = instruments_config.graph_secret_name
 
         # Create config with custom secret name if provided

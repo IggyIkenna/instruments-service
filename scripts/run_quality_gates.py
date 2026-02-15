@@ -11,10 +11,12 @@ Usage:
     --skip-performance: Skip performance tests (faster for development)
 """
 
+import argparse
 import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 # Load .env file if it exists (for local development)
@@ -54,7 +56,6 @@ def configure_git_credentials() -> None:
         # Configure git credential helper to read from environment
         # This allows pip to authenticate when installing from git URLs in pyproject.toml
         # We'll create a temporary credential helper script
-        import tempfile
 
         # Create a credential helper script that outputs the token
         credential_helper_script = f"""#!/bin/sh
@@ -496,7 +497,6 @@ def run_tests_with_coverage(coverage_threshold: int = 50) -> dict:
 
 
 def main():
-    import argparse
 
     parser = argparse.ArgumentParser(description="Quality Gates for instruments-service")
     parser.add_argument(
