@@ -13,7 +13,7 @@
 #     instruments-service --mode instruments --start-date 2024-01-01 --CEFI
 
 ARG PROJECT_ID
-FROM asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-cloud-services/unified-cloud-services:latest
+FROM --platform=linux/amd64 asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-cloud-services/unified-cloud-services:latest
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1 \
