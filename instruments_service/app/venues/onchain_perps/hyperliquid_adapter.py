@@ -7,6 +7,7 @@ Uses HyperliquidBaseClient from unified-cloud-services for network management.
 Reference: https://hyperliquid.gitbook.io/hyperliquid-docs/
 """
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -160,8 +161,6 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
 
                         # Data source routing metadata (for variable sources per data type)
                         # This tells market-tick-data-handler which source to use for each date range
-                        import json
-
                         inst_def["data_sources_metadata"] = json.dumps(
                             {
                                 "trades": [
@@ -277,8 +276,6 @@ class HyperliquidAdapter(BaseOnchainPerpAdapter):
                         inst_def["data_types"] = "trades,book_snapshot_5"
 
                         # Data source routing metadata for spot (same as perps)
-                        import json
-
                         inst_def["data_sources_metadata"] = json.dumps(
                             {
                                 "trades": [

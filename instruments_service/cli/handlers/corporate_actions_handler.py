@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
 
 from instruments_service.cli.base_handler import ModeHandler
 from instruments_service.config import instruments_config
@@ -135,8 +136,6 @@ class CorporateActionsHandler(ModeHandler):
             List of ticker symbols (e.g., ['AAPL', 'MSFT', ...])
         """
         try:
-            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
-
             bucket_name = instruments_config.gcs_bucket_tradfi or _get_tradfi_bucket()
 
             # Create cloud-agnostic service
@@ -480,8 +479,6 @@ class CorporateActionsHandler(ModeHandler):
                 return {}
 
             # Use cloud-agnostic service for uploads
-            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
-
             target = CloudTarget(
                 project_id=self.project_id,
                 gcs_bucket=bucket_name,

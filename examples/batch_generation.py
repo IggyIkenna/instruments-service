@@ -17,11 +17,13 @@ Note: For production batch processing, use the CLI instead:
         --CEFI --force
 """
 
+import argparse
 import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict
 
+import pandas as pd
 from unified_cloud_services import VenueMapping
 
 # Simple imports - assumes packages are installed
@@ -99,7 +101,6 @@ async def generate_instruments_batch(start_date: str, end_date: str, force: bool
 
             if all_instruments:
                 # Convert to DataFrame
-                import pandas as pd
 
                 instruments_list = []
                 for inst_key, inst_obj in all_instruments.items():
@@ -157,7 +158,6 @@ async def generate_instruments_batch(start_date: str, end_date: str, force: bool
 
 def main():
     """Run batch generation example."""
-    import argparse
 
     parser = argparse.ArgumentParser(description="Batch instrument generation")
     parser.add_argument("--start-date", required=True, help="Start date (YYYY-MM-DD)")

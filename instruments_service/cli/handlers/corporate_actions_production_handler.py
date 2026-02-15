@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
+from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
 
 from instruments_service.cli.base_handler import ModeHandler
 from instruments_service.config import SP500_TICKERS, corporate_actions_start_date, instruments_config
@@ -125,8 +126,6 @@ class CorporateActionsProductionHandler(ModeHandler):
             List of ticker symbols
         """
         try:
-            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
-
             bucket_name = instruments_config.gcs_bucket_tradfi or instruments_config.get_bucket_for_category("tradfi")
 
             # Create cloud-agnostic service

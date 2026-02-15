@@ -12,20 +12,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from unified_cloud_services import VenueMapping, get_date_range, parse_date
-
-try:
-    from unified_cloud_services.observability import log_event
-except ImportError:
-
-    def log_event(event_name: str, details: str = "") -> None:
-        pass  # noqa: ARG001
-
+from unified_cloud_services.observability import log_event
 
 from instruments_service.app.core.cloud_data_provider import CloudDataProvider
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.instruments_service import InstrumentsService
 from instruments_service.app.core.selective_validation import validate_required_api_keys
 from instruments_service.cli.base_handler import ModeHandler
+from instruments_service.config import get_config as get_service_config
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +36,6 @@ class InstrumentHandler(ModeHandler):
         super().__init__(config)
 
         # Initialize services directly (no ServiceContainer)
-        from instruments_service.config import get_config as get_service_config
-
         project_id = config.get("project_id") or get_service_config().gcp_project_id
 
         # Initialize InstrumentsService (orchestration wrapper)

@@ -43,6 +43,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import yaml
+from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
 
 from instruments_service.cli.base_handler import ModeHandler
 from instruments_service.config import instruments_config
@@ -90,8 +91,6 @@ class CorporateActionsBackfillHandler(ModeHandler):
         Same logic as original corporate_actions_handler.
         """
         try:
-            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
-
             bucket_name = instruments_config.gcs_bucket_tradfi or instruments_config.get_bucket_for_category("tradfi")
 
             # Create cloud-agnostic service

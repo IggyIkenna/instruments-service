@@ -22,7 +22,13 @@ import databento as db
 import exchange_calendars as xcals
 import pandas as pd
 from databento.common.error import BentoClientError
-from unified_cloud_services import DatabentoBaseClient, DatabentoClientConfig, get_config
+from unified_cloud_services import (
+    DatabentoBaseClient,
+    DatabentoClientConfig,
+    clear_databento_api_key_cache,
+    clear_databento_client_cache,
+    get_config,
+)
 
 from instruments_service.app.venues.databento.converters.instrument_converter import (
     convert_to_instrument_definition,
@@ -59,7 +65,6 @@ _EXCHANGE_CALENDARS_CACHE: Dict[str, Any] = {}
 def clear_databento_cache():
     """Clear module-level cache (useful for testing or credential rotation)"""
     global _UNIFIED_CONFIG_CACHE, _EXCHANGE_CALENDARS_CACHE
-    from unified_cloud_services import clear_databento_api_key_cache, clear_databento_client_cache
 
     clear_databento_api_key_cache()
     clear_databento_client_cache()

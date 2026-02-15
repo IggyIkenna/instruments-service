@@ -25,6 +25,7 @@ from datetime import date
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
+import yfinance as yf
 
 from instruments_service.corporate_actions.models import (
     CorporateActionsBundle,
@@ -63,19 +64,12 @@ class CorporateActionsAdapter:
         # Track last request time for rate limiting
         self._last_request_time: float = 0
 
-        # Import providers lazily
-        self._yf = None
-
         logger.info("CorporateActionsAdapter initialized")
 
     @property
     def yf(self):
-        """Lazy load yfinance."""
-        if self._yf is None:
-            import yfinance as yf
-
-            self._yf = yf
-        return self._yf
+        """yfinance module (imported at top)."""
+        return yf
 
     def _rate_limit(self, delay: Optional[float] = None):
         """Apply rate limiting between requests."""
