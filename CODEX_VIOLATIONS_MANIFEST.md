@@ -439,3 +439,19 @@ File contains print() statement. Should use logger.info() instead.
 **Codex Reference**: `06-coding-standards/README.md`
 
 ---
+
+## CI Verification
+
+**Last verified**: 2026-02-15
+**Status**: FAILED (local quality gates)
+
+### Issues (2026-02-15)
+
+| Issue | Location | Description |
+|-------|----------|-------------|
+| os.getenv | pytest_load_env.py | GOOGLE_APPLICATION_CREDENTIALS |
+| datetime.now() | cloud_instrument_storage.py | Use datetime.now(timezone.utc) |
+| requests in async | check_envio_config.py, get_clickup_user_ids.py, clickup_import.py | Use aiohttp |
+| Codex compliance | multiple | 4 violations |
+
+---
