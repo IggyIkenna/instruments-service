@@ -156,7 +156,7 @@ class CloudInstrumentStorage:
             instruments_df = instruments_df.copy()
 
             # Add generation timestamp BEFORE validation (if not present)
-            # IMPORTANT: Use the target date parameter, NOT datetime.now(), to avoid TIMESTAMP_DATE_MISMATCH
+            # IMPORTANT: Use the target date parameter, NOT datetime.now(timezone.utc), to avoid TIMESTAMP_DATE_MISMATCH
             # The timestamp should reflect the date the instruments are valid for, not when they were generated
             if "timestamp" not in instruments_df.columns:
                 if date is not None:
