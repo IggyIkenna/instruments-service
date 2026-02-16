@@ -66,7 +66,9 @@ dump.py
 *.ipynb
 
 # GCP Service Account Credentials (allow this file)
-!central-element-323112-e35fb0ddafe2.json
+# Block service account keys (security)
+*-323112-*.json
+central-element-323112-e35fb0ddafe2.json
 
 # Python version manager files (personal preference)
 .python-version
