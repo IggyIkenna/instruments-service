@@ -70,3 +70,4 @@ dump.py
 
 # Python version manager files (personal preference)
 .python-version
+.venv
