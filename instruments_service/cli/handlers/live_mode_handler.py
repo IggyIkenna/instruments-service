@@ -64,9 +64,8 @@ class LiveModeHandler(ModeHandler):
     def __init__(self, config: dict[str, Any]):
         super().__init__(config)
 
-        # Initialize instruments service
-        service_config = get_config()
-        self.instruments_service = InstrumentsService(service_config)
+        # Initialize instruments service (expects dict, not Pydantic object)
+        self.instruments_service = InstrumentsService(config)
 
         # Persistence thread
         self.persistence_queue: Queue | None = None
