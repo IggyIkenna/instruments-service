@@ -42,6 +42,7 @@ def parse_arguments() -> argparse.Namespace:
             "generate_date_views",
             "corporate_actions_update",
             "corporate_actions_production",
+            "live",  # Live mode: runs continuously on wall clock aligned intervals
         ],
         required=True,
         help="Operation mode: instruments (generate instrument definitions), corporate_actions (TRADFI only: fetch dividends, splits, earnings for equities), corporate_actions_backfill (fetch full history per ticker), generate_date_views (transform by_ticker to by_date), corporate_actions_update (incremental updates), corporate_actions_production (complete production pipeline)",
@@ -84,6 +85,13 @@ def parse_arguments() -> argparse.Namespace:
         "--force",
         action="store_true",
         help="Force processing all dates (overrides existence checks)",
+    )
+
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=15,
+        help="Live mode: interval in minutes (default: 15). Runs on wall clock aligned timestamps.",
     )
     parser.add_argument(
         "--dry-run",

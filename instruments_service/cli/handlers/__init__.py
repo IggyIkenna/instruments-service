@@ -18,6 +18,7 @@ from .corporate_actions_production_handler import CorporateActionsProductionHand
 from .corporate_actions_update_handler import CorporateActionsUpdateHandler
 from .generate_date_views_handler import GenerateDateViewsHandler
 from .instrument_handler import InstrumentHandler
+from .live_mode_handler import LiveModeHandler
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ def get_handler_for_mode(mode: str, config: Dict[str, Any]) -> ModeHandler:
             register_handler("generate_date_views", GenerateDateViewsHandler)
             register_handler("corporate_actions_update", CorporateActionsUpdateHandler)
             register_handler("corporate_actions_production", CorporateActionsProductionHandler)
+            register_handler("live", LiveModeHandler)  # Live mode with wall clock alignment
             logger.debug(f"Registered 'instruments' handler: {InstrumentHandler}")
             logger.debug(f"Registered 'corporate_actions' handler: {CorporateActionsHandler}")
             logger.debug(f"Registered 'corporate_actions_backfill' handler: {CorporateActionsBackfillHandler}")
