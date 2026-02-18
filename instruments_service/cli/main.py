@@ -35,15 +35,25 @@ def _load_env_early():
 
 _load_env_early()
 
-# Setup structured JSON logging for Cloud Run visibility with resource monitoring
-from unified_cloud_services import setup_cloud_logging
+# Setup structured JSON logging using split libraries (with fallback to UCS)
+try:
+    from unified_events_interface import setup_events
+
+    # Note: mode will be determined later, start with batch for CLI init
+    setup_events(mode="batch", service_name="instruments-service")
+    logger_setup = "unified-events-interface"
+except ImportError:
+    from unified_cloud_services import setup_cloud_logging
+
+    setup_cloud_logging(
+        log_level="INFO",
+        json_format=True,
+        enable_resource_monitoring=True,
+    )
+    logger_setup = "unified-cloud-services (fallback)"
+
 from unified_cloud_services.core.signal_handler import GracefulShutdownHandler
 
-setup_cloud_logging(
-    log_level="INFO",
-    json_format=True,
-    enable_resource_monitoring=True,  # Log CPU/memory/disk every 30s for crash diagnostics
-)
 logger = logging.getLogger(__name__)
 
 # Global shutdown handler (initialized in main())
@@ -160,25 +170,47 @@ def main() -> Dict[str, Any]:
         if hasattr(args, "max_retries") and args.max_retries:
             handler_kwargs["max_retries"] = args.max_retries
 
+        # Live mode options
+        if hasattr(args, "interval") and args.interval:
+            handler_kwargs["interval"] = args.interval
+
         # Market type filters
-        # Priority: --category flag takes precedence, then individual flags
-        if hasattr(args, "category") and args.category:
-            # --category can be a list (e.g., --category CEFI TRADFI)
-            for cat in args.category:
-                if cat.upper() == "CEFI":
-                    handler_kwargs["cefi"] = True
-                elif cat.upper() == "TRADFI":
-                    handler_kwargs["tradfi"] = True
-                elif cat.upper() == "DEFI":
-                    handler_kwargs["defi"] = True
+        if args.mode == "live":
+            # Live mode: convert flags to category list
+            categories = []
+            if hasattr(args, "category") and args.category:
+                categories = [cat.upper() for cat in args.category]
+            else:
+                # Use individual flags
+                if args.CEFI:
+                    categories.append("CEFI")
+                if args.TRADFI:
+                    categories.append("TRADFI")
+                if args.DEFI:
+                    categories.append("DEFI")
+
+            if categories:
+                handler_kwargs["category"] = categories
         else:
-            # Fallback to individual flags
-            if args.CEFI:
-                handler_kwargs["cefi"] = True
-            if args.TRADFI:
-                handler_kwargs["tradfi"] = True
-            if args.DEFI:
-                handler_kwargs["defi"] = True
+            # Batch mode: keep boolean flags
+            # Priority: --category flag takes precedence, then individual flags
+            if hasattr(args, "category") and args.category:
+                # --category can be a list (e.g., --category CEFI TRADFI)
+                for cat in args.category:
+                    if cat.upper() == "CEFI":
+                        handler_kwargs["cefi"] = True
+                    elif cat.upper() == "TRADFI":
+                        handler_kwargs["tradfi"] = True
+                    elif cat.upper() == "DEFI":
+                        handler_kwargs["defi"] = True
+            else:
+                # Fallback to individual flags
+                if args.CEFI:
+                    handler_kwargs["cefi"] = True
+                if args.TRADFI:
+                    handler_kwargs["tradfi"] = True
+                if args.DEFI:
+                    handler_kwargs["defi"] = True
 
         # Venue filter (optional - filter to specific venues within a category)
         if hasattr(args, "venues") and args.venues:
