@@ -17,13 +17,14 @@ import logging
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from unified_cloud_services import TardisBaseClient, TardisClientConfig
+from unified_cloud_services import TardisClientConfig
 from unified_cloud_services.clients.tardis_base_client import (
     clear_instruments_cache,
     clear_tardis_api_key_cache,
     get_cached_instruments,
     set_cached_instruments,
 )
+from unified_market_interface import TardisBaseClient
 
 from instruments_service.config import instruments_config
 

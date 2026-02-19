@@ -17,12 +17,11 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from unified_cloud_services import (
-    AlchemyBaseClient,
-    TheGraphBaseClient,
     TheGraphClientConfig,
     get_http_session,  # Centralized HTTP session pool
     get_secret_with_fallback,
 )
+from unified_market_interface import AlchemyBaseClient, TheGraphBaseClient
 from web3 import Web3
 
 from instruments_service.app.venues.defi.base_defi_adapter import BaseDefiAdapter

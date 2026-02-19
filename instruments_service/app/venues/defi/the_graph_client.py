@@ -13,10 +13,10 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from unified_cloud_services import (
-    TheGraphBaseClient,
     TheGraphClientConfig,
     clear_thegraph_api_key_cache,
 )
+from unified_market_interface import TheGraphBaseClient
 
 logger = logging.getLogger(__name__)
 
