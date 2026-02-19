@@ -246,3 +246,54 @@ dividends = adapter.fetch_dividends("AAPL", start_date, end_date)
 - [Setup Guide](docs/SETUP_GUIDE.md) - Installation and configuration
 - [Instrument Key Specification](docs/INSTRUMENT_KEY.md) - Instrument ID format
 # Build trigger test Tue Jan 27 15:04:47 GMT 2026
+
+---
+
+## 🚩 PRODUCTION READINESS UPDATES NEEDED (Epic: DATA-IO-PROD-001)
+
+See [GitHub Project #9](https://github.com/users/IggyIkenna/projects/9) for tracking.
+
+### P0-Critical Updates
+
+1. **Config.py File Size Violation** (Issue #76)
+   - Current: `instruments_service/config.py` is 1,929 lines
+   - Target: <1,500 lines per file
+   - Action: Split into `config/instrument_definitions.py`, keep `InstrumentsServiceConfig` in `config/service_config.py`
+
+2. **Per-Category Terraform Configs** (Issue #87)
+   - Current: Single deployment
+   - Target: 3 deployments (instruments-cefi, instruments-tradfi, instruments-defi)
+   - Machine specs: 2 core, 4GB per category
+   - See: `unified-trading-codex/04-architecture/deployment-grouping.md`
+
+3. **Hot-Reload Config Metadata** (Issue #80)
+   - Current: No metadata on config fields
+   - Target: Tag fields with `metadata={"hot_reloadable": bool, "requires_restart": bool}`
+   - See: `unified-trading-codex/05-infrastructure/config-management.md`
+
+### P1-High Updates
+
+4. **Test Coverage Threshold** (Issue #77)
+   - Current: pytest-cov configured, no threshold enforcement
+   - Target: 50%+ coverage with quality gates enforcement
+   - Action: Update `scripts/quality-gates.sh` to include `--cov-fail-under=50`
+
+5. **Live Mode Health Endpoint** (Issue #82)
+   - Current: No /health endpoint
+   - Target: Add for live mode monitoring (streaming counters, persistence health)
+   - See: `unified-trading-codex/03-observability/health-endpoints.md`
+
+6. **Batch vs Live Path Construction** (Issue #88)
+   - Current: Batch-only paths
+   - Target: Mode-aware paths (batch at root, live in `live/` subdirectory)
+   - See: `unified-trading-codex/02-data/partitioning.md#batch-vs-live`
+
+### Architecture Changes
+
+**Deployment Model:** 1 deployment → 3 per-category deployments
+**Communication:** GCS only → Pub/Sub between categories (instruments writes, downstream reads)
+**Library Imports:** Standalone → Imported by market-tick-data-handler (within same category deployment)
+
+See: `unified-trading-codex/04-architecture/deployment-grouping.md` for full architecture.
+
+---
