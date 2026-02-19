@@ -1,7 +1,7 @@
 # Dockerfile for instruments-service
 #
 # Uses unified-cloud-services base image from Artifact Registry.
-# No GitHub token (GH_PAT) required.
+# Installs unified-events-interface from Artifact Registry (no GitHub token required).
 #
 # Build:
 #   docker build --build-arg PROJECT_ID=central-element-323112 -t instruments-service .
@@ -27,11 +27,16 @@ RUN useradd --create-home --shell /bin/bash appuser
 # Set working directory
 WORKDIR /app/instruments-service
 
+# Copy pip.conf for Artifact Registry access
+COPY pip.conf /etc/pip.conf
+
 # Copy instruments-service source code
 COPY . .
 
 # Install service with dev dependencies (needed for quality gates in Cloud Build)
-RUN uv pip install --system -e ".[dev]"
+# Use pip (not uv) to properly handle Artifact Registry auth via pip.conf
+# unified-events-interface will be installed from Artifact Registry
+RUN pip install --no-cache-dir -e ".[dev]"
 
 # Create data directories
 RUN mkdir -p /app/instruments-service/data/samples /app/instruments-service/logs
