@@ -67,6 +67,12 @@ if [ -z "${GITHUB_ACTIONS:-}" ] && [ -z "${CI:-}" ] && [ -z "${CLOUD_BUILD:-}" ]
         if [ -n "$UCS_PATH" ] && [ -f "$UCS_PATH/pyproject.toml" ]; then
             uv pip install -e "$UCS_PATH" --quiet 2>/dev/null || true
         fi
+        UEI_PATH=""
+        [ -d "${REPO_ROOT:-/dev/null}/unified-events-interface" ] && UEI_PATH="${REPO_ROOT}/unified-events-interface"
+        [ -z "$UEI_PATH" ] && [ -d "deps/unified-events-interface" ] && UEI_PATH="deps/unified-events-interface"
+        if [ -n "$UEI_PATH" ] && [ -f "$UEI_PATH/pyproject.toml" ]; then
+            uv pip install -e "$UEI_PATH" --quiet 2>/dev/null || true
+        fi
         uv pip install -e ".[dev]" --quiet 2>/dev/null || uv pip install -e . --quiet 2>/dev/null || true
     fi
 fi
@@ -279,7 +285,9 @@ if [ "$RUN_TESTS" = true ]; then
         # Unit tests (parallel with pytest-xdist when available)
         echo -e "\n${YELLOW}Running unit tests...${NC}"
         if [ -d "tests/unit" ]; then
-            if $PYTHON_CMD -m pytest tests/unit/ -v --tb=short --timeout=60 $PARALLEL_ARGS; then
+            TIMEOUT_ARG=""
+            $PYTHON_CMD -c "import pytest_timeout" 2>/dev/null && TIMEOUT_ARG="--timeout=60"
+            if $PYTHON_CMD -m pytest tests/unit/ -v --tb=short $TIMEOUT_ARG $PARALLEL_ARGS; then
                 echo -e "${GREEN}✅ Unit tests PASSED${NC}"
             else
                 echo -e "${RED}❌ Unit tests FAILED${NC}"
