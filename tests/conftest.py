@@ -70,6 +70,15 @@ import json
 from typing import Optional
 
 import pytest
+
+# Initialize event logging for tests that use log_event (instrument_handler, etc.)
+try:
+    from unified_events_interface import setup_events
+
+    setup_events(service_name="instruments-service", mode="batch")
+except ImportError:
+    pass
+
 from google.cloud import storage
 from google.oauth2 import service_account
 from unified_cloud_services import CloudTarget, get_secret_with_fallback

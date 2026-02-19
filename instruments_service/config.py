@@ -1694,9 +1694,9 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
     # THE GRAPH SECRET NAME (different name than parent's thegraph_secret_name)
     # =========================================================================
     graph_secret_name: str = Field(
-        default="graph-api-key",
+        default="thegraph-api-key",
         validation_alias=AliasChoices("GRAPH_SECRET_NAME"),
-        description="Graph API key secret name",
+        description="Graph API key secret name (round-robin: thegraph-api-key-2..9)",
     )
 
     # =========================================================================
@@ -1713,9 +1713,9 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
         description="Ethereum RPC URL",
     )
     uniswap_v3_graph_url: str = Field(
-        default="",
+        default="https://api.studio.thegraph.com/query/50688/uniswap-v3/version/latest",
         validation_alias=AliasChoices("UNISWAP_V3_GRAPH_URL"),
-        description="Uniswap V3 Graph URL",
+        description="Uniswap V3 Graph URL (domain constant; override via env only for staging/mock)",
     )
     uniswap_v3_graph_arb_url: str = Field(
         default="https://api.studio.thegraph.com/query/50688/uniswap-v3-arbitrum/version/latest",
@@ -1728,9 +1728,9 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
         description="The Graph Uniswap V3 URL for Base",
     )
     envio_api_url: str = Field(
-        default="",
+        default="https://api.envio.dev/v1/prices",
         validation_alias=AliasChoices("ENVIO_API_URL"),
-        description="Envio API URL",
+        description="Envio API URL (domain constant; override via env only for local mock)",
     )
 
     # Hyperliquid API URL

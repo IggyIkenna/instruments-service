@@ -127,13 +127,13 @@ class InstrumentHandler(ModeHandler):
                 _ = validate_required_api_keys(venues_to_process)
                 logger.info(f"✅ Validated API keys for {len(venues_to_process)} venues")
             except ValueError as e:
-                log_event("VALIDATION_FAILED", f"API key validation: {str(e)}")
+                log_event("VALIDATION_FAILED", severity="ERROR", details={"message": f"API key validation: {str(e)}"})
                 raise
 
             log_event("VALIDATION_COMPLETED")
         except Exception as e:
-            log_event("VALIDATION_FAILED", str(e))
-            log_event("FAILED", f"Validation error: {str(e)}")
+            log_event("VALIDATION_FAILED", severity="ERROR", details={"message": str(e)})
+            log_event("FAILED", severity="ERROR", details={"message": f"Validation error: {str(e)}"})
             raise
 
         # Observability metrics tracking
@@ -246,7 +246,10 @@ class InstrumentHandler(ModeHandler):
                 end_combination = date_idx * len(venues_to_process)
 
                 # Level 2: Daily progress (dates being processed)
-                log_event("DATE_PROCESSING_STARTED", f"{date.strftime('%Y-%m-%d')} ({date_idx}/{total_dates})")
+                log_event(
+                    "DATE_PROCESSING_STARTED",
+                    details={"date": f"{date.strftime('%Y-%m-%d')} ({date_idx}/{total_dates})"},
+                )
 
                 # Level 3: Venues for this date (will process all in single call)
                 venues_str = ", ".join(venues_to_process[:3])
@@ -254,7 +257,9 @@ class InstrumentHandler(ModeHandler):
                     venues_str += f" + {len(venues_to_process) - 3} more"
                 log_event(
                     "VENUE_PROCESSING_STARTED",
-                    f"{len(venues_to_process)} venues for {date.strftime('%Y-%m-%d')}: {venues_str}",
+                    details={
+                        "venues": f"{len(venues_to_process)} venues for {date.strftime('%Y-%m-%d')}: {venues_str}"
+                    },
                 )
 
                 logger.info(
@@ -262,7 +267,7 @@ class InstrumentHandler(ModeHandler):
                 )
 
                 log_event("DATA_INGESTION_STARTED")
-                log_event("ADAPTER_FETCH_STARTED", "instruments")
+                log_event("ADAPTER_FETCH_STARTED", details={"scope": "instruments"})
                 log_event("PROCESSING_STARTED")
                 log_event("CLASSIFICATION_STARTED")
 
@@ -287,20 +292,30 @@ class InstrumentHandler(ModeHandler):
                 total_processing_errors += processing_errors
                 total_processing_warnings += processing_warnings
 
-                log_event("CLASSIFICATION_COMPLETED", str(result.get("instruments_generated", 0)))
+                log_event(
+                    "CLASSIFICATION_COMPLETED",
+                    details={"instruments_generated": str(result.get("instruments_generated", 0))},
+                )
                 log_event("PROCESSING_COMPLETED")
-                log_event("ADAPTER_FETCH_COMPLETED", str(result.get("instruments_generated", 0)))
-                log_event("DATA_INGESTION_COMPLETED", str(result.get("instruments_generated", 0)))
+                log_event(
+                    "ADAPTER_FETCH_COMPLETED",
+                    details={"instruments_generated": str(result.get("instruments_generated", 0))},
+                )
+                log_event(
+                    "DATA_INGESTION_COMPLETED",
+                    details={"instruments_generated": str(result.get("instruments_generated", 0))},
+                )
                 log_event("UPLOAD_STARTED")
                 log_event("UPLOAD_COMPLETED")
 
                 # Venue completion event
                 log_event(
-                    "VENUE_PROCESSING_COMPLETED", f"{len(venues_to_process)} venues for {date.strftime('%Y-%m-%d')}"
+                    "VENUE_PROCESSING_COMPLETED",
+                    details={"venues": f"{len(venues_to_process)} venues for {date.strftime('%Y-%m-%d')}"},
                 )
 
                 # Date completion event
-                log_event("DATE_PROCESSING_COMPLETED", date.strftime("%Y-%m-%d"))
+                log_event("DATE_PROCESSING_COMPLETED", details={"date": date.strftime("%Y-%m-%d")})
                 if result.get("status") == "success":
                     total_generated += result.get("instruments_generated", 0)
                     total_dates_processed += 1
@@ -355,7 +370,11 @@ class InstrumentHandler(ModeHandler):
         if total_errors == 0:
             log_event("STOPPED")
         else:
-            log_event("FAILED", f"{total_errors} date-level errors, {total_processing_errors} processing errors")
+            log_event(
+                "FAILED",
+                severity="ERROR",
+                details={"message": f"{total_errors} date-level errors, {total_processing_errors} processing errors"},
+            )
 
         return {
             "status": "success" if total_errors == 0 else "partial",

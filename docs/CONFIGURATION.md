@@ -39,7 +39,7 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
         validation_alias=AliasChoices("DATABENTO_SECRET_NAME"),
     )
     graph_secret_name: str = Field(
-        default="graph-api-key",
+        default="thegraph-api-key",
         validation_alias=AliasChoices("GRAPH_SECRET_NAME"),
     )
 ```
@@ -67,15 +67,17 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TARDIS_SECRET_NAME` | `tardis-api-key` | Tardis API key secret name |
-| `DATABENTO_SECRET_NAME` | `databento-api-key` | Databento API key secret name |
-| `GRAPH_SECRET_NAME` | `graph-api-key` | The Graph API key secret name |
+| `DATABENTO_SECRET_NAME` | `databento-api-key` | Databento base prefix; rotation uses databento-api-key-1..20 via SHARD_INDEX |
+| `GRAPH_SECRET_NAME` | `thegraph-api-key` | The Graph base name; rotation uses thegraph-api-key, thegraph-api-key-2..9 via SHARD_INDEX |
 
 ### DeFi Configuration
 
 | Variable | Description |
 |----------|-------------|
-| `UNISWAP_V3_GRAPH_URL` | Uniswap V3 subgraph URL |
-| `ENVIO_API_URL` | Envio API URL |
+| `UNISWAP_V3_GRAPH_URL` | Uniswap V3 subgraph URL (optional override; default in config) |
+| `UNISWAP_V3_GRAPH_ARB_URL` | Uniswap V3 Arbitrum URL (optional override; default in config) |
+| `UNISWAP_V3_GRAPH_BASE_URL` | Uniswap V3 Base URL (optional override; default in config) |
+| `ENVIO_API_URL` | Envio API URL (optional override; default in config) |
 | `ALCHEMY_API_KEY` | Alchemy RPC key (optional) |
 
 ## Secret Management
@@ -85,8 +87,8 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
 | Category | Secret Name | Required |
 |----------|-------------|----------|
 | CEFI | `tardis-api-key` | Yes |
-| TRADFI | `databento-api-key` | Yes |
-| DEFI | `graph-api-key` | Yes |
+| TRADFI | `databento-api-key-1`..`20` (20 keys, SHARD_INDEX rotation) | Yes |
+| DEFI | `thegraph-api-key`, `thegraph-api-key-2`..`9` (9 keys, SHARD_INDEX rotation) | Yes |
 | DEFI | `alchemy-api-key` | No |
 
 ### Using get_secret_with_fallback()
@@ -159,10 +161,11 @@ INSTRUMENTS_GCS_BUCKET_DEFI=instruments-store-defi-{project_id}
 # Secret Names (defaults usually sufficient)
 TARDIS_SECRET_NAME=tardis-api-key
 DATABENTO_SECRET_NAME=databento-api-key
-GRAPH_SECRET_NAME=graph-api-key
+GRAPH_SECRET_NAME=thegraph-api-key
 
-# DeFi URLs
-UNISWAP_V3_GRAPH_URL=https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3
+# DeFi URLs (optional - config has defaults; override only for staging/mock)
+# UNISWAP_V3_GRAPH_URL=...
+# ENVIO_API_URL=...
 ```
 
 ## Related Documentation
