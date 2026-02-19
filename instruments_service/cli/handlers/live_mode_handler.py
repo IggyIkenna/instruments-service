@@ -18,17 +18,8 @@ from datetime import datetime, timedelta, timezone
 from queue import Queue
 from typing import Any
 
-# Split libraries (per codex: use directly)
-try:
-    from unified_events_interface import log_event, publish_coordination_event, setup_events
-
-    HAS_EVENTS_INTERFACE = True
-except ImportError:
-    from unified_cloud_services import log_event
-
-    setup_events = None
-    publish_coordination_event = None
-    HAS_EVENTS_INTERFACE = False
+# Split libraries (per codex: direct import, no fallback)
+from unified_events_interface import log_event, publish_coordination_event, setup_events
 
 try:
     from unified_config_interface import load_config as load_config_interface
@@ -102,14 +93,9 @@ class LiveModeHandler(ModeHandler):
         """
         config = get_config()
 
-        # Setup events (per codex: use split library if available)
-        if HAS_EVENTS_INTERFACE and setup_events:
-            # Handle both project_id and gcp_project_id attributes (compatibility)
-            project_id = getattr(config, "project_id", None) or getattr(config, "gcp_project_id", None)
-            setup_events(mode="live", service_name="instruments-service", project_id=project_id)
-            logger.info("✅ Events setup via unified-events-interface")
-        else:
-            logger.warning("⚠️ unified-events-interface not available")
+        # Setup events (direct import per dependency matrix)
+        project_id = getattr(config, "project_id", None) or getattr(config, "gcp_project_id", None)
+        setup_events(mode="live", service_name="instruments-service", project_id=project_id)
 
         log_event(
             "LIVE_MODE_STARTED",
@@ -204,16 +190,15 @@ class LiveModeHandler(ModeHandler):
                     total_instruments += len(instruments_df)
 
                 # Publish coordination event (live only)
-                if HAS_EVENTS_INTERFACE and publish_coordination_event:
-                    publish_coordination_event(
-                        event_type="INSTRUMENTS_READY",
-                        payload={
-                            "timestamp": timestamp.isoformat(),
-                            "minute": timestamp.minute,
-                            "categories": list(result.instruments_by_category.keys()),
-                            "count": total_instruments,
-                        },
-                    )
+                publish_coordination_event(
+                    event_type="INSTRUMENTS_READY",
+                    payload={
+                        "timestamp": timestamp.isoformat(),
+                        "minute": timestamp.minute,
+                        "categories": list(result.get("instruments_by_category", {}).keys()),
+                        "count": total_instruments,
+                    },
+                )
 
                 log_event(
                     "LIVE_CYCLE_COMPLETED",
