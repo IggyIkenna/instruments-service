@@ -7,6 +7,7 @@ This module provides domain-specific query methods for DEX protocols.
 ARCHITECTURE:
 - Uses TheGraphBaseClient (unified-cloud-services) for API key, session, retries
 - This client provides DEX-specific GraphQL queries (pools, pairs)
+- Multi-key rotation: 9 keys (thegraph-api-key, thegraph-api-key-2..9) via SHARD_INDEX env var
 """
 
 import logging
@@ -69,9 +70,10 @@ class TheGraphClient:
 
         Args:
             subgraph_url: Subgraph URL (uses default if not provided)
-            api_key: Optional API key (TheGraphBaseClient handles Secret Manager)
+            api_key: Optional API key. If None, uses multi-key rotation via SHARD_INDEX
+                     (9 keys: thegraph-api-key, thegraph-api-key-2..9)
             project_id: GCP project ID for Secret Manager
-            secret_name: Secret name for API key (defaults to config value)
+            secret_name: Secret name base (defaults to config; rotation appends -2..9)
         """
         # Get secret name from config if not provided
         if secret_name is None:

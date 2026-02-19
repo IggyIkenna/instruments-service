@@ -176,6 +176,16 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
         validation_alias=AliasChoices("SHARD_LAUNCHED_AT"),
         description="Shard launch timestamp for race condition detection",
     )
+    shard_index: int = Field(
+        default=0,
+        validation_alias=AliasChoices("SHARD_INDEX"),
+        description="Shard index for API key rotation (0 for local; deployment injects 0..N)",
+    )
+    databento_batch_registry_bucket: str = Field(
+        default="",
+        validation_alias=AliasChoices("DATABENTO_BATCH_REGISTRY_BUCKET"),
+        description="GCS bucket for Databento batch job registry (cross-key dedup)",
+    )
 
     def get_cloud_target(self, category: str | None = None) -> CloudTarget:
         """Get CloudTarget for instruments service."""

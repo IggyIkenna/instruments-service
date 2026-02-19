@@ -8,6 +8,7 @@ ARCHITECTURE:
 - Uses DatabentoBaseClient from unified-cloud-services (centralized network layer)
 - This adapter handles domain-specific logic (instrument parsing, trading hours)
 - Network concerns (sessions, retries, API keys) are handled by DatabentoBaseClient
+- Multi-key rotation: 20 keys (databento-api-key-1..20) via SHARD_INDEX env var
 - Cached UnifiedInstrumentConfig instance
 - Parallel symbol group queries (asyncio.gather)
 
@@ -92,12 +93,14 @@ class DatabentoAdapter:
         Initialize Databento adapter using centralized DatabentoBaseClient.
 
         Args:
-            api_key: Databento API key (optional, DatabentoBaseClient handles Secret Manager)
+            api_key: Databento API key (optional). If None, uses multi-key rotation
+                     based on SHARD_INDEX env var via DatabentoBaseClient.
+                     With 20 keys (databento-api-key-1..20), each shard gets
+                     key_index = (shard_index % 20) + 1
             project_id: GCP project ID for Secret Manager (defaults to GCP_PROJECT_ID env var)
         """
         # Create config with instruments-service specific settings
-        # Note: DatabentoClientConfig uses secret_name_prefix for multi-key rotation
-        # e.g., secret_name_prefix="databento-api-key" -> databento-api-key-1, databento-api-key-2, etc.
+        # DatabentoBaseClient uses SHARD_INDEX for rotation (same as market-tick-data-handler)
         config = DatabentoClientConfig(
             secret_name_prefix=instruments_config.databento_secret_name,
             fallback_env_var="DATABENTO_API_KEY",
@@ -150,7 +153,7 @@ class DatabentoAdapter:
         - Deterministic key selection (same params -> same API key)
         - Expanded state checking (queued/processing/done)
         - GCS job cache for cross-shard deduplication
-        - NO fallback to streaming API
+        - Falls back to streaming API when batch_download returns None (registry miss, job pending)
 
         Args:
             dataset: Databento dataset ID
@@ -176,6 +179,23 @@ class DatabentoAdapter:
             start=start,
             end=end,
         )
+
+        # Fallback to streaming when batch_download returns None (registry miss, job pending, etc.)
+        if output_path is None:
+            logger.info(
+                f"Batch API returned None (no completed job) — falling back to streaming for "
+                f"{dataset} {schema} ({len(symbols)} symbols)"
+            )
+            self._base_client.ip_rate_limiter.acquire("timeseries")
+            return self.client.timeseries.get_range(
+                dataset=dataset,
+                schema=db.Schema.DEFINITION,  # Instrument definitions only use DEFINITION schema
+                symbols=symbols,
+                stype_in=stype_in,
+                stype_out="instrument_id",
+                start=start,
+                end=end,
+            )
 
         # Find the data file in the downloaded output
         # Databento batch.download() creates output at output_path/JOB_ID/

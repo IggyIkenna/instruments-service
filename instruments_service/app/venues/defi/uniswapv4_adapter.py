@@ -77,7 +77,7 @@ class UniswapV4Adapter(BaseDefiAdapter):
             try:
                 self._thegraph_api_key = get_secret_with_fallback(
                     project_id=self.project_id,
-                    secret_name=instruments_config.graph_secret_name or "thegraph-api-key",
+                    secret_name=instruments_config.graph_secret_name,
                     fallback_env_var="THEGRAPH_API_KEY",
                 )
             except Exception:
