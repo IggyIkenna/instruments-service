@@ -18,19 +18,11 @@ from datetime import datetime, timedelta, timezone
 from queue import Queue
 from typing import Any
 
-# Split libraries (per codex: direct import, no fallback)
-from unified_events_interface import log_event, publish_coordination_event, setup_events
-
-try:
-    from unified_config_interface import load_config as load_config_interface
-
-    HAS_CONFIG_INTERFACE = True
-except ImportError:
-    load_config_interface = None
-    HAS_CONFIG_INTERFACE = False
-
 # Unified cloud services (cloud-agnostic)
 from unified_cloud_services import get_storage_client
+
+# Split libraries (per codex: direct import, no fallback)
+from unified_events_interface import log_event, publish_coordination_event, setup_events
 
 # Service imports
 from instruments_service.app.core.instruments_service import InstrumentsService
