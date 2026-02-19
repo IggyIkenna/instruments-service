@@ -71,7 +71,10 @@ class TestBucketConfiguration:
             }
             return config_map.get(key_upper, default)
 
-        with patch("unified_cloud_services.core.market_category.get_config", mock_get_config):
+        with (
+            patch.dict(os.environ, self.env_vars),
+            patch("unified_cloud_services.core.market_category.get_config", mock_get_config),
+        ):
             bucket_cefi = get_bucket_for_category("CEFI", test_mode=False)
             assert bucket_cefi == "test-bucket-cefi"
 

@@ -2,6 +2,8 @@
 Instruments Service
 
 Service for generating canonical instrument definitions from exchange APIs.
+
+Rebuild: Feb 19, 2026 - Pull latest UCS base image with bucket configuration fix.
 """
 
 __version__ = "0.1.0"
