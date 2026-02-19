@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from unified_cloud_services import VenueMapping, get_date_range, parse_date
-from unified_events_interface import log_event
 
 from instruments_service.app.core.cloud_data_provider import CloudDataProvider
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
@@ -19,6 +18,7 @@ from instruments_service.app.core.instruments_service import InstrumentsService
 from instruments_service.app.core.selective_validation import validate_required_api_keys
 from instruments_service.cli.base_handler import ModeHandler
 from instruments_service.config import get_config
+from instruments_service.events import log_event
 
 logger = logging.getLogger(__name__)
 
