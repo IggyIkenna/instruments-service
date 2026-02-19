@@ -35,22 +35,10 @@ def _load_env_early():
 
 _load_env_early()
 
-# Setup structured JSON logging using split libraries (with fallback to UCS)
-try:
-    from unified_events_interface import setup_events
+# Setup structured JSON logging (split libraries - direct import per dependency matrix)
+from unified_events_interface import setup_events
 
-    # Note: mode will be determined later, start with batch for CLI init
-    setup_events(mode="batch", service_name="instruments-service")
-    logger_setup = "unified-events-interface"
-except ImportError:
-    from unified_cloud_services import setup_cloud_logging
-
-    setup_cloud_logging(
-        log_level="INFO",
-        json_format=True,
-        enable_resource_monitoring=True,
-    )
-    logger_setup = "unified-cloud-services (fallback)"
+setup_events(mode="batch", service_name="instruments-service")
 
 from unified_cloud_services.core.signal_handler import GracefulShutdownHandler
 
