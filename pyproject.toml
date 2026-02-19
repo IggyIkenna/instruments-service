@@ -2,6 +2,9 @@
 requires = ["setuptools>=80.9.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.uv.sources]
+unified-events-interface = { path = "../unified-events-interface" }
+
 [project]
 name = "instruments-service"
 version = "0.1.1"
@@ -42,6 +45,7 @@ dependencies = [
     "plotly>=6.4.0",
     # AWS
     "boto3>=1.40.70",
+    "unified-events-interface>=0.1.0",
     # NOTE: unified-cloud-services is installed separately:
     #   - Local: setup.sh installs via SSH
     #   - Cloud Build/Docker: cloned via HTTPS with PAT

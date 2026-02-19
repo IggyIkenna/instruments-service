@@ -38,6 +38,10 @@ jobs:
             git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-cloud-services.git deps/unified-cloud-services
             echo "✅ Cloned unified-cloud-services"
 
+            # Clone unified-events-interface (required for split libraries)
+            git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-events-interface.git deps/unified-events-interface
+            echo "✅ Cloned unified-events-interface"
+
             # Clone unified-trading-deployment-v2 (optional - for smoke tests)
             git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-trading-deployment-v2.git deps/unified-trading-deployment-v2 || echo "⚠️ Could not clone unified-trading-deployment-v2 (optional)"
           else
@@ -52,6 +56,7 @@ jobs:
         run: |
           pip install uv
           uv pip install --system -e deps/unified-cloud-services
+          uv pip install --system -e deps/unified-events-interface
           uv pip install --system -e deps/unified-trading-deployment-v2 2>/dev/null || echo "⚠️ unified-trading-deployment-v2 not available"
           uv pip install --system -e . --no-deps
           uv pip install --system pydantic pydantic-settings pandas numpy python-dateutil \
