@@ -29,40 +29,25 @@ jobs:
           python-version: '3.13'
           cache: 'pip'
 
-      - name: Checkout dependencies
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+      - name: Authenticate to GCP Artifact Registry
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure pip for Artifact Registry
         run: |
-          if [ -n "$GH_PAT" ]; then
-            # Clone unified-cloud-services to ../ (matches uv.lock path source)
-            git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-cloud-services.git ../unified-cloud-services
-            echo "✅ Cloned unified-cloud-services"
-
-            # Clone unified-events-interface to ../ (matches pyproject.toml path source)
-            git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-events-interface.git ../unified-events-interface
-            echo "✅ Cloned unified-events-interface"
-
-            # Clone unified-trading-deployment-v2 (optional - for smoke tests)
-            git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-trading-deployment-v2.git deps/unified-trading-deployment-v2 || echo "⚠️ Could not clone unified-trading-deployment-v2 (optional)"
-          else
-            echo "❌ GH_PAT not set" && exit 1
-          fi
+          mkdir -p ~/.pip
+          cp pip.conf ~/.pip/pip.conf
+          pip install keyring keyrings.google-artifactregistry-auth
+          echo "✅ Configured pip to use Artifact Registry"
 
       - name: Install ripgrep (required for codex checks)
         run: sudo apt-get update && sudo apt-get install -y ripgrep
 
-
       - name: Install dependencies
         run: |
-          pip install uv
-          uv pip install --system -e ../unified-cloud-services
-          uv pip install --system -e ../unified-events-interface
-          uv pip install --system -e deps/unified-trading-deployment-v2 2>/dev/null || echo "⚠️ unified-trading-deployment-v2 not available"
-          uv pip install --system -e . --no-deps
-          uv pip install --system pydantic pydantic-settings pandas numpy python-dateutil \
-            python-dotenv requests ccxt plotly web3 eth-abi databento boto3 \
-            exchange-calendars yfinance polars
-          uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout pytest-xdist ruff==0.15.0
+          pip install --no-cache-dir -e ".[dev]"
+          pip install ruff==0.15.0
 
       # ========================================================================
       # LINT + FORMAT - auto-fix then verify no diff (catches unformatted code)

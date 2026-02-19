@@ -2,6 +2,7 @@
 requires = ["setuptools>=80.9.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
+# Path source for local dev; CI/Cloud Build install from Artifact Registry via pip.conf
 [tool.uv.sources]
 unified-events-interface = { path = "../unified-events-interface" }
 
