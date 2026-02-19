@@ -25,11 +25,13 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore",
+        extra="forbid",
     )
 
     service_name: str = Field(default="instruments-service", description="Service name")
 
+    # See: unified-trading-codex/02-data/bucket-naming-and-config.md
+    # Prefer bucket prefix + GCP_PROJECT_ID; full bucket name is legacy override.
     gcs_bucket: str = Field(
         default="",
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET"),
@@ -40,10 +42,42 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_TEST"),
         description="Test GCS bucket for instruments",
     )
+    # Bucket prefixes (cloud-agnostic); joined with gcp_project_id for full name
+    instruments_bucket_prefix_cefi: str = Field(
+        default="instruments-store-cefi",
+        validation_alias=AliasChoices("INSTRUMENTS_BUCKET_PREFIX_CEFI"),
+        description="Bucket prefix for CEFI; full name = {prefix}-{gcp_project_id}",
+    )
+    instruments_bucket_prefix_tradfi: str = Field(
+        default="instruments-store-tradfi",
+        validation_alias=AliasChoices("INSTRUMENTS_BUCKET_PREFIX_TRADFI"),
+        description="Bucket prefix for TRADFI",
+    )
+    instruments_bucket_prefix_defi: str = Field(
+        default="instruments-store-defi",
+        validation_alias=AliasChoices("INSTRUMENTS_BUCKET_PREFIX_DEFI"),
+        description="Bucket prefix for DEFI",
+    )
+    instruments_bucket_prefix_cefi_test: str = Field(
+        default="instruments-store-cefi-test",
+        validation_alias=AliasChoices("INSTRUMENTS_BUCKET_PREFIX_CEFI_TEST"),
+        description="Test bucket prefix for CEFI",
+    )
+    instruments_bucket_prefix_tradfi_test: str = Field(
+        default="instruments-store-tradfi-test",
+        validation_alias=AliasChoices("INSTRUMENTS_BUCKET_PREFIX_TRADFI_TEST"),
+        description="Test bucket prefix for TRADFI",
+    )
+    instruments_bucket_prefix_defi_test: str = Field(
+        default="instruments-store-defi-test",
+        validation_alias=AliasChoices("INSTRUMENTS_BUCKET_PREFIX_DEFI_TEST"),
+        description="Test bucket prefix for DEFI",
+    )
+    # Full bucket names (legacy override when set)
     gcs_bucket_cefi: str = Field(
         default="",
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_CEFI"),
-        description="GCS bucket for CEFI instruments",
+        description="GCS bucket for CEFI instruments (full name; overrides prefix)",
     )
     gcs_bucket_tradfi: str = Field(
         default="",
@@ -84,9 +118,9 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
     lookback_days: int = Field(default=0, description="Lookback days for batch processing")
 
     graph_secret_name: str = Field(
-        default="graph-api-key",
+        default="thegraph-api-key",
         validation_alias=AliasChoices("GRAPH_SECRET_NAME"),
-        description="Graph API key secret name",
+        description="Graph API key secret name (round-robin: thegraph-api-key-2..9)",
     )
 
     aavescan_api_url: str = Field(
@@ -100,9 +134,9 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
         description="Ethereum RPC URL",
     )
     uniswap_v3_graph_url: str = Field(
-        default="",
+        default="https://api.studio.thegraph.com/query/50688/uniswap-v3/version/latest",
         validation_alias=AliasChoices("UNISWAP_V3_GRAPH_URL"),
-        description="Uniswap V3 Graph URL",
+        description="Uniswap V3 Graph URL (domain constant; override via env only for staging/mock)",
     )
     uniswap_v3_graph_arb_url: str = Field(
         default="https://api.studio.thegraph.com/query/50688/uniswap-v3-arbitrum/version/latest",
@@ -115,9 +149,9 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
         description="The Graph Uniswap V3 URL for Base",
     )
     envio_api_url: str = Field(
-        default="",
+        default="https://api.envio.dev/v1/prices",
         validation_alias=AliasChoices("ENVIO_API_URL"),
-        description="Envio API URL",
+        description="Envio API URL (domain constant; override via env only for local mock)",
     )
     hyperliquid_api_url: str = Field(
         default="https://api.hyperliquid.xyz",
@@ -180,20 +214,16 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
     def get_cloud_target(self, category: str | None = None) -> CloudTarget:
         """Get CloudTarget for instruments service."""
         if category:
-            category_upper = category.upper()
-            if category_upper == "CEFI":
-                bucket = self.gcs_bucket_cefi
-            elif category_upper == "TRADFI":
-                bucket = self.gcs_bucket_tradfi
-            elif category_upper == "DEFI":
-                bucket = self.gcs_bucket_defi
-            else:
-                raise ValueError(f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI")
+            bucket = self.get_bucket_for_category(category, test_mode=False)
         else:
             bucket = self.gcs_bucket
+            if not bucket and self.gcp_project_id:
+                bucket = f"instruments-store-{self.gcp_project_id}"
+
+        project_id = self.gcp_project_id or getattr(self, "project_id", "")
 
         return CloudTarget(
-            project_id=self.gcp_project_id,
+            project_id=project_id,
             gcs_bucket=bucket,
             bigquery_dataset=self.bigquery_dataset,
             bigquery_location=self.bigquery_location,
@@ -236,17 +266,52 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
         return self.gcs_bucket_test
 
     def get_bucket_for_category(self, category: str, test_mode: bool = False) -> str:
-        """Get the GCS bucket name for a specific market category."""
+        """
+        Get the GCS bucket name for a specific market category.
+
+        Uses prefix + GCP_PROJECT_ID when full bucket not configured.
+        See: unified-trading-codex/02-data/bucket-naming-and-config.md
+        """
         category_upper = category.upper()
         if category_upper not in ["CEFI", "TRADFI", "DEFI"]:
             raise ValueError(f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI")
-        bucket_name = (
-            f"gcs_bucket_{category_upper.lower()}_test" if test_mode else f"gcs_bucket_{category_upper.lower()}"
-        )
-        bucket = getattr(self, bucket_name, None)
+
+        # Full bucket names (legacy override)
+        full_bucket_map = {
+            "CEFI": (self.gcs_bucket_cefi_test, self.gcs_bucket_cefi),
+            "TRADFI": (self.gcs_bucket_tradfi_test, self.gcs_bucket_tradfi),
+            "DEFI": (self.gcs_bucket_defi_test, self.gcs_bucket_defi),
+        }
+        test_bucket, prod_bucket = full_bucket_map[category_upper]
+        bucket = test_bucket if test_mode else prod_bucket
+
         if bucket:
             logger.debug(f"📦 Using bucket for {category_upper}: {bucket}")
             return bucket
+
+        # Derive from prefix + gcp_project_id
+        project_id = self.gcp_project_id or getattr(self, "project_id", "")
+        if project_id:
+            prefix_map = {
+                "CEFI": (
+                    self.instruments_bucket_prefix_cefi_test,
+                    self.instruments_bucket_prefix_cefi,
+                ),
+                "TRADFI": (
+                    self.instruments_bucket_prefix_tradfi_test,
+                    self.instruments_bucket_prefix_tradfi,
+                ),
+                "DEFI": (
+                    self.instruments_bucket_prefix_defi_test,
+                    self.instruments_bucket_prefix_defi,
+                ),
+            }
+            test_prefix, prod_prefix = prefix_map[category_upper]
+            prefix = test_prefix if test_mode else prod_prefix
+            derived = f"{prefix}-{project_id}"
+            logger.debug(f"📦 Using bucket for {category_upper}: {derived} (prefix + GCP_PROJECT_ID)")
+            return derived
+
         logger.warning(f"⚠️ Category-specific bucket not configured for {category_upper}. Using default bucket.")
         return self.gcs_bucket_test if test_mode else self.gcs_bucket
 
