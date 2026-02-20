@@ -2,9 +2,8 @@
 requires = ["setuptools>=80.9.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.uv.sources]
-unified-events-interface = { path = "../unified-events-interface" }
-unified-market-interface = { path = "../unified-market-interface" }
+# [tool.uv.sources] removed - Docker builds use Artifact Registry via pip.conf
+# For local dev, install manually: uv pip install -e ../unified-events-interface
 
 [project]
 name = "instruments-service"
