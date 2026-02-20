@@ -9,10 +9,9 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-from instruments_service.app.venues.defi import (
+from unified_market_interface.adapters.defi import (
     AaveV3Adapter,
     BalancerAdapter,
-    CurveRPCAdapter,
     EthenaAdapter,
     EtherFiAdapter,
     EulerAdapter,
@@ -23,7 +22,11 @@ from instruments_service.app.venues.defi import (
     UniswapV3Adapter,
     UniswapV4Adapter,
 )
-from instruments_service.app.venues.onchain_perps import AsterAdapter, HyperliquidAdapter
+from unified_market_interface.adapters.defi import (
+    CurveAdapter as CurveRPCAdapter,
+)
+from unified_market_interface.adapters.onchain_perps import AsterAdapter, HyperliquidAdapter
+
 from instruments_service.models import InstrumentDefinition
 
 logger = logging.getLogger(__name__)
