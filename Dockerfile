@@ -30,11 +30,14 @@ WORKDIR /app/instruments-service
 # Copy pip.conf for Artifact Registry access
 COPY pip.conf /etc/pip.conf
 
+# Install keyring for Artifact Registry authentication (REQUIRED for pip.conf to work)
+RUN pip install --no-cache-dir keyrings.google-artifactregistry-auth
+
 # Copy instruments-service source code
 COPY . .
 
 # Install service with dev dependencies (needed for quality gates in Cloud Build)
-# Use pip (not uv) for Artifact Registry authentication via keyring
+# keyring + pip.conf enables authentication to asia-northeast1-python.pkg.dev
 RUN pip install --no-cache-dir -e ".[dev]"
 
 # Create data directories
