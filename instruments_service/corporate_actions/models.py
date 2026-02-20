@@ -194,7 +194,10 @@ class EarningsRecord(BaseModel):
     revenue: Optional[float] = Field(default=None, description="Reported revenue in USD")
     estimated_revenue: Optional[float] = Field(default=None, description="Estimated revenue in USD")
     source: str = Field(default="yfinance", description="Data source")
-    fetched_at: datetime = Field(default_factory=datetime.utcnow, description="When data was fetched")
+    fetched_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="When data was fetched",
+    )
 
     # For canonical instrument key matching
     instrument_key: Optional[str] = Field(default=None, description="Canonical instrument key")
