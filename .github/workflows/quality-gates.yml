@@ -84,7 +84,10 @@ jobs:
       - name: Run unit tests
         run: |
           echo "=== Running unit tests ==="
-          python -m pytest tests/unit/ -v --tb=short --timeout=60 -n auto
+          python -m pytest tests/unit/ -v --tb=short --timeout=60 -n auto \
+            --cov=instruments_service \
+            --cov-report=term-missing \
+            --no-cov-on-fail
           echo "✅ Unit tests passed"
 
       # ========================================================================
