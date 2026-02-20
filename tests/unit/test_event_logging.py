@@ -106,8 +106,6 @@ def test_event_helper_imported(all_event_markers: set[str]) -> None:
             return
         if "from instruments_service.events import log_event" in text:
             return
-        if "from unified_cloud_services.observability import log_event" in text:
-            return
     pytest.fail(
         "log_event not imported. Add: from unified_events_interface import log_event "
         "or from instruments_service.events import log_event"
