@@ -27,10 +27,14 @@ RUN useradd --create-home --shell /bin/bash appuser
 # Set working directory
 WORKDIR /app/instruments-service
 
+# Copy pip.conf for Artifact Registry access
+COPY pip.conf /etc/pip.conf
+
 # Copy instruments-service source code
 COPY . .
 
 # Install service with dev dependencies (needed for quality gates in Cloud Build)
+# pip.conf enables Artifact Registry for unified-* packages
 RUN uv pip install --system -e ".[dev]"
 
 # Create data directories
