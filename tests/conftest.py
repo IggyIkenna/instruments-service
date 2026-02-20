@@ -291,8 +291,12 @@ def csv_sample_dir():
 
 
 @pytest.fixture(autouse=True)
-def setup_test_environment(gcp_credentials, test_bucket_name):
-    """Automatically setup test environment for all tests."""
+def setup_test_environment(test_bucket_name):
+    """Automatically setup test environment for all tests.
+
+    Does NOT require gcp_credentials - unit tests can run without GCP.
+    Integration/cloud tests use gcp_credentials fixture explicitly.
+    """
     # Ensure test bucket is used (not prod)
     os.environ["INSTRUMENTS_GCS_BUCKET_TEST"] = test_bucket_name
 
