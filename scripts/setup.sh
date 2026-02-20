@@ -77,8 +77,9 @@ if [ "$HELP" = true ]; then
     echo "  2. Check architecture on Apple Silicon (ARM64 required)"
     echo "  3. Create/activate a virtual environment"
     echo "  4. Install unified-cloud-services from GitHub main"
-    echo "  5. Install instruments-service as EDITABLE (for your changes)"
-    echo "  6. Auto-detect GCP credentials"
+    echo "  5. Install unified-events-interface (local path or GitHub)"
+    echo "  6. Install instruments-service as EDITABLE (for your changes)"
+    echo "  7. Auto-detect GCP credentials"
     echo ""
     echo "TIP: Run with 'source' to auto-activate the venv when done:"
     echo "  source ./scripts/setup.sh"
@@ -306,6 +307,35 @@ if ! pip install "unified-cloud-services @ ${UCS_SSH_URL}"; then
 fi
 
 echo -e "${GREEN}✓ Installed unified-cloud-services${NC}"
+
+# =============================================================================
+# Step 3b: Install unified-events-interface (local path or GitHub)
+# =============================================================================
+echo ""
+echo -e "${YELLOW}Step 3b: Installing unified-events-interface...${NC}"
+
+UEI_PATH=""
+if [ -d "$REPO_ROOT/../unified-events-interface" ] && [ -f "$REPO_ROOT/../unified-events-interface/pyproject.toml" ]; then
+    UEI_PATH="$REPO_ROOT/../unified-events-interface"
+elif [ -d "$REPO_ROOT/deps/unified-events-interface" ] && [ -f "$REPO_ROOT/deps/unified-events-interface/pyproject.toml" ]; then
+    UEI_PATH="$REPO_ROOT/deps/unified-events-interface"
+fi
+
+if [ -n "$UEI_PATH" ]; then
+    echo "Installing from local path: $UEI_PATH"
+    pip install -e "$UEI_PATH" > /dev/null 2>&1
+    echo -e "${GREEN}✓ Installed unified-events-interface from local path${NC}"
+else
+    echo "Local path not found, installing from GitHub..."
+    UEI_SSH_URL="git+ssh://git@github.com/IggyIkenna/unified-events-interface.git"
+    if ! pip install "unified-events-interface @ ${UEI_SSH_URL}" 2>/dev/null; then
+        echo -e "${YELLOW}⚠ Could not install unified-events-interface from GitHub${NC}"
+        echo "  For local dev: clone to ../unified-events-interface and re-run setup.sh"
+        echo "  Or: pip install -e ../unified-events-interface"
+    else
+        echo -e "${GREEN}✓ Installed unified-events-interface from GitHub${NC}"
+    fi
+fi
 
 # =============================================================================
 # Step 4: Install instruments-service
