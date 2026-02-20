@@ -16,6 +16,10 @@ from unified_cloud_services import (
     VenueMapping,
 )
 
+from instruments_service.config.instrument_definitions import (
+    SP500_TICKERS,
+    TRADFI_INSTRUMENTS_CONFIG,
+)
 from instruments_service.config.service_config import (
     InstrumentsServiceConfig,
     get_config,
@@ -27,8 +31,6 @@ from instruments_service.config.venue_config import (
     ETF_TICKERS,
     EXCHANGE_CODE_TO_NAME,
     NASDAQ_TICKERS,
-    SP500_TICKERS,
-    TRADFI_INSTRUMENTS_CONFIG,
     InstrumentDefinition,
     TradFiInstrument,
     UnifiedInstrumentConfig,
