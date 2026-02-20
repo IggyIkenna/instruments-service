@@ -773,3 +773,27 @@ class TestInstrumentsServiceConfig:
         assert instruments_config.INSTRUMENTS_GCS_BUCKET_CEFI is not None
         assert instruments_config.INSTRUMENTS_GCS_BUCKET_TRADFI is not None
         assert instruments_config.INSTRUMENTS_GCS_BUCKET_DEFI is not None
+
+
+class TestInstrumentDefinitionsDefi:
+    """Tests for DEFI_PROTOCOLS and DEFI_VENUE_TO_PROTOCOL (Issue #91)."""
+
+    def test_defi_venue_to_protocol_has_expected_venues(self):
+        """Test DEFI_VENUE_TO_PROTOCOL contains key DeFi venues."""
+        from instruments_service.config import DEFI_VENUE_TO_PROTOCOL
+
+        assert "UNISWAPV3-ETH" in DEFI_VENUE_TO_PROTOCOL
+        assert DEFI_VENUE_TO_PROTOCOL["UNISWAPV3-ETH"] == ("uniswap_v3", "ETHEREUM")
+        assert "HYPERLIQUID" in DEFI_VENUE_TO_PROTOCOL
+        assert DEFI_VENUE_TO_PROTOCOL["HYPERLIQUID"][1] is None
+
+    def test_defi_protocols_non_empty(self):
+        """Test DEFI_PROTOCOLS is non-empty and has correct structure."""
+        from instruments_service.config import DEFI_PROTOCOLS
+
+        assert len(DEFI_PROTOCOLS) > 0
+        for item in DEFI_PROTOCOLS:
+            assert isinstance(item, tuple)
+            assert len(item) == 2
+            assert isinstance(item[0], str)
+            assert item[1] is None or isinstance(item[1], str)
