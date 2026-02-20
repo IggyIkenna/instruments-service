@@ -17,7 +17,11 @@ from unified_market_interface.adapters.tradfi import DatabentoAdapter
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
-from instruments_service.config import UnifiedInstrumentConfig
+from instruments_service.config import (
+    DEFI_PROTOCOLS,
+    DEFI_VENUE_TO_PROTOCOL,
+    UnifiedInstrumentConfig,
+)
 from instruments_service.models import InstrumentDefinition
 from instruments_service.utils.special_instruments import (
     create_krwusd_instrument_definition,
@@ -618,47 +622,6 @@ class InstrumentsService:
             # Process DEFI protocols
             if defi:
                 try:
-                    # Map canonical venues to protocol names and chains
-                    # venues_filter contains canonical venues (e.g., "UNISWAPV3-ETH", "HYPERLIQUID")
-                    # This mapping translates canonical venues to raw protocol names used by the processing service
-                    venue_to_protocol = {
-                        "HYPERLIQUID": ("hyperliquid", None),
-                        "ASTER": ("aster", None),
-                        "UNISWAPV2-ETH": ("uniswap_v2", "ETHEREUM"),
-                        "UNISWAPV3-ETH": ("uniswap_v3", "ETHEREUM"),
-                        "UNISWAPV4-ETH": ("uniswap_v4", "ETHEREUM"),
-                        "CURVE-ETH": ("curve", "ETHEREUM"),
-                        # FUTURE IMPLEMENTATION - NOT MVP
-                        # "BALANCER-ETH": ("balancer", "ETHEREUM"),
-                        "AAVE_V3_ETH": ("aave_v3", "ETHEREUM"),
-                        "ETHERFI": ("etherfi", "ETHEREUM"),
-                        "LIDO": ("lido", "ETHEREUM"),
-                        "MORPHO-ETHEREUM": ("morpho", "ETHEREUM"),
-                        "EULER-PLASMA": ("euler_plasma", None),
-                        "FLUID-PLASMA": ("fluid_plasma", None),
-                        "AAVE-PLASMA": ("aave_plasma", None),
-                        "ETHENA": ("ethena", "ETHEREUM"),
-                    }
-
-                    # Common DeFi protocols
-                    all_defi_protocols = [
-                        ("uniswap_v2", "ETHEREUM"),
-                        ("uniswap_v3", "ETHEREUM"),
-                        ("uniswap_v4", "ETHEREUM"),
-                        ("curve", "ETHEREUM"),
-                        ("balancer", "ETHEREUM"),
-                        ("aave_v3", "ETHEREUM"),
-                        ("etherfi", "ETHEREUM"),
-                        ("lido", "ETHEREUM"),
-                        ("morpho", "ETHEREUM"),
-                        ("euler_plasma", None),
-                        ("fluid_plasma", None),
-                        ("aave_plasma", None),
-                        ("hyperliquid", None),
-                        ("aster", None),
-                        ("ethena", "ETHEREUM"),
-                    ]
-
                     # Filter protocols if venues specified
                     # Note: Invalid venues have already been rejected in validation above
                     if venues_filter:
@@ -670,8 +633,8 @@ class InstrumentsService:
                             for venue in defi_venues:
                                 # venues_filter is already uppercased, but check both cases for robustness
                                 venue_key = venue.upper() if venue else ""
-                                if venue_key in venue_to_protocol:
-                                    protocol, chain = venue_to_protocol[venue_key]
+                                if venue_key in DEFI_VENUE_TO_PROTOCOL:
+                                    protocol, chain = DEFI_VENUE_TO_PROTOCOL[venue_key]
                                     if (protocol, chain) not in defi_protocols:
                                         defi_protocols.append((protocol, chain))
                             if defi_protocols:
@@ -687,7 +650,7 @@ class InstrumentsService:
                             logger.info("🔍 No DEFI venues in filter, skipping DEFI processing")
                             defi_protocols = []
                     else:
-                        defi_protocols = all_defi_protocols
+                        defi_protocols = DEFI_PROTOCOLS
                         logger.info("🔍 No venue filter specified, processing all DEFI protocols")
 
                     if not defi_protocols:

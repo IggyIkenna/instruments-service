@@ -133,8 +133,11 @@ class TestInstrumentHandler:
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
 
-        # Patch CloudDataProvider where it's imported (inside the method)
-        with patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"):
+        # Patch CloudDataProvider and validate_required_api_keys (no GCP/API keys in unit tests)
+        with (
+            patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"),
+            patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+        ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
@@ -147,20 +150,22 @@ class TestInstrumentHandler:
     def test_execute_instrument_generation_skip_future_date(self, handler):
         """Test skipping future dates."""
         future_date = datetime.now(timezone.utc) + timedelta(days=1)
-        result = handler._execute_instrument_generation(
-            future_date.strftime("%Y-%m-%d"),
-            future_date.strftime("%Y-%m-%d"),
-            force=False,
-        )
-        # Should skip future date
+        with patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"):
+            result = handler._execute_instrument_generation(
+                future_date.strftime("%Y-%m-%d"),
+                future_date.strftime("%Y-%m-%d"),
+                force=False,
+            )
         assert result["dates_skipped"] >= 0
 
     def test_execute_instrument_generation_skip_existing(self, handler, mock_data_provider):
         """Test skipping existing instruments when force=False."""
-        # Patch CloudDataProvider where it's imported (inside the method)
-        with patch(
-            "instruments_service.app.core.cloud_data_provider.CloudDataProvider",
-            return_value=mock_data_provider,
+        with (
+            patch(
+                "instruments_service.app.core.cloud_data_provider.CloudDataProvider",
+                return_value=mock_data_provider,
+            ),
+            patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
         ):
             mock_data_provider.check_instruments_exist.return_value = True
 
@@ -178,10 +183,12 @@ class TestInstrumentHandler:
 
     def test_execute_instrument_generation_force_mode(self, handler, mock_data_provider):
         """Test force mode doesn't skip existing."""
-        # Patch CloudDataProvider where it's imported (inside the method)
-        with patch(
-            "instruments_service.app.core.cloud_data_provider.CloudDataProvider",
-            return_value=mock_data_provider,
+        with (
+            patch(
+                "instruments_service.app.core.cloud_data_provider.CloudDataProvider",
+                return_value=mock_data_provider,
+            ),
+            patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
         ):
             mock_data_provider.check_instruments_exist.return_value = True
 
@@ -205,7 +212,10 @@ class TestInstrumentHandler:
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
 
-        with patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"):
+        with (
+            patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"),
+            patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+        ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
@@ -223,7 +233,10 @@ class TestInstrumentHandler:
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
 
-        with patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"):
+        with (
+            patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+            patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"),
+        ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
@@ -238,7 +251,10 @@ class TestInstrumentHandler:
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
 
-        with patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"):
+        with (
+            patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"),
+            patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+        ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
@@ -256,7 +272,10 @@ class TestInstrumentHandler:
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
 
-        with patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"):
+        with (
+            patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"),
+            patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+        ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
@@ -275,7 +294,10 @@ class TestInstrumentHandler:
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
 
-        with patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"):
+        with (
+            patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"),
+            patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+        ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
@@ -291,7 +313,10 @@ class TestInstrumentHandler:
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
 
-        with patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"):
+        with (
+            patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"),
+            patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+        ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
                 test_date.strftime("%Y-%m-%d"),
