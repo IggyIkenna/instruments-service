@@ -27,17 +27,18 @@ RUN useradd --create-home --shell /bin/bash appuser
 # Set working directory
 WORKDIR /app/instruments-service
 
-# Copy pip.conf for Artifact Registry access
-COPY pip.conf /etc/pip.conf
-
-# Install keyring for Artifact Registry authentication (REQUIRED for pip.conf to work)
+# Install keyring FIRST (before pip.conf) to avoid auth loop
+# keyring must be installed from PyPI, not Artifact Registry
 RUN pip install --no-cache-dir keyrings.google-artifactregistry-auth
+
+# NOW copy pip.conf - keyring is ready to handle Artifact Registry auth
+COPY pip.conf /etc/pip.conf
 
 # Copy instruments-service source code
 COPY . .
 
-# Install service with dev dependencies (needed for quality gates in Cloud Build)
-# keyring + pip.conf enables authentication to asia-northeast1-python.pkg.dev
+# Install service with dev dependencies
+# keyring + pip.conf enables authentication to Artifact Registry for unified-* packages
 RUN pip install --no-cache-dir -e ".[dev]"
 
 # Create data directories
