@@ -50,6 +50,7 @@ data/
 *.parquet
 *.csv
 !tests/fixtures/*.csv
+extra/
 
 # Logs
 *.log
