@@ -17,6 +17,8 @@ from unified_cloud_services import (
 )
 
 from instruments_service.config.instrument_definitions import (
+    DEFI_PROTOCOLS,
+    DEFI_VENUE_TO_PROTOCOL,
     SP500_TICKERS,
     TRADFI_INSTRUMENTS_CONFIG,
 )
@@ -40,6 +42,8 @@ from instruments_service.config.venue_config import (
 __all__ = [
     "DATABENTO_VALID_OPTIONS_SYMBOLS",
     "DATABENTO_VALID_PARENT_SYMBOLS",
+    "DEFI_PROTOCOLS",
+    "DEFI_VENUE_TO_PROTOCOL",
     "DataTypeConfig",
     "EXCHANGE_CODE_TO_NAME",
     "ETF_TICKERS",

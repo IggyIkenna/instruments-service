@@ -14,6 +14,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from unified_cloud_services.domain import DataSourceMapping
+from unified_market_interface.adapters.tradfi import YahooFinanceAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +82,9 @@ def get_adapter_for_venue(venue: str, api_keys: Optional[Dict[str, str]] = None)
             adapter = _load_defi_adapter(venue, api_keys)
 
         elif data_source == "yfinance":
-            # FX adapter (no API key required)
-            # Import will be added when FX adapter is implemented
-            raise NotImplementedError("yfinance adapter not yet implemented")
+            # FX adapter (KRW/USD, corporate actions) - no API key required
+
+            adapter = YahooFinanceAdapter()
 
         elif data_source == "barchart":
             # VIX adapter
