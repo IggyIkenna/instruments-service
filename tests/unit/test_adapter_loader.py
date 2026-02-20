@@ -102,6 +102,76 @@ def test_defi_venue_specific_adapters():
     assert "AaveV3Adapter" in str(type(aave))
 
 
+def test_defi_venue_uniswap_v4():
+    """Test loading adapter for UNISWAP-V4 (The Graph)."""
+    adapter = get_adapter_for_venue("UNISWAP-V4")
+    assert adapter is not None
+    assert "UniswapV4Adapter" in str(type(adapter))
+
+
+def test_defi_venue_curve():
+    """Test loading adapter for CURVE (The Graph)."""
+    adapter = get_adapter_for_venue("CURVE")
+    assert adapter is not None
+    assert "CurveAdapter" in str(type(adapter))
+
+
+def test_defi_venue_balancer():
+    """Test loading adapter for BALANCER (The Graph)."""
+    adapter = get_adapter_for_venue("BALANCER")
+    assert adapter is not None
+    assert "BalancerAdapter" in str(type(adapter))
+
+
+def test_defi_venue_morpho():
+    """Test loading adapter for MORPHO (The Graph)."""
+    adapter = get_adapter_for_venue("MORPHO")
+    assert adapter is not None
+    assert "MorphoAdapter" in str(type(adapter))
+
+
+def test_defi_venue_euler():
+    """Test loading adapter for EULER (The Graph)."""
+    adapter = get_adapter_for_venue("EULER")
+    assert adapter is not None
+    assert "EulerAdapter" in str(type(adapter))
+
+
+def test_defi_venue_fluid():
+    """Test loading adapter for FLUID (The Graph)."""
+    adapter = get_adapter_for_venue("FLUID")
+    assert adapter is not None
+    assert "FluidAdapter" in str(type(adapter))
+
+
+def test_defi_venue_lido():
+    """Test loading adapter for LIDO (The Graph)."""
+    adapter = get_adapter_for_venue("LIDO")
+    assert adapter is not None
+    assert "LidoAdapter" in str(type(adapter))
+
+
+def test_defi_venue_etherfi():
+    """Test loading adapter for ETHERFI (The Graph)."""
+    adapter = get_adapter_for_venue("ETHERFI")
+    assert adapter is not None
+    assert "EtherFiAdapter" in str(type(adapter))
+
+
+def test_defi_venue_ethena():
+    """Test loading adapter for ETHENA (The Graph)."""
+    adapter = get_adapter_for_venue("ETHENA")
+    assert adapter is not None
+    assert "EthenaAdapter" in str(type(adapter))
+
+
+def test_yahoo_finance_fx_venue_loads_adapter():
+    """Test that FX venue (Yahoo Finance) loads YahooFinanceAdapter."""
+    adapter = get_adapter_for_venue("FX")
+    assert adapter is not None
+    assert "YahooFinanceAdapter" in str(type(adapter))
+
+
 def test_case_insensitive_venue_names():
     """Test that venue names are case-insensitive."""
     adapter1 = get_adapter_for_venue("binance-futures")

@@ -15,7 +15,57 @@ from unittest.mock import AsyncMock, Mock, patch
 import pandas as pd
 import pytest
 
-from instruments_service.app.core.instruments_service import InstrumentsService
+from instruments_service.app.core.instruments_service import ErrorWarningCounter, InstrumentsService
+
+
+class TestErrorWarningCounter:
+    """Tests for ErrorWarningCounter logging handler (Task 110 coverage)."""
+
+    def test_init(self):
+        """Test counter initializes to zero."""
+        counter = ErrorWarningCounter()
+        assert counter.error_count == 0
+        assert counter.warning_count == 0
+
+    def test_emit_error(self):
+        """Test emit counts ERROR records."""
+        counter = ErrorWarningCounter()
+        record = type("Record", (), {"levelno": 40})()  # ERROR = 40
+        record.levelno = 40
+        counter.emit(record)
+        assert counter.error_count == 1
+        assert counter.warning_count == 0
+
+    def test_emit_warning(self):
+        """Test emit counts WARNING records."""
+        counter = ErrorWarningCounter()
+        record = type("Record", (), {"levelno": 30})()  # WARNING = 30
+        record.levelno = 30
+        counter.emit(record)
+        assert counter.error_count == 0
+        assert counter.warning_count == 1
+
+    def test_emit_info_ignored(self):
+        """Test emit ignores INFO and below."""
+        counter = ErrorWarningCounter()
+        record = type("Record", (), {"levelno": 20})()  # INFO = 20
+        record.levelno = 20
+        counter.emit(record)
+        assert counter.error_count == 0
+        assert counter.warning_count == 0
+
+    def test_reset(self):
+        """Test reset clears counts."""
+        counter = ErrorWarningCounter()
+        record_err = type("Record", (), {"levelno": 40})()
+        record_err.levelno = 40
+        record_warn = type("Record", (), {"levelno": 30})()
+        record_warn.levelno = 30
+        counter.emit(record_err)
+        counter.emit(record_warn)
+        counter.reset()
+        assert counter.error_count == 0
+        assert counter.warning_count == 0
 
 
 class TestInstrumentsServiceInitialization:
