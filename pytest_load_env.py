@@ -3,10 +3,16 @@ Pytest plugin to load .env file before any test imports.
 
 This plugin ensures environment variables are available when skipif decorators
 are evaluated during test module imports.
+
+NOTE: Uses logging (not print) per codex 06. os.getenv allowed here - runs before
+config is loaded; sets test env defaults.
 """
 
+import logging
 import os
 from pathlib import Path
+
+_logger = logging.getLogger("pytest_load_env")
 
 
 def pytest_load_initial_conftests(early_config, parser, args):
@@ -44,11 +50,17 @@ def pytest_load_initial_conftests(early_config, parser, args):
                         if parent_creds.exists():
                             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(parent_creds.resolve())
                         else:
-                            print(f"⚠️  Credentials file not found: {creds_path}")
-                            print(f"   Checked: {abs_creds_path}")
-                            print(f"   Checked: {parent_creds}")
+                            _logger.warning(
+                                "Credentials file not found: %s (checked: %s, %s)",
+                                creds_path,
+                                abs_creds_path,
+                                parent_creds,
+                            )
                 elif not creds_path_obj.exists():
-                    print(f"⚠️  Credentials file not found at absolute path: {creds_path}")
+                    _logger.warning(
+                        "Credentials file not found at absolute path: %s",
+                        creds_path,
+                    )
 
             # Ensure GCP_PROJECT_ID is set (required for many tests)
             if not os.getenv("GCP_PROJECT_ID"):
@@ -61,12 +73,15 @@ def pytest_load_initial_conftests(early_config, parser, args):
             # Debug output for troubleshooting
             final_creds = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
             creds_exists = Path(final_creds).exists() if final_creds else False
-            print(f"✅ Loaded .env from {env_path}")
-            print(f"   GOOGLE_APPLICATION_CREDENTIALS={final_creds}")
-            print(f"   Credentials file exists: {creds_exists}")
+            _logger.info(
+                "Loaded .env from %s; GOOGLE_APPLICATION_CREDENTIALS=%s; exists=%s",
+                env_path,
+                final_creds,
+                creds_exists,
+            )
         else:
-            print(f"⚠️  .env file not found at {env_path}")
+            _logger.warning(".env file not found at %s", env_path)
     except ImportError:
-        print("⚠️  python-dotenv not available, skipping .env file loading")
+        _logger.warning("python-dotenv not available, skipping .env file loading")
     except Exception as e:
-        print(f"⚠️  Error loading .env file: {e}")
+        _logger.warning("Error loading .env file: %s", e)
