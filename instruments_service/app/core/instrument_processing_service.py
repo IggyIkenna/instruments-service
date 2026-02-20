@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import unified_cloud_services.core.subgraph_service as sg_module
+import unified_market_interface.clients.thegraph_base_client as tgc_module
 
 # Import centralized models and configs (DRY principle)
 from unified_cloud_services import (
@@ -38,13 +39,9 @@ from unified_cloud_services import (
     get_secret_with_fallback,
     handle_api_errors,
 )
-
-import instruments_service.app.venues.defi.the_graph_client as tgc_module
-from instruments_service.app.venues.databento import DatabentoAdapter
-from instruments_service.app.venues.defi import (
+from unified_market_interface.adapters.defi import (
     AaveV3Adapter,
     BalancerAdapter,
-    CurveRPCAdapter,
     EthenaAdapter,
     EtherFiAdapter,
     EulerAdapter,
@@ -55,13 +52,15 @@ from instruments_service.app.venues.defi import (
     UniswapV3Adapter,
     UniswapV4Adapter,
 )
-
-# On-chain CLOB perps (Tardis-compatible data schema)
-from instruments_service.app.venues.onchain_perps import (
+from unified_market_interface.adapters.defi import (
+    CurveAdapter as CurveRPCAdapter,
+)
+from unified_market_interface.adapters.onchain_perps import (
     AsterAdapter,
     HyperliquidAdapter,
 )
-from instruments_service.app.venues.tardis import TardisAdapter
+from unified_market_interface.adapters.tradfi import DatabentoAdapter, TardisAdapter
+
 from instruments_service.config import instruments_config
 from instruments_service.models import InstrumentDefinition
 from instruments_service.utils.ccxt_service import CCXTService
