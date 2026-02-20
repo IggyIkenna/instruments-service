@@ -12,13 +12,17 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from unified_cloud_services import VenueMapping
+from unified_market_interface.adapters.tradfi import DatabentoAdapter
 
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
-from instruments_service.app.venues.databento.databento_adapter import DatabentoAdapter
 from instruments_service.config import UnifiedInstrumentConfig
 from instruments_service.models import InstrumentDefinition
+from instruments_service.utils.special_instruments import (
+    create_krwusd_instrument_definition,
+    create_vix_instrument_definition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -471,11 +475,8 @@ class InstrumentsService:
                             try:
                                 if exchange == "CBOE":
                                     # CBOE only has VIX index (static definition)
-                                    # Create Databento adapter instance (reuses cached client)
-                                    databento_adapter = DatabentoAdapter()
-
                                     # Create VIX instrument definition
-                                    vix_def_dict = databento_adapter.create_vix_instrument_definition(date)
+                                    vix_def_dict = create_vix_instrument_definition(date)
                                     if vix_def_dict:
                                         vix_def = InstrumentDefinition(**vix_def_dict)
                                         logger.info(f"✅ Created VIX: {vix_def.instrument_key}")
@@ -483,11 +484,8 @@ class InstrumentsService:
                                     return {}
                                 elif exchange == "FX":
                                     # FX venue: OTC forex instruments (KRW/USD via Yahoo Finance data provider)
-                                    # Create Databento adapter instance (reuses cached client)
-                                    databento_adapter = DatabentoAdapter()
-
                                     # Create KRW/USD instrument definition
-                                    krwusd_def_dict = databento_adapter.create_krwusd_instrument_definition(date)
+                                    krwusd_def_dict = create_krwusd_instrument_definition(date)
                                     if krwusd_def_dict:
                                         krwusd_def = InstrumentDefinition(**krwusd_def_dict)
                                         logger.info(f"✅ Created KRW/USD: {krwusd_def.instrument_key}")

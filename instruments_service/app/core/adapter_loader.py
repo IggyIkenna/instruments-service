@@ -53,28 +53,26 @@ def get_adapter_for_venue(venue: str, api_keys: Optional[Dict[str, str]] = None)
 
     try:
         if data_source == "tardis":
-            from instruments_service.app.venues.tardis import TardisAdapter
+            from unified_market_interface.adapters.tradfi import TardisAdapter
 
             api_key = api_keys.get("tardis") if api_keys else None
             adapter = TardisAdapter(api_key=api_key)
 
         elif data_source == "databento":
-            from instruments_service.app.venues.databento import DatabentoAdapter
+            from unified_market_interface.adapters.tradfi import DatabentoAdapter
 
             api_key = api_keys.get("databento") if api_keys else None
             adapter = DatabentoAdapter(api_key=api_key)
 
         elif data_source == "aster":
             from unified_cloud_services import AsterBaseClient
-
-            from instruments_service.app.venues.onchain_perps import AsterAdapter
+            from unified_market_interface.adapters.onchain_perps import AsterAdapter
 
             adapter = AsterAdapter(base_client=AsterBaseClient())
 
         elif data_source == "hyperliquid":
             from unified_cloud_services import HyperliquidBaseClient
-
-            from instruments_service.app.venues.onchain_perps import HyperliquidAdapter
+            from unified_market_interface.adapters.onchain_perps import HyperliquidAdapter
 
             adapter = HyperliquidAdapter(base_client=HyperliquidBaseClient())
 
@@ -113,51 +111,51 @@ def _load_defi_adapter(venue: str, api_keys: Optional[Dict[str, str]]) -> Any:
     venue_upper = venue.upper()
 
     if venue_upper == "UNISWAP-V2":
-        from instruments_service.app.venues.defi import UniswapV2Adapter
+        from unified_market_interface.adapters.defi import UniswapV2Adapter
 
         return UniswapV2Adapter()
     elif venue_upper == "UNISWAP-V3":
-        from instruments_service.app.venues.defi import UniswapV3Adapter
+        from unified_market_interface.adapters.defi import UniswapV3Adapter
 
         return UniswapV3Adapter()
     elif venue_upper == "UNISWAP-V4":
-        from instruments_service.app.venues.defi import UniswapV4Adapter
+        from unified_market_interface.adapters.defi import UniswapV4Adapter
 
         return UniswapV4Adapter()
     elif venue_upper == "AAVE-V3":
-        from instruments_service.app.venues.defi import AaveV3Adapter
+        from unified_market_interface.adapters.defi import AaveV3Adapter
 
         return AaveV3Adapter()
     elif venue_upper == "CURVE":
-        from instruments_service.app.venues.defi import CurveRPCAdapter
+        from unified_market_interface.adapters.defi import CurveAdapter
 
-        return CurveRPCAdapter()
+        return CurveAdapter()
     elif venue_upper == "BALANCER":
-        from instruments_service.app.venues.defi import BalancerAdapter
+        from unified_market_interface.adapters.defi import BalancerAdapter
 
         return BalancerAdapter()
     elif venue_upper == "MORPHO":
-        from instruments_service.app.venues.defi import MorphoAdapter
+        from unified_market_interface.adapters.defi import MorphoAdapter
 
         return MorphoAdapter()
     elif venue_upper == "EULER":
-        from instruments_service.app.venues.defi import EulerAdapter
+        from unified_market_interface.adapters.defi import EulerAdapter
 
         return EulerAdapter()
     elif venue_upper == "FLUID":
-        from instruments_service.app.venues.defi import FluidAdapter
+        from unified_market_interface.adapters.defi import FluidAdapter
 
         return FluidAdapter()
     elif venue_upper == "LIDO":
-        from instruments_service.app.venues.defi import LidoAdapter
+        from unified_market_interface.adapters.defi import LidoAdapter
 
         return LidoAdapter()
     elif venue_upper == "ETHERFI":
-        from instruments_service.app.venues.defi import EtherFiAdapter
+        from unified_market_interface.adapters.defi import EtherFiAdapter
 
         return EtherFiAdapter()
     elif venue_upper == "ETHENA":
-        from instruments_service.app.venues.defi import EthenaAdapter
+        from unified_market_interface.adapters.defi import EthenaAdapter
 
         return EthenaAdapter()
     else:
