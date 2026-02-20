@@ -2,9 +2,10 @@
 Instrument definitions for instruments-service.
 
 Extracted from config.py per Task 1.1.1 (Issue #89), Task 1.1.2 (Issue #90).
+DeFi protocol configs per Task 1.1.3 (Issue #91).
 """
 
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 # Source: Wikipedia S&P 500 list + manual ETF additions
 # Last updated: 2026-01-31
@@ -951,6 +952,44 @@ TRADFI_VENUE_MAPPINGS: List[Dict] = [
         "base": "WTI",
         "code": "T",
     },
+]
+
+# DeFi protocol configs (Issue #91)
+# Maps canonical venue keys to (protocol, chain) for TheGraph/subgraph adapters
+DEFI_VENUE_TO_PROTOCOL: Dict[str, Tuple[str, Optional[str]]] = {
+    "HYPERLIQUID": ("hyperliquid", None),
+    "ASTER": ("aster", None),
+    "UNISWAPV2-ETH": ("uniswap_v2", "ETHEREUM"),
+    "UNISWAPV3-ETH": ("uniswap_v3", "ETHEREUM"),
+    "UNISWAPV4-ETH": ("uniswap_v4", "ETHEREUM"),
+    "CURVE-ETH": ("curve", "ETHEREUM"),
+    "AAVE_V3_ETH": ("aave_v3", "ETHEREUM"),
+    "ETHERFI": ("etherfi", "ETHEREUM"),
+    "LIDO": ("lido", "ETHEREUM"),
+    "MORPHO-ETHEREUM": ("morpho", "ETHEREUM"),
+    "EULER-PLASMA": ("euler_plasma", None),
+    "FLUID-PLASMA": ("fluid_plasma", None),
+    "AAVE-PLASMA": ("aave_plasma", None),
+    "ETHENA": ("ethena", "ETHEREUM"),
+}
+
+# All DeFi protocols to process when no venue filter is specified
+DEFI_PROTOCOLS: List[Tuple[str, Optional[str]]] = [
+    ("uniswap_v2", "ETHEREUM"),
+    ("uniswap_v3", "ETHEREUM"),
+    ("uniswap_v4", "ETHEREUM"),
+    ("curve", "ETHEREUM"),
+    ("balancer", "ETHEREUM"),
+    ("aave_v3", "ETHEREUM"),
+    ("etherfi", "ETHEREUM"),
+    ("lido", "ETHEREUM"),
+    ("morpho", "ETHEREUM"),
+    ("euler_plasma", None),
+    ("fluid_plasma", None),
+    ("aave_plasma", None),
+    ("hyperliquid", None),
+    ("aster", None),
+    ("ethena", "ETHEREUM"),
 ]
 
 # Backward-compatible alias (Issue #90)

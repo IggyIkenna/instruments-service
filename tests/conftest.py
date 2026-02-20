@@ -67,6 +67,7 @@ _load_env_early()
 # Now safe to import modules that depend on environment variables
 # ============================================================================
 import json
+import logging
 from typing import Optional
 
 import pytest
@@ -75,6 +76,8 @@ from google.oauth2 import service_account
 from unified_cloud_services import CloudTarget, get_secret_with_fallback
 
 from instruments_service.config import instruments_config
+
+logger = logging.getLogger(__name__)
 
 
 def get_config(key: str, default: Optional[str] = None) -> Optional[str]:
@@ -183,9 +186,9 @@ def ensure_test_bucket_exists(
                 return False
 
         # Bucket doesn't exist, create it
-        print(f"📦 Creating test bucket: {bucket_name} in {location}")
+        logger.info("Creating test bucket: %s in %s", bucket_name, location)
         bucket.create(location=location)
-        print(f"✅ Created test bucket: {bucket_name}")
+        logger.info("Created test bucket: %s", bucket_name)
 
         # Grant permissions to service account
         service_account_email = get_service_account_email(credentials_file)
@@ -215,11 +218,14 @@ def ensure_test_bucket_exists(
                     )
 
                 bucket.set_iam_policy(policy)
-                print(f"✅ Granted permissions to {service_account_email}")
+                logger.info("Granted permissions to %s", service_account_email)
             except Exception as e:
                 # If we can't set IAM policy, that's okay - might already have project-level permissions
                 # or service account might not have IAM admin permissions (which is fine for tests)
-                print(f"⚠️  Could not set IAM policy (might have project-level permissions): {e}")
+                logger.warning(
+                    "Could not set IAM policy (might have project-level permissions): %s",
+                    e,
+                )
 
         return True
 
@@ -291,8 +297,12 @@ def csv_sample_dir():
 
 
 @pytest.fixture(autouse=True)
-def setup_test_environment(gcp_credentials, test_bucket_name):
-    """Automatically setup test environment for all tests."""
+def setup_test_environment(test_bucket_name):
+    """Automatically setup test environment for all tests.
+
+    Does NOT require gcp_credentials - unit tests can run without GCP.
+    Integration/cloud tests use gcp_credentials fixture explicitly.
+    """
     # Ensure test bucket is used (not prod)
     os.environ["INSTRUMENTS_GCS_BUCKET_TEST"] = test_bucket_name
 
