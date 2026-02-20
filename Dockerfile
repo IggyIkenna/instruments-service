@@ -34,8 +34,8 @@ COPY pip.conf /etc/pip.conf
 COPY . .
 
 # Install service with dev dependencies (needed for quality gates in Cloud Build)
-# pip.conf enables Artifact Registry for unified-* packages
-RUN uv pip install --system -e ".[dev]"
+# Use pip (not uv) for Artifact Registry authentication via keyring
+RUN pip install --no-cache-dir -e ".[dev]"
 
 # Create data directories
 RUN mkdir -p /app/instruments-service/data/samples /app/instruments-service/logs
