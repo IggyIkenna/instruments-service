@@ -25,11 +25,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import pandas as pd
 
-from instruments_service.cli.base_handler import ModeHandler
+from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.config import SP500_TICKERS, corporate_actions_start_date, instruments_config
 from instruments_service.corporate_actions.adapter import CorporateActionsAdapter
 
@@ -51,10 +51,10 @@ class CorporateActionsProductionHandler(ModeHandler):
     - Local storage (data/temp/)
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
 
-        self.project_id = config.get("project_id") or instruments_config.gcp_project_id
+        self.project_id = config.get("project_id") or str(getattr(instruments_config, "gcp_project_id", "") or "")
 
         # Initialize adapter
         self.adapter = CorporateActionsAdapter()
@@ -76,7 +76,7 @@ class CorporateActionsProductionHandler(ModeHandler):
         logger.info("✅ CorporateActionsProductionHandler initialized")
         logger.info(f"📁 Output directory: {self.base_dir}")
 
-    def _load_metadata(self) -> Dict[str, Any]:
+    def _load_metadata(self) -> dict[str, Any]:
         """
         Load metadata from local storage (in production: from GCS).
 
@@ -102,7 +102,7 @@ class CorporateActionsProductionHandler(ModeHandler):
                 },
             }
 
-    def _save_metadata(self, metadata: Dict[str, Any]) -> None:
+    def _save_metadata(self, metadata: dict[str, Any]) -> None:
         """
         Save metadata to local storage (in production: upload to GCS).
 
@@ -117,7 +117,7 @@ class CorporateActionsProductionHandler(ModeHandler):
 
         logger.info(f"✅ Saved metadata to {metadata_path}")
 
-    def _get_tickers_from_gcs(self) -> List[str]:
+    def _get_tickers_from_gcs(self) -> list[str]:
         """
         Fetch equity tickers from GCS instruments store.
 
@@ -144,12 +144,12 @@ class CorporateActionsProductionHandler(ModeHandler):
                 gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
 
                 try:
-                    df = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    df: pd.DataFrame = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
                     if not df.empty:
                         # Filter for equities
-                        equities = df[df["venue"].isin(["NYSE", "NASDAQ"])]
-                        tickers = equities["exchange_raw_symbol"].dropna().unique().tolist()
-                        tickers = [t.strip() for t in tickers if t and t.strip()]
+                        equities: pd.DataFrame = df[df["venue"].isin(["NYSE", "NASDAQ"])]
+                        tickers_raw: list[str] = list(equities["exchange_raw_symbol"].dropna().unique().tolist())
+                        tickers: list[str] = [str(t).strip() for t in tickers_raw if t and str(t).strip()]
 
                         logger.info(f"📂 Loaded {len(tickers)} tickers from GCS (day={date_str})")
                         return sorted(tickers)
@@ -167,7 +167,7 @@ class CorporateActionsProductionHandler(ModeHandler):
         self,
         ticker: str,
         max_retries: int = 3,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Fetch all corporate actions for a single symbol.
 
@@ -178,7 +178,7 @@ class CorporateActionsProductionHandler(ModeHandler):
         Returns:
             Dict with DataFrames and statistics
         """
-        result = {
+        result: dict[str, Any] = {
             "ticker": ticker,
             "success": False,
             "dividends_df": pd.DataFrame(),
@@ -253,7 +253,7 @@ class CorporateActionsProductionHandler(ModeHandler):
         all_dividends: pd.DataFrame,
         all_splits: pd.DataFrame,
         all_earnings: pd.DataFrame,
-    ) -> Dict[str, int]:
+    ) -> dict[str, int]:
         """
         Generate by_date partitions from combined DataFrames.
 
@@ -279,7 +279,7 @@ class CorporateActionsProductionHandler(ModeHandler):
                 if pd.isna(day):
                     continue
 
-                day_str = day.isoformat()
+                day_str: str = day.isoformat()
                 day_dir = self.by_date_dir / f"day={day_str}"
                 day_dir.mkdir(exist_ok=True)
 
@@ -294,7 +294,7 @@ class CorporateActionsProductionHandler(ModeHandler):
                 if pd.isna(day):
                     continue
 
-                day_str = day.isoformat()
+                day_str: str = day.isoformat()
                 day_dir = self.by_date_dir / f"day={day_str}"
                 day_dir.mkdir(exist_ok=True)
 
@@ -309,7 +309,7 @@ class CorporateActionsProductionHandler(ModeHandler):
                 if pd.isna(day):
                     continue
 
-                day_str = day.isoformat()
+                day_str: str = day.isoformat()
                 day_dir = self.by_date_dir / f"day={day_str}"
                 day_dir.mkdir(exist_ok=True)
 
@@ -320,8 +320,8 @@ class CorporateActionsProductionHandler(ModeHandler):
 
     def _generate_coverage_report(
         self,
-        results: List[Dict[str, Any]],
-        by_date_stats: Dict[str, int],
+        results: list[dict[str, Any]],
+        by_date_stats: dict[str, int],
     ) -> None:
         """
         Generate coverage report with statistics.
@@ -419,12 +419,12 @@ class CorporateActionsProductionHandler(ModeHandler):
 
     def run(
         self,
-        tickers: Optional[List[str]] = None,
+        tickers: Optional[list[str]] = None,
         parallel_workers: int = 2,  # Changed default from 10 to 2
         max_retries: int = 3,
         upload_to_gcs: bool = True,  # New parameter to control GCS upload
-        **kwargs,
-    ) -> Dict[str, Any]:
+        **kwargs: object,
+    ) -> dict[str, HandlerResultValue]:
         """
         Execute complete production pipeline.
 

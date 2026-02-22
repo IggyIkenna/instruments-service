@@ -13,7 +13,7 @@ Used by:
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 import ccxt
 
@@ -22,10 +22,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# CCXT market data has dynamic structure - use object for nested values
-CCXTMarketData = Dict[str, object]
-# Metadata and leverage limits from CCXT (str, float values)
-CCXTMetadata = Dict[str, str | float]
+# CCXT market data has dynamic structure - use Any for untyped CCXT responses
+CCXTMarketData = dict[str, Any]
+# Metadata and leverage limits from CCXT (str, float, int, None values)
+CCXTMetadata = dict[str, str | float | int | None]
 
 
 class CCXTService:
@@ -50,15 +50,15 @@ class CCXTService:
         self.cache_ttl_hours = cache_ttl_hours
 
         # Cache markets per venue
-        self._markets_cache: Dict[str, Dict[str, object]] = {}
-        self._cache_timestamps: Dict[str, datetime] = {}
+        self._markets_cache: dict[str, CCXTMarketData] = {}
+        self._cache_timestamps: dict[str, datetime] = {}
 
         # Cache leverage tiers per venue (to avoid repeated API calls)
-        self._leverage_tiers_cache: Dict[str, Dict[str, object]] = {}
+        self._leverage_tiers_cache: dict[str, CCXTMetadata] = {}
 
         logger.info(f"✅ CCXTService initialized (cache TTL: {cache_ttl_hours}h)")
 
-    def preload_markets_parallel(self, venues: List[str], max_workers: int = 4) -> Dict[str, bool]:
+    def preload_markets_parallel(self, venues: list[str], max_workers: int = 4) -> dict[str, bool]:
         """
         Pre-load CCXT markets for multiple venues in parallel.
 
@@ -72,18 +72,19 @@ class CCXTService:
         Returns:
             Dictionary mapping ccxt_exchange_id to success status
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 
         # Get unique CCXT exchange IDs (avoid loading same exchange multiple times)
-        ccxt_exchange_ids = set()
+        venue_to_ccxt: dict[str, str] = self.venue_mapping.venue_to_ccxt
+        ccxt_exchange_ids: set[tuple[str, str]] = set()
         for venue in venues:
-            ccxt_id = self.venue_mapping.venue_to_ccxt.get(venue)
+            ccxt_id = venue_to_ccxt.get(venue)
             if ccxt_id:
                 ccxt_exchange_ids.add((venue, ccxt_id))
 
         # Filter out already-cached exchanges and spot-only exchanges
         spot_only_exchanges = {"upbit", "coinbase"}
-        to_load = [
+        to_load: list[tuple[str, str]] = [
             (v, cid)
             for v, cid in ccxt_exchange_ids
             if cid not in self._markets_cache and cid.lower() not in spot_only_exchanges
@@ -95,13 +96,15 @@ class CCXTService:
 
         logger.info(f"⚡ Pre-loading {len(to_load)} CCXT exchanges in parallel (max_workers={max_workers})...")
 
-        results = {}
+        results: dict[str, bool] = {}
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(self.load_markets, venue): (venue, ccxt_id) for venue, ccxt_id in to_load}
-            for future in as_completed(futures):
-                venue, ccxt_id = futures[future]
+            futures_map: dict[Future[CCXTMarketData | None], tuple[str, str]] = {
+                executor.submit(self.load_markets, venue): (venue, ccxt_id) for venue, ccxt_id in to_load
+            }
+            for future in as_completed(futures_map):
+                venue, ccxt_id = futures_map[future]
                 try:
-                    result = future.result()
+                    result: CCXTMarketData | None = future.result()
                     results[ccxt_id] = result is not None
                     if result:
                         logger.debug(f"✅ Pre-loaded {ccxt_id} markets")
@@ -113,7 +116,7 @@ class CCXTService:
         logger.info(f"✅ Pre-loaded {success_count}/{len(to_load)} CCXT exchanges")
         return results
 
-    def get_ccxt_exchange(self, venue: str) -> Optional[ccxt.Exchange]:
+    def get_ccxt_exchange(self, venue: str) -> object | None:
         """
         Get CCXT exchange instance for a venue.
 
@@ -140,7 +143,7 @@ class CCXTService:
             }
         )
 
-    def load_markets(self, venue: str, force_refresh: bool = False) -> Optional[CCXTMarketData]:
+    def load_markets(self, venue: str, force_refresh: bool = False) -> CCXTMarketData | None:
         """
         Load markets for a venue with caching.
 
@@ -177,13 +180,14 @@ class CCXTService:
 
         try:
             # Load markets ONCE per CCXT exchange (major performance optimization)
-            markets = exchange.load_markets()
+            # CCXT has no stubs - cast to dict[str, Any] for type safety
+            markets = cast(dict[str, Any], exchange.load_markets())  # pyright: ignore[reportUnknownMemberType]
             logger.info(
                 f"⚡ Loaded {len(markets)} CCXT markets for {ccxt_exchange_id} - CACHED for all venues using this exchange"
             )
 
             # Cache the results by ccxt_exchange_id
-            ccxt_data = {
+            ccxt_data: CCXTMarketData = {
                 "exchange": exchange,
                 "markets": markets,
                 "exchange_id": ccxt_exchange_id,
@@ -206,7 +210,7 @@ class CCXTService:
         symbol_id: str,
         tardis_symbol: Optional[str] = None,
         instrument_type: Optional[str] = None,
-    ) -> list:
+    ) -> list[str]:
         """
         Build possible CCXT symbol formats for a venue.
 
@@ -221,7 +225,7 @@ class CCXTService:
         Returns:
             List of possible symbol formats to try
         """
-        possible_symbols = []
+        possible_symbols: list[str] = []
         tardis_symbol = tardis_symbol or symbol_id
         instrument_type = instrument_type or ""
 
@@ -385,7 +389,7 @@ class CCXTService:
 
         return possible_symbols
 
-    def _generate_default_ccxt_symbol(
+    def generate_default_ccxt_symbol(
         self,
         venue: str,
         base_asset: str,
@@ -472,7 +476,7 @@ class CCXTService:
         spot_only_exchanges = {"UPBIT", "COINBASE"}
         if venue.upper() in spot_only_exchanges:
             logger.debug(f"⏭️ Skipping CCXT market load for {venue} (spot-only exchange)")
-            default_symbol = self._generate_default_ccxt_symbol(
+            default_symbol = self.generate_default_ccxt_symbol(
                 venue, base_asset, quote_asset, symbol_id, instrument_type
             )
             return {
@@ -481,10 +485,10 @@ class CCXTService:
             }
 
         ccxt_data = self.load_markets(venue)
-        markets = ccxt_data.get("markets") if ccxt_data else None
+        markets: dict[str, Any] | None = ccxt_data.get("markets") if ccxt_data else None
 
         # Build possible symbol formats based on venue
-        possible_symbols = self._build_symbol_formats(
+        possible_symbols: list[str] = self._build_symbol_formats(
             venue, base_asset, quote_asset, symbol_id, tardis_symbol, instrument_type
         )
 
@@ -492,7 +496,7 @@ class CCXTService:
         if not markets:
             logger.debug(f"No CCXT markets loaded for {venue}, using default symbol format")
             # Generate default CCXT symbol based on venue conventions
-            default_symbol = self._generate_default_ccxt_symbol(
+            default_symbol = self.generate_default_ccxt_symbol(
                 venue, base_asset, quote_asset, symbol_id, instrument_type
             )
             return {
@@ -501,8 +505,8 @@ class CCXTService:
             }
 
         # Try to find market in CCXT
-        ccxt_market = None
-        matched_symbol_format = None
+        ccxt_market: dict[str, Any] | None = None
+        matched_symbol_format: str | None = None
         for symbol_format in possible_symbols:
             if symbol_format in markets:
                 ccxt_market = markets[symbol_format]
@@ -513,7 +517,7 @@ class CCXTService:
             logger.debug(f"No CCXT market found for {venue}:{symbol_id} (tried {len(possible_symbols)} formats)")
             # CRITICAL FIX: Still return ccxt_symbol even if market not found
             # Use the first reasonable format as default
-            default_symbol = self._generate_default_ccxt_symbol(
+            default_symbol = self.generate_default_ccxt_symbol(
                 venue, base_asset, quote_asset, symbol_id, instrument_type
             )
             return {
@@ -522,14 +526,14 @@ class CCXTService:
             }
 
         # Extract metadata from CCXT market
-        precision = ccxt_market.get("precision", {})
-        limits = ccxt_market.get("limits", {})
+        precision: dict[str, Any] = ccxt_market.get("precision", {}) or {}
+        limits: dict[str, Any] = ccxt_market.get("limits", {}) or {}
 
-        metadata = {}
+        metadata: CCXTMetadata = {}
 
         # CCXT symbol and exchange (CRITICAL: These were missing!)
         # Use the matched symbol format as ccxt_symbol
-        metadata["ccxt_symbol"] = matched_symbol_format
+        metadata["ccxt_symbol"] = matched_symbol_format or ""
         # Get CCXT exchange ID from venue mapping
         ccxt_exchange_id = self.venue_mapping.venue_to_ccxt.get(venue)
         if ccxt_exchange_id:
@@ -634,11 +638,12 @@ class CCXTService:
             )
 
             # Try to fetch leverage tiers for each symbol format
-            leverage_tiers = None
+            # CCXT has no stubs - cast to list[dict[str, Any]] for type safety
+            leverage_tiers: list[dict[str, Any]] | None = None
 
             for symbol_format in possible_symbols:
                 try:
-                    tiers = exchange.fetchMarketLeverageTiers(symbol_format)
+                    tiers = cast(list[dict[str, Any]], exchange.fetchMarketLeverageTiers(symbol_format))
                     if tiers:
                         leverage_tiers = tiers
                         break
@@ -676,7 +681,7 @@ class CCXTService:
                 self._leverage_tiers_cache[venue] = fallback_params
             return fallback_params
 
-    def _extract_risk_params_from_tiers(self, leverage_tiers: list) -> CCXTMetadata:
+    def _extract_risk_params_from_tiers(self, leverage_tiers: list[dict[str, Any]]) -> CCXTMetadata:
         """
         Extract risk parameters from CCXT leverage tiers structure.
 
@@ -689,7 +694,7 @@ class CCXTService:
         if not leverage_tiers or len(leverage_tiers) == 0:
             return {}
 
-        risk_params = {}
+        risk_params: CCXTMetadata = {}
 
         # Get tier 1 (first tier, typically has highest leverage)
         tier_1 = leverage_tiers[0] if leverage_tiers else None
@@ -734,7 +739,7 @@ class CCXTService:
         """
         # Exchange-specific defaults (from Context7 docs and exchange documentation)
         # Values are accurate as of 2024-2025 based on exchange specifications
-        exchange_defaults = {
+        exchange_defaults: dict[str, dict[str, str | float | None]] = {
             "BINANCE-FUTURES": {
                 "max_leverage": 125.0,
                 "max_position_size": 50000000.0,  # 50M USDT typical max for BTC/USDT
@@ -788,7 +793,7 @@ class CCXTService:
             },
         }
 
-        defaults = exchange_defaults.get(venue, {})
+        defaults: CCXTMetadata = cast(CCXTMetadata, exchange_defaults.get(venue, {}))
         if defaults:
             logger.debug(
                 f"Using fallback defaults for {venue}: max_leverage={defaults.get('max_leverage')}, "
