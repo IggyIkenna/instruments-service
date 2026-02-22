@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 import ccxt
 
 if TYPE_CHECKING:
-    from unified_config_interface import VenueMapping
+    from unified_market_interface.models.venue_config import VenueMapping
 
 logger = logging.getLogger(__name__)
 
