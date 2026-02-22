@@ -4,10 +4,11 @@ Instrument Handler
 Generates instrument definitions using direct GCS existence checks.
 No missing data report dependencies - pure force/skip logic.
 """
+# pyright: reportUnknownVariableType=false, reportUnknownMemberType=false
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TypedDict, cast
 
 from unified_cloud_services import get_date_range, parse_date
@@ -187,7 +188,7 @@ class InstrumentHandler(ModeHandler):
         total_errors = 0
         total_processing_errors = 0  # Errors from processing (not date-level failures)
         total_processing_warnings = 0  # Warnings from processing
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(UTC).date()
 
         # Set exchanges for CEFI processing (always use all exchanges - no filtering)
         # Note: --exchanges CLI arg was removed as it filtered within aggregated instruments.parquet
@@ -280,7 +281,8 @@ class InstrumentHandler(ModeHandler):
                 )
 
                 logger.info(
-                    f"📅 Processing {date.strftime('%Y-%m-%d')} ({start_combination}-{end_combination}/{total_combinations} day-venue combinations)"
+                    f"📅 Processing {date.strftime('%Y-%m-%d')} "
+                    f"({start_combination}-{end_combination}/{total_combinations} day-venue combinations)"
                 )
 
                 log_event("DATA_INGESTION_STARTED")
@@ -340,7 +342,8 @@ class InstrumentHandler(ModeHandler):
                     # Log if there were processing errors/warnings even though overall status is success
                     if processing_errors > 0 or processing_warnings > 0:
                         logger.info(
-                            f"⚠️ Processing completed with {processing_errors} errors and {processing_warnings} warnings "
+                            f"⚠️ Processing completed with {processing_errors} \
+                                errors and {processing_warnings} warnings "
                             f"for {date.strftime('%Y-%m-%d')}"
                         )
 
@@ -356,7 +359,8 @@ class InstrumentHandler(ModeHandler):
                         )
                 else:
                     logger.error(
-                        f"❌ Failed to generate instruments for {date.strftime('%Y-%m-%d')}: {result.get('message', 'Unknown error')}"
+                        f"❌ Failed to generate instruments for {date.strftime('%Y-%m-%d')}: \
+                            {result.get('message', 'Unknown error')}"
                     )
                     total_errors += 1
                     if processing_errors > 0 or processing_warnings > 0:
@@ -389,7 +393,7 @@ class InstrumentHandler(ModeHandler):
         else:
             log_event("FAILED", f"{total_errors} date-level errors, {total_processing_errors} processing errors")
 
-        result: dict[str, HandlerResultValue] = {
+        handler_result: dict[str, HandlerResultValue] = {
             "status": "success" if total_errors == 0 else "partial",
             "success": total_errors == 0,
             "instruments_generated": total_generated,
@@ -409,7 +413,7 @@ class InstrumentHandler(ModeHandler):
                 "processing_warnings": total_processing_warnings,
             },
         }
-        return result
+        return handler_result
 
     def cleanup(self):
         """Cleanup resources."""
