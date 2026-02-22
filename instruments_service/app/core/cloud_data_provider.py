@@ -8,7 +8,6 @@ Each domain has its own bucket and dataset (instruments domain).
 import logging
 import os
 from datetime import datetime
-from typing import Optional
 
 import pandas as pd
 from unified_cloud_services import CloudTarget, StandardizedDomainCloudService, get_bucket_for_category
@@ -23,7 +22,7 @@ class CloudDataProvider:
     Each domain has its own bucket and dataset (instruments domain).
     """
 
-    def __init__(self, cloud_target: Optional[CloudTarget] = None):
+    def __init__(self, cloud_target: CloudTarget | None = None):
         """
         Initialize cloud data provider.
 
@@ -53,7 +52,7 @@ class CloudDataProvider:
         )
 
     def get_instruments_from_gcs(
-        self, date: datetime, gcs_path: Optional[str] = None, category: Optional[str] = None
+        self, date: datetime, gcs_path: str | None = None, category: str | None = None
     ) -> pd.DataFrame:
         """
         Get instruments from GCS for a specific date.
@@ -76,7 +75,9 @@ class CloudDataProvider:
                 return self.get_instruments_from_category(date, category, gcs_path=gcs_path)
 
             logger.info(f"📥 Loading instruments from GCS: {gcs_path}")
-            raw = self.cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+            raw: pd.DataFrame | object = self.cloud_service.download_from_gcs(
+                gcs_path=gcs_path, format="parquet", log_errors=False
+            )
             if not isinstance(raw, pd.DataFrame):
                 return pd.DataFrame()
             df: pd.DataFrame = raw
@@ -96,9 +97,7 @@ class CloudDataProvider:
             logger.error(f"❌ Failed to load instruments from GCS: {e}")
             return pd.DataFrame()
 
-    def get_instruments_from_category(
-        self, date: datetime, category: str, gcs_path: Optional[str] = None
-    ) -> pd.DataFrame:
+    def get_instruments_from_category(self, date: datetime, category: str, gcs_path: str | None = None) -> pd.DataFrame:
         """
         Get instruments from category-specific bucket for a specific date.
 
@@ -118,7 +117,7 @@ class CloudDataProvider:
             # Detect test mode
             from instruments_service.config import instruments_config
 
-            environment = (instruments_config.environment or "development").lower()
+            environment: str = str(instruments_config.environment or "development").lower()
             is_test = environment in ["test", "testing"] or bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
             # Get bucket for category
@@ -136,10 +135,12 @@ class CloudDataProvider:
             )
 
             logger.info(f"📥 Loading {category} instruments from GCS: {category_bucket}/{gcs_path}")
-            raw = category_cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+            raw: pd.DataFrame | object = category_cloud_service.download_from_gcs(
+                gcs_path=gcs_path, format="parquet", log_errors=False
+            )
             if not isinstance(raw, pd.DataFrame):
                 return pd.DataFrame()
-            df = raw
+            df: pd.DataFrame = raw
             if df.empty:
                 logger.warning(f"⚠️ No {category} instruments found at {category_bucket}/{gcs_path}")
             else:
@@ -158,8 +159,8 @@ class CloudDataProvider:
 
     def get_instruments_from_bigquery(
         self,
-        venue: Optional[str] = None,
-        instrument_type: Optional[str] = None,
+        venue: str | None = None,
+        instrument_type: str | None = None,
         table_name: str = "instruments",
     ) -> pd.DataFrame:
         """
@@ -192,7 +193,7 @@ class CloudDataProvider:
             query += " ORDER BY instrument_key"
 
             logger.info(f"📥 Querying instruments from BigQuery: {table_name}")
-            result = self.cloud_service.query_bigquery(query=query, parameters=parameters)
+            result: pd.DataFrame = self.cloud_service.query_bigquery(query=query, parameters=parameters)
 
             logger.info(f"✅ Queried {len(result)} instruments from BigQuery")
             return result
@@ -204,8 +205,8 @@ class CloudDataProvider:
     def check_instruments_exist(
         self,
         date: datetime,
-        categories: Optional[list[str]] = None,
-        venues: Optional[list[str]] = None,
+        categories: list[str] | None = None,
+        venues: list[str] | None = None,
     ) -> bool:
         """
         Check if instruments exist for a specific date.
@@ -266,7 +267,7 @@ class CloudDataProvider:
 
         # Legacy behavior: check date-level aggregate file
         gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
-        found_categories = []
+        found_categories: list[str] = []
 
         for category in categories:
             try:

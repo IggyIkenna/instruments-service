@@ -39,6 +39,9 @@ from instruments_service.config.venue_config import (
     corporate_actions_start_date,
 )
 
+# Alias for backward compatibility (used by io/writer.py)
+get_service_config = get_config
+
 __all__ = [
     "DATABENTO_VALID_OPTIONS_SYMBOLS",
     "DATABENTO_VALID_PARENT_SYMBOLS",
@@ -58,5 +61,6 @@ __all__ = [
     "VenueMapping",
     "corporate_actions_start_date",
     "get_config",
+    "get_service_config",
     "instruments_config",
 ]

@@ -6,27 +6,18 @@ Service for generating canonical instrument definitions from exchange APIs.
 Rebuild: Feb 19, 2026 - Pull latest UCS base image with bucket configuration fix.
 """
 
+from typing import Any, cast
+
 __version__ = "0.1.0"
 
 # Use lazy imports to avoid circular dependencies
 # Import only what's needed at module level, defer heavy imports
-
-__all__ = [
-    "InstrumentProcessingService",
-    "CloudInstrumentStorage",
-    "InstrumentBatchProcessor",
-    "InstrumentDefinition",
-    "InstrumentKey",
-    "Venue",
-    "InstrumentType",
-    "VenueMapping",
-    "ExchangeInstrumentConfig",
-    "DataTypeConfig",
-    "UnifiedInstrumentConfig",
-]
+# Lazy-loaded attrs (InstrumentProcessingService, etc.) are available via __getattr__
+# Only non-lazy exports in __all__ to satisfy pyright reportUnsupportedDunderAll
+__all__: list[str] = ["__version__"]
 
 
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
     """Lazy import to avoid circular dependencies."""
     if name == "cli":
         import instruments_service.cli  # noqa: F401
@@ -54,12 +45,15 @@ def __getattr__(name):
             Venue,
         )
 
-        return {
-            "InstrumentDefinition": InstrumentDefinition,
-            "InstrumentKey": InstrumentKey,
-            "Venue": Venue,
-            "InstrumentType": InstrumentType,
-        }[name]
+        return cast(
+            Any,
+            {
+                "InstrumentDefinition": InstrumentDefinition,
+                "InstrumentKey": InstrumentKey,
+                "Venue": Venue,
+                "InstrumentType": InstrumentType,
+            }[name],
+        )
     elif name in (
         "VenueMapping",
         "ExchangeInstrumentConfig",
@@ -73,10 +67,13 @@ def __getattr__(name):
             VenueMapping,
         )
 
-        return {
-            "VenueMapping": VenueMapping,
-            "ExchangeInstrumentConfig": ExchangeInstrumentConfig,
-            "DataTypeConfig": DataTypeConfig,
-            "UnifiedInstrumentConfig": UnifiedInstrumentConfig,
-        }[name]
+        return cast(
+            Any,
+            {
+                "VenueMapping": VenueMapping,
+                "ExchangeInstrumentConfig": ExchangeInstrumentConfig,
+                "DataTypeConfig": DataTypeConfig,
+                "UnifiedInstrumentConfig": UnifiedInstrumentConfig,
+            }[name],
+        )
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -21,8 +21,9 @@ traditional corporate actions like dividends or stock splits.
 
 import logging
 import time
+from collections.abc import Callable
 from datetime import date
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -77,7 +78,7 @@ class CorporateActionsAdapter:
             self._yf = yf
         return self._yf
 
-    def _rate_limit(self, delay: Optional[float] = None):
+    def _rate_limit(self, delay: Optional[float] = None) -> None:
         """Apply rate limiting between requests."""
         delay = delay or self.rate_limit_delay
         elapsed = time.time() - self._last_request_time
@@ -97,7 +98,7 @@ class CorporateActionsAdapter:
         start_date: date,
         end_date: date,
         instrument_key: Optional[str] = None,
-    ) -> List[DividendRecord]:
+    ) -> list[DividendRecord]:
         """
         Fetch dividend history for a ticker.
 
@@ -118,14 +119,14 @@ class CorporateActionsAdapter:
         start_date: date,
         end_date: date,
         instrument_key: Optional[str] = None,
-    ) -> List[DividendRecord]:
+    ) -> list[DividendRecord]:
         """Fetch dividends using yfinance."""
         self._rate_limit()
-        dividends = []
+        dividends: list[DividendRecord] = []
 
         try:
             stock = self.yf.Ticker(ticker)
-            div_df = stock.dividends
+            div_df: pd.Series = stock.dividends
 
             if div_df is None or div_df.empty:
                 logger.debug(f"No dividends found for {ticker}")
@@ -168,7 +169,7 @@ class CorporateActionsAdapter:
         start_date: date,
         end_date: date,
         instrument_key: Optional[str] = None,
-    ) -> List[StockSplitRecord]:
+    ) -> list[StockSplitRecord]:
         """
         Fetch stock split history for a ticker.
 
@@ -182,11 +183,11 @@ class CorporateActionsAdapter:
             List of StockSplitRecord objects
         """
         self._rate_limit()
-        splits = []
+        splits: list[StockSplitRecord] = []
 
         try:
             stock = self.yf.Ticker(ticker)
-            splits_df = stock.splits
+            splits_df: pd.Series = stock.splits  # type: ignore[assignment]
 
             if splits_df is None or splits_df.empty:
                 logger.debug(f"No splits found for {ticker}")
@@ -243,7 +244,7 @@ class CorporateActionsAdapter:
         start_date: date,
         end_date: date,
         instrument_key: Optional[str] = None,
-    ) -> List[EarningsRecord]:
+    ) -> list[EarningsRecord]:
         """
         Fetch earnings history for a ticker.
 
@@ -264,21 +265,21 @@ class CorporateActionsAdapter:
         start_date: date,
         end_date: date,
         instrument_key: Optional[str] = None,
-    ) -> List[EarningsRecord]:
+    ) -> list[EarningsRecord]:
         """Fetch earnings using yfinance."""
         self._rate_limit()
-        earnings = []
+        earnings: list[EarningsRecord] = []
 
         try:
             stock = self.yf.Ticker(ticker)
 
             # Try to get earnings dates from calendar
             try:
-                calendar = stock.calendar
+                calendar: Any = stock.calendar
                 if calendar is not None and not calendar.empty:
                     # Future earnings date
                     if "Earnings Date" in calendar.index:
-                        calendar.loc["Earnings Date"]
+                        _ = calendar.loc["Earnings Date"]  # noqa: F841
                         # This is typically future dates, not historical
             except Exception as e:
                 logger.debug(f"Failed to process earnings date from calendar: {e}")
@@ -287,28 +288,28 @@ class CorporateActionsAdapter:
 
             # Get historical earnings from earnings_history or quarterly_earnings
             try:
-                earnings_df = stock.earnings_dates
+                earnings_df: pd.DataFrame = stock.earnings_dates  # type: ignore[assignment]
 
                 if earnings_df is not None and not earnings_df.empty:
                     for idx, row in earnings_df.iterrows():
                         try:
                             # idx is the earnings date (datetime)
-                            earnings_date = pd.to_datetime(idx, utc=True).date()
+                            earnings_date: date = pd.to_datetime(idx, utc=True).date()
 
                             # Filter by date range
                             if earnings_date < start_date or earnings_date > end_date:
                                 continue
 
-                            reported_eps = row.get("Reported EPS", None)
-                            estimated_eps = row.get("EPS Estimate", None)
-                            surprise_pct = row.get("Surprise(%)", None)
+                            reported_eps: float | None = row.get("Reported EPS", None)
+                            estimated_eps: float | None = row.get("EPS Estimate", None)
+                            surprise_pct: float | None = row.get("Surprise(%)", None)
 
                             # Clean up NaN values
-                            if pd.isna(reported_eps):
+                            if reported_eps is not None and pd.isna(reported_eps):
                                 reported_eps = None
-                            if pd.isna(estimated_eps):
+                            if estimated_eps is not None and pd.isna(estimated_eps):
                                 estimated_eps = None
-                            if pd.isna(surprise_pct):
+                            if surprise_pct is not None and pd.isna(surprise_pct):
                                 surprise_pct = None
 
                             record = EarningsRecord(
@@ -369,11 +370,11 @@ class CorporateActionsAdapter:
 
     def fetch_batch(
         self,
-        tickers: List[str],
+        tickers: list[str],
         start_date: date,
         end_date: date,
-        progress_callback: Optional[callable] = None,
-    ) -> Dict[str, CorporateActionsBundle]:
+        progress_callback: Optional[Callable[[str, int, int], None]] = None,
+    ) -> dict[str, CorporateActionsBundle]:
         """
         Fetch corporate actions for multiple tickers.
 
@@ -411,8 +412,8 @@ class CorporateActionsAdapter:
 
     def to_dataframes(
         self,
-        bundles: Dict[str, CorporateActionsBundle],
-    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+        bundles: dict[str, CorporateActionsBundle],
+    ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
         Convert bundles to DataFrames for storage.
 
@@ -422,9 +423,9 @@ class CorporateActionsAdapter:
         Returns:
             Tuple of (dividends_df, splits_df, earnings_df)
         """
-        dividends = []
-        splits = []
-        earnings = []
+        dividends: list[dict[str, Any]] = []
+        splits: list[dict[str, Any]] = []
+        earnings: list[dict[str, Any]] = []
 
         for ticker, bundle in bundles.items():
             for div in bundle.dividends:
