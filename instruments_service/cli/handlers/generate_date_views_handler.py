@@ -35,11 +35,11 @@ Output Structure:
 
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 import pandas as pd
 
-from instruments_service.cli.base_handler import ModeHandler
+from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ class GenerateDateViewsHandler(ModeHandler):
     Phase 2 of the optimized pipeline.
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         logger.info("✅ GenerateDateViewsHandler initialized")
 
@@ -103,7 +103,7 @@ class GenerateDateViewsHandler(ModeHandler):
         date_column: str,
         action_type: str,
         output_dir: Path,
-    ) -> Dict[str, int]:
+    ) -> dict[str, int]:
         """
         Generate date-partitioned Parquet files.
 
@@ -126,7 +126,7 @@ class GenerateDateViewsHandler(ModeHandler):
         # Group by date
         date_groups = df.groupby(date_column)
 
-        date_counts = {}
+        date_counts: dict[str, int] = {}
         for day, group in date_groups:
             if pd.isna(day):
                 continue
@@ -147,11 +147,11 @@ class GenerateDateViewsHandler(ModeHandler):
 
     def run(
         self,
-        input_dir: str = None,
-        output_dir: str = None,
+        input_dir: str | None = None,
+        output_dir: str | None = None,
         upload_to_gcs: bool = False,
-        **kwargs,
-    ) -> Dict[str, Any]:
+        **kwargs: object,
+    ) -> dict[str, HandlerResultValue]:
         """
         Execute date views generation.
 
@@ -183,7 +183,7 @@ class GenerateDateViewsHandler(ModeHandler):
         logger.info(f"📂 Input: {by_ticker_dir}")
         logger.info(f"📂 Output: {by_date_dir}")
 
-        stats = {
+        stats: dict[str, Any] = {
             "action_types": {},
         }
 

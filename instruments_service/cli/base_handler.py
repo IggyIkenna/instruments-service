@@ -7,7 +7,6 @@ Provides the common interface contract that all handlers must implement.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Dict
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +32,7 @@ class ModeHandler(ABC):
                 return {"status": "success"}
     """
 
-    def __init__(self, config: Dict[str, object]) -> None:
+    def __init__(self, config: dict[str, object]) -> None:
         """
         Initialize the handler with configuration.
 
@@ -66,7 +65,7 @@ class ModeHandler(ABC):
             raise ValueError("Configuration must be a dictionary")
 
     @abstractmethod
-    def run(self, **kwargs: object) -> Dict[str, HandlerResultValue]:
+    def run(self, **kwargs: object) -> dict[str, HandlerResultValue]:
         """
         Execute the specific mode logic.
 

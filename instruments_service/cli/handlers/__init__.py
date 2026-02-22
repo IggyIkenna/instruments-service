@@ -8,7 +8,7 @@ Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any
 
 from instruments_service.cli.base_handler import ModeHandler
 
@@ -22,16 +22,16 @@ from .instrument_handler import InstrumentHandler
 logger = logging.getLogger(__name__)
 
 # Import handlers (lazy to avoid circular imports)
-_handler_registry = {}
+_handler_registry: dict[str, type[ModeHandler]] = {}
 
 
-def register_handler(mode: str, handler_class):
+def register_handler(mode: str, handler_class: type[ModeHandler]) -> None:
     """Register a handler for a specific mode."""
     _handler_registry[mode] = handler_class
     logger.debug(f"Registered handler for mode: {mode}")
 
 
-def get_handler_for_mode(mode: str, config: Dict[str, Any]) -> ModeHandler:
+def get_handler_for_mode(mode: str, config: dict[str, Any]) -> ModeHandler:
     """
     Get handler instance for a specific mode.
 

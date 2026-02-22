@@ -19,11 +19,11 @@ Output Structure:
 import logging
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional, cast
 
 import pandas as pd
 
-from instruments_service.cli.base_handler import ModeHandler
+from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.config import instruments_config
 from instruments_service.corporate_actions.adapter import CorporateActionsAdapter
 
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # Update these if the schema changes - they're used for filtering and
 # ensuring consistent output structure (including empty files).
 
-DIVIDENDS_SCHEMA: List[str] = [
+DIVIDENDS_SCHEMA: list[str] = [
     "ticker",
     "ex_date",
     "pay_date",
@@ -50,7 +50,7 @@ DIVIDENDS_SCHEMA: List[str] = [
     "instrument_key",
 ]
 
-SPLITS_SCHEMA: List[str] = [
+SPLITS_SCHEMA: list[str] = [
     "ticker",
     "effective_date",
     "ratio",
@@ -63,7 +63,7 @@ SPLITS_SCHEMA: List[str] = [
     "instrument_key",
 ]
 
-EARNINGS_SCHEMA: List[str] = [
+EARNINGS_SCHEMA: list[str] = [
     "ticker",
     "earnings_date",
     "earnings_time",
@@ -107,10 +107,10 @@ class CorporateActionsHandler(ModeHandler):
     Results are saved to Parquet files locally and optionally to GCS.
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
 
-        self.project_id = config.get("project_id") or instruments_config.gcp_project_id
+        self.project_id = config.get("project_id") or str(getattr(instruments_config, "gcp_project_id", "") or "")
 
         # Initialize adapter (yfinance only - free, no API key needed)
         self.adapter = CorporateActionsAdapter()
@@ -121,7 +121,7 @@ class CorporateActionsHandler(ModeHandler):
 
         logger.info("✅ CorporateActionsHandler initialized (TRADFI only)")
 
-    def _get_tickers_from_gcs(self, reference_date: Optional[date] = None) -> List[str]:
+    def _get_tickers_from_gcs(self, reference_date: Optional[date] = None) -> list[str]:
         """
         Fetch equity tickers from GCS instruments store.
 
@@ -147,17 +147,19 @@ class CorporateActionsHandler(ModeHandler):
             )
             service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
 
-            def try_load_tickers(gcs_path: str) -> List[str]:
+            def try_load_tickers(gcs_path: str) -> list[str]:
                 """Try to load tickers from a specific GCS path."""
                 try:
-                    df = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    df: pd.DataFrame = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
                     if df.empty:
                         return []
 
                     # Filter for equities (NYSE, NASDAQ)
-                    equities = df[df["venue"].isin(["NYSE", "NASDAQ"])]
-                    tickers = equities["exchange_raw_symbol"].dropna().unique().tolist()
-                    tickers = [t.strip() for t in tickers if t and t.strip()]
+                    venue_series: pd.Series = df["venue"]
+                    equities: pd.DataFrame = df[venue_series.isin(["NYSE", "NASDAQ"])]
+                    symbol_series: pd.Series = equities["exchange_raw_symbol"].dropna().unique()
+                    tickers_raw: list[str] = cast(list[str], symbol_series.tolist())
+                    tickers = [str(t).strip() for t in tickers_raw if t and str(t).strip()]
                     return sorted(tickers)
                 except Exception:
                     return []
@@ -198,7 +200,7 @@ class CorporateActionsHandler(ModeHandler):
             logger.error(f"❌ Failed to load tickers from GCS: {e}")
             return []
 
-    def _get_tickers(self, tickers: Optional[List[str]] = None, reference_date: Optional[date] = None) -> List[str]:
+    def _get_tickers(self, tickers: Optional[list[str]] = None, reference_date: Optional[date] = None) -> list[str]:
         """
         Get list of tickers to process.
 
@@ -229,11 +231,11 @@ class CorporateActionsHandler(ModeHandler):
         self,
         start_date: str,
         end_date: str,
-        tickers: Optional[List[str]] = None,
+        tickers: Optional[list[str]] = None,
         output_format: str = "parquet",
         upload_to_gcs: bool = False,
-        **kwargs,
-    ) -> Dict[str, Any]:
+        **kwargs: object,
+    ) -> dict[str, HandlerResultValue]:
         """
         Execute corporate actions fetch.
 
@@ -258,18 +260,21 @@ class CorporateActionsHandler(ModeHandler):
         logger.info(f"📅 Date range: {start} to {end}")
 
         # Fetch data
-        bundles = self.adapter.fetch_batch(
-            tickers=ticker_list,
-            start_date=start,
-            end_date=end,
-            progress_callback=self._progress_callback,
+        bundles: dict[str, Any] = cast(
+            dict[str, Any],
+            self.adapter.fetch_batch(
+                tickers=ticker_list,
+                start_date=start,
+                end_date=end,
+                progress_callback=self._progress_callback,
+            ),
         )
 
         # Convert to DataFrames
         dividends_df, splits_df, earnings_df = self.adapter.to_dataframes(bundles)
 
         # Calculate statistics
-        stats = {
+        stats: dict[str, Any] = {
             "tickers_requested": len(ticker_list),
             "tickers_fetched": len(bundles),
             "dividends_count": len(dividends_df),
@@ -313,7 +318,7 @@ class CorporateActionsHandler(ModeHandler):
         start_date: date,
         end_date: date,
         output_format: str,
-    ) -> List[Dict[str, str]]:
+    ) -> list[dict[str, str]]:
         """
         Save results to local files partitioned by day.
 
@@ -323,10 +328,10 @@ class CorporateActionsHandler(ModeHandler):
         Returns:
             List of dicts with action_type, date, and path for each file created.
         """
-        output_files: List[Dict[str, str]] = []
+        output_files: list[dict[str, str]] = []
 
         # Generate date range
-        date_range = pd.date_range(start=start_date, end=end_date, freq="D")
+        date_range: pd.DatetimeIndex = pd.date_range(start=start_date, end=end_date, freq="D")
 
         # Normalize date columns for filtering
         dividends_df = self._normalize_date_column(dividends_df, "ex_date")
@@ -335,8 +340,8 @@ class CorporateActionsHandler(ModeHandler):
 
         days_with_data = 0
         for day in date_range:
-            day_date = day.date()
-            day_str = day_date.isoformat()
+            day_date: date = day.date()
+            day_str: str = day_date.isoformat()
 
             # Filter data for this specific day
             day_dividends = self._filter_by_date(dividends_df, "ex_date", day_date, DIVIDENDS_SCHEMA)
@@ -380,7 +385,7 @@ class CorporateActionsHandler(ModeHandler):
         df: pd.DataFrame,
         column: str,
         target_date: date,
-        schema: List[str],
+        schema: list[str],
     ) -> pd.DataFrame:
         """
         Filter dataframe by date, preserving schema for output.
@@ -397,13 +402,13 @@ class CorporateActionsHandler(ModeHandler):
         if df.empty or column not in df.columns:
             return pd.DataFrame(columns=schema)
 
-        filtered = df[df[column] == target_date]
+        filtered: pd.DataFrame = df[df[column] == target_date]
         if filtered.empty:
             return pd.DataFrame(columns=schema)
 
         # Select only schema columns that exist in the dataframe
-        available_cols = [c for c in schema if c in filtered.columns]
-        return filtered[available_cols]
+        available_cols: list[str] = [c for c in schema if c in filtered.columns]
+        return filtered[available_cols].copy()
 
     def _write_day_files(
         self,
@@ -413,13 +418,13 @@ class CorporateActionsHandler(ModeHandler):
         dividends_df: pd.DataFrame,
         splits_df: pd.DataFrame,
         earnings_df: pd.DataFrame,
-    ) -> List[Dict[str, str]]:
+    ) -> list[dict[str, str]]:
         """
         Write all corporate actions files for a specific day.
 
         Only writes files for action types that have data.
         """
-        output_files: List[Dict[str, str]] = []
+        output_files: list[dict[str, str]] = []
         suffix = "parquet" if output_format == "parquet" else "csv"
 
         # Write dividends if present
@@ -454,7 +459,7 @@ class CorporateActionsHandler(ModeHandler):
 
         return output_files
 
-    def _upload_to_gcs(self, output_files: List[Dict[str, str]]) -> Dict[str, str]:
+    def _upload_to_gcs(self, output_files: list[dict[str, str]]) -> dict[str, str]:
         """
         Upload corporate actions files to GCS TRADFI bucket.
 
@@ -466,7 +471,7 @@ class CorporateActionsHandler(ModeHandler):
         Returns:
             Dict mapping "{action_type}:{date}" to full GCS path
         """
-        gcs_paths: Dict[str, str] = {}
+        gcs_paths: dict[str, str] = {}
 
         if not output_files:
             logger.info("📭 No files to upload to GCS")
