@@ -54,7 +54,7 @@ class InstrumentBatchProcessor:
 
         return start_date, end_date
 
-    def estimate_memory_requirements(self, num_instruments: int, date_range_days: int) -> dict[str, Any]:
+    def estimate_memory_requirements(self, num_instruments: int, date_range_days: int) -> dict[str, int | float]:
         """
         Estimate memory requirements for batch processing.
 
@@ -70,7 +70,7 @@ class InstrumentBatchProcessor:
         estimated_bytes = num_instruments * bytes_per_instrument
         estimated_mb = estimated_bytes / (1024 * 1024)
 
-        estimate = {
+        estimate: dict[str, int | float] = {
             "num_instruments": num_instruments,
             "date_range_days": date_range_days,
             "estimated_bytes": estimated_bytes,
@@ -99,7 +99,7 @@ class InstrumentBatchProcessor:
             list of datetime objects for each period
         """
         start_date, end_date = self.calculate_date_range(target_date, lookback_days)
-        periods = generate_date_range(start_date, end_date)
+        periods: list[datetime] = generate_date_range(start_date, end_date)
         logger.info(f"Generated {len(periods)} periods for processing")
         return periods
 
@@ -121,6 +121,6 @@ class InstrumentBatchProcessor:
         if batch_size is None:
             batch_size = self.max_batch_size
 
-        batches = split_into_batches(instruments, batch_size)
+        batches: list[list[dict[str, Any]]] = split_into_batches(instruments, batch_size)
         logger.info(f"Split {len(instruments)} instruments into {len(batches)} batches (batch size: {batch_size})")
         return batches

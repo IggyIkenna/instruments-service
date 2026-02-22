@@ -7,7 +7,7 @@ These are reference data tied to equity instruments for price normalization.
 
 from datetime import date, datetime, timezone
 from enum import Enum
-from typing import List, Optional
+from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -58,7 +58,7 @@ class DividendRecord(BaseModel):
 
     @field_validator("ticker")
     @classmethod
-    def validate_ticker(cls, v):
+    def validate_ticker(cls, v: str) -> str:
         """Ensure ticker is uppercase and non-empty."""
         if not v or not v.strip():
             raise ValueError("Ticker cannot be empty")
@@ -66,7 +66,7 @@ class DividendRecord(BaseModel):
 
     @field_validator("amount", mode="before")
     @classmethod
-    def validate_amount(cls, v):
+    def validate_amount(cls, v: object) -> float:
         """Handle NaN and None values."""
         import math
 
@@ -74,7 +74,7 @@ class DividendRecord(BaseModel):
             return 0.0
         return float(v)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, str | float | None]:
         """Convert to dictionary for DataFrame/Parquet storage."""
         return {
             "ticker": self.ticker,
@@ -120,7 +120,7 @@ class StockSplitRecord(BaseModel):
 
     @field_validator("ticker")
     @classmethod
-    def validate_ticker(cls, v):
+    def validate_ticker(cls, v: str) -> str:
         """Ensure ticker is uppercase and non-empty."""
         if not v or not v.strip():
             raise ValueError("Ticker cannot be empty")
@@ -128,7 +128,7 @@ class StockSplitRecord(BaseModel):
 
     @field_validator("ratio", mode="before")
     @classmethod
-    def validate_ratio(cls, v):
+    def validate_ratio(cls, v: str | float) -> float:
         """Handle string ratios like '4:1'."""
         if isinstance(v, str):
             if ":" in v:
@@ -152,7 +152,7 @@ class StockSplitRecord(BaseModel):
         """
         return 1.0 / self.ratio
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, str | float | int | bool | None]:
         """Convert to dictionary for DataFrame/Parquet storage."""
         return {
             "ticker": self.ticker,
@@ -204,7 +204,7 @@ class EarningsRecord(BaseModel):
 
     @field_validator("ticker")
     @classmethod
-    def validate_ticker(cls, v):
+    def validate_ticker(cls, v: str) -> str:
         """Ensure ticker is uppercase and non-empty."""
         if not v or not v.strip():
             raise ValueError("Ticker cannot be empty")
@@ -212,7 +212,7 @@ class EarningsRecord(BaseModel):
 
     @field_validator("earnings_time")
     @classmethod
-    def validate_earnings_time(cls, v):
+    def validate_earnings_time(cls, v: str | None) -> str | None:
         """Validate earnings time format."""
         if v is None:
             return None
@@ -222,7 +222,7 @@ class EarningsRecord(BaseModel):
             return None  # Return None for unknown formats
         return v
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, str | float | int | None]:
         """Convert to dictionary for DataFrame/Parquet storage."""
         return {
             "ticker": self.ticker,
@@ -249,9 +249,9 @@ class CorporateActionsBundle(BaseModel):
     """
 
     ticker: str = Field(..., description="Stock ticker symbol")
-    dividends: List[DividendRecord] = Field(default_factory=list)
-    splits: List[StockSplitRecord] = Field(default_factory=list)
-    earnings: List[EarningsRecord] = Field(default_factory=list)
+    dividends: list[DividendRecord] = Field(default_factory=list, description="Dividend records")
+    splits: list[StockSplitRecord] = Field(default_factory=list, description="Stock split records")
+    earnings: list[EarningsRecord] = Field(default_factory=list, description="Earnings records")
     start_date: date = Field(..., description="Start of data range")
     end_date: date = Field(..., description="End of data range")
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

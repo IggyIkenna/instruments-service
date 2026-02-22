@@ -4,7 +4,6 @@ Instrument Handler
 Generates instrument definitions using direct GCS existence checks.
 No missing data report dependencies - pure force/skip logic.
 """
-# pyright: reportUnknownVariableType=false, reportUnknownMemberType=false
 
 import asyncio
 import logging
@@ -20,7 +19,7 @@ from instruments_service.app.core.instruments_service import InstrumentsService
 from instruments_service.app.core.selective_validation import validate_required_api_keys
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.config import get_config
-from instruments_service.events import log_event  # type: ignore[reportUnknownMemberType]
+from instruments_service.events import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +56,7 @@ class InstrumentHandler(ModeHandler):
     """Generate instruments with force mode and direct GCS checks only."""
 
     def __init__(self, config: InstrumentHandlerConfig) -> None:
-        super().__init__(config)  # type: ignore[arg-type]
+        super().__init__(cast(dict[str, object], config))
 
         # Initialize services directly (no ServiceContainer)
         project_id = config.get("project_id") or get_config().gcp_project_id
@@ -68,7 +67,7 @@ class InstrumentHandler(ModeHandler):
             "enable_ccxt_integration": True,
             "enable_metadata_caching": True,
         }
-        self.instruments_service = InstrumentsService(service_config)  # type: ignore[arg-type]
+        self.instruments_service = InstrumentsService(cast(dict[str, object], service_config))
 
         # Initialize cloud storage (for CLI-specific operations)
         self.cloud_storage = CloudInstrumentStorage()
