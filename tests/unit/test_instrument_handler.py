@@ -118,7 +118,7 @@ class TestInstrumentHandler:
             "_execute_instrument_generation",
             return_value={"status": "success"},
         ) as mock_execute:
-            result = handler.run("2024-01-01", "2024-01-01", force=False)
+            result = handler.run(start_date="2024-01-01", end_date="2024-01-01", force=False)
             mock_execute.assert_called_once()
             assert result["status"] == "success"
 

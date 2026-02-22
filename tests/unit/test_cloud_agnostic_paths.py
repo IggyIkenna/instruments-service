@@ -65,16 +65,14 @@ class TestCloudAgnosticPaths:
                 return_value="CEFI",
             ),
             patch(
-                "instruments_service.app.core.cloud_instrument_storage.get_bucket_for_category",
-                return_value=f"instruments-store-cefi-{mock_cloud_target.project_id}",
+                "instruments_service.app.core.cloud_instrument_storage.instruments_config",
+                Mock(
+                    get_bucket_for_category=Mock(return_value=f"instruments-store-cefi-{mock_cloud_target.project_id}")
+                ),
             ),
             patch(
                 "instruments_service.app.core.cloud_instrument_storage.create_sampling_service",
                 return_value=Mock(),
-            ),
-            patch(
-                "unified_cloud_services.SchemaValidator",
-                return_value=Mock(validate_dataframe_schema=Mock(return_value=Mock(valid=True, errors=[]))),
             ),
             patch(
                 "instruments_service.app.core.cloud_instrument_storage.ParquetSchemaEnforcer",
@@ -112,7 +110,7 @@ class TestCloudAgnosticPaths:
 
             # Verify path format uses day={date}
             for upload in uploads:
-                gcs_path = upload.get("gcs_path", "")
+                gcs_path = upload.get("gcs_path") or ""
                 assert "day=" in gcs_path, f"Path should use day= format: {gcs_path}"
                 assert "day-2024-01-15" not in gcs_path, f"Path should not use day- format: {gcs_path}"
                 assert "day=2024-01-15" in gcs_path, f"Path should contain day=2024-01-15: {gcs_path}"
@@ -286,16 +284,14 @@ class TestCloudAgnosticPaths:
                 return_value="CEFI",
             ),
             patch(
-                "instruments_service.app.core.cloud_instrument_storage.get_bucket_for_category",
-                return_value=f"instruments-store-cefi-{mock_cloud_target.project_id}",
+                "instruments_service.app.core.cloud_instrument_storage.instruments_config",
+                Mock(
+                    get_bucket_for_category=Mock(return_value=f"instruments-store-cefi-{mock_cloud_target.project_id}")
+                ),
             ),
             patch(
                 "instruments_service.app.core.cloud_instrument_storage.create_sampling_service",
                 return_value=Mock(),
-            ),
-            patch(
-                "unified_cloud_services.SchemaValidator",
-                return_value=Mock(validate_dataframe_schema=Mock(return_value=Mock(valid=True, errors=[]))),
             ),
             patch(
                 "instruments_service.app.core.cloud_instrument_storage.ParquetSchemaEnforcer",
@@ -333,7 +329,7 @@ class TestCloudAgnosticPaths:
 
             # Verify venue path format uses venue={venue} not venue-{venue}
             for upload in uploads:
-                gcs_path = upload.get("gcs_path", "")
+                gcs_path = upload.get("gcs_path") or ""
                 if "venue" in gcs_path:
                     assert "venue=" in gcs_path, f"Path should use venue= format for BigQuery partitioning: {gcs_path}"
                     assert "venue-TEST-VENUE" not in gcs_path, f"Path should not use venue- format: {gcs_path}"

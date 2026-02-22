@@ -1,5 +1,7 @@
 # instruments-service Development Rules
 
+**Repository Context**: This is one of 30+ independent repositories in a multi-repo workspace (not a monorepo).
+
 This is instruments-service: canonical instrument definitions for CeFi, TradFi, and DeFi across all venues.
 
 ## Codex References
@@ -12,7 +14,15 @@ This service follows unified-trading-codex principles:
 
 ## Workspace Rules
 
-Inherits all rules from workspace `.cursorrules`: quality gates, quickmerge, config standards, cloud-agnostic design, event logging.
+Inherits all rules from workspace `.cursorrules`: quality gates, quickmerge (with Cursor Team Kit for CI/reviews), config standards, cloud-agnostic design, event logging, parallel agent execution, rule amnesia detection.
+
+**⚠️ RUNTIME VERIFICATION (P0 BLOCKING GATE):** NEVER claim "done" without actual runtime verification. For backend: must start service, wait 8-10s, check for import/startup errors, verify service starts cleanly. See `.cursor/rules/runtime-verification-required.mdc`.
+
+**Parallel Agents**: For independent tasks (different services, non-overlapping files), automatically launch 2-4 parallel agents. See `.cursor/rules/parallel-agent-execution.mdc`.
+
+**Rule Amnesia Detection**: If agent uses `os.getenv()`, `pip install`, `git push main`, or suggests skipping tests → start fresh session. See `.cursor/rules/rule-amnesia-detection.mdc`.
+
+**Cursor Team Kit**: Use `/deslop` before committing. **Agent automatically starts ci-watcher after quickmerge** (no user prompt needed).
 
 ## Python and Package Manager
 
@@ -73,3 +83,50 @@ Append "use context7" when working with:
 - tests/unit/test_event_logging.py MUST exist.
 - Use synthetic fixtures for venue adapters; mock external APIs.
 - validate_timestamp_date_alignment() before every GCS write.
+
+---
+
+## SSOT Alignment Validation
+
+**CRITICAL**: This service's patterns must stay aligned with:
+- UTD v2 configs (`unified-trading-deployment-v2/configs/`)
+- Codex standards (`unified-trading-codex/`)
+- Epics (`unified-trading-codex/11-project-management/epics/`)
+
+### Before Committing Changes That Affect:
+
+- Sharding dimensions or compute resources
+- Data dependencies (upstream/downstream services)
+- MVP scope or data coverage
+- Service metadata or deployment topology
+- Configuration patterns or event logging
+
+**Run alignment validation**:
+
+```bash
+cd unified-trading-codex
+python scripts/validate-alignment.py --check-drift
+# Exit code 0 = aligned, 1 = drift detected
+```
+
+If drift detected, update related sources:
+
+1. **Sharding changes** → Update:
+   - `unified-trading-deployment-v2/configs/sharding.{service}.yaml`
+   - `unified-trading-codex/04-architecture/batch/per-service/{service}.md`
+   - This `.cursorrules` file
+
+2. **Data dependency changes** → Update:
+   - `unified-trading-deployment-v2/configs/dependencies.yaml`
+   - `unified-trading-codex/02-data/batch/per-service/{service}.md`
+   - Service-registry.yaml upstream_dependencies
+
+3. **MVP scope changes** → Update:
+   - `unified-trading-codex/11-project-management/mvp-universe.yaml`
+   - Epic specifications if applicable
+
+### SSOT Reference
+
+See: `.cursor/rules/ssot-alignment-enforcement.mdc` for complete alignment rules.
+
+**Last alignment validation**: Run `validate-alignment.py --check-drift` before every commit.

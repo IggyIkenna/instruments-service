@@ -71,9 +71,7 @@ import logging
 from typing import Optional
 
 import pytest
-from google.cloud import storage
-from google.oauth2 import service_account
-from unified_cloud_services import CloudTarget, get_secret_with_fallback
+from unified_cloud_services import CloudTarget, get_secret_with_fallback, get_storage_client
 
 from instruments_service.config import instruments_config
 
@@ -170,9 +168,11 @@ def ensure_test_bucket_exists(
         True if bucket exists and is accessible, False otherwise
     """
     try:
-        # Load credentials
-        credentials = service_account.Credentials.from_service_account_file(credentials_file)
-        storage_client = storage.Client(project=project_id, credentials=credentials)
+        # Set credentials for unified-cloud-services
+        import os
+
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_file
+        storage_client = get_storage_client(project_id=project_id)
 
         # Check if bucket exists
         bucket = storage_client.bucket(bucket_name)

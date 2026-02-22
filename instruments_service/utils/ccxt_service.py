@@ -13,11 +13,19 @@ Used by:
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import ccxt
 
+if TYPE_CHECKING:
+    from unified_config_interface import VenueMapping
+
 logger = logging.getLogger(__name__)
+
+# CCXT market data has dynamic structure - use object for nested values
+CCXTMarketData = Dict[str, object]
+# Metadata and leverage limits from CCXT (str, float values)
+CCXTMetadata = Dict[str, str | float]
 
 
 class CCXTService:
@@ -30,7 +38,7 @@ class CCXTService:
     - Metadata extraction (tick_size, min_size, contract_size)
     """
 
-    def __init__(self, venue_mapping: Any, cache_ttl_hours: int = 4):
+    def __init__(self, venue_mapping: "VenueMapping", cache_ttl_hours: int = 4):
         """
         Initialize CCXT service.
 
@@ -42,11 +50,11 @@ class CCXTService:
         self.cache_ttl_hours = cache_ttl_hours
 
         # Cache markets per venue
-        self._markets_cache: Dict[str, Dict[str, Any]] = {}
+        self._markets_cache: Dict[str, Dict[str, object]] = {}
         self._cache_timestamps: Dict[str, datetime] = {}
 
         # Cache leverage tiers per venue (to avoid repeated API calls)
-        self._leverage_tiers_cache: Dict[str, Dict[str, Any]] = {}
+        self._leverage_tiers_cache: Dict[str, Dict[str, object]] = {}
 
         logger.info(f"✅ CCXTService initialized (cache TTL: {cache_ttl_hours}h)")
 
@@ -132,7 +140,7 @@ class CCXTService:
             }
         )
 
-    def load_markets(self, venue: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
+    def load_markets(self, venue: str, force_refresh: bool = False) -> Optional[CCXTMarketData]:
         """
         Load markets for a venue with caching.
 
@@ -444,7 +452,7 @@ class CCXTService:
         symbol_id: str,
         tardis_symbol: Optional[str] = None,
         instrument_type: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> CCXTMetadata:
         """
         Get CCXT metadata (tick_size, min_size, contract_size) for an instrument.
 
@@ -469,7 +477,7 @@ class CCXTService:
             )
             return {
                 "ccxt_symbol": default_symbol,
-                "ccxt_exchange": self.venue_mapping.venue_to_ccxt.get(venue, ""),
+                "ccxt_exchange": self.venue_mapping.venue_to_ccxt.get(venue) or "",
             }
 
         ccxt_data = self.load_markets(venue)
@@ -489,7 +497,7 @@ class CCXTService:
             )
             return {
                 "ccxt_symbol": default_symbol,
-                "ccxt_exchange": self.venue_mapping.venue_to_ccxt.get(venue, ""),
+                "ccxt_exchange": self.venue_mapping.venue_to_ccxt.get(venue) or "",
             }
 
         # Try to find market in CCXT
@@ -510,7 +518,7 @@ class CCXTService:
             )
             return {
                 "ccxt_symbol": default_symbol,
-                "ccxt_exchange": self.venue_mapping.venue_to_ccxt.get(venue, ""),
+                "ccxt_exchange": self.venue_mapping.venue_to_ccxt.get(venue) or "",
             }
 
         # Extract metadata from CCXT market
@@ -562,7 +570,7 @@ class CCXTService:
         symbol_id: str,
         tardis_symbol: Optional[str] = None,
         instrument_type: Optional[str] = None,
-    ) -> Dict[str, Any]:
+    ) -> CCXTMetadata:
         """
         Get leverage limits and risk parameters from CCXT leverage tiers.
 
@@ -668,7 +676,7 @@ class CCXTService:
                 self._leverage_tiers_cache[venue] = fallback_params
             return fallback_params
 
-    def _extract_risk_params_from_tiers(self, leverage_tiers: list) -> Dict[str, Any]:
+    def _extract_risk_params_from_tiers(self, leverage_tiers: list) -> CCXTMetadata:
         """
         Extract risk parameters from CCXT leverage tiers structure.
 
@@ -711,7 +719,7 @@ class CCXTService:
 
         return risk_params
 
-    def _get_leverage_limits_fallback(self, venue: str) -> Dict[str, Any]:
+    def _get_leverage_limits_fallback(self, venue: str) -> CCXTMetadata:
         """
         Fallback method to get exchange-specific default leverage limits.
 
