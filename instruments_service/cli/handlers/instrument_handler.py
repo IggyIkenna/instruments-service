@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import TypedDict, cast
 
 from unified_cloud_services import get_date_range, parse_date
-from unified_config_interface import VenueMapping
+from unified_market_interface.models.venue_config import VenueMapping
 
 from instruments_service.app.core.cloud_data_provider import CloudDataProvider
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
