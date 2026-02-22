@@ -20,12 +20,11 @@ Validation Flow:
 3. Parquet file creation with implicit schema (column names + pandas dtypes)
 """
 
-from typing import Dict, List, Optional
 
 # Parquet Schema Definition
 # Maps to pandas DataFrame columns when stored to GCS
 
-INSTRUMENTS_PARQUET_SCHEMA: List[Dict[str, str]] = [
+INSTRUMENTS_PARQUET_SCHEMA: list[dict[str, str | bool]] = [
     # ============================================================================
     # REQUIRED CORE FIELDS
     # ============================================================================
@@ -474,7 +473,7 @@ INSTRUMENTS_PARQUET_SCHEMA: List[Dict[str, str]] = [
 ]
 
 # Schema metadata
-SCHEMA_METADATA = {
+SCHEMA_METADATA: dict[str, str | list[str]] = {
     "version": "1.0",
     "last_updated": "2025-01-15",
     "source_model": "InstrumentDefinition (models.py)",
@@ -492,25 +491,25 @@ SCHEMA_METADATA = {
 }
 
 
-def get_required_columns() -> List[str]:
+def get_required_columns() -> list[str]:
     """Get list of required column names."""
-    return [field["name"] for field in INSTRUMENTS_PARQUET_SCHEMA if field.get("required", False)]
+    return [col["name"] for col in INSTRUMENTS_PARQUET_SCHEMA if col.get("required", False)]
 
 
-def get_optional_columns() -> List[str]:
+def get_optional_columns() -> list[str]:
     """Get list of optional column names."""
-    return [field["name"] for field in INSTRUMENTS_PARQUET_SCHEMA if not field.get("required", False)]
+    return [col["name"] for col in INSTRUMENTS_PARQUET_SCHEMA if not col.get("required", False)]
 
 
-def get_column_info(column_name: str) -> Optional[Dict[str, str]]:
+def get_column_info(column_name: str) -> dict[str, str | bool] | None:
     """Get schema information for a specific column."""
-    for field in INSTRUMENTS_PARQUET_SCHEMA:
-        if field["name"] == column_name:
-            return field
+    for col in INSTRUMENTS_PARQUET_SCHEMA:
+        if col["name"] == column_name:
+            return col
     return None
 
 
-def validate_schema_compliance(df_columns: List[str]) -> tuple[bool, List[str]]:
+def validate_schema_compliance(df_columns: list[str]) -> tuple[bool, list[str]]:
     """
     Validate that DataFrame columns match expected schema.
 
@@ -529,7 +528,7 @@ def validate_schema_compliance(df_columns: List[str]) -> tuple[bool, List[str]]:
     return is_valid, missing_required
 
 
-def get_schema_summary() -> Dict:
+def get_schema_summary() -> dict[str, str | int | list[str]]:
     """Get summary of schema structure."""
     return {
         "total_fields": len(INSTRUMENTS_PARQUET_SCHEMA),

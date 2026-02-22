@@ -11,7 +11,7 @@ This file contains TradFiInstrument dataclass for static TradFi instrument confi
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Optional, Tuple
 
 # Import from unified-cloud-services (required dependency)
 from instruments_service.config.instrument_definitions import (
@@ -156,10 +156,10 @@ NASDAQ_TICKERS = [
 # ============================================================================
 
 # Caches for loaded data (for backward compatibility)
-_sp500_tickers_cache: Optional[List[str]] = None
-_nasdaq_tickers_cache: Optional[List[str]] = None
-_tradfi_instruments_cache: Optional[List[Dict]] = None
-_exchange_code_to_name_cache: Optional[Dict[str, str]] = None
+_sp500_tickers_cache: Optional[list[str]] = None
+_nasdaq_tickers_cache: Optional[list[str]] = None
+_tradfi_instruments_cache: Optional[list[dict[str, str | None]]] = None
+_exchange_code_to_name_cache: Optional[dict[str, str]] = None
 
 
 def _get_data_dir() -> Path:
@@ -189,7 +189,7 @@ def _get_data_dir() -> Path:
 # ============================================================================
 # Maps canonical underlying -> (databento_parent_symbol, dataset)
 # Only symbols in this map are valid for parent symbology downloads
-DATABENTO_VALID_PARENT_SYMBOLS: Dict[str, Tuple[str, str]] = {
+DATABENTO_VALID_PARENT_SYMBOLS: dict[str, tuple[str, str]] = {
     # CME Index Futures
     "ES": ("ES.FUT", "GLBX.MDP3"),
     "SP500": ("ES.FUT", "GLBX.MDP3"),
@@ -281,7 +281,7 @@ DATABENTO_VALID_PARENT_SYMBOLS: Dict[str, Tuple[str, str]] = {
 }
 
 # Options parent symbol mapping
-DATABENTO_VALID_OPTIONS_SYMBOLS: Dict[str, Tuple[str, str]] = {
+DATABENTO_VALID_OPTIONS_SYMBOLS: dict[str, tuple[str, str]] = {
     "ES": ("ES.OPT", "GLBX.MDP3"),
     "SP500": ("ES.OPT", "GLBX.MDP3"),
     "NQ": ("NQ.OPT", "GLBX.MDP3"),
@@ -292,7 +292,7 @@ DATABENTO_VALID_OPTIONS_SYMBOLS: Dict[str, Tuple[str, str]] = {
     "GOLD": ("GC.OPT", "GLBX.MDP3"),
 }
 
-EXCHANGE_CODE_TO_NAME: Dict[str, str] = {
+EXCHANGE_CODE_TO_NAME: dict[str, str] = {
     # CME Index
     "ES": "SP500",
     "NQ": "NASDAQ100",
@@ -349,7 +349,7 @@ EXCHANGE_CODE_TO_NAME: Dict[str, str] = {
 }
 
 
-def _load_sp500_tickers() -> Tuple[List[str], List[str]]:
+def _load_sp500_tickers() -> tuple[list[str], list[str]]:
     """Load S&P 500 tickers and ETF tickers from embedded constants.
 
     Returns both regular tickers and ETF tickers (including Bitcoin ETFs like IBIT, FBTC)
@@ -382,7 +382,7 @@ def _load_sp500_tickers() -> Tuple[List[str], List[str]]:
     return _sp500_tickers_cache, _nasdaq_tickers_cache
 
 
-def _load_tradfi_instruments() -> Tuple[List[Dict], Dict[str, str]]:
+def _load_tradfi_instruments() -> tuple[list[dict[str, str | None]], dict[str, str]]:
     """Load TradFi instruments and exchange code mappings from inline config.
 
     Previously loaded from data/tradfi_instruments.json, now uses inline
@@ -435,8 +435,8 @@ class UnifiedInstrumentConfig:
     """
 
     # Cached instruments loaded from JSON (initialized lazily)
-    _instruments: Optional[List[TradFiInstrument]] = field(default=None, repr=False)
-    _exchange_code_to_name: Optional[Dict[str, str]] = field(default=None, repr=False)
+    _instruments: Optional[list[TradFiInstrument]] = field(default=None, repr=False)
+    _exchange_code_to_name: Optional[dict[str, str]] = field(default=None, repr=False)
 
     def __post_init__(self):
         """Load instruments from JSON on first access."""
@@ -469,30 +469,30 @@ class UnifiedInstrumentConfig:
         self._exchange_code_to_name = exchange_mappings
 
     @property
-    def instruments(self) -> List[TradFiInstrument]:
+    def instruments(self) -> list[TradFiInstrument]:
         """Get base TradFi instruments (futures, options, ETFs)."""
         if self._instruments is None:
             self._load_data()
         return self._instruments or []
 
     @property
-    def exchange_code_to_name(self) -> Dict[str, str]:
+    def exchange_code_to_name(self) -> dict[str, str]:
         """Get exchange code to human-readable name mapping."""
         if self._exchange_code_to_name is None:
             self._load_data()
         return self._exchange_code_to_name or {}
 
-    def get_symbols_for_venue(self, venue: str) -> List[str]:
+    def get_symbols_for_venue(self, venue: str) -> list[str]:
         """Get all symbols for a venue (e.g., 'CME', 'NASDAQ', 'ICE')"""
         all_insts = self.get_all_instruments()
         return [inst.symbol for inst in all_insts if inst.venue == venue.upper()]
 
-    def get_symbols_for_dataset(self, dataset: str) -> List[str]:
+    def get_symbols_for_dataset(self, dataset: str) -> list[str]:
         """Get all symbols for a dataset (e.g., 'GLBX.MDP3', 'DBEQ.BASIC')"""
         all_insts = self.get_all_instruments()
         return [inst.symbol for inst in all_insts if inst.dataset == dataset]
 
-    def get_symbols_by_type(self, instrument_type: str) -> List[str]:
+    def get_symbols_by_type(self, instrument_type: str) -> list[str]:
         """Get all symbols for an instrument type (e.g., 'FUTURE', 'EQUITY', 'OPTION')"""
         all_insts = self.get_all_instruments()
         return [inst.symbol for inst in all_insts if inst.instrument_type == instrument_type.upper()]
@@ -581,7 +581,7 @@ class UnifiedInstrumentConfig:
         "BF A": "BF.A",  # Brown-Forman Class A
     }
 
-    def _get_sp500_equities(self) -> List[TradFiInstrument]:
+    def _get_sp500_equities(self) -> list[TradFiInstrument]:
         """Generate S&P 500 equity/ETF instrument definitions from external data file."""
         sp500_tickers, nasdaq_tickers = _load_sp500_tickers()
 
@@ -589,7 +589,7 @@ class UnifiedInstrumentConfig:
             logger.warning("No S&P 500 tickers loaded - returning empty list")
             return []
 
-        instruments = []
+        instruments: list[TradFiInstrument] = []
         for ticker in sp500_tickers:
             # Convert space symbols to dot format for Databento
             databento_symbol = self.SPACE_TO_DOT_SYMBOLS.get(ticker, ticker)
@@ -613,11 +613,11 @@ class UnifiedInstrumentConfig:
             )
         return instruments
 
-    def get_all_instruments(self) -> List[TradFiInstrument]:
+    def get_all_instruments(self) -> list[TradFiInstrument]:
         """Get all instruments (base instruments + dynamically generated S&P 500 equities)"""
         # Combine base instruments with dynamically generated S&P 500 equities
-        all_insts = list(self.instruments)
-        sp500_equities = self._get_sp500_equities()
+        all_insts: list[TradFiInstrument] = list(self.instruments)
+        sp500_equities: list[TradFiInstrument] = self._get_sp500_equities()
         all_insts.extend(sp500_equities)
         return all_insts
 

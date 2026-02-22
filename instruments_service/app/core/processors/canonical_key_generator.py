@@ -8,7 +8,10 @@ Extracted from InstrumentProcessingService.generate_canonical_key.
 import logging
 import re
 from datetime import datetime
-from typing import Dict, Optional, Protocol
+from typing import TYPE_CHECKING, Any, Optional, Protocol
+
+if TYPE_CHECKING:
+    from unified_config_interface import DataTypeConfig, ExchangeInstrumentConfig
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +21,12 @@ class CanonicalKeyServiceProtocol(Protocol):
 
     def normalize_venue(self, exchange: str) -> str: ...
     def normalize_instrument_type(self, symbol_type: str) -> str: ...
-    def _parse_symbol_components(self, symbol_id: str, exchange: str) -> Dict[str, object]: ...
+    def _parse_symbol_components(self, symbol_id: str, exchange: str) -> dict[str, Any]: ...
     def _parse_expiry_from_symbol(self, symbol_id: str, exchange: str) -> Optional[str]: ...
-    def _parse_option_components(self, symbol_id: str, exchange: str) -> Dict[str, object]: ...
+    def _parse_option_components(self, symbol_id: str, exchange: str) -> dict[str, Any]: ...
 
-    exchange_config: object
-    data_config: object
+    exchange_config: "ExchangeInstrumentConfig"
+    data_config: "DataTypeConfig"
 
 
 def generate_canonical_key(
@@ -31,7 +34,7 @@ def generate_canonical_key(
     exchange: str,
     symbol_type: str,
     symbol_id: str,
-    symbol_info: Dict[str, object],
+    symbol_info: dict[str, Any],
 ) -> Optional[str]:
     """
     Generate canonical instrument key following INSTRUMENT_KEY.md specification.
@@ -89,7 +92,7 @@ def generate_canonical_key(
 
         settle_asset = "USDT"
         if venue == "DERIBIT":
-            deribit_quotes = service.exchange_config.valid_quote_currencies.get("DERIBIT", [])
+            deribit_quotes: list[str] = service.exchange_config.valid_quote_currencies.get("DERIBIT", [])
             if clean_quote == "USD":
                 settle_asset = clean_base
             elif clean_quote in deribit_quotes and clean_quote != "USD":
@@ -142,7 +145,7 @@ def generate_canonical_key(
 
             settle_asset = "USDT"
             if venue == "DERIBIT":
-                deribit_quotes = service.exchange_config.valid_quote_currencies.get("DERIBIT", [])
+                deribit_quotes: list[str] = service.exchange_config.valid_quote_currencies.get("DERIBIT", [])
                 if clean_quote == "USD":
                     settle_asset = clean_base
                 elif clean_quote in deribit_quotes and clean_quote != "USD":
@@ -167,21 +170,20 @@ def generate_canonical_key(
             return None
 
     elif instrument_type == "OPTION":
-        if exchange == "deribit" and any(
-            strategy in symbol_id for strategy in service.data_config.excluded_deribit_strategies
-        ):
+        excluded_strategies: list[str] = service.data_config.excluded_deribit_strategies
+        if exchange == "deribit" and any(strategy in symbol_id for strategy in excluded_strategies):
             logger.debug(f"Filtered complex Deribit strategy option: {symbol_id}")
             return None
 
         expiry_date = symbol_info.get("expiry_date")
         strike_price = symbol_info.get("strike_price")
-        option_type = (symbol_info.get("option_type") or "").upper()
+        option_type: str = str(symbol_info.get("option_type") or "").upper()
 
         if not all([expiry_date, strike_price, option_type]):
             parsed_option = service._parse_option_components(symbol_id, exchange)
             expiry_date = expiry_date or parsed_option.get("expiry_date")
             strike_price = strike_price or parsed_option.get("strike_price")
-            option_type = option_type or (parsed_option.get("option_type") or "").upper()
+            option_type = option_type or str(parsed_option.get("option_type") or "").upper()
 
         if not all([expiry_date, strike_price, option_type]):
             logger.warning(f"Missing option parameters for {symbol_id}")
@@ -200,7 +202,7 @@ def generate_canonical_key(
         clean_quote = quote_asset.upper()
         settle_asset = "USDT"
         if venue == "DERIBIT":
-            deribit_quotes = service.exchange_config.valid_quote_currencies.get("DERIBIT", [])
+            deribit_quotes: list[str] = service.exchange_config.valid_quote_currencies.get("DERIBIT", [])
             if clean_quote == "USD":
                 settle_asset = clean_base
             elif clean_quote in deribit_quotes and clean_quote != "USD":

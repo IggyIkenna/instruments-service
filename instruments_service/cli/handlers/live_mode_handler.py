@@ -21,6 +21,8 @@ from typing import Any
 # Split libraries (per codex: direct import, no fallback)
 from unified_events_interface import log_event, publish_coordination_event, setup_events
 
+from instruments_service.cli.base_handler import HandlerResultValue
+
 try:
     from unified_config_interface import load_config as load_config_interface
 
@@ -58,13 +60,13 @@ class LiveModeHandler(ModeHandler):
         # Initialize instruments service (expects dict, not Pydantic object)
         self.instruments_service = InstrumentsService(config)
 
-        # Persistence thread
-        self.persistence_queue: Queue | None = None
+        # Persistence thread (Queue holds dicts or None for stop signal)
+        self.persistence_queue: Queue[dict[str, Any] | None] | None = None
         self.persistence_thread: threading.Thread | None = None
 
         logger.debug("✅ LiveModeHandler initialized")
 
-    def run(self, **kwargs) -> dict[str, Any]:
+    def run(self, **kwargs: object) -> dict[str, HandlerResultValue]:
         """
         Run live mode handler.
 
@@ -79,7 +81,9 @@ class LiveModeHandler(ModeHandler):
         # Run async handler
         return asyncio.run(self._run_live_mode(interval, category, venues))
 
-    async def _run_live_mode(self, interval: int, categories: list[str], venues: list[str] | None) -> dict[str, Any]:
+    async def _run_live_mode(
+        self, interval: int, categories: list[str], venues: list[str] | None
+    ) -> dict[str, HandlerResultValue]:
         """
         Main live mode execution loop.
 
@@ -94,7 +98,7 @@ class LiveModeHandler(ModeHandler):
         config = get_config()
 
         # Setup events (direct import per dependency matrix)
-        project_id = getattr(config, "project_id", None) or getattr(config, "gcp_project_id", None)
+        project_id = str(getattr(config, "gcp_project_id", "") or getattr(config, "project_id", "") or "")
         setup_events(mode="live", service_name="instruments-service", project_id=project_id)
 
         log_event(
@@ -172,21 +176,20 @@ class LiveModeHandler(ModeHandler):
             if result.get("success"):
                 total_instruments = 0
 
-                # Queue for async persistence
                 for category, instruments_df in result.get("instruments_by_category", {}).items():
-                    gcs_path = self._get_live_gcs_path(timestamp)
-                    bucket_name = get_config().get_bucket_for_category(category)
-
-                    self.persistence_queue.put(
-                        {
-                            "data": instruments_df,
-                            "path": gcs_path,
-                            "bucket": bucket_name,
-                            "category": category,
-                            "timestamp": timestamp,
-                        }
-                    )
-
+                    # Queue for async persistence (null check before .put())
+                    if self.persistence_queue is not None:
+                        gcs_path = self._get_live_gcs_path(timestamp)
+                        bucket_name = get_config().get_bucket_for_category(category)
+                        self.persistence_queue.put(
+                            {
+                                "data": instruments_df,
+                                "path": gcs_path,
+                                "bucket": bucket_name,
+                                "category": category,
+                                "timestamp": timestamp,
+                            }
+                        )
                     total_instruments += len(instruments_df)
 
                 # Publish coordination event (live only)
@@ -249,8 +252,8 @@ class LiveModeHandler(ModeHandler):
                 try:
                     bucket = storage_client.bucket(item["bucket"])
                     blob = bucket.blob(item["path"])
-
-                    blob.upload_from_string(item["data"].to_parquet(), content_type="application/octet-stream")
+                    parquet_bytes: bytes = item["data"].to_parquet()
+                    blob.upload_from_string(parquet_bytes, content_type="application/octet-stream")  # pyright: ignore[reportUnknownMemberType]
 
                     log_event(
                         "DATA_PERSISTED",

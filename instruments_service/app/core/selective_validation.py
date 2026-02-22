@@ -11,7 +11,7 @@ Complies with:
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Optional, Protocol
 
 from unified_cloud_services import get_secret_with_fallback
 from unified_market_interface import DataSourceMapping
@@ -21,7 +21,7 @@ from instruments_service.config import instruments_config
 logger = logging.getLogger(__name__)
 
 
-def validate_required_api_keys(venues: List[str], project_id: Optional[str] = None) -> Dict[str, str]:
+def validate_required_api_keys(venues: list[str], project_id: Optional[str] = None) -> dict[str, str]:
     """
     Validate and fetch API keys for requested venues only.
 
@@ -39,7 +39,7 @@ def validate_required_api_keys(venues: List[str], project_id: Optional[str] = No
         project_id = instruments_config.gcp_project_id
 
     # Get required secrets for venues
-    required_secrets = DataSourceMapping.get_required_secrets(venues)
+    required_secrets: dict[str, str] = DataSourceMapping.get_required_secrets(venues)
 
     if not required_secrets:
         logger.info("No API keys required for requested venues")
@@ -47,8 +47,8 @@ def validate_required_api_keys(venues: List[str], project_id: Optional[str] = No
 
     logger.info(f"Validating API keys for data sources: {list(required_secrets.keys())}")
 
-    api_keys = {}
-    errors = []
+    api_keys: dict[str, str] = {}
+    errors: list[str] = []
 
     for data_source, secret_name in required_secrets.items():
         try:
@@ -99,7 +99,18 @@ def validate_required_api_keys(venues: List[str], project_id: Optional[str] = No
     return api_keys
 
 
-def get_venues_for_category(category: str, venue_mapping) -> List[str]:
+class VenueMappingProtocol(Protocol):
+    """Protocol for VenueMapping with category venue attributes."""
+
+    @property
+    def all_tardis_exchanges(self) -> list[str]: ...
+    @property
+    def all_databento_venues(self) -> list[str]: ...
+    @property
+    def all_defi_venues(self) -> list[str]: ...
+
+
+def get_venues_for_category(category: str, venue_mapping: VenueMappingProtocol) -> list[str]:
     """
     Get all venues for a category.
 

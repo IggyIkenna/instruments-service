@@ -28,11 +28,11 @@ Workflow:
 import logging
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 import yaml
 
-from instruments_service.cli.base_handler import ModeHandler
+from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.cli.handlers.corporate_actions_backfill_handler import CorporateActionsBackfillHandler
 from instruments_service.cli.handlers.generate_date_views_handler import GenerateDateViewsHandler
 
@@ -49,7 +49,7 @@ class CorporateActionsUpdateHandler(ModeHandler):
     Phase 3 of the optimized pipeline.
     """
 
-    def __init__(self, config: Dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
 
         # Reuse backfill handler for fetching
@@ -60,7 +60,7 @@ class CorporateActionsUpdateHandler(ModeHandler):
 
         logger.info("✅ CorporateActionsUpdateHandler initialized")
 
-    def _load_ticker_registry(self, metadata_dir: Path) -> Dict[str, Any]:
+    def _load_ticker_registry(self, metadata_dir: Path) -> dict[str, Any]:
         """Load ticker registry from YAML."""
         registry_path = metadata_dir / "ticker_registry.yaml"
 
@@ -77,15 +77,14 @@ class CorporateActionsUpdateHandler(ModeHandler):
             }
 
         with open(registry_path, "r") as f:
-            registry = yaml.safe_load(f) or {}
-
+            registry: dict[str, Any] = yaml.safe_load(f) or {}
         return registry
 
     def _get_outdated_tickers(
         self,
-        registry: Dict[str, Any],
+        registry: dict[str, Any],
         days_threshold: int,
-    ) -> List[str]:
+    ) -> list[str]:
         """
         Get list of tickers that need updating.
 
@@ -97,7 +96,7 @@ class CorporateActionsUpdateHandler(ModeHandler):
             List of ticker symbols that need updating
         """
         today = date.today()
-        outdated = []
+        outdated: list[str] = []
 
         for ticker, metadata in registry.get("tickers", {}).items():
             last_download_str = metadata.get("last_download_date")
@@ -135,8 +134,8 @@ class CorporateActionsUpdateHandler(ModeHandler):
         upload_to_gcs: bool = False,
         max_retries: int = 3,
         regenerate_date_views: bool = True,
-        **kwargs,
-    ) -> Dict[str, Any]:
+        **kwargs: object,
+    ) -> dict[str, HandlerResultValue]:
         """
         Execute incremental corporate actions update.
 

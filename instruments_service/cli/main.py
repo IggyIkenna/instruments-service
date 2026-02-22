@@ -13,7 +13,6 @@ Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Dict
 
 
 # CRITICAL: Load .env file explicitly before any other imports
@@ -62,12 +61,12 @@ except ImportError:
 except Exception as e:
     logger.warning(f"⚠️ Failed to patch unified_cloud_services config: {e}")
 
-from instruments_service.cli.base_handler import ModeHandler
+from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.cli.handlers import get_handler_for_mode
 from instruments_service.cli.parser import parse_arguments
 
 
-def main() -> Dict[str, Any]:
+def main() -> dict[str, HandlerResultValue]:
     """
     Main CLI entry point for instruments-service.
 
@@ -165,7 +164,7 @@ def main() -> Dict[str, Any]:
         # Market type filters
         if args.mode == "live":
             # Live mode: convert flags to category list
-            categories = []
+            categories: list[str] = []
             if hasattr(args, "category") and args.category:
                 categories = [cat.upper() for cat in args.category]
             else:
@@ -231,7 +230,7 @@ def main() -> Dict[str, Any]:
         return {"success": False, "status": "error", "error": str(e)}
 
 
-def run_cli():
+def run_cli() -> dict[str, HandlerResultValue]:
     """Synchronous CLI execution"""
     try:
         result = main()

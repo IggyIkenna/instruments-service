@@ -158,10 +158,46 @@ if [ -n "$STAGED_PY_FILES" ]; then
 fi
 
 # ============================================================================
-# STEP 0: CLOUD BUILD CONFIG VALIDATION
+# STEP 0: ENVIRONMENT & CONFIG VALIDATION (Codex-aligned)
 # ============================================================================
-echo -e "\n${BLUE}[0/3] CLOUD BUILD CONFIG VALIDATION${NC}"
+echo -e "\n${BLUE}[0/6] ENVIRONMENT & CONFIG VALIDATION${NC}"
 echo "----------------------------------------------------------------------"
+
+# Python 3.13 runtime check (fail if not)
+REQUIRED_PYTHON="3.13"
+ACTUAL_PYTHON=$($PYTHON_CMD --version 2>&1 | awk '{print $2}' | cut -d'.' -f1,2)
+if [[ "$ACTUAL_PYTHON" != "$REQUIRED_PYTHON" ]]; then
+    echo -e "${RED}❌ Python $REQUIRED_PYTHON required, found $ACTUAL_PYTHON${NC}"
+    CONFIG_STATUS=1
+else
+    echo -e "${GREEN}✅ Python $ACTUAL_PYTHON${NC}"
+fi
+
+# uv.lock existence (warn if missing)
+if [[ ! -f "uv.lock" ]]; then
+    echo -e "${YELLOW}⚠️  uv.lock missing (run: uv lock)${NC}"
+else
+    echo -e "${GREEN}✅ uv.lock found${NC}"
+fi
+
+# ripgrep required for codex compliance
+if ! command -v rg &> /dev/null; then
+    echo -e "${RED}❌ ripgrep (rg) required for codex compliance checks${NC}"
+    echo -e "${YELLOW}   Install: brew install ripgrep (macOS) or apt install ripgrep (Linux)${NC}"
+    CONFIG_STATUS=1
+else
+    echo -e "${GREEN}✅ ripgrep available${NC}"
+fi
+
+# Ruff version check (warn if not 0.15.0)
+RUFF_CMD="ruff"
+[ -f ".venv/bin/ruff" ] && RUFF_CMD=".venv/bin/ruff"
+RUFF_VER=$($RUFF_CMD --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "0.0.0")
+if [[ "$RUFF_VER" != "0.15.0" ]]; then
+    echo -e "${YELLOW}⚠️  Ruff 0.15.0 expected, found $RUFF_VER${NC}"
+else
+    echo -e "${GREEN}✅ Ruff $RUFF_VER${NC}"
+fi
 
 # Check for unescaped shell variables in cloudbuild.yaml
 # In Cloud Build YAML, shell variables must be escaped with $$ not $
@@ -245,12 +281,10 @@ if [ "$RUN_LINT" = true ]; then
 fi
 
 # ============================================================================
-MIN_COVERAGE=35
-# STEP 3: TESTS (pytest)
+# STEP 3: TESTS (pytest with coverage)
 # ============================================================================
 if [ "$RUN_TESTS" = true ]; then
-MIN_COVERAGE=35
-    echo -e "\n${BLUE}[3/4] TESTS (pytest)${NC}"
+    echo -e "\n${BLUE}[3/6] TESTS (pytest)${NC}"
     echo "----------------------------------------------------------------------"
 
 MIN_COVERAGE=35
@@ -271,18 +305,19 @@ MIN_COVERAGE=35
 
 MIN_COVERAGE=35
     # Use parallel execution if pytest-xdist available
-    if $PYTHON_CMD -c "import xdist" 2>/dev/null || $PYTHON_CMD -c "import xdist" 2>/dev/null; then
+    if $PYTHON_CMD -c "import xdist" 2>/dev/null; then
         PARALLEL_ARGS="-n auto"
     else
         PARALLEL_ARGS=""
     fi
 
+    # Coverage args (codex: 35% minimum)
+    COV_ARGS="--cov=instruments_service --cov-report=term-missing --cov-fail-under=${MIN_COVERAGE:-35}"
+
     if [ "$QUICK_MODE" = true ]; then
-        # Quick mode: unit tests only
-MIN_COVERAGE=35
-        echo "Running: pytest tests/unit/ -v --tb=short $PARALLEL_ARGS (quick mode)"
-MIN_COVERAGE=35
-        if $PYTHON_CMD -m pytest tests/unit/ -v --tb=short $PARALLEL_ARGS; then
+        # Quick mode: unit tests only (with coverage)
+        echo "Running: pytest tests/unit/ -v --tb=short $COV_ARGS $PARALLEL_ARGS (quick mode)"
+        if $PYTHON_CMD -m pytest tests/unit/ -v --tb=short $COV_ARGS $PARALLEL_ARGS; then
             echo -e "${GREEN}✅ Unit tests PASSED${NC}"
         else
             echo -e "${RED}❌ Unit tests FAILED${NC}"
@@ -292,15 +327,12 @@ MIN_COVERAGE=35
         # Full mode: unit tests only (integration/e2e/smoke temporarily skipped - unblock quickmerge)
         # TODO: Re-enable integration, e2e, smoke when test suite timing is fixed
 
-MIN_COVERAGE=35
-        # Unit tests (parallel with pytest-xdist when available)
-        echo -e "\n${YELLOW}Running unit tests...${NC}"
+        # Unit tests (parallel with pytest-xdist when available, coverage enforced)
+        echo -e "\n${YELLOW}Running unit tests with coverage (min ${MIN_COVERAGE:-35}%)...${NC}"
         if [ -d "tests/unit" ]; then
             TIMEOUT_ARG=""
-MIN_COVERAGE=35
             $PYTHON_CMD -c "import pytest_timeout" 2>/dev/null && TIMEOUT_ARG="--timeout=60"
-MIN_COVERAGE=35
-            if $PYTHON_CMD -m pytest tests/unit/ -v --tb=short $TIMEOUT_ARG $PARALLEL_ARGS; then
+            if $PYTHON_CMD -m pytest tests/unit/ -v --tb=short $COV_ARGS $TIMEOUT_ARG $PARALLEL_ARGS; then
                 echo -e "${GREEN}✅ Unit tests PASSED${NC}"
             else
                 echo -e "${RED}❌ Unit tests FAILED${NC}"
@@ -311,12 +343,30 @@ MIN_COVERAGE=35
         fi
         echo -e "${YELLOW}⏭️  Integration/e2e/smoke tests temporarily skipped (see TODO in quality-gates.sh)${NC}"
     fi
+
+    # Required test files (codex compliance)
+    if [[ ! -f "tests/unit/test_event_logging.py" ]]; then
+        echo -e "${RED}❌ Missing required test: tests/unit/test_event_logging.py${NC}"
+        TEST_STATUS=1
+    fi
+    CONFIG_TEST=""
+    [[ -f "tests/unit/test_config.py" ]] && CONFIG_TEST="tests/unit/test_config.py"
+    [[ -z "$CONFIG_TEST" ]] && [[ -f "tests/unit/test_config_extended.py" ]] && CONFIG_TEST="tests/unit/test_config_extended.py"
+    if [[ -z "$CONFIG_TEST" ]]; then
+        echo -e "${RED}❌ Missing required test: tests/unit/test_config.py or test_config_extended.py${NC}"
+        TEST_STATUS=1
+    elif [[ -f "$CONFIG_TEST" ]]; then
+        CONFIG_LINES=$(wc -l < "$CONFIG_TEST" 2>/dev/null || echo 0)
+        if [[ $CONFIG_LINES -lt 50 ]]; then
+            echo -e "${YELLOW}⚠️  $CONFIG_TEST has only $CONFIG_LINES lines (expected >50 for comprehensive validation)${NC}"
+        fi
+    fi
 fi
 
 # ============================================================================
 # STEP 4: TYPE CHECKING (mypy - optional but recommended)
 # ============================================================================
-echo -e "\n${BLUE}[4/5] TYPE CHECKING (mypy - optional)${NC}"
+echo -e "\n${BLUE}[4/6] TYPE CHECKING (mypy)${NC}"
 echo "----------------------------------------------------------------------"
 
 TYPE_CHECK_STATUS=0
@@ -367,11 +417,9 @@ USE_RG=true
 # Check 1: print() statements in production code
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for print() statements... "
-MIN_COVERAGE=35
     if rg "print\(" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!examples/**" --glob "!pytest_load_env.py" . >/dev/null 2>&1; then
         echo -e "${RED}FAIL${NC}"
         echo -e "${YELLOW}Found print() in production code (use logger.info() instead):${NC}"
-MIN_COVERAGE=35
         rg "print\(" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!examples/**" --glob "!pytest_load_env.py" . | head -5
         CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
     else
@@ -382,11 +430,9 @@ fi
 # Check 2: os.getenv() usage
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for os.getenv() usage... "
-MIN_COVERAGE=35
     if rg "os\.getenv" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!pytest_load_env.py" . >/dev/null 2>&1; then
         echo -e "${RED}FAIL${NC}"
         echo -e "${YELLOW}Found os.getenv() (use config class instead):${NC}"
-MIN_COVERAGE=35
         rg "os\.getenv" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!pytest_load_env.py" . | head -5
         CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
     else
@@ -414,6 +460,19 @@ if [ "$USE_RG" = true ]; then
         echo -e "${RED}FAIL${NC}"
         echo -e "${YELLOW}Found bare except: (use specific exceptions or @handle_api_errors):${NC}"
         rg "except:" --type py --glob "!tests/**" . | head -5
+        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
+    else
+        echo -e "${GREEN}PASS${NC}"
+    fi
+fi
+
+# Check 4b: No direct google.cloud imports (use unified_cloud_services abstractions)
+if [ "$USE_RG" = true ]; then
+    echo -n "Checking for google.cloud imports... "
+    if rg "from google\.cloud import|import google\.cloud" --type py --glob "!tests/**" instruments_service/ >/dev/null 2>&1; then
+        echo -e "${RED}FAIL${NC}"
+        echo -e "${YELLOW}Found google.cloud imports (use unified_cloud_services abstractions):${NC}"
+        rg "from google\.cloud import|import google\.cloud" --type py instruments_service/ | head -5
         CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
     else
         echo -e "${GREEN}PASS${NC}"

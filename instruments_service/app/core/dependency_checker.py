@@ -27,7 +27,6 @@ Usage:
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -43,7 +42,7 @@ class DependencyStatus:
     message: str
     required: bool = True
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, str | bool]:
         return {
             "name": self.name,
             "available": self.available,
@@ -59,9 +58,9 @@ class DependencyReport:
     service: str
     all_available: bool
     required_available: bool
-    checks: List[DependencyStatus]
+    checks: list[DependencyStatus]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, str | bool | list[dict[str, str | bool]]]:
         return {
             "service": self.service,
             "all_available": self.all_available,
@@ -104,7 +103,7 @@ class DependencyChecker:
     OUTPUT_PATH_TEMPLATE = "instrument_availability/by_date/day={date}/instruments.parquet"
 
     # External API dependencies by category
-    EXTERNAL_APIS = {
+    EXTERNAL_APIS: dict[str, list[dict[str, str | bool]]] = {
         "CEFI": [
             {"name": "tardis_api", "secret": "tardis-api-key", "required": True},
         ],
@@ -117,7 +116,7 @@ class DependencyChecker:
         ],
     }
 
-    def __init__(self, project_id: Optional[str] = None):
+    def __init__(self, project_id: str | None = None) -> None:
         """
         Initialize the dependency checker.
 
@@ -128,7 +127,7 @@ class DependencyChecker:
 
         self.project_id = project_id or instruments_config.gcp_project_id
 
-    def get_upstream_dependencies(self) -> List[str]:
+    def get_upstream_dependencies(self) -> list[str]:
         """
         Get list of upstream service dependencies.
 
@@ -137,7 +136,7 @@ class DependencyChecker:
         """
         return []
 
-    def get_downstream_dependents(self) -> List[str]:
+    def get_downstream_dependents(self) -> list[str]:
         """
         Get list of services that depend on instruments-service output.
 
@@ -152,7 +151,7 @@ class DependencyChecker:
 
     def check_external_apis(
         self,
-        categories: Optional[List[str]] = None,
+        categories: list[str] | None = None,
     ) -> DependencyReport:
         """
         Check availability of external APIs.
@@ -166,16 +165,17 @@ class DependencyChecker:
         if categories is None:
             categories = list(self.EXTERNAL_APIS.keys())
 
-        checks = []
+        checks: list[DependencyStatus] = []
         all_available = True
         required_available = True
 
         for category in categories:
-            apis = self.EXTERNAL_APIS.get(category, [])
+            apis: list[dict[str, str | bool]] = self.EXTERNAL_APIS.get(category, [])
 
             for api in apis:
                 status = self._check_api_key(api["name"], api["secret"])
-                status.required = api.get("required", True)
+                required: bool = bool(api.get("required", True))
+                status.required = required
                 checks.append(status)
 
                 if not status.available:
@@ -195,7 +195,7 @@ class DependencyChecker:
         try:
             from unified_cloud_services import get_secret_with_fallback
 
-            secret = get_secret_with_fallback(secret_name, project_id=self.project_id)
+            secret: str | None = get_secret_with_fallback(secret_name, project_id=self.project_id)
             if secret:
                 return DependencyStatus(
                     name=api_name,
@@ -261,14 +261,18 @@ class DependencyChecker:
             bucket_name = self.OUTPUT_BUCKETS[category].format(project_id=self.project_id)
             blob_path = self.OUTPUT_PATH_TEMPLATE.format(date=date)
 
-            target = CloudTarget(
+            target: CloudTarget = CloudTarget(
                 project_id=self.project_id,
                 gcs_bucket=bucket_name,
                 bigquery_dataset="instruments",
             )
-            service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
+            service: StandardizedDomainCloudService = StandardizedDomainCloudService(
+                domain="instruments", cloud_target=target
+            )
 
-            raw = service.download_from_gcs(gcs_path=blob_path, format="parquet", log_errors=False)
+            raw: pd.DataFrame | object = service.download_from_gcs(
+                gcs_path=blob_path, format="parquet", log_errors=False
+            )
             if not isinstance(raw, pd.DataFrame):
                 return False
             return not raw.empty
@@ -278,7 +282,7 @@ class DependencyChecker:
 
     def validate_can_run(
         self,
-        categories: Optional[List[str]] = None,
+        categories: list[str] | None = None,
         fail_on_optional: bool = False,
     ) -> bool:
         """
@@ -312,7 +316,7 @@ class DependencyChecker:
 
 
 # Convenience function for CLI/scripts
-def check_dependencies(categories: Optional[List[str]] = None) -> DependencyReport:
+def check_dependencies(categories: list[str] | None = None) -> DependencyReport:
     """
     Check all dependencies for instruments-service.
 
