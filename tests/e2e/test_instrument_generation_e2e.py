@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from unified_config_interface import VenueMapping
+from unified_market_interface.models.venue_config import VenueMapping
 
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage

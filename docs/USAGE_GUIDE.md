@@ -122,7 +122,7 @@ python -m instruments_service --mode instruments \
 import asyncio
 from datetime import datetime, timedelta
 from instruments_service import InstrumentProcessingService, CloudInstrumentStorage
-from instruments_service.config import VenueMapping
+from unified_market_interface.models.venue_config import VenueMapping
 
 async def generate_batch(start_date: str, end_date: str):
     config = {

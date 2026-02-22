@@ -22,7 +22,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict
 
-from unified_config_interface import VenueMapping
+from unified_market_interface.models.venue_config import VenueMapping
 
 # Simple imports - assumes packages are installed
 from instruments_service import (
