@@ -64,7 +64,7 @@ def pytest_load_initial_conftests(early_config, parser, args):
 
             # Ensure GCP_PROJECT_ID is set (required for many tests)
             if not os.getenv("GCP_PROJECT_ID"):
-                os.environ["GCP_PROJECT_ID"] = "central-element-323112"
+                os.environ["GCP_PROJECT_ID"] = "test-project"
 
             # Ensure ENVIRONMENT is set for test detection
             if not os.getenv("ENVIRONMENT"):

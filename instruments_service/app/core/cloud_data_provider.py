@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Optional
 
 import pandas as pd
-from unified_cloud_services import CloudTarget, StandardizedDomainCloudService, get_bucket_for_category, get_config
+from unified_cloud_services import CloudTarget, StandardizedDomainCloudService, get_bucket_for_category
 
 logger = logging.getLogger(__name__)
 
@@ -35,16 +35,12 @@ class CloudDataProvider:
             # Production flow should always use category-specific buckets via get_bucket_for_category()
             from instruments_service.config import instruments_config
 
+            cfg = instruments_config
             cloud_target = CloudTarget(
-                project_id=get_config("GCP_PROJECT_ID", instruments_config.gcp_project_id),
-                gcs_bucket=get_config(
-                    "INSTRUMENTS_GCS_BUCKET_CEFI",
-                    instruments_config.get_bucket_for_category("cefi"),
-                ),
-                bigquery_dataset=get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
-                bigquery_location=get_config(
-                    "BIGQUERY_LOCATION", "asia-northeast1"
-                ),  # Default to asia-northeast1 per .env
+                project_id=cfg.gcp_project_id,
+                gcs_bucket=cfg.get_bucket_for_category("cefi"),
+                bigquery_dataset=cfg.bigquery_dataset or "instruments",
+                bigquery_location=cfg.bigquery_location or "asia-northeast1",
             )
 
         # Create instruments service (each domain has its own bucket and dataset)
@@ -80,13 +76,14 @@ class CloudDataProvider:
                 return self.get_instruments_from_category(date, category, gcs_path=gcs_path)
 
             logger.info(f"📥 Loading instruments from GCS: {gcs_path}")
-            df = self.cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
-
+            raw = self.cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+            if not isinstance(raw, pd.DataFrame):
+                return pd.DataFrame()
+            df: pd.DataFrame = raw
             if df.empty:
                 logger.warning(f"⚠️ No instruments found at {gcs_path}")
             else:
                 logger.info(f"✅ Loaded {len(df)} instruments from GCS")
-
             return df
 
         except Exception as e:
@@ -119,12 +116,10 @@ class CloudDataProvider:
 
         try:
             # Detect test mode
-            environment = get_config("ENVIRONMENT", "development").lower()
-            is_test = (
-                environment in ["test", "testing"]
-                or "pytest" in os.environ.get("_", "")
-                or get_config("PYTEST_CURRENT_TEST", "") != ""
-            )
+            from instruments_service.config import instruments_config
+
+            environment = (instruments_config.environment or "development").lower()
+            is_test = environment in ["test", "testing"] or bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
             # Get bucket for category
             category_bucket = get_bucket_for_category(category, test_mode=is_test)
@@ -141,13 +136,14 @@ class CloudDataProvider:
             )
 
             logger.info(f"📥 Loading {category} instruments from GCS: {category_bucket}/{gcs_path}")
-            df = category_cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
-
+            raw = category_cloud_service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+            if not isinstance(raw, pd.DataFrame):
+                return pd.DataFrame()
+            df = raw
             if df.empty:
                 logger.warning(f"⚠️ No {category} instruments found at {category_bucket}/{gcs_path}")
             else:
                 logger.info(f"✅ Loaded {len(df)} {category} instruments from GCS")
-
             return df
 
         except Exception as e:
@@ -196,7 +192,7 @@ class CloudDataProvider:
             query += " ORDER BY instrument_key"
 
             logger.info(f"📥 Querying instruments from BigQuery: {table_name}")
-            result = self.cloud_service.query_bigquery(query=query, parameters=parameters if parameters else None)
+            result = self.cloud_service.query_bigquery(query=query, parameters=parameters)
 
             logger.info(f"✅ Queried {len(result)} instruments from BigQuery")
             return result
@@ -206,7 +202,10 @@ class CloudDataProvider:
             return pd.DataFrame()
 
     def check_instruments_exist(
-        self, date: datetime, categories: Optional[list] = None, venues: Optional[list] = None
+        self,
+        date: datetime,
+        categories: Optional[list[str]] = None,
+        venues: Optional[list[str]] = None,
     ) -> bool:
         """
         Check if instruments exist for a specific date.

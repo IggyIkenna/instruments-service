@@ -4,12 +4,12 @@
 # No GitHub token (GH_PAT) required.
 #
 # Build:
-#   docker build --build-arg PROJECT_ID=central-element-323112 -t instruments-service .
+#   docker build --build-arg PROJECT_ID=your-gcp-project-id -t instruments-service .
 #
 # Run:
 #   docker run -v /path/to/credentials.json:/app/credentials.json \
 #     -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json \
-#     -e GCP_PROJECT_ID=central-element-323112 \
+#     -e GCP_PROJECT_ID=your-gcp-project-id \
 #     instruments-service --mode instruments --start-date 2024-01-01 --CEFI
 
 ARG PROJECT_ID
@@ -27,18 +27,22 @@ RUN useradd --create-home --shell /bin/bash appuser
 # Set working directory
 WORKDIR /app/instruments-service
 
-# Copy pip.conf for Artifact Registry access
-COPY pip.conf /etc/pip.conf
+# Install uv package manager (bootstrap with pip - acceptable exception)
+RUN pip install --no-cache-dir uv
 
-# Install keyring for Artifact Registry authentication (REQUIRED for pip.conf to work)
-RUN pip install --no-cache-dir keyrings.google-artifactregistry-auth
+# Install keyring FIRST (before pip.conf) to avoid auth loop
+# keyring must be installed from PyPI, not Artifact Registry
+RUN uv pip install --system --no-cache-dir keyrings.google-artifactregistry-auth
+
+# NOW copy pip.conf - keyring is ready to handle Artifact Registry auth
+COPY pip.conf /etc/pip.conf
 
 # Copy instruments-service source code
 COPY . .
 
-# Install service with dev dependencies (needed for quality gates in Cloud Build)
-# keyring + pip.conf enables authentication to asia-northeast1-python.pkg.dev
-RUN pip install --no-cache-dir -e ".[dev]"
+# Install service with dev dependencies
+# keyring + pip.conf enables authentication to Artifact Registry for unified-* packages
+RUN uv pip install --system --no-cache-dir -e ".[dev]"
 
 # Create data directories
 RUN mkdir -p /app/instruments-service/data/samples /app/instruments-service/logs
@@ -49,17 +53,19 @@ RUN chown -R appuser:appuser /app
 # Switch to non-root user
 USER appuser
 
-# Default environment variables
+# Default environment variables (bucket names use PROJECT_ID from build-arg)
 # ENABLE_CSV_SAMPLING=false prevents disk filling on ephemeral VMs
 # UCS_SKIP_GCSFUSE_CHECK=1 skips GCSFUSE check (not used in Cloud Run/VMs)
+ARG PROJECT_ID
 ENV ENVIRONMENT=production \
     ENABLE_CSV_SAMPLING=false \
     UCS_SKIP_GCSFUSE_CHECK=1 \
     GCS_REGION=asia-northeast1-c \
     GCS_LOCATION=asia-northeast1 \
-    INSTRUMENTS_GCS_BUCKET_CEFI=instruments-store-cefi-central-element-323112 \
-    INSTRUMENTS_GCS_BUCKET_TRADFI=instruments-store-tradfi-central-element-323112 \
-    INSTRUMENTS_GCS_BUCKET_DEFI=instruments-store-defi-central-element-323112
+    GCP_PROJECT_ID=${PROJECT_ID} \
+    INSTRUMENTS_GCS_BUCKET_CEFI=instruments-store-cefi-${PROJECT_ID} \
+    INSTRUMENTS_GCS_BUCKET_TRADFI=instruments-store-tradfi-${PROJECT_ID} \
+    INSTRUMENTS_GCS_BUCKET_DEFI=instruments-store-defi-${PROJECT_ID}
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
