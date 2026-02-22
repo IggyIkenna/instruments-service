@@ -962,9 +962,9 @@ class ClickUpImporter:
                 for team in teams.get("teams", []):
                     for member in team.get("members", []):
                         user = member.get("user", {})
-                        username = user.get("username", "").lower()
-                        email = user.get("email", "").lower()  # Also check email
-                        full_name = user.get("name", "").lower()  # Full name field
+                        username = (user.get("username") or "").lower()
+                        email = (user.get("email") or "").lower()  # Also check email
+                        full_name = (user.get("name") or "").lower()  # Full name field
                         user_id = user.get("id")
 
                         # Check username, email, and full name for "ikenna" or "igboaka"

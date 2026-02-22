@@ -10,7 +10,7 @@ Submodules:
 - service_config: InstrumentsServiceConfig (Pydantic), get_config, instruments_config
 """
 
-from unified_cloud_services import (
+from unified_config_interface import (
     DataTypeConfig,
     ExchangeInstrumentConfig,
     VenueMapping,

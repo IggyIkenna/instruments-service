@@ -4,7 +4,7 @@ Data Models for Instruments Service
 This module defines the InstrumentDefinition Pydantic model following the
 INSTRUMENT_KEY_SPEC.md format with proper expiry, call/put, and margin currency support.
 
-Note: InstrumentKey is imported from unified-cloud-services (shared across services).
+Note: InstrumentKey is imported from unified-domain-services (shared across services).
 """
 
 import logging
@@ -15,8 +15,8 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # Import shared types from unified-cloud-services
-from unified_cloud_services.models.instrument import InstrumentType, Venue
-from unified_cloud_services.models.schemas import InstrumentKey  # Shared InstrumentKey
+from unified_config_interface import InstrumentType, Venue
+from unified_domain_services import InstrumentKey  # Shared InstrumentKey
 
 logger = logging.getLogger(__name__)
 

@@ -180,7 +180,7 @@ def delete_all_tasks(client: ClickUpClient, list_id: str, dry_run: bool = False)
     for task in all_tasks:
         task_id = task.get("id")
         task_name = task.get("name", "Unknown")
-        tags = [tag.get("name", "") for tag in task.get("tags", [])]
+        tags = [tag.get("name") or "" for tag in task.get("tags", [])]
         status = task.get("status", {}).get("status", "unknown")
 
         if "instruments-service" in tags:

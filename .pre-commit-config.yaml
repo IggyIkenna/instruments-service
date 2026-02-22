@@ -2,6 +2,17 @@
 # Setup: pip install prek && prek install
 
 repos:
+  # Library version auto-bump (for packages published to Artifact Registry)
+  - repo: local
+    hooks:
+      - id: bump-library-version
+        name: Auto-bump library version
+        entry: bash scripts/bump-library-version.sh
+        language: system
+        stages: [commit]
+        pass_filenames: false
+        always_run: true
+
   # Ruff - Fast Python linter AND formatter
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.0

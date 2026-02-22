@@ -119,18 +119,21 @@ class TestInstrumentsServiceInitialization:
             assert batch_config["lookback_days"] == 7
 
     def test_initialization_default_project_id(self):
-        """Test initialization uses default project ID if not provided."""
+        """Test initialization uses project_id from config when not provided."""
+        mock_config = Mock()
+        mock_config.gcp_project_id = "test-project"
         with (
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage"),
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
+            patch("instruments_service.config.instruments_config", mock_config),
         ):
             config = {}  # No project_id
             InstrumentsService(config)
 
-            # Should use default project_id
+            # Should use project_id from config
             proc_config = mock_proc.call_args[0][0]
-            assert proc_config["project_id"] == "central-element-323112"
+            assert proc_config["project_id"] == "test-project"
 
 
 class TestGenerateInstrumentsSingleDate:
@@ -777,6 +780,65 @@ class TestCleanup:
 
             # Should not raise exception
             service.cleanup()
+
+
+class TestGenerateInstrumentsEdgeCases:
+    """Tests for edge cases in generate_instruments_for_date (from extended)."""
+
+    @pytest.mark.asyncio
+    async def test_generate_instruments_date_range_empty_range(self):
+        """Test generating instruments for empty date range."""
+        with (
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService"),
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage"),
+            patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor") as mock_batch_class,
+        ):
+            mock_batch = Mock()
+            mock_batch.get_required_periods = Mock(return_value=[])
+            mock_batch_class.return_value = mock_batch
+
+            config = {"project_id": "test-project"}
+            service = InstrumentsService(config)
+
+            start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            result = await service.generate_instruments_date_range(
+                start_date=start_date,
+                end_date=start_date,
+                cefi=True,
+            )
+
+            assert result["dates_processed"] == 0
+            assert result["success_rate_percent"] == 0
+
+    @pytest.mark.asyncio
+    async def test_generate_instruments_dict_format(self):
+        """Test generating instruments when instruments are dicts, not objects."""
+        with (
+            patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
+            patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
+            patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
+        ):
+            mock_proc = Mock()
+            mock_proc.process_exchange_instruments = AsyncMock(
+                return_value={"TEST:SPOT:BTC-USDT": {"instrument_key": "TEST:SPOT:BTC-USDT"}}
+            )
+            mock_tardis_adapter = Mock()
+            mock_tardis_adapter.check_venues_access = Mock(return_value={"binance": (True, None)})
+            mock_proc.tardis_adapter = mock_tardis_adapter
+            mock_proc._get_tardis_adapter = Mock(return_value=mock_tardis_adapter)
+            mock_proc_class.return_value = mock_proc
+
+            mock_storage = Mock()
+            mock_storage.store_instruments = Mock(return_value=True)
+            mock_storage_class.return_value = mock_storage
+
+            config = {"project_id": "test-project"}
+            service = InstrumentsService(config)
+
+            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            result = await service.generate_instruments_for_date(date=date, exchanges=["binance"], cefi=True)
+
+            assert result["status"] in ["success", "warning"]
 
 
 class TestUpbitCoinbaseIntegration:

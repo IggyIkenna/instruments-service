@@ -8,17 +8,30 @@ Extracted from InstrumentProcessingService.generate_canonical_key.
 import logging
 import re
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Dict, Optional, Protocol
 
 logger = logging.getLogger(__name__)
 
 
+class CanonicalKeyServiceProtocol(Protocol):
+    """Protocol for InstrumentProcessingService used by generate_canonical_key."""
+
+    def normalize_venue(self, exchange: str) -> str: ...
+    def normalize_instrument_type(self, symbol_type: str) -> str: ...
+    def _parse_symbol_components(self, symbol_id: str, exchange: str) -> Dict[str, object]: ...
+    def _parse_expiry_from_symbol(self, symbol_id: str, exchange: str) -> Optional[str]: ...
+    def _parse_option_components(self, symbol_id: str, exchange: str) -> Dict[str, object]: ...
+
+    exchange_config: object
+    data_config: object
+
+
 def generate_canonical_key(
-    service: Any,
+    service: CanonicalKeyServiceProtocol,
     exchange: str,
     symbol_type: str,
     symbol_id: str,
-    symbol_info: Dict[str, Any],
+    symbol_info: Dict[str, object],
 ) -> Optional[str]:
     """
     Generate canonical instrument key following INSTRUMENT_KEY.md specification.
@@ -39,13 +52,13 @@ def generate_canonical_key(
     if not venue or not instrument_type:
         return None
 
-    base_asset = str(symbol_info.get("base_asset", "") or "").upper()
-    quote_asset = str(symbol_info.get("quote_asset", "") or "").upper()
+    base_asset = str(symbol_info.get("base_asset") or "").upper()
+    quote_asset = str(symbol_info.get("quote_asset") or "").upper()
 
     if not base_asset or not quote_asset:
         parsed_components = service._parse_symbol_components(symbol_id, exchange)
-        base_asset = str(parsed_components.get("base_asset", "") or "").upper()
-        quote_asset = str(parsed_components.get("quote_asset", "") or "").upper()
+        base_asset = str(parsed_components.get("base_asset") or "").upper()
+        quote_asset = str(parsed_components.get("quote_asset") or "").upper()
 
     if not base_asset or not quote_asset:
         logger.debug(
@@ -162,13 +175,13 @@ def generate_canonical_key(
 
         expiry_date = symbol_info.get("expiry_date")
         strike_price = symbol_info.get("strike_price")
-        option_type = symbol_info.get("option_type", "").upper()
+        option_type = (symbol_info.get("option_type") or "").upper()
 
         if not all([expiry_date, strike_price, option_type]):
             parsed_option = service._parse_option_components(symbol_id, exchange)
             expiry_date = expiry_date or parsed_option.get("expiry_date")
             strike_price = strike_price or parsed_option.get("strike_price")
-            option_type = option_type or parsed_option.get("option_type", "").upper()
+            option_type = option_type or (parsed_option.get("option_type") or "").upper()
 
         if not all([expiry_date, strike_price, option_type]):
             logger.warning(f"Missing option parameters for {symbol_id}")
