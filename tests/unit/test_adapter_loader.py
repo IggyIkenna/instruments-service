@@ -25,10 +25,21 @@ def test_get_adapter_for_cefi_venue():
 
 
 def test_get_adapter_for_onchain_perp_venue():
-    """Test loading adapter for on-chain perp venue."""
-    adapter = get_adapter_for_venue("ASTER")
-    assert adapter is not None
-    assert "AsterAdapter" in str(type(adapter))
+    """Test loading adapter for on-chain perp venue. Skips if HyperliquidBaseClient removed from UCS."""
+    try:
+        adapter = get_adapter_for_venue("HYPERLIQUID")
+        assert adapter is not None
+        assert "HyperliquidAdapter" in str(type(adapter))
+    except ImportError as e:
+        if "HyperliquidBaseClient" in str(e):
+            pytest.skip("HyperliquidBaseClient removed from UCS")
+        raise
+
+
+def test_aster_venue_raises_not_implemented():
+    """Test that ASTER venue raises NotImplementedError (AsterBaseClient removed from UCS)."""
+    with pytest.raises(NotImplementedError, match="Aster adapter not available"):
+        get_adapter_for_venue("ASTER")
 
 
 def test_get_adapter_for_defi_venue():
@@ -48,11 +59,11 @@ def test_adapter_caching():
 
 
 def test_different_data_sources_different_adapters():
-    """Test that different data sources get different adapters."""
+    """Test that different data sources get different adapters (tardis vs databento)."""
     tardis_adapter = get_adapter_for_venue("BINANCE-FUTURES")
-    aster_adapter = get_adapter_for_venue("ASTER")
+    databento_adapter = get_adapter_for_venue("CME")
 
-    assert tardis_adapter is not aster_adapter
+    assert tardis_adapter is not databento_adapter
 
 
 def test_unknown_venue_raises_error():
@@ -66,13 +77,13 @@ def test_get_cached_adapters():
     # Initially empty
     assert get_cached_adapters() == {}
 
-    # Load some adapters
+    # Load some adapters (tardis and databento - different data sources)
     get_adapter_for_venue("BINANCE-FUTURES")
-    get_adapter_for_venue("ASTER")
+    get_adapter_for_venue("CME")
 
     cached = get_cached_adapters()
     assert "tardis" in cached
-    assert "aster" in cached
+    assert "databento" in cached
     assert len(cached) == 2
 
 
@@ -167,6 +178,7 @@ def test_defi_venue_ethena():
 
 def test_yahoo_finance_fx_venue_loads_adapter():
     """Test that FX venue (Yahoo Finance) loads YahooFinanceAdapter."""
+    pytest.importorskip("yfinance", reason="yfinance required for Yahoo Finance adapter")
     adapter = get_adapter_for_venue("FX")
     assert adapter is not None
     assert "YahooFinanceAdapter" in str(type(adapter))

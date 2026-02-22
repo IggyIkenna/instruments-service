@@ -28,7 +28,11 @@ __all__ = [
 
 def __getattr__(name):
     """Lazy import to avoid circular dependencies."""
-    if name == "InstrumentProcessingService":
+    if name == "cli":
+        import instruments_service.cli  # noqa: F401
+
+        return instruments_service.cli
+    elif name == "InstrumentProcessingService":
         from instruments_service.app.core.instrument_processing_service import (
             InstrumentProcessingService,
         )

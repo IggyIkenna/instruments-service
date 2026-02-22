@@ -122,7 +122,7 @@ def query_subgraph_registry(subgraph_name: str) -> Optional[str]:
             subgraphs = data["data"]["subgraphs"]
             # Look for exact match first
             for subgraph in subgraphs:
-                display_name = subgraph.get("displayName", "").lower()
+                display_name = (subgraph.get("displayName") or "").lower()
                 if name.lower() in display_name and org.lower() in display_name:
                     subgraph_id = subgraph.get("id")
                     if subgraph_id:

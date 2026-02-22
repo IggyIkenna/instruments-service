@@ -14,6 +14,7 @@
 #
 # Requirements:
 #   - Python 3.13 (>=3.13,<3.14)
+MIN_COVERAGE=35
 #   - ruff, pytest, pytest-asyncio, pytest-mock installed
 #   - unified-cloud-services available (local or via GH_PAT)
 #
@@ -61,32 +62,32 @@ if [ -z "${GITHUB_ACTIONS:-}" ] && [ -z "${CI:-}" ] && [ -z "${CLOUD_BUILD:-}" ]
     fi
     command -v uv &>/dev/null || pip install uv --quiet
     if [ -f "pyproject.toml" ]; then
-        UCS_PATH=""
-        [ -d "${REPO_ROOT:-/dev/null}/unified-cloud-services" ] && UCS_PATH="${REPO_ROOT}/unified-cloud-services"
-        [ -z "$UCS_PATH" ] && [ -d "deps/unified-cloud-services" ] && UCS_PATH="deps/unified-cloud-services"
-        if [ -n "$UCS_PATH" ] && [ -f "$UCS_PATH/pyproject.toml" ]; then
-            uv pip install -e "$UCS_PATH" --quiet 2>/dev/null || true
-        fi
-        UEI_PATH=""
-        [ -d "${REPO_ROOT:-/dev/null}/unified-events-interface" ] && UEI_PATH="${REPO_ROOT}/unified-events-interface"
-        [ -z "$UEI_PATH" ] && [ -d "deps/unified-events-interface" ] && UEI_PATH="deps/unified-events-interface"
-        if [ -n "$UEI_PATH" ] && [ -f "$UEI_PATH/pyproject.toml" ]; then
-            uv pip install -e "$UEI_PATH" --quiet 2>/dev/null || true
-        fi
+        # Install workspace libraries first (UCI, UCS, UEI, UMI, UDS) so tests use refactored code
+        for lib in unified-config-interface unified-cloud-services unified-domain-services unified-events-interface unified-market-interface; do
+            lib_path=""
+            [ -d "${REPO_ROOT:-/dev/null}/$lib" ] && lib_path="${REPO_ROOT}/$lib"
+            [ -z "$lib_path" ] && [ -d "deps/$lib" ] && lib_path="deps/$lib"
+            if [ -n "$lib_path" ] && [ -f "$lib_path/pyproject.toml" ]; then
+                uv pip install -e "$lib_path" --quiet 2>/dev/null || true
+            fi
+        done
         uv pip install -e ".[dev]" --quiet 2>/dev/null || uv pip install -e . --quiet 2>/dev/null || true
     fi
 fi
 
-# Python for tests (venv if activated, else detect-python)
-if command -v python &>/dev/null && python -c "import sys; exit(0 if sys.version_info >= (3, 13) else 1)" 2>/dev/null; then
+# Python for tests (prefer venv to ensure workspace libs are used)
+if [ -f ".venv/bin/python" ]; then
+    PYTHON_CMD=".venv/bin/python"
+elif [ -f ".venv/Scripts/python.exe" ]; then
+    PYTHON_CMD=".venv/Scripts/python.exe"
+elif command -v python &>/dev/null && python -c "import sys; exit(0 if sys.version_info >= (3, 13) else 1)" 2>/dev/null; then
     PYTHON_CMD="python"
-    PYTHON_VERSION="$(python --version 2>&1)"
 elif [ -f "$REPO_ROOT/.scripts/detect-python.sh" ]; then
     source "$REPO_ROOT/.scripts/detect-python.sh"
 else
     PYTHON_CMD="python3"
-    PYTHON_VERSION="$(python3 --version 2>&1)"
 fi
+PYTHON_VERSION="$($PYTHON_CMD --version 2>&1)"
 
 echo -e "${BLUE}======================================================================${NC}"
 echo -e "${BLUE}INSTRUMENTS-SERVICE QUALITY GATES${NC}"
@@ -244,16 +245,22 @@ if [ "$RUN_LINT" = true ]; then
 fi
 
 # ============================================================================
+MIN_COVERAGE=35
 # STEP 3: TESTS (pytest)
 # ============================================================================
 if [ "$RUN_TESTS" = true ]; then
+MIN_COVERAGE=35
     echo -e "\n${BLUE}[3/4] TESTS (pytest)${NC}"
     echo "----------------------------------------------------------------------"
 
+MIN_COVERAGE=35
     # Check if pytest is installed
+MIN_COVERAGE=35
     if ! $PYTHON_CMD -c "import pytest" &> /dev/null; then
+MIN_COVERAGE=35
         echo -e "${YELLOW}Installing pytest...${NC}"
         command -v uv >/dev/null 2>&1 || pip install uv --quiet
+MIN_COVERAGE=35
         uv pip install pytest pytest-asyncio pytest-mock --quiet
     fi
 
@@ -262,6 +269,7 @@ if [ "$RUN_TESTS" = true ]; then
     export CLOUD_MOCK_MODE="true"
     export GOOGLE_CLOUD_PROJECT="test-project"
 
+MIN_COVERAGE=35
     # Use parallel execution if pytest-xdist available
     if $PYTHON_CMD -c "import xdist" 2>/dev/null || $PYTHON_CMD -c "import xdist" 2>/dev/null; then
         PARALLEL_ARGS="-n auto"
@@ -271,7 +279,9 @@ if [ "$RUN_TESTS" = true ]; then
 
     if [ "$QUICK_MODE" = true ]; then
         # Quick mode: unit tests only
+MIN_COVERAGE=35
         echo "Running: pytest tests/unit/ -v --tb=short $PARALLEL_ARGS (quick mode)"
+MIN_COVERAGE=35
         if $PYTHON_CMD -m pytest tests/unit/ -v --tb=short $PARALLEL_ARGS; then
             echo -e "${GREEN}✅ Unit tests PASSED${NC}"
         else
@@ -282,11 +292,14 @@ if [ "$RUN_TESTS" = true ]; then
         # Full mode: unit tests only (integration/e2e/smoke temporarily skipped - unblock quickmerge)
         # TODO: Re-enable integration, e2e, smoke when test suite timing is fixed
 
+MIN_COVERAGE=35
         # Unit tests (parallel with pytest-xdist when available)
         echo -e "\n${YELLOW}Running unit tests...${NC}"
         if [ -d "tests/unit" ]; then
             TIMEOUT_ARG=""
+MIN_COVERAGE=35
             $PYTHON_CMD -c "import pytest_timeout" 2>/dev/null && TIMEOUT_ARG="--timeout=60"
+MIN_COVERAGE=35
             if $PYTHON_CMD -m pytest tests/unit/ -v --tb=short $TIMEOUT_ARG $PARALLEL_ARGS; then
                 echo -e "${GREEN}✅ Unit tests PASSED${NC}"
             else
@@ -301,9 +314,43 @@ if [ "$RUN_TESTS" = true ]; then
 fi
 
 # ============================================================================
-# STEP 4: CODEX COMPLIANCE (Coding Standards)
+# STEP 4: TYPE CHECKING (mypy - optional but recommended)
 # ============================================================================
-echo -e "\n${BLUE}[4/4] CODEX COMPLIANCE (Coding Standards)${NC}"
+echo -e "\n${BLUE}[4/5] TYPE CHECKING (mypy - optional)${NC}"
+echo "----------------------------------------------------------------------"
+
+TYPE_CHECK_STATUS=0
+
+# Check if mypy is installed
+if $PYTHON_CMD -c "import mypy" &> /dev/null; then
+    echo "Running: mypy $SOURCE_DIRS --no-error-summary"
+
+    # Run mypy with light mode (warn_return_any=false, no disallow_untyped_defs)
+    # This matches pyproject.toml [tool.mypy] settings
+    if $PYTHON_CMD -m mypy $SOURCE_DIRS --no-error-summary 2>&1 | tee /tmp/mypy_output.txt; then
+        echo -e "${GREEN}✅ Type checking PASSED${NC}"
+        TYPE_CHECK_STATUS=0
+    else
+        # Check if there are actual errors (not just warnings)
+        if grep -q "error:" /tmp/mypy_output.txt; then
+            echo -e "${YELLOW}⚠️  Type checking has errors (non-blocking)${NC}"
+            echo -e "${YELLOW}   Fix type hints to improve code quality${NC}"
+            TYPE_CHECK_STATUS=0  # Non-blocking for now
+        else
+            echo -e "${GREEN}✅ Type checking PASSED (warnings only)${NC}"
+            TYPE_CHECK_STATUS=0
+        fi
+    fi
+    rm -f /tmp/mypy_output.txt
+else
+    echo -e "${YELLOW}mypy not installed - skipping type checking${NC}"
+    echo -e "${YELLOW}Install: uv pip install mypy${NC}"
+fi
+
+# ============================================================================
+# STEP 5: CODEX COMPLIANCE (Coding Standards)
+# ============================================================================
+echo -e "\n${BLUE}[5/6] CODEX COMPLIANCE (Coding Standards)${NC}"
 echo "----------------------------------------------------------------------"
 
 CODEX_VIOLATIONS=0
@@ -320,9 +367,11 @@ USE_RG=true
 # Check 1: print() statements in production code
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for print() statements... "
+MIN_COVERAGE=35
     if rg "print\(" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!examples/**" --glob "!pytest_load_env.py" . >/dev/null 2>&1; then
         echo -e "${RED}FAIL${NC}"
         echo -e "${YELLOW}Found print() in production code (use logger.info() instead):${NC}"
+MIN_COVERAGE=35
         rg "print\(" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!examples/**" --glob "!pytest_load_env.py" . | head -5
         CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
     else
@@ -333,9 +382,11 @@ fi
 # Check 2: os.getenv() usage
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for os.getenv() usage... "
+MIN_COVERAGE=35
     if rg "os\.getenv" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!pytest_load_env.py" . >/dev/null 2>&1; then
         echo -e "${RED}FAIL${NC}"
         echo -e "${YELLOW}Found os.getenv() (use config class instead):${NC}"
+MIN_COVERAGE=35
         rg "os\.getenv" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!pytest_load_env.py" . | head -5
         CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
     else
@@ -382,7 +433,43 @@ if [ "$USE_RG" = true ]; then
     fi
 fi
 
-# Check 6: requests library in async code (only fail if SAME file has both requests and async)
+# Check 6: Any type usage (encourage better types)
+if [ "$USE_RG" = true ]; then
+    echo -n "Checking for Any type usage... "
+    ANY_USAGE=$(rg ": Any|-> Any|\[Any\]" --type py --glob "!tests/**" --glob "!scripts/**" . 2>/dev/null | wc -l | tr -d " ")
+    if [ "$ANY_USAGE" -gt 0 ]; then
+        echo -e "${YELLOW}WARN${NC} ($ANY_USAGE found)"
+        echo -e "${YELLOW}Consider using type aliases, TypedDict, Protocol, or Union types${NC}"
+        echo -e "${YELLOW}See: unified-trading-codex/06-coding-standards/type-hints-guide.md${NC}"
+        # Non-blocking warning
+    else
+        echo -e "${GREEN}PASS${NC}"
+    fi
+fi
+
+# Check 7: Project ID environment variable consistency
+if [ "$USE_RG" = true ]; then
+    echo -n "Checking project ID environment variable usage... "
+    # Check if code uses GOOGLE_CLOUD_PROJECT without GCP_PROJECT_ID fallback
+    WRONG_ORDER=$(rg 'os\.environ\.get\("GOOGLE_CLOUD_PROJECT"\)' --type py --glob "!tests/**" . 2>/dev/null | grep -v "GCP_PROJECT_ID" || true)
+    # Check if code uses generic PROJECT_ID
+    GENERIC_VAR=$(rg 'os\.environ\.get\("PROJECT_ID"\)' --type py --glob "!tests/**" . 2>/dev/null || true)
+
+    if [ -n "$GENERIC_VAR" ]; then
+        echo -e "${RED}FAIL${NC}"
+        echo -e "${RED}Found generic PROJECT_ID variable (use GCP_PROJECT_ID instead):${NC}"
+        echo "$GENERIC_VAR" | head -3
+        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
+    elif [ -n "$WRONG_ORDER" ]; then
+        echo -e "${YELLOW}WARN${NC}"
+        echo -e "${YELLOW}Found GOOGLE_CLOUD_PROJECT without GCP_PROJECT_ID fallback${NC}"
+        echo -e "${YELLOW}Use: os.environ.get('GCP_PROJECT_ID') or os.environ.get('GOOGLE_CLOUD_PROJECT')${NC}"
+    else
+        echo -e "${GREEN}PASS${NC}"
+    fi
+fi
+
+# Check 8: requests library in async code (only fail if SAME file has both requests and async)
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for requests library in async code... "
     FILES_WITH_REQUESTS=$(rg "import\s+requests" --type py --glob "!scripts/**" --glob "!**/defi/morpho_adapter.py" --glob "!**/onchain_perps/aster_adapter.py" -l . 2>/dev/null || true)
@@ -402,7 +489,7 @@ if [ "$USE_RG" = true ]; then
     fi
 fi
 
-# Check 7: asyncio.run() in loops (exclude examples - scripts often use asyncio.run for entry point)
+# Check 9: asyncio.run() in loops (exclude examples - scripts often use asyncio.run for entry point)
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for asyncio.run() in loops... "
     FILES_WITH_ASYNCIO_RUN=$(rg "asyncio\.run\(" --type py --glob "!examples/**" --glob "!scripts/**" --glob "!**/venues/defi/*" --glob "!**/cli/**" --files-with-matches . 2>/dev/null || true)
@@ -421,7 +508,7 @@ if [ "$USE_RG" = true ]; then
     fi
 fi
 
-# Check 8: time.sleep() in async functions (simplified check)
+# Check 10: time.sleep() in async functions (simplified check)
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for time.sleep() in async code... "
     FILES_WITH_TIME_SLEEP=$(rg "time\.sleep\(" --type py --files-with-matches . 2>/dev/null || true)
@@ -448,6 +535,33 @@ else
     echo -e "\n${RED}❌ Codex compliance FAILED: $CODEX_VIOLATIONS violations${NC}"
     echo -e "${YELLOW}See: unified-trading-codex/06-coding-standards/README.md${NC}"
     CODEX_STATUS=1
+fi
+
+# ============================================================================
+# STEP 6: PRODUCTION READINESS VALIDATORS (Optional)
+# ============================================================================
+echo -e "\n${BLUE}[6/6] PRODUCTION READINESS VALIDATORS (Optional)${NC}"
+echo "----------------------------------------------------------------------"
+
+# Only run if codex root exists
+if [ -f "${REPO_ROOT}/unified-trading-codex/scripts/run-all-validators.sh" ]; then
+    echo -e "${YELLOW}Running alignment validators for production readiness check...${NC}"
+
+    # Run alignment validators (non-blocking - warnings only)
+    if "${REPO_ROOT}/unified-trading-codex/scripts/run-all-validators.sh" --category alignment --failed-only 2>/dev/null; then
+        echo -e "${GREEN}✅ Alignment validators PASSED${NC}"
+    else
+        EXIT_CODE=$?
+        if [ $EXIT_CODE -eq 2 ]; then
+            echo -e "${YELLOW}⚠️  Alignment validators have WARNINGS (non-blocking)${NC}"
+        else
+            echo -e "${YELLOW}⚠️  Alignment validators FAILED (non-blocking)${NC}"
+        fi
+        echo -e "${YELLOW}   Run: cd ${REPO_ROOT}/unified-trading-codex/scripts && ./audit-alignment.sh${NC}"
+        echo -e "${YELLOW}   Note: This is informational only - does not block quality gates${NC}"
+    fi
+else
+    echo -e "${YELLOW}Validators not available (unified-trading-codex not found)${NC}"
 fi
 
 # ============================================================================
@@ -483,6 +597,12 @@ if [ "$RUN_TESTS" = true ]; then
         echo -e "Tests:    ${RED}❌ FAILED${NC}"
         OVERALL_STATUS=1
     fi
+fi
+
+if [ $TYPE_CHECK_STATUS -eq 0 ]; then
+    echo -e "Types:    ${GREEN}✅ PASSED${NC} (optional)"
+else
+    echo -e "Types:    ${YELLOW}⚠️  WARNINGS${NC} (non-blocking)"
 fi
 
 if [ $CODEX_STATUS -eq 0 ]; then

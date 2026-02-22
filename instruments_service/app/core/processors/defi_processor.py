@@ -7,7 +7,7 @@ Extracted from InstrumentProcessingService.fetch_defi_instruments.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Dict, Optional, Protocol
 
 from unified_market_interface.adapters.defi import (
     AaveV3Adapter,
@@ -25,19 +25,31 @@ from unified_market_interface.adapters.defi import (
 from unified_market_interface.adapters.defi import (
     CurveAdapter as CurveRPCAdapter,
 )
-from unified_market_interface.adapters.onchain_perps import AsterAdapter, HyperliquidAdapter
+from unified_market_interface.adapters.onchain_perps import HyperliquidAdapter
 
 from instruments_service.models import InstrumentDefinition
 
 logger = logging.getLogger(__name__)
 
+# Protocol-specific kwargs (str, int, bool, datetime, etc.)
+DefiProtocolKwargs = str | int | bool | None | datetime
+
+
+class DefiServiceProtocol(Protocol):
+    """Protocol for InstrumentProcessingService used by fetch_defi_instruments."""
+
+    venue_mapping: object
+    _graph_api_key: Optional[str]
+    date_filter_service: object
+    ccxt_service: object
+
 
 def fetch_defi_instruments(
-    service: Any,
+    service: DefiServiceProtocol,
     protocol: str,
     chain: str = "ETHEREUM",
     target_date: Optional[datetime] = None,
-    **kwargs: Any,
+    **kwargs: DefiProtocolKwargs,
 ) -> Dict[str, InstrumentDefinition]:
     """
     Fetch DeFi instruments from various protocols.
@@ -57,7 +69,7 @@ def fetch_defi_instruments(
         quote_currency_list = service.venue_mapping.get_defi_mvp_tokens()
         graph_api_key = service._graph_api_key
 
-        raw_instruments: Dict[str, Any] = {}
+        raw_instruments: Dict[str, object] = {}
 
         if protocol.lower() == "uniswap_v3":
             adapter = UniswapV3Adapter(chain=chain, api_key=graph_api_key)
@@ -92,11 +104,10 @@ def fetch_defi_instruments(
             spot_pairs = adapter.fetch_spot_pairs(test_data_availability=False)
             raw_instruments = {**perpetuals, **spot_pairs}
         elif protocol.lower() == "aster":
-            aster_base_assets = service.venue_mapping.hyperliquid_aster_mvp_base_assets
-            adapter = AsterAdapter(base_currency_list=aster_base_assets)
-            perpetuals = adapter.fetch_perpetuals(test_data_availability=False)
-            spot_pairs = adapter.fetch_spot_pairs(test_data_availability=False)
-            raw_instruments = {**perpetuals, **spot_pairs}
+            raise NotImplementedError(
+                "Aster adapter not available (AsterBaseClient removed from UCS). "
+                "Use Hyperliquid or other on-chain perpetual venues."
+            )
         elif protocol.lower() == "uniswap_v2":
             adapter = UniswapV2Adapter(chain=chain, api_key=graph_api_key)
             raw_instruments = adapter.fetch_pools(
@@ -168,14 +179,14 @@ def fetch_defi_instruments(
 
         for inst_key, inst_data in raw_instruments.items():
             try:
-                base_asset = inst_data.get("base_asset", "").upper()
+                base_asset = (inst_data.get("base_asset") or "").upper()
                 if base_asset:
                     if base_asset not in mvp_bases:
                         if base_asset not in base_versions or base_versions[base_asset] not in mvp_bases:
                             logger.debug(f"Skipping {inst_key}: base currency '{base_asset}' not in MVP list")
                             continue
 
-                quote_asset = inst_data.get("quote_asset", "").upper()
+                quote_asset = (inst_data.get("quote_asset") or "").upper()
                 if quote_asset and quote_asset not in mvp_quotes:
                     quote_versions = {
                         "WETH": "ETH",
@@ -221,7 +232,7 @@ def fetch_defi_instruments(
                                 symbol_id=inst_def.exchange_raw_symbol or inst_def.symbol,
                                 instrument_type=inst_def.instrument_type,
                             )
-                            ccxt_exchange_id = service.venue_mapping.venue_to_ccxt.get(venue, "")
+                            ccxt_exchange_id = service.venue_mapping.venue_to_ccxt.get(venue) or ""
                             if not inst_def.ccxt_symbol:
                                 inst_def.ccxt_symbol = default_ccxt_symbol
                             if not inst_def.ccxt_exchange:

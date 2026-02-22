@@ -167,9 +167,9 @@ python -m instruments_service --mode instruments \
 from instruments_service.app.core.instruments_service import InstrumentsService
 from datetime import datetime, timezone
 
-# Initialize service
+# Initialize service (project_id from config or GCP_PROJECT_ID env var)
 config = {
-    'project_id': 'central-element-323112',
+    'project_id': 'your-gcp-project-id-here',
     'enable_ccxt_integration': True
 }
 service = InstrumentsService(config)

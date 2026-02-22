@@ -22,7 +22,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict
 
-from unified_cloud_services import VenueMapping
+from unified_config_interface import VenueMapping
 
 # Simple imports - assumes packages are installed
 from instruments_service import (
@@ -30,6 +30,7 @@ from instruments_service import (
     InstrumentBatchProcessor,
     InstrumentProcessingService,
 )
+from instruments_service.config import get_config
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -49,9 +50,10 @@ async def generate_instruments_batch(start_date: str, end_date: str, force: bool
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d")
 
-    # Configuration for InstrumentProcessingService
+    # Configuration for InstrumentProcessingService (uses config class)
+    instruments_config = get_config()
     config: Dict[str, Any] = {
-        "project_id": "central-element-323112",  # Or use env var GCP_PROJECT_ID
+        "project_id": instruments_config.gcp_project_id,
         "max_batch_size": 1000,
         "lookback_days": 0,
     }

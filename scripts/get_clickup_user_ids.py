@@ -172,7 +172,7 @@ def get_clickup_user_ids():
             print("If Ikenna or Harsh weren't found above, check the list below:")
             print("Look for your email address or name in the list.")
             print()
-            for username_lower, user_info in sorted(all_users.items(), key=lambda x: x[1].get("username", "") or ""):
+            for username_lower, user_info in sorted(all_users.items(), key=lambda x: x[1].get("username") or ""):
                 print(f"   👤 Username: '{user_info.get('username', 'N/A')}'")
                 if user_info.get("name") and user_info["name"] != "N/A":
                     print(f"      Full Name: '{user_info['name']}'")
