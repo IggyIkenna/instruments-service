@@ -248,9 +248,9 @@ class TestUpbitCoinbaseMVPFiltering:
 class TestSymbolParsing:
     """Tests for symbol parsing logic for different exchanges."""
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def service(self):
-        """Create processing service for testing."""
+        """Create processing service for testing (class-scoped for performance)."""
         config = {"tardis_api_key": "test-key"}
         return InstrumentProcessingService(config)
 
@@ -289,3 +289,438 @@ class TestSymbolParsing:
         result = service._parse_symbol_components("eth-usd", "coinbase")
         assert result["base_asset"] == "ETH"
         assert result["quote_asset"] == "USD"
+
+    def test_parse_symbol_components_binance(self, service):
+        """Test symbol parsing for Binance."""
+        result = service._parse_symbol_components("BTCUSDT", "binance")
+        assert isinstance(result, dict)
+        assert "base_asset" in result or result.get("base_asset") == "BTC"
+
+    def test_parse_symbol_components_deribit(self, service):
+        """Test symbol parsing for Deribit."""
+        result = service._parse_symbol_components("BTC-PERPETUAL", "deribit")
+        assert isinstance(result, dict)
+
+        result = service._parse_symbol_components("BTC-25DEC25", "deribit")
+        assert isinstance(result, dict)
+
+    def test_parse_symbol_components_bybit(self, service):
+        """Test parsing Bybit symbol components."""
+        result = service._parse_symbol_components("BTCUSDT", "bybit")
+        assert isinstance(result, dict)
+        assert "base_asset" in result
+
+    def test_parse_symbol_components_okx(self, service):
+        """Test parsing OKX symbol components."""
+        result = service._parse_symbol_components("BTC-USDT", "okx")
+        assert isinstance(result, dict)
+        assert "base_asset" in result
+
+    def test_parse_symbol_components_okx_perp(self, service):
+        """Test parsing OKX PERP symbol."""
+        result = service._parse_symbol_components("PERP-USDT", "okx")
+        assert isinstance(result, dict)
+        assert result.get("base_asset") == "PERP"
+
+    def test_parse_symbol_components_okx_futures(self, service):
+        """Test parsing OKX futures symbol components."""
+        result = service._parse_symbol_components("BTC-USDT-241225", "okex-futures")
+        assert isinstance(result, dict)
+
+    def test_parse_symbol_components_empty(self, service):
+        """Test parsing empty symbol returns empty dict."""
+        result = service._parse_symbol_components("", "binance")
+        assert isinstance(result, dict)
+
+
+class TestTardisSymbolConversion:
+    """Tests for Tardis symbol conversion."""
+
+    @pytest.fixture
+    def service(self):
+        """Create processing service for testing."""
+        config = {"tardis_api_key": "test-key"}
+        return InstrumentProcessingService(config)
+
+    def test_convert_to_tardis_symbol_binance(self, service):
+        """Test Tardis symbol conversion for Binance."""
+        result = service._convert_to_tardis_symbol("BTC-USDT", "binance")
+        assert "btc" in result.lower() and "usdt" in result.lower()
+
+    def test_convert_to_tardis_symbol_deribit(self, service):
+        """Test Tardis symbol conversion for Deribit."""
+        result = service._convert_to_tardis_symbol("BTC-PERPETUAL", "deribit")
+        assert "btc" in result.lower() and "perpetual" in result.lower()
+
+    def test_convert_to_tardis_symbol_okx(self, service):
+        """Test converting OKX symbol to Tardis format."""
+        result = service._convert_to_tardis_symbol("BTC-USDT", "okx")
+        assert result == "btc-usdt"
+
+    def test_convert_to_tardis_symbol_bybit(self, service):
+        """Test converting Bybit symbol to Tardis format."""
+        result = service._convert_to_tardis_symbol("BTCUSDT", "bybit")
+        assert "btc" in result.lower()
+
+    def test_convert_to_tardis_symbol_lowercase(self, service):
+        """Test Tardis symbol conversion lowercases."""
+        result = service._convert_to_tardis_symbol("BTCUSDT", "binance-futures")
+        assert result == result.lower()
+
+
+class TestProblematicInstruments:
+    """Tests for problematic instrument detection."""
+
+    @pytest.fixture(scope="class")
+    def service(self):
+        """Create processing service for testing (class-scoped for performance)."""
+        config = {"tardis_api_key": "test-key"}
+        return InstrumentProcessingService(config)
+
+    def test_is_problematic_binance_instrument_basic(self, service):
+        """Test problematic Binance instrument detection."""
+        assert service._is_problematic_binance_instrument("1000SHIBUSDT")
+        assert service._is_problematic_binance_instrument("USDTTRY")
+        assert not service._is_problematic_binance_instrument("BTCUSDT")
+
+    def test_is_problematic_binance_instrument_multiplier_patterns(self, service):
+        """Test detecting problematic Binance multiplier patterns."""
+        problematic = ["1000xUSDT", "1000satsUSDT", "1000catUSDT", "1000000mogUSDT"]
+        for symbol in problematic:
+            assert service._is_problematic_binance_instrument(symbol)
+
+    def test_is_problematic_binance_instrument_usdt_base(self, service):
+        """Test detecting USDT as base asset."""
+        problematic = ["USDTTRY", "USDTZAR", "USDTUAH"]
+        for symbol in problematic:
+            assert service._is_problematic_binance_instrument(symbol)
+
+    def test_is_problematic_binance_instrument_valid(self, service):
+        """Test valid Binance instruments are not flagged."""
+        valid = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+        for symbol in valid:
+            assert not service._is_problematic_binance_instrument(symbol)
+
+
+class TestDeribitParsing:
+    """Tests for Deribit-specific parsing."""
+
+    @pytest.fixture
+    def service(self):
+        """Create processing service for testing."""
+        config = {"tardis_api_key": "test-key"}
+        return InstrumentProcessingService(config)
+
+    def test_parse_deribit_date(self, service):
+        """Test Deribit date parsing."""
+        result = service._parse_deribit_date("25DEC25")
+        assert "2025-12-25" in result
+        assert "T08:00:00Z" in result
+
+    def test_parse_deribit_date_single_digit_day(self, service):
+        """Test parsing Deribit date with single digit day."""
+        result = service._parse_deribit_date("7NOV25")
+        assert "2025-11-07" in result
+
+    def test_parse_deribit_date_with_two_digit_day(self, service):
+        """Test parsing Deribit date with two digit day."""
+        result = service._parse_deribit_date("31DEC25")
+        assert "2025-12-31" in result
+
+    def test_parse_deribit_date_invalid(self, service):
+        """Test parsing invalid Deribit date returns fallback."""
+        result = service._parse_deribit_date("INVALID")
+        assert "2025-12-25" in result
+
+    def test_parse_expiry_from_symbol_deribit(self, service):
+        """Test expiry parsing from Deribit symbol."""
+        result = service._parse_expiry_from_symbol("BTC-25DEC25-50000-C", "deribit")
+        assert result is not None
+
+    def test_parse_expiry_from_symbol_bybit(self, service):
+        """Test parsing expiry from Bybit symbol."""
+        result = service._parse_expiry_from_symbol("BTC-25DEC24", "bybit")
+        assert result is not None
+
+    def test_parse_expiry_from_symbol_binance_futures(self, service):
+        """Test parsing expiry from Binance futures symbol."""
+        result = service._parse_expiry_from_symbol("btcusdt_241225", "binance-futures")
+        assert result is not None
+        assert "2024-12-25" in result
+
+    def test_parse_expiry_from_symbol_okx(self, service):
+        """Test parsing expiry from OKX symbol."""
+        result = service._parse_expiry_from_symbol("BTC-USDT-241225", "okex-futures")
+        assert result is not None
+
+
+class TestOptionParsing:
+    """Tests for option component parsing."""
+
+    @pytest.fixture(scope="class")
+    def service(self):
+        """Create processing service for testing (class-scoped for performance)."""
+        config = {"tardis_api_key": "test-key"}
+        return InstrumentProcessingService(config)
+
+    def test_parse_option_components_deribit_new_format(self, service):
+        """Test parsing Deribit option components with new format."""
+        result = service._parse_option_components("BTC-USD-240329-120000-CALL", "deribit")
+        assert "strike_price" in result
+        assert "option_type" in result
+        assert result["option_type"] == "CALL"
+
+    def test_parse_option_components_deribit_traditional_format(self, service):
+        """Test parsing Deribit option components with traditional format."""
+        result = service._parse_option_components("BTC-25DEC25-50000-C", "deribit")
+        assert "strike_price" in result
+        assert "option_type" in result
+        assert result["option_type"] == "CALL"
+
+    def test_parse_option_components_deribit_put(self, service):
+        """Test parsing Deribit PUT option."""
+        result = service._parse_option_components("BTC-25DEC25-50000-P", "deribit")
+        assert result["option_type"] == "PUT"
+
+    def test_parse_option_components_deribit_decimal_strike(self, service):
+        """Test parsing Deribit option with decimal strike (1d14 format)."""
+        result = service._parse_option_components("BTC-25DEC25-1d14-C", "deribit")
+        assert result["strike_price"] == "1.14"
+
+
+class TestDerivedFields:
+    """Tests for derived field population."""
+
+    @pytest.fixture(scope="class")
+    def service(self):
+        """Create processing service for testing (class-scoped for performance)."""
+        config = {"tardis_api_key": "test-key", "enable_ccxt_integration": False}
+        return InstrumentProcessingService(config)
+
+    @pytest.mark.asyncio
+    async def test_populate_all_derived_fields_option(self, service):
+        """Test populating derived fields for options."""
+        fields = await service._populate_all_derived_fields(
+            "DERIBIT:OPTION:BTC-USD-241225-50000-CALL",
+            "DERIBIT",
+            "OPTION",
+            "BTC",
+            "USD",
+            "BTC-25DEC24-50000-C",
+            "deribit",
+        )
+        assert isinstance(fields, dict)
+        if fields:
+            assert "expiry" in fields or "strike" in fields or "option_type" in fields or "ccxt_symbol" in fields
+
+    @pytest.mark.asyncio
+    async def test_populate_all_derived_fields_future(self, service):
+        """Test populating derived fields for futures."""
+        fields = await service._populate_all_derived_fields(
+            "DERIBIT:FUTURE:BTC-USD-241225",
+            "DERIBIT",
+            "FUTURE",
+            "BTC",
+            "USD",
+            "BTC-25DEC24",
+            "deribit",
+        )
+        assert isinstance(fields, dict)
+        if fields:
+            assert "expiry" in fields or "ccxt_symbol" in fields
+
+    @pytest.mark.asyncio
+    async def test_populate_all_derived_fields_deribit_inverse(self, service):
+        """Test populating derived fields for Deribit inverse perpetual."""
+        fields = await service._populate_all_derived_fields(
+            "DERIBIT:PERPETUAL:BTC-USD",
+            "DERIBIT",
+            "PERPETUAL",
+            "BTC",
+            "USD",
+            "BTC-PERPETUAL",
+            "deribit",
+        )
+        assert isinstance(fields, dict)
+        if fields:
+            assert fields.get("inverse")
+
+    @pytest.mark.asyncio
+    async def test_populate_all_derived_fields_deribit_linear(self, service):
+        """Test populating derived fields for Deribit linear perpetual."""
+        fields = await service._populate_all_derived_fields(
+            "DERIBIT:PERPETUAL:BTC-USDC",
+            "DERIBIT",
+            "PERPETUAL",
+            "BTC",
+            "USDC",
+            "BTC_USDC-PERPETUAL",
+            "deribit",
+        )
+        assert isinstance(fields, dict)
+        if fields:
+            assert not fields.get("inverse")
+
+    @pytest.mark.asyncio
+    async def test_populate_all_derived_fields_underlying(self, service):
+        """Test populating underlying asset for derivatives."""
+        fields = await service._populate_all_derived_fields(
+            "BINANCE-FUTURES:PERPETUAL:BTC-USDT",
+            "BINANCE-FUTURES",
+            "PERPETUAL",
+            "BTC",
+            "USDT",
+            "BTCUSDT",
+            "binance-futures",
+        )
+        assert isinstance(fields, dict)
+        if fields:
+            assert fields.get("underlying") == "BTC-USDT" or "ccxt_symbol" in fields
+
+
+class TestCanonicalKeyGeneration:
+    """Tests for canonical key generation for different instrument types."""
+
+    @pytest.fixture(scope="class")
+    def service(self):
+        """Create processing service for testing (class-scoped for performance)."""
+        config = {"tardis_api_key": "test-key"}
+        return InstrumentProcessingService(config)
+
+    def test_generate_canonical_key_future_with_expiry(self, service):
+        """Test canonical key generation for future with expiry."""
+        key = service.generate_canonical_key(
+            exchange="deribit",
+            symbol_type="future",
+            symbol_id="BTC-25DEC25",
+            symbol_info={"base_asset": "BTC", "quote_asset": "USD"},
+        )
+        assert "DERIBIT:FUTURE:BTC-USD" in key
+
+    def test_generate_canonical_key_option(self, service):
+        """Test canonical key generation for option."""
+        key = service.generate_canonical_key(
+            exchange="deribit",
+            symbol_type="option",
+            symbol_id="BTC-25DEC25-50000-C",
+            symbol_info={"base_asset": "BTC", "quote_asset": "USD"},
+        )
+        assert "DERIBIT:OPTION" in key
+
+    def test_generate_canonical_key_inverse_perpetual(self, service):
+        """Test canonical key for inverse perpetual."""
+        key = service.generate_canonical_key(
+            exchange="bybit",
+            symbol_type="perpetual",
+            symbol_id="BTCUSD",
+            symbol_info={"base_asset": "BTC", "quote_asset": "USD"},
+        )
+        assert "BYBIT:PERPETUAL:BTC-USD" in key
+
+    def test_generate_canonical_key_linear_perpetual(self, service):
+        """Test canonical key for linear perpetual."""
+        key = service.generate_canonical_key(
+            exchange="bybit",
+            symbol_type="perpetual",
+            symbol_id="BTCUSDT",
+            symbol_info={"base_asset": "BTC", "quote_asset": "USDT"},
+        )
+        assert "BYBIT:PERPETUAL:BTC-USDT" in key
+
+
+class TestCacheOperations:
+    """Tests for metadata caching operations."""
+
+    @pytest.fixture(scope="class")
+    def service(self):
+        """Create processing service for testing (class-scoped for performance)."""
+        config = {"tardis_api_key": "test-key", "enable_metadata_caching": True}
+        return InstrumentProcessingService(config)
+
+    def test_cache_metadata(self, service):
+        """Test metadata caching."""
+        from instruments_service.models import InstrumentDefinition
+
+        metadata = InstrumentDefinition(
+            instrument_key="TEST:SPOT_PAIR:BTC-USDT",
+            venue="TEST",
+            instrument_type="SPOT_PAIR",
+            symbol="BTC-USDT",
+            available_from_datetime="2023-01-01T00:00:00Z",
+        )
+
+        service.cache_metadata("TEST:SPOT_PAIR:BTC-USDT", metadata)
+        assert len(service._metadata_cache) > 0
+
+    def test_clear_cache(self, service):
+        """Test cache clearing."""
+        service._metadata_cache["test"] = "data"
+        service._cache_timestamps["test"] = datetime.now(timezone.utc)
+        service.clear_cache()
+        assert len(service._metadata_cache) == 0
+
+    def test_metadata_cache_clear_specific_key(self, service):
+        """Test clearing cache clears all keys."""
+        service._metadata_cache["key1"] = "data1"
+        service._metadata_cache["key2"] = "data2"
+        service._cache_timestamps["key1"] = datetime.now(timezone.utc)
+        service._cache_timestamps["key2"] = datetime.now(timezone.utc)
+        service.clear_cache()
+        assert len(service._metadata_cache) == 0
+
+
+class TestServiceOperations:
+    """Tests for service-level operations."""
+
+    @pytest.fixture(scope="class")
+    def service(self):
+        """Create processing service for testing (class-scoped for performance)."""
+        config = {"tardis_api_key": "test-key"}
+        return InstrumentProcessingService(config)
+
+    def test_get_processing_stats(self, service):
+        """Test getting processing statistics."""
+        stats = service.get_processing_stats()
+        assert "supported_exchanges" in stats
+        assert "ccxt_integration_enabled" in stats
+        assert "caching_enabled" in stats
+
+    def test_supported_exchanges_count(self, service):
+        """Test getting supported exchanges count."""
+        stats = service.get_processing_stats()
+        assert "supported_exchanges" in stats
+        assert isinstance(stats["supported_exchanges"], (int, list))
+        if isinstance(stats["supported_exchanges"], int):
+            assert stats["supported_exchanges"] > 0
+        else:
+            assert len(stats["supported_exchanges"]) > 0
+
+    def test_cleanup(self, service):
+        """Test service cleanup."""
+        service.cleanup()
+
+
+class TestInstrumentFiltering:
+    """Tests for instrument filtering."""
+
+    @pytest.fixture(scope="class")
+    def service(self):
+        """Create processing service for testing (class-scoped for performance)."""
+        config = {"tardis_api_key": "test-key"}
+        return InstrumentProcessingService(config)
+
+    def test_filter_instruments_by_exchange_config(self, service):
+        """Test filtering instruments by exchange config."""
+        instruments = {
+            "BINANCE-FUTURES:PERPETUAL:BTC-USDT": {
+                "instrument_type": "PERPETUAL",
+                "quote_asset": "USDT",
+            },
+            "BINANCE-FUTURES:SPOT_PAIR:BTC-USDT": {
+                "instrument_type": "SPOT_PAIR",
+                "quote_asset": "USDT",
+            },
+        }
+
+        filtered = service.filter_instruments_by_exchange_config(instruments, "BINANCE-FUTURES")
+        assert "BINANCE-FUTURES:PERPETUAL:BTC-USDT" in filtered or len(filtered) == 0

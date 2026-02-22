@@ -1,27 +1,24 @@
 """
 Instrument Batch Processor
 
-Extends GenericBatchProcessor with instrument specific batch processing logic.
-Handles instrument downloads with lookback computation, date range calculation, and memory estimation.
+Uses unified-cloud-services utils (generate_date_range, split_into_batches) per UCS v1.6.0.
+Replaces GenericBatchProcessor with composition over inheritance.
 """
 
 import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from unified_cloud_services import GenericBatchProcessor
+from unified_cloud_services import generate_date_range, split_into_batches
 
-logger = logging.getLogger(__name__)  # logging
+logger = logging.getLogger(__name__)
 
 
-class InstrumentBatchProcessor(GenericBatchProcessor):
+class InstrumentBatchProcessor:
     """
-    Instrument specific batch processor.
+    Instrument-specific batch processor.
 
-    Extends GenericBatchProcessor with instrument specific logic:
-    - Instrument metadata requirements
-    - Instrument memory estimation
-    - Venue-specific batch orchestration
+    Uses UCS utils for date range and batching (UCS v1.6.0 migration).
     """
 
     def __init__(self, config: dict[str, Any]):
@@ -31,9 +28,6 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
         Args:
             config: Configuration with batch processing settings
         """
-        super().__init__()  # GenericBatchProcessor doesn't take config argument
-
-        # Instrument specific configuration
         self.max_batch_size: int = config.get("max_batch_size", 1000)
         self.lookback_days: int = config.get("lookback_days", 0)  # Default: no lookback for instruments
 
@@ -95,6 +89,8 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
         """
         Get list of required periods (dates) for processing.
 
+        Uses UCS generate_date_range (replaces GenericBatchProcessor.get_required_periods).
+
         Args:
             target_date: Target date for processing
             lookback_days: Optional override for lookback days
@@ -103,16 +99,8 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
             list of datetime objects for each period
         """
         start_date, end_date = self.calculate_date_range(target_date, lookback_days)
-
-        periods = []
-        current_date = start_date
-
-        while current_date <= end_date:
-            periods.append(current_date)
-            current_date += timedelta(days=1)
-
+        periods = generate_date_range(start_date, end_date)
         logger.info(f"Generated {len(periods)} periods for processing")
-
         return periods
 
     def process_batch(
@@ -120,6 +108,8 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
     ) -> list[list[dict[str, Any]]]:
         """
         Split instruments into batches for processing.
+
+        Uses UCS split_into_batches (replaces GenericBatchProcessor.process_batch).
 
         Args:
             instruments: list of instrument dictionaries
@@ -131,11 +121,6 @@ class InstrumentBatchProcessor(GenericBatchProcessor):
         if batch_size is None:
             batch_size = self.max_batch_size
 
-        batches = []
-        for i in range(0, len(instruments), batch_size):
-            batch = instruments[i : i + batch_size]
-            batches.append(batch)
-
+        batches = split_into_batches(instruments, batch_size)
         logger.info(f"Split {len(instruments)} instruments into {len(batches)} batches (batch size: {batch_size})")
-
         return batches

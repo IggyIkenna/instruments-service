@@ -29,6 +29,8 @@ import os
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
+
 logger = logging.getLogger(__name__)
 
 
@@ -191,9 +193,9 @@ class DependencyChecker:
     def _check_api_key(self, api_name: str, secret_name: str) -> DependencyStatus:
         """Check if an API key is available in Secret Manager."""
         try:
-            from unified_cloud_services import get_secret
+            from unified_cloud_services import get_secret_with_fallback
 
-            secret = get_secret(secret_name, project_id=self.project_id)
+            secret = get_secret_with_fallback(secret_name, project_id=self.project_id)
             if secret:
                 return DependencyStatus(
                     name=api_name,
@@ -259,7 +261,6 @@ class DependencyChecker:
             bucket_name = self.OUTPUT_BUCKETS[category].format(project_id=self.project_id)
             blob_path = self.OUTPUT_PATH_TEMPLATE.format(date=date)
 
-            # Use cloud-agnostic service to check existence
             target = CloudTarget(
                 project_id=self.project_id,
                 gcs_bucket=bucket_name,
@@ -267,9 +268,10 @@ class DependencyChecker:
             )
             service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
 
-            # Check if file exists by attempting download with log_errors=False
-            df = service.download_from_gcs(gcs_path=blob_path, format="parquet", log_errors=False)
-            return not df.empty
+            raw = service.download_from_gcs(gcs_path=blob_path, format="parquet", log_errors=False)
+            if not isinstance(raw, pd.DataFrame):
+                return False
+            return not raw.empty
         except Exception as e:
             logger.warning(f"Error checking output: {e}")
             return False

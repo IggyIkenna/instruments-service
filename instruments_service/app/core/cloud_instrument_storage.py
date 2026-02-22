@@ -12,37 +12,30 @@ from typing import Any, Optional
 
 import pandas as pd
 from unified_cloud_services import (
+    CloudTarget,
     ParquetSchemaEnforcer,
+    StandardizedDomainCloudService,
     determine_market_category,
-    get_bucket_for_category,
-    get_config,
     handle_storage_errors,
 )
-from unified_cloud_services.domain import validate_timestamp_date_alignment
+from unified_domain_services import validate_timestamp_date_alignment
 
 from instruments_service.config import instruments_config
 from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
 
 logger = logging.getLogger(__name__)
 
-# Import unified-cloud-services (direct dependency)
-try:
-    from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
-
-    UNIFIED_CLOUD_SERVICES_AVAILABLE = True
-    logger.info("unified-cloud-services is available")
-except ImportError:
-    UNIFIED_CLOUD_SERVICES_AVAILABLE = False
-    logger.warning("unified-cloud-services not available")
+UNIFIED_CLOUD_SERVICES_AVAILABLE = True
 
 # Import centralized sampling service from unified-cloud-services
+_sampling_available = False
 try:
     from unified_cloud_services import create_sampling_service
 
-    SAMPLING_SERVICE_AVAILABLE = True
+    _sampling_available = True
 except ImportError:
-    SAMPLING_SERVICE_AVAILABLE = False
     logger.debug("Sampling service not available")
+SAMPLING_SERVICE_AVAILABLE = _sampling_available
 
 
 class CloudInstrumentStorage:
@@ -54,7 +47,7 @@ class CloudInstrumentStorage:
     Per unified architecture plan specification.
     """
 
-    def __init__(self, cloud_target: CloudTarget = None):
+    def __init__(self, cloud_target: Optional[CloudTarget] = None):
         """Initialize cloud instrument storage with unified-cloud-services."""
         if not UNIFIED_CLOUD_SERVICES_AVAILABLE:
             raise ImportError(
@@ -67,35 +60,21 @@ class CloudInstrumentStorage:
         # Use asia-northeast1 location per .env configuration (GCS: asia-northeast1-c, BigQuery: asia-northeast1)
         # Detect test environment and use test bucket if applicable
         if cloud_target is None:
-            # Check if we're in test mode (pytest or test environment)
-            # Priority: ENVIRONMENT=test > pytest detection > default to prod
-            environment = get_config("ENVIRONMENT", "development").lower()
-            test_bucket = get_config("INSTRUMENTS_GCS_BUCKET_TEST", "")
-            # NOTE: This default is only used when no category is specified.
-            # Production flow should always use category-specific buckets via get_bucket_for_category()
-            prod_bucket = get_config("INSTRUMENTS_GCS_BUCKET_CEFI", instruments_config.get_bucket_for_category("cefi"))
+            cfg = instruments_config
+            environment = (cfg.environment or "development").lower()
+            is_test = environment in ["test", "testing"] or bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
-            # Only use test bucket if explicitly in test environment
-            is_test = (
-                environment in ["test", "testing"]  # Explicit test environment
-                or "pytest" in os.environ.get("_", "")
-                or get_config("PYTEST_CURRENT_TEST", "") != ""
-            )
-
-            # Use test bucket if in test mode, otherwise use prod bucket
             if is_test:
-                bucket_name = test_bucket or "instruments-store-test"
+                bucket_name = cfg.gcs_bucket_test or cfg.gcs_bucket_cefi_test or "instruments-store-test"
                 logger.info(f"🧪 Test mode detected: Using test bucket {bucket_name}")
             else:
-                bucket_name = prod_bucket
+                bucket_name = cfg.gcs_bucket_cefi or cfg.get_bucket_for_category("cefi")
 
             cloud_target = CloudTarget(
-                project_id=get_config("GCP_PROJECT_ID", instruments_config.gcp_project_id),
+                project_id=cfg.gcp_project_id,
                 gcs_bucket=bucket_name,
-                bigquery_dataset=get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
-                bigquery_location=get_config(
-                    "BIGQUERY_LOCATION", "asia-northeast1"
-                ),  # Default to asia-northeast1 per .env
+                bigquery_dataset=cfg.bigquery_dataset or "instruments",
+                bigquery_location=cfg.bigquery_location or "asia-northeast1",
             )
 
         # Create instruments service using direct instantiation (canonical pattern)
@@ -174,30 +153,13 @@ class CloudInstrumentStorage:
                     instruments_df["timestamp"] = datetime.now(timezone.utc)
                     logger.warning("No date parameter provided, using current time for timestamp column")
 
-            # Validate schema using unified-cloud-services SchemaValidator (DRY)
-            # Domain-specific schema definition provides required columns list
-            try:
-                from unified_cloud_services import SchemaValidator
+            # Validate required columns (ParquetSchemaEnforcer for full validation; minimal check here)
+            from instruments_service.schemas.parquet import get_required_columns
 
-                from instruments_service.schemas.parquet import get_required_columns
-
-                validator = SchemaValidator()
-                required_columns = get_required_columns()
-                result = validator.validate_dataframe_schema(df=instruments_df, required_columns=required_columns)
-
-                if not result.valid:
-                    raise ValueError(f"Schema validation failed: {result.errors}")
-            except ImportError:
-                # Fallback if schema modules not available
-                required_columns = [
-                    "instrument_key",
-                    "venue",
-                    "instrument_type",
-                    "available_from_datetime",
-                ]
-                missing_columns = [col for col in required_columns if col not in instruments_df.columns]
-                if missing_columns:
-                    raise ValueError(f"Missing required columns: {missing_columns}")
+            required_columns = get_required_columns()
+            missing_columns = [col for col in required_columns if col not in instruments_df.columns]
+            if missing_columns:
+                raise ValueError(f"Missing required columns: {missing_columns}")
 
             # Convert timestamp columns for GCS storage
             timestamp_columns = [
@@ -255,12 +217,9 @@ class CloudInstrumentStorage:
             all_successful = True
 
             # Detect test mode for bucket selection
-            environment = get_config("ENVIRONMENT", "development").lower()
-            is_test = (
-                environment in ["test", "testing"]
-                or "pytest" in os.environ.get("_", "")
-                or get_config("PYTEST_CURRENT_TEST", "") != ""
-            )
+            cfg = instruments_config
+            environment = (cfg.environment or "development").lower()
+            is_test = environment in ["test", "testing"] or bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
             # Group uploads by bucket to use batch upload per bucket
             # (each bucket needs its own cloud service)
@@ -270,15 +229,14 @@ class CloudInstrumentStorage:
             schema_enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
 
             for category, category_df in category_groups:
-                category_bucket = get_bucket_for_category(category, test_mode=is_test)
+                category_str = str(category)
+                category_bucket = cfg.get_bucket_for_category(category_str, test_mode=is_test)
 
                 # NEW: Group by venue within category for by-venue folder structure
-                # This enables turbo mode venue-level status checks without opening parquet files
                 venue_groups = category_df.groupby("venue")
 
                 for venue, venue_df in venue_groups:
-                    # Sanitize venue name for folder (replace slashes, etc.)
-                    venue_folder = venue.replace("/", "-").replace("\\", "-")
+                    venue_folder = str(venue).replace("/", "-").replace("\\", "-")
                     # Use key=value format for BigQuery hive partitioning
                     gcs_path = (
                         f"instrument_availability/by_date/day={date_str}/venue={venue_folder}/instruments.parquet"
@@ -311,15 +269,14 @@ class CloudInstrumentStorage:
                             venue_df_to_store[col] = pd.to_numeric(venue_df_to_store[col], errors="coerce")
                     for col in _INT64_COLS:
                         if col in venue_df_to_store.columns:
-                            venue_df_to_store[col] = pd.to_numeric(venue_df_to_store[col], errors="coerce").astype(
-                                "Int64"
-                            )
+                            ser = pd.to_numeric(venue_df_to_store[col], errors="coerce")
+                            venue_df_to_store[col] = ser.astype("Int64") if hasattr(ser, "astype") else ser
                     for col in _BOOL_COLS:
                         if col in venue_df_to_store.columns:
                             venue_df_to_store[col] = venue_df_to_store[col].astype("boolean")
 
                     # Validate schema before upload
-                    dimensions = {"category": category}
+                    dimensions: dict[str, str] = {"category": category_str}
                     validation_result = schema_enforcer.validate_dataframe(venue_df_to_store, dimensions)
 
                     if not validation_result.valid:

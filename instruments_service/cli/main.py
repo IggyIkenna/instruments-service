@@ -36,7 +36,7 @@ def _load_env_early():
 _load_env_early()
 
 # Setup structured JSON logging (split libraries - direct import per dependency matrix)
-from unified_events_interface import PerformanceTracer, setup_events
+from unified_events_interface import log_event, setup_events
 
 setup_events(mode="batch", service_name="instruments-service")
 
@@ -204,13 +204,9 @@ def main() -> Dict[str, Any]:
         if hasattr(args, "venues") and args.venues:
             handler_kwargs["venues"] = args.venues
 
-        # Execute handler with performance tracing
-        tracer = PerformanceTracer(service_name="instruments-service")
-        try:
-            with tracer.span("handler_run", details={"mode": args.mode}):
-                result = handler.run(**handler_kwargs)
-        finally:
-            tracer.log_summary(event_name="PROCESSING_COMPLETED")
+        # Execute handler
+        result = handler.run(**handler_kwargs)
+        log_event("PROCESSING_COMPLETED", details={"mode": args.mode})
 
         # Cleanup
         handler.cleanup()

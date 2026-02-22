@@ -139,7 +139,7 @@ def download_hyperliquid_data_to_csv(coin: str, target_date: datetime, output_di
                     for candle in candles:
                         writer.writerow(
                             {
-                                "timestamp": candle.get("t", ""),
+                                "timestamp": candle.get("t") or "",
                                 "open_time": (
                                     datetime.fromtimestamp(candle.get("t", 0) / 1000, tz=timezone.utc).isoformat()
                                     if candle.get("t")
@@ -150,14 +150,14 @@ def download_hyperliquid_data_to_csv(coin: str, target_date: datetime, output_di
                                     if candle.get("T")
                                     else ""
                                 ),
-                                "symbol": candle.get("s", ""),
-                                "interval": candle.get("i", ""),
-                                "open": candle.get("o", ""),
-                                "high": candle.get("h", ""),
-                                "low": candle.get("l", ""),
-                                "close": candle.get("c", ""),
-                                "volume": candle.get("v", ""),
-                                "trades": candle.get("n", ""),
+                                "symbol": candle.get("s") or "",
+                                "interval": candle.get("i") or "",
+                                "open": candle.get("o") or "",
+                                "high": candle.get("h") or "",
+                                "low": candle.get("l") or "",
+                                "close": candle.get("c") or "",
+                                "volume": candle.get("v") or "",
+                                "trades": candle.get("n") or "",
                             }
                         )
                 logger.info(f"  ✅ Saved {len(candles)} candles to {candles_file}")
@@ -195,15 +195,15 @@ def download_hyperliquid_data_to_csv(coin: str, target_date: datetime, output_di
 
                     book_snapshots.append(
                         {
-                            "timestamp": book_data.get("time", ""),
+                            "timestamp": book_data.get("time") or "",
                             "sample_time": sample_time.isoformat(),
                             "coin": coin,
                             "bids_count": len(bids),
                             "asks_count": len(asks),
-                            "best_bid_price": bids[0].get("px", "") if bids else "",
-                            "best_bid_size": bids[0].get("sz", "") if bids else "",
-                            "best_ask_price": asks[0].get("px", "") if asks else "",
-                            "best_ask_size": asks[0].get("sz", "") if asks else "",
+                            "best_bid_price": (bids[0].get("px") or "") if bids else "",
+                            "best_bid_size": (bids[0].get("sz") or "") if bids else "",
+                            "best_ask_price": (asks[0].get("px") or "") if asks else "",
+                            "best_ask_size": (asks[0].get("sz") or "") if asks else "",
                         }
                     )
 
@@ -268,13 +268,13 @@ def download_aster_data_to_csv(symbol: str, target_date: datetime, output_dir: P
                         )
                         writer.writerow(
                             {
-                                "id": trade.get("id", ""),
-                                "price": trade.get("price", ""),
-                                "qty": trade.get("qty", ""),
-                                "quoteQty": trade.get("quoteQty", ""),
-                                "time": trade.get("time", ""),
+                                "id": trade.get("id") or "",
+                                "price": trade.get("price") or "",
+                                "qty": trade.get("qty") or "",
+                                "quoteQty": trade.get("quoteQty") or "",
+                                "time": trade.get("time") or "",
                                 "datetime": (trade_time.isoformat() if trade_time else ""),
-                                "isBuyerMaker": trade.get("isBuyerMaker", ""),
+                                "isBuyerMaker": trade.get("isBuyerMaker") or "",
                             }
                         )
                 logger.info(f"  ✅ Saved {len(trades)} trades to {trades_file}")
@@ -322,9 +322,9 @@ def download_aster_data_to_csv(symbol: str, target_date: datetime, output_dir: P
                             "",
                             "",
                             "",
-                            book_data.get("lastUpdateId", ""),
-                            book_data.get("E", ""),
-                            book_data.get("T", ""),
+                            book_data.get("lastUpdateId") or "",
+                            book_data.get("E") or "",
+                            book_data.get("T") or "",
                         ]
                     )
 
