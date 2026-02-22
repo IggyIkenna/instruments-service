@@ -2,7 +2,7 @@
 Extended unit tests for configuration to increase coverage to 80%+.
 """
 
-from unified_cloud_services import (
+from unified_config_interface import (
     DataTypeConfig,
     ExchangeInstrumentConfig,
     VenueMapping,

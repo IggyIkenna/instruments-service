@@ -21,8 +21,8 @@ from tests.conftest import get_config
 @pytest.fixture
 def config():
     """Configuration for handlers - uses real project if available."""
-    # Use real project ID from environment or default
-    project_id = get_config("GCP_PROJECT_ID", "central-element-323112")
+    # Use project ID from environment/config or test placeholder
+    project_id = get_config("GCP_PROJECT_ID", "test-project")
     return {
         "project_id": project_id,
     }

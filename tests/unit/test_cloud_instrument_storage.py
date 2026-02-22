@@ -50,14 +50,6 @@ class TestCloudInstrumentStorage:
         mock_sampling_service = Mock()
         mock_sampling_service.generate_csv_sample = Mock()
 
-        # Mock SchemaValidator to return valid result by default
-        # SchemaValidator is imported inside store_instruments method, so patch it at unified_cloud_services level
-        mock_validator = Mock()
-        mock_validation_result = Mock()
-        mock_validation_result.valid = True
-        mock_validation_result.errors = []
-        mock_validator.validate_dataframe_schema = Mock(return_value=mock_validation_result)
-
         # Mock ParquetSchemaEnforcer to return valid result (for per-venue validation)
         mock_schema_enforcer = Mock()
         mock_schema_validation_result = Mock()
@@ -85,15 +77,10 @@ class TestCloudInstrumentStorage:
                 "instruments_service.app.core.cloud_instrument_storage.create_sampling_service",
                 return_value=mock_sampling_service,
             ),
-            # SchemaValidator is imported inside store_instruments, patch at unified_cloud_services level
+            # Mock instruments_config (used for get_bucket_for_category in store_instruments)
             patch(
-                "unified_cloud_services.SchemaValidator",
-                return_value=mock_validator,
-            ),
-            # Mock get_bucket_for_category to return a simple bucket name
-            patch(
-                "instruments_service.app.core.cloud_instrument_storage.get_bucket_for_category",
-                return_value="test-bucket",
+                "instruments_service.app.core.cloud_instrument_storage.instruments_config",
+                Mock(get_bucket_for_category=Mock(return_value="test-bucket")),
             ),
             # Mock ParquetSchemaEnforcer for per-venue validation
             patch(
@@ -109,10 +96,8 @@ class TestCloudInstrumentStorage:
         try:
             storage = CloudInstrumentStorage(cloud_target=mock_cloud_target)
             storage.cloud_service = mock_cloud_service
-            # Store reference to category service, validator, and patches for cleanup
+            # Store reference to category service, schema validation result, and patches for cleanup
             storage._mock_category_service = mock_category_service
-            storage._mock_validator = mock_validator
-            storage._mock_validation_result = mock_validation_result
             storage._mock_schema_enforcer = mock_schema_enforcer
             storage._mock_schema_validation_result = mock_schema_validation_result
             storage._patches = patches
@@ -241,12 +226,14 @@ class TestCloudInstrumentStorage:
         assert len(result) == 0
 
     def test_store_instruments_missing_columns(self, storage):
-        """Test storing instruments with missing required columns."""
+        """Test storing instruments when schema validation fails (per-venue validation)."""
         df = pd.DataFrame(
             {
                 "instrument_key": ["TEST:SPOT_PAIR:BTC-USDT"],
-                "venue": ["TEST"],  # Need venue for groupby
-                # Missing required columns
+                "venue": ["TEST"],
+                "instrument_type": ["SPOT_PAIR"],
+                "symbol": ["BTC-USDT"],
+                "available_from_datetime": ["2024-01-01T00:00:00Z"],
             }
         )
 
@@ -254,7 +241,7 @@ class TestCloudInstrumentStorage:
         storage._mock_schema_validation_result.valid = False
         storage._mock_schema_validation_result.errors = ["Missing required columns"]
 
-        # Storage returns False when validation fails, doesn't raise ValueError
+        # Storage returns False when validation fails (skips venue, all_successful=False)
         result = storage.store_instruments(df, table_name="instruments")
         assert result is False
 

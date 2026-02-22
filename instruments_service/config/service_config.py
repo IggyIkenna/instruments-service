@@ -9,16 +9,17 @@ from typing import Optional
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import SettingsConfigDict
-from unified_cloud_services import CloudTarget, UnifiedCloudServicesConfig
+from unified_cloud_services import CloudTarget
+from unified_config_interface import UnifiedCloudConfig
 
 logger = logging.getLogger(__name__)
 
 
-class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
+class InstrumentsServiceConfig(UnifiedCloudConfig):
     """
     Service-level configuration for instruments-service.
 
-    Extends UnifiedCloudServicesConfig with instruments-specific settings.
+    Extends UnifiedCloudConfig with instruments-specific settings.
     """
 
     model_config = SettingsConfigDict(

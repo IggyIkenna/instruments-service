@@ -41,17 +41,9 @@ def get_envio_secret():
             return token.strip()
         return None
     except ImportError:
-        # Fallback to direct GCP Secret Manager
-        try:
-            from google.cloud import secretmanager
-
-            client = secretmanager.SecretManagerServiceClient()
-            name = f"projects/{project_id}/secrets/{secret_id}/versions/latest"
-            response = client.access_secret_version(name=name)
-            return response.payload.data.decode("UTF-8").strip()
-        except Exception as e:
-            print(f"❌ Error retrieving secret: {e}")
-            return None
+        # unified-cloud-services not available
+        print("❌ unified-cloud-services not installed, cannot retrieve secret")
+        return None
     except Exception as e:
         print(f"❌ Error retrieving secret: {e}")
         return None

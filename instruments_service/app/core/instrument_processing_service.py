@@ -25,20 +25,22 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-import unified_cloud_services.core.subgraph_service as sg_module
+import unified_market_interface.clients.subgraph_service as sg_module
 import unified_market_interface.clients.thegraph_base_client as tgc_module
-
-# Import centralized models and configs (DRY principle)
 from unified_cloud_services import (
-    DataTypeConfig,
-    DateFilterService,
-    ExchangeInstrumentConfig,
-    SubgraphService,
-    VenueMapping,
     determine_market_category,
     get_secret_with_fallback,
     handle_api_errors,
 )
+
+# Import centralized models and configs (DRY principle)
+from unified_config_interface import (
+    DataTypeConfig,
+    ExchangeInstrumentConfig,
+    VenueMapping,
+)
+from unified_domain_services.instrument_date_filter import DateFilterService
+from unified_market_interface import SubgraphService
 from unified_market_interface.adapters.defi import (
     AaveV3Adapter,
     BalancerAdapter,
@@ -55,10 +57,7 @@ from unified_market_interface.adapters.defi import (
 from unified_market_interface.adapters.defi import (
     CurveAdapter as CurveRPCAdapter,
 )
-from unified_market_interface.adapters.onchain_perps import (
-    AsterAdapter,
-    HyperliquidAdapter,
-)
+from unified_market_interface.adapters.onchain_perps import HyperliquidAdapter
 from unified_market_interface.adapters.tradfi import DatabentoAdapter, TardisAdapter
 
 from instruments_service.config import instruments_config
@@ -189,13 +188,11 @@ class InstrumentProcessingService:
             if self._graph_api_key:
                 self._graph_api_key = self._graph_api_key.strip()
 
-                # Also set it in TheGraphClient's module-level cache
-                tgc_module._API_KEY_CACHE = self._graph_api_key
-                tgc_module._API_KEY_PROJECT_ID = project_id_for_graph
-
-                # Also set it in SubgraphService's module-level cache
-                sg_module._GRAPH_API_KEY_CACHE = self._graph_api_key
-                sg_module._GRAPH_API_KEY_PROJECT_ID = project_id_for_graph
+                # Also set it in TheGraphClient's module-level cache (runtime injection)
+                setattr(tgc_module, "_API_KEY_CACHE", self._graph_api_key)
+                setattr(tgc_module, "_API_KEY_PROJECT_ID", project_id_for_graph)
+                setattr(sg_module, "_GRAPH_API_KEY_CACHE", self._graph_api_key)
+                setattr(sg_module, "_GRAPH_API_KEY_PROJECT_ID", project_id_for_graph)
                 logger.info("✅ Retrieved and cached Graph API key at initialization")
         except Exception as e:
             logger.debug(f"Could not retrieve Graph API key at initialization: {e}")
@@ -314,14 +311,14 @@ class InstrumentProcessingService:
             return None
 
         # Extract base and quote assets from symbol ID (Tardis doesn't provide them as separate fields)
-        base_asset = str(symbol_info.get("base_asset", "") or "").upper()
-        quote_asset = str(symbol_info.get("quote_asset", "") or "").upper()
+        base_asset = str(symbol_info.get("base_asset") or "").upper()
+        quote_asset = str(symbol_info.get("quote_asset") or "").upper()
 
         # If not provided, parse from symbol_id
         if not base_asset or not quote_asset:
             parsed_components = self._parse_symbol_components(symbol_id, exchange)
-            base_asset = str(parsed_components.get("base_asset", "") or "").upper()
-            quote_asset = str(parsed_components.get("quote_asset", "") or "").upper()
+            base_asset = str(parsed_components.get("base_asset") or "").upper()
+            quote_asset = str(parsed_components.get("quote_asset") or "").upper()
 
         if not base_asset or not quote_asset:
             # Skip problematic instruments with debug logging instead of warning (use context7)
@@ -473,14 +470,14 @@ class InstrumentProcessingService:
             # Extract option parameters (parse from symbol_id if not provided)
             expiry_date = symbol_info.get("expiry_date")
             strike_price = symbol_info.get("strike_price")
-            option_type = symbol_info.get("option_type", "").upper()
+            option_type = (symbol_info.get("option_type") or "").upper()
 
             # Parse from symbol_id if not provided (Tardis format)
             if not all([expiry_date, strike_price, option_type]):
                 parsed_option = self._parse_option_components(symbol_id, exchange)
                 expiry_date = expiry_date or parsed_option.get("expiry_date")
                 strike_price = strike_price or parsed_option.get("strike_price")
-                option_type = option_type or parsed_option.get("option_type", "").upper()
+                option_type = option_type or (parsed_option.get("option_type") or "").upper()
 
             if not all([expiry_date, strike_price, option_type]):
                 logger.warning(f"Missing option parameters for {symbol_id}")
@@ -561,7 +558,10 @@ class InstrumentProcessingService:
 
     @handle_api_errors(max_retries=3)
     async def fetch_exchange_instruments(
-        self, exchange: str, target_date: datetime = None, force: bool = False
+        self,
+        exchange: str,
+        target_date: Optional[datetime] = None,
+        force: bool = False,
     ) -> Tuple[Dict[str, Dict[str, Any]], int]:
         """
         Fetch instrument data from Tardis API for specific exchange.
@@ -594,14 +594,14 @@ class InstrumentProcessingService:
             force_refresh=force,
         )
         # Convert list to dict keyed by symbol_id
-        available_symbols = {symbol.get("id", ""): symbol for symbol in available_symbols_list if symbol.get("id")}
+        available_symbols = {(symbol.get("id") or ""): symbol for symbol in available_symbols_list if symbol.get("id")}
 
         # Filter instruments available at target date AND exclude unwanted types
         instruments_data = {}
         for symbol_id, symbol in available_symbols.items():
             if not symbol_id:  # Skip if symbol_id is empty
                 continue
-            symbol_type = symbol.get("type", "")
+            symbol_type = symbol.get("type") or ""
 
             # Filter excluded instrument types (e.g., combos)
             if symbol_type in self.data_config.excluded_instrument_types:
@@ -626,7 +626,10 @@ class InstrumentProcessingService:
         return instruments_data, date_filtered_count
 
     async def process_exchange_instruments(
-        self, exchange: str, target_date: datetime = None, force: bool = False
+        self,
+        exchange: str,
+        target_date: Optional[datetime] = None,
+        force: bool = False,
     ) -> Dict[str, InstrumentDefinition]:
         """
         Process all instruments for an exchange and generate canonical keys.
@@ -644,9 +647,7 @@ class InstrumentProcessingService:
         instruments_data, date_filtered_count = await self.fetch_exchange_instruments(exchange, target_date, force)
 
         # CRITICAL OPTIMIZATION: Apply exchange config filtering BEFORE expensive processing
-        # This filters out invalid instrument types, quote currencies (even in force mode)
-        # Expected to reduce from ~250k to ~10k instruments across all exchanges
-        canonical_venue = self.normalize_venue(exchange)
+        canonical_venue = self.normalize_venue(exchange) or exchange
         valid_types = self.exchange_config.exchange_instrument_types.get(canonical_venue, [])
         valid_quotes = self.exchange_config.valid_quote_currencies.get(canonical_venue, ["USDT"])
 
@@ -661,7 +662,7 @@ class InstrumentProcessingService:
         # Pre-filter by exchange config before expensive processing
         pre_filtered = {}
         for symbol_id, symbol_info in instruments_data.items():
-            symbol_type = symbol_info.get("type", "").lower()
+            symbol_type = (symbol_info.get("type") or "").lower()
             normalized_type = self.normalize_instrument_type(symbol_type)
 
             # Filter by valid instrument types for this exchange
@@ -685,8 +686,8 @@ class InstrumentProcessingService:
             # Quick parse base and quote currency to check validity (before full processing)
             parsed_components = self._parse_symbol_components(symbol_id, exchange)
             if isinstance(parsed_components, dict):
-                base_asset = parsed_components.get("base_asset", "").upper()
-                quote_asset = parsed_components.get("quote_asset", "").upper()
+                base_asset = (parsed_components.get("base_asset") or "").upper()
+                quote_asset = (parsed_components.get("quote_asset") or "").upper()
             else:
                 base_asset, quote_asset = parsed_components if parsed_components else ("", "")
                 base_asset = base_asset.upper() if base_asset else ""
@@ -719,7 +720,7 @@ class InstrumentProcessingService:
                 # Parse base asset from symbol_id
                 parsed_components = self._parse_symbol_components(symbol_id, exchange)
                 if isinstance(parsed_components, dict):
-                    base_asset = parsed_components.get("base_asset", "").upper()
+                    base_asset = (parsed_components.get("base_asset") or "").upper()
                 else:
                     base_asset, _ = parsed_components if parsed_components else ("", "")
                     base_asset = base_asset.upper() if base_asset else ""
@@ -756,7 +757,7 @@ class InstrumentProcessingService:
                 # Generate canonical key
                 canonical_key = self.generate_canonical_key(
                     exchange=exchange,
-                    symbol_type=symbol_info.get("type", ""),
+                    symbol_type=(symbol_info.get("type") or ""),
                     symbol_id=symbol_id,
                     symbol_info=symbol_info,
                 )
@@ -765,7 +766,7 @@ class InstrumentProcessingService:
                     filter_stats["no_canonical_key"] += 1
                     if exchange == "deribit":
                         logger.debug(
-                            f"🚫 Deribit: No canonical key for {symbol_id} (type: {symbol_info.get('type', '')})"
+                            f"🚫 Deribit: No canonical key for {symbol_id} (type: {symbol_info.get('type') or ''})"
                         )
                     continue
 
@@ -773,8 +774,8 @@ class InstrumentProcessingService:
                     # Parse base/quote from symbol_id (Tardis doesn't provide these fields)
                     parsed_components = self._parse_symbol_components(symbol_id, exchange)
                     if isinstance(parsed_components, dict):
-                        base_asset = parsed_components.get("base_asset", "")
-                        quote_asset = parsed_components.get("quote_asset", "")
+                        base_asset = parsed_components.get("base_asset") or ""
+                        quote_asset = parsed_components.get("quote_asset") or ""
                     else:
                         base_asset, quote_asset = parsed_components if parsed_components else ("", "")
 
@@ -807,7 +808,7 @@ class InstrumentProcessingService:
                     enhanced_fields = await self._populate_all_derived_fields(
                         canonical_key,
                         canonical_venue,
-                        self.normalize_instrument_type(symbol_info.get("type", "")),
+                        self.normalize_instrument_type(symbol_info.get("type") or ""),
                         clean_base,
                         clean_quote,
                         symbol_id,
@@ -815,7 +816,7 @@ class InstrumentProcessingService:
                     )
 
                     # Create metadata object with ALL fields including derived ones - FIXED for InstrumentDefinition schema
-                    normalized_instrument_type = self.normalize_instrument_type(symbol_info.get("type", ""))
+                    normalized_instrument_type = self.normalize_instrument_type(symbol_info.get("type") or "")
 
                     # CRITICAL: Set data_types based on instrument_type from config
                     # All instrument types (including OPTION) now use config-based data types
@@ -961,7 +962,7 @@ class InstrumentProcessingService:
                             symbol_id, exchange
                         ),  # ✅ FIXED: Convert to proper Tardis format
                         tardis_exchange=tardis_exchange,  # ✅ FIXED: Set from venue+instrument_type mapping
-                        available_from_datetime=symbol_info.get("availableSince", ""),
+                        available_from_datetime=symbol_info.get("availableSince") or "",
                         available_to_datetime=available_to_datetime,  # ✅ FIXED: Now properly populated from Tardis or expiry
                         data_types=data_types_str,  # ✅ FIXED: Set from config based on instrument_type
                         # Include derived fields directly in model creation (FIXED for validation timing use context7)
@@ -1061,13 +1062,13 @@ class InstrumentProcessingService:
         for inst_key, inst_data in instruments.items():
             try:
                 # Check instrument type is valid for this exchange
-                inst_type = inst_data.get("instrument_type", "")
+                inst_type = inst_data.get("instrument_type") or ""
                 if inst_type not in valid_types:
                     logger.debug(f"❌ Filtered out {inst_key}: {inst_type} not valid for {canonical_venue}")
                     continue
 
                 # Check quote currency is valid for this exchange (FIXED - was not working)
-                quote_asset = inst_data.get("quote_asset", "").upper()
+                quote_asset = (inst_data.get("quote_asset") or "").upper()
                 if quote_asset not in valid_quotes:
                     logger.debug(
                         f"🚫 Filtered out {inst_key}: quote '{quote_asset}' not in valid quotes {valid_quotes} for {canonical_venue}"
@@ -1075,7 +1076,7 @@ class InstrumentProcessingService:
                     continue
 
                 # Check excluded base currencies
-                base_asset = inst_data.get("base_asset", "").upper()
+                base_asset = (inst_data.get("base_asset") or "").upper()
                 if base_asset in excluded_bases:
                     logger.debug(
                         f"🚫 Filtered out {inst_key}: base currency '{base_asset}' excluded for {canonical_venue}"
@@ -1083,7 +1084,7 @@ class InstrumentProcessingService:
                     continue
 
                 # Check excluded symbol patterns (e.g., leveraged products like 3L, 2L)
-                symbol = inst_data.get("symbol", "").upper()
+                symbol = (inst_data.get("symbol") or "").upper()
                 if excluded_patterns:
                     excluded_by_pattern = False
                     for pattern in excluded_patterns:
@@ -1120,8 +1121,8 @@ class InstrumentProcessingService:
         ]:
             inst_data["venue_type"] = "derivatives"
             # Add underlying for derivatives (base_asset-quote_asset)
-            base_asset = inst_data.get("base_asset", "")
-            quote_asset = inst_data.get("quote_asset", "")
+            base_asset = inst_data.get("base_asset") or ""
+            quote_asset = inst_data.get("quote_asset") or ""
             if base_asset and quote_asset:
                 inst_data["underlying"] = f"{base_asset}-{quote_asset}"
         else:
@@ -1622,8 +1623,8 @@ class InstrumentProcessingService:
                 derived_fields.update(
                     {
                         "expiry": option_components.get("expiry_date", "2025-12-25T08:00:00Z"),
-                        "strike": option_components.get("strike_price", ""),
-                        "option_type": option_components.get("option_type", "").upper(),
+                        "strike": option_components.get("strike_price") or "",
+                        "option_type": (option_components.get("option_type") or "").upper(),
                     }
                 )
                 logger.debug(
@@ -1665,9 +1666,9 @@ class InstrumentProcessingService:
                         {
                             "ccxt_symbol": ccxt_metadata.get("ccxt_symbol", default_ccxt_symbol),
                             "ccxt_exchange": ccxt_metadata.get("ccxt_exchange", ccxt_exchange_id or ""),
-                            "tick_size": ccxt_metadata.get("tick_size", ""),
-                            "min_size": ccxt_metadata.get("min_size", ""),
-                            "contract_size": ccxt_metadata.get("contract_size", ""),
+                            "tick_size": ccxt_metadata.get("tick_size") or "",
+                            "min_size": ccxt_metadata.get("min_size") or "",
+                            "contract_size": ccxt_metadata.get("contract_size") or "",
                         }
                     )
                 else:
@@ -1681,7 +1682,9 @@ class InstrumentProcessingService:
                 # are only for derivatives (PERPETUAL, FUTURE), but max_position_size applies to all
 
                 # Get CCXT symbol format for leverage tiers lookup
-                ccxt_symbol_for_tiers = ccxt_metadata.get("ccxt_symbol", "") if ccxt_metadata else default_ccxt_symbol
+                ccxt_symbol_for_tiers = (
+                    (ccxt_metadata.get("ccxt_symbol") or "") if ccxt_metadata else default_ccxt_symbol
+                )
 
                 leverage_limits = self.ccxt_service.get_leverage_limits(
                     venue=venue,
@@ -2196,15 +2199,10 @@ class InstrumentProcessingService:
                 raw_instruments = {**perpetuals, **spot_pairs}
 
             elif protocol.lower() == "aster":
-                # Use MVP base assets from spec guide (21 trading assets), not DeFi tokens
-                aster_base_assets = self.venue_mapping.hyperliquid_aster_mvp_base_assets
-                adapter = AsterAdapter(base_currency_list=aster_base_assets)
-                # Fetch both perpetuals and spot pairs for MVP coins
-                # Quote currency is USDC (both Hyperliquid and Aster support USDC)
-                # Note: Aster spot markets may be illiquid, but we include them for completeness
-                perpetuals = adapter.fetch_perpetuals(test_data_availability=False)
-                spot_pairs = adapter.fetch_spot_pairs(test_data_availability=False)
-                raw_instruments = {**perpetuals, **spot_pairs}
+                raise NotImplementedError(
+                    "Aster adapter not available (AsterBaseClient removed from UCS). "
+                    "Use Hyperliquid or other on-chain perpetual venues."
+                )
 
             elif protocol.lower() == "uniswap_v2":
                 adapter = UniswapV2Adapter(chain=chain, api_key=graph_api_key)
@@ -2298,7 +2296,7 @@ class InstrumentProcessingService:
             for inst_key, inst_data in raw_instruments.items():
                 try:
                     # CRITICAL: Filter out instruments where base currency is not in MVP list
-                    base_asset = inst_data.get("base_asset", "").upper()
+                    base_asset = (inst_data.get("base_asset") or "").upper()
                     if base_asset:
                         if base_asset not in mvp_bases:
                             # Check if it's a wrapped/staked version
@@ -2307,7 +2305,7 @@ class InstrumentProcessingService:
                                 continue
 
                     # CRITICAL: Filter out instruments where quote currency is not in MVP list
-                    quote_asset = inst_data.get("quote_asset", "").upper()
+                    quote_asset = (inst_data.get("quote_asset") or "").upper()
                     if quote_asset and quote_asset not in mvp_quotes:
                         # Also check if it's a wrapped/staked version (e.g., WETH, WSTETH, weETH)
                         # These should be allowed if the base version is in MVP list
@@ -2364,7 +2362,7 @@ class InstrumentProcessingService:
                                     symbol_id=inst_def.exchange_raw_symbol or inst_def.symbol,
                                     instrument_type=inst_def.instrument_type,
                                 )
-                                ccxt_exchange_id = self.venue_mapping.venue_to_ccxt.get(venue, "")
+                                ccxt_exchange_id = self.venue_mapping.venue_to_ccxt.get(venue) or ""
                                 if not inst_def.ccxt_symbol:
                                     inst_def.ccxt_symbol = default_ccxt_symbol
                                 if not inst_def.ccxt_exchange:

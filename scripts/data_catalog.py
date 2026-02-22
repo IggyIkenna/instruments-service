@@ -137,7 +137,7 @@ class CatalogReport:
 
 def get_cloud_service(bucket_name: str):
     """Get cloud-agnostic service for a bucket."""
-    mock_mode = os.environ.get("CLOUD_MOCK_MODE", "").lower() == "true"
+    mock_mode = (os.environ.get("CLOUD_MOCK_MODE") or "").lower() == "true"
 
     if mock_mode:
         logger.warning("Running in MOCK mode - no real storage checks")
