@@ -8,39 +8,66 @@ No missing data report dependencies - pure force/skip logic.
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import TypedDict, cast
 
-from unified_cloud_services import VenueMapping, get_date_range, parse_date
+from unified_cloud_services import get_date_range, parse_date
+from unified_config_interface import VenueMapping
 
 from instruments_service.app.core.cloud_data_provider import CloudDataProvider
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.instruments_service import InstrumentsService
 from instruments_service.app.core.selective_validation import validate_required_api_keys
-from instruments_service.cli.base_handler import ModeHandler
+from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.config import get_config
-from instruments_service.events import log_event
+from instruments_service.events import log_event  # type: ignore[reportUnknownMemberType]
 
 logger = logging.getLogger(__name__)
+
+
+def _to_int(val: HandlerResultValue, default: int = 0) -> int:
+    """Safely convert HandlerResultValue to int for result.get() values."""
+    if isinstance(val, int):
+        return val
+    if isinstance(val, float):
+        return int(val)
+    return default
+
+
+# Type definitions for handler arguments
+class InstrumentHandlerConfig(TypedDict, total=False):
+    """Configuration for InstrumentHandler."""
+
+    project_id: str | None
+    enable_ccxt_integration: bool
+    enable_metadata_caching: bool
+
+
+class InstrumentGenerationKwargs(TypedDict, total=False):
+    """Keyword arguments for instrument generation."""
+
+    venues: list[str] | None
+    instrument_ids: list[str] | None
+    cefi: bool
+    tradfi: bool
+    defi: bool
 
 
 class InstrumentHandler(ModeHandler):
     """Generate instruments with force mode and direct GCS checks only."""
 
-    def __init__(self, config: Dict[str, Any]) -> None:
-        super().__init__(config)
+    def __init__(self, config: InstrumentHandlerConfig) -> None:
+        super().__init__(config)  # type: ignore[arg-type]
 
         # Initialize services directly (no ServiceContainer)
-        from instruments_service.config import get_config as get_service_config
-
-        project_id = config.get("project_id") or get_service_config().gcp_project_id
+        project_id = config.get("project_id") or get_config().gcp_project_id
 
         # Initialize InstrumentsService (orchestration wrapper)
-        service_config = {
+        service_config: InstrumentHandlerConfig = {
             "project_id": project_id,
             "enable_ccxt_integration": True,
             "enable_metadata_caching": True,
         }
-        self.instruments_service = InstrumentsService(service_config)
+        self.instruments_service = InstrumentsService(service_config)  # type: ignore[arg-type]
 
         # Initialize cloud storage (for CLI-specific operations)
         self.cloud_storage = CloudInstrumentStorage()
@@ -51,8 +78,8 @@ class InstrumentHandler(ModeHandler):
         logger.debug("✅ InstrumentHandler initialized")
 
     def _get_venues_to_process(
-        self, requested_venues: Optional[List[str]], cefi: bool, tradfi: bool, defi: bool
-    ) -> List[str]:
+        self, requested_venues: list[str] | None, cefi: bool, tradfi: bool, defi: bool
+    ) -> list[str]:
         """
         Get list of venues to process based on CLI args.
 
@@ -65,7 +92,7 @@ class InstrumentHandler(ModeHandler):
         Returns:
             List of venue names to process
         """
-        venues = []
+        venues: list[str] = []
 
         # If explicit venues requested, use those (takes precedence)
         if requested_venues:
@@ -73,19 +100,28 @@ class InstrumentHandler(ModeHandler):
 
         # Otherwise, build from categories
         if cefi:
-            venues.extend(self.venue_mapping.all_tardis_exchanges)
+            venues.extend(cast(list[str], self.venue_mapping.all_tardis_exchanges))
         if tradfi:
-            venues.extend(self.venue_mapping.all_databento_venues)
+            venues.extend(cast(list[str], self.venue_mapping.all_databento_venues))
         if defi:
-            venues.extend(self.venue_mapping.all_defi_venues)
+            venues.extend(cast(list[str], self.venue_mapping.all_defi_venues))
 
         return venues
 
-    def run(self, start_date, end_date, force=False, **kwargs) -> Dict[str, Any]:
+    def run(self, **kwargs: object) -> dict[str, HandlerResultValue]:
         """Execute instrument generation."""
+        start_date = kwargs.get("start_date", "")
+        end_date = kwargs.get("end_date", "")
+        force = bool(kwargs.get("force", False))
         return self._execute_instrument_generation(start_date, end_date, force, **kwargs)
 
-    def _execute_instrument_generation(self, start_date, end_date, force=False, **kwargs):
+    def _execute_instrument_generation(
+        self,
+        start_date: str | datetime | object,
+        end_date: str | datetime | object,
+        force: bool = False,
+        **kwargs: object,
+    ) -> dict[str, HandlerResultValue]:
         """Generate instruments with direct GCS existence checks."""
         log_event("STARTED")
         log_event("VALIDATION_STARTED")
@@ -96,20 +132,35 @@ class InstrumentHandler(ModeHandler):
             if isinstance(end_date, str):
                 end_date = parse_date(end_date)
 
-            # Generate date range
-            date_range = get_date_range(start_date, end_date)
+            # Generate date range (YYYY-MM-DD format required by get_date_range)
+            start_str: str = start_date.strftime("%Y-%m-%d") if isinstance(start_date, datetime) else str(start_date)
+            end_str: str = end_date.strftime("%Y-%m-%d") if isinstance(end_date, datetime) else str(end_date)
+            date_range = get_date_range(start_str, end_str)
 
             # Get requested venues (from --venues CLI arg or default to all)
-            requested_venues = kwargs.get("venues")
+            requested_venues_raw = kwargs.get("venues")
+            requested_venues: list[str] | None = (
+                list(cast(list[str], requested_venues_raw)) if isinstance(requested_venues_raw, list) else None
+            )
 
             # Determine market categories to process
-            cefi = kwargs.get("cefi", False)
-            tradfi = kwargs.get("tradfi", False)
-            defi = kwargs.get("defi", False)
+            cefi: bool = bool(kwargs.get("cefi", False))
+            tradfi: bool = bool(kwargs.get("tradfi", False))
+            defi: bool = bool(kwargs.get("defi", False))
 
             # Default: process ALL if no flags specified
             if not cefi and not tradfi and not defi:
                 cefi = tradfi = defi = True
+                logger.info("🌍 Processing ALL market types: CEFI, TRADFI, and DEFI")
+            else:
+                market_types: list[str] = []
+                if cefi:
+                    market_types.append("CEFI")
+                if tradfi:
+                    market_types.append("TRADFI")
+                if defi:
+                    market_types.append("DEFI")
+                logger.info(f"🔍 Processing market types: {', '.join(market_types)}")
 
             # Build venue list based on categories + explicit venues
             venues_to_process = self._get_venues_to_process(requested_venues, cefi, tradfi, defi)
@@ -138,36 +189,9 @@ class InstrumentHandler(ModeHandler):
         total_processing_warnings = 0  # Warnings from processing
         today = datetime.now(timezone.utc).date()
 
-        # Determine which market types to process based on flags
-        cefi = kwargs.get("cefi", False)
-        tradfi = kwargs.get("tradfi", False)
-        defi = kwargs.get("defi", False)
-
-        # Default behavior: If no flags specified, process ALL market types
-        # If flags are specified, only process those market types
-        if not cefi and not tradfi and not defi:
-            # Default: Process ALL market types (CEFI, TRADFI, DEFI)
-            cefi = True
-            tradfi = True
-            defi = True
-            logger.info("🌍 Processing ALL market types: CEFI, TRADFI, and DEFI")
-        else:
-            # Log which market types will be processed based on flags
-            market_types = []
-            if cefi:
-                market_types.append("CEFI")
-            if tradfi:
-                market_types.append("TRADFI")
-            if defi:
-                market_types.append("DEFI")
-            logger.info(f"🔍 Processing market types: {', '.join(market_types)}")
-
         # Set exchanges for CEFI processing (always use all exchanges - no filtering)
         # Note: --exchanges CLI arg was removed as it filtered within aggregated instruments.parquet
-        if cefi:
-            exchanges_to_process = self.venue_mapping.all_tardis_exchanges
-        else:
-            exchanges_to_process = []
+        exchanges_to_process: list[str] = cast(list[str], self.venue_mapping.all_tardis_exchanges) if cefi else []
 
         # Compute day-venue combinations for 3-level event counters
         total_combinations = len(date_range) * len(venues_to_process)
@@ -184,7 +208,7 @@ class InstrumentHandler(ModeHandler):
                 if not force:
                     try:
                         # Build list of categories to check based on flags
-                        categories_to_check = []
+                        categories_to_check: list[str] = []
                         if cefi:
                             categories_to_check.append("CEFI")
                         if tradfi:
@@ -193,7 +217,12 @@ class InstrumentHandler(ModeHandler):
                             categories_to_check.append("DEFI")
 
                         # Get venues from kwargs (from --venues CLI arg)
-                        venues_to_check = kwargs.get("venues")
+                        venues_to_check_raw = kwargs.get("venues")
+                        venues_to_check: list[str] | None = (
+                            list(cast(list[str], venues_to_check_raw))
+                            if isinstance(venues_to_check_raw, list)
+                            else None
+                        )
 
                         # Use cloud_data_provider to check existence for specific categories AND venues
                         # When venues specified, checks venue-level files (new structure)
@@ -260,6 +289,15 @@ class InstrumentHandler(ModeHandler):
                 log_event("CLASSIFICATION_STARTED")
 
                 # Delegate to InstrumentsService for orchestration
+                venues_raw = kwargs.get("venues")
+                venues_list: list[str] | None = (
+                    list(cast(list[str], venues_raw)) if isinstance(venues_raw, list) else None
+                )
+                instrument_ids_raw = kwargs.get("instrument_ids")
+                instrument_ids_list: list[str] | None = (
+                    list(cast(list[str], instrument_ids_raw)) if isinstance(instrument_ids_raw, list) else None
+                )
+
                 result = asyncio.run(
                     self.instruments_service.generate_instruments_for_date(
                         date=date,
@@ -268,22 +306,23 @@ class InstrumentHandler(ModeHandler):
                         cefi=cefi,
                         tradfi=tradfi,
                         defi=defi,
-                        venues=kwargs.get("venues"),
-                        instrument_ids=kwargs.get("instrument_ids"),
+                        venues=venues_list,
+                        instrument_ids=instrument_ids_list,
                         tradfi_venues=None,  # No longer filtered - always use all TradFi venues
                     )
                 )
 
                 # Track error and warning counts from processing
-                processing_errors = result.get("error_count", 0)
-                processing_warnings = result.get("warning_count", 0)
+                processing_errors = _to_int(result.get("error_count", 0))
+                processing_warnings = _to_int(result.get("warning_count", 0))
                 total_processing_errors += processing_errors
                 total_processing_warnings += processing_warnings
 
-                log_event("CLASSIFICATION_COMPLETED", str(result.get("instruments_generated", 0)))
+                instruments_count = _to_int(result.get("instruments_generated", 0))
+                log_event("CLASSIFICATION_COMPLETED", str(instruments_count))
                 log_event("PROCESSING_COMPLETED")
-                log_event("ADAPTER_FETCH_COMPLETED", str(result.get("instruments_generated", 0)))
-                log_event("DATA_INGESTION_COMPLETED", str(result.get("instruments_generated", 0)))
+                log_event("ADAPTER_FETCH_COMPLETED", str(instruments_count))
+                log_event("DATA_INGESTION_COMPLETED", str(instruments_count))
                 log_event("UPLOAD_STARTED")
                 log_event("UPLOAD_COMPLETED")
 
@@ -295,7 +334,7 @@ class InstrumentHandler(ModeHandler):
                 # Date completion event
                 log_event("DATE_PROCESSING_COMPLETED", date.strftime("%Y-%m-%d"))
                 if result.get("status") == "success":
-                    total_generated += result.get("instruments_generated", 0)
+                    total_generated += instruments_count
                     total_dates_processed += 1
 
                     # Log if there were processing errors/warnings even though overall status is success
@@ -350,7 +389,7 @@ class InstrumentHandler(ModeHandler):
         else:
             log_event("FAILED", f"{total_errors} date-level errors, {total_processing_errors} processing errors")
 
-        return {
+        result: dict[str, HandlerResultValue] = {
             "status": "success" if total_errors == 0 else "partial",
             "success": total_errors == 0,
             "instruments_generated": total_generated,
@@ -360,16 +399,17 @@ class InstrumentHandler(ModeHandler):
             "dates_with_errors": total_errors,
             "processing_errors": total_processing_errors,
             "processing_warnings": total_processing_warnings,
-            "success_rate_percent": success_rate,
+            "success_rate_percent": int(success_rate),
             "pipeline_summary": {
                 "total_instruments": total_generated,
-                "processing_success_rate": success_rate,
+                "processing_success_rate": int(success_rate),
                 "skipped_existing": total_skipped,
                 "date_level_errors": total_errors,
                 "processing_errors": total_processing_errors,
                 "processing_warnings": total_processing_warnings,
             },
         }
+        return result
 
     def cleanup(self):
         """Cleanup resources."""

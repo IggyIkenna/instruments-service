@@ -62,10 +62,10 @@ steps:
           --entrypoint "" \
           -e CLOUD_BUILD=true \
           -e CLOUD_MOCK_MODE=true \
+          -e GCP_PROJECT_ID=$PROJECT_ID \
           -e GOOGLE_CLOUD_PROJECT=$PROJECT_ID \
           -e INSTRUMENTS_GCS_BUCKET=mock-instruments-bucket \
           -e INSTRUMENTS_GCS_BUCKET_CEFI=mock-instruments-bucket \
-          -e GCP_PROJECT_ID=mock-project \
           asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service:$SHORT_SHA \
           /bin/bash -c "scripts/quality-gates.sh --no-fix --quick"
     waitFor: ['build']
@@ -74,6 +74,23 @@ steps:
   - name: 'gcr.io/cloud-builders/docker'
     id: 'push'
     args: ['push', '--all-tags', 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service']
+    waitFor: ['quality-gates']
+
+  # Step 7: Build and publish Python wheel to Artifact Registry (for cross-service imports)
+  - name: 'python:3.13-slim'
+    id: 'publish-wheel'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -e
+        pip install uv build twine keyrings.google-artifactregistry-auth
+        mkdir -p /root/.config/pip
+        echo "[global]
+        extra-index-url = https://asia-northeast1-python.pkg.dev/$PROJECT_ID/unified-libraries/simple/" > /root/.config/pip/pip.conf
+        uv pip install --system unified-cloud-services unified-events-interface unified-config-interface unified-domain-services
+        python -m build --wheel --outdir dist/
+        python -m twine upload --repository-url https://asia-northeast1-python.pkg.dev/$PROJECT_ID/unified-libraries/ --non-interactive dist/*.whl || true
     waitFor: ['quality-gates']
 
 images:
