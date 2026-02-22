@@ -9,7 +9,7 @@ Note: InstrumentKey is imported from unified-domain-services (shared across serv
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -300,25 +300,25 @@ class InstrumentDefinition(BaseModel):
 
     @field_validator("instrument_key")
     @classmethod
-    def validate_instrument_key(cls, v):
+    def validate_instrument_key(cls, v: str) -> str:
         """Validate instrument key format"""
         if not v or ":" not in v:
             raise ValueError(f"Invalid instrument key format: {v}")
 
-        parts = v.split(":")
+        parts: list[str] = v.split(":")
         if len(parts) < 3:
             raise ValueError(f"Instrument key must have at least 3 parts: {v}")
 
         # Validate venue (first part)
-        venue = parts[0]
-        valid_venues = [v.value for v in Venue]
+        venue: str = parts[0]
+        valid_venues: list[str] = [venue_enum.value for venue_enum in Venue]
         if venue not in valid_venues:
             # Warning will be collected in model_validator
             pass
 
         # Validate instrument type (second part)
-        instrument_type = parts[1]
-        valid_types = [t.value for t in InstrumentType]
+        instrument_type: str = parts[1]
+        valid_types: list[str] = [it.value for it in InstrumentType]
         if instrument_type not in valid_types:
             # Warning will be collected in model_validator
             pass
@@ -327,7 +327,7 @@ class InstrumentDefinition(BaseModel):
 
     @field_validator("available_from_datetime")
     @classmethod
-    def validate_from_datetime(cls, v):
+    def validate_from_datetime(cls, v: str) -> str:
         """Validate available_from_datetime - always required"""
         if not v:
             raise ValueError("available_from_datetime is required and cannot be empty")
@@ -341,7 +341,7 @@ class InstrumentDefinition(BaseModel):
 
     @field_validator("available_to_datetime")
     @classmethod
-    def validate_to_datetime(cls, v):
+    def validate_to_datetime(cls, v: str | None) -> str | None:
         """Validate available_to_datetime - optional for SPOT/PERPETUAL instruments"""
         # Allow None for perpetual instruments (no expiry)
         if v is None:
@@ -362,7 +362,7 @@ class InstrumentDefinition(BaseModel):
 
     @field_validator("data_types")
     @classmethod
-    def validate_data_types(cls, v):
+    def validate_data_types(cls, v: str) -> str:
         """Validate data types string"""
         if not v:
             raise ValueError("Data types cannot be empty")
@@ -389,7 +389,7 @@ class InstrumentDefinition(BaseModel):
             "yields",  # LST/yield-bearing token yields (Lido, EtherFi, Ethena)
             "liquidity",  # AMM pool liquidity (Uniswap, Curve) for slippage simulation
         ]
-        types = [t.strip() for t in v.split(",")]
+        types: list[str] = [t.strip() for t in v.split(",")]
 
         for data_type in types:
             if data_type not in valid_data_types:
@@ -400,7 +400,7 @@ class InstrumentDefinition(BaseModel):
 
     @field_validator("expiry")
     @classmethod
-    def validate_expiry(cls, v):
+    def validate_expiry(cls, v: str | datetime | pd.Timestamp | None) -> str | None:
         """Validate expiry datetime for futures/options"""
         if v is None or v == "":
             return v
@@ -421,7 +421,7 @@ class InstrumentDefinition(BaseModel):
 
     @field_validator("option_type")
     @classmethod
-    def validate_option_type(cls, v):
+    def validate_option_type(cls, v: str | None) -> str | None:
         """Validate option type"""
         if v and v not in ["CALL", "PUT"]:
             raise ValueError(f"Invalid option type: {v}. Must be CALL or PUT")
@@ -429,7 +429,7 @@ class InstrumentDefinition(BaseModel):
 
     @field_validator("inverse")
     @classmethod
-    def validate_inverse(cls, v):
+    def validate_inverse(cls, v: bool) -> bool:
         """Validate inverse field"""
         if not isinstance(v, bool):
             raise ValueError(f"Inverse must be boolean, got: {type(v)}")
@@ -437,7 +437,7 @@ class InstrumentDefinition(BaseModel):
 
     @field_validator("tick_size", "min_size", "underlying", "ccxt_symbol", "ccxt_exchange")
     @classmethod
-    def validate_optional_strings(cls, v):
+    def validate_optional_strings(cls, v: str | None) -> str:
         """Validate optional string fields - convert None to empty string"""
         if v is None:
             return ""
@@ -445,7 +445,7 @@ class InstrumentDefinition(BaseModel):
 
     @field_validator("contract_size", mode="before")
     @classmethod
-    def validate_contract_size(cls, v):
+    def validate_contract_size(cls, v: str | float | None) -> float | None:
         """Validate contract_size field - convert empty strings to None BEFORE type conversion"""
         # Convert empty string to None for optional float field
         if v == "" or v is None:
@@ -470,13 +470,13 @@ class InstrumentDefinition(BaseModel):
         """Validate overall instrument consistency"""
         # Check instrument key components
         if self.instrument_key and ":" in self.instrument_key:
-            parts = self.instrument_key.split(":")
+            parts: list[str] = self.instrument_key.split(":")
             if len(parts) >= 2:
-                venue = parts[0]
-                instrument_type = parts[1]
+                venue: str = parts[0]
+                instrument_type: str = parts[1]
 
                 # Check venue
-                valid_venues = [v.value for v in Venue]
+                valid_venues: list[str] = [venue_enum.value for venue_enum in Venue]
                 if venue not in valid_venues:
                     logger.info(
                         f"Venue '{venue}' not in Venue enum yet. "
@@ -485,7 +485,7 @@ class InstrumentDefinition(BaseModel):
                     )
 
                 # Check instrument type
-                valid_types = [t.value for t in InstrumentType]
+                valid_types: list[str] = [it.value for it in InstrumentType]
                 if instrument_type not in valid_types:
                     logger.info(
                         f"Instrument type '{instrument_type}' not in InstrumentType enum yet. "
@@ -521,7 +521,7 @@ class InstrumentDefinition(BaseModel):
                 "flash_loan_availability",  # Flash loan liquidity (Morpho)
                 "rewards",  # EIGEN/ETHFI reward distributions (EtherFi)
             ]
-            types = [t.strip() for t in self.data_types.split(",")]
+            types: list[str] = [t.strip() for t in self.data_types.split(",")]
             for data_type in types:
                 if data_type not in valid_data_types:
                     logger.warning(f"Unknown data type: {data_type}")
@@ -786,18 +786,18 @@ class InstrumentDefinition(BaseModel):
         extra="ignore",  # Allow extra fields to prevent validation errors
     )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for DataFrame creation"""
         return self.model_dump()
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "InstrumentDefinition":
+    def from_dict(cls, data: dict[str, Any]) -> "InstrumentDefinition":
         """Create from dictionary (e.g., from DataFrame row)"""
         return cls(**data)
 
-    def validate_required_fields(self) -> List[str]:
+    def validate_required_fields(self) -> list[str]:
         """Validate required fields and return list of missing fields"""
-        missing_fields = []
+        missing_fields: list[str] = []
 
         # Check required string fields
         required_string_fields = [

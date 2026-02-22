@@ -55,7 +55,7 @@ jobs:
             echo "✅ Cloned unified-market-interface"
 
             # Clone unified-trading-deployment-v2 (optional - for smoke tests)
-            git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-trading-deployment-v2.git deps/unified-trading-deployment-v2 || echo "⚠️ Could not clone unified-trading-deployment-v2 (optional)"
+            git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-trading-deployment-v2.git ../unified-trading-deployment-v2 || echo "⚠️ Could not clone unified-trading-deployment-v2 (optional)"
           else
             echo "❌ GH_PAT not set" && exit 1
           fi
@@ -72,7 +72,7 @@ jobs:
           uv pip install --system -e ../unified-domain-services
           uv pip install --system -e ../unified-config-interface
           uv pip install --system -e ../unified-market-interface
-          uv pip install --system -e deps/unified-trading-deployment-v2 2>/dev/null || echo "⚠️ unified-trading-deployment-v2 not available"
+          uv pip install --system -e ../unified-trading-deployment-v2 2>/dev/null || echo "⚠️ unified-trading-deployment-v2 not available"
           uv pip install --system -e . --no-deps
           uv pip install --system pydantic pydantic-settings pandas numpy python-dateutil \
             python-dotenv requests ccxt plotly web3 eth-abi databento boto3 \
@@ -102,6 +102,7 @@ jobs:
           python -m pytest tests/unit/ -v --tb=short --timeout=60 -n auto \
             --cov=instruments_service \
             --cov-report=term-missing \
+            --cov-fail-under=35 \
             --no-cov-on-fail
           echo "✅ Unit tests passed"
 
@@ -143,10 +144,10 @@ jobs:
         env:
           CLOUD_MOCK_MODE: "true"
           GOOGLE_CLOUD_PROJECT: "test-project"
-          DEPLOYMENT_CONFIG_DIR: "deps/unified-trading-deployment-v2/configs"
+          DEPLOYMENT_CONFIG_DIR: "../unified-trading-deployment-v2/configs"
         run: |
           echo "=== Running smoke tests ==="
-          if [ -d "tests/smoke" ] && [ -d "deps/unified-trading-deployment-v2/configs" ]; then
+          if [ -d "tests/smoke" ] && [ -d "../unified-trading-deployment-v2/configs" ]; then
             python -m pytest tests/smoke/ -v --tb=short --timeout=180 -n auto
             echo "✅ Smoke tests passed"
           else

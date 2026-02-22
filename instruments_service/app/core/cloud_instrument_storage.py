@@ -8,7 +8,7 @@ Uses unified-cloud-services directly for cloud operations.
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, cast
 
 import pandas as pd
 from unified_cloud_services import (
@@ -47,7 +47,7 @@ class CloudInstrumentStorage:
     Per unified architecture plan specification.
     """
 
-    def __init__(self, cloud_target: Optional[CloudTarget] = None):
+    def __init__(self, cloud_target: CloudTarget | None = None):
         """Initialize cloud instrument storage with unified-cloud-services."""
         if not UNIFIED_CLOUD_SERVICES_AVAILABLE:
             raise ImportError(
@@ -95,7 +95,7 @@ class CloudInstrumentStorage:
         self,
         instruments_df: pd.DataFrame,
         table_name: str = "instruments",
-        date: Optional[datetime] = None,
+        date: datetime | None = None,
     ) -> bool:
         """
         Store instrument definitions to GCS (batch historical data only).
@@ -171,28 +171,30 @@ class CloudInstrumentStorage:
             for ts_col in timestamp_columns:
                 if ts_col in instruments_df.columns:
                     # Convert to timezone-naive UTC if needed
-                    if instruments_df[ts_col].dtype.name.startswith("datetime64"):
-                        ts_series = pd.to_datetime(instruments_df[ts_col], utc=True)
+                    col_dtype = getattr(instruments_df[ts_col].dtype, "name", str(instruments_df[ts_col].dtype))
+                    if str(col_dtype).startswith("datetime64"):
+                        ts_series: pd.Series = cast(pd.Series, pd.to_datetime(instruments_df[ts_col], utc=True))
                         if ts_series.dt.tz is not None:
                             instruments_df[ts_col] = ts_series.dt.tz_convert("UTC").dt.tz_localize(None)
                         instruments_df[ts_col] = instruments_df[ts_col].astype("datetime64[ns]")
-                    elif instruments_df[ts_col].dtype == "object":
+                    elif str(instruments_df[ts_col].dtype) == "object":
                         # Try to parse string timestamps
                         try:
-                            instruments_df[ts_col] = pd.to_datetime(instruments_df[ts_col], utc=True).dt.tz_convert(
-                                None
-                            )
+                            ts_series_obj: pd.Series = cast(pd.Series, pd.to_datetime(instruments_df[ts_col], utc=True))
+                            instruments_df[ts_col] = ts_series_obj.dt.tz_convert(None)
                         except (ValueError, TypeError, AttributeError) as e:
                             logger.debug(f"Could not parse timestamp column {ts_col}: {e}")
 
             # Determine date string for GCS path
+            date_str: str
             if date:
                 date_str = date.strftime("%Y-%m-%d")
             else:
                 # Extract date from available_from_datetime if available
                 if "available_from_datetime" in instruments_df.columns:
                     try:
-                        first_date = pd.to_datetime(instruments_df["available_from_datetime"].iloc[0], utc=True)
+                        first_val = instruments_df["available_from_datetime"].iloc[0]
+                        first_date: pd.Timestamp = cast(pd.Timestamp, pd.to_datetime(first_val, utc=True))
                         date_str = first_date.strftime("%Y-%m-%d")
                     except (ValueError, TypeError, IndexError) as e:
                         logger.debug(f"Could not extract date from available_from_datetime: {e}")
@@ -205,8 +207,8 @@ class CloudInstrumentStorage:
             if "market_category" not in instruments_df.columns:
                 instruments_df["market_category"] = ""
             # Populate market_category for instruments that don't have it or have empty value
-            mask = (instruments_df["market_category"].isna()) | (instruments_df["market_category"] == "")
-            if mask.any():
+            mask: pd.Series = (instruments_df["market_category"].isna()) | (instruments_df["market_category"] == "")
+            if cast(bool, mask.any()):
                 instruments_df.loc[mask, "market_category"] = instruments_df.loc[mask].apply(
                     lambda row: determine_market_category(row.to_dict()), axis=1
                 )
@@ -218,7 +220,7 @@ class CloudInstrumentStorage:
 
             # Detect test mode for bucket selection
             cfg = instruments_config
-            environment = (cfg.environment or "development").lower()
+            environment: str = str(cfg.environment or "development").lower()
             is_test = environment in ["test", "testing"] or bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
             # Group uploads by bucket to use batch upload per bucket
@@ -269,7 +271,7 @@ class CloudInstrumentStorage:
                             venue_df_to_store[col] = pd.to_numeric(venue_df_to_store[col], errors="coerce")
                     for col in _INT64_COLS:
                         if col in venue_df_to_store.columns:
-                            ser = pd.to_numeric(venue_df_to_store[col], errors="coerce")
+                            ser: pd.Series = cast(pd.Series, pd.to_numeric(venue_df_to_store[col], errors="coerce"))
                             venue_df_to_store[col] = ser.astype("Int64") if hasattr(ser, "astype") else ser
                     for col in _BOOL_COLS:
                         if col in venue_df_to_store.columns:
@@ -330,7 +332,7 @@ class CloudInstrumentStorage:
                     )
 
                     # Prepare batch upload
-                    batch_uploads = [
+                    batch_uploads: list[dict[str, str | pd.DataFrame]] = [
                         {"data": df, "gcs_path": gcs_path, "format": "parquet"} for gcs_path, df, _ in uploads_list
                     ]
 
@@ -355,7 +357,7 @@ class CloudInstrumentStorage:
 
             if all_successful:
                 # Count unique venues stored
-                unique_venues = instruments_df["venue"].nunique() if "venue" in instruments_df.columns else 0
+                unique_venues: int = int(instruments_df["venue"].nunique()) if "venue" in instruments_df.columns else 0
                 logger.info(
                     f"✅ Stored {total_stored} instruments across {unique_venues} venues to "
                     f"category-specific buckets (by-venue folder structure)"
@@ -371,8 +373,8 @@ class CloudInstrumentStorage:
 
     def query_instruments(
         self,
-        venue: Optional[str] = None,
-        instrument_type: Optional[str] = None,
+        venue: str | None = None,
+        instrument_type: str | None = None,
         table_name: str = "instruments",
     ) -> pd.DataFrame:
         """
