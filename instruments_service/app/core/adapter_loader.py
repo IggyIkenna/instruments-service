@@ -11,18 +11,25 @@ Complies with:
 """
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Dict, Optional, Protocol
 
-from unified_cloud_services.domain import DataSourceMapping
+from unified_market_interface import DataSourceMapping
 from unified_market_interface.adapters.tradfi import YahooFinanceAdapter
 
 logger = logging.getLogger(__name__)
 
+
+class DataSourceAdapter(Protocol):
+    """Protocol for data source adapters (Tardis, Databento, DeFi, etc.)."""
+
+    pass
+
+
 # Singleton adapter cache (one instance per data source)
-_ADAPTER_CACHE: Dict[str, Any] = {}
+_ADAPTER_CACHE: Dict[str, DataSourceAdapter] = {}
 
 
-def get_adapter_for_venue(venue: str, api_keys: Optional[Dict[str, str]] = None) -> Any:
+def get_adapter_for_venue(venue: str, api_keys: Optional[Dict[str, str]] = None) -> DataSourceAdapter:
     """
     Lazy-load adapter for a venue.
 
@@ -66,13 +73,13 @@ def get_adapter_for_venue(venue: str, api_keys: Optional[Dict[str, str]] = None)
             adapter = DatabentoAdapter(api_key=api_key)
 
         elif data_source == "aster":
-            from unified_cloud_services import AsterBaseClient
-            from unified_market_interface.adapters.onchain_perps import AsterAdapter
-
-            adapter = AsterAdapter(base_client=AsterBaseClient())
+            raise NotImplementedError(
+                "Aster adapter not available (AsterBaseClient removed from UCS). "
+                "Use Hyperliquid or other on-chain perpetual venues."
+            )
 
         elif data_source == "hyperliquid":
-            from unified_cloud_services import HyperliquidBaseClient
+            from unified_market_interface import HyperliquidBaseClient
             from unified_market_interface.adapters.onchain_perps import HyperliquidAdapter
 
             adapter = HyperliquidAdapter(base_client=HyperliquidBaseClient())
@@ -107,7 +114,7 @@ def get_adapter_for_venue(venue: str, api_keys: Optional[Dict[str, str]] = None)
         raise
 
 
-def _load_defi_adapter(venue: str, api_keys: Optional[Dict[str, str]]) -> Any:
+def _load_defi_adapter(venue: str, api_keys: Optional[Dict[str, str]]) -> DataSourceAdapter:
     """Load DeFi adapter based on venue."""
     venue_upper = venue.upper()
 
@@ -170,6 +177,6 @@ def clear_adapter_cache():
     logger.debug("Adapter cache cleared")
 
 
-def get_cached_adapters() -> Dict[str, Any]:
+def get_cached_adapters() -> Dict[str, DataSourceAdapter]:
     """Get currently cached adapters (for testing/debugging)."""
     return _ADAPTER_CACHE.copy()

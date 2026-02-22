@@ -8,7 +8,7 @@ with test bucket and real credentials.
 from datetime import datetime, timezone
 
 import pytest
-from unified_cloud_services import VenueMapping
+from unified_config_interface import VenueMapping
 
 from instruments_service.app.core.instrument_processing_service import (
     InstrumentProcessingService,

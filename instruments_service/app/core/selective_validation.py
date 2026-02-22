@@ -14,7 +14,7 @@ import logging
 from typing import Dict, List, Optional
 
 from unified_cloud_services import get_secret_with_fallback
-from unified_cloud_services.domain import DataSourceMapping
+from unified_market_interface import DataSourceMapping
 
 from instruments_service.config import instruments_config
 
