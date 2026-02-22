@@ -122,7 +122,7 @@ python -m instruments_service --mode instruments \
 import asyncio
 from datetime import datetime, timedelta
 from instruments_service import InstrumentProcessingService, CloudInstrumentStorage
-from instruments_service.config import VenueMapping
+from unified_market_interface.models.venue_config import VenueMapping
 
 async def generate_batch(start_date: str, end_date: str):
     config = {
@@ -225,7 +225,7 @@ import asyncio
 from datetime import datetime, timezone
 from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
-from instruments_service.config import VenueMapping
+from unified_market_interface.models.venue_config import VenueMapping
 
 # Initialize processing service (uses Secret Manager for API key)
 config = {

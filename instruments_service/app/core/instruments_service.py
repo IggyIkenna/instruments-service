@@ -11,8 +11,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
-from unified_config_interface import VenueMapping
 from unified_market_interface.adapters.tradfi import DatabentoAdapter
+from unified_market_interface.models.venue_config import VenueMapping
 
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
