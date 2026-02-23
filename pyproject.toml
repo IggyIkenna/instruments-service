@@ -11,7 +11,7 @@ unified-market-interface = { path = "../unified-market-interface" }
 
 [project]
 name = "instruments-service"
-version = "0.1.8"
+version = "0.1.9"
 description = "Service for generating canonical instrument definitions from exchange APIs"
 readme = "README.md"
 license = {text = "MIT"}
