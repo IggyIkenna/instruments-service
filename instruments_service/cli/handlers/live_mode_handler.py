@@ -77,12 +77,17 @@ class LiveModeHandler(ModeHandler):
         interval = kwargs.get("interval", 15)
         category = kwargs.get("category", ["CEFI", "TRADFI", "DEFI"])
         venues = kwargs.get("venues")
+        single_cycle = kwargs.get("single_cycle", False)
 
         # Run async handler
-        return asyncio.run(self._run_live_mode(interval, category, venues))
+        return asyncio.run(self._run_live_mode(interval, category, venues, single_cycle))
 
     async def _run_live_mode(
-        self, interval: int, categories: list[str], venues: list[str] | None
+        self,
+        interval: int,
+        categories: list[str],
+        venues: list[str] | None,
+        single_cycle: bool = False,
     ) -> dict[str, HandlerResultValue]:
         """
         Main live mode execution loop.
@@ -91,6 +96,7 @@ class LiveModeHandler(ModeHandler):
             interval: Minutes between runs (default 15)
             categories: List of categories to process
             venues: Optional list of specific venues
+            single_cycle: If True, run one cycle and exit (for Cloud Run scheduled every 15 min)
 
         Returns:
             Execution results
@@ -107,6 +113,7 @@ class LiveModeHandler(ModeHandler):
                 "interval_minutes": interval,
                 "categories": categories,
                 "venues": venues if venues else "all",
+                "single_cycle": single_cycle,
                 "retention_days": 30,
             },
         )
@@ -117,6 +124,18 @@ class LiveModeHandler(ModeHandler):
 
         try:
             cycle_count = 0
+
+            if single_cycle:
+                # Cloud Run: run one cycle immediately, then exit
+                actual_time = datetime.now(timezone.utc)
+                cycle_count = 1
+                log_event(
+                    "LIVE_CYCLE_STARTED",
+                    details={"cycle": cycle_count, "timestamp": actual_time.isoformat(), "minute": actual_time.minute},
+                )
+                await self._process_cycle(actual_time, categories, venues, cycle_count)
+                log_event("LIVE_MODE_STOPPED", details={"total_cycles": cycle_count, "single_cycle": True})
+                return {"status": "success", "cycles": cycle_count}
 
             while True:
                 # Wait for next aligned timestamp

@@ -33,6 +33,11 @@ SERVICE_SPECIFIC_EVENTS = {
         "ADAPTER_FETCH_COMPLETED",
         "CLASSIFICATION_STARTED",
         "CLASSIFICATION_COMPLETED",
+        # Live mode events
+        "LIVE_MODE_STARTED",
+        "LIVE_CYCLE_STARTED",
+        "LIVE_CYCLE_COMPLETED",
+        "LIVE_MODE_STOPPED",
     ],
 }
 
