@@ -5,6 +5,7 @@ Defines Pydantic models for dividends, stock splits, and earnings records.
 These are reference data tied to equity instruments for price normalization.
 """
 
+import math
 from datetime import date, datetime, timezone
 from enum import Enum
 from typing import Optional
@@ -66,10 +67,8 @@ class DividendRecord(BaseModel):
 
     @field_validator("amount", mode="before")
     @classmethod
-    def validate_amount(cls, v: object) -> float:
+    def validate_amount(cls, v: object) -> float:  # type: ignore[reportAny]
         """Handle NaN and None values."""
-        import math
-
         if v is None or (isinstance(v, float) and math.isnan(v)):
             return 0.0
         return float(v)

@@ -11,7 +11,7 @@ Complies with:
 """
 
 import logging
-from typing import Dict, Optional, Protocol
+from typing import Protocol
 
 from unified_market_interface import DataSourceMapping
 from unified_market_interface.adapters.tradfi import YahooFinanceAdapter
@@ -26,10 +26,10 @@ class DataSourceAdapter(Protocol):
 
 
 # Singleton adapter cache (one instance per data source)
-_ADAPTER_CACHE: Dict[str, DataSourceAdapter] = {}
+_ADAPTER_CACHE: dict[str, DataSourceAdapter] = {}
 
 
-def get_adapter_for_venue(venue: str, api_keys: Optional[Dict[str, str]] = None) -> DataSourceAdapter:
+def get_adapter_for_venue(venue: str, api_keys: dict[str, str] | None = None) -> DataSourceAdapter:
     """
     Lazy-load adapter for a venue.
 
@@ -114,7 +114,7 @@ def get_adapter_for_venue(venue: str, api_keys: Optional[Dict[str, str]] = None)
         raise
 
 
-def _load_defi_adapter(venue: str, api_keys: Optional[Dict[str, str]]) -> DataSourceAdapter:
+def _load_defi_adapter(venue: str, api_keys: dict[str, str] | None) -> DataSourceAdapter:
     """Load DeFi adapter based on venue."""
     venue_upper = venue.upper()
 
@@ -177,6 +177,6 @@ def clear_adapter_cache():
     logger.debug("Adapter cache cleared")
 
 
-def get_cached_adapters() -> Dict[str, DataSourceAdapter]:
+def get_cached_adapters() -> dict[str, DataSourceAdapter]:
     """Get currently cached adapters (for testing/debugging)."""
     return _ADAPTER_CACHE.copy()

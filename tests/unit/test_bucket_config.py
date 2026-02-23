@@ -34,8 +34,6 @@ class TestBucketConfiguration:
             "ENVIRONMENT": "development",
             "ALCHEMY_SECRET_NAME": "test",
             "GRAPH_SECRET_NAME": "test",
-            "CLICKUP_SECRET_NAME": "test",
-            "CLICKUP_LIST_ID": "123",
         }
 
     def test_instruments_service_config_has_category_buckets(self):

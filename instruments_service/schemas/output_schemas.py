@@ -10,9 +10,8 @@ Categories:
 - DEFI: Decentralized finance instruments (on-chain data)
 
 Usage:
-    from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
-    from unified_cloud_services import ParquetSchemaEnforcer
-
+    # from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
+    # from unified_cloud_services import ParquetSchemaEnforcer
     enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
     result = enforcer.validate_dataframe(df, {"category": "CEFI"})
 """

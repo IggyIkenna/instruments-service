@@ -245,13 +245,13 @@ if [ "$RUN_LINT" = true ] && [ "$AUTO_FIX" = true ]; then
         uv pip install ruff==0.15.0 --quiet
     fi
 
-    # Auto-format with ruff format
-    echo "Running: ruff format $SOURCE_DIRS"
-    ruff format $SOURCE_DIRS
+    # Auto-format with ruff format (--line-length 120 ensures long lines get broken)
+    echo "Running: ruff format --line-length 120 $SOURCE_DIRS"
+    ruff format --line-length 120 $SOURCE_DIRS
 
-    # Auto-fix with ruff check --fix
-    echo "Running: ruff check --fix $SOURCE_DIRS"
-    ruff check --fix $SOURCE_DIRS
+    # Auto-fix with ruff check --fix (E501 not ignored - catches line length)
+    echo "Running: ruff check --fix --line-length 120 $SOURCE_DIRS"
+    ruff check --fix --line-length 120 $SOURCE_DIRS
 
     echo -e "${GREEN}✅ Auto-fix complete${NC}"
 fi
@@ -270,9 +270,9 @@ if [ "$RUN_LINT" = true ]; then
         uv pip install ruff==0.15.0 --quiet
     fi
 
-    # Run ruff check (same as Cloud Build and GitHub Actions)
-    echo "Running: ruff check $SOURCE_DIRS"
-    if ruff check $SOURCE_DIRS; then
+    # Run ruff check (E501 enabled - line length enforced)
+    echo "Running: ruff check --line-length 120 $SOURCE_DIRS"
+    if ruff check --line-length 120 $SOURCE_DIRS; then
         echo -e "${GREEN}✅ Linting PASSED${NC}"
     else
         echo -e "${RED}❌ Linting FAILED${NC}"
@@ -364,37 +364,27 @@ MIN_COVERAGE=35
 fi
 
 # ============================================================================
-# STEP 4: TYPE CHECKING (mypy - optional but recommended)
+# STEP 4: TYPE CHECKING (pyright - matches IDE, blocking)
 # ============================================================================
-echo -e "\n${BLUE}[4/6] TYPE CHECKING (mypy)${NC}"
+echo -e "\n${BLUE}[4/6] TYPE CHECKING (pyright)${NC}"
 echo "----------------------------------------------------------------------"
 
 TYPE_CHECK_STATUS=0
 
-# Check if mypy is installed
-if $PYTHON_CMD -c "import mypy" &> /dev/null; then
-    echo "Running: mypy $SOURCE_DIRS --no-error-summary"
-
-    # Run mypy with light mode (warn_return_any=false, no disallow_untyped_defs)
-    # This matches pyproject.toml [tool.mypy] settings
-    if $PYTHON_CMD -m mypy $SOURCE_DIRS --no-error-summary 2>&1 | tee /tmp/mypy_output.txt; then
+# Check if pyright is installed (CLI from pip install pyright)
+if command -v pyright &> /dev/null; then
+    echo "Running: pyright instruments_service/ tests/ --level warning"
+    if pyright instruments_service/ tests/ --level warning 2>&1 | tee /tmp/pyright_output.txt; then
         echo -e "${GREEN}✅ Type checking PASSED${NC}"
         TYPE_CHECK_STATUS=0
     else
-        # Check if there are actual errors (not just warnings)
-        if grep -q "error:" /tmp/mypy_output.txt; then
-            echo -e "${YELLOW}⚠️  Type checking has errors (non-blocking)${NC}"
-            echo -e "${YELLOW}   Fix type hints to improve code quality${NC}"
-            TYPE_CHECK_STATUS=0  # Non-blocking for now
-        else
-            echo -e "${GREEN}✅ Type checking PASSED (warnings only)${NC}"
-            TYPE_CHECK_STATUS=0
-        fi
+        echo -e "${RED}❌ Type checking FAILED${NC}"
+        TYPE_CHECK_STATUS=1
     fi
-    rm -f /tmp/mypy_output.txt
+    rm -f /tmp/pyright_output.txt
 else
-    echo -e "${YELLOW}mypy not installed - skipping type checking${NC}"
-    echo -e "${YELLOW}Install: uv pip install mypy${NC}"
+    echo -e "${YELLOW}pyright not installed - skipping type checking${NC}"
+    echo -e "${YELLOW}Install: uv pip install pyright${NC}"
 fi
 
 # ============================================================================
@@ -479,31 +469,94 @@ if [ "$USE_RG" = true ]; then
     fi
 fi
 
-# Check 5: Imports inside functions
+# Check 4c: Empty string fallbacks (required config must fail loud)
 if [ "$USE_RG" = true ]; then
-    echo -n "Checking for imports inside functions... "
-    violations=$(rg "^[[:space:]]+import |^[[:space:]]+from .* import" --type py --glob "!tests/**" --glob "!scripts/**" . 2>/dev/null || true)
-    if [ -n "$violations" ]; then
-        violation_count=$(echo "$violations" | wc -l | tr -d " ")
-        echo -e "${YELLOW}WARN${NC} ($violation_count found)"
-        echo -e "${YELLOW}Note: Tracked in cleanup issue${NC}"
+    echo -n "Checking for empty string fallbacks... "
+    EMPTY_FALLBACKS=$(rg '\.get\(["'"'"'][\w_]+["'"'"']\s*,\s*["'"'"']["'"'"']' --type py --glob "!tests/**" --glob "!scripts/**" instruments_service/ 2>/dev/null || true)
+    ENV_EMPTY=$(rg 'os\.environ\.get\(["'"'"'][\w_]+["'"'"']\s*,\s*["'"'"']["'"'"']' --type py --glob "!tests/**" --glob "!scripts/**" instruments_service/ 2>/dev/null || true)
+    if [ -n "$EMPTY_FALLBACKS" ] || [ -n "$ENV_EMPTY" ]; then
+        echo -e "${RED}FAIL${NC}"
+        echo -e "${YELLOW}Found empty string fallbacks (required config must fail loud - see .cursor/rules/no-empty-fallbacks.mdc):${NC}"
+        [ -n "$EMPTY_FALLBACKS" ] && echo "$EMPTY_FALLBACKS" | head -5
+        [ -n "$ENV_EMPTY" ] && echo "$ENV_EMPTY" | head -5
+        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
     else
         echo -e "${GREEN}PASS${NC}"
     fi
 fi
 
-# Check 6: Any type usage (encourage better types)
+# Check 5: Imports inside functions (BLOCKING - lazy imports only for whitelisted optional deps)
+# Whitelist: adapter_loader (lazy adapter loading), __init__ (lazy submodule), dependency_checker (circular),
+# symbol_parser/canonical_key_generator (TYPE_CHECKING), handlers (circular), cloud_instrument_storage (optional),
+# parser/main/ccxt_service/utils (optional deps), instruments_service (circular)
 if [ "$USE_RG" = true ]; then
-    echo -n "Checking for Any type usage... "
-    ANY_USAGE=$(rg ": Any|-> Any|\[Any\]" --type py --glob "!tests/**" --glob "!scripts/**" . 2>/dev/null | wc -l | tr -d " ")
-    if [ "$ANY_USAGE" -gt 0 ]; then
-        echo -e "${YELLOW}WARN${NC} ($ANY_USAGE found)"
-        echo -e "${YELLOW}Consider using type aliases, TypedDict, Protocol, or Union types${NC}"
-        echo -e "${YELLOW}See: unified-trading-codex/06-coding-standards/type-hints-guide.md${NC}"
-        # Non-blocking warning
+    echo -n "Checking for imports inside functions... "
+    violations=$(rg "^[[:space:]]+import |^[[:space:]]+from .* import" --type py --glob "!tests/**" --glob "!scripts/**" \
+        --glob "!**/adapter_loader.py" --glob "!**/__init__.py" --glob "!**/dependency_checker.py" \
+        --glob "!**/instruments_service.py" --glob "!**/symbol_parser.py" --glob "!**/canonical_key_generator.py" \
+        --glob "!**/live_mode_handler.py" --glob "!**/cloud_instrument_storage.py" --glob "!**/parser.py" \
+        --glob "!**/main.py" --glob "!**/ccxt_service.py" --glob "!**/corporate_actions_handler.py" \
+        --glob "!**/corporate_actions_backfill_handler.py" --glob "!**/corporate_actions_production_handler.py" \
+        --glob "!**/corporate_actions_update_handler.py" \
+        instruments_service/ 2>/dev/null || true)
+    if [ -n "$violations" ]; then
+        echo -e "${RED}FAIL${NC}"
+        echo -e "${YELLOW}Found imports inside functions (move to top; lazy imports only for whitelisted optional deps):${NC}"
+        echo "$violations" | head -5
+        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
     else
         echo -e "${GREEN}PASS${NC}"
     fi
+fi
+
+# Check 6: Any/object type usage (BLOCKING - exception: dict[str, Any] for non-finite nested dicts with type: ignore)
+if [ "$USE_RG" = true ]; then
+    echo -n "Checking for Any/object type usage... "
+    ANY_USAGE=$(rg ": Any|-> Any|\[Any\]|: object|-> object" --type py --glob "!tests/**" --glob "!scripts/**" instruments_service/ 2>/dev/null | grep -v "dict\[str, Any\]" | grep -v "type: ignore" || true)
+    if [ -n "$ANY_USAGE" ]; then
+        echo -e "${RED}FAIL${NC}"
+        echo -e "${YELLOW}Found Any/object type usage (use specific types; exception: dict[str, Any] for non-finite nested dicts with # type: ignore[reportAny]):${NC}"
+        echo "$ANY_USAGE" | head -5
+        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
+    else
+        echo -e "${GREEN}PASS${NC}"
+    fi
+fi
+
+# Check 6b: .gitignore must NOT allow credential JSON (no negation like !central-element-*.json)
+echo -n "Checking .gitignore for credential file negation... "
+if [ -f ".gitignore" ] && rg "!central-element|!.*credentials.*\.json" .gitignore >/dev/null 2>&1; then
+    echo -e "${RED}FAIL${NC}"
+    echo -e "${YELLOW}Found credential file negation in .gitignore (remove !central-element-*.json):${NC}"
+    rg "!central-element|!.*credentials.*\.json" .gitignore
+    CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
+else
+    echo -e "${GREEN}PASS${NC}"
+fi
+
+# Check 6c: No hardcoded project ID in tests (use test-project placeholder)
+echo -n "Checking for hardcoded project ID in tests... "
+HARDCODED_PROJECT=$(rg "central-element-323112|get_config.*central-element" tests/ 2>/dev/null || true)
+if [ -n "$HARDCODED_PROJECT" ]; then
+    echo -e "${RED}FAIL${NC}"
+    echo -e "${YELLOW}Found real project ID in tests (use test-project placeholder):${NC}"
+    echo "$HARDCODED_PROJECT" | head -5
+    CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
+else
+    echo -e "${GREEN}PASS${NC}"
+fi
+
+# Check 6d: No broad except Exception in production (use specific exceptions or @handle_api_errors)
+# Whitelist: instruments_service/cli/main.py cleanup during shutdown (intentional suppress)
+echo -n "Checking for broad except Exception in production... "
+BROAD_EXCEPT=$(rg "except Exception:" --type py --glob "!tests/**" --glob "!instruments_service/cli/main.py" instruments_service/ 2>/dev/null || true)
+if [ -n "$BROAD_EXCEPT" ]; then
+    echo -e "${RED}FAIL${NC}"
+    echo -e "${YELLOW}Found broad except Exception (use @handle_api_errors or specific exceptions):${NC}"
+    echo "$BROAD_EXCEPT" | head -5
+    CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
+else
+    echo -e "${GREEN}PASS${NC}"
 fi
 
 # Check 7: Project ID environment variable consistency
@@ -551,12 +604,58 @@ fi
 # Check 9: asyncio.run() in loops (exclude examples - scripts often use asyncio.run for entry point)
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for asyncio.run() in loops... "
+    ADDED=0
     FILES_WITH_ASYNCIO_RUN=$(rg "asyncio\.run\(" --type py --glob "!examples/**" --glob "!scripts/**" --glob "!**/venues/defi/*" --glob "!**/cli/**" --files-with-matches . 2>/dev/null || true)
-    if [ -n "$FILES_WITH_ASYNCIO_RUN" ]; then
-        for file in $FILES_WITH_ASYNCIO_RUN; do
-            if grep -q "for \|while " "$file" 2>/dev/null; then
-                echo -e "${YELLOW}WARN${NC}"
-                echo -e "${YELLOW}Found asyncio.run() in file with loops (verify not in loop - use asyncio.gather() instead):${NC}"
+    for file in $FILES_WITH_ASYNCIO_RUN; do
+        if grep -q "for \|while " "$file" 2>/dev/null; then
+            echo -e "${RED}FAIL${NC}"
+            echo -e "${YELLOW}Found asyncio.run() in file with loops (use asyncio.gather() instead): $file${NC}"
+            CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
+            ADDED=1
+            break
+        fi
+    done
+    [ $ADDED -eq 0 ] && echo -e "${GREEN}PASS${NC}"
+fi
+
+# Check 10: File size limit (COD-SIZE: max 1500 lines per file)
+# Codex: unified-trading-codex/06-coding-standards/file-splitting-guide.md
+# Excludes: .venv, deps, .git, build, scripts/ (scripts exempt from line count)
+if [ "$USE_RG" = true ]; then
+    echo -n "Checking file size (max 1500 lines)... "
+    SIZE_VIOLATIONS=""
+    SIZE_WARNINGS=""
+    for f in $(find . -name "*.py" ! -path "./.venv/*" ! -path "./deps/*" ! -path "./.git/*" ! -path "./build/*" ! -path "./scripts/*" 2>/dev/null); do
+        lines=$(wc -l < "$f" 2>/dev/null || echo 0)
+        if [ "$lines" -gt 1500 ]; then
+            SIZE_VIOLATIONS="${SIZE_VIOLATIONS}\n  $f: $lines lines (max 1500)"
+        elif [ "$lines" -gt 1200 ]; then
+            SIZE_WARNINGS="${SIZE_WARNINGS}\n  $f: $lines lines (plan split before 1500)"
+        fi
+    done
+    if [ -n "$SIZE_VIOLATIONS" ]; then
+        echo -e "${RED}FAIL${NC}"
+        echo -e "${YELLOW}Files exceed 1500-line limit (split by SRP per file-splitting-guide.md):${NC}"
+        echo -e "$SIZE_VIOLATIONS"
+        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
+    else
+        echo -e "${GREEN}PASS${NC}"
+    fi
+    if [ -n "$SIZE_WARNINGS" ]; then
+        echo -e "${YELLOW}⚠️  Files near limit (plan split):${NC}"
+        echo -e "$SIZE_WARNINGS"
+    fi
+fi
+
+# Check 11: time.sleep() in async functions (simplified check)
+if [ "$USE_RG" = true ]; then
+    echo -n "Checking for time.sleep() in async code... "
+    FILES_WITH_TIME_SLEEP=$(rg "time\.sleep\(" --type py --files-with-matches . 2>/dev/null || true)
+    if [ -n "$FILES_WITH_TIME_SLEEP" ]; then
+        for file in $FILES_WITH_TIME_SLEEP; do
+            if grep -q "async def" "$file" 2>/dev/null; then
+                echo -e "${RED}FAIL${NC}"
+                echo -e "${YELLOW}Found time.sleep() in file with async functions (use asyncio.sleep() instead): $file${NC}"
                 echo "  $file"
                 CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
                 break
@@ -567,23 +666,16 @@ if [ "$USE_RG" = true ]; then
     fi
 fi
 
-# Check 10: time.sleep() in async functions (simplified check)
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for time.sleep() in async code... "
-    FILES_WITH_TIME_SLEEP=$(rg "time\.sleep\(" --type py --files-with-matches . 2>/dev/null || true)
-    if [ -n "$FILES_WITH_TIME_SLEEP" ]; then
-        for file in $FILES_WITH_TIME_SLEEP; do
-            if grep -q "async def" "$file" 2>/dev/null; then
-                echo -e "${YELLOW}WARN${NC}"
-                echo -e "${YELLOW}Found time.sleep() in file with async functions (verify not in async - use asyncio.sleep() instead):${NC}"
-                echo "  $file"
-                CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-                break
-            fi
-        done
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
+# Check 12: pip-audit for known vulnerabilities (security)
+echo -n "Checking for known vulnerabilities (pip-audit)... "
+if $PYTHON_CMD -m pip_audit --desc 2>/dev/null; then
+    echo -e "${GREEN}PASS${NC}"
+elif ! $PYTHON_CMD -c "import pip_audit" 2>/dev/null; then
+    echo -e "${YELLOW}SKIP (pip-audit not installed; uv pip install pip-audit)${NC}"
+else
+    echo -e "${RED}FAIL${NC}"
+    echo -e "${YELLOW}Known vulnerabilities found. Run: pip-audit --desc for details${NC}"
+    CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
 fi
 
 # Summary
@@ -604,14 +696,14 @@ echo "----------------------------------------------------------------------"
 
 # Only run if codex root exists
 if [ -f "${REPO_ROOT}/unified-trading-codex/scripts/run-all-validators.sh" ]; then
-    echo -e "${YELLOW}Running alignment validators for production readiness check...${NC}"
+    echo -e "${YELLOW}Running validators (alignment + security + hardening) for production readiness...${NC}"
 
     # Run alignment validators (non-blocking - warnings only)
-    if "${REPO_ROOT}/unified-trading-codex/scripts/run-all-validators.sh" --category alignment --failed-only 2>/dev/null; then
+    if "${REPO_ROOT}/unified-trading-codex/scripts/run-all-validators.sh" --category all --failed-only 2>/dev/null; then
         echo -e "${GREEN}✅ Alignment validators PASSED${NC}"
     else
-        EXIT_CODE=$?
-        if [ $EXIT_CODE -eq 2 ]; then
+        EXIT_CODE=${?}
+        if [ "${EXIT_CODE:-0}" -eq 2 ]; then
             echo -e "${YELLOW}⚠️  Alignment validators have WARNINGS (non-blocking)${NC}"
         else
             echo -e "${YELLOW}⚠️  Alignment validators FAILED (non-blocking)${NC}"
@@ -659,9 +751,10 @@ if [ "$RUN_TESTS" = true ]; then
 fi
 
 if [ $TYPE_CHECK_STATUS -eq 0 ]; then
-    echo -e "Types:    ${GREEN}✅ PASSED${NC} (optional)"
+    echo -e "Types:    ${GREEN}✅ PASSED${NC}"
 else
-    echo -e "Types:    ${YELLOW}⚠️  WARNINGS${NC} (non-blocking)"
+    echo -e "Types:    ${RED}❌ FAILED${NC}"
+    OVERALL_STATUS=1
 fi
 
 if [ $CODEX_STATUS -eq 0 ]; then

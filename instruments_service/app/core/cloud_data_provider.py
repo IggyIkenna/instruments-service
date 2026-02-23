@@ -12,6 +12,8 @@ from datetime import datetime
 import pandas as pd
 from unified_cloud_services import CloudTarget, StandardizedDomainCloudService, get_bucket_for_category
 
+from instruments_service.config import instruments_config
+
 logger = logging.getLogger(__name__)
 
 
@@ -32,8 +34,6 @@ class CloudDataProvider:
         if cloud_target is None:
             # NOTE: This default is only used when no category is specified.
             # Production flow should always use category-specific buckets via get_bucket_for_category()
-            from instruments_service.config import instruments_config
-
             cfg = instruments_config
             cloud_target = CloudTarget(
                 project_id=cfg.gcp_project_id,
@@ -48,7 +48,8 @@ class CloudDataProvider:
         self.cloud_target = cloud_target
 
         logger.info(
-            f"✅ CloudDataProvider initialized: project={cloud_target.project_id}, dataset={cloud_target.bigquery_dataset}"
+            f"✅ CloudDataProvider initialized: project={cloud_target.project_id}, "
+            f"dataset={cloud_target.bigquery_dataset}"
         )
 
     def get_instruments_from_gcs(
@@ -115,8 +116,6 @@ class CloudDataProvider:
 
         try:
             # Detect test mode
-            from instruments_service.config import instruments_config
-
             environment: str = str(instruments_config.environment or "development").lower()
             is_test = environment in ["test", "testing"] or bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
@@ -180,7 +179,7 @@ class CloudDataProvider:
             WHERE 1=1
             """
 
-            parameters = {}
+            parameters: dict[str, str] = {}
 
             if venue:
                 query += " AND venue = @venue"

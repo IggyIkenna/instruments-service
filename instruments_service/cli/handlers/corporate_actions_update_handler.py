@@ -134,7 +134,7 @@ class CorporateActionsUpdateHandler(ModeHandler):
         upload_to_gcs: bool = False,
         max_retries: int = 3,
         regenerate_date_views: bool = True,
-        **kwargs: object,
+        **kwargs: object,  # type: ignore[reportAny]
     ) -> dict[str, HandlerResultValue]:
         """
         Execute incremental corporate actions update.

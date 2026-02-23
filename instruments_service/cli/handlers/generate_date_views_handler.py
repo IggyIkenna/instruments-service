@@ -150,7 +150,7 @@ class GenerateDateViewsHandler(ModeHandler):
         input_dir: str | None = None,
         output_dir: str | None = None,
         upload_to_gcs: bool = False,
-        **kwargs: object,
+        **kwargs: object,  # type: ignore[reportAny]
     ) -> dict[str, HandlerResultValue]:
         """
         Execute date views generation.

@@ -17,6 +17,8 @@ Service for generating canonical instrument definitions from exchange APIs.
 
 ## Architecture
 
+**Implemented (UMI-INSTR-001):** instruments-service is a thin consumer of unified-market-interface (UMI). UMI owns CeFi (Tardis) instrument normalization; instruments-service calls UMI `get_adapter("tardis").fetch_instruments(normalize=True)`, converts to InstrumentDefinition, writes to GCS. TradFi and DeFi paths use InstrumentProcessingService. See: `unified-trading-codex/11-project-management/epics/umi-instrument-normalization-epic.md`
+
 Follows unified repository structure per architecture plan:
 
 ```
@@ -39,7 +41,7 @@ instruments_service/
 │   └── handlers/
 │       ├── instrument_handler.py         # Instrument generation handler
 │       └── instruments_query_handler.py  # Query handler
-├── models.py                             # InstrumentDefinition, InstrumentKey models
+├── models.py                             # InstrumentDefinition (from UMI), InstrumentKey, Venue, InstrumentType
 ├── config.py                             # VenueMapping, ExchangeInstrumentConfig, DataTypeConfig, InstrumentsServiceConfig
 └── requirements.txt
 ```
@@ -48,7 +50,7 @@ instruments_service/
 
 **All components have been successfully extracted and migrated from `market-tick-data-handler`:**
 
-1. ✅ **Models** - `InstrumentDefinition`, `InstrumentKey`, `Venue`, `InstrumentType` (extracted and migrated)
+1. ✅ **Models** - `InstrumentDefinition` (from UMI), `InstrumentKey`, `Venue`, `InstrumentType` (extracted and migrated)
 2. ✅ **Configs** - `VenueMapping`, `ExchangeInstrumentConfig`, `DataTypeConfig` (extracted and migrated)
 3. ✅ **Service** - `InstrumentProcessingService` (extracted and migrated, ~1547 lines)
 4. ✅ **CLI Handlers** - Instrument generation and query handlers (extracted and migrated)
@@ -77,7 +79,7 @@ instruments_service/
 - Python 3.13.x (required - see installation below)
 - SSH key configured with GitHub (for unified-cloud-services)
 
-**Note:** GCP credentials are included in the repo (private repo). The setup script will auto-detect them.
+**Note:** For local dev, use ADC: `gcloud auth application-default login` (no key file needed). Copy `.env.example` to `.env` and fill in placeholders.
 
 ### One-Command Setup
 

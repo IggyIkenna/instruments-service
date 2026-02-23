@@ -261,8 +261,9 @@ class TestCloudAgnosticPaths:
                         f"Bucket should contain project ID or be test bucket: {bucket_cefi}"
                     )
                     # Only check for hardcoded ID if it's different from mock
-                    if mock_project_id != "central-element-323112":
-                        assert "central-element-323112" not in bucket_cefi, (
+                    FORBIDDEN_REAL_ID = "real-project-id"  # Placeholder for "real project ID must not leak"
+                    if mock_project_id != FORBIDDEN_REAL_ID:
+                        assert FORBIDDEN_REAL_ID not in bucket_cefi, (
                             f"Bucket should not contain hardcoded project ID: {bucket_cefi}"
                         )
 

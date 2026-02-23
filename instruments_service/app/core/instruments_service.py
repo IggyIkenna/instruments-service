@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, cast
 
 import pandas as pd
+from unified_market_interface import InstrumentDefinition, get_adapter
 from unified_market_interface.adapters.tradfi import DatabentoAdapter
 from unified_market_interface.models.venue_config import VenueMapping
 
@@ -22,7 +23,6 @@ from instruments_service.config import (
     DEFI_VENUE_TO_PROTOCOL,
     UnifiedInstrumentConfig,
 )
-from instruments_service.models import InstrumentDefinition
 from instruments_service.utils.special_instruments import (
     create_krwusd_instrument_definition,
     create_vix_instrument_definition,
@@ -110,6 +110,7 @@ class InstrumentsService:
         venues: list[str] | str | None = None,
         instrument_ids: list[str] | str | None = None,
         tradfi_venues: list[str] | None = None,
+        skip_storage: bool = False,
     ) -> dict[str, Any]:
         """
         Generate instruments for a specific date.
@@ -334,41 +335,44 @@ class InstrumentsService:
                 if cefi_exchanges:
                     # Pre-flight check: Validate venue access before processing
                     # This detects Cloudflare blocks early instead of failing per-venue later
-                    # Note: tardis_adapter is lazy-loaded, so we need to call _get_tardis_adapter()
-                    # to ensure it's initialized before checking venue access
-                    adapter: object | None = None
-                    if hasattr(self.processing_service, "_get_tardis_adapter"):
-                        try:
-                            adapter = self.processing_service._get_tardis_adapter()  # pyright: ignore[reportPrivateUsage]
-                        except ValueError as e:
-                            # API key not available - skip venue access check
-                            logger.warning(f"⚠️ Cannot check venue access: {e}")
-                    elif hasattr(self.processing_service, "tardis_adapter"):
-                        adapter = getattr(self.processing_service, "tardis_adapter", None)
+                    # Get TardisAdapter via UMI get_adapter for check_venues_access
+                    adapter: object | None = None  # type: ignore[reportAny]
+                    try:
+                        api_key = getattr(self.processing_service, "api_key", None)
+                        project_id = getattr(self.processing_service, "_tardis_project_id", None)
+                        tardis_adapter = get_adapter("tardis", "tradfi", api_key=api_key, project_id=project_id)
+                        if hasattr(tardis_adapter, "base_client"):
+                            base_client = tardis_adapter.base_client
+                            if hasattr(base_client, "check_venues_access"):
+                                adapter = tardis_adapter
+                    except (ValueError, Exception) as e:
+                        logger.warning(f"⚠️ Cannot check venue access: {e}")
 
-                    if adapter is not None and hasattr(adapter, "check_venues_access"):
-                        access_results: dict[str, tuple[bool, str]] = cast(
-                            dict[str, tuple[bool, str]],
-                            adapter.check_venues_access(cefi_exchanges),
-                        )
-                        blocked: list[str] = [ex for ex, (ok, _) in access_results.items() if not ok]
-                        if blocked:
-                            for ex in blocked:
-                                _, error_msg = access_results[ex]
-                                logger.warning(f"⚠️ Venue access blocked: {ex} - {error_msg}")
-                            # Filter out blocked exchanges
-                            accessible = [ex for ex in cefi_exchanges if ex not in blocked]
-                            if not accessible:
-                                logger.error(
-                                    f"❌ All {len(cefi_exchanges)} CEFI venues blocked - skipping CEFI processing"
-                                )
-                                cefi_exchanges = []
-                            else:
-                                logger.warning(
-                                    f"⚠️ {len(blocked)}/{len(cefi_exchanges)} venues blocked, "
-                                    f"continuing with {len(accessible)} accessible venues"
-                                )
-                                cefi_exchanges = accessible
+                    if adapter is not None and hasattr(adapter, "base_client"):
+                        base_client = adapter.base_client
+                        if hasattr(base_client, "check_venues_access"):
+                            access_results: dict[str, tuple[bool, str]] = cast(
+                                dict[str, tuple[bool, str]],
+                                base_client.check_venues_access(cefi_exchanges),
+                            )
+                            blocked: list[str] = [ex for ex, (ok, _) in access_results.items() if not ok]
+                            if blocked:
+                                for ex in blocked:
+                                    _, error_msg = access_results[ex]
+                                    logger.warning(f"⚠️ Venue access blocked: {ex} - {error_msg}")
+                                # Filter out blocked exchanges
+                                accessible = [ex for ex in cefi_exchanges if ex not in blocked]
+                                if not accessible:
+                                    logger.error(
+                                        f"❌ All {len(cefi_exchanges)} CEFI venues blocked - skipping CEFI processing"
+                                    )
+                                    cefi_exchanges = []
+                                else:
+                                    logger.warning(
+                                        f"⚠️ {len(blocked)}/{len(cefi_exchanges)} venues blocked, "
+                                        f"continuing with {len(accessible)} accessible venues"
+                                    )
+                                    cefi_exchanges = accessible
 
                 if not cefi_exchanges:
                     logger.info("⏭️ Skipping CEFI processing - no exchanges to process")
@@ -376,17 +380,34 @@ class InstrumentsService:
                     logger.info(f"🚀 Processing {len(cefi_exchanges)} CeFi exchanges in parallel...")
 
                     # OPTIMIZATION: Process all exchanges in parallel using asyncio.gather
-                    # Each exchange is independent, so we can parallelize API calls
+                    # CeFi path: thin consumer - ask UMI get_instruments, convert to dict, write to GCS
+                    api_key = getattr(self.processing_service, "api_key", None)
+                    project_id = getattr(self.processing_service, "_tardis_project_id", None)
+
                     async def process_single_exchange(exchange: str) -> dict[str, InstrumentDefinition]:
                         try:
                             logger.info(f"🔍 Processing CeFi exchange {exchange}...")
-                            exchange_instruments = await self.processing_service.process_exchange_instruments(
-                                exchange=exchange, target_date=date, force=force
+                            adapter = get_adapter("tardis", "tradfi", api_key=api_key, project_id=project_id)
+                            instruments_raw = await adapter.fetch_instruments(
+                                exchange=exchange,
+                                target_date=date,
+                                force_refresh=force,
+                                normalize=True,
                             )
-                            if exchange_instruments:
-                                logger.info(f"✅ Processed {len(exchange_instruments)} instruments from {exchange}")
-                                return cast(dict[str, InstrumentDefinition], exchange_instruments)
-                            return {}
+                            result: dict[str, InstrumentDefinition] = {}
+                            for d in instruments_raw:
+                                try:
+                                    inst = InstrumentDefinition(**d)
+                                    key = d.get("instrument_key") or inst.instrument_key
+                                    result[key] = inst
+                                except Exception as e:
+                                    logger.warning(
+                                        f"Failed to create InstrumentDefinition for "
+                                        f"{d.get('instrument_key', 'unknown')}: {e}"
+                                    )
+                            if result:
+                                logger.info(f"✅ Processed {len(result)} instruments from {exchange}")
+                            return result
                         except Exception as e:
                             logger.error(f"❌ Failed to process {exchange}: {e}", exc_info=True)
                             return {}
@@ -753,6 +774,18 @@ class InstrumentsService:
 
             instruments_df = pd.DataFrame(instruments_list)
 
+            # Ensure market_category populated for live mode (skip_storage) - needed for instruments_by_category
+            if skip_storage and not instruments_df.empty:
+                from unified_cloud_services import determine_market_category
+
+                if "market_category" not in instruments_df.columns:
+                    instruments_df["market_category"] = ""
+                mask = (instruments_df["market_category"].isna()) | (instruments_df["market_category"] == "")
+                if mask.any():
+                    instruments_df.loc[mask, "market_category"] = instruments_df.loc[mask].apply(
+                        lambda row: determine_market_category(row.to_dict()), axis=1
+                    )
+
             # Handle case where no instruments generated
             if not all_instruments:
                 # For TradFi: Check if this is expected (holiday) or unexpected (error)
@@ -861,20 +894,29 @@ class InstrumentsService:
                 # All instruments in this file are tagged as "close_date" initially
                 instruments_df["session_date_tag"] = "close_date"
 
-            # Store to cloud (primary close-date file)
-            logger.info(f"📤 Storing {len(instruments_df)} instruments to cloud...")
-            success = cast(
-                bool,
-                self.cloud_storage.store_instruments(
-                    instruments_df=instruments_df, table_name="instruments", date=date
-                ),
-            )
+            # Store to cloud (primary close-date file) unless skip_storage (live mode writes to live/ path)
+            if skip_storage:
+                success = True
+                logger.info(f"📤 Skipping batch storage (live mode) - {len(instruments_df)} instruments for live path")
+            else:
+                logger.info(f"📤 Storing {len(instruments_df)} instruments to cloud...")
+                success = cast(
+                    bool,
+                    self.cloud_storage.store_instruments(
+                        instruments_df=instruments_df, table_name="instruments", date=date
+                    ),
+                )
 
-            # Handle UTC midnight spanning for CME and ICE
+            # Handle UTC midnight spanning for CME and ICE (skip when skip_storage - live mode)
             # When a session spans UTC midnight (opens on day N, closes on day N+1),
             # write duplicate entries to the open-date file so metadata is available for all ticks
-            if success and not instruments_df.empty and "regular_open_utc" in instruments_df.columns:
-                utc_spanning_instruments: list[Any] = []
+            if (
+                success
+                and not skip_storage
+                and not instruments_df.empty
+                and "regular_open_utc" in instruments_df.columns
+            ):
+                utc_spanning_instruments: list[pd.Series] = []
                 file_date: date = date.date() if isinstance(date, datetime) else date
 
                 for idx, row in instruments_df.iterrows():
@@ -929,7 +971,7 @@ class InstrumentsService:
 
             if success:
                 logger.info(f"✅ Successfully stored instruments for {date_str}")
-                return {
+                result: dict[str, Any] = {
                     "status": "success",
                     "date": date_str,
                     "instruments_generated": len(instruments_df),
@@ -942,6 +984,11 @@ class InstrumentsService:
                     "error_count": error_count,
                     "warning_count": warning_count,
                 }
+                if skip_storage and not instruments_df.empty and "market_category" in instruments_df.columns:
+                    result["instruments_by_category"] = {
+                        str(cat): grp for cat, grp in instruments_df.groupby("market_category")
+                    }
+                return result
             else:
                 logger.error(f"❌ Failed to store instruments for {date_str}")
                 return {

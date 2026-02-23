@@ -114,7 +114,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
                     tickers_raw: list[str] = list(equities["exchange_raw_symbol"].dropna().unique().tolist())
                     tickers: list[str] = [str(t).strip() for t in tickers_raw if t and str(t).strip()]
                     return sorted(tickers)
-                except Exception:
+                except (OSError, FileNotFoundError, RuntimeError, ValueError):
                     return []
 
             # Try known good dates
@@ -136,7 +136,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
             logger.warning("⚠️ No equity tickers found in any GCS instruments file")
             return []
 
-        except Exception as e:
+        except (OSError, ValueError, TypeError, KeyError) as e:
             logger.error(f"❌ Failed to load tickers from GCS: {e}")
             return []
 
@@ -224,7 +224,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
                 )
                 break  # Success, exit retry loop
 
-            except Exception as e:
+            except (OSError, ValueError, TypeError, KeyError, ConnectionError) as e:
                 result["error"] = str(e)
                 if attempt < max_retries:
                     logger.warning(f"⚠️ {ticker}: Attempt {attempt}/{max_retries} failed: {e}. Retrying...")
@@ -279,7 +279,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
             logger.debug(f"Appended {len(new_events)} new events to {csv_path.name}")
             return combined
 
-        except Exception as e:
+        except (OSError, ValueError, TypeError, KeyError) as e:
             logger.warning(f"Failed to append to {csv_path}: {e}. Returning new data only.")
             return new_df
 
@@ -433,7 +433,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
         append_mode: bool = True,
         upload_to_gcs: bool = False,
         max_retries: int = 3,
-        **kwargs: object,
+        **kwargs: object,  # type: ignore[reportAny]
     ) -> dict[str, HandlerResultValue]:
         """
         Execute corporate actions backfill.
@@ -481,7 +481,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
                     pct = (i / len(ticker_list)) * 100
                     logger.info(f"📊 [{i}/{len(ticker_list)}] ({pct:.1f}%) Processed {ticker}")
 
-                except Exception as e:
+                except (OSError, ValueError, TypeError, KeyError, ConnectionError, TimeoutError) as e:
                     logger.error(f"❌ Unexpected error processing {ticker}: {e}")
                     results.append(
                         {

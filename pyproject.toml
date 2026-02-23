@@ -2,12 +2,16 @@
 requires = ["setuptools>=80.9.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-# [tool.uv.sources] removed - Docker builds use Artifact Registry via pip.conf
-# For local dev, install manually: uv pip install -e ../unified-events-interface
+# Path deps for local workspace; CI/Docker clone to ../ and use Artifact Registry
+[tool.uv.sources]
+unified-config-interface = { path = "../unified-config-interface" }
+unified-events-interface = { path = "../unified-events-interface" }
+unified-domain-services = { path = "../unified-domain-services" }
+unified-market-interface = { path = "../unified-market-interface" }
 
 [project]
 name = "instruments-service"
-version = "0.1.4"
+version = "0.1.5"
 description = "Service for generating canonical instrument definitions from exchange APIs"
 readme = "README.md"
 license = {text = "MIT"}
@@ -48,7 +52,7 @@ dependencies = [
     "unified-config-interface>=0.3.0",
     "unified-events-interface>=0.1.0",
     "unified-domain-services>=0.1.0",
-    "unified-market-interface>=0.3.0",
+    "unified-market-interface>=0.4.0",
     # NOTE: unified-cloud-services is installed separately:
     #   - Local: setup.sh installs via SSH
     #   - Cloud Build/Docker: cloned via HTTPS with PAT
@@ -63,7 +67,8 @@ dev = [
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.6.0",
     "ruff==0.15.0",
-    "mypy>=1.19.1",
+    "pyright>=1.1.400",
+    "pip-audit>=2.7.0",
     "prek>=0.3.2",
     "pandas-stubs>=2.2.0,<3.0.0",
 ]
@@ -80,11 +85,6 @@ Repository = "https://github.com/iggyikenna/instruments-service"
 packages = ["instruments_service"]
 include-package-data = true
 
-[tool.mypy]
-python_version = "3.13"
-warn_return_any = false  # Light mode
-disallow_untyped_defs = false
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
@@ -97,7 +97,7 @@ target-version = "py313"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I"]
 ignore = [
-    "E501",  # Line too long - handled by ruff format
+    "E501",  # Line too long (handled by formatter)
     "E722",  # Do not use bare `except` - allowed in scripts for simplicity
 ]
 

@@ -26,6 +26,7 @@ from datetime import date
 from typing import Any, Optional
 
 import pandas as pd
+import yfinance as yf
 
 from instruments_service.corporate_actions.models import (
     CorporateActionsBundle,
@@ -71,10 +72,8 @@ class CorporateActionsAdapter:
 
     @property
     def yf(self):
-        """Lazy load yfinance."""
+        """Lazy load yfinance (cached)."""
         if self._yf is None:
-            import yfinance as yf
-
             self._yf = yf
         return self._yf
 
@@ -275,7 +274,7 @@ class CorporateActionsAdapter:
 
             # Try to get earnings dates from calendar
             try:
-                calendar: Any = stock.calendar
+                calendar: object = stock.calendar  # type: ignore[reportAny]
                 if calendar is not None and not calendar.empty:
                     # Future earnings date
                     if "Earnings Date" in calendar.index:

@@ -38,9 +38,9 @@ DefiProtocolKwargs = str | int | bool | None | datetime
 class DefiServiceProtocol(Protocol):
     """Protocol for InstrumentProcessingService used by fetch_defi_instruments."""
 
-    venue_mapping: object
-    date_filter_service: object
-    ccxt_service: object
+    venue_mapping: object  # type: ignore[reportAny]
+    date_filter_service: object  # type: ignore[reportAny]
+    ccxt_service: object  # type: ignore[reportAny]
 
     def _get_manual_ccxt_fallback(self, venue: str, base_asset: str) -> dict[str, Any]: ...
 

@@ -312,11 +312,11 @@ def setup_test_environment(test_bucket_name):
     # the attribute to exist. Since BaseServiceConfig doesn't have these fields,
     # we patch get_bucket_for_category to use os.getenv as fallback
     if "INSTRUMENTS_GCS_BUCKET_CEFI_TEST" not in os.environ:
-        os.environ["INSTRUMENTS_GCS_BUCKET_CEFI_TEST"] = "instruments-store-test-cefi-central-element-323112"
+        os.environ["INSTRUMENTS_GCS_BUCKET_CEFI_TEST"] = "instruments-store-test-cefi-test-project"
     if "INSTRUMENTS_GCS_BUCKET_TRADFI_TEST" not in os.environ:
-        os.environ["INSTRUMENTS_GCS_BUCKET_TRADFI_TEST"] = "instruments-store-test-tradfi-central-element-323112"
+        os.environ["INSTRUMENTS_GCS_BUCKET_TRADFI_TEST"] = "instruments-store-test-tradfi-test-project"
     if "INSTRUMENTS_GCS_BUCKET_DEFI_TEST" not in os.environ:
-        os.environ["INSTRUMENTS_GCS_BUCKET_DEFI_TEST"] = "instruments-store-test-defi-central-element-323112"
+        os.environ["INSTRUMENTS_GCS_BUCKET_DEFI_TEST"] = "instruments-store-test-defi-test-project"
 
     # Enable CSV sampling for tests if not explicitly disabled
     if "ENABLE_CSV_SAMPLING" not in os.environ:
