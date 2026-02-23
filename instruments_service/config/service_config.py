@@ -151,21 +151,6 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         description="Comma-separated list of DeFi MVP tokens",
     )
 
-    clickup_secret_name: str = Field(
-        default="clickup-api-key",
-        validation_alias=AliasChoices("CLICKUP_SECRET_NAME"),
-        description="ClickUp API key secret name",
-    )
-    clickup_list_id: str = Field(
-        default="",
-        validation_alias=AliasChoices("clickup_list_id_instruments_service"),
-        description="ClickUp List ID",
-    )
-    clickup_user_id_ikenna: str = Field(default="254573729")
-    clickup_user_id_harsh: str = Field(default="100698878")
-    clickup_user_id_femi: str = Field(default="100698756")
-    clickup_user_id_daniel: str = Field(default="36559682")
-
     # Deployment orchestration metadata (set by VM startup scripts)
     deployment_id: str = Field(
         default="",

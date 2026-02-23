@@ -77,21 +77,36 @@ jobs:
           uv pip install --system pydantic pydantic-settings pandas numpy python-dateutil \
             python-dotenv requests ccxt plotly web3 eth-abi databento boto3 \
             exchange-calendars yfinance polars
-          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout pytest-xdist ruff==0.15.0
+          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout pytest-xdist ruff==0.15.0 pyright pip-audit>=2.7.0
 
       # ========================================================================
-      # LINT + FORMAT - auto-fix then verify no diff (catches unformatted code)
+      # DEPENDENCY VULNERABILITY SCAN (pip-audit)
+      # ========================================================================
+      - name: Dependency vulnerability scan (pip-audit)
+        run: |
+          pip-audit || { echo "❌ pip-audit found vulnerabilities. Run: pip-audit --desc"; exit 1; }
+
+      # ========================================================================
+      # LINT + FORMAT - format first (fixes line length), then check --fix
       # ========================================================================
       - name: Lint and format check
         run: |
-          ruff check --fix instruments_service/ tests/
-          ruff format instruments_service/ tests/
+          ruff format --line-length 120 instruments_service/ tests/
+          ruff check --fix --line-length 120 instruments_service/ tests/
           git diff --exit-code || {
-            echo "❌ Code not formatted. Run locally: ruff check --fix . && ruff format ."
+            echo "❌ Code not formatted. Run locally: ruff format --line-length 120 . && ruff check --fix --line-length 120 ."
             git diff
             exit 1
           }
           echo "✅ Lint and format check passed"
+
+      # ========================================================================
+      # TYPE CHECK (pyright - matches IDE)
+      # ========================================================================
+      - name: Type check (pyright)
+        run: |
+          pyright instruments_service/ tests/ --level warning || exit 1
+          echo "✅ Type check passed"
 
       # ========================================================================
       # UNIT TESTS - MUST PASS

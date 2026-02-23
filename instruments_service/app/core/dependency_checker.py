@@ -27,8 +27,18 @@ Usage:
 import logging
 import os
 from dataclasses import dataclass
+from typing import TypedDict
 
 import pandas as pd
+
+
+class ApiConfig(TypedDict):
+    """API dependency config: name, secret, and whether required."""
+
+    name: str
+    secret: str
+    required: bool
+
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +113,7 @@ class DependencyChecker:
     OUTPUT_PATH_TEMPLATE = "instrument_availability/by_date/day={date}/instruments.parquet"
 
     # External API dependencies by category
-    EXTERNAL_APIS: dict[str, list[dict[str, str | bool]]] = {
+    EXTERNAL_APIS: dict[str, list[ApiConfig]] = {
         "CEFI": [
             {"name": "tardis_api", "secret": "tardis-api-key", "required": True},
         ],
@@ -170,11 +180,11 @@ class DependencyChecker:
         required_available = True
 
         for category in categories:
-            apis: list[dict[str, str | bool]] = self.EXTERNAL_APIS.get(category, [])
+            apis: list[ApiConfig] = self.EXTERNAL_APIS.get(category, [])
 
             for api in apis:
                 status = self._check_api_key(api["name"], api["secret"])
-                required: bool = bool(api.get("required", True))
+                required: bool = api["required"]
                 status.required = required
                 checks.append(status)
 

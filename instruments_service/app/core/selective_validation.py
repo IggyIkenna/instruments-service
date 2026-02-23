@@ -50,7 +50,7 @@ def validate_required_api_keys(venues: list[str], project_id: Optional[str] = No
     api_keys: dict[str, str] = {}
     errors: list[str] = []
 
-    for data_source, secret_name in required_secrets.items():
+    for data_source, _ in required_secrets.items():
         try:
             # Map data source to config secret name
             if data_source == "tardis":
@@ -83,7 +83,8 @@ def validate_required_api_keys(venues: list[str], project_id: Optional[str] = No
                 api_keys[data_source] = api_key.strip()
                 logger.info(f"✅ Validated API key for {data_source}")
             else:
-                error_msg = f"Missing API key for {data_source} (venues: {[v for v in venues if DataSourceMapping.get_data_source_for_venue(v) == data_source]})"
+                error_msg = f"Missing API key for {data_source} \
+                    (venues: {[v for v in venues if DataSourceMapping.get_data_source_for_venue(v) == data_source]})"
                 errors.append(error_msg)
                 logger.error(error_msg)
 

@@ -116,7 +116,7 @@ class CCXTService:
         logger.info(f"✅ Pre-loaded {success_count}/{len(to_load)} CCXT exchanges")
         return results
 
-    def get_ccxt_exchange(self, venue: str) -> object | None:
+    def get_ccxt_exchange(self, venue: str) -> object | None:  # type: ignore[reportAny]
         """
         Get CCXT exchange instance for a venue.
 

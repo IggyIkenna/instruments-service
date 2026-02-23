@@ -5,7 +5,7 @@ Runs continuously on wall clock aligned intervals (:00, :15, :30, :45) following
 codex batch-live symmetry principles.
 
 Per codex:
-- Cloud-agnostic: uses get_storage_client() not direct google.cloud
+- Cloud-agnostic: uses upload_to_storage() not direct google.cloud
 - Split libraries: unified-config-interface, unified-events-interface, unified-cloud-services
 - UTC datetime: all timestamps use timezone.utc
 - No hardcoded project IDs: uses unified_config
@@ -32,7 +32,7 @@ except ImportError:
     HAS_CONFIG_INTERFACE = False
 
 # Unified cloud services (cloud-agnostic)
-from unified_cloud_services import get_storage_client
+from unified_cloud_services import upload_to_storage
 
 # Service imports
 from instruments_service.app.core.instruments_service import InstrumentsService
@@ -66,7 +66,7 @@ class LiveModeHandler(ModeHandler):
 
         logger.debug("✅ LiveModeHandler initialized")
 
-    def run(self, **kwargs: object) -> dict[str, HandlerResultValue]:
+    def run(self, **kwargs: object) -> dict[str, HandlerResultValue]:  # type: ignore[reportAny]
         """
         Run live mode handler.
 
@@ -169,11 +169,18 @@ class LiveModeHandler(ModeHandler):
             defi = "DEFI" in categories
 
             # Generate instruments (reuse batch engine per codex symmetry)
+            # skip_storage=True: live mode writes to live/ path via persistence queue, not batch path
             result = await self.instruments_service.generate_instruments_for_date(
-                date=current_date, cefi=cefi, tradfi=tradfi, defi=defi, venues=venues, force=True
+                date=current_date,
+                cefi=cefi,
+                tradfi=tradfi,
+                defi=defi,
+                venues=venues,
+                force=True,
+                skip_storage=True,
             )
 
-            if result.get("success"):
+            if result.get("status") == "success":
                 total_instruments = 0
 
                 for category, instruments_df in result.get("instruments_by_category", {}).items():
@@ -241,8 +248,6 @@ class LiveModeHandler(ModeHandler):
         """Start background thread for non-blocking GCS writes."""
 
         def worker():
-            storage_client = get_storage_client()  # Cloud-agnostic per codex
-
             while True:
                 item = self.persistence_queue.get()
 
@@ -250,11 +255,13 @@ class LiveModeHandler(ModeHandler):
                     break
 
                 try:
-                    bucket = storage_client.bucket(item["bucket"])
-                    blob = bucket.blob(item["path"])
                     parquet_bytes: bytes = item["data"].to_parquet()
-                    blob.upload_from_string(parquet_bytes, content_type="application/octet-stream")  # pyright: ignore[reportUnknownMemberType]
-
+                    upload_to_storage(
+                        bucket=item["bucket"],
+                        path=item["path"],
+                        data=parquet_bytes,
+                        content_type="application/octet-stream",
+                    )
                     log_event(
                         "DATA_PERSISTED",
                         details={"path": f"gs://{item['bucket']}/{item['path']}", "rows": len(item["data"])},

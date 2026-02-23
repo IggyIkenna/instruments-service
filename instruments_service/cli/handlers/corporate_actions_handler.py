@@ -161,7 +161,7 @@ class CorporateActionsHandler(ModeHandler):
                     tickers_raw: list[str] = cast(list[str], symbol_series.tolist())
                     tickers = [str(t).strip() for t in tickers_raw if t and str(t).strip()]
                     return sorted(tickers)
-                except Exception:
+                except (OSError, FileNotFoundError, RuntimeError, ValueError):
                     return []
 
             # If specific date provided, use it
@@ -196,7 +196,7 @@ class CorporateActionsHandler(ModeHandler):
         except ImportError:
             logger.error("❌ unified-cloud-services not available")
             return []
-        except Exception as e:
+        except (OSError, ValueError, TypeError, KeyError) as e:
             logger.error(f"❌ Failed to load tickers from GCS: {e}")
             return []
 
@@ -234,7 +234,7 @@ class CorporateActionsHandler(ModeHandler):
         tickers: Optional[list[str]] = None,
         output_format: str = "parquet",
         upload_to_gcs: bool = False,
-        **kwargs: object,
+        **kwargs: object,  # type: ignore[reportAny]
     ) -> dict[str, HandlerResultValue]:
         """
         Execute corporate actions fetch.
@@ -517,7 +517,7 @@ class CorporateActionsHandler(ModeHandler):
         except ImportError:
             logger.warning("⚠️ google-cloud-storage not installed - skipping GCS upload")
             return {}
-        except Exception as e:
+        except (OSError, ValueError, TypeError, KeyError) as e:
             logger.error(f"❌ Failed to upload to GCS: {e}")
             return {}
 

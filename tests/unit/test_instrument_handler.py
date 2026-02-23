@@ -247,7 +247,7 @@ class TestInstrumentHandler:
 
     def test_execute_instrument_generation_exception_handling(self, handler):
         """Test exception handling during generation."""
-        handler.instruments_service.generate_instruments_for_date = AsyncMock(side_effect=Exception("Test error"))
+        handler.instruments_service.generate_instruments_for_date = AsyncMock(side_effect=RuntimeError("Test error"))
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)
 
@@ -308,7 +308,7 @@ class TestInstrumentHandler:
 
     def test_generate_instruments_for_date_exchange_error(self, handler, mock_instrument_service):
         """Test handling exchange processing errors."""
-        mock_instrument_service.generate_instruments_for_date = AsyncMock(side_effect=Exception("Exchange error"))
+        mock_instrument_service.generate_instruments_for_date = AsyncMock(side_effect=RuntimeError("Exchange error"))
 
         today = datetime.now(timezone.utc).date()
         test_date = today - timedelta(days=1)

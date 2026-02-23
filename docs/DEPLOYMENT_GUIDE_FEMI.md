@@ -593,7 +593,7 @@ grep -i error /var/log/instruments-t1.log
 
 - **Technical Questions:** Ikenna (code/specs)
 - **Deployment Issues:** Femi (VM/scheduler)
-- **Progress Tracking:** Julian (ClickUp)
+- **Progress Tracking:** Julian
 
 ---
 

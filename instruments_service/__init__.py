@@ -17,7 +17,7 @@ __version__ = "0.1.0"
 __all__: list[str] = ["__version__"]
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> Any:  # type: ignore[reportAny]
     """Lazy import to avoid circular dependencies."""
     if name == "cli":
         import instruments_service.cli  # noqa: F401

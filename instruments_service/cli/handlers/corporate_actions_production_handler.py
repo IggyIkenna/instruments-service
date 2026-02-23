@@ -153,13 +153,13 @@ class CorporateActionsProductionHandler(ModeHandler):
 
                         logger.info(f"📂 Loaded {len(tickers)} tickers from GCS (day={date_str})")
                         return sorted(tickers)
-                except Exception:
+                except (OSError, FileNotFoundError, RuntimeError, ValueError):
                     continue
 
             logger.warning("⚠️ No equity tickers found in GCS")
             return []
 
-        except Exception as e:
+        except (OSError, ValueError, TypeError, KeyError) as e:
             logger.error(f"❌ Failed to load tickers from GCS: {e}")
             return []
 
@@ -211,7 +211,7 @@ class CorporateActionsProductionHandler(ModeHandler):
                 )
                 break
 
-            except Exception as e:
+            except (OSError, ValueError, TypeError, KeyError, ConnectionError) as e:
                 result["error"] = str(e)
                 if attempt < max_retries:
                     logger.warning(f"⚠️ {ticker}: Attempt {attempt}/{max_retries} failed: {e}. Retrying...")
@@ -413,7 +413,7 @@ class CorporateActionsProductionHandler(ModeHandler):
             logger.error(f"❌ GCS upload failed: {e}")
             logger.error(f"stderr: {e.stderr}")
             return False
-        except Exception as e:
+        except (OSError, ValueError, TypeError, KeyError) as e:
             logger.error(f"❌ Unexpected error during GCS upload: {e}")
             return False
 
@@ -423,7 +423,7 @@ class CorporateActionsProductionHandler(ModeHandler):
         parallel_workers: int = 2,  # Changed default from 10 to 2
         max_retries: int = 3,
         upload_to_gcs: bool = True,  # New parameter to control GCS upload
-        **kwargs: object,
+        **kwargs: object,  # type: ignore[reportAny]
     ) -> dict[str, HandlerResultValue]:
         """
         Execute complete production pipeline.
@@ -484,7 +484,7 @@ class CorporateActionsProductionHandler(ModeHandler):
                     pct = (i / len(ticker_list)) * 100
                     logger.info(f"📊 [{i}/{len(ticker_list)}] ({pct:.1f}%) Processed {ticker}")
 
-                except Exception as e:
+                except (OSError, ValueError, TypeError, KeyError, ConnectionError, TimeoutError) as e:
                     logger.error(f"❌ Unexpected error processing {ticker}: {e}")
                     results.append(
                         {

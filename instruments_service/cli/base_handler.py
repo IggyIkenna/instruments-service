@@ -65,7 +65,7 @@ class ModeHandler(ABC):
             raise ValueError("Configuration must be a dictionary")
 
     @abstractmethod
-    def run(self, **kwargs: object) -> dict[str, HandlerResultValue]:
+    def run(self, **kwargs: object) -> dict[str, HandlerResultValue]:  # type: ignore[reportAny]
         """
         Execute the specific mode logic.
 

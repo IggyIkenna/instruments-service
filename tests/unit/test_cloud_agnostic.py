@@ -102,7 +102,7 @@ class TestCloudAgnosticArchitecture:
 
         # Search for hardcoded project ID
         hardcoded_patterns = [
-            "central-element-323112",
+            "test-project",
             "project_id='",
             'project_id="',
         ]

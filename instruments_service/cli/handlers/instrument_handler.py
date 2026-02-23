@@ -108,10 +108,14 @@ class InstrumentHandler(ModeHandler):
 
         return venues
 
-    def run(self, **kwargs: object) -> dict[str, HandlerResultValue]:
+    def run(self, **kwargs: object) -> dict[str, HandlerResultValue]:  # type: ignore[reportAny]
         """Execute instrument generation."""
-        start_date = kwargs.get("start_date", "")
-        end_date = kwargs.get("end_date", "")
+        start_date = kwargs.get("start_date")
+        end_date = kwargs.get("end_date")
+        if start_date is None or start_date == "":
+            raise ValueError("start_date is required for instrument generation")
+        if end_date is None or end_date == "":
+            raise ValueError("end_date is required for instrument generation")
         force = bool(kwargs.get("force", False))
         return self._execute_instrument_generation(start_date, end_date, force, **kwargs)
 
@@ -120,7 +124,7 @@ class InstrumentHandler(ModeHandler):
         start_date: str | datetime | object,
         end_date: str | datetime | object,
         force: bool = False,
-        **kwargs: object,
+        **kwargs: object,  # type: ignore[reportAny]
     ) -> dict[str, HandlerResultValue]:
         """Generate instruments with direct GCS existence checks."""
         log_event("STARTED")
@@ -175,7 +179,7 @@ class InstrumentHandler(ModeHandler):
                 raise
 
             log_event("VALIDATION_COMPLETED")
-        except Exception as e:
+        except (ValueError, TypeError, KeyError) as e:
             log_event("VALIDATION_FAILED", str(e))
             log_event("FAILED", f"Validation error: {str(e)}")
             raise
@@ -258,8 +262,8 @@ class InstrumentHandler(ModeHandler):
 
                             total_skipped += 1
                             continue
-                    except Exception:
-                        # File doesn't exist, proceed with generation
+                    except (OSError, FileNotFoundError, RuntimeError, ValueError):
+                        # File doesn't exist or check failed, proceed with generation
                         pass
 
                 # Level 1: Day-venue combination counters (shows overall progress)
@@ -367,7 +371,8 @@ class InstrumentHandler(ModeHandler):
                             f"   (Processing had {processing_errors} errors and {processing_warnings} warnings)"
                         )
 
-            except Exception as e:
+            except (OSError, ValueError, TypeError, RuntimeError, Exception) as e:
+                # In-flight validation: catch any exception from service, log, continue with other dates
                 logger.error(
                     f"❌ Failed to process {date.strftime('%Y-%m-%d')}: {e}",
                     exc_info=True,
