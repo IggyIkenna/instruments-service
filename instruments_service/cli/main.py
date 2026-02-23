@@ -160,6 +160,8 @@ def main() -> dict[str, HandlerResultValue]:
         # Live mode options
         if hasattr(args, "interval") and args.interval:
             handler_kwargs["interval"] = args.interval
+        if hasattr(args, "single_cycle") and args.single_cycle:
+            handler_kwargs["single_cycle"] = True
 
         # Market type filters
         if args.mode == "live":

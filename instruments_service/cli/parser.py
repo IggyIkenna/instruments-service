@@ -42,9 +42,10 @@ def parse_arguments() -> argparse.Namespace:
             "generate_date_views",
             "corporate_actions_update",
             "corporate_actions_production",
+            "live",
         ],
         required=True,
-        help="Operation mode: instruments (generate instrument definitions), corporate_actions (TRADFI only: fetch dividends, splits, earnings for equities), corporate_actions_backfill (fetch full history per ticker), generate_date_views (transform by_ticker to by_date), corporate_actions_update (incremental updates), corporate_actions_production (complete production pipeline)",
+        help="Operation mode: instruments (generate instrument definitions), corporate_actions (TRADFI only: fetch dividends, splits, earnings for equities), corporate_actions_backfill (fetch full history per ticker), generate_date_views (transform by_ticker to by_date), corporate_actions_update (incremental updates), corporate_actions_production (complete production pipeline), live (wall-clock aligned instrument refresh for real-time availability)",
     )
 
     # Date range (required for instruments mode)
@@ -179,6 +180,19 @@ def parse_arguments() -> argparse.Namespace:
         help="Maximum retry attempts per ticker (default: 3)",
     )
 
+    # Live mode options (for --mode live)
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=15,
+        help="Live mode: minutes between runs (default: 15). Used with --single-cycle for Cloud Run scheduling.",
+    )
+    parser.add_argument(
+        "--single-cycle",
+        action="store_true",
+        help="Live mode: run one cycle and exit (for Cloud Run scheduled every 15 min). Without this, runs continuously.",
+    )
+
     # Logging
     parser.add_argument(
         "--log-level",
@@ -213,6 +227,10 @@ def validate_arguments(args: argparse.Namespace) -> None:
         if not args.end_date:
             # Default to same as start_date if not provided
             args.end_date = args.start_date
+
+    # Live mode: no date range required (uses current date)
+    if args.mode == "live":
+        pass  # No validation needed
 
     # Validate date range for corporate_actions mode
     if args.mode == "corporate_actions":
@@ -268,6 +286,16 @@ Corporate Actions (dividends, splits, earnings):
 
   # Save as CSV instead of Parquet
   python -m instruments_service --mode corporate_actions --start-date 2020-01-01 --end-date 2026-01-25 --output-format csv
+
+Query Instruments (use unified-cloud-services):
+
+Live mode (Cloud Run every 15 min - single cycle, then exit):
+
+  # Single cycle for scheduled Cloud Run (run once, exit)
+  python -m instruments_service --mode live --single-cycle --CEFI --TRADFI --DEFI
+
+  # Continuous live mode (local dev - runs until Ctrl+C)
+  python -m instruments_service --mode live --interval 15 --CEFI --TRADFI --DEFI
 
 Query Instruments (use unified-cloud-services):
 

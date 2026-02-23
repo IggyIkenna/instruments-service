@@ -140,6 +140,20 @@ pyenv local 3.13.1
 python --version
 ```
 
+### Live Mode (Cloud Run Every 15 Min)
+
+Live mode refreshes instrument availability on wall-clock aligned intervals. For **Cloud Run scheduled every 15 minutes** (avoids wasting compute—job runs once, exits):
+
+```bash
+# Single cycle for scheduled Cloud Run (run once, exit)
+python -m instruments_service --mode live --single-cycle --CEFI --TRADFI --DEFI
+
+# Continuous live mode (local dev - runs until Ctrl+C)
+python -m instruments_service --mode live --interval 15 --CEFI --TRADFI --DEFI
+```
+
+**Deployment:** UTD v2 Terraform creates `instruments-service-live` workflow with Cloud Scheduler `*/15 * * * *`. Each run invokes the Cloud Run job with `--mode live --single-cycle`, processes current instruments, and exits. See `unified-trading-deployment-v2/terraform/services/instruments-service/gcp/`.
+
 ### CLI Usage
 
 ```bash
