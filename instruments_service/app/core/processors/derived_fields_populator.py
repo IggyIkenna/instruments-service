@@ -11,16 +11,48 @@ from typing import Any, Protocol, cast
 logger = logging.getLogger(__name__)
 
 
+class _CCXTServiceProtocol(Protocol):
+    """Protocol for ccxt_service attribute."""
+
+    def get_metadata(
+        self,
+        venue: str,
+        base_asset: str,
+        quote_asset: str,
+        symbol_id: str,
+        tardis_symbol: str | None = None,
+        instrument_type: str | None = None,
+    ) -> dict[str, str | float | int | None]: ...
+
+    def get_leverage_limits(
+        self,
+        venue: str,
+        symbol: str,
+        base_asset: str,
+        quote_asset: str,
+        symbol_id: str,
+        tardis_symbol: str | None = None,
+        instrument_type: str | None = None,
+    ) -> dict[str, Any]: ...
+
+
+class _VenueMappingProtocol(Protocol):
+    """Protocol for venue_mapping attribute."""
+
+    tardis_to_venue: dict[str, str]
+    venue_to_ccxt: dict[str, str]
+
+
 class DerivedFieldsServiceProtocol(Protocol):
     """Protocol for InstrumentProcessingService used by populate_derived_fields."""
 
-    venue_mapping: object  # type: ignore[reportAny]
+    venue_mapping: _VenueMappingProtocol
     exchange_config: object  # type: ignore[reportAny]
     processing_config: object  # type: ignore[reportAny]
-    ccxt_service: object | None  # type: ignore[reportAny]
+    ccxt_service: _CCXTServiceProtocol | None
 
-    def _parse_option_components(self, symbol_id: str, exchange: str) -> dict[str, Any]: ...
-    def _parse_expiry_from_symbol(self, symbol_id: str, exchange: str) -> str | None: ...
+    def parse_option_components(self, symbol_id: str, exchange: str) -> dict[str, Any]: ...
+    def parse_expiry_from_symbol(self, symbol_id: str, exchange: str) -> str | None: ...
 
 
 async def populate_derived_fields(
@@ -39,7 +71,7 @@ async def populate_derived_fields(
 
         if inst_type == "OPTION":
             tardis_exchange = exchange or venue.lower()
-            option_components = service._parse_option_components(symbol_id, tardis_exchange)
+            option_components = service.parse_option_components(symbol_id, tardis_exchange)
             derived_fields.update(
                 {
                     "expiry": cast(str, option_components.get("expiry_date", "2025-12-25T08:00:00Z")),
@@ -48,11 +80,11 @@ async def populate_derived_fields(
                 }
             )
         elif inst_type == "FUTURE":
-            tardis_venue = getattr(service.venue_mapping, "tardis_to_venue", {}).get(venue, venue)
-            expiry_date = service._parse_expiry_from_symbol(symbol_id, str(tardis_venue).lower())
+            tardis_venue: str = service.venue_mapping.tardis_to_venue.get(venue, venue)
+            expiry_date = service.parse_expiry_from_symbol(symbol_id, tardis_venue.lower())
             derived_fields["expiry"] = expiry_date or "2025-12-25T08:00:00Z"
 
-        ccxt_exchange_id = getattr(service.venue_mapping, "venue_to_ccxt", {}).get(venue)
+        ccxt_exchange_id: str | None = service.venue_mapping.venue_to_ccxt.get(venue)
         default_ccxt_symbol = (
             f"{base_asset}/{quote_asset}:{quote_asset}"
             if quote_asset and inst_type in ["PERPETUAL", "FUTURE"]
@@ -131,7 +163,9 @@ async def populate_derived_fields(
                     if leverage_limits.get("maintenance_margin_rate") is not None:
                         derived_fields["maintenance_margin_rate"] = leverage_limits["maintenance_margin_rate"]
 
-        deribit_quotes = getattr(service.exchange_config, "valid_quote_currencies", {}).get("DERIBIT", [])
+        deribit_quotes: list[str] = list(
+            cast(list[str], getattr(service.exchange_config, "valid_quote_currencies", {}).get("DERIBIT", []))
+        )
         if venue == "DERIBIT" and quote_asset == "USD":
             derived_fields["inverse"] = True
         elif venue == "DERIBIT" and quote_asset in deribit_quotes:

@@ -39,7 +39,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import pandas as pd
 import yaml
@@ -105,7 +105,10 @@ class CorporateActionsBackfillHandler(ModeHandler):
             def try_load_tickers(gcs_path: str) -> list[str]:
                 """Try to load tickers from a specific GCS path."""
                 try:
-                    df: pd.DataFrame = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    raw = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    if not isinstance(raw, pd.DataFrame):
+                        return []
+                    df = cast(pd.DataFrame, raw)
                     if df.empty:
                         return []
 
@@ -220,7 +223,8 @@ class CorporateActionsBackfillHandler(ModeHandler):
 
                 result["success"] = True
                 logger.debug(
-                    f"✅ {ticker}: {result['dividends_count']} dividends, {result['splits_count']} splits, {result['earnings_count']} earnings"
+                    f"✅ {ticker}: {result['dividends_count']} dividends, "
+                    f"{result['splits_count']} splits, {result['earnings_count']} earnings"
                 )
                 break  # Success, exit retry loop
 
@@ -315,16 +319,30 @@ class CorporateActionsBackfillHandler(ModeHandler):
         registry["total_tickers"] = len(results)
 
         # Update ticker entries
+        tickers_map: dict[str, Any] = cast(dict[str, Any], registry.get("tickers") or {})
         for result in results:
-            ticker = result["ticker"]
+            ticker_val: object = result.get("ticker")  # type: ignore[reportAny]
+            ticker: str = str(ticker_val) if ticker_val is not None else ""
 
-            ticker_entry: dict[str, Any] = registry["tickers"].get(
-                ticker,
-                {
+            raw_entry: dict[str, Any] = cast(
+                dict[str, Any],
+                tickers_map.get(
+                    ticker,
+                    {
+                        "exchange": "UNKNOWN",
+                        "instrument_type": "equity",
+                        "fetch_history": [],
+                    },
+                ),
+            )
+            ticker_entry: dict[str, Any] = (
+                raw_entry
+                if isinstance(raw_entry, dict)
+                else {
                     "exchange": "UNKNOWN",
                     "instrument_type": "equity",
                     "fetch_history": [],
-                },
+                }
             )
 
             # Update metadata
@@ -341,7 +359,11 @@ class CorporateActionsBackfillHandler(ModeHandler):
                 ticker_entry["last_error"] = result["error"]
 
             # Add to fetch history
-            ticker_entry["fetch_history"].append(
+            fetch_history_raw: object = ticker_entry.get("fetch_history")  # type: ignore[reportAny]
+            fetch_history: list[dict[str, Any]] = (
+                list(cast(list[dict[str, Any]], fetch_history_raw)) if isinstance(fetch_history_raw, list) else []
+            )
+            fetch_history.append(
                 {
                     "date": datetime.now(timezone.utc).isoformat(),
                     "result": "success" if result["success"] else "error",
@@ -351,7 +373,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
             )
 
             # Keep only last 10 fetch history entries
-            ticker_entry["fetch_history"] = ticker_entry["fetch_history"][-10:]
+            ticker_entry["fetch_history"] = fetch_history[-10:]
 
             registry["tickers"][ticker] = ticker_entry
 
@@ -513,19 +535,23 @@ class CorporateActionsBackfillHandler(ModeHandler):
 
         logger.info(f"📈 Results: {stats['tickers_successful']}/{stats['tickers_requested']} tickers successful")
         logger.info(
-            f"📈 Total events: {stats['total_dividends']} dividends, {stats['total_splits']} splits, {stats['total_earnings']} earnings"
+            f"📈 Total events: {stats['total_dividends']} dividends, "
+            f"{stats['total_splits']} splits, {stats['total_earnings']} earnings"
         )
 
         # TODO: Upload to GCS if requested
         if upload_to_gcs:
             logger.warning("⚠️ GCS upload not yet implemented (testing phase)")
 
-        return {
-            "success": True,
-            "status": "success",
-            "statistics": stats,
-            "results": results,
-        }
+        return cast(
+            dict[str, HandlerResultValue],
+            {
+                "success": True,
+                "status": "success",
+                "statistics": stats,
+                "results": results,
+            },
+        )
 
     def cleanup(self) -> None:
         """Cleanup resources."""

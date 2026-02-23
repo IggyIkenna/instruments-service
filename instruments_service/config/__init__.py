@@ -5,9 +5,11 @@ Unified instrument configuration. Re-exports from submodules for backward compat
 
 Submodules:
 - venue_config: TradFi tickers, instruments, exchange mappings
-- api_keys: API key and secret defaults
+- api_keys: API key and secret defaults (see docs/API_KEYS_STANDARDIZED_PROCESS.md)
 - data_type_config: Processing defaults
 - service_config: InstrumentsServiceConfig (Pydantic), get_config, instruments_config
+- instrument_definitions: DEFI_PROTOCOLS, ETF_TICKERS, SP500_TICKERS, etc.
+- tradfi_exchange_mappings: Databento symbol mappings
 """
 
 from unified_config_interface import (

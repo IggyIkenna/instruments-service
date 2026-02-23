@@ -187,6 +187,30 @@ def create_krwusd_instrument_definition(target_date: datetime) -> Dict[str, Any]
     }
 
 
+def get_us_equity_trading_hours(venue: str, instrument_type: str, target_date: datetime) -> Dict[str, Any]:
+    """Return US equity trading hours (9:30-16:00 ET) for NASDAQ/NYSE."""
+    _ = (venue, instrument_type)
+    target_date_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    if target_date_start.tzinfo is None:
+        target_date_start = target_date_start.replace(tzinfo=timezone.utc)
+    session_start = target_date_start.replace(hour=14, minute=30, second=0).isoformat()
+    session_end = target_date_start.replace(hour=21, minute=0, second=0).isoformat()
+    return {
+        "session_start_utc": session_start,
+        "session_end_utc": session_end,
+        "open": "09:30:00-05:00",
+        "close": "16:00:00-05:00",
+        "session": "regular",
+        "is_trading_day": True,
+        "holiday_calendar": "NYSE",
+        "regular_open_utc": session_start,
+        "regular_close_utc": session_end,
+        "auction_open_utc": None,
+        "auction_close_utc": None,
+        "early_close_utc": None,
+    }
+
+
 def create_bitcoin_etf_instrument_definition(
     ticker: str,
     target_date: datetime,

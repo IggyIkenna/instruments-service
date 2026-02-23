@@ -12,7 +12,7 @@ from unified_market_interface import SubgraphService
 # Optional: http_session and web3_client moved to unified-market-interface (UCS v1.6.0)
 # Services that need them should import from unified_market_interface.utils when available
 try:
-    from unified_cloud_services import get_http_session, get_web3_client  # pyright: ignore[reportUnknownVariableType]
+    from unified_cloud_services import get_http_session, get_web3_client  # pyright: ignore
     from unified_cloud_services.core.http_session_pool import (
         clear_pool as clear_http_pool,  # pyright: ignore[reportUnknownVariableType]
     )

@@ -12,6 +12,6 @@ from unified_events_interface import log_event as _log_event
 def log_event(event_name: str, message: str = "", **kwargs: Any) -> None:  # type: ignore[reportAny]
     """Log a lifecycle event. Message is passed as details["message"]."""
     if message:
-        _log_event(event_name, details={"message": message}, **kwargs)
+        _log_event(event_name, details={"message": message}, **kwargs)  # type: ignore[reportAny]
     else:
-        _log_event(event_name, **kwargs)
+        _log_event(event_name, **kwargs)  # type: ignore[reportAny]

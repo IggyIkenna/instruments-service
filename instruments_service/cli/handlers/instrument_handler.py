@@ -318,12 +318,12 @@ class InstrumentHandler(ModeHandler):
                 )
 
                 # Track error and warning counts from processing
-                processing_errors = _to_int(result.get("error_count", 0))
-                processing_warnings = _to_int(result.get("warning_count", 0))
+                processing_errors = _to_int(cast(HandlerResultValue, result.get("error_count", 0)))
+                processing_warnings = _to_int(cast(HandlerResultValue, result.get("warning_count", 0)))
                 total_processing_errors += processing_errors
                 total_processing_warnings += processing_warnings
 
-                instruments_count = _to_int(result.get("instruments_generated", 0))
+                instruments_count = _to_int(cast(HandlerResultValue, result.get("instruments_generated", 0)))
                 log_event("CLASSIFICATION_COMPLETED", str(instruments_count))
                 log_event("PROCESSING_COMPLETED")
                 log_event("ADAPTER_FETCH_COMPLETED", str(instruments_count))

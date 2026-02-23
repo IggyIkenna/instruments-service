@@ -4,6 +4,8 @@ Inventory of all exceptions, exclusions, and handling that bypass or relax quali
 
 **Status:** Section 7 classifies valid (keep) vs hardening (fix). Aligns with `.cursor/plans/quality-gates-audit-factors-propagation.plan.md` Phase 7 — fix root causes, no shortcuts. Propagate audit template to all Python repos.
 
+**CRITICAL — Only Audited Exceptions May Pass:** Quality gates (basedpyright) must pass. Allowed: (1) inline bypasses in sections 2.1, 2.2, 2.3; (2) path exclusions in section 1.1 (e.g. tests/ for basedpyright). All other type errors must be fixed — no relaxations, no baseline files, no downgrading rules to warning.
+
 ---
 
 ## 1. Quality Gate Script Exclusions (quality-gates.sh)
@@ -22,9 +24,14 @@ Inventory of all exceptions, exclusions, and handling that bypass or relax quali
 | **Any/object** | `tests/**`, `scripts/**` | Tests exempt |
 | **project ID** | `tests/**` | Tests exempt |
 | **requests in async** | `scripts/**`, `**/defi/morpho_adapter.py`, `**/onchain_perps/aster_adapter.py` | Known exceptions |
-| **asyncio.run() in loops** | `examples/**`, `scripts/**`, `**/venues/defi/*`, `**/cli/**` | Entry points / CLI |
+| **asyncio.run() in loops** | `examples/**`, `scripts/**`, `**/venues/defi/*`, `**/cli/**`, `**/defi_processor.py` | Entry points / CLI; DeFi adapters use async |
 | **file size** | `scripts/*`, `.venv/*`, `deps/*`, `.git/*`, `build/*` | Scripts exempt per codex |
 | **pip-audit** | (skip if pip_audit not installed) | Optional tool |
+| **basedpyright** | `tests/**` | Tests use mocks, dynamic types; codex exempts tests from production rules (Any, etc.). Type-check production code only. |
+
+**pyrightconfig.json:** `reportPrivateUsage` and `reportIncompatibleMethodOverride` are set to `"warning"` so quality gates catch private/protected member usage and incompatible method overrides (aligns with IDE). Previously defaulted to `"none"`, so these were not caught.
+
+**Ruff F841 (unused variable):** Ruff select includes `F` (Pyflakes). F841 flags variables assigned but never used. Use `_` for intentionally unused loop variables (e.g. `for _, bundle in items()`).
 
 ### 1.2 Import Check Whitelist (14 files exempt from “imports inside functions”)
 
@@ -36,6 +43,7 @@ These files are **excluded** from the import-inside-functions check:
 | `**/__init__.py` | Lazy submodule loading |
 | `**/dependency_checker.py` | Circular import |
 | `**/instruments_service.py` | Circular import |
+| `**/instrument_processing_service.py` | Lazy imports for DerivedFieldsServiceProtocol, DefiServiceProtocol (avoid circular) |
 | `**/symbol_parser.py` | TYPE_CHECKING block |
 | `**/canonical_key_generator.py` | TYPE_CHECKING block |
 | `**/live_mode_handler.py` | Circular import |
@@ -65,9 +73,12 @@ These files are **excluded** from the import-inside-functions check:
 | File | Line | Code | Purpose |
 |------|------|------|---------|
 | `corporate_actions/adapter.py` | 277 | `calendar: object = stock.calendar  # type: ignore[reportAny]` | yfinance calendar type |
+| `corporate_actions/adapter.py` | 141, 203 | `for ex_date, amount in div_df.items()` / `for effective_date, ratio in splits_df.items()` | Pandas Series.items() yields Any |
 | `corporate_actions/models.py` | 70 | `def validate_amount(cls, v: object) -> float:  # type: ignore[reportAny]` | Pydantic validator |
 | `app/core/instruments_service.py` | 339 | `adapter: object \| None = None  # type: ignore[reportAny]` | Dynamic adapter type |
-| `app/core/processors/defi_processor.py` | 41–43 | `venue_mapping: object` etc. | Protocol stubs |
+| `app/core/processors/defi_processor.py` | 41–43 | `venue_mapping: object` etc. | Protocol stubs (replaced with typed protocols) |
+| `app/core/processors/defi_processor.py` | 226, 264 | `for inst_data in raw_instruments.values/items()` | raw_instruments from adapters is dict[str, Any] |
+| `app/core/processors/defi_processor.py` | 288 | `InstrumentDefinition(**inst_data_dict)` | DeFi adapters return dict[str, Any] |
 | `app/core/processors/derived_fields_populator.py` | 17–20 | `venue_mapping: object` etc. | Protocol stubs |
 | `cli/base_handler.py` | 68 | `def run(self, **kwargs: object)` | Handler interface |
 | `cli/handlers/instrument_handler.py` | 111, 127 | `**kwargs: object` | Handler args |
@@ -76,7 +87,16 @@ These files are **excluded** from the import-inside-functions check:
 | `cli/handlers/generate_date_views_handler.py` | 153 | `**kwargs: object` | Handler args |
 | `events.py` | 12 | `def log_event(..., **kwargs: Any)` | Event logging |
 | `utils/ccxt_service.py` | 119 | `def get_ccxt_exchange(...) -> object \| None` | CCXT exchange type |
+| `utils/ccxt_service.py` | 184, 546, 552, 557, 623, 626, 648, 716 | CCXT exchange/market access | CCXT has no stubs, returns Any |
 | `__init__.py` | 20 | `def __getattr__(name: str) -> Any` | Lazy module loading |
+| `app/core/instrument_processing_service.py` | ~751 | `**enhanced_fields` in InstrumentDefinition | Dynamic derived fields from populate_derived_fields |
+| `app/core/instrument_processing_service.py` | ~1168 | `InstrumentDefinition(**inst_data)` in fetch_databento_instruments | Databento adapter returns dict[str, Any] |
+| `app/core/cloud_instrument_storage.py` | 197 | `first_val` from pandas iloc[0] | Pandas scalar access returns Any |
+| `app/core/cloud_instrument_storage.py` | 219 | `v` in _row_to_market_category for row.items() | Pandas Series.items() yields Any |
+| `app/core/instruments_service.py` | 14 | `get_adapter` from UMI | Dynamic adapter loading |
+| `app/core/instruments_service.py` | 345-357 | `base_client`, `check_venues_access` via getattr/hasattr | Adapter attribute access (get_adapter returns untyped) |
+| `app/core/instruments_service.py` | 398, 527, 536, 566 | `InstrumentDefinition(**d)` from UMI adapters | Adapter returns dict[str, Any] |
+| `app/core/instruments_service.py` | 801-802 | `_row_to_market_category` for k,v in raw.items() | Pandas row.to_dict() yields Any |
 
 ### 2.2 type: ignore[assignment] — Type checker only
 
@@ -89,9 +109,14 @@ These files are **excluded** from the import-inside-functions check:
 
 | File | Line | Code | Purpose |
 |------|------|------|---------|
-| `app/core/processors/defi_processor.py` | 273 | `service._get_manual_ccxt_fallback(...)` | Private method access |
+| *(removed)* | — | `get_manual_ccxt_fallback` made public (was `_get_manual_ccxt_fallback`) | — |
 | `utils/ccxt_service.py` | 184 | `cast(dict[str, Any], exchange.load_markets())` | CCXT untyped |
 | `utils/__init__.py` | 15–28 | `get_http_session`, `clear_pool`, etc. | Optional UCS imports |
+| `app/core/cloud_instrument_storage.py` | 298 | `schema_enforcer.validate_dataframe` | ParquetSchemaEnforcer from UCS has partially unknown types |
+| `io/writer.py` | 36 | `super().__init__` | BaseGCSWriter from UCS has schema: Unknown |
+| `app/core/instrument_processing_service.py` | 423 | `await self.fetch_exchange_instruments` | @handle_api_errors decorator alters return type inference |
+| `app/core/instruments_service.py` | 582, 628, 652 | `await fetch_databento_instruments` | @handle_api_errors decorator alters return type |
+| `app/core/instruments_service.py` | 935, 996 | `store_instruments` | @handle_storage_errors decorator alters return type |
 
 ### 2.4 noqa — Ruff linter only
 
@@ -106,7 +131,7 @@ These files are **excluded** from the import-inside-functions check:
 
 | Rule | Scope | Effect |
 |------|--------|--------|
-| **E501** (line length) | Global | Ignored; formatter handles |
+| **E501** (line length) | Global | Enforced (120 chars); ruff check catches |
 | **E722** (bare except) | Global | Bare `except:` allowed |
 | **E402** (module level import) | `cli/main.py`, `tests/conftest.py` | Imports not at top allowed |
 | **E722** (bare except) | `scripts/*` | Bare except allowed in scripts |
@@ -168,7 +193,7 @@ These files are **excluded** from the import-inside-functions check:
 | **Import whitelist: symbol_parser, canonical_key_generator** | `TYPE_CHECKING` blocks — standard pattern for circular imports. |
 | **Import whitelist: main.py** | `load_dotenv()` must run before config imports. |
 | **dict[str, Any] exclusion** | Codex explicitly allows for non-finite nested dicts. |
-| **Ruff E501** | Formatter handles line length; no conflict. |
+| **Ruff E501** | Enforced; ruff check --line-length 120 fails on lines > 120. |
 | **Ruff E722 in scripts/** | Codex exempts scripts; bare except acceptable there. |
 | **noqa F401** (side-effect import) | Standard pattern for `import x` when `x` is used for side effects. |
 | **noqa F841** (intentional unused) | Acceptable when variable is intentionally unused. |
@@ -222,5 +247,5 @@ Use this to decide what to change:
 - [ ] **Ruff E722 (bare except)** — Disallow globally; keep only in scripts?
 - [ ] **Ruff E402** — Move imports to top in main.py / conftest?
 - [ ] **morpho/aster adapters** — Migrate requests → aiohttp?
-- [ ] **pyright: ignore** — Fix underlying type issues?
+- [ ] **pyright: ignore** — Fix underlying type issues? (reportPrivateUsage/reportProtectedAccess now enabled in pyrightconfig.json so quality gates catch private/protected usage)
 - [ ] **Test skips** — Replace with fixtures or env setup where possible?

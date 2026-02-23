@@ -9,6 +9,7 @@ import os
 from typing import Optional
 
 import requests
+from unified_cloud_services import get_secret_with_fallback
 
 # Subgraph names we need IDs for (Ethereum only)
 SUBDGRAPH_NAMES = {
@@ -144,9 +145,18 @@ def main():
     print("🔍 Finding Ethereum subgraph IDs...")
     print("=" * 60)
 
-    # Get API key from environment or use placeholder
-
-    api_key = os.getenv("THEGRAPH_API_KEY", "test-key")
+    # API key via get_secret_with_fallback (Secret Manager first, env fallback) per instruments-and-api-keys-standard
+    project_id = os.environ.get("GCP_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    api_key = (
+        get_secret_with_fallback(
+            secret_name="thegraph-api-key",
+            project_id=project_id or "",
+            fallback_env_var="THEGRAPH_API_KEY",
+        )
+        if project_id
+        else None
+    )
+    api_key = api_key or "test-key"  # Placeholder for dry-run when no key available
 
     subgraph_ids = {}
 

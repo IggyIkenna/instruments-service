@@ -348,7 +348,6 @@ class TestGenerateInstrumentsSingleDate:
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
             patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig") as mock_config_class,
-            patch("instruments_service.app.core.instruments_service.DatabentoAdapter"),
         ):
             mock_config = Mock()
             mock_config.get_symbols_for_venue.return_value = ["SPY"]

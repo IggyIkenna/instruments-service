@@ -34,14 +34,21 @@ Output Structure:
 """
 
 import logging
+from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import pandas as pd
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 
 logger = logging.getLogger(__name__)
+
+
+class _ActionTypeStats(TypedDict):
+    total_records: int
+    dates_with_data: int
+    date_counts: dict[str, int]
 
 
 class GenerateDateViewsHandler(ModeHandler):
@@ -73,7 +80,7 @@ class GenerateDateViewsHandler(ModeHandler):
         Returns:
             Combined DataFrame with all tickers
         """
-        all_data = []
+        all_data: list[pd.DataFrame] = []
         filename = f"{action_type}.csv"
 
         ticker_dirs = [d for d in by_ticker_dir.iterdir() if d.is_dir()]
@@ -128,7 +135,7 @@ class GenerateDateViewsHandler(ModeHandler):
 
         date_counts: dict[str, int] = {}
         for day, group in date_groups:
-            if pd.isna(day):
+            if pd.isna(day) or not isinstance(day, date):
                 continue
 
             day_str = day.isoformat()
@@ -183,9 +190,7 @@ class GenerateDateViewsHandler(ModeHandler):
         logger.info(f"📂 Input: {by_ticker_dir}")
         logger.info(f"📂 Output: {by_date_dir}")
 
-        stats: dict[str, Any] = {
-            "action_types": {},
-        }
+        action_types: dict[str, _ActionTypeStats] = {}
 
         # Process each action type
         for action_type in ["dividends", "splits", "earnings"]:
@@ -210,15 +215,15 @@ class GenerateDateViewsHandler(ModeHandler):
                 by_date_dir,
             )
 
-            stats["action_types"][action_type] = {
+            action_types[action_type] = {
                 "total_records": len(combined_df),
                 "dates_with_data": len(date_counts),
                 "date_counts": date_counts,
             }
 
         # Summary statistics
-        total_records = sum(s["total_records"] for s in stats["action_types"].values())
-        total_dates = sum(s["dates_with_data"] for s in stats["action_types"].values())
+        total_records = sum(s["total_records"] for s in action_types.values())
+        total_dates = sum(s["dates_with_data"] for s in action_types.values())
 
         logger.info("\n✅ Date views generation complete")
         logger.info(f"📈 Total records: {total_records}")
@@ -231,7 +236,7 @@ class GenerateDateViewsHandler(ModeHandler):
         return {
             "success": True,
             "status": "success",
-            "statistics": stats,
+            "statistics": {"action_types": action_types},
         }
 
     def cleanup(self) -> None:

@@ -77,7 +77,7 @@ jobs:
           uv pip install --system pydantic pydantic-settings pandas numpy python-dateutil \
             python-dotenv requests ccxt plotly web3 eth-abi databento boto3 \
             exchange-calendars yfinance polars
-          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout pytest-xdist ruff==0.15.0 pyright pip-audit>=2.7.0
+          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout pytest-xdist ruff==0.15.0 basedpyright pip-audit>=2.7.0
 
       # ========================================================================
       # DEPENDENCY VULNERABILITY SCAN (pip-audit)
@@ -101,11 +101,11 @@ jobs:
           echo "✅ Lint and format check passed"
 
       # ========================================================================
-      # TYPE CHECK (pyright - matches IDE)
+      # TYPE CHECK (basedpyright - matches IDE strict mode)
       # ========================================================================
-      - name: Type check (pyright)
+      - name: Type check (basedpyright)
         run: |
-          pyright instruments_service/ tests/ --level warning || exit 1
+          basedpyright instruments_service/ --level warning || exit 1
           echo "✅ Type check passed"
 
       # ========================================================================

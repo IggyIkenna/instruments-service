@@ -5,7 +5,7 @@ InstrumentsServiceConfig (Pydantic BaseSettings) and singleton access.
 """
 
 import logging
-from typing import Optional
+from typing import Optional, cast
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import SettingsConfigDict
@@ -232,7 +232,7 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         bucket = getattr(self, bucket_name, None)
         if bucket:
             logger.debug(f"📦 Using bucket for {category_upper}: {bucket}")
-            return bucket
+            return cast(str, bucket)
         logger.warning(f"⚠️ Category-specific bucket not configured for {category_upper}. Using default bucket.")
         return self.gcs_bucket_test if test_mode else self.gcs_bucket
 

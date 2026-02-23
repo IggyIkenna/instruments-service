@@ -5,6 +5,8 @@ Stores instrument definitions to instruments domain (each domain has its own buc
 Uses unified-cloud-services directly for cloud operations.
 """
 
+from __future__ import annotations
+
 import logging
 import os
 from datetime import datetime, timezone
@@ -14,6 +16,7 @@ import pandas as pd
 from unified_cloud_services import (
     CloudTarget,
     ParquetSchemaEnforcer,
+    SchemaValidationResult,
     StandardizedDomainCloudService,
     determine_market_category,
     handle_storage_errors,
@@ -193,8 +196,12 @@ class CloudInstrumentStorage:
                 # Extract date from available_from_datetime if available
                 if "available_from_datetime" in instruments_df.columns:
                     try:
-                        first_val = instruments_df["available_from_datetime"].iloc[0]
-                        first_date: pd.Timestamp = cast(pd.Timestamp, pd.to_datetime(first_val, utc=True))
+                        first_val = instruments_df["available_from_datetime"].iloc[0]  # type: ignore[reportAny]
+                        first_date = pd.Timestamp(
+                            pd.to_datetime([first_val], utc=True)[0]
+                            if first_val is not None
+                            else datetime.now(timezone.utc)
+                        )
                         date_str = first_date.strftime("%Y-%m-%d")
                     except (ValueError, TypeError, IndexError) as e:
                         logger.debug(f"Could not extract date from available_from_datetime: {e}")
@@ -209,8 +216,18 @@ class CloudInstrumentStorage:
             # Populate market_category for instruments that don't have it or have empty value
             mask: pd.Series = (instruments_df["market_category"].isna()) | (instruments_df["market_category"] == "")
             if cast(bool, mask.any()):
+
+                def _row_to_market_category(row: pd.Series[Any]) -> str:  # type: ignore[reportAny]
+                    d: dict[str, str | None] = {}
+                    for k, v in row.items():  # type: ignore[reportAny]
+                        if v is None or (isinstance(v, float) and (v != v)):
+                            d[str(k)] = None
+                        else:
+                            d[str(k)] = str(v)
+                    return determine_market_category(d)
+
                 instruments_df.loc[mask, "market_category"] = instruments_df.loc[mask].apply(
-                    lambda row: determine_market_category(row.to_dict()), axis=1
+                    _row_to_market_category, axis=1
                 )
 
             # Group by category
@@ -225,7 +242,7 @@ class CloudInstrumentStorage:
 
             # Group uploads by bucket to use batch upload per bucket
             # (each bucket needs its own cloud service)
-            bucket_uploads: dict[str, list[tuple[str, Any, str]]] = {}  # bucket -> [(gcs_path, df, category)]
+            bucket_uploads: dict[str, list[tuple[str, pd.DataFrame, str]]] = {}  # bucket -> [(gcs_path, df, category)]
 
             # Create schema enforcer for validation
             schema_enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
@@ -279,7 +296,10 @@ class CloudInstrumentStorage:
 
                     # Validate schema before upload
                     dimensions: dict[str, str] = {"category": category_str}
-                    validation_result = schema_enforcer.validate_dataframe(venue_df_to_store, dimensions)
+                    validation_result = cast(
+                        SchemaValidationResult,
+                        schema_enforcer.validate_dataframe(venue_df_to_store, dimensions),  # pyright: ignore[reportUnknownMemberType]
+                    )
 
                     if not validation_result.valid:
                         for error in validation_result.errors:
@@ -331,7 +351,7 @@ class CloudInstrumentStorage:
                         domain="instruments", cloud_target=bucket_cloud_target
                     )
 
-                    # Prepare batch upload
+                    # Prepare batch upload (uploads_list: list[tuple[str, pd.DataFrame, str]])
                     batch_uploads: list[dict[str, str | pd.DataFrame]] = [
                         {"data": df, "gcs_path": gcs_path, "format": "parquet"} for gcs_path, df, _ in uploads_list
                     ]
