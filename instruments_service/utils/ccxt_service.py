@@ -136,11 +136,14 @@ class CCXTService:
             logger.debug(f"CCXT exchange not available: {ccxt_exchange_id}")
             return None
 
-        return exchange_class(
-            {
-                "enableRateLimit": True,
-                "timeout": 15000,  # 15s timeout for initial load
-            }
+        return cast(
+            object | None,
+            exchange_class(
+                {
+                    "enableRateLimit": True,
+                    "timeout": 15000,  # 15s timeout for initial load
+                }
+            ),
         )
 
     def load_markets(self, venue: str, force_refresh: bool = False) -> CCXTMarketData | None:
@@ -169,7 +172,7 @@ class CCXTService:
         if not force_refresh and self._is_cache_valid(cache_key):
             logger.debug(
                 f"📋 Using cached CCXT markets for {venue} via {ccxt_exchange_id} "
-                f"({len(self._markets_cache[cache_key]['markets'])} markets)"
+                f"({len(cast(dict[str, Any], self._markets_cache[cache_key].get('markets', {})))} markets)"
             )
             return self._markets_cache[cache_key]
 
@@ -181,9 +184,10 @@ class CCXTService:
         try:
             # Load markets ONCE per CCXT exchange (major performance optimization)
             # CCXT has no stubs - cast to dict[str, Any] for type safety
-            markets = cast(dict[str, Any], exchange.load_markets())  # pyright: ignore[reportUnknownMemberType]
+            markets = cast(dict[str, Any], exchange.load_markets())  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
             logger.info(
-                f"⚡ Loaded {len(markets)} CCXT markets for {ccxt_exchange_id} - CACHED for all venues using this exchange"
+                f"⚡ Loaded {len(markets)} CCXT markets for {ccxt_exchange_id} - "
+                f"CACHED for all venues using this exchange"
             )
 
             # Cache the results by ccxt_exchange_id
@@ -509,7 +513,7 @@ class CCXTService:
         matched_symbol_format: str | None = None
         for symbol_format in possible_symbols:
             if symbol_format in markets:
-                ccxt_market = markets[symbol_format]
+                ccxt_market = cast(dict[str, Any], markets[symbol_format])
                 matched_symbol_format = symbol_format
                 break
 
@@ -543,25 +547,25 @@ class CCXTService:
 
         # Tick size (price precision)
         if "price" in precision:
-            tick_size_val = precision["price"]
+            tick_size_val = precision["price"]  # type: ignore[reportAny]
             if tick_size_val:
-                metadata["tick_size"] = str(tick_size_val)
+                metadata["tick_size"] = str(cast(str | int | float, tick_size_val))
 
         # Min size (amount precision)
         if "amount" in precision:
-            min_size_val = precision["amount"]
+            min_size_val = precision["amount"]  # type: ignore[reportAny]
             if min_size_val:
-                metadata["min_size"] = str(min_size_val)
+                metadata["min_size"] = str(cast(str | int | float, min_size_val))
         elif "cost" in limits and "min" in limits["cost"]:
             # Some exchanges use cost_min instead
-            cost_min = limits["cost"]["min"]
+            cost_min = limits["cost"]["min"]  # type: ignore[reportAny]
             if cost_min:
-                metadata["min_size"] = f"cost_min:{cost_min}"
+                metadata["min_size"] = f"cost_min:{cast(str | int | float, cost_min)}"
 
         # Contract size
         contract_size_val = ccxt_market.get("contractSize")
         if contract_size_val:
-            metadata["contract_size"] = float(contract_size_val)
+            metadata["contract_size"] = float(cast(str | int | float, contract_size_val))
 
         return metadata
 
@@ -620,10 +624,10 @@ class CCXTService:
                 self._leverage_tiers_cache[venue] = fallback_params
             return fallback_params
 
-        exchange = ccxt_data["exchange"]
+        exchange = ccxt_data["exchange"]  # type: ignore[reportAny]
 
         # Check if exchange supports fetchMarketLeverageTiers
-        if not hasattr(exchange, "fetchMarketLeverageTiers"):
+        if not hasattr(exchange, "fetchMarketLeverageTiers"):  # type: ignore[reportAny]
             logger.debug(f"Exchange {venue} does not support fetchMarketLeverageTiers")
             # Try fallback to Context7 documentation lookup
             fallback_params = self._get_leverage_limits_fallback(venue)
@@ -643,7 +647,10 @@ class CCXTService:
 
             for symbol_format in possible_symbols:
                 try:
-                    tiers = cast(list[dict[str, Any]], exchange.fetchMarketLeverageTiers(symbol_format))
+                    tiers = cast(
+                        list[dict[str, Any]],
+                        getattr(exchange, "fetchMarketLeverageTiers")(symbol_format),  # type: ignore[reportAny]
+                    )
                     if tiers:
                         leverage_tiers = tiers
                         break
@@ -710,11 +717,10 @@ class CCXTService:
         max_notional = 0
 
         for tier in leverage_tiers:
-            tier_max_notional = tier.get("maxNotional", 0)
-            if isinstance(tier_max_notional, (int, float)):
-                if tier_max_notional > max_notional:
-                    max_notional = tier_max_notional
-                    highest_tier = tier
+            raw_notional = tier.get("maxNotional", 0)  # type: ignore[reportAny]
+            if isinstance(raw_notional, (int, float)) and raw_notional > max_notional:
+                max_notional = raw_notional
+                highest_tier = tier
 
         if highest_tier:
             risk_params["max_position_size"] = max_notional

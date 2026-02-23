@@ -45,6 +45,7 @@ from unified_config_interface import (
 from unified_domain_services.instrument_date_filter import DateFilterService
 from unified_market_interface import SubgraphService
 from unified_market_interface.adapters.tradfi import DatabentoAdapter, TardisAdapter
+from unified_market_interface.models.venue_config import VenueMapping as UMI_VenueMapping
 
 from instruments_service.app.core.processors.canonical_key_generator import (
     generate_canonical_key as _generate_canonical_key,
@@ -110,14 +111,15 @@ class InstrumentProcessingService:
         project_id: str = str(config.get("project_id") or instruments_config.gcp_project_id)
 
         # Try to get API key from config first
-        self.api_key = config.get("tardis_api_key") or config.get("api_key")
+        self.api_key: str | None = cast(str | None, config.get("tardis_api_key") or config.get("api_key"))
 
         # If not in config, try Secret Manager (only if available)
         if not self.api_key:
             try:
                 secret_name = instruments_config.tardis_secret_name
                 logger.debug(
-                    f"Attempting to retrieve Tardis API key from Secret Manager (secret: {secret_name}, project: {project_id})"
+                    f"Attempting to retrieve Tardis API key from Secret Manager "
+                    f"(secret: {secret_name}, project: {project_id})"
                 )
                 self.api_key = get_secret_with_fallback(
                     secret_name=secret_name,
@@ -144,13 +146,16 @@ class InstrumentProcessingService:
         self.data_config = DataTypeConfig()
         self._symbol_parser = SymbolParser(self.exchange_config)
 
+        retry_attempts: int = int(cast(int | float, config.get("retry_max_attempts", 3)))
+        retry_backoff: float = float(cast(int | float, config.get("retry_backoff_factor", 1.0)))
+        cache_ttl: int = int(cast(int | float, config.get("cache_ttl_hours", 24)))
         self.processing_config = InstrumentProcessingConfig(
             api_key=self.api_key or "",  # Empty string if not available (only needed for CeFi)
-            retry_max_attempts=config.get("retry_max_attempts", 3),
-            retry_backoff_factor=config.get("retry_backoff_factor", 1.0),
-            enable_ccxt_integration=config.get("enable_ccxt_integration", True),
-            enable_metadata_caching=config.get("enable_metadata_caching", True),
-            cache_ttl_hours=config.get("cache_ttl_hours", 24),
+            retry_max_attempts=retry_attempts,
+            retry_backoff_factor=retry_backoff,
+            enable_ccxt_integration=cast(bool, config.get("enable_ccxt_integration", True)),
+            enable_metadata_caching=cast(bool, config.get("enable_metadata_caching", True)),
+            cache_ttl_hours=cache_ttl,
             supported_exchanges=self.venue_mapping.all_tardis_exchanges,
         )
 
@@ -193,8 +198,8 @@ class InstrumentProcessingService:
         # Initialize CCXT service if enabled
         if self.processing_config.enable_ccxt_integration:
             self.ccxt_service = CCXTService(
-                venue_mapping=self.venue_mapping,
-                cache_ttl_hours=config.get("cache_ttl_hours", 4),
+                venue_mapping=cast(UMI_VenueMapping, self.venue_mapping),
+                cache_ttl_hours=int(cast(int | float, config.get("cache_ttl_hours", 4))),
             )
             # PERFORMANCE: Pre-load CCXT markets in parallel at startup
             # This saves ~5s by loading all exchanges concurrently instead of sequentially
@@ -414,7 +419,8 @@ class InstrumentProcessingService:
             DeprecationWarning,
             stacklevel=2,
         )
-        instruments_data, date_filtered_count = await self.fetch_exchange_instruments(exchange, target_date, force)
+        fetch_result = await self.fetch_exchange_instruments(exchange, target_date, force)  # pyright: ignore[reportGeneralTypeIssues,reportUnknownMemberType,reportUnknownVariableType]
+        instruments_data, date_filtered_count = cast(tuple[dict[str, dict[str, Any]], int], fetch_result)
 
         # CRITICAL OPTIMIZATION: Apply exchange config filtering BEFORE expensive processing
         canonical_venue = self.normalize_venue(exchange) or exchange
@@ -431,7 +437,9 @@ class InstrumentProcessingService:
 
         # Pre-filter by exchange config before expensive processing
         pre_filtered: dict[str, dict[str, Any]] = {}
-        for symbol_id, symbol_info in instruments_data.items():
+        for _sid, _sinfo in instruments_data.items():
+            symbol_id: str = _sid
+            symbol_info: dict[str, Any] = _sinfo
             symbol_type: str = (cast(str | None, symbol_info.get("type")) or "").lower()
             normalized_type = self.normalize_instrument_type(symbol_type)
 
@@ -446,7 +454,8 @@ class InstrumentProcessingService:
                 for pattern in excluded_patterns:
                     if pattern.upper() in symbol_upper:
                         logger.debug(
-                            f"🚫 Pre-filtered out {symbol_id}: symbol pattern '{pattern}' excluded for {canonical_venue}"
+                            f"🚫 Pre-filtered out {symbol_id}: symbol pattern '{pattern}' "
+                            f"excluded for {canonical_venue}"
                         )
                         excluded_by_pattern = True
                         break
@@ -454,7 +463,7 @@ class InstrumentProcessingService:
                     continue
 
             # Quick parse base and quote currency to check validity (before full processing)
-            parsed_components = self._parse_symbol_components(symbol_id, exchange)
+            parsed_components = self.parse_symbol_components(symbol_id, exchange)
             if isinstance(parsed_components, dict):
                 base_asset = (parsed_components.get("base_asset") or "").upper()
                 quote_asset = (parsed_components.get("quote_asset") or "").upper()
@@ -465,9 +474,7 @@ class InstrumentProcessingService:
 
             # Filter by excluded base currencies
             if base_asset and base_asset in excluded_bases:
-                logger.debug(
-                    f"🚫 Pre-filtered out {symbol_id}: base currency '{base_asset}' excluded for {canonical_venue}"
-                )
+                logger.debug(f"🚫 Pre-filtered out {symbol_id}: base '{base_asset}' excluded for {canonical_venue}")
                 continue
 
             # Filter by valid quote currencies for this exchange
@@ -477,7 +484,8 @@ class InstrumentProcessingService:
             pre_filtered[symbol_id] = symbol_info
 
         logger.info(
-            f"🔍 Exchange config filter: {len(pre_filtered)}/{len(instruments_data)} instruments valid for {canonical_venue}"
+            f"🔍 Exchange config filter: {len(pre_filtered)}/{len(instruments_data)} instruments "
+            f"valid for {canonical_venue}"
         )
         instruments_data = pre_filtered
 
@@ -485,10 +493,10 @@ class InstrumentProcessingService:
         # These venues only include instruments for the 21 MVP base assets (for premium calculations)
         if canonical_venue in self.venue_mapping.spot_mvp_filtered_venues:
             mvp_base_assets = {b.upper() for b in self.venue_mapping.hyperliquid_aster_mvp_base_assets}
-            mvp_filtered = {}
+            mvp_filtered: dict[str, dict[str, Any]] = {}
             for symbol_id, symbol_info in instruments_data.items():
                 # Parse base asset from symbol_id
-                parsed_components = self._parse_symbol_components(symbol_id, exchange)
+                parsed_components = self.parse_symbol_components(symbol_id, exchange)
                 if isinstance(parsed_components, dict):
                     base_asset = (parsed_components.get("base_asset") or "").upper()
                 else:
@@ -502,7 +510,8 @@ class InstrumentProcessingService:
                     logger.debug(f"🚫 MVP filter: {symbol_id} excluded (base '{base_asset}' not in MVP list)")
 
             logger.info(
-                f"🔍 MVP base asset filter: {len(mvp_filtered)}/{len(instruments_data)} instruments for {canonical_venue} (21 MVP coins)"
+                f"🔍 MVP base asset filter: {len(mvp_filtered)}/{len(instruments_data)} instruments "
+                f"for {canonical_venue} (21 MVP coins)"
             )
             instruments_data = mvp_filtered
 
@@ -542,7 +551,7 @@ class InstrumentProcessingService:
 
                 if canonical_key:
                     # Parse base/quote from symbol_id (Tardis doesn't provide these fields)
-                    parsed_components: dict[str, Any] = self._parse_symbol_components(symbol_id, exchange)
+                    parsed_components: dict[str, Any] = self.parse_symbol_components(symbol_id, exchange)
                     if isinstance(parsed_components, dict):
                         base_asset = cast(str, parsed_components.get("base_asset") or "")
                         quote_asset = cast(str, parsed_components.get("quote_asset") or "")
@@ -563,7 +572,8 @@ class InstrumentProcessingService:
 
                     # Infer settle_asset for Deribit using centralized config (DRY principle)
                     settle_asset = "USDT"
-                    canonical_venue = self.normalize_venue(exchange)
+                    canonical_venue_raw = self.normalize_venue(exchange)
+                    canonical_venue = canonical_venue_raw or exchange
                     if canonical_venue == "DERIBIT":
                         deribit_quotes = self.exchange_config.valid_quote_currencies.get("DERIBIT", [])
                         if clean_quote == "USD":
@@ -575,17 +585,18 @@ class InstrumentProcessingService:
                     symbol: str = canonical_key.split(":", 2)[2] if len(canonical_key.split(":")) >= 3 else symbol_id
 
                     # Populate ALL derived fields BEFORE model creation (FIXED for Pydantic validation use context7)
+                    norm_inst_type: str = self.normalize_instrument_type(symbol_info.get("type") or "") or ""
                     enhanced_fields: dict[str, Any] = await self._populate_all_derived_fields(
                         canonical_key,
                         canonical_venue,
-                        self.normalize_instrument_type(symbol_info.get("type") or ""),
+                        norm_inst_type,
                         clean_base,
                         clean_quote,
                         symbol_id,
                         exchange,  # Pass original tardis exchange name
                     )
 
-                    # Create metadata object with ALL fields including derived ones - FIXED for InstrumentDefinition schema
+                    # Create metadata object with ALL fields including derived ones (InstrumentDefinition schema)
                     normalized_instrument_type = self.normalize_instrument_type(symbol_info.get("type") or "")
 
                     # CRITICAL: Set data_types based on instrument_type from config
@@ -598,7 +609,7 @@ class InstrumentProcessingService:
 
                     # CRITICAL: Set tardis_exchange based on venue+instrument_type mapping
                     # This ensures we use the correct Tardis endpoint (e.g., okex-swap for OKX PERPETUAL)
-                    mapping_key = (
+                    mapping_key: tuple[str, str] = (
                         canonical_venue,
                         normalized_instrument_type or "SPOT_PAIR",
                     )
@@ -653,7 +664,8 @@ class InstrumentProcessingService:
                                 )
 
                                 logger.debug(
-                                    f"✅ Set available_to_datetime for {symbol_id} to midnight after expiry: {available_to_datetime}"
+                                    f"✅ Set available_to_datetime for {symbol_id} to midnight "
+                                    f"after expiry: {available_to_datetime}"
                                 )
                             except Exception as e:
                                 logger.debug(f"⚠️ Could not parse expiry '{expiry_str}' for available_to_datetime: {e}")
@@ -676,7 +688,8 @@ class InstrumentProcessingService:
                             if comparison_date.date() > available_to_dt.date():
                                 filter_stats["expired_filtered"] = filter_stats.get("expired_filtered", 0) + 1
                                 logger.debug(
-                                    f"🚫 Filtered expired instrument: {symbol_id} - availableTo {available_to_dt.date()} < comparison_date {comparison_date.date()}"
+                                    f"🚫 Filtered expired instrument: {symbol_id} - availableTo "
+                                    f"{available_to_dt.date()} < comparison_date {comparison_date.date()}"
                                 )
                                 continue
                         except (ValueError, TypeError) as e:
@@ -703,7 +716,8 @@ class InstrumentProcessingService:
                                 if target_date_only > expiry_date_only:
                                     filter_stats["expiry_filtered"] += 1
                                     logger.debug(
-                                        f"🚫 Filtered: {symbol_id} - expiry {expiry_date_only} < target_date {target_date_only}"
+                                        f"🚫 Filtered: {symbol_id} - expiry {expiry_date_only} "
+                                        f"< target_date {target_date_only}"
                                     )
                                     continue
                             except (ValueError, TypeError) as e:
@@ -711,16 +725,18 @@ class InstrumentProcessingService:
 
                     # Determine market category
 
-                    instrument_dict = {
+                    instrument_dict: dict[str, str | None] = {
                         "databento_symbol": "",  # CeFi instruments don't have databento_symbol
                         "chain": "off-chain",
                     }
                     market_category = determine_market_category(instrument_dict)
 
+                    venue_str: str = canonical_venue
+                    inst_type_str: str = normalized_instrument_type or "SPOT_PAIR"
                     metadata = InstrumentDefinition(
                         instrument_key=canonical_key,
-                        venue=canonical_venue,
-                        instrument_type=normalized_instrument_type,
+                        venue=venue_str,
+                        instrument_type=inst_type_str,
                         symbol=symbol,  # ✅ FIXED: symbol_id → symbol (required field)
                         base_asset=clean_base,
                         quote_asset=clean_quote,
@@ -731,12 +747,12 @@ class InstrumentProcessingService:
                         tardis_symbol=self._convert_to_tardis_symbol(
                             symbol_id, exchange
                         ),  # ✅ FIXED: Convert to proper Tardis format
-                        tardis_exchange=tardis_exchange,  # ✅ FIXED: Set from venue+instrument_type mapping
+                        tardis_exchange=tardis_exchange,  # venue+instrument_type mapping
                         available_from_datetime=symbol_info.get("availableSince") or "",
-                        available_to_datetime=available_to_datetime,  # ✅ FIXED: Now properly populated from Tardis or expiry
+                        available_to_datetime=available_to_datetime,  # from Tardis or expiry
                         data_types=data_types_str,  # ✅ FIXED: Set from config based on instrument_type
                         # Include derived fields directly in model creation (FIXED for validation timing use context7)
-                        **enhanced_fields,  # Unpack all enhanced fields including strike, option_type, etc.
+                        **enhanced_fields,  # type: ignore[reportAny]
                     )
 
                     processed_instruments[canonical_key] = metadata
@@ -768,8 +784,8 @@ class InstrumentProcessingService:
     async def generate_instruments_for_exchanges(
         self,
         exchanges: list[str],
-        target_date: datetime = None,
-        max_parallel: int = None,
+        target_date: datetime | None = None,
+        max_parallel: int | None = None,
         force: bool = False,
     ) -> dict[str, InstrumentDefinition]:
         """
@@ -798,7 +814,7 @@ class InstrumentProcessingService:
         logger.info(f"🚀 Processing {len(supported_exchanges)} exchanges: {supported_exchanges}")
 
         # Process exchanges individually for now (can be parallelized later with ConcurrencyService)
-        all_instruments = {}
+        all_instruments: dict[str, InstrumentDefinition] = {}
 
         for exchange in supported_exchanges:
             try:
@@ -820,7 +836,7 @@ class InstrumentProcessingService:
     ) -> dict[str, dict[str, Any]]:
         """Filter instruments by exchange-specific capabilities using centralized config (DRY)."""
         # Use centralized configs (already loaded)
-        canonical_venue = self.normalize_venue(exchange)
+        canonical_venue: str = self.normalize_venue(exchange) or exchange
         valid_types: list[str] = self.exchange_config.exchange_instrument_types.get(canonical_venue, ["SPOT_PAIR"])
         valid_quotes: list[str] = self.exchange_config.valid_quote_currencies.get(canonical_venue, ["USDT"])
         is_derivative = canonical_venue in self.exchange_config.derivative_exchanges
@@ -843,7 +859,8 @@ class InstrumentProcessingService:
                 quote_asset: str = (cast(str | None, inst_data.get("quote_asset")) or "").upper()
                 if quote_asset not in valid_quotes:
                     logger.debug(
-                        f"🚫 Filtered out {inst_key}: quote '{quote_asset}' not in valid quotes {valid_quotes} for {canonical_venue}"
+                        f"🚫 Filtered out {inst_key}: quote '{quote_asset}' not in valid quotes "
+                        f"{valid_quotes} for {canonical_venue}"
                     )
                     continue
 
@@ -912,11 +929,11 @@ class InstrumentProcessingService:
 
         return inst_data
 
-    def _get_manual_ccxt_fallback(self, venue: str, base_asset: str) -> dict[str, Any]:
+    def get_manual_ccxt_fallback(self, venue: str, base_asset: str) -> dict[str, Any]:
         """Manual fallback mappings when CCXT lookup fails."""
         return get_manual_ccxt_fallback(venue, base_asset)
 
-    def _parse_symbol_components(self, symbol_id: str, exchange: str) -> dict[str, Any]:
+    def parse_symbol_components(self, symbol_id: str, exchange: str) -> dict[str, Any]:
         """Parse base/quote assets from Tardis symbol ID."""
         return self._symbol_parser.parse_symbol_components(symbol_id, exchange)
 
@@ -931,15 +948,26 @@ class InstrumentProcessingService:
         exchange: str | None = None,
     ) -> dict[str, Any]:
         """Populate ALL derived fields for instrument definition."""
-        return await populate_derived_fields(
-            self, canonical_key, venue, inst_type, base_asset, quote_asset, symbol_id, exchange
+        from instruments_service.app.core.processors.derived_fields_populator import (
+            DerivedFieldsServiceProtocol,
         )
 
-    def _parse_option_components(self, symbol_id: str, exchange: str) -> dict[str, Any]:
+        return await populate_derived_fields(
+            cast(DerivedFieldsServiceProtocol, self),
+            canonical_key,
+            venue,
+            inst_type,
+            base_asset,
+            quote_asset,
+            symbol_id,
+            exchange,
+        )
+
+    def parse_option_components(self, symbol_id: str, exchange: str) -> dict[str, Any]:
         """Parse option expiry, strike, and type."""
         return self._symbol_parser.parse_option_components(symbol_id, exchange)
 
-    def _parse_expiry_from_symbol(self, symbol_id: str, exchange: str) -> str | None:
+    def parse_expiry_from_symbol(self, symbol_id: str, exchange: str) -> str | None:
         """Parse expiry from symbol using exchange-specific patterns."""
         return self._symbol_parser.parse_expiry_from_symbol(symbol_id, exchange)
 
@@ -950,9 +978,9 @@ class InstrumentProcessingService:
     async def _parse_symbol_async(self, symbol_id: str, exchange: str) -> dict[str, str]:
         """Parse symbol components asynchronously for parallel processing."""
         try:
-            parsed = self._parse_symbol_components(symbol_id, exchange)
-            base = parsed.get("base_asset")
-            quote = parsed.get("quote_asset")
+            parsed = self.parse_symbol_components(symbol_id, exchange)
+            base: object = parsed.get("base_asset")  # type: ignore[reportAny]
+            quote: object = parsed.get("quote_asset")  # type: ignore[reportAny]
             return {
                 "base_asset": str(base) if base is not None else "",
                 "quote_asset": str(quote) if quote is not None else "",
@@ -1139,7 +1167,7 @@ class InstrumentProcessingService:
             instruments: dict[str, InstrumentDefinition] = {}
             for inst_key, inst_data in raw_instruments.items():
                 try:
-                    inst_def = InstrumentDefinition(**inst_data)
+                    inst_def = InstrumentDefinition(**inst_data)  # type: ignore[reportAny]
                     instruments[inst_key] = inst_def
                 except Exception as e:
                     logger.warning(f"Failed to create InstrumentDefinition for {inst_key}: {e}")
@@ -1160,10 +1188,18 @@ class InstrumentProcessingService:
         protocol: str,
         chain: str = "ETHEREUM",
         target_date: datetime | None = None,
-        **kwargs,
+        **kwargs: Any,  # type: ignore[reportAny]
     ) -> dict[str, InstrumentDefinition]:
         """Fetch DeFi instruments from various protocols."""
-        return _fetch_defi_instruments(self, protocol, chain, target_date, **kwargs)
+        from instruments_service.app.core.processors.defi_processor import DefiServiceProtocol
+
+        return _fetch_defi_instruments(
+            cast(DefiServiceProtocol, self),
+            protocol,
+            chain,
+            target_date,
+            **kwargs,  # type: ignore[reportAny]
+        )
 
     def cleanup(self):
         """Cleanup resources and close connections"""

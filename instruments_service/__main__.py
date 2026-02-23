@@ -6,10 +6,11 @@ Enables execution via: python -m instruments_service
 
 import sys
 
+from instruments_service.cli.base_handler import HandlerResultValue
 from instruments_service.cli.main import run_cli
 
 if __name__ == "__main__":
-    result: dict[str, str | bool | int | None] = run_cli()
+    result: dict[str, HandlerResultValue] = run_cli()
     # STRICT: Only exit 0 when status is explicitly "success"
     # All other states (error, partial, warning, unknown) exit non-zero
     # This prevents silent failures in VM/Cloud Run deployments

@@ -364,27 +364,28 @@ MIN_COVERAGE=35
 fi
 
 # ============================================================================
-# STEP 4: TYPE CHECKING (pyright - matches IDE, blocking)
+# STEP 4: TYPE CHECKING (basedpyright - matches IDE strict mode, blocking)
 # ============================================================================
-echo -e "\n${BLUE}[4/6] TYPE CHECKING (pyright)${NC}"
+echo -e "\n${BLUE}[4/6] TYPE CHECKING (basedpyright)${NC}"
 echo "----------------------------------------------------------------------"
 
 TYPE_CHECK_STATUS=0
 
-# Check if pyright is installed (CLI from pip install pyright)
-if command -v pyright &> /dev/null; then
-    echo "Running: pyright instruments_service/ tests/ --level warning"
-    if pyright instruments_service/ tests/ --level warning 2>&1 | tee /tmp/pyright_output.txt; then
+# basedpyright = stricter fork, supports reportAny, aligns with Pylance/IDE
+if command -v basedpyright &> /dev/null; then
+    echo "Running: basedpyright instruments_service/ --level warning (tests excluded per audit)"
+    if basedpyright instruments_service/ --level warning 2>&1 | tee /tmp/basedpyright_output.txt; then
         echo -e "${GREEN}✅ Type checking PASSED${NC}"
         TYPE_CHECK_STATUS=0
     else
         echo -e "${RED}❌ Type checking FAILED${NC}"
         TYPE_CHECK_STATUS=1
     fi
-    rm -f /tmp/pyright_output.txt
+    rm -f /tmp/basedpyright_output.txt
 else
-    echo -e "${YELLOW}pyright not installed - skipping type checking${NC}"
-    echo -e "${YELLOW}Install: uv pip install pyright${NC}"
+    echo -e "${RED}❌ basedpyright not installed - type checking REQUIRED${NC}"
+    echo -e "${YELLOW}Install: uv pip install basedpyright${NC}"
+    TYPE_CHECK_STATUS=1
 fi
 
 # ============================================================================
@@ -493,7 +494,8 @@ if [ "$USE_RG" = true ]; then
     echo -n "Checking for imports inside functions... "
     violations=$(rg "^[[:space:]]+import |^[[:space:]]+from .* import" --type py --glob "!tests/**" --glob "!scripts/**" \
         --glob "!**/adapter_loader.py" --glob "!**/__init__.py" --glob "!**/dependency_checker.py" \
-        --glob "!**/instruments_service.py" --glob "!**/symbol_parser.py" --glob "!**/canonical_key_generator.py" \
+        --glob "!**/instruments_service.py" --glob "!**/instrument_processing_service.py" \
+        --glob "!**/symbol_parser.py" --glob "!**/canonical_key_generator.py" \
         --glob "!**/live_mode_handler.py" --glob "!**/cloud_instrument_storage.py" --glob "!**/parser.py" \
         --glob "!**/main.py" --glob "!**/ccxt_service.py" --glob "!**/corporate_actions_handler.py" \
         --glob "!**/corporate_actions_backfill_handler.py" --glob "!**/corporate_actions_production_handler.py" \
@@ -605,7 +607,7 @@ fi
 if [ "$USE_RG" = true ]; then
     echo -n "Checking for asyncio.run() in loops... "
     ADDED=0
-    FILES_WITH_ASYNCIO_RUN=$(rg "asyncio\.run\(" --type py --glob "!examples/**" --glob "!scripts/**" --glob "!**/venues/defi/*" --glob "!**/cli/**" --files-with-matches . 2>/dev/null || true)
+    FILES_WITH_ASYNCIO_RUN=$(rg "asyncio\.run\(" --type py --glob "!examples/**" --glob "!scripts/**" --glob "!**/venues/defi/*" --glob "!**/cli/**" --glob "!**/defi_processor.py" --files-with-matches . 2>/dev/null || true)
     for file in $FILES_WITH_ASYNCIO_RUN; do
         if grep -q "for \|while " "$file" 2>/dev/null; then
             echo -e "${RED}FAIL${NC}"

@@ -150,16 +150,20 @@ class CorporateActionsHandler(ModeHandler):
             def try_load_tickers(gcs_path: str) -> list[str]:
                 """Try to load tickers from a specific GCS path."""
                 try:
-                    df: pd.DataFrame = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    raw = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    if not isinstance(raw, pd.DataFrame):
+                        return []
+                    df = cast(pd.DataFrame, raw)
                     if df.empty:
                         return []
 
                     # Filter for equities (NYSE, NASDAQ)
                     venue_series: pd.Series = df["venue"]
                     equities: pd.DataFrame = df[venue_series.isin(["NYSE", "NASDAQ"])]
-                    symbol_series: pd.Series = equities["exchange_raw_symbol"].dropna().unique()
-                    tickers_raw: list[str] = cast(list[str], symbol_series.tolist())
-                    tickers = [str(t).strip() for t in tickers_raw if t and str(t).strip()]
+                    symbol_arr = equities["exchange_raw_symbol"].dropna().unique()
+                    symbol_list: list[str | int | float] = cast(list[str | int | float], symbol_arr.tolist())
+                    tickers_raw: list[str] = [str(s).strip() for s in symbol_list if s is not None and str(s).strip()]
+                    tickers = [t.strip() for t in tickers_raw if t and t.strip()]
                     return sorted(tickers)
                 except (OSError, FileNotFoundError, RuntimeError, ValueError):
                     return []
@@ -227,19 +231,11 @@ class CorporateActionsHandler(ModeHandler):
         pct = (current / total) * 100
         logger.info(f"📊 [{current}/{total}] ({pct:.1f}%) Processing {ticker}")
 
-    def run(
-        self,
-        start_date: str,
-        end_date: str,
-        tickers: Optional[list[str]] = None,
-        output_format: str = "parquet",
-        upload_to_gcs: bool = False,
-        **kwargs: object,  # type: ignore[reportAny]
-    ) -> dict[str, HandlerResultValue]:
+    def run(self, **kwargs: object) -> dict[str, HandlerResultValue]:  # type: ignore[reportAny]
         """
         Execute corporate actions fetch.
 
-        Args:
+        Args (via kwargs):
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
             tickers: Optional list of tickers (defaults to S&P 500)
@@ -249,12 +245,24 @@ class CorporateActionsHandler(ModeHandler):
         Returns:
             Result dictionary with status and statistics
         """
-        # Parse dates
-        start = parse_date(start_date) if isinstance(start_date, str) else start_date
-        end = parse_date(end_date) if isinstance(end_date, str) else end_date
+        start_date = kwargs.get("start_date")
+        end_date = kwargs.get("end_date")
+        if start_date is None or start_date == "":
+            raise ValueError("start_date is required for corporate actions")
+        if end_date is None or end_date == "":
+            raise ValueError("end_date is required for corporate actions")
+        tickers = kwargs.get("tickers")
+        output_format = str(kwargs.get("output_format", "parquet"))
+        upload_to_gcs = bool(kwargs.get("upload_to_gcs", False))
+
+        # Parse dates (narrow type for type checker)
+        start = parse_date(str(start_date)) if isinstance(start_date, str) else start_date
+        end = parse_date(str(end_date)) if isinstance(end_date, str) else end_date
+        if not isinstance(start, date) or not isinstance(end, date):
+            raise ValueError("start_date and end_date must be date or YYYY-MM-DD string")
 
         # Get tickers
-        ticker_list = self._get_tickers(tickers)
+        ticker_list = self._get_tickers(cast(Optional[list[str]], tickers))
 
         logger.info(f"🚀 Fetching corporate actions for {len(ticker_list)} tickers")
         logger.info(f"📅 Date range: {start} to {end}")
@@ -284,7 +292,8 @@ class CorporateActionsHandler(ModeHandler):
         }
 
         logger.info(
-            f"📈 Results: {stats['dividends_count']} dividends, {stats['splits_count']} splits, {stats['earnings_count']} earnings"
+            f"📈 Results: {stats['dividends_count']} dividends, "
+            f"{stats['splits_count']} splits, {stats['earnings_count']} earnings"
         )
 
         # Save to files
@@ -505,7 +514,7 @@ class CorporateActionsHandler(ModeHandler):
 
                 # Read file as DataFrame and upload (cloud-agnostic)
                 df = pd.read_parquet(local_path)
-                service.upload_to_gcs(df=df, gcs_path=gcs_path, format="parquet")
+                service.upload_to_gcs(data=df, gcs_path=gcs_path, format="parquet")
 
                 full_gcs_path = f"gs://{bucket_name}/{gcs_path}"
                 gcs_paths[f"{action_type}:{day_str}"] = full_gcs_path

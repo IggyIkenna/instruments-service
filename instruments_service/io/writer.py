@@ -33,7 +33,7 @@ class InstrumentWriter(BaseGCSWriter):
         config: InstrumentsServiceConfig = get_service_config()
         bucket = f"instruments-store-{category.lower()}-{config.gcp_project_id}"
 
-        super().__init__(
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]
             bucket_name=bucket,
             schema=INSTRUMENTS_SCHEMA,
             dry_run=dry_run,
@@ -43,20 +43,22 @@ class InstrumentWriter(BaseGCSWriter):
         self.category = category.upper()
         logger.info(f"Initialized InstrumentWriter: category={category}, dry_run={dry_run}")
 
-    def build_path(
-        self,
-        date: datetime,
-        instrument_id: str,
-    ) -> str:
+    def build_path(self, **kwargs: object) -> str:
         """
         Build GCS path for instrument output.
 
-        Args:
-            date: Processing date
+        Args (via kwargs):
+            date: Processing date (datetime)
             instrument_id: Instrument identifier
 
         Returns:
             Relative path: by_date/day={date}/instrument_id={instrument_id}.parquet
         """
-        date_str = date.strftime("%Y-%m-%d")
+        date_val = kwargs.get("date")
+        instrument_id = kwargs.get("instrument_id")
+        if not isinstance(date_val, datetime):
+            raise TypeError("build_path requires date: datetime")
+        if not isinstance(instrument_id, str):
+            raise TypeError("build_path requires instrument_id: str")
+        date_str = date_val.strftime("%Y-%m-%d")
         return f"by_date/day={date_str}/instrument_id={instrument_id}.parquet"

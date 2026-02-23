@@ -23,7 +23,7 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import date
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 import pandas as pd
 import yfinance as yf
@@ -138,15 +138,16 @@ class CorporateActionsAdapter:
             mask = (div_df.index >= start_date) & (div_df.index <= end_date)
             div_df = div_df[mask]
 
-            for ex_date, amount in div_df.items():
-                if pd.isna(amount) or amount <= 0:
+            for ex_date, amount in div_df.items():  # type: ignore[reportAny]
+                if not isinstance(amount, (int, float)) or pd.isna(amount) or amount <= 0:
                     continue
+                amount_float = float(amount)
 
                 try:
                     record = DividendRecord(
                         ticker=ticker,
-                        ex_date=ex_date,
-                        amount=float(amount),
+                        ex_date=cast(date, ex_date),
+                        amount=amount_float,
                         dividend_type=DividendType.UNSPECIFIED,
                         source="yfinance",
                         instrument_key=instrument_key,
@@ -199,14 +200,14 @@ class CorporateActionsAdapter:
             mask = (splits_df.index >= start_date) & (splits_df.index <= end_date)
             splits_df = splits_df[mask]
 
-            for effective_date, ratio in splits_df.items():
-                if pd.isna(ratio) or ratio <= 0:
+            for effective_date, ratio in splits_df.items():  # type: ignore[reportAny]
+                if not isinstance(ratio, (int, float)) or pd.isna(ratio) or ratio <= 0:
                     continue
+                ratio_float = float(ratio)
 
                 try:
                     # yfinance returns ratio as "new shares per old share"
                     # e.g., 4.0 means 4:1 split (1 share becomes 4)
-                    ratio_float = float(ratio)
 
                     # Determine split_from and split_to
                     if ratio_float >= 1:
@@ -219,7 +220,7 @@ class CorporateActionsAdapter:
 
                     record = StockSplitRecord(
                         ticker=ticker,
-                        effective_date=effective_date,
+                        effective_date=cast(date, effective_date),
                         ratio=ratio_float,
                         split_from=split_from,
                         split_to=split_to,
@@ -275,10 +276,10 @@ class CorporateActionsAdapter:
             # Try to get earnings dates from calendar
             try:
                 calendar: object = stock.calendar  # type: ignore[reportAny]
-                if calendar is not None and not calendar.empty:
-                    # Future earnings date
-                    if "Earnings Date" in calendar.index:
-                        _ = calendar.loc["Earnings Date"]  # noqa: F841
+                if calendar is not None:
+                    cal_df = cast(pd.DataFrame, calendar)
+                    if not cal_df.empty and "Earnings Date" in cal_df.index:
+                        _ = cal_df.loc["Earnings Date"]  # noqa: F841
                         # This is typically future dates, not historical
             except Exception as e:
                 logger.debug(f"Failed to process earnings date from calendar: {e}")
@@ -293,7 +294,7 @@ class CorporateActionsAdapter:
                     for idx, row in earnings_df.iterrows():
                         try:
                             # idx is the earnings date (datetime)
-                            earnings_date: date = pd.to_datetime(idx, utc=True).date()
+                            earnings_date = pd.to_datetime(cast(float | str | date, idx), utc=True).date()
 
                             # Filter by date range
                             if earnings_date < start_date or earnings_date > end_date:
@@ -386,7 +387,7 @@ class CorporateActionsAdapter:
         Returns:
             Dict mapping ticker -> CorporateActionsBundle
         """
-        results = {}
+        results: dict[str, CorporateActionsBundle] = {}
         total = len(tickers)
 
         logger.info(f"Fetching corporate actions for {total} tickers ({start_date} to {end_date})")
@@ -426,7 +427,7 @@ class CorporateActionsAdapter:
         splits: list[dict[str, Any]] = []
         earnings: list[dict[str, Any]] = []
 
-        for ticker, bundle in bundles.items():
+        for _, bundle in bundles.items():
             for div in bundle.dividends:
                 dividends.append(div.to_dict())
             for split in bundle.splits:

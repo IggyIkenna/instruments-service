@@ -12,6 +12,7 @@ from typing import Any
 
 from instruments_service.cli.base_handler import ModeHandler
 
+from .aggregate_handler import AggregateHandler
 from .corporate_actions_backfill_handler import CorporateActionsBackfillHandler
 from .corporate_actions_handler import CorporateActionsHandler
 from .corporate_actions_production_handler import CorporateActionsProductionHandler
@@ -47,6 +48,7 @@ def get_handler_for_mode(mode: str, config: dict[str, Any]) -> ModeHandler:
     """
     if not _handler_registry:
         try:
+            register_handler("aggregate", AggregateHandler)
             register_handler("instruments", InstrumentHandler)
             register_handler("corporate_actions", CorporateActionsHandler)
             register_handler("corporate_actions_backfill", CorporateActionsBackfillHandler)

@@ -218,8 +218,8 @@ class TestUpbitCoinbaseMVPFiltering:
                 0,
             ),
         ):
-            # Also mock _parse_symbol_components to return correct base/quote
-            original_parse = service._parse_symbol_components
+            # Also mock parse_symbol_components to return correct base/quote
+            original_parse = service.parse_symbol_components
 
             def mock_parse(symbol_id, exchange):
                 if symbol_id == "BTC-KRW":
@@ -230,7 +230,7 @@ class TestUpbitCoinbaseMVPFiltering:
                     return {"base_asset": "RANDOM", "quote_asset": "KRW"}
                 return original_parse(symbol_id, exchange)
 
-            with patch.object(service, "_parse_symbol_components", side_effect=mock_parse):
+            with patch.object(service, "parse_symbol_components", side_effect=mock_parse):
                 result = await service.process_exchange_instruments(
                     exchange="upbit",
                     target_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
@@ -256,80 +256,80 @@ class TestSymbolParsing:
 
     def test_parse_symbol_upbit_krw_sol(self, service):
         """Test Upbit symbol parsing for KRW-SOL (QUOTE-BASE format)."""
-        result = service._parse_symbol_components("KRW-SOL", "upbit")
+        result = service.parse_symbol_components("KRW-SOL", "upbit")
         assert result["base_asset"] == "SOL"
         assert result["quote_asset"] == "KRW"
 
     def test_parse_symbol_upbit_krw_btc(self, service):
         """Test Upbit symbol parsing for KRW-BTC (QUOTE-BASE format)."""
-        result = service._parse_symbol_components("KRW-BTC", "upbit")
+        result = service.parse_symbol_components("KRW-BTC", "upbit")
         assert result["base_asset"] == "BTC"
         assert result["quote_asset"] == "KRW"
 
     def test_parse_symbol_coinbase_sol_usd(self, service):
         """Test Coinbase symbol parsing for SOL-USD (BASE-QUOTE format)."""
-        result = service._parse_symbol_components("SOL-USD", "coinbase")
+        result = service.parse_symbol_components("SOL-USD", "coinbase")
         assert result["base_asset"] == "SOL"
         assert result["quote_asset"] == "USD"
 
     def test_parse_symbol_coinbase_btc_usd(self, service):
         """Test Coinbase symbol parsing for BTC-USD (BASE-QUOTE format)."""
-        result = service._parse_symbol_components("BTC-USD", "coinbase")
+        result = service.parse_symbol_components("BTC-USD", "coinbase")
         assert result["base_asset"] == "BTC"
         assert result["quote_asset"] == "USD"
 
     def test_parse_symbol_upbit_lowercase(self, service):
         """Test Upbit symbol parsing with lowercase input."""
-        result = service._parse_symbol_components("krw-eth", "upbit")
+        result = service.parse_symbol_components("krw-eth", "upbit")
         assert result["base_asset"] == "ETH"
         assert result["quote_asset"] == "KRW"
 
     def test_parse_symbol_coinbase_lowercase(self, service):
         """Test Coinbase symbol parsing with lowercase input."""
-        result = service._parse_symbol_components("eth-usd", "coinbase")
+        result = service.parse_symbol_components("eth-usd", "coinbase")
         assert result["base_asset"] == "ETH"
         assert result["quote_asset"] == "USD"
 
     def test_parse_symbol_components_binance(self, service):
         """Test symbol parsing for Binance."""
-        result = service._parse_symbol_components("BTCUSDT", "binance")
+        result = service.parse_symbol_components("BTCUSDT", "binance")
         assert isinstance(result, dict)
         assert "base_asset" in result or result.get("base_asset") == "BTC"
 
     def test_parse_symbol_components_deribit(self, service):
         """Test symbol parsing for Deribit."""
-        result = service._parse_symbol_components("BTC-PERPETUAL", "deribit")
+        result = service.parse_symbol_components("BTC-PERPETUAL", "deribit")
         assert isinstance(result, dict)
 
-        result = service._parse_symbol_components("BTC-25DEC25", "deribit")
+        result = service.parse_symbol_components("BTC-25DEC25", "deribit")
         assert isinstance(result, dict)
 
     def test_parse_symbol_components_bybit(self, service):
         """Test parsing Bybit symbol components."""
-        result = service._parse_symbol_components("BTCUSDT", "bybit")
+        result = service.parse_symbol_components("BTCUSDT", "bybit")
         assert isinstance(result, dict)
         assert "base_asset" in result
 
     def test_parse_symbol_components_okx(self, service):
         """Test parsing OKX symbol components."""
-        result = service._parse_symbol_components("BTC-USDT", "okx")
+        result = service.parse_symbol_components("BTC-USDT", "okx")
         assert isinstance(result, dict)
         assert "base_asset" in result
 
     def test_parse_symbol_components_okx_perp(self, service):
         """Test parsing OKX PERP symbol."""
-        result = service._parse_symbol_components("PERP-USDT", "okx")
+        result = service.parse_symbol_components("PERP-USDT", "okx")
         assert isinstance(result, dict)
         assert result.get("base_asset") == "PERP"
 
     def test_parse_symbol_components_okx_futures(self, service):
         """Test parsing OKX futures symbol components."""
-        result = service._parse_symbol_components("BTC-USDT-241225", "okex-futures")
+        result = service.parse_symbol_components("BTC-USDT-241225", "okex-futures")
         assert isinstance(result, dict)
 
     def test_parse_symbol_components_empty(self, service):
         """Test parsing empty symbol returns empty dict."""
-        result = service._parse_symbol_components("", "binance")
+        result = service.parse_symbol_components("", "binance")
         assert isinstance(result, dict)
 
 
@@ -434,23 +434,23 @@ class TestDeribitParsing:
 
     def test_parse_expiry_from_symbol_deribit(self, service):
         """Test expiry parsing from Deribit symbol."""
-        result = service._parse_expiry_from_symbol("BTC-25DEC25-50000-C", "deribit")
+        result = service.parse_expiry_from_symbol("BTC-25DEC25-50000-C", "deribit")
         assert result is not None
 
     def test_parse_expiry_from_symbol_bybit(self, service):
         """Test parsing expiry from Bybit symbol."""
-        result = service._parse_expiry_from_symbol("BTC-25DEC24", "bybit")
+        result = service.parse_expiry_from_symbol("BTC-25DEC24", "bybit")
         assert result is not None
 
     def test_parse_expiry_from_symbol_binance_futures(self, service):
         """Test parsing expiry from Binance futures symbol."""
-        result = service._parse_expiry_from_symbol("btcusdt_241225", "binance-futures")
+        result = service.parse_expiry_from_symbol("btcusdt_241225", "binance-futures")
         assert result is not None
         assert "2024-12-25" in result
 
     def test_parse_expiry_from_symbol_okx(self, service):
         """Test parsing expiry from OKX symbol."""
-        result = service._parse_expiry_from_symbol("BTC-USDT-241225", "okex-futures")
+        result = service.parse_expiry_from_symbol("BTC-USDT-241225", "okex-futures")
         assert result is not None
 
 
@@ -465,26 +465,26 @@ class TestOptionParsing:
 
     def test_parse_option_components_deribit_new_format(self, service):
         """Test parsing Deribit option components with new format."""
-        result = service._parse_option_components("BTC-USD-240329-120000-CALL", "deribit")
+        result = service.parse_option_components("BTC-USD-240329-120000-CALL", "deribit")
         assert "strike_price" in result
         assert "option_type" in result
         assert result["option_type"] == "CALL"
 
     def test_parse_option_components_deribit_traditional_format(self, service):
         """Test parsing Deribit option components with traditional format."""
-        result = service._parse_option_components("BTC-25DEC25-50000-C", "deribit")
+        result = service.parse_option_components("BTC-25DEC25-50000-C", "deribit")
         assert "strike_price" in result
         assert "option_type" in result
         assert result["option_type"] == "CALL"
 
     def test_parse_option_components_deribit_put(self, service):
         """Test parsing Deribit PUT option."""
-        result = service._parse_option_components("BTC-25DEC25-50000-P", "deribit")
+        result = service.parse_option_components("BTC-25DEC25-50000-P", "deribit")
         assert result["option_type"] == "PUT"
 
     def test_parse_option_components_deribit_decimal_strike(self, service):
         """Test parsing Deribit option with decimal strike (1d14 format)."""
-        result = service._parse_option_components("BTC-25DEC25-1d14-C", "deribit")
+        result = service.parse_option_components("BTC-25DEC25-1d14-C", "deribit")
         assert result["strike_price"] == "1.14"
 
 

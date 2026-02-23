@@ -76,7 +76,10 @@ INSTRUMENTS_SCHEMA = SchemaDefinition(
             name="instruction_type",
             dtype="string",
             nullable=True,
-            description="Instruction type for execution algorithm selection: TRADE (CLOB), SWAP (DEX), or ZERO_ALPHA (lending/staking)",
+            description=(
+                "Instruction type for execution algorithm selection: "
+                "TRADE (CLOB), SWAP (DEX), or ZERO_ALPHA (lending/staking)"
+            ),
         ),
         # ==========================================================================
         # METADATA FIELDS (nullable by default, defaults exist)
@@ -471,7 +474,10 @@ INSTRUMENTS_SCHEMA = SchemaDefinition(
             name="session_date_tag",
             dtype="string",
             nullable=True,
-            description="UTC midnight spanning tag: 'close_date' (primary/full session) or 'open_date' (duplicate for prev day ticks). Only for CME/ICE.",
+            description=(
+                "UTC midnight spanning tag: 'close_date' (primary/full session) or "
+                "'open_date' (duplicate for prev day ticks). Only for CME/ICE."
+            ),
         ),
     ],
 )

@@ -129,11 +129,11 @@ class UnifiedInstrumentConfig:
         for inst in raw_instruments:
             self._instruments.append(
                 TradFiInstrument(
-                    symbol=inst["symbol"],
-                    venue=inst["venue"],
-                    instrument_type=inst["type"],
-                    dataset=inst["dataset"],
-                    stype_in=inst["stype"],
+                    symbol=inst["symbol"] or "",
+                    venue=inst["venue"] or "",
+                    instrument_type=inst["type"] or "",
+                    dataset=inst["dataset"] or "",
+                    stype_in=inst["stype"] or "",
                     base_asset=inst.get("base"),
                     quote_asset="USD",
                     exchange_code=inst.get("code"),

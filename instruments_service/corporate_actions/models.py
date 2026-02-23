@@ -8,7 +8,7 @@ These are reference data tied to equity instruments for price normalization.
 import math
 from datetime import date, datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Optional, cast
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -71,7 +71,7 @@ class DividendRecord(BaseModel):
         """Handle NaN and None values."""
         if v is None or (isinstance(v, float) and math.isnan(v)):
             return 0.0
-        return float(v)
+        return float(cast(str | int | float, v))
 
     def to_dict(self) -> dict[str, str | float | None]:
         """Convert to dictionary for DataFrame/Parquet storage."""

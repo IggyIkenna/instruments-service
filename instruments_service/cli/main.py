@@ -13,6 +13,7 @@ Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 import logging
 import sys
 from pathlib import Path
+from typing import cast
 
 
 # CRITICAL: Load .env file explicitly before any other imports
@@ -52,9 +53,9 @@ from instruments_service.config import instruments_config
 # This ensures that get_bucket_for_category() uses the correct bucket configuration
 # from instruments-service instead of the default BaseServiceConfig
 try:
-    import unified_cloud_services.core.market_category
+    import unified_cloud_services.core.market_category as market_category_module
 
-    unified_cloud_services.core.market_category.unified_config = instruments_config
+    setattr(market_category_module, "unified_config", instruments_config)
     logger.info("✅ Patched unified_cloud_services config with instruments_config")
 except ImportError:
     logger.warning("⚠️ Could not patch unified_cloud_services config (module not found)")
@@ -100,15 +101,16 @@ def main() -> dict[str, HandlerResultValue]:
         # Parse arguments
         args = parse_arguments()
 
-        # Setup logging level
-        logging.getLogger().setLevel(getattr(logging, args.log_level.upper()))
+        # Setup logging level (getattr returns Any; cast to int for setLevel)
+        log_level_int = cast(int, getattr(logging, args.log_level.upper()))
+        logging.getLogger().setLevel(log_level_int)
 
         logger.info(f"🚀 Starting {args.mode} operation")
         if args.start_date:
             logger.info(f"📅 Date range: {args.start_date} to {args.end_date or args.start_date}")
 
         # Build configuration from arguments
-        config = {
+        config: dict[str, str | None] = {
             "project_id": args.project_id,
             "gcs_bucket": args.gcs_bucket,
             "bigquery_dataset": args.bigquery_dataset,
@@ -118,14 +120,18 @@ def main() -> dict[str, HandlerResultValue]:
         handler: ModeHandler = get_handler_for_mode(args.mode, config)
         mode_handler = handler  # Track for cleanup on signal
 
-        # Prepare arguments for handler
-        handler_kwargs = {}
+        # Prepare arguments for handler (typed for HandlerResultValue alignment)
+        handler_kwargs: dict[str, HandlerResultValue] = {}
 
         # Date range
         if args.start_date:
             handler_kwargs["start_date"] = args.start_date
         if args.end_date:
             handler_kwargs["end_date"] = args.end_date
+
+        # Aggregate mode options
+        if hasattr(args, "redo_all") and args.redo_all:
+            handler_kwargs["redo_all"] = args.redo_all
 
         # Common options
         if hasattr(args, "force") and args.force:

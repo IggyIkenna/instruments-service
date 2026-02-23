@@ -5,9 +5,12 @@ Fetches DeFi instruments from various protocols.
 Extracted from InstrumentProcessingService.fetch_defi_instruments.
 """
 
+from __future__ import annotations
+
+import asyncio
 import logging
 from datetime import datetime
-from typing import Any, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Any, Optional, Protocol, cast
 
 from unified_market_interface.adapters.defi import (
     AaveV3Adapter,
@@ -29,20 +32,67 @@ from unified_market_interface.adapters.onchain_perps import HyperliquidAdapter
 
 from instruments_service.models import InstrumentDefinition
 
+if TYPE_CHECKING:
+    pass
+
 logger = logging.getLogger(__name__)
 
 # Protocol-specific kwargs (str, int, bool, datetime, etc.)
 DefiProtocolKwargs = str | int | bool | None | datetime
 
 
+class _VenueMappingProtocol(Protocol):
+    """Protocol for venue_mapping attribute."""
+
+    def get_defi_mvp_tokens(self) -> list[str]: ...
+
+    hyperliquid_aster_mvp_base_assets: list[str]
+
+
+class _DateFilterProtocol(Protocol):
+    """Protocol for date_filter_service attribute."""
+
+    def filter_instruments_by_date(
+        self,
+        instruments: dict[str, Any],
+        target_date: datetime,
+        protocol: str | None = None,
+    ) -> dict[str, Any]: ...
+
+
+class _CCXTServiceProtocol(Protocol):
+    """Protocol for ccxt_service attribute."""
+
+    def load_markets(self, venue: str, force_refresh: bool = False) -> dict[str, Any] | None: ...
+
+    def get_metadata(
+        self,
+        venue: str,
+        base_asset: str,
+        quote_asset: str,
+        symbol_id: str,
+        tardis_symbol: str | None = None,
+        instrument_type: str | None = None,
+    ) -> dict[str, str | float | int | None]: ...
+
+    def generate_default_ccxt_symbol(
+        self,
+        venue: str,
+        base_asset: str,
+        quote_asset: str,
+        symbol_id: str,
+        instrument_type: str | None = None,
+    ) -> str: ...
+
+
 class DefiServiceProtocol(Protocol):
     """Protocol for InstrumentProcessingService used by fetch_defi_instruments."""
 
-    venue_mapping: object  # type: ignore[reportAny]
-    date_filter_service: object  # type: ignore[reportAny]
-    ccxt_service: object  # type: ignore[reportAny]
+    venue_mapping: _VenueMappingProtocol
+    date_filter_service: _DateFilterProtocol
+    ccxt_service: _CCXTServiceProtocol
 
-    def _get_manual_ccxt_fallback(self, venue: str, base_asset: str) -> dict[str, Any]: ...
+    def get_manual_ccxt_fallback(self, venue: str, base_asset: str) -> dict[str, Any]: ...
 
 
 def fetch_defi_instruments(
@@ -66,9 +116,15 @@ def fetch_defi_instruments(
         Dictionary mapping instrument_key to InstrumentDefinition
     """
     try:
-        base_currency_list: list[str] = cast(list[str], service.venue_mapping.get_defi_mvp_tokens())
-        quote_currency_list: list[str] = cast(list[str], service.venue_mapping.get_defi_mvp_tokens())
+        base_currency_list: list[str] = service.venue_mapping.get_defi_mvp_tokens()
+        quote_currency_list: list[str] = service.venue_mapping.get_defi_mvp_tokens()
         graph_api_key: str | None = getattr(service, "_graph_api_key", None)
+
+        # Extract fetch_markets/fetch_pools params from kwargs (exclude target_date)
+        bc = kwargs.get("base_currency")
+        base_currency_kw: str | None = bc if isinstance(bc, str) else None
+        ml = kwargs.get("min_liquidity")
+        min_liquidity_kw: float | None = float(ml) if isinstance(ml, (int, float)) else None
 
         raw_instruments: dict[str, Any] = {}
 
@@ -76,20 +132,24 @@ def fetch_defi_instruments(
             adapter = UniswapV3Adapter(chain=chain, api_key=graph_api_key)
             raw_instruments = cast(
                 dict[str, Any],
-                adapter.fetch_pools(
-                    base_currency_list=base_currency_list,
-                    quote_currency_list=quote_currency_list,
-                    **kwargs,
+                asyncio.run(
+                    adapter.fetch_pools(
+                        base_currency_list=base_currency_list,
+                        quote_currency_list=quote_currency_list,
+                        base_currency=base_currency_kw,
+                        min_liquidity=min_liquidity_kw,
+                    )
                 ),
             )
         elif protocol.lower() == "balancer":
             adapter = BalancerAdapter(chain=chain)
             raw_instruments = cast(
                 dict[str, Any],
-                adapter.fetch_pools(
+                adapter.fetch_markets(
                     base_currency_list=base_currency_list,
                     quote_currency_list=quote_currency_list,
-                    **kwargs,
+                    base_currency=base_currency_kw,
+                    min_liquidity=min_liquidity_kw,
                 ),
             )
         elif protocol.lower() == "aave_v3":
@@ -105,9 +165,7 @@ def fetch_defi_instruments(
             adapter = MorphoAdapter(chain=chain)
             raw_instruments = cast(dict[str, Any], adapter.fetch_markets())
         elif protocol.lower() == "hyperliquid":
-            hyperliquid_base_assets: list[str] = cast(
-                list[str], service.venue_mapping.hyperliquid_aster_mvp_base_assets
-            )
+            hyperliquid_base_assets: list[str] = service.venue_mapping.hyperliquid_aster_mvp_base_assets
             adapter = HyperliquidAdapter(base_currency_list=hyperliquid_base_assets)
             perpetuals = cast(dict[str, Any], adapter.fetch_perpetuals(test_data_availability=False))
             spot_pairs = cast(dict[str, Any], adapter.fetch_spot_pairs(test_data_availability=False))
@@ -121,20 +179,21 @@ def fetch_defi_instruments(
             adapter = UniswapV2Adapter(chain=chain, api_key=graph_api_key)
             raw_instruments = cast(
                 dict[str, Any],
-                adapter.fetch_pools(
+                adapter.fetch_markets(
                     base_currency_list=base_currency_list,
                     quote_currency_list=quote_currency_list,
-                    **kwargs,
+                    base_currency=base_currency_kw,
+                    min_liquidity=min_liquidity_kw,
                 ),
             )
         elif protocol.lower() == "uniswap_v4":
             adapter = UniswapV4Adapter(chain=chain, api_key=graph_api_key)
             raw_instruments = cast(
                 dict[str, Any],
-                adapter.fetch_pools(
+                adapter.fetch_markets(
                     base_currency_list=base_currency_list,
                     quote_currency_list=quote_currency_list,
-                    **kwargs,
+                    base_currency=base_currency_kw,
                 ),
             )
         elif protocol.lower() == "curve":
@@ -164,26 +223,27 @@ def fetch_defi_instruments(
             )
 
         venues_to_enrich: set[str] = set()
-        for inst_data in raw_instruments.values():
+        for inst_data in raw_instruments.values():  # type: ignore[reportAny]
             if protocol.lower() == "hyperliquid" and isinstance(inst_data, dict):
-                venue_val = inst_data.get("venue")
+                inst_d: dict[str, Any] = cast(dict[str, Any], inst_data)
+                venue_val: str | None = cast(str | None, inst_d.get("venue"))
                 if isinstance(venue_val, str):
                     venues_to_enrich.add(venue_val)
 
         for venue in venues_to_enrich:
             logger.info(f"⚡ Pre-loading CCXT markets for {venue} to ensure enrichment works")
-            ccxt_data: dict[str, Any] | None = cast(dict[str, Any] | None, service.ccxt_service.load_markets(venue))
+            ccxt_data = service.ccxt_service.load_markets(venue)
             if ccxt_data and ccxt_data.get("markets"):
-                logger.info(f"✅ CCXT markets loaded for {venue}: {len(ccxt_data['markets'])} markets")
+                logger.info(
+                    f"✅ CCXT markets loaded for {venue}: {len(cast(dict[str, Any], ccxt_data['markets']))} markets"
+                )
             else:
                 logger.warning(f"⚠️ Failed to load CCXT markets for {venue}")
 
         instruments: dict[str, InstrumentDefinition] = {}
 
         if protocol.lower() in ["hyperliquid", "aster"]:
-            mvp_bases = {
-                str(b).upper() for b in cast(list[str], service.venue_mapping.hyperliquid_aster_mvp_base_assets)
-            }
+            mvp_bases = {str(b).upper() for b in service.venue_mapping.hyperliquid_aster_mvp_base_assets}
             mvp_quotes: set[str] = {"USDC"}
         elif protocol.lower() == "ethena":
             mvp_bases = {"USDE", "SUSDE"}
@@ -199,17 +259,17 @@ def fetch_defi_instruments(
             "STETH": "ETH",
         }
 
-        for inst_key, inst_data in raw_instruments.items():
+        for inst_key, inst_data in raw_instruments.items():  # type: ignore[reportAny]
             try:
-                inst_data_dict = inst_data if isinstance(inst_data, dict) else {}
-                base_asset: str = (inst_data_dict.get("base_asset") or "").upper()
+                inst_data_dict: dict[str, Any] = cast(dict[str, Any], inst_data) if isinstance(inst_data, dict) else {}
+                base_asset: str = str(inst_data_dict.get("base_asset") or "").upper()
                 if base_asset:
                     if base_asset not in mvp_bases:
                         if base_asset not in base_versions or base_versions[base_asset] not in mvp_bases:
                             logger.debug(f"Skipping {inst_key}: base currency '{base_asset}' not in MVP list")
                             continue
 
-                quote_asset: str = (inst_data_dict.get("quote_asset") or "").upper()
+                quote_asset: str = str(inst_data_dict.get("quote_asset") or "").upper()
                 if quote_asset and quote_asset not in mvp_quotes:
                     quote_versions = {
                         "WETH": "ETH",
@@ -221,45 +281,39 @@ def fetch_defi_instruments(
                         logger.debug(f"Skipping {inst_key}: quote currency '{quote_asset}' not in MVP list")
                         continue
 
-                inst_def = InstrumentDefinition(**cast(dict[str, Any], inst_data_dict))
+                inst_def = InstrumentDefinition(**inst_data_dict)  # type: ignore[reportAny]
 
                 if protocol.lower() == "hyperliquid":
                     venue = inst_def.venue
-                    ccxt_metadata = cast(
-                        dict[str, Any] | None,
-                        service.ccxt_service.get_metadata(
-                            venue=venue,
-                            base_asset=inst_def.base_asset,
-                            quote_asset=inst_def.quote_asset,
-                            symbol_id=inst_def.exchange_raw_symbol or inst_def.symbol,
-                            instrument_type=inst_def.instrument_type,
-                        ),
+                    ccxt_metadata = service.ccxt_service.get_metadata(
+                        venue=venue,
+                        base_asset=inst_def.base_asset,
+                        quote_asset=inst_def.quote_asset,
+                        symbol_id=inst_def.exchange_raw_symbol or inst_def.symbol,
+                        instrument_type=inst_def.instrument_type,
                     )
                     if ccxt_metadata:
                         if ccxt_metadata.get("ccxt_symbol"):
-                            inst_def.ccxt_symbol = ccxt_metadata["ccxt_symbol"]
+                            inst_def.ccxt_symbol = str(ccxt_metadata["ccxt_symbol"])
                         if ccxt_metadata.get("ccxt_exchange"):
-                            inst_def.ccxt_exchange = ccxt_metadata["ccxt_exchange"]
+                            inst_def.ccxt_exchange = str(ccxt_metadata["ccxt_exchange"])
                         if ccxt_metadata.get("tick_size"):
-                            inst_def.tick_size = ccxt_metadata["tick_size"]
+                            inst_def.tick_size = str(ccxt_metadata["tick_size"])
                         if ccxt_metadata.get("min_size"):
-                            inst_def.min_size = ccxt_metadata["min_size"]
+                            inst_def.min_size = str(ccxt_metadata["min_size"])
                         if ccxt_metadata.get("contract_size"):
                             try:
-                                inst_def.contract_size = float(ccxt_metadata["contract_size"])
+                                inst_def.contract_size = float(cast(str | int | float, ccxt_metadata["contract_size"]))
                             except (ValueError, TypeError):
                                 pass
                     else:
                         if not inst_def.ccxt_symbol or not inst_def.ccxt_exchange:
-                            default_ccxt_symbol = cast(
-                                str,
-                                service.ccxt_service.generate_default_ccxt_symbol(
-                                    venue=venue,
-                                    base_asset=inst_def.base_asset,
-                                    quote_asset=inst_def.quote_asset,
-                                    symbol_id=inst_def.exchange_raw_symbol or inst_def.symbol,
-                                    instrument_type=inst_def.instrument_type,
-                                ),
+                            default_ccxt_symbol = service.ccxt_service.generate_default_ccxt_symbol(
+                                venue=venue,
+                                base_asset=inst_def.base_asset,
+                                quote_asset=inst_def.quote_asset,
+                                symbol_id=inst_def.exchange_raw_symbol or inst_def.symbol,
+                                instrument_type=inst_def.instrument_type,
                             )
                             ccxt_exchange_id = (
                                 cast(dict[str, str], getattr(service.venue_mapping, "venue_to_ccxt", {})).get(venue)
@@ -270,15 +324,17 @@ def fetch_defi_instruments(
                             if not inst_def.ccxt_exchange:
                                 inst_def.ccxt_exchange = ccxt_exchange_id
 
-                        manual_metadata = service._get_manual_ccxt_fallback(venue, inst_def.base_asset)  # pyright: ignore[reportPrivateUsage]
+                        manual_metadata = service.get_manual_ccxt_fallback(venue, inst_def.base_asset)
                         if manual_metadata:
                             if not inst_def.tick_size and manual_metadata.get("tick_size"):
-                                inst_def.tick_size = manual_metadata["tick_size"]
+                                inst_def.tick_size = str(cast(str | int | float, manual_metadata["tick_size"]))
                             if not inst_def.min_size and manual_metadata.get("min_size"):
-                                inst_def.min_size = manual_metadata["min_size"]
+                                inst_def.min_size = str(cast(str | int | float, manual_metadata["min_size"]))
                             if not inst_def.contract_size and manual_metadata.get("contract_size"):
                                 try:
-                                    inst_def.contract_size = float(manual_metadata["contract_size"])
+                                    inst_def.contract_size = float(
+                                        cast(str | int | float, manual_metadata["contract_size"])
+                                    )
                                 except (ValueError, TypeError):
                                     pass
                             logger.debug(

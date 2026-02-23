@@ -26,7 +26,8 @@ import os
 import sys
 from datetime import datetime, timedelta
 
-from unified_cloud_services import DatabentoBaseClient
+from unified_cloud_services import get_secret_with_fallback
+from unified_market_interface import DatabentoBaseClient
 
 
 def format_cost(cost_usd: float | None) -> str:
@@ -105,9 +106,18 @@ Examples:
     print(f"  Date:      {start_str} -> {end_str}")
     print(f"  Mode:      {'EXECUTE (will submit job)' if args.execute else 'DRY-RUN (estimate only)'}")
 
-    # Use env var API key if available, otherwise let base client resolve via Secret Manager
-    api_key = os.environ.get("DATABENTO_API_KEY")
-    base_client = DatabentoBaseClient(api_key=api_key)
+    # API key via get_secret_with_fallback (Secret Manager first, env fallback) per instruments-and-api-keys-standard
+    project_id = os.environ.get("GCP_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    api_key = (
+        get_secret_with_fallback(
+            secret_name="databento-api-key",
+            project_id=project_id or "",
+            fallback_env_var="DATABENTO_API_KEY",
+        )
+        if project_id
+        else None
+    )
+    base_client = DatabentoBaseClient(api_key=api_key, project_id=project_id)
 
     # Also get a raw db.Historical for metadata calls (cost estimate, billable size)
     raw_client = base_client.client
@@ -281,21 +291,32 @@ Examples:
     print(f"  Job ID:        {job_id}")
     print(f"  Actual cost:   {format_cost(actual_cost)}")
     print(f"  Billed size:   {actual_billed:,} bytes" if actual_billed else "  Billed size:   N/A")
-    print(
-        f"  Dataset:       {refreshed_job.get('dataset', 'N/A') if isinstance(refreshed_job, dict) else getattr(refreshed_job, 'dataset', 'N/A')}"
+    dataset_val = (
+        refreshed_job.get("dataset", "N/A")
+        if isinstance(refreshed_job, dict)
+        else getattr(refreshed_job, "dataset", "N/A")
     )
-    print(
-        f"  Schema:        {refreshed_job.get('schema', 'N/A') if isinstance(refreshed_job, dict) else getattr(refreshed_job, 'schema', 'N/A')}"
+    schema_val = (
+        refreshed_job.get("schema", "N/A")
+        if isinstance(refreshed_job, dict)
+        else getattr(refreshed_job, "schema", "N/A")
     )
-    print(
-        f"  Symbols:       {refreshed_job.get('symbols', 'N/A') if isinstance(refreshed_job, dict) else getattr(refreshed_job, 'symbols', 'N/A')}"
+    symbols_val = (
+        refreshed_job.get("symbols", "N/A")
+        if isinstance(refreshed_job, dict)
+        else getattr(refreshed_job, "symbols", "N/A")
     )
-    print(
-        f"  Start:         {refreshed_job.get('start', 'N/A') if isinstance(refreshed_job, dict) else getattr(refreshed_job, 'start', 'N/A')}"
+    start_val = (
+        refreshed_job.get("start", "N/A") if isinstance(refreshed_job, dict) else getattr(refreshed_job, "start", "N/A")
     )
-    print(
-        f"  End:           {refreshed_job.get('end', 'N/A') if isinstance(refreshed_job, dict) else getattr(refreshed_job, 'end', 'N/A')}"
+    end_val = (
+        refreshed_job.get("end", "N/A") if isinstance(refreshed_job, dict) else getattr(refreshed_job, "end", "N/A")
     )
+    print(f"  Dataset:       {dataset_val}")
+    print(f"  Schema:        {schema_val}")
+    print(f"  Symbols:       {symbols_val}")
+    print(f"  Start:         {start_val}")
+    print(f"  End:           {end_val}")
 
     # ---- Step 7: Summary ----
     print_separator("SUMMARY")
