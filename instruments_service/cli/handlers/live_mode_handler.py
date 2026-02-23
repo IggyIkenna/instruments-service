@@ -191,9 +191,16 @@ class LiveModeHandler(ModeHandler):
 
             if result.get("status") == "success":
                 total_instruments = 0
+                instruments_by_category_raw = result.get("instruments_by_category")
+                if instruments_by_category_raw is None:
+                    raise ValueError("instruments_by_category is required when status is success")
+                if not isinstance(instruments_by_category_raw, dict):
+                    raise TypeError(
+                        f"instruments_by_category must be dict, got {type(instruments_by_category_raw).__name__}"
+                    )
                 instruments_by_category: dict[str, pd.DataFrame] = cast(
                     dict[str, pd.DataFrame],
-                    result.get("instruments_by_category", {}),
+                    instruments_by_category_raw,
                 )
                 for category, instruments_df in instruments_by_category.items():
                     # Queue for async persistence (null check before .put())
