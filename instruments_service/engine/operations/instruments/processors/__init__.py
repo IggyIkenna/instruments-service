@@ -18,8 +18,8 @@ from instruments_service.engine.operations.instruments.processors.tradfi_process
 
 __all__ = [
     "BaseInstrumentProcessor",
-    "InstrumentProcessingConfig",
     "CeFiInstrumentProcessor",
-    "TradFiInstrumentProcessor",
     "DeFiInstrumentProcessor",
+    "InstrumentProcessingConfig",
+    "TradFiInstrumentProcessor",
 ]

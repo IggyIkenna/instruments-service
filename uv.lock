@@ -91,6 +91,26 @@ wheels = [
 ]
 
 [[package]]
+name = "api-contracts"
+version = "0.1.0"
+source = { directory = "../api-contracts" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "basedpyright", marker = "extra == 'dev'", specifier = ">=1.20.0,<2.0.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.1" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "requests", marker = "extra == 'dev'", specifier = ">=2.31.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.0" },
+    { name = "vcrpy", marker = "extra == 'dev'", specifier = ">=6.0.0" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "attrs"
 version = "25.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1046,7 +1066,7 @@ wheels = [
 
 [[package]]
 name = "instruments-service"
-version = "0.1.5"
+version = "0.1.9"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
@@ -2329,7 +2349,7 @@ wheels = [
 
 [[package]]
 name = "unified-cloud-services"
-version = "1.5.16"
+version = "1.5.17"
 source = { directory = "../unified-cloud-services" }
 dependencies = [
     { name = "fsspec" },
@@ -2354,6 +2374,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiobotocore", marker = "extra == 'aws'", specifier = ">=2.11.0,<3.0.0" },
+    { name = "basedpyright", marker = "extra == 'dev'", specifier = ">=1.20.0,<2.0.0" },
     { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.40.70,<2.0.0" },
     { name = "botocore", marker = "extra == 'aws'", specifier = ">=1.34.0,<2.0.0" },
     { name = "databento", marker = "extra == 'databento'", specifier = ">=0.40.0,<1.0.0" },
@@ -2377,7 +2398,6 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=23.0.0,<24.0.0" },
     { name = "pydantic", specifier = ">=2.12.5,<3.0.0" },
     { name = "pydantic-settings", specifier = ">=2.12.0,<3.0.0" },
-    { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.390,<2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.1,<10.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.0.0,<2.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.0.0,<8.0.0" },
@@ -2391,7 +2411,7 @@ requires-dist = [
     { name = "unified-config-interface", marker = "extra == 'split-libraries'", specifier = ">=0.1.0" },
     { name = "unified-events-interface", marker = "extra == 'split-libraries'", specifier = ">=0.1.0" },
     { name = "unified-market-interface", marker = "extra == 'split-libraries'", specifier = ">=0.1.0" },
-    { name = "unified-order-interface", marker = "extra == 'split-libraries'", specifier = ">=0.1.0" },
+    { name = "unified-trade-execution-interface", marker = "extra == 'split-libraries'", specifier = ">=0.1.0" },
     { name = "web3", specifier = ">=6.0.0,<7.0.0" },
 ]
 provides-extras = ["aws", "gcp", "databento", "split-libraries", "all", "dev"]
@@ -2410,14 +2430,15 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "basedpyright", marker = "extra == 'dev'", specifier = ">=1.20.0,<2.0.0" },
     { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.40.70,<2.0.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0,<4.0.0" },
     { name = "pydantic", specifier = ">=2.12.5,<3.0.0" },
     { name = "pydantic-settings", specifier = ">=2.12.0,<3.0.0" },
-    { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.390,<2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.1,<10.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.0.0,<2.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.0.0,<8.0.0" },
+    { name = "pytest-mock", marker = "extra == 'dev'", specifier = ">=3.12.0,<4.0.0" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.2.0,<3.0.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.5.0,<4.0.0" },
     { name = "python-dateutil", specifier = ">=2.8.2,<3.0.0" },
@@ -2429,7 +2450,7 @@ provides-extras = ["aws", "dev"]
 
 [[package]]
 name = "unified-domain-services"
-version = "0.1.6"
+version = "0.1.8"
 source = { directory = "../unified-domain-services" }
 dependencies = [
     { name = "pandas" },
@@ -2462,9 +2483,11 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "unified-events-interface"
-version = "0.1.0"
+version = "0.2.0"
 source = { directory = "../unified-events-interface" }
 dependencies = [
+    { name = "numpy" },
+    { name = "pandas" },
     { name = "pydantic" },
     { name = "python-dateutil" },
     { name = "unified-cloud-services" },
@@ -2473,9 +2496,12 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "basedpyright", marker = "extra == 'dev'", specifier = ">=1.20.0,<2.0.0" },
+    { name = "numpy", specifier = ">=2.1.0,<2.4.0" },
+    { name = "pandas", specifier = ">=2.2.3,<3.0.0" },
+    { name = "pandas-stubs", marker = "extra == 'dev'", specifier = ">=2.2.0,<3.0.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0,<4.0.0" },
     { name = "pydantic", specifier = ">=2.12.5,<3.0.0" },
-    { name = "pyright", marker = "extra == 'dev'", specifier = ">=1.1.390,<2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.1,<10.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=1.0.0,<2.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.0.0,<8.0.0" },
@@ -2494,6 +2520,7 @@ version = "0.4.0"
 source = { directory = "../unified-market-interface" }
 dependencies = [
     { name = "aiohttp" },
+    { name = "api-contracts" },
     { name = "boto3" },
     { name = "ccxt" },
     { name = "databento" },
@@ -2512,6 +2539,8 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9" },
+    { name = "api-contracts", directory = "../api-contracts" },
+    { name = "basedpyright", marker = "extra == 'dev'", specifier = ">=1.20.0,<2.0.0" },
     { name = "boto3", specifier = ">=1.34.0" },
     { name = "ccxt", specifier = ">=4.0" },
     { name = "databento", specifier = ">=0.32.0" },

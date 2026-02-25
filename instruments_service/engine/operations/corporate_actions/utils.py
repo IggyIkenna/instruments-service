@@ -6,7 +6,7 @@ Shared utility functions for corporate actions handlers.
 
 import logging
 from datetime import date
-from typing import Optional, cast
+from typing import cast
 
 import pandas as pd
 
@@ -22,7 +22,7 @@ def get_tradfi_bucket() -> str:
 
 def get_tickers_from_gcs(
     project_id: str,
-    reference_date: Optional[date] = None,
+    reference_date: date | None = None,
 ) -> list[str]:
     """
     Fetch equity tickers from GCS instruments store.

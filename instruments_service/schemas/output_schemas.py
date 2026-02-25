@@ -11,14 +11,13 @@ Categories:
 
 Usage:
     # from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
-    # from unified_cloud_services import ParquetSchemaEnforcer
+    # from unified_cloud_services import ParquetSchemaEnforcer  # TODO: Map to explicit import
     enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
     result = enforcer.validate_dataframe(df, {"category": "CEFI"})
 """
 
 from unified_cloud_services import ColumnSchema, SchemaDefinition
 
-# ==============================================================================
 # INSTRUMENTS OUTPUT SCHEMA
 # ==============================================================================
 # Defines all columns with dimension-aware nullability rules

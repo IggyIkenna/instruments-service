@@ -2,11 +2,8 @@
 Extended unit tests for configuration to increase coverage to 80%+.
 """
 
-from unified_config_interface import (
-    DataTypeConfig,
-    ExchangeInstrumentConfig,
-)
-from unified_market_interface.models.venue_config import VenueMapping
+from unified_config_interface import DataTypeConfig, ExchangeInstrumentConfig
+from unified_market_interface import VenueMapping
 
 from instruments_service.config import UnifiedInstrumentConfig
 

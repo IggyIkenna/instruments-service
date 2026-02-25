@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, cast
 
-from unified_market_interface.adapters.tradfi import DatabentoAdapter
+from unified_market_interface import DatabentoAdapter
 
 from instruments_service.engine.operations.instruments.processors.base_processor import BaseInstrumentProcessor
 from instruments_service.models import InstrumentDefinition
@@ -60,7 +60,7 @@ class TradFiInstrumentProcessor(BaseInstrumentProcessor):
         Raises:
             Exception: If API fetch fails after retries
         """
-        target_date_resolved = target_date or datetime.now(timezone.utc)
+        target_date_resolved = target_date or datetime.now(UTC)
 
         # Manual retry logic for type safety
         max_retries: int = self.processing_config.retry_max_attempts

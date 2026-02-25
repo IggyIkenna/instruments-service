@@ -20,7 +20,7 @@ __all__: list[str] = ["__version__"]
 def __getattr__(name: str) -> Any:  # type: ignore[reportAny]
     """Lazy import to avoid circular dependencies."""
     if name == "cli":
-        import instruments_service.cli  # noqa: F401
+        import instruments_service.cli
 
         return instruments_service.cli
     elif name == "InstrumentProcessingService":

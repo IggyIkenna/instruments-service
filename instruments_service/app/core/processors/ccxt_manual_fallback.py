@@ -34,7 +34,10 @@ def get_manual_ccxt_fallback(venue: str, base_asset: str) -> dict[str, str | flo
             "LINK": {"tick_size": "0.0001", "min_size": "cost_min:10.0", "contract_size": 1.0},
             "UNI": {"tick_size": "0.0001", "min_size": "cost_min:10.0", "contract_size": 1.0},
         }
-        return HYPERLIQUID_MANUAL_MAPPINGS.get(base_asset, {})
+        mapping_value = HYPERLIQUID_MANUAL_MAPPINGS.get(base_asset)
+        if mapping_value is None:
+            mapping_value = {}
+        return mapping_value
 
     if venue == "ASTER":
         ASTER_MANUAL_MAPPINGS: dict[str, dict[str, str | float | None]] = {
@@ -42,6 +45,9 @@ def get_manual_ccxt_fallback(venue: str, base_asset: str) -> dict[str, str | flo
             "ETH": {"tick_size": "0.01", "min_size": "0.001", "contract_size": None},
             "SOL": {"tick_size": "0.01", "min_size": "0.01", "contract_size": None},
         }
-        return ASTER_MANUAL_MAPPINGS.get(base_asset, {})
+        mapping_value = ASTER_MANUAL_MAPPINGS.get(base_asset)
+        if mapping_value is None:
+            mapping_value = {}
+        return mapping_value
 
     return {}

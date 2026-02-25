@@ -33,7 +33,10 @@ def _load_env_early():
             load_dotenv(dotenv_path=env_path, override=True)
 
             # Resolve relative GOOGLE_APPLICATION_CREDENTIALS path
-            creds_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+            from unified_config_interface import UnifiedCloudConfig
+
+            config = UnifiedCloudConfig()
+            creds_path = config.google_application_credentials or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
             if creds_path and not Path(creds_path).is_absolute():
                 abs_creds_path = (project_root / creds_path).resolve()
                 if abs_creds_path.exists():
@@ -56,6 +59,7 @@ def _load_env_early():
         ("GCP_PROJECT_ID", "test-project"),
         ("INSTRUMENTS_BIGQUERY_DATASET", "instruments_test"),
     ]:
+        # Use os.getenv here since this is test setup code and needs to check raw env vars
         if not (os.getenv(key) or "").strip():
             os.environ[key] = default
 
@@ -68,7 +72,6 @@ _load_env_early()
 # ============================================================================
 import json
 import logging
-from typing import Optional
 
 import pytest
 from unified_cloud_services import CloudTarget, get_secret_with_fallback, get_storage_client
@@ -78,7 +81,7 @@ from instruments_service.config import instruments_config
 logger = logging.getLogger(__name__)
 
 
-def get_config(key: str, default: Optional[str] = None) -> Optional[str]:
+def get_config(key: str, default: str | None = None) -> str | None:
     """
     Get configuration value from environment or instruments_config.
 
@@ -89,8 +92,12 @@ def get_config(key: str, default: Optional[str] = None) -> Optional[str]:
     Returns:
         Configuration value or default
     """
-    # First try environment variable
-    env_value = os.getenv(key)
+    # First try environment variable via config
+    from unified_config_interface import UnifiedCloudConfig
+
+    config = UnifiedCloudConfig()
+    # For test configuration, allow fallback to raw os.getenv
+    env_value = getattr(config, key.lower(), None) or os.getenv(key)
     if env_value is not None:
         return env_value
 
@@ -102,7 +109,7 @@ def get_config(key: str, default: Optional[str] = None) -> Optional[str]:
     return default
 
 
-def cred_file_exists() -> Optional[str]:
+def cred_file_exists() -> str | None:
     """Find GCP credentials file in common locations."""
     if os.path.exists(instruments_config.google_application_credentials_path):
         return instruments_config.google_application_credentials_path
@@ -142,10 +149,10 @@ def bigquery_dataset():
     return instruments_config.bigquery_dataset
 
 
-def get_service_account_email(credentials_file: str) -> Optional[str]:
+def get_service_account_email(credentials_file: str) -> str | None:
     """Extract service account email from credentials file."""
     try:
-        with open(credentials_file, "r") as f:
+        with open(credentials_file) as f:
             creds = json.load(f)
             return creds.get("client_email")
     except Exception:

@@ -5,8 +5,6 @@ Extracted from config.py per Task 1.1.1 (Issue #89), Task 1.1.2 (Issue #90).
 DeFi protocol configs per Task 1.1.3 (Issue #91).
 """
 
-from typing import Optional
-
 # Source: Wikipedia S&P 500 list + manual ETF additions
 # Last updated: 2026-01-31
 corporate_actions_start_date: str = "2020-01-01"
@@ -1086,7 +1084,7 @@ TRADFI_VENUE_MAPPINGS: list[dict[str, str | None]] = [
 
 # DeFi protocol configs (Issue #91)
 # Maps canonical venue keys to (protocol, chain) for TheGraph/subgraph adapters
-DEFI_VENUE_TO_PROTOCOL: dict[str, tuple[str, Optional[str]]] = {
+DEFI_VENUE_TO_PROTOCOL: dict[str, tuple[str, str | None]] = {
     "HYPERLIQUID": ("hyperliquid", None),
     "ASTER": ("aster", None),
     "UNISWAPV2-ETH": ("uniswap_v2", "ETHEREUM"),
@@ -1104,7 +1102,7 @@ DEFI_VENUE_TO_PROTOCOL: dict[str, tuple[str, Optional[str]]] = {
 }
 
 # All DeFi protocols to process when no venue filter is specified
-DEFI_PROTOCOLS: list[tuple[str, Optional[str]]] = [
+DEFI_PROTOCOLS: list[tuple[str, str | None]] = [
     ("uniswap_v2", "ETHEREUM"),
     ("uniswap_v3", "ETHEREUM"),
     ("uniswap_v4", "ETHEREUM"),

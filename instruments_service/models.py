@@ -9,4 +9,4 @@ from unified_config_interface import InstrumentType, Venue
 from unified_domain_services import InstrumentKey
 from unified_market_interface import InstrumentDefinition
 
-__all__ = ["InstrumentKey", "InstrumentDefinition", "Venue", "InstrumentType"]
+__all__ = ["InstrumentDefinition", "InstrumentKey", "InstrumentType", "Venue"]

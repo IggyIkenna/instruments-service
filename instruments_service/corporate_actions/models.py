@@ -6,14 +6,14 @@ These are reference data tied to equity instruments for price normalization.
 """
 
 import math
-from datetime import date, datetime, timezone
-from enum import Enum
-from typing import Optional, cast
+from datetime import UTC, date, datetime
+from enum import StrEnum
+from typing import cast
 
 from pydantic import BaseModel, Field, field_validator
 
 
-class CorporateActionType(str, Enum):
+class CorporateActionType(StrEnum):
     """Types of corporate actions."""
 
     DIVIDEND = "dividend"
@@ -22,7 +22,7 @@ class CorporateActionType(str, Enum):
     SPINOFF = "spinoff"
 
 
-class DividendType(str, Enum):
+class DividendType(StrEnum):
     """Types of dividends."""
 
     REGULAR = "regular"  # Normal quarterly/monthly dividend
@@ -43,19 +43,17 @@ class DividendRecord(BaseModel):
 
     ticker: str = Field(..., description="Stock ticker symbol (e.g., AAPL)")
     ex_date: date = Field(..., description="Ex-dividend date (date after which buyers don't receive dividend)")
-    pay_date: Optional[date] = Field(default=None, description="Payment date when dividend is distributed")
-    record_date: Optional[date] = Field(default=None, description="Record date for determining eligible shareholders")
-    declaration_date: Optional[date] = Field(default=None, description="Date dividend was announced")
+    pay_date: date | None = Field(default=None, description="Payment date when dividend is distributed")
+    record_date: date | None = Field(default=None, description="Record date for determining eligible shareholders")
+    declaration_date: date | None = Field(default=None, description="Date dividend was announced")
     amount: float = Field(..., ge=0, description="Dividend amount per share in USD")
     dividend_type: DividendType = Field(default=DividendType.UNSPECIFIED, description="Type of dividend")
     currency: str = Field(default="USD", description="Currency of dividend payment")
     source: str = Field(default="yfinance", description="Data source")
-    fetched_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc), description="When data was fetched"
-    )
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC), description="When data was fetched")
 
     # For canonical instrument key matching
-    instrument_key: Optional[str] = Field(default=None, description="Canonical instrument key (e.g., NYSE:EQUITY:AAPL)")
+    instrument_key: str | None = Field(default=None, description="Canonical instrument key (e.g., NYSE:EQUITY:AAPL)")
 
     @field_validator("ticker")
     @classmethod
@@ -110,12 +108,10 @@ class StockSplitRecord(BaseModel):
     split_from: int = Field(default=1, ge=1, description="Original share count (e.g., 1 in 4:1 split)")
     split_to: int = Field(default=1, ge=1, description="New share count (e.g., 4 in 4:1 split)")
     source: str = Field(default="yfinance", description="Data source")
-    fetched_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc), description="When data was fetched"
-    )
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC), description="When data was fetched")
 
     # For canonical instrument key matching
-    instrument_key: Optional[str] = Field(default=None, description="Canonical instrument key")
+    instrument_key: str | None = Field(default=None, description="Canonical instrument key")
 
     @field_validator("ticker")
     @classmethod
@@ -179,27 +175,27 @@ class EarningsRecord(BaseModel):
 
     ticker: str = Field(..., description="Stock ticker symbol (e.g., AAPL)")
     earnings_date: date = Field(..., description="Earnings announcement date")
-    earnings_time: Optional[str] = Field(
+    earnings_time: str | None = Field(
         default=None,
         description="Time of announcement: 'BMO' (before market open), 'AMC' (after market close), or None",
     )
-    fiscal_quarter: Optional[str] = Field(default=None, description="Fiscal quarter (e.g., 'Q1 2024')")
-    fiscal_year: Optional[int] = Field(default=None, description="Fiscal year")
-    reported_eps: Optional[float] = Field(default=None, description="Actual reported EPS")
-    estimated_eps: Optional[float] = Field(default=None, description="Consensus estimated EPS before announcement")
-    surprise_pct: Optional[float] = Field(
+    fiscal_quarter: str | None = Field(default=None, description="Fiscal quarter (e.g., 'Q1 2024')")
+    fiscal_year: int | None = Field(default=None, description="Fiscal year")
+    reported_eps: float | None = Field(default=None, description="Actual reported EPS")
+    estimated_eps: float | None = Field(default=None, description="Consensus estimated EPS before announcement")
+    surprise_pct: float | None = Field(
         default=None, description="Earnings surprise percentage ((actual-estimate)/estimate * 100)"
     )
-    revenue: Optional[float] = Field(default=None, description="Reported revenue in USD")
-    estimated_revenue: Optional[float] = Field(default=None, description="Estimated revenue in USD")
+    revenue: float | None = Field(default=None, description="Reported revenue in USD")
+    estimated_revenue: float | None = Field(default=None, description="Estimated revenue in USD")
     source: str = Field(default="yfinance", description="Data source")
     fetched_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
         description="When data was fetched",
     )
 
     # For canonical instrument key matching
-    instrument_key: Optional[str] = Field(default=None, description="Canonical instrument key")
+    instrument_key: str | None = Field(default=None, description="Canonical instrument key")
 
     @field_validator("ticker")
     @classmethod
@@ -253,7 +249,7 @@ class CorporateActionsBundle(BaseModel):
     earnings: list[EarningsRecord] = Field(default_factory=list, description="Earnings records")
     start_date: date = Field(..., description="Start of data range")
     end_date: date = Field(..., description="End of data range")
-    fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    fetched_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     source: str = Field(default="yfinance")
 
     @property

@@ -4,7 +4,7 @@ Unit tests for DateFilterService.
 Tests uniform date filtering logic for instruments.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -48,7 +48,7 @@ class TestDateFilterService:
 
     def test_filter_instruments_by_date_before_launch(self, date_filter_service, sample_instruments):
         """Test filtering instruments before launch date."""
-        target_date = datetime(2023, 6, 1, tzinfo=timezone.utc)
+        target_date = datetime(2023, 6, 1, tzinfo=UTC)
         filtered = date_filter_service.filter_instruments_by_date(
             instruments=sample_instruments,
             target_date=target_date,
@@ -63,7 +63,7 @@ class TestDateFilterService:
 
     def test_filter_instruments_by_date_after_launch(self, date_filter_service, sample_instruments):
         """Test filtering instruments after launch date."""
-        target_date = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        target_date = datetime(2024, 6, 1, tzinfo=UTC)
         filtered = date_filter_service.filter_instruments_by_date(
             instruments=sample_instruments,
             target_date=target_date,
@@ -84,7 +84,7 @@ class TestDateFilterService:
         }
 
         # Filter for date before protocol launch
-        target_date = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        target_date = datetime(2020, 1, 1, tzinfo=UTC)
         filtered = date_filter_service.filter_instruments_by_date(
             instruments=instruments,
             target_date=target_date,
@@ -117,14 +117,14 @@ class TestDateFilterService:
         """Test filtering empty instrument dictionary."""
         filtered = date_filter_service.filter_instruments_by_date(
             instruments={},
-            target_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+            target_date=datetime(2024, 1, 1, tzinfo=UTC),
         )
         assert filtered == {}
 
     def test_filter_timezone_aware_date(self, date_filter_service, sample_instruments):
         """Test filtering with timezone-aware dates."""
         # Test with timezone-aware date
-        target_date = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        target_date = datetime(2024, 6, 1, tzinfo=UTC)
         filtered = date_filter_service.filter_instruments_by_date(
             instruments=sample_instruments,
             target_date=target_date,

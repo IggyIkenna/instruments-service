@@ -6,13 +6,14 @@ that are not provided by upstream data adapters.
 """
 
 import logging
-from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Optional
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-def create_vix_instrument_definition(target_date: datetime) -> Dict[str, Any]:
+def create_vix_instrument_definition(target_date: datetime) -> dict[str, Any]:
     """
     Create VIX (Volatility Index) instrument definition.
 
@@ -29,7 +30,7 @@ def create_vix_instrument_definition(target_date: datetime) -> Dict[str, Any]:
     instrument_type = "INDEX"
     symbol_canonical = "VIX"
     instrument_key = f"{venue}:{instrument_type}:{symbol_canonical}"
-    available_from = datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat()
+    available_from = datetime(2020, 1, 1, tzinfo=UTC).isoformat()
 
     return {
         "instrument_key": instrument_key,
@@ -98,7 +99,7 @@ def create_vix_instrument_definition(target_date: datetime) -> Dict[str, Any]:
     }
 
 
-def create_krwusd_instrument_definition(target_date: datetime) -> Dict[str, Any]:
+def create_krwusd_instrument_definition(target_date: datetime) -> dict[str, Any]:
     """
     Create KRW/USD currency pair instrument definition.
 
@@ -118,7 +119,7 @@ def create_krwusd_instrument_definition(target_date: datetime) -> Dict[str, Any]
     quote_asset = "USD"
     symbol_canonical = f"{base_asset}-{quote_asset}"
     instrument_key = f"{venue}:{instrument_type}:{symbol_canonical}"
-    available_from = datetime(2020, 1, 1, tzinfo=timezone.utc).isoformat()
+    available_from = datetime(2020, 1, 1, tzinfo=UTC).isoformat()
 
     return {
         "instrument_key": instrument_key,
@@ -187,12 +188,12 @@ def create_krwusd_instrument_definition(target_date: datetime) -> Dict[str, Any]
     }
 
 
-def get_us_equity_trading_hours(venue: str, instrument_type: str, target_date: datetime) -> Dict[str, Any]:
+def get_us_equity_trading_hours(venue: str, instrument_type: str, target_date: datetime) -> dict[str, Any]:
     """Return US equity trading hours (9:30-16:00 ET) for NASDAQ/NYSE."""
     _ = (venue, instrument_type)
     target_date_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
     if target_date_start.tzinfo is None:
-        target_date_start = target_date_start.replace(tzinfo=timezone.utc)
+        target_date_start = target_date_start.replace(tzinfo=UTC)
     session_start = target_date_start.replace(hour=14, minute=30, second=0).isoformat()
     session_end = target_date_start.replace(hour=21, minute=0, second=0).isoformat()
     return {
@@ -214,8 +215,8 @@ def get_us_equity_trading_hours(venue: str, instrument_type: str, target_date: d
 def create_bitcoin_etf_instrument_definition(
     ticker: str,
     target_date: datetime,
-    get_exchange_trading_hours: Callable[[str, str, datetime], Dict[str, Any]],
-) -> Optional[Dict[str, Any]]:
+    get_exchange_trading_hours: Callable[[str, str, datetime], dict[str, Any]],
+) -> dict[str, Any] | None:
     """
     Create Bitcoin ETF instrument definition with full metadata.
 
@@ -253,7 +254,7 @@ def create_bitcoin_etf_instrument_definition(
     if not available_from:
         target_date_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
         if target_date_start.tzinfo is None:
-            target_date_start = target_date_start.replace(tzinfo=timezone.utc)
+            target_date_start = target_date_start.replace(tzinfo=UTC)
         available_from = target_date_start.isoformat()
     available_to = trading_hours.get("session_end_utc")
 

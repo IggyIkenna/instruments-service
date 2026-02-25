@@ -6,9 +6,8 @@ for Hyperliquid and Aster to CSV files.
 import csv
 import logging
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 import requests
 
@@ -22,7 +21,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 
-def find_earliest_available_data_hyperliquid(coin: str, max_days_back: int = 365) -> Optional[datetime]:
+def find_earliest_available_data_hyperliquid(coin: str, max_days_back: int = 365) -> datetime | None:
     """
     Find the earliest available data for a Hyperliquid coin by testing historical endpoints.
 
@@ -34,7 +33,7 @@ def find_earliest_available_data_hyperliquid(coin: str, max_days_back: int = 365
         Earliest available datetime or None
     """
     api_base_url = "https://api.hyperliquid.xyz"
-    end_date = datetime.now(timezone.utc)
+    end_date = datetime.now(UTC)
 
     # Binary search for earliest available data
     earliest_found = None
@@ -141,12 +140,12 @@ def download_hyperliquid_data_to_csv(coin: str, target_date: datetime, output_di
                             {
                                 "timestamp": candle.get("t") or "",
                                 "open_time": (
-                                    datetime.fromtimestamp(candle.get("t", 0) / 1000, tz=timezone.utc).isoformat()
+                                    datetime.fromtimestamp(candle.get("t", 0) / 1000, tz=UTC).isoformat()
                                     if candle.get("t")
                                     else ""
                                 ),
                                 "close_time": (
-                                    datetime.fromtimestamp(candle.get("T", 0) / 1000, tz=timezone.utc).isoformat()
+                                    datetime.fromtimestamp(candle.get("T", 0) / 1000, tz=UTC).isoformat()
                                     if candle.get("T")
                                     else ""
                                 ),
@@ -262,9 +261,7 @@ def download_aster_data_to_csv(symbol: str, target_date: datetime, output_dir: P
                     writer.writeheader()
                     for trade in trades:
                         trade_time = (
-                            datetime.fromtimestamp(trade.get("time", 0) / 1000, tz=timezone.utc)
-                            if trade.get("time")
-                            else None
+                            datetime.fromtimestamp(trade.get("time", 0) / 1000, tz=UTC) if trade.get("time") else None
                         )
                         writer.writerow(
                             {
@@ -400,7 +397,7 @@ def main():
     logger.info("Downloading Sample Data (Last 24 Hours)")
     logger.info("=" * 80)
 
-    target_date = datetime.now(timezone.utc) - timedelta(days=1)
+    target_date = datetime.now(UTC) - timedelta(days=1)
 
     # Hyperliquid sample
     if hl_perpetuals:

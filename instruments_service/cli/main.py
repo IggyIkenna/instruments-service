@@ -10,6 +10,7 @@ Query functionality has been moved to unified-cloud-services.
 Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 """
 
+import contextlib
 import logging
 import sys
 from pathlib import Path
@@ -40,7 +41,7 @@ from unified_events_interface import log_event, setup_events
 
 setup_events(mode="batch", service_name="instruments-service")
 
-from unified_cloud_services.core.signal_handler import GracefulShutdownHandler
+from unified_cloud_services import GracefulShutdownHandler
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ from instruments_service.config import instruments_config
 try:
     import unified_cloud_services.core.market_category as market_category_module
 
-    setattr(market_category_module, "unified_config", instruments_config)
+    market_category_module.unified_config = instruments_config
     logger.info("✅ Patched unified_cloud_services config with instruments_config")
 except ImportError:
     logger.warning("⚠️ Could not patch unified_cloud_services config (module not found)")
@@ -89,10 +90,8 @@ def main() -> dict[str, HandlerResultValue]:
 
         nonlocal mode_handler
         if mode_handler is not None:
-            try:
+            with contextlib.suppress(RuntimeError, OSError, ValueError):
                 mode_handler.cleanup()
-            except Exception:
-                pass  # Suppress all errors during shutdown
 
     # Initialize graceful shutdown handler (handles SIGTERM/SIGINT)
     _shutdown_handler = GracefulShutdownHandler(cleanup_callback=cleanup_on_signal)

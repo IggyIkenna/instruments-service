@@ -11,7 +11,7 @@ Complies with:
 """
 
 import logging
-from typing import Optional, Protocol
+from typing import Protocol
 
 from unified_cloud_services import get_secret_with_fallback
 from unified_market_interface import DataSourceMapping
@@ -21,7 +21,7 @@ from instruments_service.config import instruments_config
 logger = logging.getLogger(__name__)
 
 
-def validate_required_api_keys(venues: list[str], project_id: Optional[str] = None) -> dict[str, str]:
+def validate_required_api_keys(venues: list[str], project_id: str | None = None) -> dict[str, str]:
     """
     Validate and fetch API keys for requested venues only.
 

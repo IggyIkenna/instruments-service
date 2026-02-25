@@ -17,6 +17,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from unified_config_interface import UnifiedCloudConfig
+
 # Load .env file if it exists (for local development)
 # This allows GH_PAT to be stored in .env instead of environment variables
 try:
@@ -42,8 +44,9 @@ def configure_git_credentials() -> None:
     hardcoding tokens in the URLs. When pip installs dependencies from
     pyproject.toml, git will use these credentials.
     """
-    github_token = os.getenv("GITHUB_TOKEN")
-    gh_pat = os.getenv("GH_PAT")
+    config = UnifiedCloudConfig()
+    github_token = getattr(config, "github_token", None) or os.getenv("GITHUB_TOKEN")
+    gh_pat = getattr(config, "gh_pat", None) or os.getenv("GH_PAT")
     token = github_token or gh_pat
 
     if token:
@@ -157,7 +160,7 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
     ]
 
     all_deps = dependencies_to_install + dev_dependencies
-    cmd = [sys.executable, "-m", "pip", "install"] + all_deps
+    cmd = [sys.executable, "-m", "pip", "install", *all_deps]
     result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
 
     if result.returncode != 0:
@@ -206,7 +209,10 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
 
     # Try GitHub Packages (always attempted if not installed yet)
     if not installed:
-        gh_pat = os.getenv("GH_PAT") or os.getenv("GITHUB_TOKEN")
+        config = UnifiedCloudConfig()
+        github_token = getattr(config, "github_token", None) or os.getenv("GITHUB_TOKEN")
+        gh_pat = getattr(config, "gh_pat", None) or os.getenv("GH_PAT")
+        gh_pat = gh_pat or github_token
         if gh_pat:
             print("\n📦 Attempting GitHub Packages installation...")
             # Use __token__ format for GitHub Packages (more secure)
@@ -230,8 +236,8 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
                     print(f"   Error: {result.stderr[:300]}")
                 # Check if package exists at all
                 if "Could not find a version" in result.stderr:
-                    print("   ℹ️  Package may not be published to GitHub Packages yet")
-                    print("   ℹ️  Run the publish workflow in unified-cloud-services repository")
+                    print("   [i]  Package may not be published to GitHub Packages yet")
+                    print("   [i]  Run the publish workflow in unified-cloud-services repository")
         else:
             print("⚠️  Skipping GitHub Packages (GH_PAT or GITHUB_TOKEN not set)")
 
@@ -239,8 +245,9 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
     if not installed:
         # Prioritize GITHUB_TOKEN (automatically available in GitHub Actions)
         # Fall back to GH_PAT (for local development or custom tokens)
-        github_token = os.getenv("GITHUB_TOKEN")
-        gh_pat = os.getenv("GH_PAT")
+        config = UnifiedCloudConfig()
+        github_token = getattr(config, "github_token", None) or os.getenv("GITHUB_TOKEN")
+        gh_pat = getattr(config, "gh_pat", None) or os.getenv("GH_PAT")
         token = github_token or gh_pat
 
         if token:
@@ -269,7 +276,10 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
                     print(f"   Output: {result.stdout[:300]}")
 
                 # Additional debugging in CI
-                is_ci = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
+                config = UnifiedCloudConfig()
+                ci_env = getattr(config, "ci", None) or os.getenv("CI")
+                github_actions_env = getattr(config, "github_actions", None) or os.getenv("GITHUB_ACTIONS")
+                is_ci = ci_env == "true" or github_actions_env == "true"
                 if is_ci:
                     print(f"   Debug: GITHUB_TOKEN={'set' if github_token else 'not set'}")
                     print(f"   Debug: GH_PAT={'set' if gh_pat else 'not set'}")
@@ -281,7 +291,10 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
     if not installed:
         # In CI/CD (GitHub Actions), fail if installation fails
         # Locally, warn but continue (for development flexibility)
-        is_ci = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
+        config = UnifiedCloudConfig()
+        ci_env = getattr(config, "ci", None) or os.getenv("CI")
+        github_actions_env = getattr(config, "github_actions", None) or os.getenv("GITHUB_ACTIONS")
+        is_ci = ci_env == "true" or github_actions_env == "true"
 
         print("\n" + "=" * 70)
         if is_ci:
@@ -451,7 +464,7 @@ def run_tests_with_coverage(coverage_threshold: int = 50) -> dict:
 
     if coverage_file.exists():
         try:
-            with open(coverage_file, "r") as f:
+            with open(coverage_file) as f:
                 coverage_data = json.load(f)
                 coverage_percent = coverage_data.get("totals", {}).get("percent_covered", 0.0)
         except (json.JSONDecodeError, KeyError) as e:

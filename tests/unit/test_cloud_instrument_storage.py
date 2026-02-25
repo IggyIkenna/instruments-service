@@ -2,7 +2,7 @@
 Tests for CloudInstrumentStorage to increase coverage.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 import pandas as pd
@@ -167,7 +167,7 @@ class TestCloudInstrumentStorage:
                 "available_from_datetime": ["2024-01-01T00:00:00Z"],
             }
         )
-        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date = datetime(2024, 1, 1, tzinfo=UTC)
 
         result = storage.store_instruments(df, table_name="instruments", date=date)
 
@@ -321,12 +321,14 @@ class TestCloudInstrumentStorage:
     def test_init_import_error(self):
         """Test initialization when unified-cloud-services not available."""
         # Mock the imports to simulate ImportError scenario
-        with patch(
-            "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
-            side_effect=ImportError("unified-cloud-services not available"),
+        with (
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
+                side_effect=ImportError("unified-cloud-services not available"),
+            ),
+            pytest.raises(ImportError, match="unified-cloud-services not available"),
         ):
-            with pytest.raises(ImportError, match="unified-cloud-services not available"):
-                CloudInstrumentStorage()
+            CloudInstrumentStorage()
 
     def test_store_instruments_date_extraction_fallback(self, storage, mock_cloud_service):
         """Test storing instruments with date extraction fallback."""
@@ -406,7 +408,7 @@ class TestCloudInstrumentStorage:
                 ],
             }
         )
-        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date = datetime(2024, 1, 1, tzinfo=UTC)
 
         result = storage.store_instruments(df, table_name="instruments", date=date)
 
@@ -436,7 +438,7 @@ class TestCloudInstrumentStorage:
                 "available_from_datetime": ["2024-01-01T00:00:00Z"],
             }
         )
-        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date = datetime(2024, 1, 1, tzinfo=UTC)
 
         result = storage.store_instruments(df, table_name="instruments", date=date)
 
@@ -462,7 +464,7 @@ class TestCloudInstrumentStorage:
                 "available_from_datetime": ["2024-01-01T00:00:00Z"],
             }
         )
-        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date = datetime(2024, 1, 1, tzinfo=UTC)
 
         result = storage.store_instruments(df, table_name="instruments", date=date)
 

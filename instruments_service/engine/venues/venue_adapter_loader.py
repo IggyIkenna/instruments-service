@@ -13,8 +13,7 @@ Complies with:
 import logging
 from typing import Protocol
 
-from unified_market_interface import DataSourceMapping
-from unified_market_interface.adapters.tradfi import YahooFinanceAdapter
+from unified_market_interface import DataSourceMapping, YahooFinanceAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +60,13 @@ def get_adapter_for_venue(venue: str, api_keys: dict[str, str] | None = None) ->
 
     try:
         if data_source == "tardis":
-            from unified_market_interface.adapters.tradfi import TardisAdapter
+            from unified_market_interface import TardisAdapter
 
             api_key = api_keys.get("tardis") if api_keys else None
             adapter = TardisAdapter(api_key=api_key)
 
         elif data_source == "databento":
-            from unified_market_interface.adapters.tradfi import DatabentoAdapter
+            from unified_market_interface import DatabentoAdapter
 
             api_key = api_keys.get("databento") if api_keys else None
             adapter = DatabentoAdapter(api_key=api_key)
@@ -79,8 +78,7 @@ def get_adapter_for_venue(venue: str, api_keys: dict[str, str] | None = None) ->
             )
 
         elif data_source == "hyperliquid":
-            from unified_market_interface import HyperliquidBaseClient
-            from unified_market_interface.adapters.onchain_perps import HyperliquidAdapter
+            from unified_market_interface import HyperliquidAdapter, HyperliquidBaseClient
 
             adapter = HyperliquidAdapter(base_client=HyperliquidBaseClient())
 
@@ -119,51 +117,51 @@ def _load_defi_adapter(venue: str, api_keys: dict[str, str] | None) -> DataSourc
     venue_upper = venue.upper()
 
     if venue_upper == "UNISWAP-V2":
-        from unified_market_interface.adapters.defi import UniswapV2Adapter
+        from unified_market_interface import UniswapV2Adapter
 
         return UniswapV2Adapter()
     elif venue_upper == "UNISWAP-V3":
-        from unified_market_interface.adapters.defi import UniswapV3Adapter
+        from unified_market_interface import UniswapV3Adapter
 
         return UniswapV3Adapter()
     elif venue_upper == "UNISWAP-V4":
-        from unified_market_interface.adapters.defi import UniswapV4Adapter
+        from unified_market_interface import UniswapV4Adapter
 
         return UniswapV4Adapter()
     elif venue_upper == "AAVE-V3":
-        from unified_market_interface.adapters.defi import AaveV3Adapter
+        from unified_market_interface import AaveV3Adapter
 
         return AaveV3Adapter()
     elif venue_upper == "CURVE":
-        from unified_market_interface.adapters.defi import CurveAdapter
+        from unified_market_interface import CurveAdapter
 
         return CurveAdapter()
     elif venue_upper == "BALANCER":
-        from unified_market_interface.adapters.defi import BalancerAdapter
+        from unified_market_interface import BalancerAdapter
 
         return BalancerAdapter()
     elif venue_upper == "MORPHO":
-        from unified_market_interface.adapters.defi import MorphoAdapter
+        from unified_market_interface import MorphoAdapter
 
         return MorphoAdapter()
     elif venue_upper == "EULER":
-        from unified_market_interface.adapters.defi import EulerAdapter
+        from unified_market_interface import EulerAdapter
 
         return EulerAdapter()
     elif venue_upper == "FLUID":
-        from unified_market_interface.adapters.defi import FluidAdapter
+        from unified_market_interface import FluidAdapter
 
         return FluidAdapter()
     elif venue_upper == "LIDO":
-        from unified_market_interface.adapters.defi import LidoAdapter
+        from unified_market_interface import LidoAdapter
 
         return LidoAdapter()
     elif venue_upper == "ETHERFI":
-        from unified_market_interface.adapters.defi import EtherFiAdapter
+        from unified_market_interface import EtherFiAdapter
 
         return EtherFiAdapter()
     elif venue_upper == "ETHENA":
-        from unified_market_interface.adapters.defi import EthenaAdapter
+        from unified_market_interface import EthenaAdapter
 
         return EthenaAdapter()
     else:

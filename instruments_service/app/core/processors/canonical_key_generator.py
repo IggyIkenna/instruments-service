@@ -8,7 +8,7 @@ Extracted from InstrumentProcessingService.generate_canonical_key.
 import logging
 import re
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 if TYPE_CHECKING:
     from unified_config_interface import DataTypeConfig, ExchangeInstrumentConfig
@@ -22,7 +22,7 @@ class CanonicalKeyServiceProtocol(Protocol):
     def normalize_venue(self, exchange: str) -> str | None: ...
     def normalize_instrument_type(self, symbol_type: str) -> str | None: ...
     def parse_symbol_components(self, symbol_id: str, exchange: str) -> dict[str, Any]: ...
-    def parse_expiry_from_symbol(self, symbol_id: str, exchange: str) -> Optional[str]: ...
+    def parse_expiry_from_symbol(self, symbol_id: str, exchange: str) -> str | None: ...
     def parse_option_components(self, symbol_id: str, exchange: str) -> dict[str, Any]: ...
 
     exchange_config: "ExchangeInstrumentConfig"
@@ -35,7 +35,7 @@ def generate_canonical_key(
     symbol_type: str,
     symbol_id: str,
     symbol_info: dict[str, Any],
-) -> Optional[str]:
+) -> str | None:
     """
     Generate canonical instrument key following INSTRUMENT_KEY.md specification.
 

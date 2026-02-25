@@ -2,7 +2,7 @@
 Tests for CloudDataProvider to increase coverage.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 import pandas as pd
@@ -80,7 +80,7 @@ class TestCloudDataProvider:
 
     def test_get_instruments_from_gcs_success(self, provider, mock_cloud_service):
         """Test getting instruments from GCS successfully."""
-        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date = datetime(2024, 1, 1, tzinfo=UTC)
 
         result = provider.get_instruments_from_gcs(date)
 
@@ -90,7 +90,7 @@ class TestCloudDataProvider:
 
     def test_get_instruments_from_gcs_custom_path(self, provider, mock_cloud_service):
         """Test getting instruments from GCS with custom path."""
-        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date = datetime(2024, 1, 1, tzinfo=UTC)
         custom_path = "custom/path/instruments.parquet"
 
         result = provider.get_instruments_from_gcs(date, gcs_path=custom_path)
@@ -103,7 +103,7 @@ class TestCloudDataProvider:
     def test_get_instruments_from_gcs_empty(self, provider, mock_cloud_service):
         """Test getting instruments from GCS when empty."""
         mock_cloud_service.download_from_gcs.return_value = pd.DataFrame()
-        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date = datetime(2024, 1, 1, tzinfo=UTC)
 
         result = provider.get_instruments_from_gcs(date)
 
@@ -113,7 +113,7 @@ class TestCloudDataProvider:
     def test_get_instruments_from_gcs_exception(self, provider, mock_cloud_service):
         """Test getting instruments from GCS with exception."""
         mock_cloud_service.download_from_gcs.side_effect = Exception("Download error")
-        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date = datetime(2024, 1, 1, tzinfo=UTC)
 
         result = provider.get_instruments_from_gcs(date)
 
@@ -148,7 +148,7 @@ class TestCloudDataProvider:
 
     def test_check_instruments_exist_true(self, provider, mock_cloud_service):
         """Test checking if instruments exist when they do."""
-        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date = datetime(2024, 1, 1, tzinfo=UTC)
 
         # Mock get_instruments_from_category since check_instruments_exist creates
         # new cloud services for each category, bypassing the fixture mock
@@ -163,7 +163,7 @@ class TestCloudDataProvider:
     def test_check_instruments_exist_false(self, provider, mock_cloud_service):
         """Test checking if instruments exist when they don't."""
         mock_cloud_service.download_from_gcs.return_value = pd.DataFrame()
-        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date = datetime(2024, 1, 1, tzinfo=UTC)
 
         result = provider.check_instruments_exist(date)
 
@@ -172,7 +172,7 @@ class TestCloudDataProvider:
     def test_check_instruments_exist_exception(self, provider, mock_cloud_service):
         """Test checking if instruments exist with exception."""
         mock_cloud_service.download_from_gcs.side_effect = Exception("Download error")
-        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date = datetime(2024, 1, 1, tzinfo=UTC)
 
         result = provider.check_instruments_exist(date)
 

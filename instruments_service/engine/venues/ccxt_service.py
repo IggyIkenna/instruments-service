@@ -12,13 +12,13 @@ Used by:
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Optional, cast
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any, cast
 
 import ccxt
 
 if TYPE_CHECKING:
-    from unified_market_interface.models.venue_config import VenueMapping
+    from unified_market_interface import VenueMapping
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +208,7 @@ class CCXTService:
             }
 
             self._markets_cache[cache_key] = ccxt_data
-            self._cache_timestamps[cache_key] = datetime.now(timezone.utc)
+            self._cache_timestamps[cache_key] = datetime.now(UTC)
 
             return ccxt_data
 
@@ -222,8 +222,8 @@ class CCXTService:
         base_asset: str,
         quote_asset: str,
         symbol_id: str,
-        tardis_symbol: Optional[str] = None,
-        instrument_type: Optional[str] = None,
+        tardis_symbol: str | None = None,
+        instrument_type: str | None = None,
     ) -> list[str]:
         """
         Build possible CCXT symbol formats for a venue.
@@ -409,7 +409,7 @@ class CCXTService:
         base_asset: str,
         quote_asset: str,
         symbol_id: str,
-        instrument_type: Optional[str] = None,
+        instrument_type: str | None = None,
     ) -> str:
         """
         Generate default CCXT symbol format when markets aren't available.
@@ -446,11 +446,9 @@ class CCXTService:
             elif instrument_type in ["PERPETUAL", "FUTURE"]:
                 return f"{base_asset}/{quote_asset}:{quote_asset}"
             return f"{base_asset}/{quote_asset}"
-        elif venue == "BYBIT" and base_asset and quote_asset:
-            if instrument_type in ["PERPETUAL", "FUTURE"]:
-                return f"{base_asset}/{quote_asset}:{quote_asset}"
-            return f"{base_asset}/{quote_asset}"
-        elif venue == "HYPERLIQUID" and base_asset and quote_asset:
+        elif (venue == "BYBIT" and base_asset and quote_asset) or (
+            venue == "HYPERLIQUID" and base_asset and quote_asset
+        ):
             if instrument_type in ["PERPETUAL", "FUTURE"]:
                 return f"{base_asset}/{quote_asset}:{quote_asset}"
             return f"{base_asset}/{quote_asset}"
@@ -468,8 +466,8 @@ class CCXTService:
         base_asset: str,
         quote_asset: str,
         symbol_id: str,
-        tardis_symbol: Optional[str] = None,
-        instrument_type: Optional[str] = None,
+        tardis_symbol: str | None = None,
+        instrument_type: str | None = None,
     ) -> CCXTMetadata:
         """
         Get CCXT metadata (tick_size, min_size, contract_size) for an instrument.
@@ -595,8 +593,8 @@ class CCXTService:
         base_asset: str,
         quote_asset: str,
         symbol_id: str,
-        tardis_symbol: Optional[str] = None,
-        instrument_type: Optional[str] = None,
+        tardis_symbol: str | None = None,
+        instrument_type: str | None = None,
     ) -> CCXTMetadata:
         """
         Get leverage limits and risk parameters from CCXT leverage tiers.
@@ -668,7 +666,7 @@ class CCXTService:
                 try:
                     tiers = cast(
                         list[dict[str, Any]],
-                        getattr(exchange, "fetchMarketLeverageTiers")(symbol_format),  # type: ignore[reportAny]
+                        exchange.fetchMarketLeverageTiers(symbol_format),  # type: ignore[reportAny]
                     )
                     if tiers:
                         leverage_tiers = tiers
@@ -839,10 +837,10 @@ class CCXTService:
         if cache_key not in self._cache_timestamps:
             return False
 
-        cache_age = datetime.now(timezone.utc) - self._cache_timestamps[cache_key]
+        cache_age = datetime.now(UTC) - self._cache_timestamps[cache_key]
         return cache_age < timedelta(hours=self.cache_ttl_hours)
 
-    def clear_cache(self, venue: Optional[str] = None):
+    def clear_cache(self, venue: str | None = None):
         """
         Clear cache for a venue or all venues.
 

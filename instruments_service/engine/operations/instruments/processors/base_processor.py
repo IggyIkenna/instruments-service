@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from unified_config_interface import DataTypeConfig, ExchangeInstrumentConfig, VenueMapping
-from unified_domain_services.instrument_date_filter import DateFilterService
+from unified_domain_services import DateFilterService
 from unified_market_interface import SubgraphService
-from unified_market_interface.models.venue_config import VenueMapping as UMI_VenueMapping
+from unified_market_interface import VenueMapping as UMI_VenueMapping
 
 from instruments_service.config import instruments_config
 from instruments_service.engine.processors.symbol_parser import SymbolParser
@@ -190,7 +190,7 @@ class BaseInstrumentProcessor:
         """
         if self.processing_config.enable_metadata_caching:
             self._metadata_cache[instrument_key] = metadata
-            self._cache_timestamps[instrument_key] = datetime.now(timezone.utc)
+            self._cache_timestamps[instrument_key] = datetime.now(UTC)
 
     def get_processing_stats(self) -> dict[str, Any]:
         """Get current processing statistics for monitoring"""
