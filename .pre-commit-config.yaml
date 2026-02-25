@@ -13,6 +13,17 @@ repos:
         pass_filenames: false
         always_run: true
 
+  # Import pattern checker
+  - repo: local
+    hooks:
+      - id: check-import-patterns
+        name: Check external import patterns
+        entry: python3 .cursor/scripts/check-import-patterns.py
+        language: python
+        files: \.py$
+        pass_filenames: false
+        stages: [commit]
+
   # Ruff - Fast Python linter AND formatter
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.0
