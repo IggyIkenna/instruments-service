@@ -152,7 +152,7 @@ class AggregateHandler(ModeHandler):
         self,
         client: object,
         bucket_name: str,
-        project_id: str,  # noqa: ARG002
+        project_id: str,
     ) -> pd.DataFrame:
         """Load previous day's data and merge with existing aggregated file (delta-only)."""
         yesterday = (date.today() - timedelta(days=1)).isoformat()

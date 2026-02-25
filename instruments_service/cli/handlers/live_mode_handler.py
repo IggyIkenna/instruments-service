@@ -14,7 +14,7 @@ Per codex:
 import asyncio
 import logging
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from queue import Queue
 from typing import Any, TypedDict, cast
 
@@ -22,11 +22,8 @@ import pandas as pd
 
 # Unified cloud services (cloud-agnostic)
 from unified_cloud_services import upload_to_storage
-
-# Split libraries (per codex: direct import, no fallback)
 from unified_events_interface import JsonValue, log_event, publish_coordination_event, setup_events
 
-# Service imports
 from instruments_service.app.core.instruments_service import InstrumentsService
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.config import get_config
@@ -142,7 +139,7 @@ class LiveModeHandler(ModeHandler):
                 await asyncio.sleep(sleep_seconds)
 
                 # Verify alignment
-                actual_time = datetime.now(timezone.utc)
+                actual_time = datetime.now(UTC)
                 cycle_count += 1
 
                 log_event(
@@ -253,7 +250,7 @@ class LiveModeHandler(ModeHandler):
 
     def _calculate_next_aligned_time(self, interval_minutes: int = 15) -> tuple[float, datetime]:
         """Calculate sleep until next wall clock aligned timestamp."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         current_minute = now.minute
         minutes_to_next = interval_minutes - (current_minute % interval_minutes)
 

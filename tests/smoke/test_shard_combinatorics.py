@@ -1,7 +1,7 @@
 """
 Shard Combinatorics Smoke Test for instruments-service
 
-This test verifies that all valid category×venue combinations can be enumerated
+This test verifies that all valid category x venue combinations can be enumerated
 and that the ShardCalculator correctly filters by venue start dates.
 
 Run with: pytest tests/smoke/test_shard_combinatorics.py -v
@@ -37,7 +37,7 @@ if DEPLOYMENT_PATH.exists():
 # Skip if deployment package not available
 pytest.importorskip("unified_trading_deployment")
 
-from unified_trading_deployment import (  # noqa: E402
+from unified_trading_deployment import (
     ShardCalculator,
     ShardCombinatoricsGenerator,
     SmokeTestRunner,

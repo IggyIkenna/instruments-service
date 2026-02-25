@@ -11,7 +11,6 @@ This file contains TradFiInstrument dataclass for static TradFi instrument confi
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Tuple
 
 # Import from unified-cloud-services (required dependency)
 from instruments_service.config.instrument_definitions import (
@@ -156,10 +155,10 @@ NASDAQ_TICKERS = [
 # ============================================================================
 
 # Caches for loaded data (for backward compatibility)
-_sp500_tickers_cache: Optional[list[str]] = None
-_nasdaq_tickers_cache: Optional[list[str]] = None
-_tradfi_instruments_cache: Optional[list[dict[str, str | None]]] = None
-_exchange_code_to_name_cache: Optional[dict[str, str]] = None
+_sp500_tickers_cache: list[str] | None = None
+_nasdaq_tickers_cache: list[str] | None = None
+_tradfi_instruments_cache: list[dict[str, str | None]] | None = None
+_exchange_code_to_name_cache: dict[str, str] | None = None
 
 
 def _get_data_dir() -> Path:
@@ -415,10 +414,10 @@ class TradFiInstrument:
     instrument_type: str  # "FUTURE", "EQUITY", "OPTION", "ETF"
     dataset: str  # Databento dataset (e.g., "GLBX.MDP3", "DBEQ.BASIC")
     stype_in: str  # "parent" for futures/options, "raw_symbol" for equities/ETFs
-    base_asset: Optional[str] = None  # Human-readable base asset name
+    base_asset: str | None = None  # Human-readable base asset name
     quote_asset: str = "USD"  # Quote currency (default USD for TradFi)
-    exchange_code: Optional[str] = None  # Databento exchange code (e.g., "ES", "CL")
-    underlying: Optional[str] = None  # Underlying asset (e.g., "BTC" for Bitcoin ETFs)
+    exchange_code: str | None = None  # Databento exchange code (e.g., "ES", "CL")
+    underlying: str | None = None  # Underlying asset (e.g., "BTC" for Bitcoin ETFs)
 
 
 # Backward compatibility alias
@@ -435,8 +434,8 @@ class UnifiedInstrumentConfig:
     """
 
     # Cached instruments loaded from JSON (initialized lazily)
-    _instruments: Optional[list[TradFiInstrument]] = field(default=None, repr=False)
-    _exchange_code_to_name: Optional[dict[str, str]] = field(default=None, repr=False)
+    _instruments: list[TradFiInstrument] | None = field(default=None, repr=False)
+    _exchange_code_to_name: dict[str, str] | None = field(default=None, repr=False)
 
     def __post_init__(self):
         """Load instruments from JSON on first access."""
@@ -497,7 +496,7 @@ class UnifiedInstrumentConfig:
         all_insts = self.get_all_instruments()
         return [inst.symbol for inst in all_insts if inst.instrument_type == instrument_type.upper()]
 
-    def get_dataset_and_stype(self, symbol: str) -> Optional[Tuple[str, str]]:
+    def get_dataset_and_stype(self, symbol: str) -> tuple[str, str] | None:
         """Get dataset and stype_in for a symbol"""
         all_insts = self.get_all_instruments()
         for inst in all_insts:
@@ -505,13 +504,12 @@ class UnifiedInstrumentConfig:
                 return (inst.dataset, inst.stype_in)
         return None
 
-    def get_instrument(self, symbol: str, venue: Optional[str] = None) -> Optional[InstrumentDefinition]:
+    def get_instrument(self, symbol: str, venue: str | None = None) -> InstrumentDefinition | None:
         """Get instrument definition by symbol (optionally filtered by venue)"""
         all_insts = self.get_all_instruments()
         for inst in all_insts:
-            if inst.symbol == symbol:
-                if venue is None or inst.venue == venue.upper():
-                    return inst
+            if inst.symbol == symbol and (venue is None or inst.venue == venue.upper()):
+                return inst
         return None
 
     def get_human_readable_name(self, exchange_code: str) -> str:

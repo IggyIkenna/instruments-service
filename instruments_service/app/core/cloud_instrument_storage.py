@@ -9,36 +9,36 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from datetime import date as date_type
 from typing import Any, cast
 
 import pandas as pd
 from unified_cloud_services import (
     CloudTarget,
+    CSVSampler,
     ParquetSchemaEnforcer,
     SchemaValidationResult,
     StandardizedDomainCloudService,
+    create_sampling_service,
     determine_market_category,
     handle_storage_errors,
 )
 from unified_domain_services import validate_timestamp_date_alignment
 
 from instruments_service.config import instruments_config
+from instruments_service.schemas.parquet import get_required_columns
+
+try:
+    from api_contracts.domain_config import DomainConfigProtocol
+except ImportError:
+    DomainConfigProtocol = None
 from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
 
 logger = logging.getLogger(__name__)
 
 UNIFIED_CLOUD_SERVICES_AVAILABLE = True
-
-# Import centralized sampling service from unified-cloud-services
-_sampling_available = False
-try:
-    from unified_cloud_services import create_sampling_service
-
-    _sampling_available = True
-except ImportError:
-    logger.debug("Sampling service not available")
-SAMPLING_SERVICE_AVAILABLE = _sampling_available
+SAMPLING_SERVICE_AVAILABLE = True
 
 
 class CloudInstrumentStorage:
@@ -50,8 +50,13 @@ class CloudInstrumentStorage:
     Per unified architecture plan specification.
     """
 
-    def __init__(self, cloud_target: CloudTarget | None = None):
-        """Initialize cloud instrument storage with unified-cloud-services."""
+    def __init__(
+        self,
+        cloud_target: CloudTarget | None = None,
+        domain_config: DomainConfigProtocol | None = None,
+        enable_async: bool = True,
+    ):
+        """Initialize cloud instrument storage with unified-cloud-services and DomainConfigProtocol support."""
         if not UNIFIED_CLOUD_SERVICES_AVAILABLE:
             raise ImportError(
                 "unified-cloud-services not available. "
@@ -65,7 +70,8 @@ class CloudInstrumentStorage:
         if cloud_target is None:
             cfg = instruments_config
             environment = (cfg.environment or "development").lower()
-            is_test = environment in ["test", "testing"] or bool(os.environ.get("PYTEST_CURRENT_TEST"))
+            pytest_env = os.environ.get("PYTEST_CURRENT_TEST")
+            is_test = environment in ["test", "testing"] or bool(pytest_env)
 
             if is_test:
                 bucket_name = cfg.gcs_bucket_test or cfg.gcs_bucket_cefi_test or "instruments-store-test"
@@ -80,18 +86,40 @@ class CloudInstrumentStorage:
                 bigquery_location=cfg.bigquery_location or "asia-northeast1",
             )
 
-        # Create instruments service using direct instantiation (canonical pattern)
-        # Each domain has its own bucket and dataset (instruments domain)
-        self.cloud_service = StandardizedDomainCloudService(domain="instruments", cloud_target=cloud_target)
+        # Create instruments service using DomainConfigProtocol pattern (preferred) or legacy CloudTarget
+        if domain_config and DomainConfigProtocol:
+            # Use DomainConfigProtocol pattern (preferred for UCS v2.0)
+            self.cloud_service = StandardizedDomainCloudService.from_config(
+                domain_config=domain_config, enable_async=enable_async
+            )
+            logger.info("✅ Using DomainConfigProtocol pattern for type-safe configuration")
+        else:
+            # Fallback to legacy CloudTarget pattern
+            self.cloud_service = StandardizedDomainCloudService(domain="instruments", cloud_target=cloud_target)
+            logger.info("⚠️ Using legacy CloudTarget pattern (consider migrating to DomainConfigProtocol)")
+
         self.cloud_target = cloud_target
 
-        logger.info(
-            f"Initialized CloudInstrumentStorage: "
-            f"project={cloud_target.project_id}, "
-            f"bucket={cloud_target.gcs_bucket}, "
-            f"dataset={cloud_target.bigquery_dataset}, "
-            f"location={cloud_target.bigquery_location}"
-        )
+        # Initialize debugging tools
+        self.csv_sampler = CSVSampler() if CSVSampler else None
+        if self.csv_sampler:
+            logger.info("🔍 CSV sampling enabled for debugging")
+
+        if cloud_target:
+            logger.info(
+                f"Initialized CloudInstrumentStorage: "
+                f"project={cloud_target.project_id}, "
+                f"bucket={cloud_target.gcs_bucket}, "
+                f"dataset={cloud_target.bigquery_dataset}, "
+                f"location={cloud_target.bigquery_location}"
+            )
+        elif domain_config:
+            logger.info(
+                f"Initialized CloudInstrumentStorage with DomainConfigProtocol: "
+                f"project={domain_config.gcp_project_id}, "
+                f"bucket={domain_config.gcs_bucket}, "
+                f"dataset={domain_config.bigquery_dataset}"
+            )
 
     @handle_storage_errors(max_retries=2)
     def store_instruments(
@@ -127,7 +155,7 @@ class CloudInstrumentStorage:
             # Generate CSV sample using centralized service (only in non-production)
             if SAMPLING_SERVICE_AVAILABLE and instruments_df is not None and not instruments_df.empty:
                 sampling_service = create_sampling_service()
-                sample_date = date if date else datetime.now(timezone.utc)
+                sample_date = date if date else datetime.now(UTC)
                 sampling_service.generate_csv_sample(
                     df=instruments_df,
                     filename_prefix="instruments",
@@ -146,19 +174,17 @@ class CloudInstrumentStorage:
                     if isinstance(date, datetime):
                         target_timestamp = date.replace(hour=0, minute=0, second=0, microsecond=0)
                         if target_timestamp.tzinfo is None:
-                            target_timestamp = target_timestamp.replace(tzinfo=timezone.utc)
+                            target_timestamp = target_timestamp.replace(tzinfo=UTC)
                     else:
                         # date is a date object, convert to datetime
-                        target_timestamp = datetime.combine(date, datetime.min.time(), tzinfo=timezone.utc)
+                        target_timestamp = datetime.combine(date, datetime.min.time(), tzinfo=UTC)
                     instruments_df["timestamp"] = target_timestamp
                 else:
                     # Fallback to current time (should not happen in normal flow)
-                    instruments_df["timestamp"] = datetime.now(timezone.utc)
+                    instruments_df["timestamp"] = datetime.now(UTC)
                     logger.warning("No date parameter provided, using current time for timestamp column")
 
             # Validate required columns (ParquetSchemaEnforcer for full validation; minimal check here)
-            from instruments_service.schemas.parquet import get_required_columns
-
             required_columns = get_required_columns()
             missing_columns = [col for col in required_columns if col not in instruments_df.columns]
             if missing_columns:
@@ -198,16 +224,14 @@ class CloudInstrumentStorage:
                     try:
                         first_val = instruments_df["available_from_datetime"].iloc[0]  # type: ignore[reportAny]
                         first_date = pd.Timestamp(
-                            pd.to_datetime([first_val], utc=True)[0]
-                            if first_val is not None
-                            else datetime.now(timezone.utc)
+                            pd.to_datetime([first_val], utc=True)[0] if first_val is not None else datetime.now(UTC)
                         )
                         date_str = first_date.strftime("%Y-%m-%d")
                     except (ValueError, TypeError, IndexError) as e:
                         logger.debug(f"Could not extract date from available_from_datetime: {e}")
-                        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
                 else:
-                    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    date_str = datetime.now(UTC).strftime("%Y-%m-%d")
 
             # Ensure market_category is populated for all instruments
             logger.info(f"📊 Ensuring market_category is populated for {len(instruments_df)} instruments...")
@@ -238,7 +262,8 @@ class CloudInstrumentStorage:
             # Detect test mode for bucket selection
             cfg = instruments_config
             environment: str = str(cfg.environment or "development").lower()
-            is_test = environment in ["test", "testing"] or bool(os.environ.get("PYTEST_CURRENT_TEST"))
+            pytest_env = os.environ.get("PYTEST_CURRENT_TEST")
+            is_test = environment in ["test", "testing"] or bool(pytest_env)
 
             # Group uploads by bucket to use batch upload per bucket
             # (each bucket needs its own cloud service)
@@ -264,7 +289,7 @@ class CloudInstrumentStorage:
 
                     # Coerce nullable float64/bool columns to correct dtypes
                     # When all values are None, pandas infers 'object' dtype
-                    _FLOAT64_COLS = [
+                    float64_cols = [
                         "contract_size",
                         "max_position_size",
                         "max_leverage",
@@ -281,16 +306,16 @@ class CloudInstrumentStorage:
                         "variable_rate_slope1",
                         "variable_rate_slope2",
                     ]
-                    _INT64_COLS = ["pool_fee_tier", "emode_category_id"]
-                    _BOOL_COLS = ["is_trading_day"]
-                    for col in _FLOAT64_COLS:
+                    int64_cols = ["pool_fee_tier", "emode_category_id"]
+                    bool_cols = ["is_trading_day"]
+                    for col in float64_cols:
                         if col in venue_df_to_store.columns:
                             venue_df_to_store[col] = pd.to_numeric(venue_df_to_store[col], errors="coerce")
-                    for col in _INT64_COLS:
+                    for col in int64_cols:
                         if col in venue_df_to_store.columns:
                             ser: pd.Series = cast(pd.Series, pd.to_numeric(venue_df_to_store[col], errors="coerce"))
                             venue_df_to_store[col] = ser.astype("Int64") if hasattr(ser, "astype") else ser
-                    for col in _BOOL_COLS:
+                    for col in bool_cols:
                         if col in venue_df_to_store.columns:
                             venue_df_to_store[col] = venue_df_to_store[col].astype("boolean")
 
@@ -314,8 +339,6 @@ class CloudInstrumentStorage:
 
                     # Validate timestamp-date alignment (item_22c)
                     # Instruments use available_from_datetime which should align with the date folder
-                    from datetime import date as date_type
-
                     expected_date = date_type.fromisoformat(date_str)
                     alignment_result = validate_timestamp_date_alignment(
                         venue_df_to_store,

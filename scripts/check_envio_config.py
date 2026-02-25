@@ -31,22 +31,11 @@ def get_envio_secret():
         return None
     secret_id = "envio-api-key"
 
-    try:
-        # Try unified-cloud-services first (multi-cloud)
-        from unified_cloud_services.core.client_factory import get_secret_client
+    from unified_cloud_services import get_secret_client
 
-        secret_client = get_secret_client()
-        token = secret_client.get_secret(secret_id)
-        if token:
-            return token.strip()
-        return None
-    except ImportError:
-        # unified-cloud-services not available
-        print("❌ unified-cloud-services not installed, cannot retrieve secret")
-        return None
-    except Exception as e:
-        print(f"❌ Error retrieving secret: {e}")
-        return None
+    secret_client = get_secret_client()
+    token = secret_client.get_secret(secret_id)
+    return token.strip() if token else None
 
 
 def test_envio_endpoint(api_url: str, api_token: str):

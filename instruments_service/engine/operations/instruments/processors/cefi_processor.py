@@ -15,11 +15,11 @@ import asyncio
 import logging
 import re
 import warnings
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from unified_cloud_services import determine_market_category, get_secret_with_fallback
-from unified_market_interface.adapters.tradfi import TardisAdapter
+from unified_market_interface import TardisAdapter
 
 from instruments_service.config import instruments_config
 from instruments_service.engine.operations.instruments.processors.base_processor import BaseInstrumentProcessor
@@ -137,7 +137,7 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
         Raises:
             Exception: If API fetch fails after retries
         """
-        target_date = target_date or datetime.now(timezone.utc)
+        target_date = target_date or datetime.now(UTC)
         date_str = target_date.strftime("%Y-%m-%d")
 
         # Manual retry logic for proper type safety (instead of decorator)
@@ -442,9 +442,7 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
                             expiry_date = expiry_dt.date()
                             day_after_expiry = expiry_date + timedelta(days=1)
                             available_to_datetime = (
-                                datetime.combine(day_after_expiry, datetime.min.time())
-                                .replace(tzinfo=timezone.utc)
-                                .isoformat()
+                                datetime.combine(day_after_expiry, datetime.min.time()).replace(tzinfo=UTC).isoformat()
                             )
                             logger.debug(f"✅ Set available_to for {symbol_id} to midnight after expiry")
                         except Exception as e:
@@ -454,11 +452,11 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
                     try:
                         available_to_dt = datetime.fromisoformat(available_to_datetime.replace("Z", "+00:00"))
                         if available_to_dt.tzinfo is None:
-                            available_to_dt = available_to_dt.replace(tzinfo=timezone.utc)
+                            available_to_dt = available_to_dt.replace(tzinfo=UTC)
 
-                        comparison_date = target_date if target_date else datetime.now(timezone.utc)
+                        comparison_date = target_date if target_date else datetime.now(UTC)
                         if comparison_date.tzinfo is None:
-                            comparison_date = comparison_date.replace(tzinfo=timezone.utc)
+                            comparison_date = comparison_date.replace(tzinfo=UTC)
 
                         if comparison_date.date() > available_to_dt.date():
                             filter_stats["expired_filtered"] += 1
@@ -742,10 +740,7 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
             return True
 
         problematic_patterns = ["nftusdt", "defiusdt", "bullusdt", "bearusdt"]
-        if symbol_lower in problematic_patterns:
-            return True
-
-        return False
+        return symbol_lower in problematic_patterns
 
     def cleanup(self) -> None:
         """Cleanup CeFi processor resources."""

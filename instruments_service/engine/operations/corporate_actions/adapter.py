@@ -23,7 +23,7 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import date
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import pandas as pd
 import yfinance as yf
@@ -77,7 +77,7 @@ class CorporateActionsAdapter:
             self._yf = yf
         return self._yf
 
-    def _rate_limit(self, delay: Optional[float] = None) -> None:
+    def _rate_limit(self, delay: float | None = None) -> None:
         """Apply rate limiting between requests."""
         delay = delay or self.rate_limit_delay
         elapsed = time.time() - self._last_request_time
@@ -96,7 +96,7 @@ class CorporateActionsAdapter:
         ticker: str,
         start_date: date,
         end_date: date,
-        instrument_key: Optional[str] = None,
+        instrument_key: str | None = None,
     ) -> list[DividendRecord]:
         """
         Fetch dividend history for a ticker.
@@ -117,7 +117,7 @@ class CorporateActionsAdapter:
         ticker: str,
         start_date: date,
         end_date: date,
-        instrument_key: Optional[str] = None,
+        instrument_key: str | None = None,
     ) -> list[DividendRecord]:
         """Fetch dividends using yfinance."""
         self._rate_limit()
@@ -168,7 +168,7 @@ class CorporateActionsAdapter:
         ticker: str,
         start_date: date,
         end_date: date,
-        instrument_key: Optional[str] = None,
+        instrument_key: str | None = None,
     ) -> list[StockSplitRecord]:
         """
         Fetch stock split history for a ticker.
@@ -243,7 +243,7 @@ class CorporateActionsAdapter:
         ticker: str,
         start_date: date,
         end_date: date,
-        instrument_key: Optional[str] = None,
+        instrument_key: str | None = None,
     ) -> list[EarningsRecord]:
         """
         Fetch earnings history for a ticker.
@@ -264,7 +264,7 @@ class CorporateActionsAdapter:
         ticker: str,
         start_date: date,
         end_date: date,
-        instrument_key: Optional[str] = None,
+        instrument_key: str | None = None,
     ) -> list[EarningsRecord]:
         """Fetch earnings using yfinance."""
         self._rate_limit()
@@ -279,7 +279,7 @@ class CorporateActionsAdapter:
                 if calendar is not None:
                     cal_df = cast(pd.DataFrame, calendar)
                     if not cal_df.empty and "Earnings Date" in cal_df.index:
-                        _ = cal_df.loc["Earnings Date"]  # noqa: F841
+                        _ = cal_df.loc["Earnings Date"]
                         # This is typically future dates, not historical
             except Exception as e:
                 logger.debug(f"Failed to process earnings date from calendar: {e}")
@@ -340,7 +340,7 @@ class CorporateActionsAdapter:
         ticker: str,
         start_date: date,
         end_date: date,
-        instrument_key: Optional[str] = None,
+        instrument_key: str | None = None,
     ) -> CorporateActionsBundle:
         """
         Fetch all corporate actions for a ticker.
@@ -373,7 +373,7 @@ class CorporateActionsAdapter:
         tickers: list[str],
         start_date: date,
         end_date: date,
-        progress_callback: Optional[Callable[[str, int, int], None]] = None,
+        progress_callback: Callable[[str, int, int], None] | None = None,
     ) -> dict[str, CorporateActionsBundle]:
         """
         Fetch corporate actions for multiple tickers.

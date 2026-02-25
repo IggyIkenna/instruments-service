@@ -10,7 +10,7 @@ import os
 from datetime import datetime
 
 import pandas as pd
-from unified_cloud_services import CloudTarget, StandardizedDomainCloudService, get_bucket_for_category
+from unified_cloud_services import CloudTarget, StandardizedDomainCloudService, dump_to_csv, get_bucket_for_category
 
 from instruments_service.config import instruments_config
 
@@ -86,13 +86,20 @@ class CloudDataProvider:
                 logger.warning(f"⚠️ No instruments found at {gcs_path}")
             else:
                 logger.info(f"✅ Loaded {len(df)} instruments from GCS")
+
+                # CSV sampling for instruments data
+                dump_to_csv(
+                    df,
+                    filename=f"instruments_service_data_{date.strftime('%Y%m%d')}_{datetime.now().strftime('%H%M%S')}.csv",
+                )
+
             return df
 
         except Exception as e:
             error_msg = str(e)
             # Handle 404/Not Found gracefully - this is an expected state when data hasn't been generated yet
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
-                logger.info(f"ℹ️ No instruments found (404): {gcs_path}")
+                logger.info(f"No instruments found (404): {gcs_path}")
                 return pd.DataFrame()
 
             logger.error(f"❌ Failed to load instruments from GCS: {e}")
@@ -117,7 +124,8 @@ class CloudDataProvider:
         try:
             # Detect test mode
             environment: str = str(instruments_config.environment or "development").lower()
-            is_test = environment in ["test", "testing"] or bool(os.environ.get("PYTEST_CURRENT_TEST"))
+            pytest_env = os.environ.get("PYTEST_CURRENT_TEST")
+            is_test = environment in ["test", "testing"] or bool(pytest_env)
 
             # Get bucket for category
             category_bucket = get_bucket_for_category(category, test_mode=is_test)
@@ -144,13 +152,20 @@ class CloudDataProvider:
                 logger.warning(f"⚠️ No {category} instruments found at {category_bucket}/{gcs_path}")
             else:
                 logger.info(f"✅ Loaded {len(df)} {category} instruments from GCS")
+
+                # CSV sampling for category-specific instruments data
+                dump_to_csv(
+                    df,
+                    filename=f"instruments_service_{category.lower()}_data_{date.strftime('%Y%m%d')}_{datetime.now().strftime('%H%M%S')}.csv",
+                )
+
             return df
 
         except Exception as e:
             error_msg = str(e)
             # Handle 404/Not Found gracefully - this is an expected state when data hasn't been generated yet
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
-                logger.info(f"ℹ️ No {category} instruments found (404): {category_bucket}/{gcs_path}")
+                logger.info(f"No {category} instruments found (404): {category_bucket}/{gcs_path}")
                 return pd.DataFrame()
 
             logger.error(f"❌ Failed to load {category} instruments from GCS: {e}")

@@ -9,13 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime
 from datetime import date as date_type
-from datetime import datetime, timezone
 from typing import Any, cast
 
 import pandas as pd
-from unified_market_interface import InstrumentDefinition, get_adapter  # type: ignore[reportUnknownVariableType]
-from unified_market_interface.models.venue_config import VenueMapping
+from unified_market_interface import InstrumentDefinition, VenueMapping, get_adapter
 
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
@@ -344,14 +343,14 @@ class InstrumentsService:
                         project_id = getattr(self.processing_service, "_tardis_project_id", None)
                         tardis_adapter = get_adapter("tardis", "tradfi", api_key=api_key, project_id=project_id)
                         if hasattr(tardis_adapter, "base_client"):  # type: ignore[reportAny]
-                            base_client = getattr(tardis_adapter, "base_client")  # type: ignore[reportAny]
+                            base_client = tardis_adapter.base_client  # type: ignore[reportAny]
                             if hasattr(base_client, "check_venues_access"):  # type: ignore[reportAny]
                                 adapter = tardis_adapter
                     except (ValueError, Exception) as e:
                         logger.warning(f"⚠️ Cannot check venue access: {e}")
 
                     if adapter is not None and hasattr(adapter, "base_client"):  # type: ignore[reportAny]
-                        base_client = getattr(adapter, "base_client")  # type: ignore[reportAny]
+                        base_client = adapter.base_client  # type: ignore[reportAny]
                         if hasattr(base_client, "check_venues_access"):  # type: ignore[reportAny]
                             access_results: dict[str, tuple[bool, str]] = cast(
                                 dict[str, tuple[bool, str]],
@@ -446,7 +445,7 @@ class InstrumentsService:
                     logger.info(
                         f"🚀 Processing {len(cefi_clob_protocols)} on-chain CLOB venues (CEFI): {protocol_names}"
                     )
-                    for protocol, chain in cefi_clob_protocols:
+                    for protocol, _chain in cefi_clob_protocols:
                         try:
                             # Fetch on-chain CLOB instruments via processing_service
                             clob_instruments = self.processing_service.fetch_defi_instruments(
@@ -552,7 +551,7 @@ class InstrumentsService:
                                     # Process Bitcoin ETFs using static definitions
                                     # (more reliable for new ETFs like IBIT, FBTC, ARKB)
                                     # IMPORTANT: Bitcoin ETFs launched January 11, 2024 - skip for earlier dates
-                                    bitcoin_etf_launch_date = datetime(2024, 1, 11, tzinfo=timezone.utc)
+                                    bitcoin_etf_launch_date = datetime(2024, 1, 11, tzinfo=UTC)
                                     bitcoin_etf_tickers = ["IBIT", "FBTC", "ARKB"]
 
                                     # Only process Bitcoin ETFs if date is on or after launch date
@@ -607,7 +606,7 @@ class InstrumentsService:
                                     #
                                     # Since we can't filter per-symbol here, we use the earliest date (IFUS)
                                     # The individual symbol downloads will handle IFEU date filtering
-                                    ice_us_launch = datetime(2018, 12, 23, tzinfo=timezone.utc)
+                                    ice_us_launch = datetime(2018, 12, 23, tzinfo=UTC)
                                     if date < ice_us_launch:
                                         logger.info(
                                             f"⏭️ Skipping ICE - date {date.strftime('%Y-%m-%d')} "
@@ -755,7 +754,7 @@ class InstrumentsService:
             # Apply instrument_id filtering if specified
             if instrument_ids:
                 instrument_ids_list = instrument_ids if isinstance(instrument_ids, list) else [str(instrument_ids)]
-                instrument_ids_set: set[str] = set(str(inst_id).upper() for inst_id in instrument_ids_list)
+                instrument_ids_set: set[str] = {str(inst_id).upper() for inst_id in instrument_ids_list}
 
                 filtered_instruments: dict[str, InstrumentDefinition] = {}
                 for inst_key, inst_obj in all_instruments.items():
@@ -854,9 +853,9 @@ class InstrumentsService:
                     if isinstance(date, datetime):
                         target_dt = date.replace(hour=0, minute=0, second=0, microsecond=0)
                     else:
-                        target_dt = datetime.combine(date, datetime.min.time(), tzinfo=timezone.utc)
+                        target_dt = datetime.combine(date, datetime.min.time(), tzinfo=UTC)
                     if target_dt.tzinfo is None:
-                        target_dt = target_dt.replace(tzinfo=timezone.utc)
+                        target_dt = target_dt.replace(tzinfo=UTC)
                     date_iso = target_dt.isoformat().replace("+00:00", "Z")
 
                     # Check venue presence - handle both empty DataFrame and missing venues
@@ -992,7 +991,7 @@ class InstrumentsService:
                     )
 
                     # Store to the previous date (open date)
-                    open_date_dt = datetime.combine(open_date_val, datetime.min.time(), tzinfo=timezone.utc)
+                    open_date_dt = datetime.combine(open_date_val, datetime.min.time(), tzinfo=UTC)
                     span_success = cast(
                         bool,
                         self.cloud_storage.store_instruments(  # pyright: ignore[reportUnknownMemberType]
@@ -1051,7 +1050,7 @@ class InstrumentsService:
                 "status": "error",
                 "date": date_str if "date_str" in locals() else date.strftime("%Y-%m-%d"),
                 "instruments_generated": 0,
-                "message": f"Exception during processing: {str(e)}",
+                "message": f"Exception during processing: {e!s}",
                 "error_count": error_count,
                 "warning_count": warning_count,
             }

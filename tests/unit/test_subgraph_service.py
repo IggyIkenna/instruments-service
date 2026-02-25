@@ -4,7 +4,7 @@ Unit tests for SubgraphService.
 Tests subgraph URL resolution and caching.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -73,21 +73,21 @@ class TestSubgraphService:
         cache_key = "test_key"
         subgraph_service._subgraph_cache[cache_key] = "https://test.url"
         # Must use UTC-aware datetime to match SubgraphService._is_cache_valid()
-        subgraph_service._cache_timestamps[cache_key] = datetime.now(timezone.utc)
+        subgraph_service._cache_timestamps[cache_key] = datetime.now(UTC)
 
         # Cache should be valid immediately
         assert subgraph_service._is_cache_valid(cache_key) is True
 
         # Cache should be invalid after TTL expires
-        subgraph_service._cache_timestamps[cache_key] = datetime.now(timezone.utc) - timedelta(hours=25)
+        subgraph_service._cache_timestamps[cache_key] = datetime.now(UTC) - timedelta(hours=25)
         assert subgraph_service._is_cache_valid(cache_key) is False
 
     def test_clear_cache_all(self, subgraph_service):
         """Test clearing all cache."""
         subgraph_service._subgraph_cache["key1"] = "url1"
         subgraph_service._subgraph_cache["key2"] = "url2"
-        subgraph_service._cache_timestamps["key1"] = datetime.now(timezone.utc)
-        subgraph_service._cache_timestamps["key2"] = datetime.now(timezone.utc)
+        subgraph_service._cache_timestamps["key1"] = datetime.now(UTC)
+        subgraph_service._cache_timestamps["key2"] = datetime.now(UTC)
 
         subgraph_service.clear_cache()
 
@@ -98,8 +98,8 @@ class TestSubgraphService:
         """Test clearing cache for specific protocol."""
         subgraph_service._subgraph_cache["uniswap_v2_ETHEREUM"] = "url1"
         subgraph_service._subgraph_cache["curve_ETHEREUM"] = "url2"
-        subgraph_service._cache_timestamps["uniswap_v2_ETHEREUM"] = datetime.now(timezone.utc)
-        subgraph_service._cache_timestamps["curve_ETHEREUM"] = datetime.now(timezone.utc)
+        subgraph_service._cache_timestamps["uniswap_v2_ETHEREUM"] = datetime.now(UTC)
+        subgraph_service._cache_timestamps["curve_ETHEREUM"] = datetime.now(UTC)
 
         subgraph_service.clear_cache(protocol="uniswap_v2")
 

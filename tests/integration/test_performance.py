@@ -9,7 +9,7 @@ These tests use real services and require GCP credentials.
 
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -34,7 +34,7 @@ class TestPerformance:
             "project_id": get_config("GCP_PROJECT_ID", "test-project"),
         }
         service = InstrumentsService(config)
-        test_date = datetime(2025, 11, 10, tzinfo=timezone.utc)
+        test_date = datetime(2025, 11, 10, tzinfo=UTC)
 
         start_time = time.time()
 
@@ -67,7 +67,7 @@ class TestPerformance:
             "project_id": get_config("GCP_PROJECT_ID", "test-project"),
         }
         service = InstrumentsService(config)
-        test_date = datetime(2025, 11, 10, tzinfo=timezone.utc)
+        test_date = datetime(2025, 11, 10, tzinfo=UTC)
 
         start_time = time.time()
 
@@ -105,7 +105,7 @@ class TestPerformance:
             "project_id": get_config("GCP_PROJECT_ID", "test-project"),
         }
         service = InstrumentsService(config)
-        test_date = datetime(2025, 11, 10, tzinfo=timezone.utc)
+        test_date = datetime(2025, 11, 10, tzinfo=UTC)
 
         start_time = time.time()
 
@@ -146,7 +146,7 @@ class TestPerformance:
             "project_id": get_config("GCP_PROJECT_ID", "test-project"),
         }
         service = InstrumentsService(config)
-        test_date = datetime(2025, 11, 10, tzinfo=timezone.utc)
+        test_date = datetime(2025, 11, 10, tzinfo=UTC)
 
         start_time = time.time()
 

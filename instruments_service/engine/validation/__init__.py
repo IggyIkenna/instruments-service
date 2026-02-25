@@ -6,22 +6,21 @@ This module provides validation utilities for:
 - Selective API key validation (only for required venues)
 """
 
-from instruments_service.engine.validation.dependency_checker import (
-    DependencyChecker,
+from unified_cloud_services import (
+    BaseDependencyChecker,
     DependencyReport,
     DependencyStatus,
-    check_dependencies,
 )
+
 from instruments_service.engine.validation.selective_validator import (
     get_venues_for_category,
     validate_required_api_keys,
 )
 
 __all__ = [
-    "DependencyChecker",
+    "BaseDependencyChecker",
     "DependencyReport",
     "DependencyStatus",
-    "check_dependencies",
     "get_venues_for_category",
     "validate_required_api_keys",
 ]

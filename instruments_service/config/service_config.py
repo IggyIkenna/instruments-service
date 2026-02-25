@@ -5,12 +5,25 @@ InstrumentsServiceConfig (Pydantic BaseSettings) and singleton access.
 """
 
 import logging
-from typing import Optional, cast
+from typing import cast
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import SettingsConfigDict
 from unified_cloud_services import CloudTarget
 from unified_config_interface import UnifiedCloudConfig
+
+try:
+    from api_contracts.domain_config import DomainConfigProtocol
+except ImportError:
+    # Fallback if api-contracts not available
+    from typing import Any, Protocol
+
+    class DomainConfigProtocol(Protocol):
+        gcp_project_id: str
+        gcs_bucket: str
+        bigquery_dataset: str
+        config: dict[str, Any]
+
 
 logger = logging.getLogger(__name__)
 
@@ -236,8 +249,17 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         logger.warning(f"⚠️ Category-specific bucket not configured for {category_upper}. Using default bucket.")
         return self.gcs_bucket_test if test_mode else self.gcs_bucket
 
+    # =========================================================================
+    # DOMAIN CONFIG PROTOCOL IMPLEMENTATION
+    # =========================================================================
 
-_config: Optional[InstrumentsServiceConfig] = None
+    @property
+    def config(self) -> dict[str, Any]:
+        """Generic config dict for extensibility (implements DomainConfigProtocol)."""
+        return self.model_dump()
+
+
+_config: InstrumentsServiceConfig | None = None
 
 
 def get_config() -> InstrumentsServiceConfig:

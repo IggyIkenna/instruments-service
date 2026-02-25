@@ -31,7 +31,7 @@ def test_parse_arguments_instruments_mode():
         "--force",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.mode == "instruments"
         assert args.start_date == "2023-05-23"
@@ -50,7 +50,7 @@ def test_parse_arguments_instruments_mode_with_categories():
         "--TRADFI",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.mode == "instruments"
         assert args.start_date == "2023-05-23"
@@ -101,15 +101,9 @@ def test_validate_arguments_default_end_date():
 )
 def test_parse_category_multi_value(categories, expected):
     """Test --category with multiple values."""
-    test_args = [
-        "--mode",
-        "instruments",
-        "--start-date",
-        "2023-05-23",
-        "--category",
-    ] + categories
+    test_args = ["--mode", "instruments", "--start-date", "2023-05-23", "--category", *categories]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.category == expected
 
@@ -126,7 +120,7 @@ def test_parse_category_case_insensitive():
         "tradfi",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.category == ["CEFI", "TRADFI"]
 
@@ -154,11 +148,11 @@ def test_category_flag_vs_category_arg():
         "--TRADFI",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args_category):
+    with patch.object(sys, "argv", ["parser", *test_args_category]):
         args_cat = parse_arguments()
         assert args_cat.category == ["CEFI", "TRADFI"]
 
-    with patch.object(sys, "argv", ["parser"] + test_args_flags):
+    with patch.object(sys, "argv", ["parser", *test_args_flags]):
         args_flags = parse_arguments()
         assert args_flags.CEFI is True
         assert args_flags.TRADFI is True
@@ -179,7 +173,7 @@ def test_parse_dry_run_flag():
         "--dry-run",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.dry_run is True
 
@@ -193,7 +187,7 @@ def test_parse_dry_run_default_false():
         "2023-05-23",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.dry_run is False
 
@@ -209,7 +203,7 @@ def test_parse_dry_run_with_force():
         "--force",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.dry_run is True
         assert args.force is True
@@ -231,7 +225,7 @@ def test_parse_corporate_actions_mode():
         "2026-01-25",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.mode == "corporate_actions"
         assert args.start_date == "2020-01-01"
@@ -253,7 +247,7 @@ def test_parse_corporate_actions_with_tickers():
         "GOOGL",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.mode == "corporate_actions"
         assert args.tickers == ["AAPL", "MSFT", "GOOGL"]
@@ -272,7 +266,7 @@ def test_parse_corporate_actions_output_format_csv():
         "csv",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.output_format == "csv"
 
@@ -288,7 +282,7 @@ def test_parse_corporate_actions_output_format_parquet():
         "2026-01-25",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.output_format == "parquet"  # default
 
@@ -305,7 +299,7 @@ def test_parse_corporate_actions_upload_to_gcs():
         "--upload-to-gcs",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.upload_to_gcs is True
 
@@ -327,7 +321,7 @@ def test_parse_corporate_actions_full_args():
         "--upload-to-gcs",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.mode == "corporate_actions"
         assert args.start_date == "2020-01-01"
@@ -371,7 +365,7 @@ def test_parse_project_id():
         "my-custom-project",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.project_id == "my-custom-project"
 
@@ -385,7 +379,7 @@ def test_parse_project_id_default():
         "2023-05-23",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         # Parser returns None, service config provides the default
         assert args.project_id is None
@@ -402,7 +396,7 @@ def test_parse_gcs_bucket():
         "my-custom-bucket",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.gcs_bucket == "my-custom-bucket"
 
@@ -418,7 +412,7 @@ def test_parse_log_level():
         "DEBUG",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.log_level == "DEBUG"
 
@@ -442,14 +436,9 @@ def test_parse_log_level():
 )
 def test_category_flag_combinations(category_flags):
     """Test all combinations of category flags for sharding."""
-    test_args = [
-        "--mode",
-        "instruments",
-        "--start-date",
-        "2023-05-23",
-    ] + category_flags
+    test_args = ["--mode", "instruments", "--start-date", "2023-05-23", *category_flags]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         assert args.mode == "instruments"
         assert args.start_date == "2023-05-23"
@@ -471,7 +460,7 @@ def test_no_category_flags_means_all():
         "2023-05-23",
     ]
 
-    with patch.object(sys, "argv", ["parser"] + test_args):
+    with patch.object(sys, "argv", ["parser", *test_args]):
         args = parse_arguments()
         # All flags should be False (meaning process all)
         assert args.CEFI is False

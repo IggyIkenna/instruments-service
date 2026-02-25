@@ -8,27 +8,26 @@ Extracted from InstrumentProcessingService.fetch_defi_instruments.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from unified_market_interface.adapters.defi import (
+from unified_market_interface import (
     AaveV3Adapter,
     BalancerAdapter,
+    CurveAdapter,
     EthenaAdapter,
     EtherFiAdapter,
     EulerAdapter,
     FluidAdapter,
+    HyperliquidAdapter,
     LidoAdapter,
     MorphoAdapter,
     UniswapV2Adapter,
     UniswapV3Adapter,
     UniswapV4Adapter,
 )
-from unified_market_interface.adapters.defi import (
-    CurveAdapter as CurveRPCAdapter,
-)
-from unified_market_interface.adapters.onchain_perps import HyperliquidAdapter
 
 from instruments_service.models import InstrumentDefinition
 
@@ -99,7 +98,7 @@ def fetch_defi_instruments(
     service: DefiServiceProtocol,
     protocol: str,
     chain: str = "ETHEREUM",
-    target_date: Optional[datetime] = None,
+    target_date: datetime | None = None,
     **kwargs: DefiProtocolKwargs,
 ) -> dict[str, InstrumentDefinition]:
     """
@@ -197,7 +196,7 @@ def fetch_defi_instruments(
                 ),
             )
         elif protocol.lower() == "curve":
-            adapter = CurveRPCAdapter(chain=chain if chain else "ETHEREUM")
+            adapter = CurveAdapter(chain=chain if chain else "ETHEREUM")
             raw_instruments = cast(dict[str, Any], adapter.fetch_markets(target_date=target_date))
         elif protocol.lower() == "ethena":
             adapter = EthenaAdapter(chain=chain)
@@ -263,11 +262,13 @@ def fetch_defi_instruments(
             try:
                 inst_data_dict: dict[str, Any] = cast(dict[str, Any], inst_data) if isinstance(inst_data, dict) else {}
                 base_asset: str = str(inst_data_dict.get("base_asset") or "").upper()
-                if base_asset:
-                    if base_asset not in mvp_bases:
-                        if base_asset not in base_versions or base_versions[base_asset] not in mvp_bases:
-                            logger.debug(f"Skipping {inst_key}: base currency '{base_asset}' not in MVP list")
-                            continue
+                if (
+                    base_asset
+                    and base_asset not in mvp_bases
+                    and (base_asset not in base_versions or base_versions[base_asset] not in mvp_bases)
+                ):
+                    logger.debug(f"Skipping {inst_key}: base currency '{base_asset}' not in MVP list")
+                    continue
 
                 quote_asset: str = str(inst_data_dict.get("quote_asset") or "").upper()
                 if quote_asset and quote_asset not in mvp_quotes:
@@ -302,10 +303,8 @@ def fetch_defi_instruments(
                         if ccxt_metadata.get("min_size"):
                             inst_def.min_size = str(ccxt_metadata["min_size"])
                         if ccxt_metadata.get("contract_size"):
-                            try:
+                            with contextlib.suppress(ValueError, TypeError):
                                 inst_def.contract_size = float(cast(str | int | float, ccxt_metadata["contract_size"]))
-                            except (ValueError, TypeError):
-                                pass
                     else:
                         if not inst_def.ccxt_symbol or not inst_def.ccxt_exchange:
                             default_ccxt_symbol = service.ccxt_service.generate_default_ccxt_symbol(
@@ -331,12 +330,10 @@ def fetch_defi_instruments(
                             if not inst_def.min_size and manual_metadata.get("min_size"):
                                 inst_def.min_size = str(cast(str | int | float, manual_metadata["min_size"]))
                             if not inst_def.contract_size and manual_metadata.get("contract_size"):
-                                try:
+                                with contextlib.suppress(ValueError, TypeError):
                                     inst_def.contract_size = float(
                                         cast(str | int | float, manual_metadata["contract_size"])
                                     )
-                                except (ValueError, TypeError):
-                                    pass
                             logger.debug(
                                 f"✅ Used manual fallback for {inst_def.instrument_key}: "
                                 f"tick_size={inst_def.tick_size}, "

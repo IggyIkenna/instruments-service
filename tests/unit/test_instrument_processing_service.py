@@ -4,7 +4,7 @@ Unit tests for InstrumentProcessingService.
 Tests service orchestration logic with mocked dependencies.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -222,18 +222,17 @@ class TestUpbitCoinbaseMVPFiltering:
             original_parse = service.parse_symbol_components
 
             def mock_parse(symbol_id, exchange):
-                if symbol_id == "BTC-KRW":
-                    return {"base_asset": "BTC", "quote_asset": "KRW"}
-                elif symbol_id == "ETH-KRW":
-                    return {"base_asset": "ETH", "quote_asset": "KRW"}
-                elif symbol_id == "RANDOM-KRW":
-                    return {"base_asset": "RANDOM", "quote_asset": "KRW"}
-                return original_parse(symbol_id, exchange)
+                mapping = {
+                    "BTC-KRW": {"base_asset": "BTC", "quote_asset": "KRW"},
+                    "ETH-KRW": {"base_asset": "ETH", "quote_asset": "KRW"},
+                    "RANDOM-KRW": {"base_asset": "RANDOM", "quote_asset": "KRW"},
+                }
+                return mapping.get(symbol_id, original_parse(symbol_id, exchange))
 
             with patch.object(service, "parse_symbol_components", side_effect=mock_parse):
                 result = await service.process_exchange_instruments(
                     exchange="upbit",
-                    target_date=datetime(2024, 1, 1, tzinfo=timezone.utc),
+                    target_date=datetime(2024, 1, 1, tzinfo=UTC),
                 )
 
                 # Should only include BTC and ETH (MVP coins), not RANDOM
@@ -638,7 +637,7 @@ class TestCacheOperations:
         return InstrumentProcessingService(config)
 
     def test_cache_metadata(self, service):
-        """Test metadata caching."""
+        """Test metadata caching delegates to processor."""
         from instruments_service.models import InstrumentDefinition
 
         metadata = InstrumentDefinition(
@@ -650,21 +649,22 @@ class TestCacheOperations:
         )
 
         service.cache_metadata("TEST:SPOT_PAIR:BTC-USDT", metadata)
+        # Cache is directly on service, not on a processor
         assert len(service._metadata_cache) > 0
 
     def test_clear_cache(self, service):
-        """Test cache clearing."""
+        """Test cache clearing delegates to processors."""
         service._metadata_cache["test"] = "data"
-        service._cache_timestamps["test"] = datetime.now(timezone.utc)
+        service._cache_timestamps["test"] = datetime.now(UTC)
         service.clear_cache()
         assert len(service._metadata_cache) == 0
 
     def test_metadata_cache_clear_specific_key(self, service):
-        """Test clearing cache clears all keys."""
+        """Test clearing cache clears all keys from all processors."""
         service._metadata_cache["key1"] = "data1"
         service._metadata_cache["key2"] = "data2"
-        service._cache_timestamps["key1"] = datetime.now(timezone.utc)
-        service._cache_timestamps["key2"] = datetime.now(timezone.utc)
+        service._cache_timestamps["key1"] = datetime.now(UTC)
+        service._cache_timestamps["key2"] = datetime.now(UTC)
         service.clear_cache()
         assert len(service._metadata_cache) == 0
 

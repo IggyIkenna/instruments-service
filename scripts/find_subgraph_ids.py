@@ -6,7 +6,6 @@ This script queries The Graph Explorer API to find subgraph IDs for popular DeFi
 """
 
 import os
-from typing import Optional
 
 import requests
 from unified_cloud_services import get_secret_with_fallback
@@ -66,7 +65,7 @@ def verify_subgraph_id(subgraph_name: str, subgraph_id: str, api_key: str) -> bo
     return False
 
 
-def query_subgraph_registry(subgraph_name: str) -> Optional[str]:
+def query_subgraph_registry(subgraph_name: str) -> str | None:
     """
     Query The Graph's subgraph registry to find subgraph ID.
 
@@ -87,27 +86,24 @@ def query_subgraph_registry(subgraph_name: str) -> Optional[str]:
     org, name = parts
 
     # Query for subgraphs matching the name
-    query = (
-        """
-    {
+    query = f"""
+    {{
         subgraphs(
-            where: {
-                displayName_contains: "%s"
-            }
+            where: {{
+                displayName_contains: "{name}"
+            }}
             first: 20
-        ) {
+        ) {{
             id
             displayName
-            currentVersion {
-                subgraphDeployment {
+            currentVersion {{
+                subgraphDeployment {{
                     ipfsHash
-                }
-            }
-        }
-    }
+                }}
+            }}
+        }}
+    }}
     """
-        % name
-    )
 
     try:
         response = requests.post(

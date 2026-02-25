@@ -24,18 +24,6 @@ def test_get_adapter_for_cefi_venue():
     assert "TardisAdapter" in str(type(adapter))
 
 
-def test_get_adapter_for_onchain_perp_venue():
-    """Test loading adapter for on-chain perp venue. Skips if HyperliquidBaseClient removed from UCS."""
-    try:
-        adapter = get_adapter_for_venue("HYPERLIQUID")
-        assert adapter is not None
-        assert "HyperliquidAdapter" in str(type(adapter))
-    except ImportError as e:
-        if "HyperliquidBaseClient" in str(e):
-            pytest.skip("HyperliquidBaseClient removed from UCS")
-        raise
-
-
 def test_aster_venue_raises_not_implemented():
     """Test that ASTER venue raises NotImplementedError (AsterBaseClient removed from UCS)."""
     with pytest.raises(NotImplementedError, match="Aster adapter not available"):

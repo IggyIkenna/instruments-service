@@ -20,10 +20,10 @@ from instruments_service.corporate_actions.models import (
 )
 
 __all__ = [
-    "DividendRecord",
-    "StockSplitRecord",
-    "EarningsRecord",
     "CorporateActionType",
-    "DividendType",
     "CorporateActionsAdapter",
+    "DividendRecord",
+    "DividendType",
+    "EarningsRecord",
+    "StockSplitRecord",
 ]

@@ -2,7 +2,7 @@
 Comprehensive unit tests for InstrumentHandler to increase coverage to 80%+.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -20,7 +20,7 @@ class TestInstrumentHandlerHelpers:
     def test_parse_date_valid(self):
         """Test parsing valid date string."""
         result = parse_date("2024-01-01")
-        assert result == datetime(2024, 1, 1, tzinfo=timezone.utc)
+        assert result == datetime(2024, 1, 1, tzinfo=UTC)
 
     def test_parse_date_invalid(self):
         """Test parsing invalid date string raises error."""
@@ -31,18 +31,18 @@ class TestInstrumentHandlerHelpers:
         """Test date range for single day."""
         result = get_date_range("2024-01-01", "2024-01-01")
         assert len(result) == 1
-        assert result[0] == datetime(2024, 1, 1, tzinfo=timezone.utc)
+        assert result[0] == datetime(2024, 1, 1, tzinfo=UTC)
 
     def test_get_date_range_multiple_days(self):
         """Test date range for multiple days."""
         result = get_date_range("2024-01-01", "2024-01-03")
         assert len(result) == 3
-        assert result[0] == datetime(2024, 1, 1, tzinfo=timezone.utc)
-        assert result[2] == datetime(2024, 1, 3, tzinfo=timezone.utc)
+        assert result[0] == datetime(2024, 1, 1, tzinfo=UTC)
+        assert result[2] == datetime(2024, 1, 3, tzinfo=UTC)
 
     def test_get_date_range_invalid(self):
         """Test date range with start > end raises error."""
-        with pytest.raises(ValueError, match="Start date.*must be <= end date"):
+        with pytest.raises(ValueError, match=r"Start date.*must be <= end date"):
             get_date_range("2024-01-02", "2024-01-01")
 
 
@@ -85,6 +85,7 @@ class TestInstrumentHandler:
                 "instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage",
                 return_value=mock_cloud_storage,
             ),
+            patch("instruments_service.cli.handlers.instrument_handler.log_event"),
         ):
             config = {"project_id": "test-project"}
             handler = InstrumentHandler(config)
@@ -105,6 +106,7 @@ class TestInstrumentHandler:
                 "instruments_service.cli.handlers.instrument_handler.CloudInstrumentStorage",
                 return_value=mock_cloud_storage,
             ),
+            patch("instruments_service.cli.handlers.instrument_handler.log_event"),
         ):
             config = {"project_id": "test-project"}
             handler = InstrumentHandler(config)
@@ -130,13 +132,14 @@ class TestInstrumentHandler:
         )
 
         # Mock date to be in the past
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(UTC).date()
         test_date = today - timedelta(days=1)
 
         # Patch CloudDataProvider and validate_required_api_keys (no GCP/API keys in unit tests)
         with (
             patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"),
             patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+            patch("instruments_service.cli.handlers.instrument_handler.log_event"),
         ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
@@ -149,8 +152,11 @@ class TestInstrumentHandler:
 
     def test_execute_instrument_generation_skip_future_date(self, handler):
         """Test skipping future dates."""
-        future_date = datetime.now(timezone.utc) + timedelta(days=1)
-        with patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"):
+        future_date = datetime.now(UTC) + timedelta(days=1)
+        with (
+            patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+            patch("instruments_service.cli.handlers.instrument_handler.log_event"),
+        ):
             result = handler._execute_instrument_generation(
                 future_date.strftime("%Y-%m-%d"),
                 future_date.strftime("%Y-%m-%d"),
@@ -166,10 +172,11 @@ class TestInstrumentHandler:
                 return_value=mock_data_provider,
             ),
             patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+            patch("instruments_service.cli.handlers.instrument_handler.log_event"),
         ):
             mock_data_provider.check_instruments_exist.return_value = True
 
-            today = datetime.now(timezone.utc).date()
+            today = datetime.now(UTC).date()
             test_date = today - timedelta(days=1)
 
             result = handler._execute_instrument_generation(
@@ -189,10 +196,11 @@ class TestInstrumentHandler:
                 return_value=mock_data_provider,
             ),
             patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+            patch("instruments_service.cli.handlers.instrument_handler.log_event"),
         ):
             mock_data_provider.check_instruments_exist.return_value = True
 
-            today = datetime.now(timezone.utc).date()
+            today = datetime.now(UTC).date()
             test_date = today - timedelta(days=1)
 
             # Force mode should not check existence
@@ -209,12 +217,13 @@ class TestInstrumentHandler:
         handler.instruments_service.generate_instruments_for_date = AsyncMock(
             return_value={"status": "warning", "instruments_generated": 0}
         )
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(UTC).date()
         test_date = today - timedelta(days=1)
 
         with (
             patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"),
             patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+            patch("instruments_service.cli.handlers.instrument_handler.log_event"),
         ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
@@ -230,12 +239,13 @@ class TestInstrumentHandler:
             return_value={"status": "success", "instruments_generated": 10}
         )
         handler.cloud_storage.store_instruments = Mock(return_value=False)
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(UTC).date()
         test_date = today - timedelta(days=1)
 
         with (
             patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
             patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"),
+            patch("instruments_service.cli.handlers.instrument_handler.log_event"),
         ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
@@ -248,12 +258,13 @@ class TestInstrumentHandler:
     def test_execute_instrument_generation_exception_handling(self, handler):
         """Test exception handling during generation."""
         handler.instruments_service.generate_instruments_for_date = AsyncMock(side_effect=RuntimeError("Test error"))
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(UTC).date()
         test_date = today - timedelta(days=1)
 
         with (
             patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"),
             patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+            patch("instruments_service.cli.handlers.instrument_handler.log_event"),
         ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
@@ -269,12 +280,13 @@ class TestInstrumentHandler:
             return_value={"status": "success", "instruments_generated": 5}
         )
 
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(UTC).date()
         test_date = today - timedelta(days=1)
 
         with (
             patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"),
             patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+            patch("instruments_service.cli.handlers.instrument_handler.log_event"),
         ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
@@ -291,12 +303,13 @@ class TestInstrumentHandler:
             return_value={"status": "success", "instruments_generated": 10}
         )
 
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(UTC).date()
         test_date = today - timedelta(days=1)
 
         with (
             patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"),
             patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+            patch("instruments_service.cli.handlers.instrument_handler.log_event"),
         ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),
@@ -310,12 +323,13 @@ class TestInstrumentHandler:
         """Test handling exchange processing errors."""
         mock_instrument_service.generate_instruments_for_date = AsyncMock(side_effect=RuntimeError("Exchange error"))
 
-        today = datetime.now(timezone.utc).date()
+        today = datetime.now(UTC).date()
         test_date = today - timedelta(days=1)
 
         with (
             patch("instruments_service.app.core.cloud_data_provider.CloudDataProvider"),
             patch("instruments_service.cli.handlers.instrument_handler.validate_required_api_keys"),
+            patch("instruments_service.cli.handlers.instrument_handler.log_event"),
         ):
             result = handler._execute_instrument_generation(
                 test_date.strftime("%Y-%m-%d"),

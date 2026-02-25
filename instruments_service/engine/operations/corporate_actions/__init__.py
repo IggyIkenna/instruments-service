@@ -16,8 +16,8 @@ from instruments_service.engine.operations.corporate_actions.models import (
 )
 
 __all__ = [
-    "CorporateActionsAdapter",
     "CorporateActionType",
+    "CorporateActionsAdapter",
     "CorporateActionsBundle",
     "DividendRecord",
     "DividendType",

@@ -346,6 +346,21 @@ rg "central-element-323112|get_config.*central-element" tests/ 2>/dev/null && { 
 
 rg "central-element-323112" --type py --glob "!tests/**" $SOURCE_DIR/ 2>/dev/null && { log_fail "Found hardcoded project ID in production"; ((CODEX_VIOLATIONS++)); } || log_success "No hardcoded project ID in production"
 
+# Security: no service account JSON files committed or referenced by path
+SA_JSON=$(rg '"type"\s*:\s*"service_account"|"private_key_id"' --glob "*.json" . 2>/dev/null \
+    | grep -v ".venv\|node_modules" || true)
+[[ -n "$SA_JSON" ]] && { log_fail "Service account JSON detected — use Secret Manager via UCS"; echo "$SA_JSON" | head -3; ((CODEX_VIOLATIONS++)); } || log_success "No service account JSON"
+
+# Security: no private keys embedded in code
+PRIV_KEY=$(rg "BEGIN RSA PRIVATE KEY|BEGIN PRIVATE KEY|BEGIN EC PRIVATE KEY" \
+    --type py --type sh --type yaml --glob "!tests/**" . 2>/dev/null || true)
+[[ -n "$PRIV_KEY" ]] && { log_fail "Private key in codebase — use Secret Manager"; echo "$PRIV_KEY" | head -3; ((CODEX_VIOLATIONS++)); } || log_success "No embedded private keys"
+
+# Security: no secrets in Dockerfile ENV statements
+DOCKER_SECRETS=$(rg "^ENV\s+[A-Z_]*(KEY|SECRET|PASSWORD|TOKEN|CREDENTIAL)[A-Z_]*\s*=" \
+    --glob "**/Dockerfile*" . 2>/dev/null | grep -v "#" || true)
+[[ -n "$DOCKER_SECRETS" ]] && { log_fail "Secrets in Dockerfile ENV — pass at runtime via Secret Manager"; echo "$DOCKER_SECRETS" | head -3; ((CODEX_VIOLATIONS++)); } || log_success "No secrets in Dockerfile ENV"
+
 rg "GOOGLE_CLOUD_PROJECT" --type py --glob "!tests/**" --glob "!**/config.py" $SOURCE_DIR/ 2>/dev/null \
     && { log_fail "Use GCP_PROJECT_ID not GOOGLE_CLOUD_PROJECT"; ((CODEX_VIOLATIONS++)); } || log_success "No GOOGLE_CLOUD_PROJECT usage"
 

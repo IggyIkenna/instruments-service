@@ -20,11 +20,10 @@ Note: For production batch processing, use the CLI instead:
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict
+from typing import Any
 
-from unified_market_interface.models.venue_config import VenueMapping
+from unified_market_interface import VenueMapping
 
-# Simple imports - assumes packages are installed
 from instruments_service import (
     CloudInstrumentStorage,
     InstrumentBatchProcessor,
@@ -52,7 +51,7 @@ async def generate_instruments_batch(start_date: str, end_date: str, force: bool
 
     # Configuration for InstrumentProcessingService (uses config class)
     instruments_config = get_config()
-    config: Dict[str, Any] = {
+    config: dict[str, Any] = {
         "project_id": instruments_config.gcp_project_id,
         "max_batch_size": 1000,
         "lookback_days": 0,
@@ -104,7 +103,7 @@ async def generate_instruments_batch(start_date: str, end_date: str, force: bool
                 import pandas as pd
 
                 instruments_list = []
-                for inst_key, inst_obj in all_instruments.items():
+                for _inst_key, inst_obj in all_instruments.items():
                     if hasattr(inst_obj, "model_dump"):
                         instruments_list.append(inst_obj.model_dump())
                     else:

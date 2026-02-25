@@ -33,7 +33,7 @@ class TestCloudTargetInstantiations:
         """CloudTarget should fail if bigquery_dataset is missing."""
         config = instruments_config
 
-        with pytest.raises((TypeError, ValueError), match="bigquery_dataset|required"):
+        with pytest.raises((TypeError, ValueError), match=r"bigquery_dataset|required"):
             CloudTarget(
                 project_id=config.gcp_project_id,
                 gcs_bucket=config.get_bucket_for_category("cefi"),

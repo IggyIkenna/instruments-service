@@ -8,7 +8,7 @@ Use InstrumentsDomainClient from unified-cloud-services to query instruments.
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -58,7 +58,7 @@ def test_instrument_handler_run(mock_instrument_handler):
     # Use a past date to avoid future date skipping
     from datetime import timedelta
 
-    past_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    past_date = (datetime.now(UTC) - timedelta(days=30)).strftime("%Y-%m-%d")
 
     result = mock_instrument_handler.run(start_date=past_date, end_date=past_date, force=False)
 
@@ -80,7 +80,7 @@ def test_instrument_handler_run_with_categories(mock_instrument_handler):
     """Test instrument handler run method with market categories (skipped in Cloud Build)."""
     from datetime import timedelta
 
-    past_date = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+    past_date = (datetime.now(UTC) - timedelta(days=30)).strftime("%Y-%m-%d")
 
     result = mock_instrument_handler.run(
         start_date=past_date,

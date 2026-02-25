@@ -96,9 +96,12 @@ class SymbolParser:
                 for suffix in suffixes:
                     if s.upper().endswith(suffix):
                         base = s[: -len(suffix)]
-                        if exchange in ["binance", "binance-futures"] and base:
-                            if (base[0].isdigit() and base[0:3] != "1000") or base.upper() == "USDT":
-                                return "", ""
+                        if (
+                            exchange in ["binance", "binance-futures"]
+                            and base
+                            and ((base[0].isdigit() and base[0:3] != "1000") or base.upper() == "USDT")
+                        ):
+                            return "", ""
                         return base, suffix
                 return s, None
 
@@ -186,20 +189,18 @@ class SymbolParser:
                     if clean_symbol.endswith(quote):
                         base = clean_symbol[: -len(quote)]
                         if base and len(base) >= 2:
-                            if exchange in ["binance", "binance-futures"]:
-                                if base[0].isdigit() or base == "USDT":
-                                    return {"base_asset": "", "quote_asset": ""}
+                            if exchange in ["binance", "binance-futures"] and (base[0].isdigit() or base == "USDT"):
+                                return {"base_asset": "", "quote_asset": ""}
                             return {"base_asset": base, "quote_asset": quote}
                 base_currency, detected_quote = remove_suffix(clean_symbol)
                 base_currency = base_currency.replace("PERP", "").strip()
                 if base_currency and detected_quote:
-                    if exchange in ["binance", "binance-futures"]:
-                        if (
-                            (base_currency[0].isdigit() and "1000" not in base_currency)
-                            or base_currency == "USDT"
-                            or "USDT" in base_currency
-                        ):
-                            return {"base_asset": "", "quote_asset": ""}
+                    if exchange in ["binance", "binance-futures"] and (
+                        (base_currency[0].isdigit() and "1000" not in base_currency)
+                        or base_currency == "USDT"
+                        or "USDT" in base_currency
+                    ):
+                        return {"base_asset": "", "quote_asset": ""}
                     return {"base_asset": base_currency, "quote_asset": detected_quote}
                 return {"base_asset": clean_symbol, "quote_asset": "USDT"}
 

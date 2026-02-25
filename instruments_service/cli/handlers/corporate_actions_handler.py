@@ -19,7 +19,7 @@ Output Structure:
 import logging
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import pandas as pd
 
@@ -121,7 +121,7 @@ class CorporateActionsHandler(ModeHandler):
 
         logger.info("✅ CorporateActionsHandler initialized (TRADFI only)")
 
-    def _get_tickers_from_gcs(self, reference_date: Optional[date] = None) -> list[str]:
+    def _get_tickers_from_gcs(self, reference_date: date | None = None) -> list[str]:
         """
         Fetch equity tickers from GCS instruments store.
 
@@ -204,7 +204,7 @@ class CorporateActionsHandler(ModeHandler):
             logger.error(f"❌ Failed to load tickers from GCS: {e}")
             return []
 
-    def _get_tickers(self, tickers: Optional[list[str]] = None, reference_date: Optional[date] = None) -> list[str]:
+    def _get_tickers(self, tickers: list[str] | None = None, reference_date: date | None = None) -> list[str]:
         """
         Get list of tickers to process.
 
@@ -262,7 +262,7 @@ class CorporateActionsHandler(ModeHandler):
             raise ValueError("start_date and end_date must be date or YYYY-MM-DD string")
 
         # Get tickers
-        ticker_list = self._get_tickers(cast(Optional[list[str]], tickers))
+        ticker_list = self._get_tickers(cast(list[str] | None, tickers))
 
         logger.info(f"🚀 Fetching corporate actions for {len(ticker_list)} tickers")
         logger.info(f"📅 Date range: {start} to {end}")

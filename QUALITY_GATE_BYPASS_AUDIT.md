@@ -23,17 +23,38 @@ Inventory of all exceptions, exclusions, and handling that bypass or relax quali
 | **imports inside functions** | `tests/**`, `scripts/**` + **14 whitelisted files** (see 1.2) | Lazy imports allowed |
 | **Any/object** | `tests/**`, `scripts/**` | Tests exempt |
 | **project ID** | `tests/**` | Tests exempt |
-| **requests in async** | `scripts/**`, `**/defi/morpho_adapter.py`, `**/onchain_perps/aster_adapter.py` | Known exceptions |
-| **asyncio.run() in loops** | `examples/**`, `scripts/**`, `**/venues/defi/*`, `**/cli/**`, `**/defi_processor.py` | Entry points / CLI; DeFi adapters use async |
+| **requests in async** | `scripts/**`, `**/defi/morpho_adapter.py`, `**/onchain_perps/aster_adapter.py` | See rationale below |
+| **asyncio.run() in loops** | `examples/**`, `scripts/**`, `**/venues/defi/*`, `**/cli/**`, `**/defi_processor.py` | See rationale below |
 | **file size** | `scripts/*`, `.venv/*`, `deps/*`, `.git/*`, `build/*` | Scripts exempt per codex |
-| **pip-audit** | (skip if pip_audit not installed) | Optional tool |
+| **pip-audit** | Required (blocking) | Vulnerability scan |
+| **bandit** | Required (blocking) | Security lint |
 | **basedpyright** | `tests/**` | Tests use mocks, dynamic types; codex exempts tests from production rules (Any, etc.). Type-check production code only. |
 
 **pyrightconfig.json:** `reportPrivateUsage` and `reportIncompatibleMethodOverride` are set to `"warning"` so quality gates catch private/protected member usage and incompatible method overrides (aligns with IDE). Previously defaulted to `"none"`, so these were not caught.
 
+**Rationale for requests-in-async and asyncio.run-in-loops:**
+
+| Rule | Best practice | Why |
+|------|---------------|-----|
+| **No `requests` in async code** | Use `aiohttp` (or `httpx`) for HTTP in async functions | `requests.get()` is blocking — it blocks the event loop. In async code, blocking I/O defeats concurrency and can cause performance issues. `aiohttp` (and `httpx` async) yield control during I/O so the event loop can handle other tasks. |
+| **No `asyncio.run()` in loops** | Use `asyncio.gather()` for parallel async work | `asyncio.run()` creates a new event loop each call. Calling it inside `for item in items: asyncio.run(process(item))` creates N event loops — wasteful and can cause resource leaks. Correct: `await asyncio.gather(*[process(item) for item in items])` — one loop, parallel execution. |
+
+**Why we have exceptions:** (1) **CLI/entry points** — Sync code (CLI) must bridge to async via `asyncio.run()`; one call per command invocation is acceptable. The quality-gate heuristic (file has both `for`/`while` and `asyncio.run`) can false-positive on CLI handlers. (2) **defi_processor** — Uses `asyncio.run(adapter.fetch_pools(...))` per protocol; sync caller, async adapter. The fix would be to make the processor async and use `asyncio.gather` when processing multiple protocols. (3) **morpho_adapter, aster_adapter** — Legacy or third-party adapters that use `requests`; migration to `aiohttp` is planned (see Section 7 hardening).
+
 **Ruff F841 (unused variable):** Ruff select includes `F` (Pyflakes). F841 flags variables assigned but never used. Use `_` for intentionally unused loop variables (e.g. `for _, bundle in items()`).
 
-### 1.2 Import Check Whitelist (14 files exempt from “imports inside functions”)
+### 1.2 Required Quality Gate Components (blocking)
+
+| Component | Enforcement | Notes |
+|-----------|--------------|-------|
+| **Duration** | Must complete in <2 min | Fails if total runtime > 120s |
+| **pytest-timeout** | Required (no fallback) | `--timeout=60` per test; fail clearly if not installed |
+| **pip-audit** | Required (blocking) | Vulnerability scan; fail if not installed or vulnerabilities found |
+| **bandit** | Required (blocking) | Security lint (`-r instruments_service/ -ll`); timeout 30s; fail if not installed or issues found |
+
+**Dev deps:** `pyproject.toml` must include `pytest-timeout`, `pip-audit`, `bandit` in `[project.optional-dependencies]` dev.
+
+### 1.3 Import Check Whitelist (14 files exempt from “imports inside functions”)
 
 These files are **excluded** from the import-inside-functions check:
 
@@ -56,7 +77,7 @@ These files are **excluded** from the import-inside-functions check:
 | `**/corporate_actions_production_handler.py` | Circular import |
 | `**/corporate_actions_update_handler.py` | Circular import |
 
-### 1.3 grep -v Exclusions (lines matching these patterns are ignored)
+### 1.4 grep -v Exclusions (lines matching these patterns are ignored)
 
 | Check | Excluded Pattern | Effect |
 |-------|------------------|--------|
@@ -135,6 +156,10 @@ These files are **excluded** from the import-inside-functions check:
 | **E722** (bare except) | Global | Bare `except:` allowed |
 | **E402** (module level import) | `cli/main.py`, `tests/conftest.py` | Imports not at top allowed |
 | **E722** (bare except) | `scripts/*` | Bare except allowed in scripts |
+| **N802** (function name) | `config/service_config.py` | INSTRUMENTS_GCS_BUCKET_* override parent config API |
+| **RUF012** (ClassVar) | `config.py`, `config/venue_config.py` | KNOWN_ETFS, SPACE_TO_DOT_SYMBOLS — ClassVar refactor deferred |
+| **N806** (variable case) | `ccxt_manual_fallback.py`, `test_cloud_agnostic_paths.py` | HYPERLIQUID_MANUAL_MAPPINGS, FORBIDDEN_REAL_ID constants |
+| **E402, F821** | `tests/smoke/test_shard_combinatorics.py` | Import after importorskip; unified_trading_deployment external |
 
 ---
 

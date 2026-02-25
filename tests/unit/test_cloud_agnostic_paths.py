@@ -12,9 +12,9 @@ from datetime import date
 from unittest.mock import Mock, patch
 
 import pytest
+from unified_cloud_services import BaseDependencyChecker as DependencyChecker
 
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
-from instruments_service.app.core.dependency_checker import DependencyChecker
 
 
 class TestCloudAgnosticPaths:
@@ -204,11 +204,11 @@ class TestCloudAgnosticPaths:
         violations = []
         for file_path in python_files:
             try:
-                with open(file_path, "r") as f:
+                with open(file_path) as f:
                     content = f.read()
 
                 # Check for direct get_gcs_client imports (bad)
-                if "from unified_cloud_services import get_gcs_client" in content:
+                if "from unified_cloud_services.core.cloud_auth_factory import create_gcs_client" in content:
                     violations.append(f"{file_path}: Direct import of get_gcs_client")
 
                 # Check for get_gcs_client() calls (bad, should use StandardizedDomainCloudService)

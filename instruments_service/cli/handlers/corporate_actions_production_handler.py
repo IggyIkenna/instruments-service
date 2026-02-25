@@ -23,9 +23,9 @@ import logging
 import subprocess
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import pandas as pd
 
@@ -90,13 +90,13 @@ class CorporateActionsProductionHandler(ModeHandler):
 
         if metadata_path.exists():
             logger.info(f"📂 Loading existing metadata from {metadata_path}")
-            with open(metadata_path, "r") as f:
+            with open(metadata_path) as f:
                 return cast(dict[str, Any], json.load(f))
         else:
             logger.info("📝 Creating new metadata (first run)")
             return {
                 "version": "1.0",
-                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "generated_at": datetime.now(UTC).isoformat(),
                 "tickers": {},
                 "config": {
                     "update_frequency_days": 7,
@@ -113,7 +113,7 @@ class CorporateActionsProductionHandler(ModeHandler):
             metadata: Metadata dictionary to save
         """
         metadata_path = self.metadata_dir / "ticker_registry.json"
-        metadata["last_updated"] = datetime.now(timezone.utc).isoformat()
+        metadata["last_updated"] = datetime.now(UTC).isoformat()
 
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
@@ -357,7 +357,7 @@ class CorporateActionsProductionHandler(ModeHandler):
             str,
             str | dict[str, int] | dict[str, dict[str, int]] | dict[str, list[dict[str, str]]],
         ] = {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "version": "1.0",
             "summary": {
                 "total_tickers": len(results),
@@ -417,10 +417,21 @@ class CorporateActionsProductionHandler(ModeHandler):
             logger.info(f"📁 Source: {self.base_dir}")
             logger.info(f"☁️  Destination: {gcs_path}")
 
-            # Use gsutil to upload entire directory
-            cmd = ["gsutil", "-m", "cp", "-r", f"{self.base_dir}/*", gcs_path]
+            # Use gsutil to upload entire directory - safely without shell globbing
+            import glob
+            import os
 
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            # Get all files in base_dir safely
+            files_to_upload = glob.glob(os.path.join(self.base_dir, "*"))
+
+            if not files_to_upload:
+                logger.warning(f"No files found in {self.base_dir} to upload")
+                return False
+
+            # Upload files in batches to avoid command line limits
+            for file_path in files_to_upload:
+                cmd = ["gsutil", "-m", "cp", "-r", file_path, gcs_path]
+                subprocess.run(cmd, capture_output=True, text=True, check=True)
 
             logger.info("✅ Successfully uploaded to GCS")
             logger.info(f"☁️  Location: {gcs_path}")
@@ -438,7 +449,7 @@ class CorporateActionsProductionHandler(ModeHandler):
 
     def run(
         self,
-        tickers: Optional[list[str]] = None,
+        tickers: list[str] | None = None,
         parallel_workers: int = 2,  # Changed default from 10 to 2
         max_retries: int = 3,
         upload_to_gcs: bool = True,  # New parameter to control GCS upload

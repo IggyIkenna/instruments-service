@@ -76,7 +76,7 @@ class CorporateActionsUpdateHandler(ModeHandler):
                 },
             }
 
-        with open(registry_path, "r") as f:
+        with open(registry_path) as f:
             registry: dict[str, Any] = yaml.safe_load(f) or {}
         return registry
 
@@ -196,7 +196,10 @@ class CorporateActionsUpdateHandler(ModeHandler):
             max_retries=max_retries,
         )
 
-        stats = cast(dict[str, Any], result.get("statistics", {}))
+        stats_value = result.get("statistics")
+        if stats_value is None:
+            stats_value = {}
+        stats = cast(dict[str, Any], stats_value)
 
         # Regenerate date views if requested
         if regenerate_date_views:
@@ -205,7 +208,10 @@ class CorporateActionsUpdateHandler(ModeHandler):
                 upload_to_gcs=upload_to_gcs,
             )
 
-            stats["date_views"] = date_views_result.get("statistics", {})
+            date_views_stats = date_views_result.get("statistics")
+            if date_views_stats is None:
+                date_views_stats = {}
+            stats["date_views"] = date_views_stats
 
         logger.info("\n✅ Update complete")
         logger.info(f"📈 Updated {stats['tickers_successful']}/{len(outdated_tickers)} tickers")

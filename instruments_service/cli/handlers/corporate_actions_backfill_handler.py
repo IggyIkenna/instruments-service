@@ -37,9 +37,9 @@ Storage Structure:
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, cast
 
 import pandas as pd
 import yaml
@@ -83,7 +83,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
 
         logger.info("✅ CorporateActionsBackfillHandler initialized")
 
-    def _get_tickers_from_gcs(self, reference_date: Optional[date] = None) -> list[str]:
+    def _get_tickers_from_gcs(self, reference_date: date | None = None) -> list[str]:
         """
         Fetch equity tickers from GCS instruments store.
 
@@ -143,7 +143,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
             logger.error(f"❌ Failed to load tickers from GCS: {e}")
             return []
 
-    def _get_tickers(self, tickers: Optional[list[str]] = None) -> list[str]:
+    def _get_tickers(self, tickers: list[str] | None = None) -> list[str]:
         """Get list of tickers to process."""
         if tickers:
             return [t.upper() for t in tickers]
@@ -302,7 +302,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
         # Load existing registry if exists
         registry: dict[str, Any]
         if registry_path.exists():
-            with open(registry_path, "r") as f:
+            with open(registry_path) as f:
                 registry = yaml.safe_load(f) or {}
         else:
             registry = {
@@ -315,7 +315,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
                 },
             }
 
-        registry["last_updated"] = datetime.now(timezone.utc).isoformat()
+        registry["last_updated"] = datetime.now(UTC).isoformat()
         registry["total_tickers"] = len(results)
 
         # Update ticker entries
@@ -365,7 +365,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
             )
             fetch_history.append(
                 {
-                    "date": datetime.now(timezone.utc).isoformat(),
+                    "date": datetime.now(UTC).isoformat(),
                     "result": "success" if result["success"] else "error",
                     "events_found": result["dividends_count"] + result["splits_count"] + result["earnings_count"],
                     "error": result["error"] if not result["success"] else None,
@@ -412,7 +412,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
         total_earnings = sum(r["earnings_count"] for r in successful)
 
         report: dict[str, Any] = {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": datetime.now(UTC).isoformat(),
             "version": "1.0",
             "summary": {
                 "total_tickers": len(results),
@@ -440,7 +440,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
                 "tickers_with_errors": [{"ticker": r["ticker"], "error": r["error"]} for r in failed],
                 "tickers_no_data": tickers_no_data,
             },
-            "last_update_check": datetime.now(timezone.utc).isoformat(),
+            "last_update_check": datetime.now(UTC).isoformat(),
         }
 
         with open(report_path, "w") as f:
@@ -450,7 +450,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
 
     def run(
         self,
-        tickers: Optional[list[str]] = None,
+        tickers: list[str] | None = None,
         parallel_workers: int = 10,
         append_mode: bool = True,
         upload_to_gcs: bool = False,

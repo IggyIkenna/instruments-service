@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from typing import TypedDict, cast
 
 from unified_cloud_services import get_date_range, parse_date
-from unified_market_interface.models.venue_config import VenueMapping
+from unified_market_interface import VenueMapping
 
 from instruments_service.app.core.cloud_data_provider import CloudDataProvider
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
@@ -175,13 +175,13 @@ class InstrumentHandler(ModeHandler):
                 _ = validate_required_api_keys(venues_to_process)
                 logger.info(f"✅ Validated API keys for {len(venues_to_process)} venues")
             except ValueError as e:
-                log_event("VALIDATION_FAILED", f"API key validation: {str(e)}")
+                log_event("VALIDATION_FAILED", f"API key validation: {e!s}")
                 raise
 
             log_event("VALIDATION_COMPLETED")
         except (ValueError, TypeError, KeyError) as e:
             log_event("VALIDATION_FAILED", str(e))
-            log_event("FAILED", f"Validation error: {str(e)}")
+            log_event("FAILED", f"Validation error: {e!s}")
             raise
 
         # Observability metrics tracking

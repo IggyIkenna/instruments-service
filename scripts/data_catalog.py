@@ -17,8 +17,8 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -75,10 +75,10 @@ class CatalogEntry:
     date: str
     exists: bool
     gcs_path: str
-    file_size: Optional[int] = None
-    instrument_count: Optional[int] = None
+    file_size: int | None = None
+    instrument_count: int | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "category": self.category,
             "date": self.date,
@@ -98,9 +98,9 @@ class CategorySummary:
     existing_dates: int
     missing_dates: int
     completion_pct: float
-    missing_date_list: List[str] = field(default_factory=list)
+    missing_date_list: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "category": self.category,
             "total_dates": self.total_dates,
@@ -120,10 +120,10 @@ class CatalogReport:
     end_date: str
     generated_at: str
     overall_completion: float
-    category_summaries: List[CategorySummary]
-    entries: List[CatalogEntry]
+    category_summaries: list[CategorySummary]
+    entries: list[CatalogEntry]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "service": self.service,
             "start_date": self.start_date,
@@ -180,7 +180,7 @@ def check_file_exists(service, bucket_name: str, blob_path: str) -> tuple:
         return False, None
 
 
-def generate_date_range(start_date: date, end_date: date) -> List[date]:
+def generate_date_range(start_date: date, end_date: date) -> list[date]:
     """Generate all dates in range."""
     dates = []
     current = start_date
@@ -193,7 +193,7 @@ def generate_date_range(start_date: date, end_date: date) -> List[date]:
 def generate_catalog(
     start_date: date,
     end_date: date,
-    categories: Optional[List[str]] = None,
+    categories: list[str] | None = None,
     include_entries: bool = True,
 ) -> CatalogReport:
     """
@@ -280,7 +280,7 @@ def generate_catalog(
         service="instruments-service",
         start_date=start_date.isoformat(),
         end_date=end_date.isoformat(),
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        generated_at=datetime.now(UTC).isoformat(),
         overall_completion=round(overall_completion, 2),
         category_summaries=category_summaries,
         entries=entries if include_entries else [],

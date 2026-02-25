@@ -6,7 +6,7 @@ Extends BaseGCSWriter from unified-cloud-services with instrument specific path 
 import logging
 from datetime import datetime
 
-from unified_cloud_services.io import BaseGCSWriter
+from unified_cloud_services import BaseGCSWriter
 
 from instruments_service.config import InstrumentsServiceConfig, get_service_config
 from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA

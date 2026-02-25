@@ -9,7 +9,7 @@ Tests cover real-world usage scenarios:
 - Resource cleanup
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, Mock, patch
 
 import pandas as pd
@@ -182,7 +182,7 @@ class TestGenerateInstrumentsSingleDate:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            date = datetime(2024, 1, 1, tzinfo=UTC)
             result = await service.generate_instruments_for_date(date=date, exchanges=["binance"], cefi=True)
 
             assert result["status"] == "success"
@@ -212,7 +212,7 @@ class TestGenerateInstrumentsSingleDate:
             mock_tardis_adapter.fetch_instruments = AsyncMock(return_value=[])
             mock_base_client = Mock()
             mock_base_client.check_venues_access = Mock(
-                side_effect=lambda exchanges: {ex: (True, "") for ex in exchanges}
+                side_effect=lambda exchanges: dict.fromkeys(exchanges, (True, ""))
             )
             mock_tardis_adapter.base_client = mock_base_client
             mock_get_adapter.return_value = mock_tardis_adapter
@@ -225,7 +225,7 @@ class TestGenerateInstrumentsSingleDate:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            date = datetime(2024, 1, 1, tzinfo=UTC)
             await service.generate_instruments_for_date(
                 date=date,
                 cefi=True,  # No exchanges specified
@@ -267,7 +267,7 @@ class TestGenerateInstrumentsSingleDate:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            date = datetime(2024, 1, 1, tzinfo=UTC)
             result = await service.generate_instruments_for_date(date=date, tradfi=True)
 
             assert result["status"] == "success"
@@ -303,7 +303,7 @@ class TestGenerateInstrumentsSingleDate:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            date = datetime(2024, 1, 1, tzinfo=UTC)
             result = await service.generate_instruments_for_date(date=date, defi=True)
 
             assert result["status"] == "success"
@@ -329,7 +329,7 @@ class TestGenerateInstrumentsSingleDate:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            date = datetime(2024, 1, 1, tzinfo=UTC)
             await service.generate_instruments_for_date(date=date, defi=True, venues=["UNISWAPV3-ETH"])
 
             # Should only process Uniswap V3
@@ -390,7 +390,7 @@ class TestGenerateInstrumentsSingleDate:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            date = datetime(2024, 1, 1, tzinfo=UTC)
             result = await service.generate_instruments_for_date(date=date, tradfi=True, venues=["NYSE", "NASDAQ"])
 
             assert result["status"] == "success"
@@ -425,7 +425,7 @@ class TestGenerateInstrumentsSingleDate:
             mock_tardis_adapter.fetch_instruments = AsyncMock(return_value=[])
             mock_base_client = Mock()
             mock_base_client.check_venues_access = Mock(
-                side_effect=lambda exchanges: {ex: (True, "") for ex in exchanges}
+                side_effect=lambda exchanges: dict.fromkeys(exchanges, (True, ""))
             )
             mock_tardis_adapter.base_client = mock_base_client
             mock_get_adapter.return_value = mock_tardis_adapter
@@ -438,7 +438,7 @@ class TestGenerateInstrumentsSingleDate:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            date = datetime(2024, 1, 1, tzinfo=UTC)
             await service.generate_instruments_for_date(date=date)
 
             # CeFi uses UMI get_adapter + fetch_instruments; TradFi and DeFi use processing_service
@@ -471,7 +471,7 @@ class TestGenerateInstrumentsSingleDate:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            date = datetime(2024, 1, 1, tzinfo=UTC)
             result = await service.generate_instruments_for_date(date=date, exchanges=["binance"], cefi=True)
 
             # CeFi with no instruments = ERROR (unexpected)
@@ -518,7 +518,7 @@ class TestGenerateInstrumentsSingleDate:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            date = datetime(2024, 1, 1, tzinfo=UTC)
             result = await service.generate_instruments_for_date(date=date, exchanges=["binance"], cefi=True)
 
             assert result["status"] == "error"
@@ -568,7 +568,7 @@ class TestGenerateInstrumentsSingleDate:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            date = datetime(2024, 1, 1, tzinfo=UTC)
             result = await service.generate_instruments_for_date(date=date, exchanges=["binance", "deribit"], cefi=True)
 
             # Should still succeed with instruments from deribit
@@ -604,7 +604,7 @@ class TestGenerateInstrumentsSingleDate:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            date = datetime(2024, 1, 1, tzinfo=UTC)
             await service.generate_instruments_for_date(date=date, exchanges=["binance"], cefi=True, force=True)
 
             # Verify force_refresh=True was passed to adapter.fetch_instruments
@@ -629,7 +629,7 @@ class TestGenerateInstrumentsDateRange:
             mock_storage_class.return_value = mock_storage
 
             mock_batch = Mock()
-            start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            start_date = datetime(2024, 1, 1, tzinfo=UTC)
             mock_batch.get_required_periods = Mock(return_value=[start_date])
             mock_batch_class.return_value = mock_batch
 
@@ -666,9 +666,9 @@ class TestGenerateInstrumentsDateRange:
         ):
             mock_batch = Mock()
             dates = [
-                datetime(2024, 1, 1, tzinfo=timezone.utc),
-                datetime(2024, 1, 2, tzinfo=timezone.utc),
-                datetime(2024, 1, 3, tzinfo=timezone.utc),
+                datetime(2024, 1, 1, tzinfo=UTC),
+                datetime(2024, 1, 2, tzinfo=UTC),
+                datetime(2024, 1, 3, tzinfo=UTC),
             ]
             mock_batch.get_required_periods = Mock(return_value=dates)
             mock_batch_class.return_value = mock_batch
@@ -704,9 +704,9 @@ class TestGenerateInstrumentsDateRange:
         ):
             mock_batch = Mock()
             dates = [
-                datetime(2024, 1, 1, tzinfo=timezone.utc),
-                datetime(2024, 1, 2, tzinfo=timezone.utc),
-                datetime(2024, 1, 3, tzinfo=timezone.utc),
+                datetime(2024, 1, 1, tzinfo=UTC),
+                datetime(2024, 1, 2, tzinfo=UTC),
+                datetime(2024, 1, 3, tzinfo=UTC),
             ]
             mock_batch.get_required_periods = Mock(return_value=dates)
             mock_batch_class.return_value = mock_batch
@@ -840,7 +840,7 @@ class TestGenerateInstrumentsEdgeCases:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            start_date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            start_date = datetime(2024, 1, 1, tzinfo=UTC)
             result = await service.generate_instruments_date_range(
                 start_date=start_date,
                 end_date=start_date,
@@ -889,7 +889,7 @@ class TestGenerateInstrumentsEdgeCases:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            date = datetime(2024, 1, 1, tzinfo=UTC)
             result = await service.generate_instruments_for_date(date=date, exchanges=["binance"], cefi=True)
 
             assert result["status"] in ["success", "warning"]
@@ -937,7 +937,7 @@ class TestUpbitCoinbaseIntegration:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            date = datetime(2024, 1, 1, tzinfo=UTC)
             result = await service.generate_instruments_for_date(date=date, exchanges=["upbit"], cefi=True)
 
             assert result["status"] == "success"
@@ -983,7 +983,7 @@ class TestUpbitCoinbaseIntegration:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+            date = datetime(2024, 1, 1, tzinfo=UTC)
             result = await service.generate_instruments_for_date(date=date, exchanges=["coinbase"], cefi=True)
 
             assert result["status"] == "success"
