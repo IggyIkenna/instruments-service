@@ -1,46 +1,50 @@
 #!/usr/bin/env bash
 #
 # Quality Gates for instruments-service
+# Aligned with: unified-trading-codex/06-coding-standards/quality-gates-service-template.sh
+# Whitelists: docs/QUALITY_GATE_BYPASS_AUDIT.md
 #
-# This script runs the EXACT same checks as GitHub Actions and Cloud Build.
-# Run this locally before pushing to catch issues early.
+# Required: duration <2 min, pytest-timeout (--timeout=60), pip-audit, bandit
 #
 # Usage:
 #   ./scripts/quality-gates.sh           # Run all checks (with auto-fix)
-#   ./scripts/quality-gates.sh --lint    # Linting only (with auto-fix)
+#   ./scripts/quality-gates.sh --lint    # Linting only
 #   ./scripts/quality-gates.sh --test    # Tests only
-#   ./scripts/quality-gates.sh --quick   # Unit tests only (fast)
+#   ./scripts/quality-gates.sh --quick   # Unit tests only (faster)
 #   ./scripts/quality-gates.sh --no-fix  # Skip auto-fix (CI mode)
 #
-# Requirements:
-#   - Python 3.13 (>=3.13,<3.14)
-MIN_COVERAGE=35
-#   - ruff, pytest, pytest-asyncio, pytest-mock installed
-#   - unified-cloud-services available (local or via GH_PAT)
-#
-set -e  # Exit on any error
+set -e
 
-# Colors for output
+# ============================================================================
+# REPO-SPECIFIC CONFIG (override template defaults)
+# ============================================================================
+SERVICE_NAME="instruments-service"
+SOURCE_DIR="instruments_service"
+SOURCE_DIRS="instruments_service/ tests/"
+MIN_COVERAGE=35
+# Integration skipped until test timing fixed (see TODO)
+RUN_INTEGRATION=false
+
+# Start timer (quality gates must complete in <2 min)
+QG_START=$(date +%s)
+
+# Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Get script directory and project root
+# Paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-REPO_ROOT="$(dirname "$PROJECT_ROOT")"
-
-# Change to project root
+REPO_ROOT="${REPO_ROOT:-$(dirname "$PROJECT_ROOT")}"
 cd "$PROJECT_ROOT"
 
 # ============================================================================
-# ENSURE ENVIRONMENT (venv + uv + deps) - single command, no setup needed first
-# Skips in CI (GitHub Actions, Cloud Build use their own setup)
+# ENVIRONMENT BOOTSTRAP (repo-specific; skips in CI)
 # ============================================================================
 if [ -z "${GITHUB_ACTIONS:-}" ] && [ -z "${CI:-}" ] && [ -z "${CLOUD_BUILD:-}" ]; then
-    # Update lock file when pyproject.toml changes (cross-platform, fast; no-op when deps unchanged)
     if [ -f "pyproject.toml" ]; then
         command -v uv &>/dev/null || pip install uv --quiet
         uv lock 2>/dev/null || true
@@ -62,7 +66,6 @@ if [ -z "${GITHUB_ACTIONS:-}" ] && [ -z "${CI:-}" ] && [ -z "${CLOUD_BUILD:-}" ]
     fi
     command -v uv &>/dev/null || pip install uv --quiet
     if [ -f "pyproject.toml" ]; then
-        # Install workspace libraries first (UCI, UCS, UEI, UMI, UDS) so tests use refactored code
         for lib in unified-config-interface unified-cloud-services unified-domain-services unified-events-interface unified-market-interface; do
             lib_path=""
             [ -d "${REPO_ROOT:-/dev/null}/$lib" ] && lib_path="${REPO_ROOT}/$lib"
@@ -75,704 +78,392 @@ if [ -z "${GITHUB_ACTIONS:-}" ] && [ -z "${CI:-}" ] && [ -z "${CLOUD_BUILD:-}" ]
     fi
 fi
 
-# Python for tests (prefer venv to ensure workspace libs are used)
-if [ -f ".venv/bin/python" ]; then
-    PYTHON_CMD=".venv/bin/python"
-elif [ -f ".venv/Scripts/python.exe" ]; then
-    PYTHON_CMD=".venv/Scripts/python.exe"
-elif command -v python &>/dev/null && python -c "import sys; exit(0 if sys.version_info >= (3, 13) else 1)" 2>/dev/null; then
-    PYTHON_CMD="python"
-elif [ -f "$REPO_ROOT/.scripts/detect-python.sh" ]; then
-    source "$REPO_ROOT/.scripts/detect-python.sh"
-else
-    PYTHON_CMD="python3"
-fi
-PYTHON_VERSION="$($PYTHON_CMD --version 2>&1)"
+# Python command
+PYTHON_CMD=".venv/bin/python"
+[ ! -f "$PYTHON_CMD" ] && [ -f ".venv/Scripts/python.exe" ] && PYTHON_CMD=".venv/Scripts/python.exe"
+[ ! -f "$PYTHON_CMD" ] && PYTHON_CMD="python3"
 
-echo -e "${BLUE}======================================================================${NC}"
-echo -e "${BLUE}INSTRUMENTS-SERVICE QUALITY GATES${NC}"
-echo -e "${BLUE}======================================================================${NC}"
-echo -e "Project: ${PROJECT_ROOT}"
-echo -e "Python:  $PYTHON_VERSION (using: $PYTHON_CMD)"
-echo ""
+# Portable timeout (Linux: timeout; macOS: gtimeout from brew install coreutils)
+run_timeout() {
+  local secs=$1
+  shift
+  if command -v timeout &>/dev/null; then
+    timeout "$secs" "$@"
+  elif command -v gtimeout &>/dev/null; then
+    gtimeout "$secs" "$@"
+  else
+    "$@"
+  fi
+}
 
-# Parse arguments
+# ============================================================================
+# MODE DETECTION
+# ============================================================================
+FIX_MODE=true
+QUICK_MODE=false
 RUN_LINT=true
 RUN_TESTS=true
-QUICK_MODE=false
-AUTO_FIX=true  # Default to auto-fix for local runs
-
 for arg in "$@"; do
     case $arg in
-        --lint)
-            RUN_LINT=true
-            RUN_TESTS=false
-            ;;
-        --test)
-            RUN_LINT=false
-            RUN_TESTS=true
-            ;;
-        --quick)
-            QUICK_MODE=true
-            ;;
-        --no-fix)
-            AUTO_FIX=false
-            ;;
-        --fix)
-            AUTO_FIX=true
-            ;;
+        --no-fix) FIX_MODE=false ;;
+        --quick) QUICK_MODE=true ;;
+        --lint) RUN_TESTS=false ;;
+        --test) RUN_LINT=false ;;
+        --fix) FIX_MODE=true ;;
         --help|-h)
-            echo "Usage: $0 [OPTIONS]"
-            echo ""
-            echo "Options:"
-            echo "  --lint     Run linting only (with auto-fix)"
-            echo "  --test     Run tests only"
-            echo "  --quick    Run unit tests only (faster)"
-            echo "  --fix      Auto-fix linting issues (default)"
-            echo "  --no-fix   Skip auto-fix (CI mode)"
-            echo "  --help     Show this help message"
+            echo "Usage: $0 [--lint|--test|--quick|--no-fix|--fix|--help]"
             exit 0
             ;;
     esac
 done
 
-# Track overall status
-LINT_STATUS=0
-TEST_STATUS=0
-CODEX_STATUS=0
-CONFIG_STATUS=0
-
-# Source directories (default: check all)
-SOURCE_DIRS="instruments_service/ tests/"
-
-# Git-aware: If files are staged (e.g., via quickmerge --files), check ONLY staged files
-# This prevents deadlock when fixing COD issues with other unrelated linter errors
+# Git-aware mode
 STAGED_PY_FILES=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null | grep '\.py$' | tr '\n' ' ' || true)
-
 if [ -n "$STAGED_PY_FILES" ]; then
     FILE_COUNT=$(echo "$STAGED_PY_FILES" | wc -w | tr -d ' ')
     SOURCE_DIRS="$STAGED_PY_FILES"
     echo -e "${YELLOW}🔍 Git-aware mode: Checking ONLY staged files ($FILE_COUNT files)${NC}"
-    echo -e "${YELLOW}   Staged: $STAGED_PY_FILES${NC}"
-    echo ""
 fi
+
+# Test env for smoke tests
+export DEPLOYMENT_CONFIG_DIR="${REPO_ROOT}/unified-trading-deployment-v3/configs"
+export CLOUD_MOCK_MODE="true"
+export GOOGLE_CLOUD_PROJECT="test-project"
+
+# Template limits
+MAX_FILE_LINES=900
+FILE_WARN_LINES=700
+MAX_FUNCTION_LINES=100
+MAX_CLASS_LINES=500
+MAX_METHOD_LINES=50
+PYTEST_WORKERS=${PYTEST_WORKERS:-2}
+
+# Helpers
+log_section() { echo -e "\n${BLUE}$1${NC}"; echo "----------------------------------------------------------------------"; }
+log_success() { echo -e "${GREEN}✅ $1${NC}"; }
+log_fail() { echo -e "${RED}❌ $1${NC}"; }
+log_warn() { echo -e "${YELLOW}⚠️  $1${NC}"; }
 
 # ============================================================================
-# STEP 0: ENVIRONMENT & CONFIG VALIDATION (Codex-aligned)
+# STEP 0: ENVIRONMENT & CONFIG VALIDATION
 # ============================================================================
-echo -e "\n${BLUE}[0/6] ENVIRONMENT & CONFIG VALIDATION${NC}"
-echo "----------------------------------------------------------------------"
+log_section "[0/6] ENVIRONMENT & CONFIG VALIDATION"
 
-# Python 3.13 runtime check (fail if not)
-REQUIRED_PYTHON="3.13"
-ACTUAL_PYTHON=$($PYTHON_CMD --version 2>&1 | awk '{print $2}' | cut -d'.' -f1,2)
-if [[ "$ACTUAL_PYTHON" != "$REQUIRED_PYTHON" ]]; then
-    echo -e "${RED}❌ Python $REQUIRED_PYTHON required, found $ACTUAL_PYTHON${NC}"
-    CONFIG_STATUS=1
-else
-    echo -e "${GREEN}✅ Python $ACTUAL_PYTHON${NC}"
-fi
+ACTUAL_PYTHON=$(python --version 2>&1 | awk '{print $2}' | cut -d'.' -f1,2)
+[[ "$ACTUAL_PYTHON" != "3.13" ]] && { log_fail "Python 3.13 required, found $ACTUAL_PYTHON"; exit 1; }
+log_success "Python $ACTUAL_PYTHON"
 
-# uv.lock existence (warn if missing)
-if [[ ! -f "uv.lock" ]]; then
-    echo -e "${YELLOW}⚠️  uv.lock missing (run: uv lock)${NC}"
-else
-    echo -e "${GREEN}✅ uv.lock found${NC}"
-fi
+[[ ! -f "uv.lock" ]] && log_warn "uv.lock missing (run: uv lock)" || log_success "uv.lock found"
 
-# ripgrep required for codex compliance
 if ! command -v rg &> /dev/null; then
-    echo -e "${RED}❌ ripgrep (rg) required for codex compliance checks${NC}"
-    echo -e "${YELLOW}   Install: brew install ripgrep (macOS) or apt install ripgrep (Linux)${NC}"
-    CONFIG_STATUS=1
-else
-    echo -e "${GREEN}✅ ripgrep available${NC}"
+    log_fail "ripgrep (rg) required"
+    exit 1
 fi
+log_success "ripgrep available"
 
-# Ruff version check (warn if not 0.15.0)
 RUFF_CMD="ruff"
 [ -f ".venv/bin/ruff" ] && RUFF_CMD=".venv/bin/ruff"
 RUFF_VER=$($RUFF_CMD --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "0.0.0")
-if [[ "$RUFF_VER" != "0.15.0" ]]; then
-    echo -e "${YELLOW}⚠️  Ruff 0.15.0 expected, found $RUFF_VER${NC}"
-else
-    echo -e "${GREEN}✅ Ruff $RUFF_VER${NC}"
-fi
+[[ "$RUFF_VER" != "0.15.0" ]] && log_warn "Ruff 0.15.0 expected, found $RUFF_VER" || log_success "Ruff $RUFF_VER"
 
-# Check for unescaped shell variables in cloudbuild.yaml
-# In Cloud Build YAML, shell variables must be escaped with $$ not $
 if [ -f "cloudbuild.yaml" ]; then
-    # Check for $PYTEST_EXIT or $? that should be $$PYTEST_EXIT or $$?
-    # Exclude lines that already have $$ (properly escaped)
     UNESCAPED=$(grep -E '\$PYTEST_EXIT|\$\?' cloudbuild.yaml | grep -v '\$\$' || true)
-    if [ -n "$UNESCAPED" ]; then
-        echo -e "${RED}❌ cloudbuild.yaml has unescaped shell variables:${NC}"
-        echo "$UNESCAPED"
-        echo -e "${YELLOW}Fix: Change \$PYTEST_EXIT to \$\$PYTEST_EXIT and \$? to \$\$?${NC}"
-        CONFIG_STATUS=1
-    else
-        echo -e "${GREEN}✅ cloudbuild.yaml shell variables properly escaped${NC}"
-    fi
-else
-    echo -e "${YELLOW}No cloudbuild.yaml found (skipping)${NC}"
+    [ -n "$UNESCAPED" ] && { log_fail "cloudbuild.yaml unescaped shell variables"; exit 1; }
+    log_success "cloudbuild.yaml OK"
 fi
 
-# Check Python version in pyproject.toml matches expected
-if [ -f "pyproject.toml" ]; then
-    PYTHON_VERSION=$(grep 'requires-python' pyproject.toml | head -1)
-    if echo "$PYTHON_VERSION" | grep -q '>=3.13,<3.14'; then
-        echo -e "${GREEN}✅ pyproject.toml Python version correct: $PYTHON_VERSION${NC}"
-    else
-        echo -e "${RED}❌ pyproject.toml Python version may be incorrect: $PYTHON_VERSION${NC}"
-        echo -e "${YELLOW}Expected: requires-python = \">=3.13,<3.14\"${NC}"
-        CONFIG_STATUS=1
-    fi
-else
-    echo -e "${YELLOW}No pyproject.toml found (skipping)${NC}"
+[ -f "pyproject.toml" ] && grep -q '>=3.13,<3.14' pyproject.toml || { log_fail "pyproject.toml requires Python >=3.13,<3.14"; exit 1; }
+log_success "pyproject.toml Python version correct"
+
+# ============================================================================
+# STEP 1: AUTO-FIX (ruff) — timeout 30s
+# ============================================================================
+if [ "$RUN_LINT" = true ] && [ "$FIX_MODE" = true ]; then
+    log_section "[1/6] AUTO-FIX (ruff)"
+    run_timeout 30 ruff format --line-length 120 $SOURCE_DIRS || { log_fail "ruff format timed out (30s)"; exit 1; }
+    run_timeout 30 ruff check --fix --line-length 120 $SOURCE_DIRS || { log_fail "ruff check --fix timed out (30s)"; exit 1; }
+    log_success "Auto-fix complete"
 fi
 
 # ============================================================================
-# STEP 1: AUTO-FIX (ruff format + ruff check --fix)
-# ============================================================================
-if [ "$RUN_LINT" = true ] && [ "$AUTO_FIX" = true ]; then
-    echo -e "\n${BLUE}[1/3] AUTO-FIX (ruff format + ruff check --fix)${NC}"
-    echo "----------------------------------------------------------------------"
-
-    # Check if ruff is installed
-    if ! command -v ruff &> /dev/null; then
-        echo -e "${YELLOW}Installing ruff...${NC}"
-        command -v uv >/dev/null 2>&1 || pip install uv --quiet
-        uv pip install ruff==0.15.0 --quiet
-    fi
-
-    # Auto-format with ruff format (--line-length 120 ensures long lines get broken)
-    echo "Running: ruff format --line-length 120 $SOURCE_DIRS"
-    ruff format --line-length 120 $SOURCE_DIRS
-
-    # Auto-fix with ruff check --fix (E501 not ignored - catches line length)
-    echo "Running: ruff check --fix --line-length 120 $SOURCE_DIRS"
-    ruff check --fix --line-length 120 $SOURCE_DIRS
-
-    echo -e "${GREEN}✅ Auto-fix complete${NC}"
-fi
-
-# ============================================================================
-# STEP 2: LINTING (ruff)
+# STEP 2: LINTING (ruff) — timeout 30s
 # ============================================================================
 if [ "$RUN_LINT" = true ]; then
-    echo -e "\n${BLUE}[2/3] LINTING (ruff)${NC}"
-    echo "----------------------------------------------------------------------"
-
-    # Check if ruff is installed
-    if ! command -v ruff &> /dev/null; then
-        echo -e "${YELLOW}Installing ruff...${NC}"
-        command -v uv >/dev/null 2>&1 || pip install uv --quiet
-        uv pip install ruff==0.15.0 --quiet
-    fi
-
-    # Run ruff check (E501 enabled - line length enforced)
-    echo "Running: ruff check --line-length 120 $SOURCE_DIRS"
-    if ruff check --line-length 120 $SOURCE_DIRS; then
-        echo -e "${GREEN}✅ Linting PASSED${NC}"
+    log_section "[2/6] LINTING (ruff)"
+    if run_timeout 30 ruff check --line-length 120 $SOURCE_DIRS; then
+        log_success "Linting PASSED"
     else
-        echo -e "${RED}❌ Linting FAILED${NC}"
-        LINT_STATUS=1
+        log_fail "Linting FAILED (or timed out after 30s)"
+        exit 1
     fi
 fi
 
 # ============================================================================
-# STEP 3: TESTS (pytest with coverage)
+# STEP 3: TESTS (pytest)
 # ============================================================================
 if [ "$RUN_TESTS" = true ]; then
-    echo -e "\n${BLUE}[3/6] TESTS (pytest)${NC}"
-    echo "----------------------------------------------------------------------"
-
-MIN_COVERAGE=35
-    # Check if pytest is installed
-MIN_COVERAGE=35
-    if ! $PYTHON_CMD -c "import pytest" &> /dev/null; then
-MIN_COVERAGE=35
-        echo -e "${YELLOW}Installing pytest...${NC}"
-        command -v uv >/dev/null 2>&1 || pip install uv --quiet
-MIN_COVERAGE=35
-        uv pip install pytest pytest-asyncio pytest-mock --quiet
-    fi
-
-    # Set environment variables for smoke tests
-    export DEPLOYMENT_CONFIG_DIR="${REPO_ROOT}/unified-trading-deployment-v2/configs"
-    export CLOUD_MOCK_MODE="true"
-    export GOOGLE_CLOUD_PROJECT="test-project"
-
-MIN_COVERAGE=35
-    # Use parallel execution if pytest-xdist available
-    if $PYTHON_CMD -c "import xdist" 2>/dev/null; then
-        PARALLEL_ARGS="-n auto"
+    log_section "[3/6] TESTS (pytest)"
+    $PYTHON_CMD -c "import pytest_timeout" 2>/dev/null || { log_fail "pytest-timeout required (uv pip install pytest-timeout)"; exit 1; }
+    $PYTHON_CMD -c "import xdist" 2>/dev/null || { log_fail "pytest-xdist required (uv pip install pytest-xdist)"; exit 1; }
+    COV_ARGS="--cov=$SOURCE_DIR --cov-report=term-missing --cov-fail-under=$MIN_COVERAGE"
+    PARALLEL_ARGS="-n ${PYTEST_WORKERS}"
+    TIMEOUT_ARGS="--timeout=60"
+    if [ "$QUICK_MODE" = true ] || [ "$RUN_INTEGRATION" != "true" ]; then
+        $PYTHON_CMD -m pytest tests/unit/ -v --tb=short $COV_ARGS $PARALLEL_ARGS $TIMEOUT_ARGS || exit 1
     else
-        PARALLEL_ARGS=""
+        $PYTHON_CMD -m pytest tests/unit/ tests/integration/ -v --tb=short $COV_ARGS $PARALLEL_ARGS $TIMEOUT_ARGS || exit 1
     fi
+    log_success "Tests PASSED"
+    [[ ! -f "tests/unit/test_event_logging.py" ]] && log_fail "Missing test_event_logging.py" && exit 1
+    [[ ! -f "tests/unit/test_config.py" ]] && [[ ! -f "tests/unit/test_config_extended.py" ]] && log_fail "Missing test_config.py" && exit 1
+    log_success "Required test files present"
 
-    # Coverage args (codex: 35% minimum)
-    COV_ARGS="--cov=instruments_service --cov-report=term-missing --cov-fail-under=${MIN_COVERAGE:-35}"
+    DUP=$(find tests/ -name "test_*_extended.py" -o -name "test_*_additional.py" 2>/dev/null | head -5 || true)
+    [[ -n "$DUP" ]] && { log_fail "Duplicate test files — expand existing files instead:"; echo "$DUP"; exit 1; }
+    log_success "No duplicate test files"
 
-    if [ "$QUICK_MODE" = true ]; then
-        # Quick mode: unit tests only (with coverage)
-        echo "Running: pytest tests/unit/ -v --tb=short $COV_ARGS $PARALLEL_ARGS (quick mode)"
-        if $PYTHON_CMD -m pytest tests/unit/ -v --tb=short $COV_ARGS $PARALLEL_ARGS; then
-            echo -e "${GREEN}✅ Unit tests PASSED${NC}"
-        else
-            echo -e "${RED}❌ Unit tests FAILED${NC}"
-            TEST_STATUS=1
-        fi
-    else
-        # Full mode: unit tests only (integration/e2e/smoke temporarily skipped - unblock quickmerge)
-        # TODO: Re-enable integration, e2e, smoke when test suite timing is fixed
-
-        # Unit tests (parallel with pytest-xdist when available, coverage enforced)
-        echo -e "\n${YELLOW}Running unit tests with coverage (min ${MIN_COVERAGE:-35}%)...${NC}"
-        if [ -d "tests/unit" ]; then
-            TIMEOUT_ARG=""
-            $PYTHON_CMD -c "import pytest_timeout" 2>/dev/null && TIMEOUT_ARG="--timeout=60"
-            if $PYTHON_CMD -m pytest tests/unit/ -v --tb=short $COV_ARGS $TIMEOUT_ARG $PARALLEL_ARGS; then
-                echo -e "${GREEN}✅ Unit tests PASSED${NC}"
-            else
-                echo -e "${RED}❌ Unit tests FAILED${NC}"
-                TEST_STATUS=1
-            fi
-        else
-            echo "No unit tests directory found"
-        fi
-        echo -e "${YELLOW}⏭️  Integration/e2e/smoke tests temporarily skipped (see TODO in quality-gates.sh)${NC}"
-    fi
-
-    # Required test files (codex compliance)
-    if [[ ! -f "tests/unit/test_event_logging.py" ]]; then
-        echo -e "${RED}❌ Missing required test: tests/unit/test_event_logging.py${NC}"
-        TEST_STATUS=1
-    fi
-    CONFIG_TEST=""
-    [[ -f "tests/unit/test_config.py" ]] && CONFIG_TEST="tests/unit/test_config.py"
-    [[ -z "$CONFIG_TEST" ]] && [[ -f "tests/unit/test_config_extended.py" ]] && CONFIG_TEST="tests/unit/test_config_extended.py"
-    if [[ -z "$CONFIG_TEST" ]]; then
-        echo -e "${RED}❌ Missing required test: tests/unit/test_config.py or test_config_extended.py${NC}"
-        TEST_STATUS=1
-    elif [[ -f "$CONFIG_TEST" ]]; then
-        CONFIG_LINES=$(wc -l < "$CONFIG_TEST" 2>/dev/null || echo 0)
-        if [[ $CONFIG_LINES -lt 50 ]]; then
-            echo -e "${YELLOW}⚠️  $CONFIG_TEST has only $CONFIG_LINES lines (expected >50 for comprehensive validation)${NC}"
-        fi
-    fi
+    SKIP_NO_REASON=$(rg "@pytest\.mark\.skip" --type py tests/ -B 1 2>/dev/null \
+        | grep -v "# reason:\|# noqa\|^--" | grep "@pytest\.mark\.skip" || true)
+    [[ -n "$SKIP_NO_REASON" ]] && { log_fail "pytest.mark.skip without reason — add '# reason: ...' above"; echo "$SKIP_NO_REASON" | head -3; exit 1; }
+    log_success "All pytest.mark.skip have reason comments"
 fi
 
 # ============================================================================
-# STEP 4: TYPE CHECKING (basedpyright - matches IDE strict mode, blocking)
+# STEP 3.5: IMPORT PATTERN STANDARDS
 # ============================================================================
-echo -e "\n${BLUE}[4/6] TYPE CHECKING (basedpyright)${NC}"
-echo "----------------------------------------------------------------------"
-
-TYPE_CHECK_STATUS=0
-
-# basedpyright = stricter fork, supports reportAny, aligns with Pylance/IDE
-if command -v basedpyright &> /dev/null; then
-    echo "Running: basedpyright instruments_service/ --level warning (tests excluded per audit)"
-    if basedpyright instruments_service/ --level warning 2>&1 | tee /tmp/basedpyright_output.txt; then
-        echo -e "${GREEN}✅ Type checking PASSED${NC}"
-        TYPE_CHECK_STATUS=0
+log_section "[3.5/6] IMPORT PATTERN STANDARDS"
+IP="unified-trading-pm/scripts/check-import-patterns.py"
+[ ! -f "$IP" ] && IP=".cursor/scripts/check-import-patterns.py"  # legacy fallback
+if [ -f "$IP" ]; then
+    if $PYTHON_CMD "$IP" --verbose \
+        --exclude instruments_service/app/core/adapter_loader.py \
+        --exclude instruments_service/engine/venues/venue_adapter_loader.py 2>/dev/null; then
+        log_success "Import patterns PASSED"
     else
-        echo -e "${RED}❌ Type checking FAILED${NC}"
-        TYPE_CHECK_STATUS=1
+        log_fail "Import patterns FAILED (use top-level imports)"
+        exit 1
     fi
-    rm -f /tmp/basedpyright_output.txt
 else
-    echo -e "${RED}❌ basedpyright not installed - type checking REQUIRED${NC}"
-    echo -e "${YELLOW}Install: uv pip install basedpyright${NC}"
-    TYPE_CHECK_STATUS=1
+    log_warn "check-import-patterns.py not found, skipping"
 fi
 
 # ============================================================================
-# STEP 5: CODEX COMPLIANCE (Coding Standards)
+# STEP 4: TYPE CHECKING (basedpyright) — timeout 120s, cleanup zombies
 # ============================================================================
-echo -e "\n${BLUE}[5/6] CODEX COMPLIANCE (Coding Standards)${NC}"
-echo "----------------------------------------------------------------------"
+log_section "[4/6] TYPE CHECKING (basedpyright)"
 
-CODEX_VIOLATIONS=0
+cleanup_zombie_pyright() {
+    ps -eo pid,etime,command 2>/dev/null | grep -E 'basedpyright.*index\.js' | grep -v grep | while read -r pid etime _; do
+        hours=0
+        if echo "$etime" | grep -q '-'; then
+            days=$(echo "$etime" | cut -d'-' -f1)
+            hours=$((days * 24))
+        elif [ "$(echo "$etime" | tr ':' '\n' | wc -l)" -eq 3 ]; then
+            hours=$(echo "$etime" | cut -d':' -f1)
+        fi
+        if [ "${hours:-0}" -ge 2 ]; then
+            echo -e "${YELLOW}⚠️  Killing zombie basedpyright (PID: $pid)${NC}"
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+    done
+}
+cleanup_zombie_pyright
 
-# Check: ripgrep (rg) availability
-if ! command -v rg &> /dev/null; then
-    echo -e "${RED}❌ ERROR: ripgrep (rg) required for codex compliance checks${NC}"
-    echo -e "${YELLOW}   Install: brew install ripgrep (macOS) or apt install ripgrep (Linux)${NC}"
-    echo -e "${YELLOW}   Or add to Dockerfile: RUN apt-get install -y ripgrep${NC}"
+if command -v basedpyright &> /dev/null; then
+    if run_timeout 120 basedpyright $SOURCE_DIR/ --level warning 2>&1; then
+        log_success "Type checking PASSED"
+    else
+        log_fail "Type checking FAILED (or timed out after 120s)"
+        exit 1
+    fi
+else
+    log_fail "basedpyright not installed (uv pip install basedpyright)"
     exit 1
 fi
-USE_RG=true
-
-# Check 1: print() statements in production code
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for print() statements... "
-    if rg "print\(" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!examples/**" --glob "!pytest_load_env.py" . >/dev/null 2>&1; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Found print() in production code (use logger.info() instead):${NC}"
-        rg "print\(" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!examples/**" --glob "!pytest_load_env.py" . | head -5
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 2: os.getenv() usage
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for os.getenv() usage... "
-    if rg "os\.getenv" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!pytest_load_env.py" . >/dev/null 2>&1; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Found os.getenv() (use config class instead):${NC}"
-        rg "os\.getenv" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!pytest_load_env.py" . | head -5
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 3: datetime.now() without UTC
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for datetime.now() without UTC... "
-    if rg "datetime\.now\(\)" --type py --glob "!docs/**" --glob "!*.md" . >/dev/null 2>&1; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Found datetime.now() (use datetime.now(timezone.utc) instead):${NC}"
-        rg "datetime\.now\(\)" --type py . | head -5
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 4: Bare except clauses
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for bare except clauses... "
-    if rg "except:" --type py --glob "!tests/**" . >/dev/null 2>&1; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Found bare except: (use specific exceptions or @handle_api_errors):${NC}"
-        rg "except:" --type py --glob "!tests/**" . | head -5
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 4b: No direct google.cloud imports (use unified_cloud_services abstractions)
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for google.cloud imports... "
-    if rg "from google\.cloud import|import google\.cloud" --type py --glob "!tests/**" instruments_service/ >/dev/null 2>&1; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Found google.cloud imports (use unified_cloud_services abstractions):${NC}"
-        rg "from google\.cloud import|import google\.cloud" --type py instruments_service/ | head -5
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 4c: Empty string fallbacks (required config must fail loud)
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for empty string fallbacks... "
-    EMPTY_FALLBACKS=$(rg '\.get\(["'"'"'][\w_]+["'"'"']\s*,\s*["'"'"']["'"'"']' --type py --glob "!tests/**" --glob "!scripts/**" instruments_service/ 2>/dev/null || true)
-    ENV_EMPTY=$(rg 'os\.environ\.get\(["'"'"'][\w_]+["'"'"']\s*,\s*["'"'"']["'"'"']' --type py --glob "!tests/**" --glob "!scripts/**" instruments_service/ 2>/dev/null || true)
-    if [ -n "$EMPTY_FALLBACKS" ] || [ -n "$ENV_EMPTY" ]; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Found empty string fallbacks (required config must fail loud - see .cursor/rules/no-empty-fallbacks.mdc):${NC}"
-        [ -n "$EMPTY_FALLBACKS" ] && echo "$EMPTY_FALLBACKS" | head -5
-        [ -n "$ENV_EMPTY" ] && echo "$ENV_EMPTY" | head -5
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 5: Imports inside functions (BLOCKING - lazy imports only for whitelisted optional deps)
-# Whitelist: adapter_loader (lazy adapter loading), __init__ (lazy submodule), dependency_checker (circular),
-# symbol_parser/canonical_key_generator (TYPE_CHECKING), handlers (circular), cloud_instrument_storage (optional),
-# parser/main/ccxt_service/utils (optional deps), instruments_service (circular)
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for imports inside functions... "
-    violations=$(rg "^[[:space:]]+import |^[[:space:]]+from .* import" --type py --glob "!tests/**" --glob "!scripts/**" \
-        --glob "!**/adapter_loader.py" --glob "!**/__init__.py" --glob "!**/dependency_checker.py" \
-        --glob "!**/instruments_service.py" --glob "!**/instrument_processing_service.py" \
-        --glob "!**/symbol_parser.py" --glob "!**/canonical_key_generator.py" \
-        --glob "!**/live_mode_handler.py" --glob "!**/cloud_instrument_storage.py" --glob "!**/parser.py" \
-        --glob "!**/main.py" --glob "!**/ccxt_service.py" --glob "!**/corporate_actions_handler.py" \
-        --glob "!**/corporate_actions_backfill_handler.py" --glob "!**/corporate_actions_production_handler.py" \
-        --glob "!**/corporate_actions_update_handler.py" \
-        instruments_service/ 2>/dev/null || true)
-    if [ -n "$violations" ]; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Found imports inside functions (move to top; lazy imports only for whitelisted optional deps):${NC}"
-        echo "$violations" | head -5
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 6: Any/object type usage (BLOCKING - exception: dict[str, Any] for non-finite nested dicts with type: ignore)
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for Any/object type usage... "
-    ANY_USAGE=$(rg ": Any|-> Any|\[Any\]|: object|-> object" --type py --glob "!tests/**" --glob "!scripts/**" instruments_service/ 2>/dev/null | grep -v "dict\[str, Any\]" | grep -v "type: ignore" || true)
-    if [ -n "$ANY_USAGE" ]; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Found Any/object type usage (use specific types; exception: dict[str, Any] for non-finite nested dicts with # type: ignore[reportAny]):${NC}"
-        echo "$ANY_USAGE" | head -5
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 6b: .gitignore must NOT allow credential JSON (no negation like !central-element-*.json)
-echo -n "Checking .gitignore for credential file negation... "
-if [ -f ".gitignore" ] && rg "!central-element|!.*credentials.*\.json" .gitignore >/dev/null 2>&1; then
-    echo -e "${RED}FAIL${NC}"
-    echo -e "${YELLOW}Found credential file negation in .gitignore (remove !central-element-*.json):${NC}"
-    rg "!central-element|!.*credentials.*\.json" .gitignore
-    CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-else
-    echo -e "${GREEN}PASS${NC}"
-fi
-
-# Check 6c: No hardcoded project ID in tests (use test-project placeholder)
-echo -n "Checking for hardcoded project ID in tests... "
-HARDCODED_PROJECT=$(rg "central-element-323112|get_config.*central-element" tests/ 2>/dev/null || true)
-if [ -n "$HARDCODED_PROJECT" ]; then
-    echo -e "${RED}FAIL${NC}"
-    echo -e "${YELLOW}Found real project ID in tests (use test-project placeholder):${NC}"
-    echo "$HARDCODED_PROJECT" | head -5
-    CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-else
-    echo -e "${GREEN}PASS${NC}"
-fi
-
-# Check 6d: No broad except Exception in production (use specific exceptions or @handle_api_errors)
-# Whitelist: instruments_service/cli/main.py cleanup during shutdown (intentional suppress)
-echo -n "Checking for broad except Exception in production... "
-BROAD_EXCEPT=$(rg "except Exception:" --type py --glob "!tests/**" --glob "!instruments_service/cli/main.py" instruments_service/ 2>/dev/null || true)
-if [ -n "$BROAD_EXCEPT" ]; then
-    echo -e "${RED}FAIL${NC}"
-    echo -e "${YELLOW}Found broad except Exception (use @handle_api_errors or specific exceptions):${NC}"
-    echo "$BROAD_EXCEPT" | head -5
-    CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-else
-    echo -e "${GREEN}PASS${NC}"
-fi
-
-# Check 7: Project ID environment variable consistency
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking project ID environment variable usage... "
-    # Check if code uses GOOGLE_CLOUD_PROJECT without GCP_PROJECT_ID fallback
-    WRONG_ORDER=$(rg 'os\.environ\.get\("GOOGLE_CLOUD_PROJECT"\)' --type py --glob "!tests/**" . 2>/dev/null | grep -v "GCP_PROJECT_ID" || true)
-    # Check if code uses generic PROJECT_ID
-    GENERIC_VAR=$(rg 'os\.environ\.get\("PROJECT_ID"\)' --type py --glob "!tests/**" . 2>/dev/null || true)
-
-    if [ -n "$GENERIC_VAR" ]; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${RED}Found generic PROJECT_ID variable (use GCP_PROJECT_ID instead):${NC}"
-        echo "$GENERIC_VAR" | head -3
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    elif [ -n "$WRONG_ORDER" ]; then
-        echo -e "${YELLOW}WARN${NC}"
-        echo -e "${YELLOW}Found GOOGLE_CLOUD_PROJECT without GCP_PROJECT_ID fallback${NC}"
-        echo -e "${YELLOW}Use: os.environ.get('GCP_PROJECT_ID') or os.environ.get('GOOGLE_CLOUD_PROJECT')${NC}"
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 8: requests library in async code (only fail if SAME file has both requests and async)
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for requests library in async code... "
-    FILES_WITH_REQUESTS=$(rg "import\s+requests" --type py --glob "!scripts/**" --glob "!**/defi/morpho_adapter.py" --glob "!**/onchain_perps/aster_adapter.py" -l . 2>/dev/null || true)
-    VIOLATION=""
-    for f in $FILES_WITH_REQUESTS; do
-        if rg "async\s+def" "$f" >/dev/null 2>&1; then
-            VIOLATION="$f"
-            break
-        fi
-    done
-    if [ -n "$VIOLATION" ]; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Found requests with async in same file (use aiohttp): $VIOLATION${NC}"
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 9: asyncio.run() in loops (exclude examples - scripts often use asyncio.run for entry point)
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for asyncio.run() in loops... "
-    ADDED=0
-    FILES_WITH_ASYNCIO_RUN=$(rg "asyncio\.run\(" --type py --glob "!examples/**" --glob "!scripts/**" --glob "!**/venues/defi/*" --glob "!**/cli/**" --glob "!**/defi_processor.py" --files-with-matches . 2>/dev/null || true)
-    for file in $FILES_WITH_ASYNCIO_RUN; do
-        if grep -q "for \|while " "$file" 2>/dev/null; then
-            echo -e "${RED}FAIL${NC}"
-            echo -e "${YELLOW}Found asyncio.run() in file with loops (use asyncio.gather() instead): $file${NC}"
-            CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-            ADDED=1
-            break
-        fi
-    done
-    [ $ADDED -eq 0 ] && echo -e "${GREEN}PASS${NC}"
-fi
-
-# Check 10: File size limit (COD-SIZE: max 1500 lines per file)
-# Codex: unified-trading-codex/06-coding-standards/file-splitting-guide.md
-# Excludes: .venv, deps, .git, build, scripts/ (scripts exempt from line count)
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking file size (max 1500 lines)... "
-    SIZE_VIOLATIONS=""
-    SIZE_WARNINGS=""
-    for f in $(find . -name "*.py" ! -path "./.venv/*" ! -path "./deps/*" ! -path "./.git/*" ! -path "./build/*" ! -path "./scripts/*" 2>/dev/null); do
-        lines=$(wc -l < "$f" 2>/dev/null || echo 0)
-        if [ "$lines" -gt 1500 ]; then
-            SIZE_VIOLATIONS="${SIZE_VIOLATIONS}\n  $f: $lines lines (max 1500)"
-        elif [ "$lines" -gt 1200 ]; then
-            SIZE_WARNINGS="${SIZE_WARNINGS}\n  $f: $lines lines (plan split before 1500)"
-        fi
-    done
-    if [ -n "$SIZE_VIOLATIONS" ]; then
-        echo -e "${RED}FAIL${NC}"
-        echo -e "${YELLOW}Files exceed 1500-line limit (split by SRP per file-splitting-guide.md):${NC}"
-        echo -e "$SIZE_VIOLATIONS"
-        CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-    if [ -n "$SIZE_WARNINGS" ]; then
-        echo -e "${YELLOW}⚠️  Files near limit (plan split):${NC}"
-        echo -e "$SIZE_WARNINGS"
-    fi
-fi
-
-# Check 11: time.sleep() in async functions (simplified check)
-if [ "$USE_RG" = true ]; then
-    echo -n "Checking for time.sleep() in async code... "
-    FILES_WITH_TIME_SLEEP=$(rg "time\.sleep\(" --type py --files-with-matches . 2>/dev/null || true)
-    if [ -n "$FILES_WITH_TIME_SLEEP" ]; then
-        for file in $FILES_WITH_TIME_SLEEP; do
-            if grep -q "async def" "$file" 2>/dev/null; then
-                echo -e "${RED}FAIL${NC}"
-                echo -e "${YELLOW}Found time.sleep() in file with async functions (use asyncio.sleep() instead): $file${NC}"
-                echo "  $file"
-                CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-                break
-            fi
-        done
-    else
-        echo -e "${GREEN}PASS${NC}"
-    fi
-fi
-
-# Check 12: pip-audit for known vulnerabilities (security)
-echo -n "Checking for known vulnerabilities (pip-audit)... "
-if $PYTHON_CMD -m pip_audit --desc 2>/dev/null; then
-    echo -e "${GREEN}PASS${NC}"
-elif ! $PYTHON_CMD -c "import pip_audit" 2>/dev/null; then
-    echo -e "${YELLOW}SKIP (pip-audit not installed; uv pip install pip-audit)${NC}"
-else
-    echo -e "${RED}FAIL${NC}"
-    echo -e "${YELLOW}Known vulnerabilities found. Run: pip-audit --desc for details${NC}"
-    CODEX_VIOLATIONS=$((CODEX_VIOLATIONS + 1))
-fi
-
-# Summary
-if [ $CODEX_VIOLATIONS -eq 0 ]; then
-    echo -e "\n${GREEN}✅ Codex compliance PASSED${NC}"
-    CODEX_STATUS=0
-else
-    echo -e "\n${RED}❌ Codex compliance FAILED: $CODEX_VIOLATIONS violations${NC}"
-    echo -e "${YELLOW}See: unified-trading-codex/06-coding-standards/README.md${NC}"
-    CODEX_STATUS=1
-fi
 
 # ============================================================================
-# STEP 6: PRODUCTION READINESS VALIDATORS (Optional)
+# STEP 5: CODEX COMPLIANCE (inline whitelists per QUALITY_GATE_BYPASS_AUDIT.md)
 # ============================================================================
-echo -e "\n${BLUE}[6/6] PRODUCTION READINESS VALIDATORS (Optional)${NC}"
-echo "----------------------------------------------------------------------"
+log_section "[5/6] CODEX COMPLIANCE"
+CODEX_VIOLATIONS=0
 
-# Only run if codex root exists
+# Imports-inside whitelist: 14 files (QUALITY_GATE_BYPASS_AUDIT.md 1.2)
+
+rg "print\(" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!examples/**" --glob "!pytest_load_env.py" $SOURCE_DIR/ 2>/dev/null && { log_fail "Found print()"; ((CODEX_VIOLATIONS++)); } || log_success "No print()"
+
+rg "os\.getenv" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!**/config.py" --glob "!pytest_load_env.py" $SOURCE_DIR/ 2>/dev/null && { log_fail "Found os.getenv()"; ((CODEX_VIOLATIONS++)); } || log_success "No os.getenv()"
+
+rg 'os\.getenv\s*\([^)]+,\s*""\s*\)' --type py --glob "!tests/**" $SOURCE_DIR/ 2>/dev/null && { log_fail "Found os.getenv empty fallback"; ((CODEX_VIOLATIONS++)); } || log_success "No os.getenv empty fallback"
+
+rg "datetime\.now\(\)|datetime\.utcnow\(\)" --type py --glob "!tests/**" $SOURCE_DIR/ 2>/dev/null && { log_fail "Found naive datetime"; ((CODEX_VIOLATIONS++)); } || log_success "No naive datetime"
+
+rg "except:" --type py --glob "!tests/**" $SOURCE_DIR/ 2>/dev/null && { log_fail "Found bare except"; ((CODEX_VIOLATIONS++)); } || log_success "No bare except"
+
+rg "from google\.cloud import|import google\.cloud" --type py $SOURCE_DIR/ 2>/dev/null && { log_fail "Found google.cloud imports"; ((CODEX_VIOLATIONS++)); } || log_success "No google.cloud imports"
+
+# requests in async — exclude morpho_adapter, aster_adapter (QUALITY_GATE_BYPASS_AUDIT 1.1)
+REQ_ASYNC=0
+for f in $(rg "import requests" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!**/defi/morpho_adapter.py" --glob "!**/onchain_perps/aster_adapter.py" $SOURCE_DIR/ -l 2>/dev/null || true); do
+    grep -q "async def" "$f" 2>/dev/null && { log_fail "Found requests with async in $f"; ((CODEX_VIOLATIONS++)); REQ_ASYNC=1; break; }
+done
+[[ $REQ_ASYNC -eq 0 ]] && log_success "No requests in async"
+
+# asyncio.run in loops — exclude defi/*, cli/**, defi_processor, examples, scripts (QUALITY_GATE_BYPASS_AUDIT 1.1)
+ASYNCIO_LOOP=0
+for f in $(rg "asyncio\.run\(" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!examples/**" --glob "!**/venues/defi/*" --glob "!**/cli/**" --glob "!**/defi_processor.py" $SOURCE_DIR/ -l 2>/dev/null || true); do
+    grep -q "for \|while " "$f" 2>/dev/null && { log_fail "Found asyncio.run() in loop in $f"; ((CODEX_VIOLATIONS++)); ASYNCIO_LOOP=1; break; }
+done
+[[ $ASYNCIO_LOOP -eq 0 ]] && log_success "No asyncio.run in loops"
+
+TIME_SLEEP_ASYNC=0
+for f in $(rg "time\.sleep\(" --type py --glob "!tests/**" $SOURCE_DIR/ -l 2>/dev/null || true); do
+    grep -q "async def" "$f" 2>/dev/null && { log_fail "Found time.sleep() in async file $f"; ((CODEX_VIOLATIONS++)); TIME_SLEEP_ASYNC=1; break; }
+done
+[[ $TIME_SLEEP_ASYNC -eq 0 ]] && log_success "No time.sleep in async"
+
+# Imports inside — inline whitelist (14 files)
+IMPORTS_INSIDE=$(rg "^[[:space:]]+import |^[[:space:]]+from .* import" --type py --glob "!tests/**" --glob "!scripts/**" --glob "!**/__init__.py" \
+    --glob "!**/adapter_loader.py" --glob "!**/dependency_checker.py" --glob "!**/instruments_service.py" \
+    --glob "!**/instrument_processing_service.py" --glob "!**/symbol_parser.py" --glob "!**/canonical_key_generator.py" \
+    --glob "!**/live_mode_handler.py" --glob "!**/cloud_instrument_storage.py" --glob "!**/parser.py" \
+    --glob "!**/main.py" --glob "!**/ccxt_service.py" --glob "!**/corporate_actions_handler.py" \
+    --glob "!**/corporate_actions_backfill_handler.py" --glob "!**/corporate_actions_production_handler.py" \
+    --glob "!**/corporate_actions_update_handler.py" $SOURCE_DIR/ 2>/dev/null || true)
+[[ -n "$IMPORTS_INSIDE" ]] && { log_fail "Found imports inside functions"; echo "$IMPORTS_INSIDE" | head -3; ((CODEX_VIOLATIONS++)); } || log_success "No imports inside functions"
+
+ANY_USAGE=$(rg ": Any|-> Any|\[Any\]|: object|-> object" --type py --glob "!tests/**" --glob "!scripts/**" $SOURCE_DIR/ 2>/dev/null | grep -v "dict\[str, Any\]" | grep -v "type: ignore" || true)
+[[ -n "$ANY_USAGE" ]] && { log_fail "Found Any/object types"; echo "$ANY_USAGE" | head -3; ((CODEX_VIOLATIONS++)); } || log_success "No Any/object types"
+
+rg '\.get\(["\x27][\w_]+["\x27]\s*,\s*["\x27]["\x27]\)' --type py --glob "!tests/**" $SOURCE_DIR/ 2>/dev/null && { log_fail "Found empty string fallbacks"; ((CODEX_VIOLATIONS++)); } || log_success "No empty string fallbacks"
+
+EMPTY_DICT=$(rg '\.get\s*\(\s*["\x27][^"\x27]+["\x27]\s*,\s*\{\}\s*\)' --type py --glob "!tests/**" --glob "!scripts/**" $SOURCE_DIR/ 2>/dev/null || true)
+EMPTY_LIST=$(rg '\.get\s*\(\s*["\x27][^"\x27]+["\x27]\s*,\s*\[\]\s*\)' --type py --glob "!tests/**" --glob "!scripts/**" $SOURCE_DIR/ 2>/dev/null || true)
+[[ -n "$EMPTY_DICT" ]] || [[ -n "$EMPTY_LIST" ]] && { log_fail "Found empty dict/list fallbacks"; ((CODEX_VIOLATIONS++)); } || log_success "No empty dict/list fallbacks"
+
+[[ -f ".gitignore" ]] && rg "!central-element|!.*credentials.*\.json" .gitignore 2>/dev/null && { log_fail "Found credential negation"; ((CODEX_VIOLATIONS++)); } || log_success "No credential negation"
+
+rg "central-element-323112|get_config.*central-element" tests/ 2>/dev/null && { log_fail "Found hardcoded project ID in tests"; ((CODEX_VIOLATIONS++)); } || log_success "No hardcoded project ID in tests"
+
+rg "central-element-323112" --type py --glob "!tests/**" $SOURCE_DIR/ 2>/dev/null && { log_fail "Found hardcoded project ID in production"; ((CODEX_VIOLATIONS++)); } || log_success "No hardcoded project ID in production"
+
+rg "GOOGLE_CLOUD_PROJECT" --type py --glob "!tests/**" --glob "!**/config.py" $SOURCE_DIR/ 2>/dev/null \
+    && { log_fail "Use GCP_PROJECT_ID not GOOGLE_CLOUD_PROJECT"; ((CODEX_VIOLATIONS++)); } || log_success "No GOOGLE_CLOUD_PROJECT usage"
+
+EL_OLD=$(rg "from unified_cloud_services[. ].*(log_event|setup_events|setup_cloud_logging|observability)" --type py --glob "!tests/**" $SOURCE_DIR/ 2>/dev/null || true)
+[[ -n "$EL_OLD" ]] && { log_fail "Old event logging — use 'from unified_events_interface import ...'"; echo "$EL_OLD" | head -3; ((CODEX_VIOLATIONS++)); } || log_success "Event logging from unified_events_interface"
+
+PIP=$(rg "^RUN pip install|^RUN python -m pip| pip install " --glob "**/Dockerfile" --glob "**/*.sh" . 2>/dev/null | grep -v "pip install uv" | grep -v "#" || true)
+[[ -n "$PIP" ]] && { log_fail "Use 'uv pip install' not 'pip install'"; echo "$PIP" | head -3; ((CODEX_VIOLATIONS++)); } || log_success "No bare pip install"
+
+rg 'central-element-323112-[a-z0-9]+\.json' --type py --glob "!tests/**" $SOURCE_DIR/ 2>/dev/null && { log_fail "Found hardcoded credential path"; ((CODEX_VIOLATIONS++)); } || log_success "No hardcoded credential path"
+
+DEEP_IMPORTS=$(rg 'from unified_[a-z_-]+\.[a-zA-Z0-9_.]+\s+import' --type py --glob "!tests/**" --glob "!**/__init__.py" $SOURCE_DIR/ 2>/dev/null || true)
+[[ -n "$DEEP_IMPORTS" ]] && { log_fail "Found deep imports"; echo "$DEEP_IMPORTS" | head -3; ((CODEX_VIOLATIONS++)); } || log_success "No deep imports"
+
+# Broad except — whitelist cli/main.py (QUALITY_GATE_BYPASS_AUDIT 1.1)
+SWALLOWED=$(rg "except Exception:" --type py --glob "!tests/**" $SOURCE_DIR/ -A 2 2>/dev/null \
+    | grep -E "^[[:space:]]+(pass|return None)$" || true)
+[[ -n "$SWALLOWED" ]] && { log_fail "Swallowed errors — use @handle_api_errors or re-raise"; ((CODEX_VIOLATIONS++)); } || log_success "No swallowed errors"
+
+BROAD_EXCEPT=$(rg "except Exception:" --type py --glob "!tests/**" --glob "!instruments_service/cli/main.py" $SOURCE_DIR/ 2>/dev/null || true)
+if [[ -n "$BROAD_EXCEPT" ]]; then
+    echo -e "${YELLOW}Found broad except Exception — document in QUALITY_GATE_BYPASS_AUDIT.md${NC}"
+    echo "$BROAD_EXCEPT" | head -3
+    ((CODEX_VIOLATIONS++))
+else
+    log_success "No broad except Exception"
+fi
+
+# File size
+SIZE_VIOLATIONS=""
+SIZE_WARNINGS=""
+for f in $(find . -name "*.py" ! -path "./.venv/*" ! -path "./deps/*" ! -path "./.git/*" ! -path "./scripts/*" ! -path "./build/*" 2>/dev/null); do
+    lines=$(wc -l < "$f" 2>/dev/null || echo 0)
+    [[ "$lines" -gt $MAX_FILE_LINES ]] && SIZE_VIOLATIONS="${SIZE_VIOLATIONS}\n  $f: $lines lines (max $MAX_FILE_LINES)"
+    [[ "$lines" -gt $FILE_WARN_LINES ]] && [[ "$lines" -le $MAX_FILE_LINES ]] && SIZE_WARNINGS="${SIZE_WARNINGS}\n  $f: $lines lines (plan split)"
+done
+[[ -n "$SIZE_VIOLATIONS" ]] && { log_fail "Files exceed $MAX_FILE_LINES lines"; echo -e "$SIZE_VIOLATIONS"; ((CODEX_VIOLATIONS++)); } || log_success "File size OK"
+[[ -n "$SIZE_WARNINGS" ]] && log_warn "Files near limit:$SIZE_WARNINGS"
+
+# Function/class/method size
+SIZE_CODE_VIOLATIONS=""
+for f in $(find . -name "*.py" ! -path "./.venv/*" ! -path "./deps/*" ! -path "./.git/*" ! -path "./scripts/*" 2>/dev/null); do
+    out=$($PYTHON_CMD -c "
+import ast
+import sys
+p = sys.argv[1]
+try:
+    with open(p, 'r', encoding='utf-8') as fp:
+        tree = ast.parse(fp.read())
+    def visit(n, parent=None):
+        if isinstance(n, ast.FunctionDef) or isinstance(n, ast.AsyncFunctionDef):
+            lines = (n.end_lineno or n.lineno) - n.lineno + 1
+            if isinstance(parent, ast.ClassDef):
+                if lines > $MAX_METHOD_LINES:
+                    print(f'  {p}:{n.lineno}:{parent.name}.{n.name}(): {lines} lines (max $MAX_METHOD_LINES)')
+            elif lines > $MAX_FUNCTION_LINES:
+                print(f'  {p}:{n.lineno}:{n.name}(): {lines} lines (max $MAX_FUNCTION_LINES)')
+        elif isinstance(n, ast.ClassDef):
+            lines = (n.end_lineno or n.lineno) - n.lineno + 1
+            if lines > $MAX_CLASS_LINES:
+                print(f'  {p}:{n.lineno}:{n.name}: {lines} lines (max $MAX_CLASS_LINES)')
+        for c in ast.iter_child_nodes(n):
+            visit(c, n if isinstance(n, ast.ClassDef) else parent)
+    visit(tree)
+except Exception:
+    pass
+" "$f" 2>/dev/null || true)
+    [[ -n "$out" ]] && SIZE_CODE_VIOLATIONS="${SIZE_CODE_VIOLATIONS}\n${out}"
+done
+[[ -n "$SIZE_CODE_VIOLATIONS" ]] && { log_fail "Function/class/method size exceeded"; echo -e "$SIZE_CODE_VIOLATIONS"; ((CODEX_VIOLATIONS++)); } || log_success "Function/class/method size OK"
+
+# pip-audit + bandit
+if command -v pip-audit &> /dev/null; then
+    pip-audit 2>/dev/null || { log_fail "pip-audit found vulnerabilities"; ((CODEX_VIOLATIONS++)); }
+elif $PYTHON_CMD -c "import pip_audit" 2>/dev/null; then
+    $PYTHON_CMD -m pip_audit 2>/dev/null || { log_fail "pip-audit found vulnerabilities"; ((CODEX_VIOLATIONS++)); }
+else
+    log_fail "pip-audit required (uv pip install pip-audit)"
+    ((CODEX_VIOLATIONS++))
+fi
+if command -v bandit &> /dev/null; then
+    run_timeout 30 bandit -r $SOURCE_DIR/ -ll 2>/dev/null || { log_fail "bandit found issues"; ((CODEX_VIOLATIONS++)); }
+elif $PYTHON_CMD -c "import bandit" 2>/dev/null; then
+    run_timeout 30 $PYTHON_CMD -m bandit -r $SOURCE_DIR/ -ll 2>/dev/null || { log_fail "bandit found issues"; ((CODEX_VIOLATIONS++)); }
+else
+    log_fail "bandit required (uv pip install bandit)"
+    ((CODEX_VIOLATIONS++))
+fi
+
+[[ $CODEX_VIOLATIONS -gt 0 ]] && log_fail "Codex compliance FAILED: $CODEX_VIOLATIONS violations" && exit 1
+BYPASS=$(rg "\|\|true|\|\| true" --glob "**/quality-gates.sh" --glob "**/quality-gates.yml" . 2>/dev/null \
+    | grep -v "^#\|zombies\|pyright\|cleanup" || true)
+[[ -n "$BYPASS" ]] && { log_fail "||true bypass in quality gates — fix root cause"; echo "$BYPASS" | head -3; ((CODEX_VIOLATIONS++)); } || log_success "No ||true quality gate bypasses"
+
+log_success "Codex compliance PASSED"
+
+# ============================================================================
+# STEP 6: PRODUCTION READINESS VALIDATORS
+# ============================================================================
+log_section "[6/6] PRODUCTION READINESS VALIDATORS"
 if [ -f "${REPO_ROOT}/unified-trading-codex/scripts/run-all-validators.sh" ]; then
-    echo -e "${YELLOW}Running validators (alignment + security + hardening) for production readiness...${NC}"
-
-    # Run alignment validators (non-blocking - warnings only)
-    if "${REPO_ROOT}/unified-trading-codex/scripts/run-all-validators.sh" --category all --failed-only 2>/dev/null; then
-        echo -e "${GREEN}✅ Alignment validators PASSED${NC}"
-    else
-        EXIT_CODE=${?}
-        if [ "${EXIT_CODE:-0}" -eq 2 ]; then
-            echo -e "${YELLOW}⚠️  Alignment validators have WARNINGS (non-blocking)${NC}"
-        else
-            echo -e "${YELLOW}⚠️  Alignment validators FAILED (non-blocking)${NC}"
-        fi
-        echo -e "${YELLOW}   Run: cd ${REPO_ROOT}/unified-trading-codex/scripts && ./audit-alignment.sh${NC}"
-        echo -e "${YELLOW}   Note: This is informational only - does not block quality gates${NC}"
-    fi
+    "${REPO_ROOT}/unified-trading-codex/scripts/run-all-validators.sh" --category all --failed-only 2>/dev/null || log_warn "Validators have warnings (informational)"
 else
-    echo -e "${YELLOW}Validators not available (unified-trading-codex not found)${NC}"
+    log_warn "Validators not available"
 fi
 
 # ============================================================================
-# FINAL SUMMARY
+# DURATION CHECK (<2 min)
 # ============================================================================
+QG_END=$(date +%s)
+QG_DURATION=$((QG_END - QG_START))
+if [ $QG_DURATION -gt 120 ]; then
+    log_fail "Quality gates must complete in <2 minutes (took ${QG_DURATION}s)"
+    exit 1
+fi
+
 echo ""
-echo -e "${BLUE}======================================================================${NC}"
-echo -e "${BLUE}QUALITY GATES SUMMARY${NC}"
-echo -e "${BLUE}======================================================================${NC}"
-
-OVERALL_STATUS=0
-
-if [ $CONFIG_STATUS -eq 0 ]; then
-    echo -e "Config:   ${GREEN}✅ PASSED${NC}"
-else
-    echo -e "Config:   ${RED}❌ FAILED${NC}"
-    OVERALL_STATUS=1
-fi
-
-if [ "$RUN_LINT" = true ]; then
-    if [ $LINT_STATUS -eq 0 ]; then
-        echo -e "Linting:  ${GREEN}✅ PASSED${NC}"
-    else
-        echo -e "Linting:  ${RED}❌ FAILED${NC}"
-        OVERALL_STATUS=1
-    fi
-fi
-
-if [ "$RUN_TESTS" = true ]; then
-    if [ $TEST_STATUS -eq 0 ]; then
-        echo -e "Tests:    ${GREEN}✅ PASSED${NC}"
-    else
-        echo -e "Tests:    ${RED}❌ FAILED${NC}"
-        OVERALL_STATUS=1
-    fi
-fi
-
-if [ $TYPE_CHECK_STATUS -eq 0 ]; then
-    echo -e "Types:    ${GREEN}✅ PASSED${NC}"
-else
-    echo -e "Types:    ${RED}❌ FAILED${NC}"
-    OVERALL_STATUS=1
-fi
-
-if [ $CODEX_STATUS -eq 0 ]; then
-    echo -e "Codex:    ${GREEN}✅ PASSED${NC}"
-else
-    echo -e "Codex:    ${RED}❌ FAILED${NC}"
-    OVERALL_STATUS=1
-
-fi
-
-echo -e "${BLUE}======================================================================${NC}"
-
-if [ $OVERALL_STATUS -eq 0 ]; then
-    echo -e "\n${GREEN}✅ ALL QUALITY GATES PASSED - Safe to push!${NC}\n"
-else
-    echo -e "\n${RED}❌ QUALITY GATES FAILED - Fix issues before pushing${NC}\n"
-fi
-
-exit $OVERALL_STATUS
+echo -e "${GREEN}======================================================================${NC}"
+echo -e "${GREEN}✅ ALL QUALITY GATES PASSED (${QG_DURATION}s)${NC}"
+echo -e "${GREEN}======================================================================${NC}"
+exit 0

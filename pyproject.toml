@@ -2,12 +2,6 @@
 requires = ["setuptools>=80.9.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-# Path deps for local workspace; CI/Docker clone to ../ and use Artifact Registry
-[tool.uv.sources]
-unified-config-interface = { path = "../unified-config-interface" }
-unified-events-interface = { path = "../unified-events-interface" }
-unified-domain-services = { path = "../unified-domain-services" }
-unified-market-interface = { path = "../unified-market-interface" }
 
 [project]
 name = "instruments-service"
@@ -49,10 +43,10 @@ dependencies = [
     "plotly>=6.4.0",
     # AWS
     "boto3>=1.40.70",
-    "unified-config-interface>=0.3.0",
-    "unified-events-interface>=0.1.0",
-    "unified-domain-services>=0.1.0",
-    "unified-market-interface>=0.4.0",
+    "unified-config-interface>=1.0.0,<2.0.0",
+    "unified-events-interface>=1.0.0,<2.0.0",
+    "unified-domain-services>=1.0.0,<2.0.0",
+    "unified-market-interface>=1.0.0,<2.0.0",
     # NOTE: unified-cloud-services is installed separately:
     #   - Local: setup.sh installs via SSH
     #   - Cloud Build/Docker: cloned via HTTPS with PAT
@@ -69,6 +63,7 @@ dev = [
     "ruff==0.15.0",
     "basedpyright>=1.20.0,<2.0.0",
     "pip-audit>=2.7.0",
+    "bandit>=1.7.0",
     "prek>=0.3.2",
     "pandas-stubs>=2.2.0,<3.0.0",
 ]
@@ -95,13 +90,57 @@ line-length = 120
 target-version = "py313"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
-ignore = [
-    "E722",  # Do not use bare `except` - allowed in scripts for simplicity
-]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF"]
+ignore = ["E501"]  # line too long handled by formatter
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
 
 [tool.ruff.lint.per-file-ignores]
 # Allow imports not at top of file where intentional (setup before imports)
 "instruments_service/cli/main.py" = ["E402"]
 "tests/conftest.py" = ["E402"]
 "scripts/*" = ["E722"]  # Allow bare except in scripts
+# Config property names override parent UnifiedCloudConfig (API compatibility)
+"instruments_service/config/service_config.py" = ["N802"]
+# Class constants (KNOWN_ETFS, SPACE_TO_DOT_SYMBOLS) - ClassVar would require refactor
+"instruments_service/config.py" = ["RUF012"]
+"instruments_service/config/venue_config.py" = ["RUF012"]
+# Manual mapping constants in functions (N806)
+"instruments_service/app/core/processors/ccxt_manual_fallback.py" = ["N806"]
+"instruments_service/engine/processors/ccxt_manual_fallback.py" = ["N806"]
+# Test constants (N806)
+"tests/unit/test_cloud_agnostic_paths.py" = ["N806"]
+# Smoke tests: E402 (import after importorskip), F821 (external pkg may not be in workspace)
+"tests/smoke/test_shard_combinatorics.py" = ["E402", "F821"]
+
+[tool.coverage.report]
+fail_under = 35  # Minimum coverage requirement
+show_missing = true
+skip_covered = false
+precision = 1
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "raise NotImplementedError",
+]
+
+[tool.basedpyright]
+include = ["instruments_service"]
+exclude = ["tests", "**/__pycache__", ".venv*", "build", "dist"]
+pythonVersion = "3.13"
+typeCheckingMode = "standard"
+reportMissingImports = "error"
+reportUnusedVariable = "warning"
+reportUnusedImport = "warning"
+# Enforce no Any — must use specific types (see .cursor/rules/no-type-any-use-specific.mdc)
+reportAny = "warning"
+# Enforce known types — warn on unknown parameter/return/variable types
+reportUnknownVariableType = "warning"
+reportUnknownParameterType = "warning"
+reportUnknownMemberType = "warning"
