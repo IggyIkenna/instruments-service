@@ -66,7 +66,7 @@ if [ -z "${GITHUB_ACTIONS:-}" ] && [ -z "${CI:-}" ] && [ -z "${CLOUD_BUILD:-}" ]
     fi
     command -v uv &>/dev/null || pip install uv --quiet
     if [ -f "pyproject.toml" ]; then
-        for lib in unified-config-interface unified-cloud-services unified-domain-services unified-events-interface unified-market-interface; do
+        for lib in api-contracts unified-config-interface unified-cloud-services unified-domain-services unified-events-interface unified-market-interface; do
             lib_path=""
             [ -d "${REPO_ROOT:-/dev/null}/$lib" ] && lib_path="${REPO_ROOT}/$lib"
             [ -z "$lib_path" ] && [ -d "deps/$lib" ] && lib_path="deps/$lib"

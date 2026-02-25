@@ -47,6 +47,7 @@ dependencies = [
     "unified-events-interface>=1.0.0,<2.0.0",
     "unified-domain-services>=1.0.0,<2.0.0",
     "unified-market-interface>=1.0.0,<2.0.0",
+    "api-contracts>=1.0.0,<2.0.0",
     # NOTE: unified-cloud-services is installed separately:
     #   - Local: setup.sh installs via SSH
     #   - Cloud Build/Docker: cloned via HTTPS with PAT
@@ -75,6 +76,9 @@ instruments-service = "instruments_service.cli.main:run_cli"
 Homepage = "https://github.com/iggyikenna/instruments-service"
 Documentation = "https://github.com/iggyikenna/instruments-service"
 Repository = "https://github.com/iggyikenna/instruments-service"
+
+[tool.uv.sources]
+api-contracts = { path = "../api-contracts" }
 
 [tool.setuptools]
 packages = ["instruments_service"]

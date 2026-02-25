@@ -44,6 +44,7 @@ jobs:
               echo "✅ Cloned ${repo} (branch: ${DEP_BRANCH} or main fallback)"
             }
 
+            clone_dep api-contracts
             clone_dep unified-cloud-services
             clone_dep unified-events-interface
             clone_dep unified-domain-services
@@ -65,6 +66,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install uv
+          uv pip install --system -e ../api-contracts 2>/dev/null || true
           uv pip install --system -e ../unified-cloud-services
           uv pip install --system -e ../unified-events-interface
           uv pip install --system -e ../unified-domain-services
