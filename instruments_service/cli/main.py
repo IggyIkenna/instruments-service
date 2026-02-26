@@ -37,9 +37,8 @@ def _load_env_early():
 _load_env_early()
 
 # Setup structured JSON logging (split libraries - direct import per dependency matrix)
+from unified_cloud_services import GCSEventSink
 from unified_events_interface import log_event, setup_events
-
-setup_events(mode="batch", service_name="instruments-service")
 
 from unified_cloud_services import GracefulShutdownHandler
 
@@ -99,6 +98,17 @@ def main() -> dict[str, HandlerResultValue]:
     try:
         # Parse arguments
         args = parse_arguments()
+
+        # Setup events with GCSEventSink now that we have config
+        setup_events(
+            mode="batch", 
+            service_name="instruments-service",
+            sink=GCSEventSink(
+                project_id=instruments_config.gcp_project_id,
+                bucket=getattr(instruments_config, 'events_bucket', f"{instruments_config.gcp_project_id}-events"),
+                service_name="instruments-service",
+            ),
+        )
 
         # Setup logging level (getattr returns Any; cast to int for setLevel)
         log_level_int = cast(int, getattr(logging, args.log_level.upper()))
