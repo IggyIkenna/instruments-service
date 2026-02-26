@@ -21,7 +21,7 @@ from typing import Any, TypedDict, cast
 import pandas as pd
 
 # Unified cloud services (cloud-agnostic)
-from unified_cloud_services import upload_to_storage
+from unified_cloud_services import GCSEventSink, upload_to_storage
 from unified_events_interface import JsonValue, log_event, publish_coordination_event, setup_events
 
 from instruments_service.app.core.instruments_service import InstrumentsService
@@ -98,7 +98,15 @@ class LiveModeHandler(ModeHandler):
 
         # Setup events (direct import per dependency matrix)
         project_id = str(getattr(config, "gcp_project_id", "") or getattr(config, "project_id", "") or "")
-        setup_events(mode="live", service_name="instruments-service", project_id=project_id)
+        setup_events(
+            mode="live", 
+            service_name="instruments-service", 
+            sink=GCSEventSink(
+                project_id=config.gcp_project_id,
+                bucket=getattr(config, 'events_bucket', f"{config.gcp_project_id}-events"),
+                service_name="instruments-service",
+            ),
+        )
 
         log_event(
             "LIVE_MODE_STARTED",
