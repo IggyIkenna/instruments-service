@@ -270,7 +270,7 @@ cleanup_zombie_pyright() {
 cleanup_zombie_pyright
 
 if command -v basedpyright &> /dev/null; then
-    if run_timeout 120 basedpyright $SOURCE_DIR/ --level warning 2>&1; then
+    if run_timeout 120 basedpyright $SOURCE_DIR/ 2>&1; then
         log_success "Type checking PASSED"
     else
         log_fail "Type checking FAILED (or timed out after 120s)"
@@ -454,6 +454,32 @@ fi
 BYPASS=$(rg "\|\|true|\|\| true" --glob "**/quality-gates.sh" --glob "**/quality-gates.yml" . 2>/dev/null \
     | grep -v "^#\|zombies\|pyright\|cleanup" || true)
 [[ -n "$BYPASS" ]] && { log_fail "||true bypass in quality gates — fix root cause"; echo "$BYPASS" | head -3; ((CODEX_VIOLATIONS++)); } || log_success "No ||true quality gate bypasses"
+
+# ID conventions (generate_strategy_id, generate_config_id, etc.) live in unified-config-interface
+ID_CONV=$(rg 'from unified_cloud_services import[^#]*?(generate_strategy_id|generate_config_id|parse_strategy_id|parse_config_id|validate_strategy_id|validate_config_id|get_gcs_config_path|get_execution_bucket|get_strategy_bucket|CATEGORIES|MODES|TIMEFRAMES)' \
+    --type py "$SOURCE_DIR/" 2>/dev/null || true)
+[[ -n "$ID_CONV" ]] && { log_fail "ID convention functions must come from unified_config_interface, not unified_cloud_services"; echo "$ID_CONV" | head -3; ((CODEX_VIOLATIONS++)); } || log_success "ID convention imports from unified_config_interface"
+
+# unified_cloud_services.security module was deleted Feb 2026 — use log_event() from unified_events_interface
+SEC=$(rg 'from unified_cloud_services.*security|from unified_cloud_services import.*[Aa]uth[Ff]ailure|SecurityLogger|config_change_logger|secret_access_logger' \
+    --type py "$SOURCE_DIR/" 2>/dev/null || true)
+[[ -n "$SEC" ]] && { log_fail "unified_cloud_services.security is deleted — use log_event('AUTH_FAILURE', ...) from unified_events_interface"; echo "$SEC" | head -3; ((CODEX_VIOLATIONS++)); } || log_success "No deleted security module imports"
+
+# Domain clients must come from unified_domain_services, not unified_cloud_services
+UCS_DOMAIN=$(rg 'from unified_cloud_services import[^#]*?(InstrumentsDomainClient|ExecutionDomainClient|MarketCandleDataDomainClient|MarketTickDataDomainClient|create_instruments_client|create_execution_client|create_features_client|create_market_candle_data_client|create_market_tick_data_client)' \
+    --type py --glob "!tests/**" "$SOURCE_DIR/" 2>/dev/null || true)
+[[ -n "$UCS_DOMAIN" ]] && { log_fail "Domain clients must come from unified_domain_services, not unified_cloud_services"; echo "$UCS_DOMAIN" | head -5; ((CODEX_VIOLATIONS++)); } || log_success "Domain clients imported from unified_domain_services"
+
+# GCP auth: tests must use google.auth.default() — never pytest.skip for missing credential file
+BAD_AUTH_SKIP=$(rg 'pytest\.skip.*[Cc]redential|pytest\.skip.*GOOGLE_APPLICATION_CREDENTIALS|if not.*gcp_credentials.*pytest\.skip|if not.*cred_file.*pytest\.skip' \
+    --type py tests/ 2>/dev/null \
+    | grep -v "_skip_integration_without_creds\|No GCP credentials.*skipping integration\|No GCP credentials.*skipping Secret Manager\|Could not create/access" \
+    || true)
+[[ -n "$BAD_AUTH_SKIP" ]] && { log_fail "Tests skip due to missing credential file — use google.auth.default() + @pytest.mark.integration instead"; echo "$BAD_AUTH_SKIP" | head -5; ((CODEX_VIOLATIONS++)); } || log_success "No credential-file skip patterns in tests"
+
+# .env.example must not contain GOOGLE_APPLICATION_CREDENTIALS (use ADC / GH token / Cloud SA)
+[[ -f ".env.example" ]] && rg "GOOGLE_APPLICATION_CREDENTIALS" .env.example 2>/dev/null \
+    && { log_fail ".env.example contains GOOGLE_APPLICATION_CREDENTIALS — remove it (use ADC)"; ((CODEX_VIOLATIONS++)); } || log_success "No GOOGLE_APPLICATION_CREDENTIALS in .env.example"
 
 log_success "Codex compliance PASSED"
 
