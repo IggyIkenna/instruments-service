@@ -2,14 +2,13 @@
 Unit tests for events module - updated for unified-trading-services pattern.
 """
 
-from unified_events_interface import MockEventSink
-from unified_trading_services import log_event, setup_service
+from unified_events_interface import MockEventSink, log_event, setup_events
 
 
 def test_setup_service_uses_mock_sink():
     """Test that setup_service works with MockEventSink for testing."""
     sink = MockEventSink()
-    setup_service(service_name="instruments-service", mode="test", sink=sink)
+    setup_events(service_name="instruments-service", mode="test", sink=sink)
     log_event("STARTED")
     assert any(name == "STARTED" for name, _ in sink.events)
 
@@ -17,7 +16,7 @@ def test_setup_service_uses_mock_sink():
 def test_lifecycle_events_logged():
     """Test that standard lifecycle events can be logged."""
     sink = MockEventSink()
-    setup_service(service_name="instruments-service", mode="test", sink=sink)
+    setup_events(service_name="instruments-service", mode="test", sink=sink)
 
     # Log standard lifecycle events
     log_event("STARTED")
@@ -47,7 +46,7 @@ def test_lifecycle_events_logged():
 def test_service_specific_events_logged():
     """Test that service-specific events can be logged."""
     sink = MockEventSink()
-    setup_service(service_name="instruments-service", mode="test", sink=sink)
+    setup_events(service_name="instruments-service", mode="test", sink=sink)
 
     # Log service-specific events
     log_event("DATE_PROCESSING_STARTED")

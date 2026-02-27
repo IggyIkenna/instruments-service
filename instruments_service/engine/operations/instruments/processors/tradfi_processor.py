@@ -100,9 +100,6 @@ class TradFiInstrumentProcessor(BaseInstrumentProcessor):
                 logger.info(f"✅ Fetched {len(instruments)} Databento instruments for {exchange}")
                 return instruments
 
-            except ImportError as e:
-                logger.error("Databento adapter not available. Install: pip install databento")
-                raise Exception("Databento adapter not available") from e
             except Exception as e:
                 last_error = e
                 if attempt < max_retries - 1:

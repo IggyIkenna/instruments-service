@@ -7,15 +7,16 @@ Each domain has its own bucket and dataset (instruments domain).
 
 import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pandas as pd
-from unified_cloud_services import CloudTarget, StandardizedDomainCloudService, dump_to_csv, get_bucket_for_category
+from unified_cloud_services import CloudTarget, StandardizedDomainCloudService, get_bucket_for_category
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
 from unified_internal_contracts.schemas.errors import ErrorContext
 
 from instruments_service.config import instruments_config
+from instruments_service.utils.dump_to_csv import dump_to_csv
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,7 @@ class CloudDataProvider:
                 # CSV sampling for instruments data
                 dump_to_csv(
                     df,
-                    filename=f"instruments_service_data_{date.strftime('%Y%m%d')}_{datetime.now().strftime('%H%M%S')}.csv",
+                    filename=f"instruments_service_data_{date.strftime('%Y%m%d')}_{datetime.now(UTC).strftime('%H%M%S')}.csv",
                 )
 
             return df
@@ -168,7 +169,7 @@ class CloudDataProvider:
                 # CSV sampling for category-specific instruments data
                 dump_to_csv(
                     df,
-                    filename=f"instruments_service_{category.lower()}_data_{date.strftime('%Y%m%d')}_{datetime.now().strftime('%H%M%S')}.csv",
+                    filename=f"instruments_service_{category.lower()}_data_{date.strftime('%Y%m%d')}_{datetime.now(UTC).strftime('%H%M%S')}.csv",
                 )
 
             return df

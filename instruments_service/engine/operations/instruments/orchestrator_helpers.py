@@ -16,11 +16,11 @@ from datetime import date as date_type
 from typing import Any, cast
 
 import pandas as pd
-from instruments_service.utils.dump_to_csv import dump_to_csv
 from unified_cloud_services import determine_market_category
 from unified_events_interface import ErrorWarningCounter
 
 from instruments_service.models import InstrumentDefinition
+from instruments_service.utils.dump_to_csv import dump_to_csv
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +187,7 @@ def convert_to_dataframe(all_instruments: dict[str, InstrumentDefinition], skip_
     # CSV sampling for generated instruments data
     if not instruments_df.empty:
         dump_to_csv(
-            instruments_df, filename=f"instruments_service_generated_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            instruments_df, filename=f"instruments_service_generated_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.csv"
         )
 
     return instruments_df

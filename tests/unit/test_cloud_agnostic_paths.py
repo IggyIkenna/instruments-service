@@ -12,7 +12,7 @@ from datetime import date
 from unittest.mock import Mock, patch
 
 import pytest
-from unified_trading_services import BaseDependencyChecker as DependencyChecker
+from unified_cloud_services import BaseDependencyChecker as DependencyChecker
 
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 
@@ -164,7 +164,7 @@ class TestCloudAgnosticPaths:
             expected_bucket = f"instruments-store-cefi-{mock_project_id}"
 
             # Create CloudTarget directly (not mocked) to verify it accepts project ID
-            from unified_trading_services import CloudTarget
+            from unified_cloud_services import CloudTarget
 
             cloud_target = CloudTarget(
                 project_id=mock_project_id,
@@ -182,7 +182,7 @@ class TestCloudAgnosticPaths:
             )
 
     def test_no_direct_gcs_client_imports(self):
-        """Test that instruments-service code doesn't directly import get_gcs_client from unified_trading_services."""
+        """Test that instruments-service code doesn't directly import get_gcs_client from unified_cloud_services."""
         from pathlib import Path
 
         # Use package path - invariant across environments. Path(__file__) breaks in Cloud Build
@@ -208,7 +208,7 @@ class TestCloudAgnosticPaths:
                     content = f.read()
 
                 # Check for direct get_gcs_client imports (bad)
-                if "from unified_trading_services.core.cloud_auth_factory import create_gcs_client" in content:
+                if "from unified_cloud_services.core.cloud_auth_factory import create_gcs_client" in content:
                     violations.append(f"{file_path}: Direct import of get_gcs_client")
 
                 # Check for get_gcs_client() calls (bad, should use StandardizedDomainCloudService)

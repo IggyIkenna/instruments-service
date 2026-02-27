@@ -5,7 +5,7 @@ unified-trading-services validates real API usage via its own integration tests.
 """
 
 import pytest
-from unified_trading_services import CloudTarget
+from unified_cloud_services import CloudTarget
 
 from instruments_service.config import instruments_config
 
