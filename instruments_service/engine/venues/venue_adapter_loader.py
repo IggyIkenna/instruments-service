@@ -104,9 +104,6 @@ def get_adapter_for_venue(venue: str, api_keys: dict[str, str] | None = None) ->
         logger.info(f"✅ Loaded adapter for {data_source}")
         return adapter
 
-    except ImportError as e:
-        logger.error(f"Failed to import adapter for {data_source}: {e}")
-        raise
     except Exception as e:
         logger.error(f"Failed to initialize adapter for {data_source}: {e}")
         raise

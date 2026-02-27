@@ -77,7 +77,7 @@ import pytest
 from google.auth import default
 from google.auth.exceptions import DefaultCredentialsError
 from google.oauth2 import service_account
-from unified_trading_services import CloudTarget, get_secret_with_fallback, get_storage_client
+from unified_cloud_services import CloudTarget, get_secret_with_fallback, get_storage_client
 
 from instruments_service.config import instruments_config
 
