@@ -12,8 +12,11 @@ Complies with:
 
 import logging
 from typing import Protocol
+from uuid import uuid4
 
 from unified_cloud_services import get_secret_with_fallback
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 from unified_market_interface import DataSourceMapping
 
 from instruments_service.config import instruments_config
@@ -89,10 +92,18 @@ def validate_required_api_keys(venues: list[str], project_id: str | None = None)
                 logger.error(error_msg)
 
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             error_msg = f"Failed to fetch API key for {data_source}: {e}"
             errors.append(error_msg)
             logger.error(error_msg)
-
     if errors:
         raise ValueError(f"API key validation failed: {'; '.join(errors)}")
 

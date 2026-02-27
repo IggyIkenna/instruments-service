@@ -8,6 +8,10 @@ Extracted from InstrumentProcessingService for file-size compliance (COD-SIZE).
 import logging
 import re
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
+
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 if TYPE_CHECKING:
     from unified_config_interface import ExchangeInstrumentConfig
@@ -244,6 +248,15 @@ class SymbolParser:
             return {"base_asset": base_currency, "quote_asset": detected_quote}
 
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.debug(f"⚠️ Symbol parsing error for {symbol_id}: {e}")
             return {"base_asset": "", "quote_asset": ""}
 
@@ -293,6 +306,15 @@ class SymbolParser:
                 }
             return {"expiry_date": "", "strike_price": "", "option_type": ""}
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.debug(f"⚠️ Option parsing error for {symbol_id}: {e}")
             return {"expiry_date": "", "strike_price": "", "option_type": ""}
 
@@ -319,7 +341,16 @@ class SymbolParser:
                 month = months.get(month_str, "01")
                 return f"20{year}-{month}-{day.zfill(2)}T08:00:00Z"
         except Exception as e:
-            logger.debug(f"⚠️ Date parsing error: {e}")
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.HIGH,
+                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return "2025-12-25T08:00:00Z"
 
     def parse_expiry_from_symbol(self, symbol_id: str, exchange: str) -> str | None:
@@ -367,5 +398,14 @@ class SymbolParser:
                     return self.parse_deribit_date(expiry_raw)
             return None
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.debug(f"⚠️ Expiry parsing error for {symbol_id}: {e}")
             return None

@@ -11,12 +11,12 @@ Comprehensive usage guide for instruments-service.
 
 ## For Downstream Clients
 
-**Important**: Downstream clients should use `unified-cloud-services` directly to query instruments, NOT import `instruments-service`.
+**Important**: Downstream clients should use `unified-trading-services` directly to query instruments, NOT import `instruments-service`.
 
 ### Querying Instruments from GCS
 
 ```python
-from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
+from unified_trading_services import StandardizedDomainCloudService, CloudTarget
 
 # Create market_data service (canonical pattern: direct instantiation)
 service = StandardizedDomainCloudService(
@@ -286,7 +286,7 @@ stats = client.get_summary_stats('2023-05-23')
 
 See `examples/` directory for complete working examples:
 - `batch_generation.py` - Batch instrument generation using orchestration service
-- `query_instruments.py` - Query instruments using unified-cloud-services client
+- `query_instruments.py` - Query instruments using unified-trading-services client
 
 ---
 

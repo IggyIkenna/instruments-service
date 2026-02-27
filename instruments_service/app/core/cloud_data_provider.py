@@ -8,9 +8,12 @@ Each domain has its own bucket and dataset (instruments domain).
 import logging
 import os
 from datetime import datetime
+from uuid import uuid4
 
 import pandas as pd
 from unified_cloud_services import CloudTarget, StandardizedDomainCloudService, dump_to_csv, get_bucket_for_category
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 from instruments_service.config import instruments_config
 
@@ -96,6 +99,15 @@ class CloudDataProvider:
             return df
 
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             error_msg = str(e)
             # Handle 404/Not Found gracefully - this is an expected state when data hasn't been generated yet
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
@@ -162,6 +174,15 @@ class CloudDataProvider:
             return df
 
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             error_msg = str(e)
             # Handle 404/Not Found gracefully - this is an expected state when data hasn't been generated yet
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
@@ -213,6 +234,15 @@ class CloudDataProvider:
             return result
 
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.error(f"❌ Failed to query instruments from BigQuery: {e}")
             return pd.DataFrame()
 
@@ -273,9 +303,17 @@ class CloudDataProvider:
                             logger.debug(f"📊 Venue instruments NOT found: {category}/{venue} for {date_str}")
                             return False  # Any missing venue means data doesn't exist
                     except Exception as e:
+                        _err = EnhancedError(
+                            message=str(e),
+                            category=ErrorCategory.SERVER_ERROR,
+                            severity=ErrorSeverity.MEDIUM,
+                            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                            correlation_id=str(uuid4()),
+                            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                        )
+                        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                         logger.debug(f"Could not check {category}/{venue} for {date_str}: {e}")
                         return False  # Error checking = treat as not existing
-
             # All venues found
             return True
 
@@ -297,10 +335,18 @@ class CloudDataProvider:
                     if not check_all:
                         return True
             except Exception as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                 # Log but continue checking other categories
                 logger.debug(f"Could not check {category} for {date_str}: {e}")
                 continue
-
         if check_all:
             # Only return True if ALL specified categories were found
             all_found = len(found_categories) == len(categories)

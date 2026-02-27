@@ -141,7 +141,7 @@ The instruments schema uses `nullable_overrides` to specify different nullabilit
 
 ```python
 from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
-from unified_cloud_services import ParquetSchemaEnforcer
+from unified_trading_services import ParquetSchemaEnforcer
 
 enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
 

@@ -12,8 +12,10 @@ import os
 from datetime import UTC, datetime
 from datetime import date as date_type
 from typing import Any, cast
+from uuid import uuid4
 
 import pandas as pd
+from api_contracts.domain_config import DomainConfigProtocol
 from unified_cloud_services import (
     CloudTarget,
     CSVSampler,
@@ -25,15 +27,12 @@ from unified_cloud_services import (
     handle_storage_errors,
 )
 from unified_domain_services import validate_timestamp_date_alignment
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 from instruments_service.config import instruments_config
-from instruments_service.schemas.parquet import get_required_columns
-
-try:
-    from api_contracts.domain_config import DomainConfigProtocol
-except ImportError:
-    DomainConfigProtocol = None
 from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
+from instruments_service.schemas.parquet import get_required_columns
 
 logger = logging.getLogger(__name__)
 
@@ -395,9 +394,17 @@ class CloudInstrumentStorage:
                             all_successful = False
 
                 except Exception as gcs_error:
+                    _err = EnhancedError(
+                        message=str(gcs_error),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.MEDIUM,
+                        recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(gcs_error).__name__}),
+                    )
+                    logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                     logger.error(f"❌ GCS upload failed for bucket {bucket_name}: {gcs_error}")
                     all_successful = False
-
             if all_successful:
                 # Count unique venues stored
                 unique_venues: int = int(instruments_df["venue"].nunique()) if "venue" in instruments_df.columns else 0
@@ -411,6 +418,15 @@ class CloudInstrumentStorage:
             return all_successful
 
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.error(f"Failed to store instruments: {e}")
             return False
 

@@ -16,9 +16,13 @@ It has NO upstream GCS data dependencies. All data sources are external APIs.
 
 ### CEFI (Centralized Finance)
 
+**Primary path:** instruments-service uses **UMI (unified-market-interface)** `get_adapter("tardis", "tradfi")` for CeFi. No direct exchange REST calls — UMI TardisAdapter fetches and normalizes instrument data.
+
 | API | Purpose | Secret Name | Required |
 |-----|---------|-------------|----------|
-| Tardis API | Exchange instrument data | `tardis-api-key` | Yes |
+| Tardis API | Exchange instrument data (via UMI) | `tardis-api-key` | Yes |
+
+**Optional path:** `unified-reference-data-interface` (URDI) provides direct exchange REST adapters. When `USE_URDI_REFERENCE_DATA=true` and URDI is installed, instruments-service can use `get_reference_adapter(venue).get_instruments()` for supported venues (binance, bybit, okx, deribit, coinbase, hyperliquid). URDI adapters call `get_secret_with_fallback` internally — secrets never surface to the service.
 
 **Supported Exchanges:**
 - BINANCE-SPOT
@@ -162,7 +166,9 @@ In the unified trading system deployment:
 
 | Package | Purpose |
 |---------|---------|
-| `unified-cloud-services` | Cloud operations |
+| `unified-trading-services` | Cloud operations |
+| `unified-market-interface` | CeFi instrument fetch via TardisAdapter (no direct REST) |
+| `unified-reference-data-interface` | Optional: direct exchange reference data adapters |
 | `databento` | TradFi API client |
 | `ccxt` | Exchange metadata |
 | `web3` | Ethereum interactions |

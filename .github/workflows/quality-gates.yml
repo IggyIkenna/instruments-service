@@ -45,9 +45,9 @@ jobs:
             }
 
             clone_dep api-contracts
-            clone_dep unified-cloud-services
+            clone_dep unified-trading-services
             clone_dep unified-events-interface
-            clone_dep unified-domain-services
+            clone_dep unified-domain-client
             clone_dep unified-config-interface
             clone_dep unified-market-interface
 
@@ -67,9 +67,9 @@ jobs:
         run: |
           pip install uv
           uv pip install --system -e ../api-contracts 2>/dev/null || true
-          uv pip install --system -e ../unified-cloud-services
+          uv pip install --system -e ../unified-trading-services
           uv pip install --system -e ../unified-events-interface
-          uv pip install --system -e ../unified-domain-services
+          uv pip install --system -e ../unified-domain-client
           uv pip install --system -e ../unified-config-interface
           uv pip install --system -e ../unified-market-interface
           uv pip install --system -e . --no-deps

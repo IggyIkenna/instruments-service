@@ -7,6 +7,10 @@ Extracted from InstrumentProcessingService for file-size compliance (COD-SIZE).
 
 import logging
 from typing import Any, Protocol, cast
+from uuid import uuid4
+
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 logger = logging.getLogger(__name__)
 
@@ -177,5 +181,14 @@ async def populate_derived_fields(
         return derived_fields
 
     except Exception as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
         logger.debug(f"⚠️ Error populating derived fields for {canonical_key}: {e}")
         return {}

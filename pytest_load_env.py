@@ -11,6 +11,10 @@ config is loaded; sets test env defaults.
 import logging
 import os
 from pathlib import Path
+from uuid import uuid4
+
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 _logger = logging.getLogger("pytest_load_env")
 
@@ -84,4 +88,12 @@ def pytest_load_initial_conftests(early_config, parser, args):
     except ImportError:
         _logger.warning("python-dotenv not available, skipping .env file loading")
     except Exception as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
         _logger.warning("Error loading .env file: %s", e)

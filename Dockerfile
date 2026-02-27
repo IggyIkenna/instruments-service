@@ -1,6 +1,6 @@
 # Dockerfile for instruments-service
 #
-# Uses unified-cloud-services base image from Artifact Registry.
+# Uses unified-trading-services base image from Artifact Registry.
 # No GitHub token (GH_PAT) required.
 #
 # Build:
@@ -13,7 +13,7 @@
 #     instruments-service --mode instruments --start-date 2024-01-01 --CEFI
 
 ARG PROJECT_ID
-FROM --platform=linux/amd64 asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-cloud-services/unified-cloud-services:latest
+FROM --platform=linux/amd64 asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-trading-services/unified-trading-services:latest
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1 \

@@ -11,8 +11,11 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import Any, Protocol, cast
+from uuid import uuid4
 
 import pandas as pd
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 from unified_market_interface import InstrumentDefinition, VenueMapping
 
 from instruments_service.adapters import StorageAdapter
@@ -231,6 +234,15 @@ class InstrumentsOrchestrator:
             }
 
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.error(f"❌ Error in generate_instruments_for_date: {e}")
             return {
                 "success": False,
@@ -239,7 +251,6 @@ class InstrumentsOrchestrator:
                 "error_count": error_warning_counter.error_count,
                 "warning_count": error_warning_counter.warning_count,
             }
-
         finally:
             # Remove handler to avoid memory leaks
             root_logger.removeHandler(error_warning_counter)  # type: ignore[arg-type]

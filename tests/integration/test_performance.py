@@ -18,6 +18,8 @@ from instruments_service.app.core.instruments_service import InstrumentsService
 # Import get_config from conftest (avoids circular import issues)
 from tests.conftest import get_config
 
+pytestmark = pytest.mark.integration
+
 
 class TestPerformance:
     """Performance benchmarks for instrument generation."""

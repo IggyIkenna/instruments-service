@@ -12,9 +12,12 @@ This example shows:
 """
 
 import logging
+from uuid import uuid4
 
 # Simple imports - assumes packages are installed
 from unified_cloud_services import create_instruments_client
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -187,6 +190,15 @@ def main():
         print("=" * 60)
 
     except Exception as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
         print(f"\n❌ Error: {e}")
         import traceback
 

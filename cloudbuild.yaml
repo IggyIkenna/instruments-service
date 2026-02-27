@@ -42,7 +42,7 @@ steps:
   # Step 3: Pull base image (required for authenticated access during build)
   - name: 'gcr.io/cloud-builders/docker'
     id: 'pull-base-image'
-    args: ['pull', 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/unified-cloud-services/unified-cloud-services:latest']
+    args: ['pull', 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/unified-trading-services/unified-trading-services:latest']
     waitFor: ['configure-docker']
 
   # Step 4: Build the image
@@ -122,7 +122,7 @@ steps:
         mkdir -p /root/.config/pip
         echo "[global]
         extra-index-url = https://asia-northeast1-python.pkg.dev/$PROJECT_ID/unified-libraries/simple/" > /root/.config/pip/pip.conf
-        uv pip install --system unified-cloud-services unified-events-interface unified-config-interface unified-domain-services
+        uv pip install --system unified-trading-services unified-events-interface unified-config-interface unified-domain-client
         python -m build --wheel --outdir dist/
         python -m twine upload --repository-url https://asia-northeast1-python.pkg.dev/$PROJECT_ID/unified-libraries/ --non-interactive dist/*.whl || true
     waitFor: ['quality-gates']

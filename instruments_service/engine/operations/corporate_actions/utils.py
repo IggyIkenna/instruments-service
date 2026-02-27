@@ -96,9 +96,6 @@ def get_tickers_from_gcs(
         logger.warning("⚠️ No equity tickers found in any GCS instruments file")
         return []
 
-    except ImportError:
-        logger.error("❌ unified-cloud-services not available")
-        return []
     except (OSError, ValueError, TypeError, KeyError) as e:
         logger.error(f"❌ Failed to load tickers from GCS: {e}")
         return []

@@ -19,6 +19,10 @@ import sys
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
+from uuid import uuid4
+
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -153,6 +157,15 @@ def get_cloud_service(bucket_name: str):
         )
         return StandardizedDomainCloudService(domain="instruments", cloud_target=target)
     except Exception as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
         logger.warning(f"Could not initialize cloud service: {e}")
         return None
 
@@ -176,6 +189,15 @@ def check_file_exists(service, bucket_name: str, blob_path: str) -> tuple:
             return True, size
         return False, None
     except Exception as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
         logger.debug(f"Error checking {bucket_name}/{blob_path}: {e}")
         return False, None
 

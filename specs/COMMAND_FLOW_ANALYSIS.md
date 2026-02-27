@@ -6,7 +6,7 @@
 python -m instruments_service --mode instruments --start-date 2023-05-23 --end-date 2023-05-24
 ```
 
-This document traces the complete execution flow of the instruments generation command, showing how it uses both `instruments-service` and `unified-cloud-services` projects.
+This document traces the complete execution flow of the instruments generation command, showing how it uses both `instruments-service` and `unified-trading-services` projects.
 
 ---
 
@@ -30,7 +30,7 @@ This document traces the complete execution flow of the instruments generation c
                                                     │
                                                     ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                       unified-cloud-services                            │
+│                       unified-trading-services                            │
 │  ┌──────────────────────────────────┐    ┌─────────────────────┐        │
 │  │ StandardizedDomainCloudService   │───▶│ UnifiedCloudService │        │
 │  │   (domain validation wrapper)    │    │  (async GCS/BQ ops) │        │
@@ -81,14 +81,14 @@ def _load_env_early():
 #### 2.2 Configuration Patching (Lines 42-52)
 
 ```python
-# CRITICAL PATCH: Ensures unified-cloud-services uses instruments-service config
-import unified_cloud_services.core.market_category
-unified_cloud_services.core.market_category.unified_config = instruments_config
+# CRITICAL PATCH: Ensures unified-trading-services uses instruments-service config
+import unified_trading_services.core.market_category
+unified_trading_services.core.market_category.unified_config = instruments_config
 ```
 
 **Why This Matters**:
 
-- `unified-cloud-services` has default bucket configurations
+- `unified-trading-services` has default bucket configurations
 - This patch ensures it uses the correct buckets from `instruments-service`
 - Enables market category routing (CEFI/TRADFI/DEFI to different buckets)
 
@@ -429,15 +429,15 @@ if success:
 
 **File**: `instruments-service/instruments_service/app/core/cloud_instrument_storage.py`
 
-This is where the connection to `unified-cloud-services` happens.
+This is where the connection to `unified-trading-services` happens.
 
 #### 7.1 Initialization (Lines 41-100)
 
 ```python
 class CloudInstrumentStorage:
     def __init__(self, cloud_target: CloudTarget = None):
-        # Import unified-cloud-services
-        from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
+        # Import unified-trading-services
+        from unified_trading_services import StandardizedDomainCloudService, CloudTarget
 
         # Detect test environment
         environment = get_config("ENVIRONMENT", "development").lower()
@@ -482,8 +482,8 @@ def store_instruments(
 ##### A. Market Category Determination (Lines 118-142)
 
 ```python
-# Import from unified-cloud-services
-from unified_cloud_services import (
+# Import from unified-trading-services
+from unified_trading_services import (
     determine_market_category,
     get_bucket_for_category,
 )
@@ -556,7 +556,7 @@ for category in categories:
 
 ### 8. Unified Cloud Services Layer
 
-**File**: `unified-cloud-services/unified_cloud_services/domain/standardized_service.py`
+**File**: `unified-trading-services/unified_trading_services/domain/standardized_service.py`
 
 This is the abstraction layer that provides domain-specific validation and wraps async operations.
 
@@ -659,7 +659,7 @@ def upload_to_bigquery(
 
 ### 9. Core Cloud Operations
 
-**File**: `unified-cloud-services/unified_cloud_services/core/unified_cloud_service.py`
+**File**: `unified-trading-services/unified_trading_services/core/unified_cloud_service.py`
 
 This is the lowest-level cloud service that directly interacts with GCS and BigQuery clients.
 
@@ -800,7 +800,7 @@ async def upload_to_bigquery(
                    (uses as dependency)
                             ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                  unified-cloud-services                           │
+│                  unified-trading-services                           │
 │                                                                   │
 │  Responsibilities:                                               │
 │  • GCS upload/download operations                                │
@@ -818,22 +818,22 @@ async def upload_to_bigquery(
 
 1. **Configuration Patching** (main.py:42-52)
 
-   - Ensures `unified-cloud-services` uses `instruments-service` config
+   - Ensures `unified-trading-services` uses `instruments-service` config
    - Critical for category-based bucket routing
 
 2. **CloudInstrumentStorage** (cloud_instrument_storage.py)
 
-   - Bridge between `instruments-service` and `unified-cloud-services`
+   - Bridge between `instruments-service` and `unified-trading-services`
    - Creates `StandardizedDomainCloudService` instance
    - Manages category-based storage routing
 
-3. **Market Category Classification** (unified-cloud-services)
+3. **Market Category Classification** (unified-trading-services)
 
    - `determine_market_category()`: Classifies instruments as CEFI/TRADFI/DEFI
    - `get_bucket_for_category()`: Routes to category-specific GCS buckets
    - Enables independent batch processing per category
 
-4. **Domain Validation** (unified-cloud-services)
+4. **Domain Validation** (unified-trading-services)
    - Schema validation before BigQuery uploads
    - Type checking and null validation
    - Prevents bad data from entering data warehouse
@@ -904,7 +904,7 @@ instruments_service/
 ├── app/
 │   └── core/
 │       ├── instruments_service.py           # Orchestration (CEFI/TRADFI/DEFI)
-│       ├── cloud_instrument_storage.py      # Bridge to unified-cloud-services
+│       ├── cloud_instrument_storage.py      # Bridge to unified-trading-services
 │       ├── instrument_processing_service.py # API integrations
 │       └── cloud_data_provider.py           # Read operations
 │
@@ -914,10 +914,10 @@ instruments_service/
 └── settings.py                   # Configuration (buckets, datasets, API keys)
 ```
 
-### unified-cloud-services
+### unified-trading-services
 
 ```
-unified_cloud_services/
+unified_trading_services/
 ├── domain/
 │   ├── standardized_service.py   # Domain-aware wrapper (sync API)
 │   └── validation.py             # Schema validation per domain
@@ -939,8 +939,8 @@ unified_cloud_services/
 
 ### 1. **Dependency Injection**
 
-- `instruments-service` depends on `unified-cloud-services`
-- `unified-cloud-services` is reusable across all services
+- `instruments-service` depends on `unified-trading-services`
+- `unified-trading-services` is reusable across all services
 - No circular dependencies
 
 ### 2. **Configuration Patching**
@@ -1088,7 +1088,7 @@ else:
 The command flow demonstrates a clean separation of concerns:
 
 - **instruments-service**: Domain logic & API integrations
-- **unified-cloud-services**: Cloud operations & infrastructure
+- **unified-trading-services**: Cloud operations & infrastructure
 
 The integration is achieved through:
 

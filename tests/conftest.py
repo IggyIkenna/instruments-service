@@ -51,7 +51,7 @@ def _load_env_early():
             pass
 
     # Set test defaults for CI/unit tests when .env is absent (CloudTarget requires non-empty gcs_bucket)
-    for key, default in [
+    for key, default_val in [
         ("INSTRUMENTS_GCS_BUCKET", "instruments-store-test"),
         ("INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-test"),
         ("INSTRUMENTS_GCS_BUCKET_TRADFI", "instruments-store-tradfi-test"),
@@ -61,7 +61,7 @@ def _load_env_early():
     ]:
         # Use os.getenv here since this is test setup code and needs to check raw env vars
         if not (os.getenv(key) or "").strip():
-            os.environ[key] = default
+            os.environ[key] = default_val
 
 
 # Load env vars immediately at import time
@@ -74,7 +74,10 @@ import json
 import logging
 
 import pytest
-from unified_cloud_services import CloudTarget, get_secret_with_fallback, get_storage_client
+from google.auth import default
+from google.auth.exceptions import DefaultCredentialsError
+from google.oauth2 import service_account
+from unified_trading_services import CloudTarget, get_secret_with_fallback, get_storage_client
 
 from instruments_service.config import instruments_config
 
@@ -109,20 +112,38 @@ def get_config(key: str, default: str | None = None) -> str | None:
     return default
 
 
-def cred_file_exists() -> str | None:
-    """Find GCP credentials file in common locations."""
-    if os.path.exists(instruments_config.google_application_credentials_path):
-        return instruments_config.google_application_credentials_path
-    return None
+@pytest.fixture(scope="session")
+def gcp_auth_info():
+    """Resolve GCP credentials using SA key file or ADC."""
+    creds_file = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    if creds_file and Path(creds_file).exists():
+        credentials = service_account.Credentials.from_service_account_file(creds_file)
+        with open(creds_file) as f:
+            project_id = json.load(f).get("project_id") or "test-project"
+        return credentials, project_id, creds_file
+    try:
+        credentials, project = default()
+        project_id = project or os.getenv("GCP_PROJECT_ID") or "test-project"
+        return credentials, project_id, None
+    except DefaultCredentialsError:
+        pass
+    return None, "test-project", None
+
+
+@pytest.fixture(autouse=True)
+def _skip_integration_without_creds(request: pytest.FixtureRequest, gcp_auth_info: tuple) -> None:
+    """Skip @pytest.mark.integration tests when no GCP credentials are available."""
+    if "integration" in request.keywords:
+        credentials, _, _ = gcp_auth_info
+        if credentials is None:
+            pytest.skip("No GCP credentials — skipping integration test")
 
 
 @pytest.fixture(scope="session")
-def gcp_credentials():
-    """Setup GCP credentials for tests."""
-    cred_file = cred_file_exists()
-    if not cred_file:
-        pytest.skip("GCP credentials file not found")
-    return cred_file
+def gcp_credentials(gcp_auth_info: tuple) -> str | None:
+    """GCP credentials file path (None when using ADC)."""
+    _, _, creds_file = gcp_auth_info
+    return creds_file
 
 
 @pytest.fixture(scope="session")
@@ -175,7 +196,7 @@ def ensure_test_bucket_exists(
         True if bucket exists and is accessible, False otherwise
     """
     try:
-        # Set credentials for unified-cloud-services
+        # Set credentials for unified-trading-services
         import os
 
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_file
@@ -242,28 +263,22 @@ def ensure_test_bucket_exists(
 
 
 @pytest.fixture(scope="session")
-def ensure_test_resources(gcp_credentials, gcp_project_id, test_bucket_name):
+def ensure_test_resources(gcp_credentials: str | None, gcp_project_id: str, test_bucket_name: str):
     """
     Ensure test resources (bucket) exist and have proper permissions.
 
     Automatically creates test bucket if it doesn't exist and grants
     permissions to the service account.
     """
-    if not gcp_credentials:
-        pytest.skip("GCP credentials required for test resource setup")
-
-    # Get location from env (default to asia-northeast1)
-    # Ensure test bucket exists
-    ensure_test_bucket_exists(
-        project_id=gcp_project_id,
-        bucket_name=test_bucket_name,
-        credentials_file=gcp_credentials,
-        location=instruments_config.gcs_location,
-    )
+    if gcp_credentials:
+        ensure_test_bucket_exists(
+            project_id=gcp_project_id,
+            bucket_name=test_bucket_name,
+            credentials_file=gcp_credentials,
+            location=instruments_config.gcs_location,
+        )
 
     yield
-
-    # Cleanup: Could delete test bucket here if desired, but we keep it for reuse
 
 
 @pytest.fixture(scope="session")
@@ -278,11 +293,8 @@ def test_cloud_target(gcp_project_id, test_bucket_name, bigquery_dataset, ensure
 
 
 @pytest.fixture(scope="session")
-def tardis_api_key(gcp_project_id, gcp_credentials):
+def tardis_api_key(gcp_project_id: str, gcp_credentials: str | None) -> str:
     """Get Tardis API key from Secret Manager."""
-    if not gcp_credentials:
-        pytest.skip("GCP credentials required for Secret Manager access")
-
     api_key = get_secret_with_fallback(
         project_id=gcp_project_id,
         secret_name="tardis-api-key",

@@ -14,7 +14,7 @@ python -m instruments_service --mode instruments --start-date 2023-05-23 --end-d
 graph TB
     CLI[CLI Command]
     IS[instruments-service]
-    UCS[unified-cloud-services]
+    UCS[unified-trading-services]
     GCP[GCP: GCS + BigQuery]
 
     CLI --> IS
@@ -50,7 +50,7 @@ graph TB
 │  ┌────────────────────────────────────────────────────────────────┐    │
 │  │  2. Main Orchestration (cli/main.py)                            │    │
 │  │     ├─▶ Parse arguments (parser.py)                             │    │
-│  │     ├─▶ Patch unified-cloud-services config ⚠️                 │    │
+│  │     ├─▶ Patch unified-trading-services config ⚠️                 │    │
 │  │     ├─▶ Get handler for mode                                    │    │
 │  │     └─▶ Execute handler.run()                                   │    │
 │  └────────────────────────────────────────────────────────────────┘    │
@@ -94,7 +94,7 @@ graph TB
                                    │
                                    ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                      unified-cloud-services                              │
+│                      unified-trading-services                              │
 │                                                                          │
 │  ┌────────────────────────────────────────────────────────────────┐    │
 │  │  6. Standardized Service (domain/standardized_service.py)       │    │
@@ -149,8 +149,8 @@ graph TB
 │    _load_env_early()                     # Lines 18-32                  │
 │      └─▶ Load .env file                                                 │
 │                                                                          │
-│    Patch unified-cloud-services          # Lines 42-52 ⚠️ CRITICAL     │
-│      └─▶ unified_cloud_services.core.market_category.unified_config     │
+│    Patch unified-trading-services          # Lines 42-52 ⚠️ CRITICAL     │
+│      └─▶ unified_trading_services.core.market_category.unified_config     │
 │          = instruments_config                                           │
 │                                                                          │
 │    main()                                # Lines 63-209                 │
@@ -279,11 +279,11 @@ graph TB
          │
          ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│ 5. CLOUD INSTRUMENT STORAGE (Bridge to unified-cloud-services)          │
+│ 5. CLOUD INSTRUMENT STORAGE (Bridge to unified-trading-services)          │
 │    File: app/core/cloud_instrument_storage.py                           │
 │                                                                          │
 │    __init__()                            # Lines 50-100                 │
-│      ├─▶ Import unified-cloud-services                                 │
+│      ├─▶ Import unified-trading-services                                 │
 │      ├─▶ Detect test environment                                       │
 │      ├─▶ Create CloudTarget                                            │
 │      └─▶ Create StandardizedDomainCloudService                         │
@@ -291,7 +291,7 @@ graph TB
 │    store_instruments()                   # Lines 103-340                │
 │      │                                                                   │
 │      ├─▶ Determine Market Category       # Lines 118-142               │
-│      │   └─▶ from unified_cloud_services import (                     │
+│      │   └─▶ from unified_trading_services import (                     │
 │      │         determine_market_category,                              │
 │      │         get_bucket_for_category,                                │
 │      │       )                                                          │
@@ -349,7 +349,7 @@ graph TB
          │
          ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                      unified-cloud-services                              │
+│                      unified-trading-services                              │
 └─────────────────────────────────────────────────────────────────────────┘
          │
          ▼
@@ -570,11 +570,11 @@ graph TB
 ```python
 # File: instruments_service/cli/main.py (Lines 42-52)
 
-import unified_cloud_services.core.market_category
-unified_cloud_services.core.market_category.unified_config = instruments_config
+import unified_trading_services.core.market_category
+unified_trading_services.core.market_category.unified_config = instruments_config
 ```
 
-**Why**: Ensures `unified-cloud-services` uses the correct bucket configuration from `instruments-service`.
+**Why**: Ensures `unified-trading-services` uses the correct bucket configuration from `instruments-service`.
 
 ---
 
@@ -583,7 +583,7 @@ unified_cloud_services.core.market_category.unified_config = instruments_config
 ```python
 # File: instruments_service/app/core/cloud_instrument_storage.py
 
-from unified_cloud_services import (
+from unified_trading_services import (
     determine_market_category,
     get_bucket_for_category,
 )
@@ -641,7 +641,7 @@ results = await asyncio.gather(
 ### 2. Connection Pooling
 
 ```python
-# unified-cloud-services reuses clients
+# unified-trading-services reuses clients
 gcs_client = self._get_gcs_client()  # Cached
 bq_client = self._get_bigquery_client()  # Cached
 ```
@@ -678,6 +678,6 @@ The command flows through 8 levels:
 **Key Integration**:
 
 - `instruments-service` handles domain logic
-- `unified-cloud-services` handles cloud operations
+- `unified-trading-services` handles cloud operations
 - Configuration patching ensures correct bucket routing
 - Market category classification enables independent processing

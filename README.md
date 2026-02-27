@@ -10,7 +10,7 @@ Service for generating canonical instrument definitions from exchange APIs.
 
 ## Dependencies
 
-- `unified-cloud-services` - For cloud operations (GCS, Secret Manager; BigQuery utilities for ad hoc use)
+- `unified-trading-services` - For cloud operations (GCS, Secret Manager; BigQuery utilities for ad hoc use)
 - `ccxt` - For exchange metadata enrichment
 - `pydantic` - For data validation
 - `requests` - For Tardis API integration
@@ -18,6 +18,8 @@ Service for generating canonical instrument definitions from exchange APIs.
 ## Architecture
 
 **Implemented (UMI-INSTR-001):** instruments-service is a thin consumer of unified-market-interface (UMI). UMI owns CeFi (Tardis) instrument normalization; instruments-service calls UMI `get_adapter("tardis").fetch_instruments(normalize=True)`, converts to InstrumentDefinition, writes to GCS. TradFi and DeFi paths use InstrumentProcessingService. See: `unified-trading-codex/11-project-management/epics/umi-instrument-normalization-epic.md`
+
+**Optional (URDI):** unified-reference-data-interface provides direct exchange REST adapters. When `USE_URDI_REFERENCE_DATA=true` and URDI is installed, instruments-service can use `get_reference_adapter(venue).get_instruments()` for supported venues. URDI adapters handle API keys via `get_secret_with_fallback` internally.
 
 Follows unified repository structure per architecture plan:
 
@@ -28,7 +30,7 @@ instruments_service/
 │   │   ├── instruments_service.py        # Main orchestration service
 │   │   ├── instrument_processing_service.py  # Instrument processing logic
 │   │   ├── cloud_instrument_storage.py   # Stores instruments to GCS (batch data only)
-│   │   ├── cloud_data_provider.py        # Reads instruments from unified-cloud-services
+│   │   ├── cloud_data_provider.py        # Reads instruments from unified-trading-services
 │   │   ├── batch_processor.py            # Batch processing with lookback
 │   │   └── validation_service.py        # Service-specific validation
 │   ├── venues/                           # ⚠️ DEVIATION: Venue-specific adapters (future)
@@ -67,7 +69,7 @@ instruments_service/
 
 ### Integration Points:
 
-- Uses `unified-cloud-services` for cloud operations
+- Uses `unified-trading-services` for cloud operations
 - Stores instruments to `market-data-tick` GCS bucket (market_data domain)
 - Instruments are part of market_data domain (not separate domain)
 - Uses Secret Manager for API key retrieval (no env var required)
@@ -77,7 +79,7 @@ instruments_service/
 ### Prerequisites
 
 - Python 3.13.x (required - see installation below)
-- SSH key configured with GitHub (for unified-cloud-services)
+- SSH key configured with GitHub (for unified-trading-services)
 
 **Note:** For local dev, use ADC: `gcloud auth application-default login` (no key file needed). Copy `.env.example` to `.env` and fill in placeholders.
 
@@ -106,7 +108,7 @@ The setup script will:
 2. Show installation instructions if needed (brew, pyenv)
 3. Verify architecture on Apple Silicon (ARM64 required)
 4. Create a virtual environment (.venv/)
-5. Install unified-cloud-services (latest) from GitHub
+5. Install unified-trading-services (latest) from GitHub
 6. Install instruments-service with all dependencies
 7. Auto-detect and configure GCP credentials
 

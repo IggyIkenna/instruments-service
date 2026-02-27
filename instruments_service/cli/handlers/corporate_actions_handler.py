@@ -197,9 +197,6 @@ class CorporateActionsHandler(ModeHandler):
             logger.warning("⚠️ No equity tickers found in any GCS instruments file")
             return []
 
-        except ImportError:
-            logger.error("❌ unified-cloud-services not available")
-            return []
         except (OSError, ValueError, TypeError, KeyError) as e:
             logger.error(f"❌ Failed to load tickers from GCS: {e}")
             return []
@@ -523,9 +520,6 @@ class CorporateActionsHandler(ModeHandler):
             logger.info(f"✅ Uploaded {len(gcs_paths)} files to GCS")
             return gcs_paths
 
-        except ImportError:
-            logger.warning("⚠️ google-cloud-storage not installed - skipping GCS upload")
-            return {}
         except (OSError, ValueError, TypeError, KeyError) as e:
             logger.error(f"❌ Failed to upload to GCS: {e}")
             return {}

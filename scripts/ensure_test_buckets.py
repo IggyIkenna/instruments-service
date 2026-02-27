@@ -1,4 +1,8 @@
 import os
+from uuid import uuid4
+
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 # Cloud-agnostic storage client
 try:
@@ -27,6 +31,14 @@ def create_bucket_if_not_exists(bucket_name, location="asia-northeast1"):
         else:
             print(f"✅ Bucket {bucket_name} already exists")
     except Exception as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
         print(f"❌ Error checking/creating {bucket_name}: {e}")
 
 

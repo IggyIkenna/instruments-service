@@ -25,8 +25,11 @@ import argparse
 import os
 import sys
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 from unified_cloud_services import get_secret_with_fallback
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 from unified_market_interface import DatabentoBaseClient
 
 
@@ -139,9 +142,16 @@ Examples:
         )
         print(f"  Estimated cost for FRESH download: {format_cost(estimated_cost)}")
     except Exception as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
         print(f"  [WARN] get_cost() failed: {e}")
         estimated_cost = None
-
     # ---- Step 2: Estimated billable size ----
     print_separator("STEP 2: Billable Size (metadata.get_billable_size)")
     try:
@@ -159,9 +169,16 @@ Examples:
         else:
             print("  Billable size: N/A")
     except Exception as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
         print(f"  [WARN] get_billable_size() failed: {e}")
         billable_size = None
-
     # ---- Step 3: Check for existing batch job (using base client with expanded states) ----
     print_separator("STEP 3: Check Existing Batch Jobs (queued/processing/done)")
     existing_job = base_client.find_matching_batch_job(
@@ -234,6 +251,14 @@ Examples:
                 )
                 print("  Job completed!")
             except Exception as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
                 print(f"  [ERROR] Waiting for job failed: {e}")
                 sys.exit(1)
     else:
@@ -261,9 +286,16 @@ Examples:
             )
             print("  Job completed!")
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
             print(f"  [ERROR] Batch job submission/wait failed: {e}")
             sys.exit(1)
-
     # ---- Step 6: Report actual cost of the job ----
     print_separator("STEP 5: Actual Job Cost")
 
@@ -276,9 +308,16 @@ Examples:
             (j for j in jobs if (j.get("id") if isinstance(j, dict) else getattr(j, "id", None)) == job_id),
             final_job,
         )
-    except Exception:
+    except Exception as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
         refreshed_job = final_job
-
     actual_cost = (
         refreshed_job.get("cost_usd") if isinstance(refreshed_job, dict) else getattr(refreshed_job, "cost_usd", None)
     )

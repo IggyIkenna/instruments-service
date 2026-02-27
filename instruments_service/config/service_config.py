@@ -5,25 +5,12 @@ InstrumentsServiceConfig (Pydantic BaseSettings) and singleton access.
 """
 
 import logging
-from typing import cast
+from typing import Any, cast
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import SettingsConfigDict
 from unified_cloud_services import CloudTarget
 from unified_config_interface import UnifiedCloudConfig
-
-try:
-    from api_contracts.domain_config import DomainConfigProtocol
-except ImportError:
-    # Fallback if api-contracts not available
-    from typing import Any, Protocol
-
-    class DomainConfigProtocol(Protocol):
-        gcp_project_id: str
-        gcs_bucket: str
-        bigquery_dataset: str
-        config: dict[str, Any]
-
 
 logger = logging.getLogger(__name__)
 

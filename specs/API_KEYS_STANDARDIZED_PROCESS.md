@@ -12,16 +12,16 @@ Single source of truth for how API keys are resolved, when they are required, an
 
 | Consumer | How They Read Instruments |
 |----------|---------------------------|
-| **market-tick-data-handler** | `InstrumentsDomainClient` from unified-cloud-services |
-| **market-data-processing-service** | `InstrumentsDomainClient` from unified-cloud-services |
-| **features-*** services | `InstrumentsDomainClient` from unified-cloud-services |
+| **market-tick-data-handler** | `InstrumentsDomainClient` from unified-trading-services |
+| **market-data-processing-service** | `InstrumentsDomainClient` from unified-trading-services |
+| **features-*** services | `InstrumentsDomainClient` from unified-trading-services |
 | **UTDv3 data-status** | `InstrumentsDomainClient.get_aggregated_instruments()` (aggregated cache) |
 | **deployment scripts** | `InstrumentsDomainClient` or instruments-service CLI |
 | **instruments-service itself** | `CloudInstrumentStorage.query_instruments`, `InstrumentsService.query_instruments` |
 
-**Standard:** All consumers use **InstrumentsDomainClient** (unified-cloud-services). No duplicate `_load_instruments_by_venue` or direct GCS reads. Aggregated instruments via `get_aggregated_instruments(category)`.
+**Standard:** All consumers use **InstrumentsDomainClient** (unified-trading-services). No duplicate `_load_instruments_by_venue` or direct GCS reads. Aggregated instruments via `get_aggregated_instruments(category)`.
 
-**Conclusion:** instruments-service is a **producer** (writes to GCS). Consumers use **unified-cloud-services** `InstrumentsDomainClient` exclusively. No need for instruments-service to expose a reader library.
+**Conclusion:** instruments-service is a **producer** (writes to GCS). Consumers use **unified-trading-services** `InstrumentsDomainClient` exclusively. No need for instruments-service to expose a reader library.
 
 ---
 
@@ -50,7 +50,7 @@ Not all modes need all API keys. Use **selective validation** — only fetch key
 |-------|----------------|
 | **Secret Manager** | Store all API keys |
 | **unified-config-interface** | Define secret names in `UnifiedCloudConfig` |
-| **unified-cloud-services** | `get_secret_with_fallback` — **only** way to resolve API keys |
+| **unified-trading-services** | `get_secret_with_fallback` — **only** way to resolve API keys |
 | **Services** | Call `get_secret_with_fallback` via config secret names. Never `os.environ.get` for API keys. |
 
 **Resolution order** (never `os.getenv` alone for API keys):
@@ -59,10 +59,10 @@ Not all modes need all API keys. Use **selective validation** — only fetch key
 2. **Secret Manager** — `get_secret_with_fallback(secret_name=config.tardis_secret_name, project_id=..., fallback_env_var="TARDIS_API_KEY")`
 3. **Env var fallback** — Only for local dev; production uses Secret Manager.
 
-**Single function:** `get_secret_with_fallback` from unified-cloud-services.
+**Single function:** `get_secret_with_fallback` from unified-trading-services.
 
 ```python
-from unified_cloud_services import get_secret_with_fallback
+from unified_trading_services import get_secret_with_fallback
 
 api_key = get_secret_with_fallback(
     project_id=instruments_config.gcp_project_id,

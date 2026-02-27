@@ -21,7 +21,7 @@ The instruments-service requires several API keys stored in GCP Secret Manager. 
 
 ### Automatic Credentials Detection ✅
 
-**Credentials are automatically handled by `unified-cloud-services`** based on the `ENVIRONMENT` variable:
+**Credentials are automatically handled by `unified-trading-services`** based on the `ENVIRONMENT` variable:
 
 - **Development mode** (`ENVIRONMENT=development`): Auto-detects credentials files in common locations
 - **Production mode** (`ENVIRONMENT=production`): Uses VM service account (no credentials file needed)
@@ -66,11 +66,11 @@ This is the service account JSON file content needed for GCP authentication in G
 5. Value: Copy the **entire contents** of `{project_id}-e35fb0ddafe2.json` file (replace {project_id} with actual project ID)
 6. Click **Add secret**
 
-### Required: GH_PAT (for private unified-cloud-services)
+### Required: GH_PAT (for private unified-trading-services)
 
 **Note:** GitHub doesn't allow secret names starting with `GITHUB_`, so we use `GH_PAT` instead.
 
-A GitHub Personal Access Token (PAT) with access to the private `unified-cloud-services` repository.
+A GitHub Personal Access Token (PAT) with access to the private `unified-trading-services` repository.
 
 **Steps:**
 1. Go to GitHub.com → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**
@@ -163,7 +163,7 @@ gcloud secrets describe tardis-api-key --project={project_id}
 
 # Test secret access
 python3 -c "
-from unified_cloud_services import get_secret_with_fallback
+from unified_trading_services import get_secret_with_fallback
 api_key = get_secret_with_fallback(
     project_id='{project_id}',  # Replace {project_id} with actual project ID
     secret_name='tardis-api-key',
@@ -279,7 +279,7 @@ Runs automatically on:
 **What it does:**
 1. Sets up Python 3.13
 2. Creates GCP credentials from `GCP_SERVICE_ACCOUNT_JSON` secret
-3. Clones `unified-cloud-services` (sibling repo)
+3. Clones `unified-trading-services` (sibling repo)
 4. Runs `scripts/run_quality_gates.py` with 65% coverage threshold
 5. Uploads coverage reports as artifacts
 
@@ -341,16 +341,16 @@ cp -r .github/workflows/ ../new-repo/.github/workflows/
 | `GH_PAT` | ✅ Yes | GitHub PAT with `repo` + `read:packages` scopes |
 | `SSH_PRIVATE_KEY` | ⚠️ Optional | SSH key for git clone (alternative to PAT) |
 
-### Step 3: Ensure unified-cloud-services is accessible
+### Step 3: Ensure unified-trading-services is accessible
 
-The workflow clones `unified-cloud-services` from GitHub. Ensure:
-- Your `GH_PAT` has access to the `unified-cloud-services` repo
+The workflow clones `unified-trading-services` from GitHub. Ensure:
+- Your `GH_PAT` has access to the `unified-trading-services` repo
 - Or set up `SSH_PRIVATE_KEY` for SSH access
 
 ### Step 4: Update repo-specific values in workflow
 
 Edit `quality-gates.yml`:
-- Line 91: Update repo URL `git@github.com:IggyIkenna/unified-cloud-services.git`
+- Line 91: Update repo URL `git@github.com:IggyIkenna/unified-trading-services.git`
 - Line 262: Adjust coverage threshold `--coverage-threshold 65`
 
 ### Step 5: Configure branch protection (optional)
