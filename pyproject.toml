@@ -141,12 +141,12 @@ exclude_lines = [
 include = ["instruments_service"]
 exclude = ["tests", "**/__pycache__", ".venv*", "build", "dist"]
 pythonVersion = "3.13"
-typeCheckingMode = "standard"
+typeCheckingMode = "strict"
 reportMissingImports = "error"
 reportUnusedVariable = "warning"
 reportUnusedImport = "warning"
 # Enforce no Any — must use specific types (see .cursor/rules/no-type-any-use-specific.mdc)
-reportAny = "warning"
+reportAny = "error"
 # Enforce known types — warn on unknown parameter/return/variable types
 reportUnknownVariableType = "warning"
 reportUnknownParameterType = "warning"
