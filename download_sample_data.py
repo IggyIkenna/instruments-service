@@ -14,8 +14,12 @@ import requests
 # Add instruments_service to path
 sys.path.insert(0, str(Path(__file__).parent))
 
+from uuid import uuid4
+
 from instruments_service.app.venues.onchain_perps.aster_adapter import AsterAdapter
 from instruments_service.app.venues.onchain_perps.hyperliquid_adapter import HyperliquidAdapter
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -72,8 +76,16 @@ def find_earliest_available_data_hyperliquid(coin: str, max_days_back: int = 365
                     if earliest_found:
                         break  # Found earliest, stop searching
         except Exception as e:
-            logger.debug(f"  ⚠️ Error checking {test_date.strftime('%Y-%m-%d')}: {e}")
-
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.HIGH,
+                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
     return earliest_found
 
 
@@ -165,8 +177,16 @@ def download_hyperliquid_data_to_csv(coin: str, target_date: datetime, output_di
         else:
             logger.warning(f"  ⚠️ Failed to fetch candles: {response.status_code}")
     except Exception as e:
-        logger.error(f"  ❌ Error downloading candles: {e}")
-
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.HIGH,
+            recovery_strategy=ErrorRecoveryStrategy.RETRY,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+        raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
     # Download L2 book snapshots (sample a few times during the day)
     book_file = output_dir / f"hyperliquid_{coin}_book_{target_date.strftime('%Y%m%d')}.csv"
     try:
@@ -213,7 +233,16 @@ def download_hyperliquid_data_to_csv(coin: str, target_date: datetime, output_di
                 writer.writerows(book_snapshots)
             logger.info(f"  ✅ Saved {len(book_snapshots)} book snapshots to {book_file}")
     except Exception as e:
-        logger.error(f"  ❌ Error downloading book snapshots: {e}")
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.HIGH,
+            recovery_strategy=ErrorRecoveryStrategy.RETRY,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+        raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
 
 
 def download_aster_data_to_csv(symbol: str, target_date: datetime, output_dir: Path):
@@ -280,8 +309,16 @@ def download_aster_data_to_csv(symbol: str, target_date: datetime, output_dir: P
         else:
             logger.warning(f"  ⚠️ Failed to fetch trades: {response.status_code}")
     except Exception as e:
-        logger.error(f"  ❌ Error downloading trades: {e}")
-
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.HIGH,
+            recovery_strategy=ErrorRecoveryStrategy.RETRY,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+        raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
     # Download order book depth
     book_file = output_dir / f"aster_{symbol}_book_{target_date.strftime('%Y%m%d')}.csv"
     try:
@@ -337,7 +374,16 @@ def download_aster_data_to_csv(symbol: str, target_date: datetime, output_dir: P
         else:
             logger.warning(f"  ⚠️ Failed to fetch book depth: {response.status_code}")
     except Exception as e:
-        logger.error(f"  ❌ Error downloading book depth: {e}")
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.HIGH,
+            recovery_strategy=ErrorRecoveryStrategy.RETRY,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+        raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
 
 
 def check_historical_metadata():

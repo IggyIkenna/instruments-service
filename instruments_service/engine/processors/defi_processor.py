@@ -12,7 +12,10 @@ import contextlib
 import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Protocol, cast
+from uuid import uuid4
 
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 from unified_market_interface import (
     AaveV3Adapter,
     BalancerAdapter,
@@ -348,12 +351,29 @@ def fetch_defi_instruments(
 
                 instruments[inst_key] = inst_def
             except Exception as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                 logger.warning(f"Failed to create InstrumentDefinition for {inst_key}: {e}")
                 continue
-
         logger.info(f"✅ Fetched {len(instruments)} {protocol} instruments for {chain}")
         return instruments
 
     except Exception as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
         logger.error(f"Failed to fetch {protocol} instruments: {e}")
         return {}

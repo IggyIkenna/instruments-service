@@ -11,7 +11,10 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import uuid4
 
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 from unified_market_interface import InstrumentDefinition, get_adapter
 
 from instruments_service.config import (
@@ -120,6 +123,15 @@ class MarketProcessors:
                             key = cast(str, d.get("instrument_key") or inst.instrument_key)
                             result[key] = inst
                         except Exception as e:
+                            _err = EnhancedError(
+                                message=str(e),
+                                category=ErrorCategory.SERVER_ERROR,
+                                severity=ErrorSeverity.MEDIUM,
+                                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                                correlation_id=str(uuid4()),
+                                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                            )
+                            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                             logger.warning(
                                 f"Failed to create InstrumentDefinition for {d.get('instrument_key', 'unknown')}: {e}"
                             )
@@ -127,6 +139,15 @@ class MarketProcessors:
                         logger.info(f"✅ Processed {len(result)} instruments from {exchange}")
                     return result
                 except Exception as e:
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.MEDIUM,
+                        recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                     logger.error(f"❌ Failed to process {exchange}: {e}", exc_info=True)
                     return {}
 
@@ -202,8 +223,16 @@ class MarketProcessors:
                         all_instruments.update(cast(dict[str, InstrumentDefinition], result))
 
         except Exception as e:
-            logger.error(f"❌ Failed to initialize Databento processing: {e}", exc_info=True)
-
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.HIGH,
+                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return all_instruments
 
     async def process_defi(self, date: datetime, venues_filter: list[str]) -> dict[str, InstrumentDefinition]:
@@ -266,10 +295,27 @@ class MarketProcessors:
                             all_instruments.update(cast(dict[str, InstrumentDefinition], defi_instruments))
                             logger.info(f"✅ Processed {len(defi_instruments)} instruments from {protocol}")
                     except Exception as e:
-                        logger.error(f"❌ Failed to process {protocol}: {e}", exc_info=True)
+                        _err = EnhancedError(
+                            message=str(e),
+                            category=ErrorCategory.SERVER_ERROR,
+                            severity=ErrorSeverity.HIGH,
+                            recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                            correlation_id=str(uuid4()),
+                            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                        )
+                        logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                        raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         except Exception as e:
-            logger.error(f"❌ Failed to initialize DeFi processing: {e}", exc_info=True)
-
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.HIGH,
+                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return all_instruments
 
     async def _check_venue_access(self, cefi_exchanges: list[str]) -> list[str]:
@@ -342,8 +388,16 @@ class MarketProcessors:
                             f"✅ Processed {len(clob_instruments)} instruments from {protocol} (CEFI on-chain CLOB)"
                         )
                 except Exception as e:
-                    logger.error(f"❌ Failed to process on-chain CLOB {protocol}: {e}", exc_info=True)
-
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.HIGH,
+                        recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                    raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return all_instruments
 
     async def _process_databento_exchange(
@@ -424,5 +478,14 @@ class MarketProcessors:
                 return instruments
 
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.error(f"❌ Failed to process {exchange}: {e}", exc_info=True)
             return {}

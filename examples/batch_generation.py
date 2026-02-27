@@ -21,7 +21,10 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Any
+from uuid import uuid4
 
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 from unified_market_interface import VenueMapping
 
 from instruments_service import (
@@ -95,9 +98,17 @@ async def generate_instruments_batch(start_date: str, end_date: str, force: bool
                         all_instruments.update(exchange_instruments)
                         logger.info(f"  ✅ {exchange}: {len(exchange_instruments)} instruments")
                 except Exception as e:
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.MEDIUM,
+                        recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                     logger.error(f"  ❌ Failed to process {exchange}: {e}")
                     errors.append(f"{date_str}/{exchange}: {e}")
-
             if all_instruments:
                 # Convert to DataFrame
                 import pandas as pd
@@ -131,9 +142,17 @@ async def generate_instruments_batch(start_date: str, end_date: str, force: bool
                 errors.append(f"{date_str}: No instruments")
 
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.error(f"  ❌ Error processing {date_str}: {e}", exc_info=True)
             errors.append(f"{date_str}: {e}")
-
         # Move to next date
         current_date += timedelta(days=1)
 

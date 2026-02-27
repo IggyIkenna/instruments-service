@@ -7,7 +7,10 @@ Handles processing of DeFi protocols across different chains.
 import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, cast
+from uuid import uuid4
 
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 from unified_market_interface import InstrumentDefinition, VenueMapping
 
 from instruments_service.config import DEFI_PROTOCOLS, DEFI_VENUE_TO_PROTOCOL
@@ -46,11 +49,27 @@ class DeFiOrchestrator:
                         all_instruments.update(cast(dict[str, InstrumentDefinition], defi_instruments))
                         logger.info(f"✅ Processed {len(defi_instruments)} instruments from {protocol}")
                 except Exception as e:
-                    logger.error(f"❌ Failed to process {protocol}: {e}", exc_info=True)
-
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.HIGH,
+                        recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                    raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         except Exception as e:
-            logger.error(f"❌ Failed to initialize DeFi processing: {e}", exc_info=True)
-
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.HIGH,
+                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return all_instruments
 
     def _determine_defi_protocols(self, venues_filter: list[str]) -> list[tuple[str, str | None]]:

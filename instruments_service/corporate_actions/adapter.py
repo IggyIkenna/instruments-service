@@ -24,9 +24,12 @@ import time
 from collections.abc import Callable
 from datetime import date
 from typing import Any, cast
+from uuid import uuid4
 
 import pandas as pd
 import yfinance as yf
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 from instruments_service.corporate_actions.models import (
     CorporateActionsBundle,
@@ -154,13 +157,29 @@ class CorporateActionsAdapter:
                     )
                     dividends.append(record)
                 except Exception as e:
-                    logger.warning(f"Failed to parse dividend for {ticker} on {ex_date}: {e}")
-
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.HIGH,
+                        recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                    raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
             logger.debug(f"Fetched {len(dividends)} dividends for {ticker}")
 
         except Exception as e:
-            logger.error(f"Failed to fetch dividends for {ticker}: {e}")
-
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.HIGH,
+                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return dividends
 
     def fetch_splits(
@@ -229,13 +248,29 @@ class CorporateActionsAdapter:
                     )
                     splits.append(record)
                 except Exception as e:
-                    logger.warning(f"Failed to parse split for {ticker} on {effective_date}: {e}")
-
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.HIGH,
+                        recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                    raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
             logger.debug(f"Fetched {len(splits)} splits for {ticker}")
 
         except Exception as e:
-            logger.error(f"Failed to fetch splits for {ticker}: {e}")
-
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.HIGH,
+                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return splits
 
     def fetch_earnings(
@@ -282,10 +317,18 @@ class CorporateActionsAdapter:
                         _ = cal_df.loc["Earnings Date"]
                         # This is typically future dates, not historical
             except Exception as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                 logger.debug(f"Failed to process earnings date from calendar: {e}")
                 # Error handled, continue processing next calendar entry
                 pass
-
             # Get historical earnings from earnings_history or quarterly_earnings
             try:
                 earnings_df: pd.DataFrame = stock.earnings_dates  # type: ignore[assignment]
@@ -323,16 +366,40 @@ class CorporateActionsAdapter:
                             )
                             earnings.append(record)
                         except Exception as e:
-                            logger.warning(f"Failed to parse earnings for {ticker} on {idx}: {e}")
-
+                            _err = EnhancedError(
+                                message=str(e),
+                                category=ErrorCategory.SERVER_ERROR,
+                                severity=ErrorSeverity.HIGH,
+                                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                                correlation_id=str(uuid4()),
+                                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                            )
+                            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
             except Exception as e:
-                logger.debug(f"No earnings_dates for {ticker}: {e}")
-
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.HIGH,
+                    recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
             logger.debug(f"Fetched {len(earnings)} earnings records for {ticker}")
 
         except Exception as e:
-            logger.error(f"Failed to fetch earnings for {ticker}: {e}")
-
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.HIGH,
+                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return earnings
 
     def fetch_corporate_actions(
@@ -404,9 +471,17 @@ class CorporateActionsAdapter:
                     logger.info(f"Progress: {i + 1}/{total} tickers processed")
 
             except Exception as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                 logger.error(f"Failed to fetch corporate actions for {ticker}: {e}")
                 # Continue with next ticker
-
         logger.info(f"Completed: {len(results)}/{total} tickers fetched successfully")
         return results
 

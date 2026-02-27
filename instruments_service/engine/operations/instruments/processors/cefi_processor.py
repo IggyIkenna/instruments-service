@@ -17,8 +17,11 @@ import re
 import warnings
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+from uuid import uuid4
 
 from unified_cloud_services import determine_market_category, get_secret_with_fallback
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 from unified_market_interface import TardisAdapter
 
 from instruments_service.config import instruments_config
@@ -92,11 +95,19 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
                         api_key = api_key.strip()
                         logger.info("✅ Retrieved Tardis API key from Secret Manager")
                 except Exception as e:
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.MEDIUM,
+                        recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                     raise ValueError(
                         f"Tardis API key required for CeFi instruments. Error: {e}. "
                         "Provide 'tardis_api_key' in config or ensure Secret Manager access."
                     ) from e
-
             if not api_key:
                 raise ValueError(
                     "Tardis API key required for CeFi instruments. "
@@ -156,6 +167,15 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
                 )
                 break
             except Exception as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                 last_error = e
                 if attempt < max_retries - 1:
                     backoff_multiplier: int = cast(int, 2**attempt)
@@ -169,7 +189,6 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
                     raise Exception(
                         f"Failed to fetch instruments for {exchange} after {max_retries} retries"
                     ) from last_error
-
         available_symbols: dict[str, dict[str, Any]] = {
             (str(cast(str | None, symbol.get("id"))) or ""): symbol
             for symbol in available_symbols_list
@@ -446,8 +465,16 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
                             )
                             logger.debug(f"✅ Set available_to for {symbol_id} to midnight after expiry")
                         except Exception as e:
-                            logger.debug(f"⚠️ Could not parse expiry '{expiry_str}': {e}")
-
+                            _err = EnhancedError(
+                                message=str(e),
+                                category=ErrorCategory.SERVER_ERROR,
+                                severity=ErrorSeverity.HIGH,
+                                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                                correlation_id=str(uuid4()),
+                                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                            )
+                            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
                 if available_to_datetime:
                     try:
                         available_to_dt = datetime.fromisoformat(available_to_datetime.replace("Z", "+00:00"))
@@ -512,9 +539,17 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
                 self.cache_metadata(canonical_key, metadata)
 
             except Exception as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                 filter_stats["processing_error"] += 1
                 logger.warning(f"⚠️ Failed to process {symbol_id}: {e}")
-
         total_filtered = sum(v for k, v in filter_stats.items() if k != "success")
         logger.info(f"📊 Processed {len(processed_instruments)} instruments from {exchange}")
         if total_filtered > 0:
@@ -619,8 +654,16 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
                 filtered[inst_key] = inst_data
 
             except Exception as e:
-                logger.warning(f"⚠️ Error filtering {inst_key}: {e}")
-
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.HIGH,
+                    recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return filtered
 
     def _populate_complete_instrument_data(
@@ -669,6 +712,15 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
             else:
                 return symbol_id.lower()
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.debug(f"Failed to convert symbol {symbol_id} for {exchange}: {e}")
             return symbol_id.lower()
 

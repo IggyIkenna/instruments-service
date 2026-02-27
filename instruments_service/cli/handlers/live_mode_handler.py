@@ -17,12 +17,15 @@ import threading
 from datetime import UTC, datetime, timedelta
 from queue import Queue
 from typing import Any, TypedDict, cast
+from uuid import uuid4
 
 import pandas as pd
 
 # Unified cloud services (cloud-agnostic)
 from unified_cloud_services import GCSEventSink, upload_to_storage
 from unified_events_interface import JsonValue, log_event, publish_coordination_event, setup_events
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 from instruments_service.app.core.instruments_service import InstrumentsService
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
@@ -97,13 +100,12 @@ class LiveModeHandler(ModeHandler):
         config = get_config()
 
         # Setup events (direct import per dependency matrix)
-        project_id = str(getattr(config, "gcp_project_id", "") or getattr(config, "project_id", "") or "")
         setup_events(
-            mode="live", 
-            service_name="instruments-service", 
+            mode="live",
+            service_name="instruments-service",
             sink=GCSEventSink(
                 project_id=config.gcp_project_id,
-                bucket=getattr(config, 'events_bucket', f"{config.gcp_project_id}-events"),
+                bucket=getattr(config, "events_bucket", f"{config.gcp_project_id}-events"),
                 service_name="instruments-service",
             ),
         )
@@ -167,10 +169,18 @@ class LiveModeHandler(ModeHandler):
             return {"status": "stopped", "cycles": cycle_count}
 
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             log_event("LIVE_MODE_FAILED", severity="CRITICAL", details=cast(dict[str, JsonValue], {"error": str(e)}))
             logger.exception("Live mode failed")
             return {"status": "failed", "error": str(e)}
-
         finally:
             self._cleanup()
 
@@ -249,6 +259,15 @@ class LiveModeHandler(ModeHandler):
                 log_event("LIVE_CYCLE_FAILED", severity="ERROR", details=cast(dict[str, JsonValue], {"cycle": cycle}))
 
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             log_event(
                 "LIVE_CYCLE_EXCEPTION",
                 severity="ERROR",
@@ -311,6 +330,15 @@ class LiveModeHandler(ModeHandler):
                     )
 
                 except Exception as e:
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.MEDIUM,
+                        recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                     log_event(
                         "PERSIST_FAILED",
                         severity="ERROR",

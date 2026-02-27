@@ -58,7 +58,7 @@ class TestShardCombinatoricsGeneration:
     def mock_env(self, monkeypatch):
         """Set up mock environment."""
         monkeypatch.setenv("CLOUD_MOCK_MODE", "true")
-        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+        monkeypatch.setenv("GCP_PROJECT_ID", "test-project")
 
     def test_generator_enumerates_combinations(self, config_dir, mock_env):
         """Test that generator returns valid combinations for this service."""
@@ -101,7 +101,7 @@ class TestSmokeTestRunner:
     def mock_env(self, monkeypatch):
         """Set up mock environment."""
         monkeypatch.setenv("CLOUD_MOCK_MODE", "true")
-        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+        monkeypatch.setenv("GCP_PROJECT_ID", "test-project")
 
     def test_runner_generates_test_report(self, config_dir, mock_env):
         """Test that runner generates a proper test report."""
@@ -131,7 +131,7 @@ class TestShardCalculatorIntegration:
     def mock_env(self, monkeypatch):
         """Set up mock environment."""
         monkeypatch.setenv("CLOUD_MOCK_MODE", "true")
-        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+        monkeypatch.setenv("GCP_PROJECT_ID", "test-project")
 
     def test_shards_filtered_by_start_dates(self, config_dir, mock_env):
         """Test that ShardCalculator filters shards by venue start dates."""

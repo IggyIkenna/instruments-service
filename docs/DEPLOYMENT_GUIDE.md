@@ -151,7 +151,7 @@ export GCP_PROJECT_ID={project_id}  # Or AWS_PROJECT_ID for AWS deployments
 python3 -m venv venv
 source venv/bin/activate
 pip install -e .
-pip install git+https://github.com/IggyIkenna/unified-cloud-services.git
+pip install git+https://github.com/IggyIkenna/unified-trading-services.git
 ```
 
 ---
@@ -436,7 +436,7 @@ cd instruments-service
 python3.13 -m venv venv
 source venv/bin/activate
 pip install -e .
-pip install git+https://github.com/IggyIkenna/unified-cloud-services.git
+pip install git+https://github.com/IggyIkenna/unified-trading-services.git
 ```
 
 ### 3. Run Backfill

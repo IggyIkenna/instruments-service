@@ -7,7 +7,7 @@ with dimension-aware nullability.
 
 import numpy as np
 import pandas as pd
-from unified_cloud_services import ParquetSchemaEnforcer
+from unified_trading_services import ParquetSchemaEnforcer
 
 from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA, get_instruments_schema
 

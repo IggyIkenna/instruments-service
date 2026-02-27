@@ -9,7 +9,7 @@ import os
 from unittest.mock import MagicMock, patch
 
 import pytest
-from unified_cloud_services import get_bucket_for_category
+from unified_trading_services import get_bucket_for_category
 
 from instruments_service.app.core.cloud_data_provider import CloudDataProvider
 from instruments_service.config import InstrumentsServiceConfig
@@ -55,7 +55,7 @@ class TestBucketConfiguration:
 
     def test_get_bucket_for_category_resolution(self):
         """Test that get_bucket_for_category resolves correctly."""
-        # We need to patch get_config in unified_cloud_services to return our test values
+        # We need to patch get_config in unified_trading_services to return our test values
         # get_config converts env vars to snake_case and uses getattr on unified_config
 
         def mock_get_config(key, default=""):
@@ -71,7 +71,7 @@ class TestBucketConfiguration:
 
         with (
             patch.dict(os.environ, self.env_vars),
-            patch("unified_cloud_services.core.market_category.get_config", mock_get_config),
+            patch("unified_trading_services.core.market_category.get_config", mock_get_config),
         ):
             bucket_cefi = get_bucket_for_category("CEFI", test_mode=False)
             assert bucket_cefi == "test-bucket-cefi"

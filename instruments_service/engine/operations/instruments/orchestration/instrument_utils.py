@@ -8,8 +8,11 @@ import logging
 from datetime import date as date_type
 from datetime import datetime
 from typing import Any, cast
+from uuid import uuid4
 
 import pandas as pd
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 from unified_market_interface import InstrumentDefinition, VenueMapping
 
 from instruments_service.utils import ErrorWarningCounter
@@ -203,8 +206,16 @@ class InstrumentUtils:
                             f"opens {open_dt.date()} closes {close_dt.date()}"
                         )
                 except Exception as e:
-                    logger.warning(f"⚠️ Failed to parse session times for {row.get('instrument_key')}: {e}")
-
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.HIGH,
+                        recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                    raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         if utc_spanning_instruments:
             logger.info(
                 f"🌙 Found {len(utc_spanning_instruments)} UTC-spanning instruments "

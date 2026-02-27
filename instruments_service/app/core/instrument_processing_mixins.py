@@ -12,11 +12,14 @@ import logging
 import re
 from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import uuid4
 
 import unified_market_interface.clients.subgraph_service as sg_module
 import unified_market_interface.clients.thegraph_base_client as tgc_module
 from unified_cloud_services import get_secret_with_fallback, handle_api_errors
 from unified_domain_services import DateFilterService
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 from unified_market_interface import DatabentoAdapter, SubgraphService, TardisAdapter
 from unified_market_interface import VenueMapping as UMI_VenueMapping
 
@@ -226,6 +229,15 @@ class TardisIntegrationMixin:
             else:
                 return symbol_id.lower()
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.debug(f"Failed to convert symbol {symbol_id} for {exchange}: {e}")
             return symbol_id.lower()
 
@@ -268,13 +280,30 @@ class DatabentoIntegrationMixin:
                     inst_def = InstrumentDefinition(**inst_data)
                     instruments[inst_key] = inst_def
                 except Exception as e:
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.MEDIUM,
+                        recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                     logger.warning(f"Failed to create InstrumentDefinition for {inst_key}: {e}")
                     continue
-
             logger.info(f"✅ Fetched {len(instruments)} Databento instruments for {exchange}")
             return instruments
 
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.error(f"Failed to fetch Databento instruments: {e}")
             return {}
 
@@ -312,7 +341,16 @@ class DefiIntegrationMixin:
                 sg_module._GRAPH_API_KEY_PROJECT_ID = project_id_for_graph
                 logger.info("✅ Retrieved and cached Graph API key")
         except Exception as e:
-            logger.debug(f"Could not retrieve Graph API key: {e}")
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.HIGH,
+                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
 
     def fetch_defi_instruments(
         self,
@@ -431,5 +469,14 @@ class SymbolProcessingMixin:
                 "quote_asset": str(quote) if quote is not None else "",
             }
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.debug(f"Error parsing symbol {symbol_id}: {e}")
             return {}

@@ -13,9 +13,12 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, timedelta
 from typing import cast
+from uuid import uuid4
 
 import pandas as pd
 from unified_cloud_services import get_instruments_bucket_for_category, get_storage_client
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.config import get_config
@@ -64,9 +67,17 @@ class AggregateHandler(ModeHandler):
                     categories_processed += 1
                     log_event("CATEGORY_AGGREGATION_COMPLETED", f"{category}: {count} instruments")
             except Exception as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                 logger.error(f"Aggregation failed for {category}: {e}", exc_info=True)
                 log_event("CATEGORY_AGGREGATION_FAILED", f"{category}: {e}")
-
         log_event("AGGREGATION_COMPLETED", f"{categories_processed} categories, {total_instruments} total")
 
         return {
@@ -132,8 +143,16 @@ class AggregateHandler(ModeHandler):
                     if df is not None and not df.empty:
                         all_dfs.append(df)
                 except Exception as e:
-                    logger.debug(f"Skip blob: {e}")
-
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.HIGH,
+                        recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                    raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         if not all_dfs:
             return pd.DataFrame()
         return pd.concat(all_dfs, ignore_index=True)
@@ -174,8 +193,16 @@ class AggregateHandler(ModeHandler):
                 if df is not None and not df.empty:
                     delta_dfs.append(df)
             except Exception as e:
-                logger.debug(f"Skip {gcs_path}: {e}")
-
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.HIGH,
+                    recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         delta_df = pd.concat(delta_dfs, ignore_index=True) if delta_dfs else pd.DataFrame()
 
         # Load existing aggregated file if present
@@ -201,6 +228,15 @@ class AggregateHandler(ModeHandler):
             data = client.download_bytes(bucket=bucket_name, blob_path=blob.name)
             return pd.read_parquet(io.BytesIO(data))
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.warning(f"Could not load existing aggregated {blob.name}: {e}")
             return pd.DataFrame()
 

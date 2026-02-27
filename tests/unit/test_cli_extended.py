@@ -1,8 +1,8 @@
 """
 Extended unit tests for CLI components to increase coverage to 80%+.
 
-Note: Query functionality has been moved to unified-cloud-services.
-Use InstrumentsDomainClient from unified-cloud-services to query instruments.
+Note: Query functionality has been moved to unified-trading-services.
+Use InstrumentsDomainClient from unified-trading-services to query instruments.
 """
 
 import argparse

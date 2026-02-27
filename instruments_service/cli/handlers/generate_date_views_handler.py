@@ -37,8 +37,11 @@ import logging
 from datetime import date
 from pathlib import Path
 from typing import Any, TypedDict
+from uuid import uuid4
 
 import pandas as pd
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 
@@ -95,8 +98,16 @@ class GenerateDateViewsHandler(ModeHandler):
                 if not df.empty:
                     all_data.append(df)
             except Exception as e:
-                logger.warning(f"Failed to load {csv_path}: {e}")
-
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.HIGH,
+                    recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         if not all_data:
             return pd.DataFrame()
 

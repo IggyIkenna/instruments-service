@@ -15,6 +15,11 @@ from instruments_service.config import UnifiedInstrumentConfig
 
 if TYPE_CHECKING:
     from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
+from uuid import uuid4
+
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
+
 from instruments_service.engine.venues.special_instruments import (
     InstrumentDefDict,
     create_bitcoin_etf_instrument_definition,
@@ -67,8 +72,16 @@ class TradFiOrchestrator:
                     all_instruments.update(cast(dict[str, InstrumentDefinition], result))
 
         except Exception as e:
-            logger.error(f"❌ Failed to initialize Databento processing: {e}", exc_info=True)
-
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.HIGH,
+                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return all_instruments
 
     def _determine_tradfi_exchanges(
@@ -114,6 +127,15 @@ class TradFiOrchestrator:
             else:  # CME and others
                 return await self._process_cme(exchange, date, databento_config)
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.error(f"❌ Failed to process {exchange}: {e}", exc_info=True)
             return {}
 

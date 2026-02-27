@@ -319,14 +319,14 @@ class TestCloudInstrumentStorage:
         storage._mock_category_service.upload_to_gcs_batch.assert_called()
 
     def test_init_import_error(self):
-        """Test initialization when unified-cloud-services not available."""
+        """Test initialization when unified-trading-services not available."""
         # Mock the imports to simulate ImportError scenario
         with (
             patch(
                 "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
-                side_effect=ImportError("unified-cloud-services not available"),
+                side_effect=ImportError("unified-trading-services not available"),
             ),
-            pytest.raises(ImportError, match="unified-cloud-services not available"),
+            pytest.raises(ImportError, match="unified-trading-services not available"),
         ):
             CloudInstrumentStorage()
 

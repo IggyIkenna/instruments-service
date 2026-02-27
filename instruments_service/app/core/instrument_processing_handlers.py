@@ -11,8 +11,11 @@ import logging
 import warnings
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+from uuid import uuid4
 
 from unified_cloud_services import determine_market_category
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 from instruments_service.models import InstrumentDefinition
 
@@ -276,8 +279,16 @@ class InstrumentProcessingHandlers:
                                 datetime.combine(day_after_expiry, datetime.min.time()).replace(tzinfo=UTC).isoformat()
                             )
                         except Exception as e:
-                            logger.debug(f"⚠️ Could not parse expiry '{expiry_str}': {e}")
-
+                            _err = EnhancedError(
+                                message=str(e),
+                                category=ErrorCategory.SERVER_ERROR,
+                                severity=ErrorSeverity.HIGH,
+                                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                                correlation_id=str(uuid4()),
+                                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                            )
+                            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
                 # Filter expired instruments
                 if available_to_datetime:
                     try:
@@ -345,9 +356,17 @@ class InstrumentProcessingHandlers:
                 self.cache_metadata(canonical_key, metadata)
 
             except Exception as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                 filter_stats["processing_error"] += 1
                 logger.warning(f"⚠️ Failed to process instrument {symbol_id}: {e}")
-
         # Log statistics
         total_filtered = sum(v for k, v in filter_stats.items() if k != "success")
         logger.info(f"📊 Processed {len(processed_instruments)} instruments from {exchange}")
@@ -399,8 +418,16 @@ class InstrumentProcessingHandlers:
                 all_instruments.update(exchange_instruments)
                 logger.info(f"✅ {exchange}: {len(exchange_instruments)} instruments processed")
             except Exception as e:
-                logger.error(f"❌ Failed to process {exchange}: {e}")
-
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.HIGH,
+                    recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         logger.info(f"📊 Total: {len(all_instruments)} instruments across {len(supported_exchanges)} exchanges")
         return all_instruments
 
@@ -467,8 +494,16 @@ class InstrumentProcessingHandlers:
                 filtered[inst_key] = inst_data
 
             except Exception as e:
-                logger.warning(f"⚠️ Error filtering {inst_key}: {e}")
-
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.HIGH,
+                    recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return filtered
 
     def _populate_complete_instrument_data(

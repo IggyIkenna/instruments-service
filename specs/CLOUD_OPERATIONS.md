@@ -2,10 +2,10 @@
 
 ## GCS Storage Pattern
 
-All GCS operations use CloudTarget from unified-cloud-services:
+All GCS operations use CloudTarget from unified-trading-services:
 
 ```python
-from unified_cloud_services.domain import CloudTarget, StandardizedDomainCloudService
+from unified_trading_services.domain import CloudTarget, StandardizedDomainCloudService
 from instruments_service.config import instruments_config
 
 config = instruments_config
@@ -46,7 +46,7 @@ Even for GCS-only operations, `bigquery_dataset` is required because:
 
 ```python
 # WRONG: Using get_config with defaults
-from unified_cloud_services import get_config
+from unified_trading_services import get_config
 project_id = get_config("GCP_PROJECT_ID", instruments_config.gcp_project_id)
 
 # CORRECT: Use config attributes directly

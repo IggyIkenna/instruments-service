@@ -6,9 +6,12 @@ This script queries The Graph Explorer API to find subgraph IDs for popular DeFi
 """
 
 import os
+from uuid import uuid4
 
 import requests
 from unified_cloud_services import get_secret_with_fallback
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 # Subgraph names we need IDs for (Ethereum only)
 SUBDGRAPH_NAMES = {
@@ -59,9 +62,15 @@ def verify_subgraph_id(subgraph_name: str, subgraph_id: str, api_key: str) -> bo
             data = response.json()
             if "errors" not in data:
                 return True
-    except Exception:
-        pass
-
+    except Exception as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.LOW,
+            recovery_strategy=ErrorRecoveryStrategy.SKIP,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
     return False
 
 
@@ -131,8 +140,15 @@ def query_subgraph_registry(subgraph_name: str) -> str | None:
                 if subgraph_id:
                     return subgraph_id
     except Exception as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
         print(f"   ⚠️  Error querying registry: {e}")
-
     return None
 
 

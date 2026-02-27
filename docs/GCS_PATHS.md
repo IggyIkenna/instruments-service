@@ -71,7 +71,7 @@ The `instruments.parquet` file contains the following key columns:
 ### Reading Instrument Definitions
 
 ```python
-from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
+from unified_trading_services import StandardizedDomainCloudService, CloudTarget
 
 # Create cloud-agnostic service
 target = CloudTarget(

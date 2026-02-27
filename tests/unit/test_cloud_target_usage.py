@@ -1,11 +1,11 @@
 """Test that all CloudTarget instantiations are correct.
 
 IMPORTANT: These are UNIT TESTS ONLY (no real cloud APIs).
-unified-cloud-services validates real API usage via its own integration tests.
+unified-trading-services validates real API usage via its own integration tests.
 """
 
 import pytest
-from unified_cloud_services import CloudTarget
+from unified_trading_services import CloudTarget
 
 from instruments_service.config import instruments_config
 

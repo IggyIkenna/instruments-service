@@ -23,15 +23,15 @@ Complete setup and installation guide for instruments-service.
 ```bash
 # 1. Clone repositories (as siblings)
 git clone <instruments-service-repo-url> instruments-service
-git clone <unified-cloud-services-repo-url> unified-cloud-services
+git clone <unified-trading-services-repo-url> unified-trading-services
 
 # 2. Create virtual environment
 cd instruments-service
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# 3. Install unified-cloud-services first (required)
-pip install -e ../unified-cloud-services
+# 3. Install unified-trading-services first (required)
+pip install -e ../unified-trading-services
 
 # 4. Install instruments-service
 pip install -e .
@@ -59,7 +59,7 @@ export GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
 python -c "from instruments_service import InstrumentProcessingService; print('✅ Import successful')"
 
 # Test Secret Manager access
-python -c "from unified_cloud_services import get_secret_with_fallback; key = get_secret_with_fallback('{project_id}', 'tardis-api-key'); print('✅ Secret Manager works' if key else '❌ Secret Manager failed')"  # Replace {project_id} with actual project ID
+python -c "from unified_trading_services import get_secret_with_fallback; key = get_secret_with_fallback('{project_id}', 'tardis-api-key'); print('✅ Secret Manager works' if key else '❌ Secret Manager failed')"  # Replace {project_id} with actual project ID
 ```
 
 ### Generate Instruments
@@ -91,8 +91,8 @@ Both repositories should be cloned as siblings:
 │   ├── instruments_service/
 │   ├── tests/
 │   └── ...
-└── unified-cloud-services/
-    ├── unified_cloud_services/
+└── unified-trading-services/
+    ├── unified_trading_services/
     └── ...
 ```
 
@@ -102,7 +102,7 @@ Both repositories should be cloned as siblings:
 
 ```bash
 git clone <instruments-service-repo-url> instruments-service
-git clone <unified-cloud-services-repo-url> unified-cloud-services
+git clone <unified-trading-services-repo-url> unified-trading-services
 ```
 
 ### Step 2: Create Virtual Environment
@@ -113,21 +113,21 @@ python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-### Step 3: Install unified-cloud-services (Required First)
+### Step 3: Install unified-trading-services (Required First)
 
-**IMPORTANT**: `unified-cloud-services` must be installed before `instruments-service`:
+**IMPORTANT**: `unified-trading-services` must be installed before `instruments-service`:
 
 ```bash
-# Install unified-cloud-services with all dependencies
-pip install -e ../unified-cloud-services
+# Install unified-trading-services with all dependencies
+pip install -e ../unified-trading-services
 ```
 
 **Important**: Do NOT use `--no-deps` flag. The package requires dependencies like `pydantic-settings`, `google-cloud-storage`, etc. to function properly.
 
-**Note**: If you already have `unified-cloud-services` installed, reinstall it to ensure all dependencies are up to date:
+**Note**: If you already have `unified-trading-services` installed, reinstall it to ensure all dependencies are up to date:
 
 ```bash
-pip install -e ../unified-cloud-services --force-reinstall
+pip install -e ../unified-trading-services --force-reinstall
 ```
 
 ### Step 4: Install instruments-service
@@ -188,7 +188,7 @@ python -c "from instruments_service.app.core.instrument_processing_service impor
 ### Test Secret Manager Access
 
 ```bash
-python -c "from unified_cloud_services import get_secret_with_fallback; key = get_secret_with_fallback('{project_id}', 'tardis-api-key'); print('✅ Secret Manager access works' if key else '❌ Secret Manager access failed')"  # Replace {project_id} with actual project ID
+python -c "from unified_trading_services import get_secret_with_fallback; key = get_secret_with_fallback('{project_id}', 'tardis-api-key'); print('✅ Secret Manager access works' if key else '❌ Secret Manager access failed')"  # Replace {project_id} with actual project ID
 ```
 
 ### Run Tests
@@ -227,7 +227,7 @@ python -m instruments_service --mode instruments-query --start-date 2023-05-23 \
 ### Using Python
 
 ```python
-from unified_cloud_services import create_instruments_client
+from unified_trading_services import create_instruments_client
 
 client = create_instruments_client()
 instruments_df = client.get_instruments_for_date(

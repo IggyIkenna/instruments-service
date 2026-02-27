@@ -6,9 +6,12 @@ NO business logic, validation, or transformation - just I/O operations.
 """
 
 import logging
+from uuid import uuid4
 
 import pandas as pd
 from unified_cloud_services import CloudTarget, StandardizedDomainCloudService, get_bucket_for_category
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,15 @@ class DataSourceAdapter:
                 return pd.DataFrame()
             return raw
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             error_msg = str(e)
             # 404/Not Found is expected when data doesn't exist yet
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
@@ -93,6 +105,15 @@ class DataSourceAdapter:
                 return pd.DataFrame()
             return raw
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             error_msg = str(e)
             # 404/Not Found is expected when data doesn't exist yet
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:

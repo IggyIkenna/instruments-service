@@ -3,8 +3,8 @@ Integration tests for CLI handlers.
 
 These tests use real services when credentials are available.
 
-Note: Query functionality has been moved to unified-cloud-services.
-Use InstrumentsDomainClient from unified-cloud-services to query instruments.
+Note: Query functionality has been moved to unified-trading-services.
+Use InstrumentsDomainClient from unified-trading-services to query instruments.
 """
 
 import os
@@ -16,6 +16,8 @@ from instruments_service.cli.handlers.instrument_handler import InstrumentHandle
 
 # Import get_config from conftest (avoids circular import issues)
 from tests.conftest import get_config
+
+pytestmark = pytest.mark.integration
 
 
 @pytest.fixture

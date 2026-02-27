@@ -68,3 +68,16 @@ dump.py
 # Python version manager files (personal preference)
 .python-version
 .venv
+
+# Security - Never commit credentials
+*-credentials.json
+*-service-account.json
+service-account*.json
+credentials*.json
+*secret*.json
+central-element-323112-*.json
+.env
+.env.local
+.env.*.local
+**/secrets/
+**/credentials/

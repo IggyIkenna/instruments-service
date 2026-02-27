@@ -22,11 +22,11 @@ phases:
   pre_build:
     commands:
       - echo "=== Cloning dependencies ==="
-      - git clone https://x-access-token:${GITHUB_TOKEN}@github.com/IggyIkenna/unified-cloud-services.git /tmp/unified-cloud-services
+      - git clone https://x-access-token:${GITHUB_TOKEN}@github.com/IggyIkenna/unified-trading-services.git /tmp/unified-trading-services
       - git clone https://x-access-token:${GITHUB_TOKEN}@github.com/IggyIkenna/unified-trading-deployment-v2.git /tmp/unified-trading-deployment-v2 || true
 
       - echo "=== Installing packages ==="
-      - pip install -e /tmp/unified-cloud-services
+      - pip install -e /tmp/unified-trading-services
       - pip install -e /tmp/unified-trading-deployment-v2 || true
       - pip install -e . || pip install -e ".[dev]"
       - pip install ruff pytest

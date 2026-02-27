@@ -13,7 +13,10 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import uuid4
 
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 from unified_market_interface import DatabentoAdapter
 
 from instruments_service.engine.operations.instruments.processors.base_processor import BaseInstrumentProcessor
@@ -83,9 +86,17 @@ class TradFiInstrumentProcessor(BaseInstrumentProcessor):
                         inst_def = InstrumentDefinition(**inst_data)  # type: ignore[reportAny]
                         instruments[inst_key] = inst_def
                     except Exception as e:
+                        _err = EnhancedError(
+                            message=str(e),
+                            category=ErrorCategory.SERVER_ERROR,
+                            severity=ErrorSeverity.MEDIUM,
+                            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                            correlation_id=str(uuid4()),
+                            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                        )
+                        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                         logger.warning(f"Failed to create InstrumentDefinition for {inst_key}: {e}")
                         continue
-
                 logger.info(f"✅ Fetched {len(instruments)} Databento instruments for {exchange}")
                 return instruments
 
@@ -102,7 +113,6 @@ class TradFiInstrumentProcessor(BaseInstrumentProcessor):
                 else:
                     logger.error(f"❌ Failed to fetch Databento instruments after {max_retries} attempts: {e}")
                     raise Exception(f"Failed to fetch Databento instruments for {exchange}") from last_error
-
         raise Exception("Unexpected: retry loop completed without return or raise")
 
     async def process_tradfi_instruments(

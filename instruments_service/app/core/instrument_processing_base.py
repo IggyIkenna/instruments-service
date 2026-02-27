@@ -11,9 +11,12 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import uuid4
 
 from unified_cloud_services import get_secret_with_fallback
 from unified_config_interface import DataTypeConfig, ExchangeInstrumentConfig, VenueMapping
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 from instruments_service.config import instruments_config
 from instruments_service.models import InstrumentDefinition
@@ -85,9 +88,17 @@ class InstrumentProcessingBase:
                 else:
                     logger.warning("⚠️ Tardis API key retrieval returned None (only needed for CeFi)")
             except Exception as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                 logger.warning(f"⚠️ Tardis API key not available (only needed for CeFi): {e}")
                 self.api_key = None
-
         # Use centralized configs from config.py (DRY principle)
         self.venue_mapping = VenueMapping()
         self.exchange_config = ExchangeInstrumentConfig()

@@ -12,8 +12,11 @@ import logging
 from datetime import UTC, datetime
 from datetime import date as date_type
 from typing import Any, cast
+from uuid import uuid4
 
 import pandas as pd
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 from unified_market_interface import InstrumentDefinition, VenueMapping, get_adapter
 
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
@@ -402,6 +405,15 @@ class InstrumentsService:
                                     key = cast(str, d.get("instrument_key") or inst.instrument_key)
                                     result[key] = inst
                                 except Exception as e:
+                                    _err = EnhancedError(
+                                        message=str(e),
+                                        category=ErrorCategory.SERVER_ERROR,
+                                        severity=ErrorSeverity.MEDIUM,
+                                        recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                                        correlation_id=str(uuid4()),
+                                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                                    )
+                                    logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                                     logger.warning(
                                         f"Failed to create InstrumentDefinition for "
                                         f"{d.get('instrument_key', 'unknown')}: {e}"
@@ -410,6 +422,15 @@ class InstrumentsService:
                                 logger.info(f"✅ Processed {len(result)} instruments from {exchange}")
                             return result
                         except Exception as e:
+                            _err = EnhancedError(
+                                message=str(e),
+                                category=ErrorCategory.SERVER_ERROR,
+                                severity=ErrorSeverity.MEDIUM,
+                                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                                correlation_id=str(uuid4()),
+                                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                            )
+                            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                             logger.error(f"❌ Failed to process {exchange}: {e}", exc_info=True)
                             return {}
 
@@ -459,8 +480,16 @@ class InstrumentsService:
                                     "(CEFI on-chain CLOB)"
                                 )
                         except Exception as e:
-                            logger.error(f"❌ Failed to process on-chain CLOB {protocol}: {e}", exc_info=True)
-
+                            _err = EnhancedError(
+                                message=str(e),
+                                category=ErrorCategory.SERVER_ERROR,
+                                severity=ErrorSeverity.HIGH,
+                                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                                correlation_id=str(uuid4()),
+                                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                            )
+                            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
             # Process TRADFI (Databento) exchanges
             if tradfi:
                 try:
@@ -658,6 +687,15 @@ class InstrumentsService:
                                         logger.info(f"✅ Processed {len(cme_instruments)} instruments from {exchange}")
                                     return cme_instruments
                             except Exception as e:
+                                _err = EnhancedError(
+                                    message=str(e),
+                                    category=ErrorCategory.SERVER_ERROR,
+                                    severity=ErrorSeverity.MEDIUM,
+                                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                                    correlation_id=str(uuid4()),
+                                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                                )
+                                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                                 logger.error(f"❌ Failed to process {exchange}: {e}", exc_info=True)
                                 return {}
 
@@ -673,8 +711,16 @@ class InstrumentsService:
                                 all_instruments.update(cast(dict[str, InstrumentDefinition], result))
 
                 except Exception as e:
-                    logger.error(f"❌ Failed to initialize Databento processing: {e}", exc_info=True)
-
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.HIGH,
+                        recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                    raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
             # Process DEFI protocols
             if defi:
                 try:
@@ -733,10 +779,27 @@ class InstrumentsService:
                                     all_instruments.update(cast(dict[str, InstrumentDefinition], defi_instruments))
                                     logger.info(f"✅ Processed {len(defi_instruments)} instruments from {protocol}")
                             except Exception as e:
-                                logger.error(f"❌ Failed to process {protocol}: {e}", exc_info=True)
+                                _err = EnhancedError(
+                                    message=str(e),
+                                    category=ErrorCategory.SERVER_ERROR,
+                                    severity=ErrorSeverity.HIGH,
+                                    recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                                    correlation_id=str(uuid4()),
+                                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                                )
+                                logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                                raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
                 except Exception as e:
-                    logger.error(f"❌ Failed to initialize DeFi processing: {e}", exc_info=True)
-
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.HIGH,
+                        recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                    raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
             # If no mode flags specified, process all three modes
             if not cefi and not tradfi and not defi:
                 logger.info("📋 No mode flags specified, processing all modes (CeFi, TradFi, DeFi)")
@@ -969,8 +1032,16 @@ class InstrumentsService:
                                     f"opens {open_dt.date()} closes {close_dt.date()}"
                                 )
                         except Exception as e:
-                            logger.warning(f"⚠️ Failed to parse session times for {row.get('instrument_key')}: {e}")
-
+                            _err = EnhancedError(
+                                message=str(e),
+                                category=ErrorCategory.SERVER_ERROR,
+                                severity=ErrorSeverity.HIGH,
+                                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                                correlation_id=str(uuid4()),
+                                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                            )
+                            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
                 if utc_spanning_instruments:
                     # Create DataFrame for open-date file
                     spanning_df = pd.DataFrame(utc_spanning_instruments)
@@ -1041,6 +1112,15 @@ class InstrumentsService:
                 }
 
         except Exception as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             # Get error/warning counts before returning
             root_logger.removeHandler(error_warning_counter)
             error_count = error_warning_counter.error_count
@@ -1118,6 +1198,15 @@ class InstrumentsService:
                 else:
                     total_errors += 1
             except Exception as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                 logger.error(
                     f"❌ Failed to process {date.strftime('%Y-%m-%d')}: {e}",
                     exc_info=True,
@@ -1130,7 +1219,6 @@ class InstrumentsService:
                         "error": str(e),
                     }
                 )
-
         success_count: int = len([r for r in results if r.get("status") == "success"])
         success_rate = (success_count / len(date_range) * 100) if date_range else 0
 

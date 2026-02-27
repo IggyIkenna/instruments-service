@@ -8,7 +8,10 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
+from uuid import uuid4
 
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 from unified_market_interface import InstrumentDefinition, TardisAdapter, VenueMapping, get_adapter
 
 if TYPE_CHECKING:
@@ -118,6 +121,15 @@ class CeFiOrchestrator:
                         key = cast(str, d.get("instrument_key") or inst.instrument_key)
                         result[key] = inst
                     except Exception as e:
+                        _err = EnhancedError(
+                            message=str(e),
+                            category=ErrorCategory.SERVER_ERROR,
+                            severity=ErrorSeverity.MEDIUM,
+                            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                            correlation_id=str(uuid4()),
+                            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                        )
+                        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                         logger.warning(
                             f"Failed to create InstrumentDefinition for {d.get('instrument_key', 'unknown')}: {e}"
                         )
@@ -125,6 +137,15 @@ class CeFiOrchestrator:
                     logger.info(f"✅ Processed {len(result)} instruments from {exchange}")
                 return result
             except Exception as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                 logger.error(f"❌ Failed to process {exchange}: {e}", exc_info=True)
                 return {}
 
@@ -174,8 +195,16 @@ class CeFiOrchestrator:
                             f"✅ Processed {len(clob_instruments)} instruments from {protocol} (CEFI on-chain CLOB)"
                         )
                 except Exception as e:
-                    logger.error(f"❌ Failed to process on-chain CLOB {protocol}: {e}", exc_info=True)
-
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.HIGH,
+                        recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                    raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return all_instruments
 
     async def _check_venue_access(self, cefi_exchanges: list[str]) -> list[str]:

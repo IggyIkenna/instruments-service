@@ -19,48 +19,36 @@ from typing import cast
 
 # CRITICAL: Load .env file explicitly before any other imports
 def _load_env_early():
-    try:
-        from dotenv import load_dotenv
+    from dotenv import load_dotenv
 
-        # Find .env file in current directory or project root
-        env_path = Path(".env")
-        if not env_path.exists():
-            # Try parent directory once
-            env_path = Path(__file__).parent.parent.parent / ".env"
+    env_path = Path(".env")
+    if not env_path.exists():
+        env_path = Path(__file__).parent.parent.parent / ".env"
 
-        if env_path.exists():
-            load_dotenv(dotenv_path=env_path, override=True)
-    except ImportError:
-        pass
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=True)
 
 
 _load_env_early()
 
 # Setup structured JSON logging (split libraries - direct import per dependency matrix)
-from unified_cloud_services import GCSEventSink
+from unified_cloud_services import GCSEventSink, GracefulShutdownHandler
 from unified_events_interface import log_event, setup_events
-
-from unified_cloud_services import GracefulShutdownHandler
 
 logger = logging.getLogger(__name__)
 
 # Global shutdown handler (initialized in main())
 _shutdown_handler = None
 
-from instruments_service.config import instruments_config
-
 # CRITICAL: Patch unified_cloud_services config to use instruments_config
 # This ensures that get_bucket_for_category() uses the correct bucket configuration
 # from instruments-service instead of the default BaseServiceConfig
-try:
-    import unified_cloud_services.core.market_category as market_category_module
+import unified_cloud_services.core.market_category as market_category_module
 
-    market_category_module.unified_config = instruments_config
-    logger.info("✅ Patched unified_cloud_services config with instruments_config")
-except ImportError:
-    logger.warning("⚠️ Could not patch unified_cloud_services config (module not found)")
-except Exception as e:
-    logger.warning(f"⚠️ Failed to patch unified_cloud_services config: {e}")
+from instruments_service.config import instruments_config
+
+market_category_module.unified_config = instruments_config
+logger.info("✅ Patched unified_cloud_services config with instruments_config")
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.cli.handlers import get_handler_for_mode
@@ -101,11 +89,11 @@ def main() -> dict[str, HandlerResultValue]:
 
         # Setup events with GCSEventSink now that we have config
         setup_events(
-            mode="batch", 
+            mode="batch",
             service_name="instruments-service",
             sink=GCSEventSink(
                 project_id=instruments_config.gcp_project_id,
-                bucket=getattr(instruments_config, 'events_bucket', f"{instruments_config.gcp_project_id}-events"),
+                bucket=getattr(instruments_config, "events_bucket", f"{instruments_config.gcp_project_id}-events"),
                 service_name="instruments-service",
             ),
         )
