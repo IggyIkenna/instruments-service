@@ -39,8 +39,8 @@ Welcome to the Instruments Service documentation. This directory contains compre
 
 ## Related Services
 
-- **unified-cloud-services**: Cloud infrastructure library (GCS, BigQuery, Secret Manager) - Required dependency
-- **market-tick-data-handler**: Consumes instruments data for market data download
+- **unified-trading-services**: Cloud infrastructure library (GCS, BigQuery, Secret Manager) - Required dependency
+- **market-tick-data-service**: Consumes instruments data for market data download
 - **market-data-processing-service**: Consumes instruments data for feature generation
 - **strategy-service**: Consumes instruments data for strategy execution
 

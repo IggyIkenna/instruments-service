@@ -2,7 +2,7 @@
 Tests for CloudInstrumentStorage to increase coverage.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import Mock, patch
 
 import pandas as pd
@@ -137,24 +137,21 @@ class TestCloudInstrumentStorage:
             assert storage.cloud_service is not None
 
     def test_init_test_mode(self, mock_cloud_service):
-        """Test initialization in test mode."""
+        """Test initialization in test mode via testing_mode=True parameter."""
         with (
             patch(
                 "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
                 return_value=mock_cloud_service,
             ),
             patch("instruments_service.app.core.cloud_instrument_storage.CloudTarget") as mock_target_class,
-            patch.dict(
-                "os.environ",
-                {"ENVIRONMENT": "test", "INSTRUMENTS_GCS_BUCKET_TEST": "test-bucket"},
-            ),
         ):
             mock_target = Mock()
             mock_target_class.return_value = mock_target
 
-            storage = CloudInstrumentStorage()
+            storage = CloudInstrumentStorage(testing_mode=True)
             # Should use test bucket
             assert storage.cloud_service is not None
+            assert storage._testing_mode is True
 
     def test_store_instruments_success(self, storage, mock_cloud_service):
         """Test storing instruments successfully."""
@@ -167,7 +164,7 @@ class TestCloudInstrumentStorage:
                 "available_from_datetime": ["2024-01-01T00:00:00Z"],
             }
         )
-        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date = datetime(2024, 1, 1, tzinfo=UTC)
 
         result = storage.store_instruments(df, table_name="instruments", date=date)
 
@@ -319,14 +316,16 @@ class TestCloudInstrumentStorage:
         storage._mock_category_service.upload_to_gcs_batch.assert_called()
 
     def test_init_import_error(self):
-        """Test initialization when unified-cloud-services not available."""
+        """Test initialization when unified-trading-services not available."""
         # Mock the imports to simulate ImportError scenario
-        with patch(
-            "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
-            side_effect=ImportError("unified-cloud-services not available"),
+        with (
+            patch(
+                "instruments_service.app.core.cloud_instrument_storage.StandardizedDomainCloudService",
+                side_effect=ImportError("unified-trading-services not available"),
+            ),
+            pytest.raises(ImportError, match="unified-trading-services not available"),
         ):
-            with pytest.raises(ImportError, match="unified-cloud-services not available"):
-                CloudInstrumentStorage()
+            CloudInstrumentStorage()
 
     def test_store_instruments_date_extraction_fallback(self, storage, mock_cloud_service):
         """Test storing instruments with date extraction fallback."""
@@ -406,7 +405,7 @@ class TestCloudInstrumentStorage:
                 ],
             }
         )
-        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date = datetime(2024, 1, 1, tzinfo=UTC)
 
         result = storage.store_instruments(df, table_name="instruments", date=date)
 
@@ -436,7 +435,7 @@ class TestCloudInstrumentStorage:
                 "available_from_datetime": ["2024-01-01T00:00:00Z"],
             }
         )
-        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date = datetime(2024, 1, 1, tzinfo=UTC)
 
         result = storage.store_instruments(df, table_name="instruments", date=date)
 
@@ -462,7 +461,7 @@ class TestCloudInstrumentStorage:
                 "available_from_datetime": ["2024-01-01T00:00:00Z"],
             }
         )
-        date = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        date = datetime(2024, 1, 1, tzinfo=UTC)
 
         result = storage.store_instruments(df, table_name="instruments", date=date)
 

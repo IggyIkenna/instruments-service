@@ -6,23 +6,26 @@ for Hyperliquid and Aster to CSV files.
 import csv
 import logging
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 import requests
 
 # Add instruments_service to path
 sys.path.insert(0, str(Path(__file__).parent))
 
+from uuid import uuid4
+
 from instruments_service.app.venues.onchain_perps.aster_adapter import AsterAdapter
 from instruments_service.app.venues.onchain_perps.hyperliquid_adapter import HyperliquidAdapter
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def find_earliest_available_data_hyperliquid(coin: str, max_days_back: int = 365) -> Optional[datetime]:
+def find_earliest_available_data_hyperliquid(coin: str, max_days_back: int = 365) -> datetime | None:
     """
     Find the earliest available data for a Hyperliquid coin by testing historical endpoints.
 
@@ -34,12 +37,12 @@ def find_earliest_available_data_hyperliquid(coin: str, max_days_back: int = 365
         Earliest available datetime or None
     """
     api_base_url = "https://api.hyperliquid.xyz"
-    end_date = datetime.now(timezone.utc)
+    end_date = datetime.now(UTC)
 
     # Binary search for earliest available data
     earliest_found = None
 
-    logger.info(f"🔍 Searching for earliest data for {coin} (up to {max_days_back} days back)...")
+    logger.info("🔍 Searching for earliest data for %s (up to %s days back)...", coin, max_days_back)
 
     # Start from most recent and work backwards
     for days_back in range(0, max_days_back, 30):  # Check every 30 days
@@ -67,14 +70,22 @@ def find_earliest_available_data_hyperliquid(coin: str, max_days_back: int = 365
                 candles = response.json()
                 if candles and len(candles) > 0:
                     earliest_found = test_date
-                    logger.info(f"  ✅ Found data for {coin} on {test_date.strftime('%Y-%m-%d')}")
+                    logger.info("  ✅ Found data for %s on %s", coin, test_date.strftime("%Y-%m-%d"))
                 else:
-                    logger.debug(f"  ⚠️ No data for {coin} on {test_date.strftime('%Y-%m-%d')}")
+                    logger.debug("  ⚠️ No data for %s on %s", coin, test_date.strftime("%Y-%m-%d"))
                     if earliest_found:
                         break  # Found earliest, stop searching
-        except Exception as e:
-            logger.debug(f"  ⚠️ Error checking {test_date.strftime('%Y-%m-%d')}: {e}")
-
+        except (ConnectionError, TimeoutError, OSError, ValueError) as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.HIGH,
+                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
     return earliest_found
 
 
@@ -95,7 +106,7 @@ def download_hyperliquid_data_to_csv(coin: str, target_date: datetime, output_di
     start_ms = int(start_date.timestamp() * 1000)
     end_ms = int(end_date.timestamp() * 1000)
 
-    logger.info(f"📥 Downloading Hyperliquid data for {coin} on {target_date.strftime('%Y-%m-%d')}...")
+    logger.info("📥 Downloading Hyperliquid data for %s on %s...", coin, target_date.strftime("%Y-%m-%d"))
 
     # Download candles (trades data)
     candles_file = output_dir / f"hyperliquid_{coin}_candles_{target_date.strftime('%Y%m%d')}.csv"
@@ -141,12 +152,12 @@ def download_hyperliquid_data_to_csv(coin: str, target_date: datetime, output_di
                             {
                                 "timestamp": candle.get("t") or "",
                                 "open_time": (
-                                    datetime.fromtimestamp(candle.get("t", 0) / 1000, tz=timezone.utc).isoformat()
+                                    datetime.fromtimestamp(candle.get("t", 0) / 1000, tz=UTC).isoformat()
                                     if candle.get("t")
                                     else ""
                                 ),
                                 "close_time": (
-                                    datetime.fromtimestamp(candle.get("T", 0) / 1000, tz=timezone.utc).isoformat()
+                                    datetime.fromtimestamp(candle.get("T", 0) / 1000, tz=UTC).isoformat()
                                     if candle.get("T")
                                     else ""
                                 ),
@@ -160,14 +171,22 @@ def download_hyperliquid_data_to_csv(coin: str, target_date: datetime, output_di
                                 "trades": candle.get("n") or "",
                             }
                         )
-                logger.info(f"  ✅ Saved {len(candles)} candles to {candles_file}")
+                logger.info("  ✅ Saved %s candles to %s", len(candles), candles_file)
             else:
-                logger.warning(f"  ⚠️ No candles data for {coin}")
+                logger.warning("  ⚠️ No candles data for %s", coin)
         else:
-            logger.warning(f"  ⚠️ Failed to fetch candles: {response.status_code}")
-    except Exception as e:
-        logger.error(f"  ❌ Error downloading candles: {e}")
-
+            logger.warning("  ⚠️ Failed to fetch candles: %s", response.status_code)
+    except (ConnectionError, TimeoutError, OSError, ValueError) as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.HIGH,
+            recovery_strategy=ErrorRecoveryStrategy.RETRY,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+        raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
     # Download L2 book snapshots (sample a few times during the day)
     book_file = output_dir / f"hyperliquid_{coin}_book_{target_date.strftime('%Y%m%d')}.csv"
     try:
@@ -212,9 +231,18 @@ def download_hyperliquid_data_to_csv(coin: str, target_date: datetime, output_di
                 writer = csv.DictWriter(f, fieldnames=book_snapshots[0].keys())
                 writer.writeheader()
                 writer.writerows(book_snapshots)
-            logger.info(f"  ✅ Saved {len(book_snapshots)} book snapshots to {book_file}")
-    except Exception as e:
-        logger.error(f"  ❌ Error downloading book snapshots: {e}")
+            logger.info("  ✅ Saved %s book snapshots to %s", len(book_snapshots), book_file)
+    except (ConnectionError, TimeoutError, OSError, ValueError) as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.HIGH,
+            recovery_strategy=ErrorRecoveryStrategy.RETRY,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+        raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
 
 
 def download_aster_data_to_csv(symbol: str, target_date: datetime, output_dir: Path):
@@ -228,7 +256,7 @@ def download_aster_data_to_csv(symbol: str, target_date: datetime, output_dir: P
     """
     futures_api_base_url = "https://fapi.asterdex.com"
 
-    logger.info(f"📥 Downloading Aster data for {symbol} on {target_date.strftime('%Y-%m-%d')}...")
+    logger.info("📥 Downloading Aster data for %s on %s...", symbol, target_date.strftime("%Y-%m-%d"))
 
     # Download recent trades (historical trades endpoint may require auth)
     trades_file = output_dir / f"aster_{symbol}_trades_{target_date.strftime('%Y%m%d')}.csv"
@@ -262,9 +290,7 @@ def download_aster_data_to_csv(symbol: str, target_date: datetime, output_dir: P
                     writer.writeheader()
                     for trade in trades:
                         trade_time = (
-                            datetime.fromtimestamp(trade.get("time", 0) / 1000, tz=timezone.utc)
-                            if trade.get("time")
-                            else None
+                            datetime.fromtimestamp(trade.get("time", 0) / 1000, tz=UTC) if trade.get("time") else None
                         )
                         writer.writerow(
                             {
@@ -277,14 +303,22 @@ def download_aster_data_to_csv(symbol: str, target_date: datetime, output_dir: P
                                 "isBuyerMaker": trade.get("isBuyerMaker") or "",
                             }
                         )
-                logger.info(f"  ✅ Saved {len(trades)} trades to {trades_file}")
+                logger.info("  ✅ Saved %s trades to %s", len(trades), trades_file)
             else:
-                logger.warning(f"  ⚠️ No trades data for {symbol}")
+                logger.warning("  ⚠️ No trades data for %s", symbol)
         else:
-            logger.warning(f"  ⚠️ Failed to fetch trades: {response.status_code}")
-    except Exception as e:
-        logger.error(f"  ❌ Error downloading trades: {e}")
-
+            logger.warning("  ⚠️ Failed to fetch trades: %s", response.status_code)
+    except (ConnectionError, TimeoutError, OSError, ValueError) as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.HIGH,
+            recovery_strategy=ErrorRecoveryStrategy.RETRY,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+        raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
     # Download order book depth
     book_file = output_dir / f"aster_{symbol}_book_{target_date.strftime('%Y%m%d')}.csv"
     try:
@@ -334,13 +368,22 @@ def download_aster_data_to_csv(symbol: str, target_date: datetime, output_dir: P
                     for i, ask in enumerate(asks):
                         writer.writerow(["ask", i + 1, ask[0], ask[1], "", "", ""])
 
-                logger.info(f"  ✅ Saved book depth ({len(bids)} bids, {len(asks)} asks) to {book_file}")
+                logger.info("  ✅ Saved book depth (%s bids, %s asks) to %s", len(bids), len(asks), book_file)
             else:
-                logger.warning(f"  ⚠️ Invalid book data for {symbol}")
+                logger.warning("  ⚠️ Invalid book data for %s", symbol)
         else:
-            logger.warning(f"  ⚠️ Failed to fetch book depth: {response.status_code}")
-    except Exception as e:
-        logger.error(f"  ❌ Error downloading book depth: {e}")
+            logger.warning("  ⚠️ Failed to fetch book depth: %s", response.status_code)
+    except (ConnectionError, TimeoutError, OSError, ValueError) as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.HIGH,
+            recovery_strategy=ErrorRecoveryStrategy.RETRY,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+        raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
 
 
 def check_historical_metadata():
@@ -364,11 +407,11 @@ def check_historical_metadata():
             if inst_key in perpetuals:
                 earliest = find_earliest_available_data_hyperliquid(coin, max_days_back=730)
                 if earliest:
-                    logger.info(f"  {coin}: Earliest data found: {earliest.strftime('%Y-%m-%d')}")
+                    logger.info("  %s: Earliest data found: %s", coin, earliest.strftime("%Y-%m-%d"))
                     # Update available_from in instrument definition
                     perpetuals[inst_key]["available_from_datetime"] = earliest.isoformat()
                 else:
-                    logger.warning(f"  {coin}: Could not determine earliest data (may be very recent)")
+                    logger.warning("  %s: Could not determine earliest data (may be very recent)", coin)
 
     # Test Aster
     logger.info("\n📊 Aster Historical Metadata Check")
@@ -380,7 +423,7 @@ def check_historical_metadata():
     if aster_perpetuals:
         # Aster doesn't provide historical metadata, so we'll use current date
         # In production, we'd need to check exchange launch date or use a known date
-        logger.info(f"  Found {len(aster_perpetuals)} instruments")
+        logger.info("  Found %s instruments", len(aster_perpetuals))
         logger.info("  ⚠️ Aster API doesn't provide historical metadata")
         logger.info("  💡 Suggestion: Use exchange launch date or first known trading date")
 
@@ -400,7 +443,7 @@ def main():
     logger.info("Downloading Sample Data (Last 24 Hours)")
     logger.info("=" * 80)
 
-    target_date = datetime.now(timezone.utc) - timedelta(days=1)
+    target_date = datetime.now(UTC) - timedelta(days=1)
 
     # Hyperliquid sample
     if hl_perpetuals:

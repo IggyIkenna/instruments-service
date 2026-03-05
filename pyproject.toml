@@ -1,20 +1,25 @@
 [build-system]
-requires = ["setuptools>=80.9.0", "wheel"]
+requires = [
+    "setuptools>=80.9.0",
+    "wheel",
+]
 build-backend = "setuptools.build_meta"
-
-# [tool.uv.sources] removed - Docker builds use Artifact Registry via pip.conf
-# For local dev, install manually: uv pip install -e ../unified-events-interface
 
 [project]
 name = "instruments-service"
-version = "0.1.4"
+version = "0.1.15"
 description = "Service for generating canonical instrument definitions from exchange APIs"
 readme = "README.md"
-license = {text = "MIT"}
 authors = [
-    {name = "Unified Trading System", email = "ikenna@odum-research.com"}
+    { name = "Unified Trading System", email = "ikenna@odum-research.com" },
 ]
-keywords = ["trading", "instruments", "exchange", "market-data", "ccxt", "cryptocurrency"]
+keywords = [
+    "trading",
+    "instruments",
+    "exchange",
+    "market-data",
+    "cryptocurrency",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -23,71 +28,99 @@ classifiers = [
 ]
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    # Core data processing (aligned with unified-cloud-services)
-    "numpy>=2.1.0,<2.4.0",
-    "pandas>=2.2.3,<3.0.0",
-    "polars>=1.0.0",  # Required by unified-cloud-services feature_data_loader
-    # Validation
-    "pydantic>=2.12.5",
-    "pydantic-settings>=2.12.0",
-    # Utilities
-    "python-dateutil>=2.8.0",
-    "python-dotenv>=1.0.0",
-    "requests>=2.32.5",
-    # Exchange integrations
-    "ccxt>=4.5.24",
-    "web3>=6.0.0",
-    "eth-abi>=4.0.0",
-    "databento>=0.20.0",
-    "exchange-calendars>=4.5.0",
-    "yfinance>=0.2.50",
-    # Visualization
-    "plotly>=6.4.0",
-    # AWS
-    "boto3>=1.40.70",
-    "unified-config-interface>=0.3.0",
+    "numpy>=2.3.0,<2.4.0",
+    "pandas>=2.3.0,<3.0.0",
+    "polars<2.0.0,>=1.37.0",
+    "pydantic>=2.12.5,<3.0.0",
+    "pydantic-settings>=2.12.0,<3.0.0",
+    "python-dateutil>=2.8.2,<3.0.0",
+    "python-dotenv>=1.0.0,<2.0.0",
+    "web3>=6.0.0,<7.0.0",
+    "eth-abi>=4.0.0,<5.0.0",
+    "databento>=0.32.0,<1.0.0",
+    "exchange-calendars>=4.5.0,<5.0.0",
+    "yfinance>=0.2.66,<1.0.0",
+    "plotly>=6.4.0,<7.0.0",
+    "unified-trading-library>=0.1.0",
+    "unified-config-interface>=0.1.0",
     "unified-events-interface>=0.1.0",
-    "unified-domain-services>=0.1.0",
-    "unified-market-interface>=0.3.0",
-    # NOTE: unified-cloud-services is installed separately:
-    #   - Local: setup.sh installs via SSH
-    #   - Cloud Build/Docker: cloned via HTTPS with PAT
+    "unified-domain-client>=0.1.0",
+    "unified-market-interface>=0.1.0",
+    "unified-reference-data-interface>=0.1.0",
+    "unified-api-contracts>=0.1.0",
+    "unified-internal-contracts>=0.1.0",
+    "google-cloud-pubsub>=2.28.0,<3.0.0",
+    "unified-cloud-interface>=0.1.0,<1.0.0",
 ]
+
+[project.license]
+text = "MIT"
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=9.0.2",
-    "pytest-cov>=7.0.0",
-    "pytest-asyncio>=0.25.0",
-    "pytest-mock>=3.14.0",
-    "pytest-timeout>=2.4.0",
-    "pytest-xdist>=3.6.0",
+    "pytest>=9.0.1,<10.0.0",
+    "pytest-cov>=7.0.0,<8.0.0",
+    "pytest-asyncio>=0.25.0,<2.0.0",
+    "pytest-mock>=3.15.0,<4.0.0",
+    "pytest-timeout>=2.4.0,<3.0.0",
+    "pytest-xdist>=3.6.0,<4.0.0",
     "ruff==0.15.0",
-    "mypy>=1.19.1",
-    "prek>=0.3.2",
+    "basedpyright>=1.21.0,<2.0.0",
+    "pip-audit>=2.7.0,<3.0.0",
+    "bandit>=1.7.0,<2.0.0",
+    "prek>=0.3.0,<1.0.0",
     "pandas-stubs>=2.2.0,<3.0.0",
 ]
 
 [project.scripts]
-instruments-service = "instruments_service.cli.main:run_cli"
+instruments-service = "instruments_service.cli.main:main_service_cli"
 
 [project.urls]
 Homepage = "https://github.com/iggyikenna/instruments-service"
 Documentation = "https://github.com/iggyikenna/instruments-service"
 Repository = "https://github.com/iggyikenna/instruments-service"
 
+[tool.uv.sources.unified-api-contracts]
+path = "../unified-api-contracts"
+
+[tool.uv.sources.unified-internal-contracts]
+path = "../unified-internal-contracts"
+
+[tool.uv.sources.unified-trading-library]
+path = "../unified-trading-library"
+
+[tool.uv.sources.unified-config-interface]
+path = "../unified-config-interface"
+
+[tool.uv.sources.unified-events-interface]
+path = "../unified-events-interface"
+
+[tool.uv.sources.unified-domain-client]
+path = "../unified-domain-client"
+
+[tool.uv.sources.unified-market-interface]
+path = "../unified-market-interface"
+editable = true
+
+[tool.uv.sources.unified-reference-data-interface]
+path = "../unified-reference-data-interface"
+
+[tool.uv.sources.unified-cloud-interface]
+path = "../unified-cloud-interface"
+
 [tool.setuptools]
-packages = ["instruments_service"]
+packages = [
+    "instruments_service",
+]
 include-package-data = true
 
-[tool.mypy]
-python_version = "3.13"
-warn_return_any = false  # Light mode
-disallow_untyped_defs = false
-
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
+testpaths = [
+    "tests",
+]
+python_files = [
+    "test_*.py",
+]
 asyncio_mode = "auto"
 
 [tool.ruff]
@@ -95,14 +128,93 @@ line-length = 120
 target-version = "py313"
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I"]
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
+    "N",
+    "UP",
+    "B",
+    "C4",
+    "SIM",
+    "RUF",
+    "G",
+]
 ignore = [
-    "E501",  # Line too long - handled by ruff format
-    "E722",  # Do not use bare `except` - allowed in scripts for simplicity
+    "E501",
 ]
 
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
 [tool.ruff.lint.per-file-ignores]
-# Allow imports not at top of file where intentional (setup before imports)
-"instruments_service/cli/main.py" = ["E402"]
-"tests/conftest.py" = ["E402"]
-"scripts/*" = ["E722"]  # Allow bare except in scripts
+"instruments_service/cli/main.py" = [
+    "E402",
+]
+"tests/conftest.py" = [
+    "E402",
+]
+"scripts/*" = [
+    "E722",
+]
+"instruments_service/config/service_config.py" = [
+    "N802",
+]
+"instruments_service/config.py" = [
+    "RUF012",
+]
+"instruments_service/config/venue_config.py" = [
+    "RUF012",
+]
+"instruments_service/app/core/processors/ccxt_manual_fallback.py" = [
+    "N806",
+]
+"instruments_service/engine/processors/ccxt_manual_fallback.py" = [
+    "N806",
+]
+"tests/unit/test_cloud_agnostic_paths.py" = [
+    "N806",
+]
+"tests/smoke/test_shard_combinatorics.py" = [
+    "E402",
+    "F821",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.coverage.report]
+fail_under = 70
+show_missing = true
+skip_covered = false
+precision = 1
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "raise NotImplementedError",
+]
+
+[tool.basedpyright]
+include = [
+    "instruments_service",
+]
+exclude = [
+    "tests",
+    "**/__pycache__",
+    ".venv*",
+    "build",
+    "dist",
+]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+reportMissingImports = "error"
+reportUnusedVariable = "warning"
+reportUnusedImport = "warning"
+reportAny = "error"
+reportUnknownVariableType = "error"
+reportUnknownParameterType = "error"
+reportUnknownMemberType = "error"
+useLibraryCodeForTypes = true

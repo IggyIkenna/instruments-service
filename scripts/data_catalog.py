@@ -17,8 +17,14 @@ import logging
 import os
 import sys
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, date, datetime, timedelta
+from typing import TypedDict
+from uuid import uuid4
+
+from unified_trading_library import CloudTarget, StandardizedDomainCloudService
+from unified_config_interface import UnifiedCloudConfig
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,16 +32,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# Cloud project/account configuration (multi-cloud support)
-PROJECT_ID = (
-    os.environ.get("GCP_PROJECT_ID")
-    or os.environ.get("AWS_PROJECT_ID")
-    or os.environ.get("GOOGLE_CLOUD_PROJECT")
-    or os.environ.get("AWS_ACCOUNT_ID")
-)
+# Cloud project/account configuration via UnifiedCloudConfig (fail-fast)
+_cloud_config = UnifiedCloudConfig()
+PROJECT_ID = _cloud_config.gcp_project_id
 if not PROJECT_ID:
-    raise ValueError("PROJECT_ID not found. Set GCP_PROJECT_ID or AWS_PROJECT_ID environment variable.")
-CLOUD_PROVIDER = os.environ.get("CLOUD_PROVIDER", "gcp").lower()
+    raise ValueError("PROJECT_ID not found. Set GCP_PROJECT_ID environment variable in .env or environment.")
+CLOUD_PROVIDER = _cloud_config.cloud_provider.lower() if _cloud_config.cloud_provider else "gcp"
 CATEGORIES = ["CEFI", "TRADFI", "DEFI"]
 
 
@@ -43,11 +45,11 @@ def _get_bucket_name(category: str) -> str:
     """Get bucket name for category with multi-cloud support."""
     category_upper = category.upper()
 
-    # Check for environment variable override
-    env_key = f"INSTRUMENTS_GCS_BUCKET_{category_upper}"
-    bucket_from_env = os.environ.get(env_key)
-    if bucket_from_env:
-        return bucket_from_env
+    # Check for bucket override from config
+    bucket_attr = f"instruments_gcs_bucket_{category_upper.lower()}"
+    bucket_from_config = getattr(_cloud_config, bucket_attr, None)
+    if bucket_from_config:
+        return str(bucket_from_config)
 
     # Generate bucket name based on cloud provider
     if CLOUD_PROVIDER == "aws":
@@ -67,6 +69,40 @@ GCS_BUCKETS = {
 PATH_TEMPLATE = "instrument_availability/by_date/day={date}/instruments.parquet"
 
 
+class CatalogEntryDict(TypedDict):
+    """Serialized form of CatalogEntry."""
+
+    category: str
+    date: str
+    exists: bool
+    gcs_path: str
+    file_size: int | None
+    instrument_count: int | None
+
+
+class CategorySummaryDict(TypedDict):
+    """Serialized form of CategorySummary."""
+
+    category: str
+    total_dates: int
+    existing_dates: int
+    missing_dates: int
+    completion_pct: float
+    missing_date_list: list[str]
+
+
+class CatalogReportDict(TypedDict):
+    """Serialized form of CatalogReport."""
+
+    service: str
+    start_date: str
+    end_date: str
+    generated_at: str
+    overall_completion: float
+    category_summaries: list[CategorySummaryDict]
+    entries: list[CatalogEntryDict]
+
+
 @dataclass
 class CatalogEntry:
     """Single entry in the data catalog."""
@@ -75,18 +111,18 @@ class CatalogEntry:
     date: str
     exists: bool
     gcs_path: str
-    file_size: Optional[int] = None
-    instrument_count: Optional[int] = None
+    file_size: int | None = None
+    instrument_count: int | None = None
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "category": self.category,
-            "date": self.date,
-            "exists": self.exists,
-            "gcs_path": self.gcs_path,
-            "file_size": self.file_size,
-            "instrument_count": self.instrument_count,
-        }
+    def to_dict(self) -> CatalogEntryDict:
+        return CatalogEntryDict(
+            category=self.category,
+            date=self.date,
+            exists=self.exists,
+            gcs_path=self.gcs_path,
+            file_size=self.file_size,
+            instrument_count=self.instrument_count,
+        )
 
 
 @dataclass
@@ -98,17 +134,17 @@ class CategorySummary:
     existing_dates: int
     missing_dates: int
     completion_pct: float
-    missing_date_list: List[str] = field(default_factory=list)
+    missing_date_list: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "category": self.category,
-            "total_dates": self.total_dates,
-            "existing_dates": self.existing_dates,
-            "missing_dates": self.missing_dates,
-            "completion_pct": self.completion_pct,
-            "missing_date_list": self.missing_date_list[:10],  # First 10 only
-        }
+    def to_dict(self) -> CategorySummaryDict:
+        return CategorySummaryDict(
+            category=self.category,
+            total_dates=self.total_dates,
+            existing_dates=self.existing_dates,
+            missing_dates=self.missing_dates,
+            completion_pct=self.completion_pct,
+            missing_date_list=self.missing_date_list[:10],
+        )
 
 
 @dataclass
@@ -120,40 +156,47 @@ class CatalogReport:
     end_date: str
     generated_at: str
     overall_completion: float
-    category_summaries: List[CategorySummary]
-    entries: List[CatalogEntry]
+    category_summaries: list[CategorySummary]
+    entries: list[CatalogEntry]
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "service": self.service,
-            "start_date": self.start_date,
-            "end_date": self.end_date,
-            "generated_at": self.generated_at,
-            "overall_completion": self.overall_completion,
-            "category_summaries": [s.to_dict() for s in self.category_summaries],
-            "entries": [e.to_dict() for e in self.entries],
-        }
+    def to_dict(self) -> CatalogReportDict:
+        return CatalogReportDict(
+            service=self.service,
+            start_date=self.start_date,
+            end_date=self.end_date,
+            generated_at=self.generated_at,
+            overall_completion=self.overall_completion,
+            category_summaries=[s.to_dict() for s in self.category_summaries],
+            entries=[e.to_dict() for e in self.entries],
+        )
 
 
-def get_cloud_service(bucket_name: str):
+def get_cloud_service(bucket_name: str) -> StandardizedDomainCloudService | None:
     """Get cloud-agnostic service for a bucket."""
-    mock_mode = (os.environ.get("CLOUD_MOCK_MODE") or "").lower() == "true"
+    mock_mode = (_cloud_config.cloud_mock_mode or "").lower() == "true"
 
     if mock_mode:
         logger.warning("Running in MOCK mode - no real storage checks")
         return None
 
     try:
-        from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
-
         target = CloudTarget(
             project_id=PROJECT_ID,
             gcs_bucket=bucket_name,
             bigquery_dataset="instruments",
         )
         return StandardizedDomainCloudService(domain="instruments", cloud_target=target)
-    except Exception as e:
-        logger.warning(f"Could not initialize cloud service: {e}")
+    except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+        logger.warning("Could not initialize cloud service: %s", e)
         return None
 
 
@@ -175,12 +218,21 @@ def check_file_exists(service, bucket_name: str, blob_path: str) -> tuple:
             size = len(df) * len(df.columns) * 8  # Rough estimate
             return True, size
         return False, None
-    except Exception as e:
-        logger.debug(f"Error checking {bucket_name}/{blob_path}: {e}")
+    except (OSError, ValueError, RuntimeError) as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+        logger.debug("Error checking %s/%s: %s", bucket_name, blob_path, e)
         return False, None
 
 
-def generate_date_range(start_date: date, end_date: date) -> List[date]:
+def generate_date_range(start_date: date, end_date: date) -> list[date]:
     """Generate all dates in range."""
     dates = []
     current = start_date
@@ -193,7 +245,7 @@ def generate_date_range(start_date: date, end_date: date) -> List[date]:
 def generate_catalog(
     start_date: date,
     end_date: date,
-    categories: Optional[List[str]] = None,
+    categories: list[str] | None = None,
     include_entries: bool = True,
 ) -> CatalogReport:
     """
@@ -221,13 +273,13 @@ def generate_catalog(
     for category in categories:
         bucket_name = GCS_BUCKETS.get(category)
         if not bucket_name:
-            logger.warning(f"No bucket configured for category: {category}")
+            logger.warning("No bucket configured for category: %s", category)
             continue
 
         # Create cloud service for this bucket
         service = get_cloud_service(bucket_name)
         if service is None:
-            logger.warning(f"Could not initialize cloud service for {bucket_name}")
+            logger.warning("Could not initialize cloud service for %s", bucket_name)
             continue
 
         existing_count = 0
@@ -272,7 +324,7 @@ def generate_catalog(
             )
         )
 
-        logger.info(f"{category}: {existing_count}/{len(dates)} dates ({completion_pct:.1f}%)")
+        logger.info("%s: %s/%s dates (%..1f%)", category, existing_count, len(dates), completion_pct)
 
     overall_completion = (total_existing / total_expected * 100) if total_expected > 0 else 0
 
@@ -280,39 +332,44 @@ def generate_catalog(
         service="instruments-service",
         start_date=start_date.isoformat(),
         end_date=end_date.isoformat(),
-        generated_at=datetime.now(timezone.utc).isoformat(),
+        generated_at=datetime.now(UTC).isoformat(),
         overall_completion=round(overall_completion, 2),
         category_summaries=category_summaries,
         entries=entries if include_entries else [],
     )
 
 
-def print_report(report: CatalogReport):
-    """Print a human-readable report."""
-    print()
-    print("=" * 60)
-    print("INSTRUMENTS-SERVICE DATA CATALOG")
-    print("=" * 60)
-    print(f"Date Range: {report.start_date} to {report.end_date}")
-    print(f"Generated: {report.generated_at}")
-    print(f"Overall Completion: {report.overall_completion}%")
-    print()
+def print_report(report: CatalogReport) -> None:
+    """Log a human-readable report."""
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("INSTRUMENTS-SERVICE DATA CATALOG")
+    logger.info("=" * 60)
+    logger.info("Date Range: %s to %s", report.start_date, report.end_date)
+    logger.info("Generated: %s", report.generated_at)
+    logger.info("Overall Completion: %s%%", report.overall_completion)
+    logger.info("")
 
     for summary in report.category_summaries:
-        status = "✅" if summary.completion_pct == 100 else "⏳" if summary.completion_pct > 0 else "❌"
-        print(
-            f"{status} {summary.category}: {summary.completion_pct}% ({summary.existing_dates}/{summary.total_dates} dates)"
+        status = "COMPLETE" if summary.completion_pct == 100 else "PARTIAL" if summary.completion_pct > 0 else "MISSING"
+        logger.info(
+            "[%s] %s: %s%% (%s/%s dates)",
+            status,
+            summary.category,
+            summary.completion_pct,
+            summary.existing_dates,
+            summary.total_dates,
         )
 
         if summary.missing_dates > 0 and summary.missing_date_list:
-            print(f"   Missing: {', '.join(summary.missing_date_list[:5])}", end="")
+            missing_preview = ", ".join(summary.missing_date_list[:5])
             if summary.missing_dates > 5:
-                print(f" ... and {summary.missing_dates - 5} more")
+                logger.info("   Missing: %s ... and %s more", missing_preview, summary.missing_dates - 5)
             else:
-                print()
+                logger.info("   Missing: %s", missing_preview)
 
-    print()
-    print("=" * 60)
+    logger.info("")
+    logger.info("=" * 60)
 
 
 def main():
@@ -371,7 +428,7 @@ def main():
     if args.output:
         with open(args.output, "w") as f:
             json.dump(report.to_dict(), f, indent=2)
-        logger.info(f"Report saved to {args.output}")
+        logger.info("Report saved to %s", args.output)
 
     if args.json:
         print(json.dumps(report.to_dict(), indent=2))

@@ -34,28 +34,27 @@ jobs:
           GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           if [ -n "$GH_PAT" ]; then
-            # Clone unified-cloud-services to ../ (matches uv.lock path source)
-            git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-cloud-services.git ../unified-cloud-services
-            echo "✅ Cloned unified-cloud-services"
+            # Branch-fallback pattern: try dep-branch first, fallback to main
+            DEP_BRANCH="${{ github.head_ref }}"
 
-            # Clone unified-events-interface to ../ (matches pyproject.toml path source)
-            git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-events-interface.git ../unified-events-interface
-            echo "✅ Cloned unified-events-interface"
+            clone_dep() {
+              local repo=$1
+              git clone -b "$DEP_BRANCH" https://x-access-token:${GH_PAT}@github.com/IggyIkenna/${repo}.git ../${repo} 2>/dev/null \
+                || git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/${repo}.git ../${repo}
+              echo "✅ Cloned ${repo} (branch: ${DEP_BRANCH} or main fallback)"
+            }
 
-            # Clone unified-domain-services (required - StandardizedDomainCloudService)
-            git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-domain-services.git ../unified-domain-services
-            echo "✅ Cloned unified-domain-services"
+            clone_dep api-contracts
+            clone_dep unified-trading-library
+            clone_dep unified-events-interface
+            clone_dep unified-domain-client
+            clone_dep unified-config-interface
+            clone_dep unified-market-interface
 
-            # Clone unified-config-interface to ../ (matches pyproject.toml dependency)
-            git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-config-interface.git ../unified-config-interface
-            echo "✅ Cloned unified-config-interface"
-
-            # Clone unified-market-interface to ../ (matches pyproject.toml dependency)
-            git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-market-interface.git ../unified-market-interface
-            echo "✅ Cloned unified-market-interface"
-
-            # Clone unified-trading-deployment-v2 (optional - for smoke tests)
-            git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-trading-deployment-v2.git ../unified-trading-deployment-v2 || echo "⚠️ Could not clone unified-trading-deployment-v2 (optional)"
+            # Clone unified-trading-deployment-v3 (for smoke tests config)
+            git clone -b "$DEP_BRANCH" https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-trading-deployment-v3.git ../unified-trading-deployment-v3 2>/dev/null \
+              || git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-trading-deployment-v3.git ../unified-trading-deployment-v3 \
+              || echo "⚠️ Could not clone unified-trading-deployment-v3 (optional)"
           else
             echo "❌ GH_PAT not set" && exit 1
           fi
@@ -67,31 +66,54 @@ jobs:
       - name: Install dependencies
         run: |
           pip install uv
-          uv pip install --system -e ../unified-cloud-services
+          uv pip install --system -e ../api-contracts 2>/dev/null || true
+          uv pip install --system -e ../unified-trading-library
           uv pip install --system -e ../unified-events-interface
-          uv pip install --system -e ../unified-domain-services
+          uv pip install --system -e ../unified-domain-client
           uv pip install --system -e ../unified-config-interface
           uv pip install --system -e ../unified-market-interface
-          uv pip install --system -e ../unified-trading-deployment-v2 2>/dev/null || echo "⚠️ unified-trading-deployment-v2 not available"
           uv pip install --system -e . --no-deps
           uv pip install --system pydantic pydantic-settings pandas numpy python-dateutil \
             python-dotenv requests ccxt plotly web3 eth-abi databento boto3 \
             exchange-calendars yfinance polars
-          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout pytest-xdist ruff==0.15.0
+          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout pytest-xdist ruff==0.15.0 basedpyright pip-audit>=2.7.0
 
       # ========================================================================
-      # LINT + FORMAT - auto-fix then verify no diff (catches unformatted code)
+      # DEPENDENCY VULNERABILITY SCAN (pip-audit)
+      # ========================================================================
+      - name: Dependency vulnerability scan (pip-audit)
+        run: |
+          pip-audit || { echo "❌ pip-audit found vulnerabilities. Run: pip-audit --desc"; exit 1; }
+
+      # ========================================================================
+      # LINT + FORMAT - format first (fixes line length), then check --fix
       # ========================================================================
       - name: Lint and format check
         run: |
-          ruff check --fix instruments_service/ tests/
-          ruff format instruments_service/ tests/
+          ruff format --line-length 120 instruments_service/ tests/
+          ruff check --fix --line-length 120 instruments_service/ tests/
           git diff --exit-code || {
-            echo "❌ Code not formatted. Run locally: ruff check --fix . && ruff format ."
+            echo "❌ Code not formatted. Run locally: ruff format --line-length 120 . && ruff check --fix --line-length 120 ."
             git diff
             exit 1
           }
           echo "✅ Lint and format check passed"
+
+      # ========================================================================
+      # TYPE CHECK (basedpyright - matches IDE strict mode) with TIMEOUT
+      # ========================================================================
+      - name: Type check (basedpyright with timeout)
+        run: |
+          # CRITICAL: Use timeout to prevent hangs - basedpyright can hang without it
+          timeout 60 basedpyright instruments_service/ --level warning || exit_code=$?
+          if [ "${exit_code:-0}" -eq 124 ]; then
+            echo "::error::Basedpyright timed out after 60 seconds"
+            exit 1
+          elif [ "${exit_code:-0}" -ne 0 ]; then
+            echo "::error::Basedpyright failed with exit code $exit_code"
+            exit $exit_code
+          fi
+          echo "✅ Type check passed"
 
       # ========================================================================
       # UNIT TESTS - MUST PASS
@@ -99,7 +121,7 @@ jobs:
       - name: Run unit tests
         run: |
           echo "=== Running unit tests ==="
-          python -m pytest tests/unit/ -v --tb=short --timeout=60 -n auto \
+          python -m pytest tests/unit/ -v --tb=short --timeout=60 -n 2 \
             --cov=instruments_service \
             --cov-report=term-missing \
             --cov-fail-under=35 \
@@ -113,7 +135,7 @@ jobs:
         run: |
           echo "=== Running integration tests ==="
           if [ -d "tests/integration" ]; then
-            python -m pytest tests/integration/ -v --tb=short --timeout=120 -n auto \
+            python -m pytest tests/integration/ -v --tb=short --timeout=120 -n 2 \
               --ignore=tests/integration/test_performance.py \
               -k "not api and not live and not download"
             echo "✅ Integration tests passed"
@@ -131,7 +153,7 @@ jobs:
         run: |
           echo "=== Running e2e tests ==="
           if [ -d "tests/e2e" ]; then
-            python -m pytest tests/e2e/ -v --tb=short --timeout=180 -n auto
+            python -m pytest tests/e2e/ -v --tb=short --timeout=180 -n 2
             echo "✅ E2E tests passed"
           else
             echo "No e2e tests directory found"
@@ -144,11 +166,11 @@ jobs:
         env:
           CLOUD_MOCK_MODE: "true"
           GOOGLE_CLOUD_PROJECT: "test-project"
-          DEPLOYMENT_CONFIG_DIR: "../unified-trading-deployment-v2/configs"
+          DEPLOYMENT_CONFIG_DIR: "../unified-trading-deployment-v3/configs"
         run: |
           echo "=== Running smoke tests ==="
-          if [ -d "tests/smoke" ] && [ -d "../unified-trading-deployment-v2/configs" ]; then
-            python -m pytest tests/smoke/ -v --tb=short --timeout=180 -n auto
+          if [ -d "tests/smoke" ] && [ -d "../unified-trading-deployment-v3/configs" ]; then
+            python -m pytest tests/smoke/ -v --tb=short --timeout=180 -n 2
             echo "✅ Smoke tests passed"
           else
             echo "⚠️ Skipping smoke tests (deployment configs not available)"

@@ -1,15 +1,14 @@
 """
 Instrument Batch Processor
 
-Uses unified-cloud-services utils (generate_date_range, split_into_batches) per UCS v1.6.0.
+Uses unified-trading-library utils (generate_date_range, split_into_batches) per UCS v1.6.0.
 Replaces GenericBatchProcessor with composition over inheritance.
 """
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any
 
-from unified_cloud_services import generate_date_range, split_into_batches
+from unified_trading_library import generate_date_range, split_into_batches
 
 logger = logging.getLogger(__name__)
 
@@ -21,15 +20,17 @@ class InstrumentBatchProcessor:
     Uses UCS utils for date range and batching (UCS v1.6.0 migration).
     """
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(self, config: dict[str, object]):
         """
         Initialize instrument batch processor.
 
         Args:
             config: Configuration with batch processing settings
         """
-        self.max_batch_size: int = config.get("max_batch_size", 1000)
-        self.lookback_days: int = config.get("lookback_days", 0)  # Default: no lookback for instruments
+        max_batch_raw = config.get("max_batch_size")
+        self.max_batch_size: int = int(max_batch_raw) if isinstance(max_batch_raw, (int, float, str)) else 1000
+        lookback_raw = config.get("lookback_days")
+        self.lookback_days: int = int(lookback_raw) if isinstance(lookback_raw, (int, float, str)) else 0
 
     def calculate_date_range(
         self, target_date: datetime, lookback_days: int | None = None
@@ -50,7 +51,9 @@ class InstrumentBatchProcessor:
         start_date = target_date - timedelta(days=lookback_days)
         end_date = target_date
 
-        logger.info(f"Calculated date range: {start_date.date()} to {end_date.date()} (lookback: {lookback_days} days)")
+        logger.info(
+            "Calculated date range: %s to %s (lookback: %s days)", start_date.date(), end_date.date(), lookback_days
+        )
 
         return start_date, end_date
 
@@ -79,8 +82,10 @@ class InstrumentBatchProcessor:
         }
 
         logger.info(
-            f"Memory estimate: {estimate['estimated_mb']} MB "
-            f"({estimate['estimated_gb']} GB) for {num_instruments} instruments"
+            "Memory estimate: %s MB (%s GB) for %s instruments",
+            estimate["estimated_mb"],
+            estimate["estimated_gb"],
+            num_instruments,
         )
 
         return estimate
@@ -100,12 +105,12 @@ class InstrumentBatchProcessor:
         """
         start_date, end_date = self.calculate_date_range(target_date, lookback_days)
         periods: list[datetime] = generate_date_range(start_date, end_date)
-        logger.info(f"Generated {len(periods)} periods for processing")
+        logger.info("Generated %s periods for processing", len(periods))
         return periods
 
     def process_batch(
-        self, instruments: list[dict[str, Any]], batch_size: int | None = None
-    ) -> list[list[dict[str, Any]]]:
+        self, instruments: list[dict[str, object]], batch_size: int | None = None
+    ) -> list[list[dict[str, object]]]:
         """
         Split instruments into batches for processing.
 
@@ -121,6 +126,6 @@ class InstrumentBatchProcessor:
         if batch_size is None:
             batch_size = self.max_batch_size
 
-        batches: list[list[dict[str, Any]]] = split_into_batches(instruments, batch_size)
-        logger.info(f"Split {len(instruments)} instruments into {len(batches)} batches (batch size: {batch_size})")
+        batches: list[list[dict[str, object]]] = split_into_batches(instruments, batch_size)
+        logger.info("Split %s instruments into %s batches (batch size: %s)", len(instruments), len(batches), batch_size)
         return batches

@@ -4,13 +4,13 @@ Unit tests for CCXTService.
 Tests centralized CCXT integration, market loading, caching, and metadata extraction.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
 
 import pytest
-from unified_market_interface.models.venue_config import VenueMapping
+from unified_config_interface import VenueMapping
 
-from instruments_service.utils.ccxt_service import CCXTService
+from instruments_service.engine.venues.ccxt_service import CCXTService
 
 
 class TestCCXTService:
@@ -34,8 +34,8 @@ class TestCCXTService:
         assert service._markets_cache == {}
         assert service._cache_timestamps == {}
 
-    @patch("instruments_service.utils.ccxt_service.getattr")
-    @patch("instruments_service.utils.ccxt_service.ccxt")
+    @patch("instruments_service.engine.venues.ccxt_service.getattr")
+    @patch("instruments_service.engine.venues.ccxt_service.ccxt")
     def test_load_markets_success(self, mock_ccxt, mock_getattr, ccxt_service):
         """Test successful market loading."""
         # Mock exchange class and instance
@@ -85,7 +85,7 @@ class TestCCXTService:
             },
             "exchange_id": "binance",
         }
-        ccxt_service._cache_timestamps["BINANCE-FUTURES_binance"] = datetime.now(timezone.utc)
+        ccxt_service._cache_timestamps["BINANCE-FUTURES_binance"] = datetime.now(UTC)
 
         metadata = ccxt_service.get_metadata(
             venue="BINANCE-FUTURES",
@@ -97,7 +97,7 @@ class TestCCXTService:
         # Utils version returns dict with ccxt_exchange and ccxt_symbol even if symbol not found
         assert isinstance(metadata, dict)
 
-    @patch("instruments_service.utils.ccxt_service.CCXTService.load_markets")
+    @patch("instruments_service.engine.venues.ccxt_service.CCXTService.load_markets")
     def test_get_metadata_no_cache(self, mock_load_markets, ccxt_service):
         """Test metadata retrieval when cache is empty."""
         # Mock load_markets to return None (simulating no markets available)
@@ -116,19 +116,19 @@ class TestCCXTService:
         """Test cache validity checking."""
         cache_key = "test_key"
         ccxt_service._markets_cache[cache_key] = {"markets": {}}
-        ccxt_service._cache_timestamps[cache_key] = datetime.now(timezone.utc)
+        ccxt_service._cache_timestamps[cache_key] = datetime.now(UTC)
 
         # Cache should be valid immediately
         assert ccxt_service._is_cache_valid(cache_key) is True
 
         # Cache should be invalid after TTL expires
-        ccxt_service._cache_timestamps[cache_key] = datetime.now(timezone.utc) - timedelta(hours=5)
+        ccxt_service._cache_timestamps[cache_key] = datetime.now(UTC) - timedelta(hours=5)
         assert ccxt_service._is_cache_valid(cache_key) is False
 
     def test_cleanup(self, ccxt_service):
         """Test cleanup method."""
         ccxt_service._markets_cache["test"] = {}
-        ccxt_service._cache_timestamps["test"] = datetime.now(timezone.utc)
+        ccxt_service._cache_timestamps["test"] = datetime.now(UTC)
 
         ccxt_service.clear_cache()
 
@@ -139,7 +139,7 @@ class TestCCXTService:
         """Test getting CCXT exchange instance."""
         ccxt_service.venue_mapping.venue_to_ccxt = {"BINANCE-FUTURES": "binance"}
 
-        with patch("instruments_service.utils.ccxt_service.ccxt") as mock_ccxt:
+        with patch("instruments_service.engine.venues.ccxt_service.ccxt") as mock_ccxt:
             mock_exchange_class = Mock()
             mock_ccxt.binance = mock_exchange_class
             mock_exchange_class.return_value = Mock()
@@ -157,7 +157,7 @@ class TestCCXTService:
         """Test getting CCXT exchange when exchange class not available."""
         ccxt_service.venue_mapping.venue_to_ccxt = {"TEST-VENUE": "nonexistent"}
 
-        with patch("instruments_service.utils.ccxt_service.ccxt") as mock_ccxt:
+        with patch("instruments_service.engine.venues.ccxt_service.ccxt") as mock_ccxt:
             mock_ccxt.nonexistent = None
 
             exchange = ccxt_service.get_ccxt_exchange("TEST-VENUE")
@@ -168,9 +168,9 @@ class TestCCXTService:
         # Setup cache
         cache_key = "BINANCE-FUTURES_binance"
         ccxt_service._markets_cache[cache_key] = {"markets": {"OLD": "data"}}
-        ccxt_service._cache_timestamps[cache_key] = datetime.now(timezone.utc)
+        ccxt_service._cache_timestamps[cache_key] = datetime.now(UTC)
 
-        with patch("instruments_service.utils.ccxt_service.CCXTService.get_ccxt_exchange") as mock_get_exchange:
+        with patch("instruments_service.engine.venues.ccxt_service.CCXTService.get_ccxt_exchange") as mock_get_exchange:
             mock_exchange = Mock()
             mock_exchange.load_markets.return_value = {"BTC/USDT:USDT": {}}
             mock_get_exchange.return_value = mock_exchange
@@ -185,7 +185,7 @@ class TestCCXTService:
         """Test load_markets when exception occurs."""
         ccxt_service.venue_mapping.venue_to_ccxt = {"BINANCE-FUTURES": "binance"}
 
-        with patch("instruments_service.utils.ccxt_service.CCXTService.get_ccxt_exchange") as mock_get_exchange:
+        with patch("instruments_service.engine.venues.ccxt_service.CCXTService.get_ccxt_exchange") as mock_get_exchange:
             mock_exchange = Mock()
             mock_exchange.load_markets.side_effect = Exception("API Error")
             mock_get_exchange.return_value = mock_exchange
@@ -238,7 +238,7 @@ class TestCCXTService:
             },
             "exchange_id": "binance",
         }
-        ccxt_service._cache_timestamps["BINANCE-FUTURES_binance"] = datetime.now(timezone.utc)
+        ccxt_service._cache_timestamps["BINANCE-FUTURES_binance"] = datetime.now(UTC)
         ccxt_service.venue_mapping.venue_to_ccxt = {"BINANCE-FUTURES": "binance"}
 
         metadata = ccxt_service.get_metadata(
@@ -267,7 +267,7 @@ class TestCCXTService:
             },
             "exchange_id": "binance",
         }
-        ccxt_service._cache_timestamps["TEST_binance"] = datetime.now(timezone.utc)
+        ccxt_service._cache_timestamps["TEST_binance"] = datetime.now(UTC)
         ccxt_service.venue_mapping.venue_to_ccxt = {"TEST": "binance"}
 
         metadata = ccxt_service.get_metadata(
@@ -280,7 +280,7 @@ class TestCCXTService:
         # Utils version returns dict with ccxt_exchange and ccxt_symbol
         assert isinstance(metadata, dict)
 
-    @patch("instruments_service.utils.ccxt_service.CCXTService.load_markets")
+    @patch("instruments_service.engine.venues.ccxt_service.CCXTService.load_markets")
     def test_get_leverage_limits(self, mock_load_markets, ccxt_service):
         """Test getting leverage limits."""
         mock_exchange = Mock()
@@ -394,8 +394,8 @@ class TestCCXTService:
         """Test clearing cache for specific venue."""
         ccxt_service._markets_cache["BINANCE-FUTURES_binance"] = {"markets": {}}
         ccxt_service._markets_cache["DERIBIT_deribit"] = {"markets": {}}
-        ccxt_service._cache_timestamps["BINANCE-FUTURES_binance"] = datetime.now(timezone.utc)
-        ccxt_service._cache_timestamps["DERIBIT_deribit"] = datetime.now(timezone.utc)
+        ccxt_service._cache_timestamps["BINANCE-FUTURES_binance"] = datetime.now(UTC)
+        ccxt_service._cache_timestamps["DERIBIT_deribit"] = datetime.now(UTC)
 
         ccxt_service.clear_cache(venue="BINANCE-FUTURES")
 

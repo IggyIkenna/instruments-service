@@ -1,74 +1,41 @@
-# Environment variables
-#.env  # INTENTIONALLY TRACKED - secrets are in Secret Manager
-#.env.local
-env
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.pyc
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-#tests
-.coverage
-.pytest_cache/
-coverage.json
-coverage/
-
-# Virtual environments
-venv/
-env/
-ENV/
-requirements.txt
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# Data and samples
-data/
-*.parquet
-*.csv
-!tests/fixtures/*.csv
-extra/
-
-# Logs
-*.log
-
-# OS
+# Security - Never commit credentials
+*-credentials.json
+*-service-account.json
+workspace-dev-sa-key.json
+service-account*.json
+credentials*.json
+*secret*.json
+central-element-323112-*.json
+.env
+.env.local
+.env.*.local
+**/secrets/
+**/credentials/
 .DS_Store
-Thumbs.db
-
-# Service account json files
-*.json
-
-
-dump.py
-*.ipynb
-
-# GCP Service Account Credentials (allow this file)
-!central-element-323112-e35fb0ddafe2.json
-
-# Python version manager files (personal preference)
-.python-version
-.venv
+*.backup
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.hypothesis/
+.ruff_cache/
+.cache/
+data/
+# Python venvs
+.venv/
+venv/
+.venv-workspace/
+# Node / UI
+node_modules/
+.next/
+dist/
+build/
+.turbo/
+# Coverage
+.coverage
+.coverage.*
+coverage/
+htmlcov/
+.nyc_output/
+logs/

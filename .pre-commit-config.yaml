@@ -1,8 +1,18 @@
+default_install_hook_types:
+  - pre-commit
+  - commit-msg
+
 # Pre-commit hooks - auto-format on commit
 # Setup: pip install prek && prek install
 
 repos:
-  # Library version auto-bump (for packages published to Artifact Registry)
+  # Conventional commit validation (feat:/fix:/chore:/docs:/refactor:/test:/ci:)
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v3.2.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+# Library version auto-bump (for packages published to Artifact Registry)
   - repo: local
     hooks:
       - id: bump-library-version
@@ -12,6 +22,17 @@ repos:
         stages: [commit]
         pass_filenames: false
         always_run: true
+
+  # Import pattern checker
+  - repo: local
+    hooks:
+      - id: check-import-patterns
+        name: Check external import patterns
+        entry: python3 .cursor/scripts/check-import-patterns.py
+        language: python
+        files: \.py$
+        pass_filenames: false
+        stages: [commit]
 
   # Ruff - Fast Python linter AND formatter
   - repo: https://github.com/astral-sh/ruff-pre-commit
@@ -24,6 +45,17 @@ repos:
         name: Format with Ruff
 
   # Basic file checks
+
+# Prettier - TypeScript/JSON/Markdown formatter
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v4.0.0-alpha.8
+    hooks:
+      - id: prettier
+        name: Format with Prettier
+        types_or: [ts, tsx, javascript, jsx, json, markdown, yaml]
+        additional_dependencies:
+          - prettier@3.6.2
+
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:

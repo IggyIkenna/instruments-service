@@ -1,39 +1,43 @@
 """
 Cloud Data Provider
 
-Provides read access to instrument data from unified-cloud-services.
+Provides read access to instrument data from unified-trading-library.
 Each domain has its own bucket and dataset (instruments domain).
 """
 
 import logging
-import os
-from datetime import datetime
+from datetime import UTC, datetime
+from uuid import uuid4
 
 import pandas as pd
-from unified_cloud_services import CloudTarget, StandardizedDomainCloudService, get_bucket_for_category
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
+from unified_trading_library import CloudTarget, StandardizedDomainCloudService, get_bucket_for_category
+
+from instruments_service.config import instruments_config
+from instruments_service.utils.dump_to_csv import dump_to_csv
 
 logger = logging.getLogger(__name__)
 
 
 class CloudDataProvider:
     """
-    Provides read access to instrument data from unified-cloud-services.
+    Provides read access to instrument data from unified-trading-library.
 
     Each domain has its own bucket and dataset (instruments domain).
     """
 
-    def __init__(self, cloud_target: CloudTarget | None = None):
+    def __init__(self, cloud_target: CloudTarget | None = None, testing_mode: bool = False):
         """
         Initialize cloud data provider.
 
         Args:
             cloud_target: Optional CloudTarget configuration (auto-detects if not provided)
+            testing_mode: When True, uses test buckets instead of production buckets
         """
+        self._testing_mode = testing_mode
         if cloud_target is None:
             # NOTE: This default is only used when no category is specified.
             # Production flow should always use category-specific buckets via get_bucket_for_category()
-            from instruments_service.config import instruments_config
-
             cfg = instruments_config
             cloud_target = CloudTarget(
                 project_id=cfg.gcp_project_id,
@@ -48,7 +52,9 @@ class CloudDataProvider:
         self.cloud_target = cloud_target
 
         logger.info(
-            f"✅ CloudDataProvider initialized: project={cloud_target.project_id}, dataset={cloud_target.bigquery_dataset}"
+            "✅ CloudDataProvider initialized: project=%s, dataset=%s",
+            cloud_target.project_id,
+            cloud_target.bigquery_dataset,
         )
 
     def get_instruments_from_gcs(
@@ -74,7 +80,7 @@ class CloudDataProvider:
             if category:
                 return self.get_instruments_from_category(date, category, gcs_path=gcs_path)
 
-            logger.info(f"📥 Loading instruments from GCS: {gcs_path}")
+            logger.info("📥 Loading instruments from GCS: %s", gcs_path)
             raw: pd.DataFrame | object = self.cloud_service.download_from_gcs(
                 gcs_path=gcs_path, format="parquet", log_errors=False
             )
@@ -82,19 +88,35 @@ class CloudDataProvider:
                 return pd.DataFrame()
             df: pd.DataFrame = raw
             if df.empty:
-                logger.warning(f"⚠️ No instruments found at {gcs_path}")
+                logger.warning("⚠️ No instruments found at %s", gcs_path)
             else:
-                logger.info(f"✅ Loaded {len(df)} instruments from GCS")
+                logger.info("✅ Loaded %s instruments from GCS", len(df))
+
+                # CSV sampling for instruments data
+                dump_to_csv(
+                    df,
+                    filename=f"instruments_service_data_{date.strftime('%Y%m%d')}_{datetime.now(UTC).strftime('%H%M%S')}.csv",
+                )
+
             return df
 
-        except Exception as e:
+        except (OSError, PermissionError) as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             error_msg = str(e)
             # Handle 404/Not Found gracefully - this is an expected state when data hasn't been generated yet
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
-                logger.info(f"ℹ️ No instruments found (404): {gcs_path}")
+                logger.info("No instruments found (404): %s", gcs_path)
                 return pd.DataFrame()
 
-            logger.error(f"❌ Failed to load instruments from GCS: {e}")
+            logger.error("❌ Failed to load instruments from GCS: %s", e)
             return pd.DataFrame()
 
     def get_instruments_from_category(self, date: datetime, category: str, gcs_path: str | None = None) -> pd.DataFrame:
@@ -113,12 +135,12 @@ class CloudDataProvider:
             date_str = date.strftime("%Y-%m-%d")
             gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
 
+        # Initialize before try so it's always bound (even in exception handler)
+        category_bucket: str = ""
         try:
             # Detect test mode
-            from instruments_service.config import instruments_config
-
             environment: str = str(instruments_config.environment or "development").lower()
-            is_test = environment in ["test", "testing"] or bool(os.environ.get("PYTEST_CURRENT_TEST"))
+            is_test = environment in ["test", "testing"] or self._testing_mode
 
             # Get bucket for category
             category_bucket = get_bucket_for_category(category, test_mode=is_test)
@@ -134,7 +156,7 @@ class CloudDataProvider:
                 domain="instruments", cloud_target=category_cloud_target
             )
 
-            logger.info(f"📥 Loading {category} instruments from GCS: {category_bucket}/{gcs_path}")
+            logger.info("📥 Loading %s instruments from GCS: %s/%s", category, category_bucket, gcs_path)
             raw: pd.DataFrame | object = category_cloud_service.download_from_gcs(
                 gcs_path=gcs_path, format="parquet", log_errors=False
             )
@@ -142,19 +164,35 @@ class CloudDataProvider:
                 return pd.DataFrame()
             df: pd.DataFrame = raw
             if df.empty:
-                logger.warning(f"⚠️ No {category} instruments found at {category_bucket}/{gcs_path}")
+                logger.warning("⚠️ No %s instruments found at %s/%s", category, category_bucket, gcs_path)
             else:
-                logger.info(f"✅ Loaded {len(df)} {category} instruments from GCS")
+                logger.info("✅ Loaded %s %s instruments from GCS", len(df), category)
+
+                # CSV sampling for category-specific instruments data
+                dump_to_csv(
+                    df,
+                    filename=f"instruments_service_{category.lower()}_data_{date.strftime('%Y%m%d')}_{datetime.now(UTC).strftime('%H%M%S')}.csv",
+                )
+
             return df
 
-        except Exception as e:
+        except (OSError, PermissionError) as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             error_msg = str(e)
             # Handle 404/Not Found gracefully - this is an expected state when data hasn't been generated yet
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
-                logger.info(f"ℹ️ No {category} instruments found (404): {category_bucket}/{gcs_path}")
+                logger.info("No %s instruments found (404): %s/%s", category, category_bucket, gcs_path)
                 return pd.DataFrame()
 
-            logger.error(f"❌ Failed to load {category} instruments from GCS: {e}")
+            logger.error("❌ Failed to load %s instruments from GCS: %s", category, e)
             return pd.DataFrame()
 
     def get_instruments_from_bigquery(
@@ -180,7 +218,7 @@ class CloudDataProvider:
             WHERE 1=1
             """
 
-            parameters = {}
+            parameters: dict[str, object] = {}
 
             if venue:
                 query += " AND venue = @venue"
@@ -192,14 +230,23 @@ class CloudDataProvider:
 
             query += " ORDER BY instrument_key"
 
-            logger.info(f"📥 Querying instruments from BigQuery: {table_name}")
+            logger.info("📥 Querying instruments from BigQuery: %s", table_name)
             result: pd.DataFrame = self.cloud_service.query_bigquery(query=query, parameters=parameters)
 
-            logger.info(f"✅ Queried {len(result)} instruments from BigQuery")
+            logger.info("✅ Queried %s instruments from BigQuery", len(result))
             return result
 
-        except Exception as e:
-            logger.error(f"❌ Failed to query instruments from BigQuery: {e}")
+        except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.error("❌ Failed to query instruments from BigQuery: %s", e)
             return pd.DataFrame()
 
     def check_instruments_exist(
@@ -238,7 +285,9 @@ class CloudDataProvider:
         # When venues specified, use venue-level paths (new structure)
         # This enables granular skip logic matching the category x venue x date sharding
         if venues:
-            logger.debug(f"🔍 Checking venue-level existence for {date_str}: categories={categories}, venues={venues}")
+            logger.debug(
+                "🔍 Checking venue-level existence for %s: categories=%s, venues=%s", date_str, categories, venues
+            )
             for category in categories:
                 for venue in venues:
                     # Sanitize venue name for folder (replace slashes, etc.)
@@ -251,17 +300,25 @@ class CloudDataProvider:
                     try:
                         df = self.get_instruments_from_category(date, category, gcs_path=gcs_path)
 
-                        if df is not None and not df.empty:
-                            logger.debug(f"📊 Venue instruments found: {category}/{venue} for {date_str}")
+                        if not df.empty:
+                            logger.debug("📊 Venue instruments found: %s/%s for %s", category, venue, date_str)
                             # For venue-level checks, we need ALL venues to exist
                             # (matches the sharding logic - each shard is a specific venue)
                         else:
-                            logger.debug(f"📊 Venue instruments NOT found: {category}/{venue} for {date_str}")
+                            logger.debug("📊 Venue instruments NOT found: %s/%s for %s", category, venue, date_str)
                             return False  # Any missing venue means data doesn't exist
-                    except Exception as e:
-                        logger.debug(f"Could not check {category}/{venue} for {date_str}: {e}")
+                    except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
+                        _err = EnhancedError(
+                            message=str(e),
+                            category=ErrorCategory.SERVER_ERROR,
+                            severity=ErrorSeverity.MEDIUM,
+                            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                            correlation_id=str(uuid4()),
+                            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                        )
+                        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                        logger.debug("Could not check %s/%s for %s: %s", category, venue, date_str, e)
                         return False  # Error checking = treat as not existing
-
             # All venues found
             return True
 
@@ -275,25 +332,33 @@ class CloudDataProvider:
                 # and uses the correct category-specific bucket
                 df = self.get_instruments_from_category(date, category, gcs_path=gcs_path)
 
-                if df is not None and not df.empty:
-                    logger.debug(f"📊 Instruments found in {category} for {date_str}")
+                if not df.empty:
+                    logger.debug("📊 Instruments found in %s for %s", category, date_str)
                     found_categories.append(category)
 
                     # Legacy behavior: return True on first find
                     if not check_all:
                         return True
-            except Exception as e:
+            except (OSError, ValueError, RuntimeError) as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                 # Log but continue checking other categories
-                logger.debug(f"Could not check {category} for {date_str}: {e}")
+                logger.debug("Could not check %s for %s: %s", category, date_str, e)
                 continue
-
         if check_all:
             # Only return True if ALL specified categories were found
             all_found = len(found_categories) == len(categories)
             if not all_found:
                 missing = set(categories) - set(found_categories)
-                logger.debug(f"📊 Missing categories for {date_str}: {missing}")
+                logger.debug("📊 Missing categories for %s: %s", date_str, missing)
             return all_found
 
-        logger.debug(f"📊 No instruments found for {date_str} in any category")
+        logger.debug("📊 No instruments found for %s in any category", date_str)
         return False
