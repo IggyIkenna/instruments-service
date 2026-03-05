@@ -150,7 +150,7 @@ class CeFiOrchestrator:
                     context=ErrorContext(extra={"exc_type": type(e).__name__}),
                 )
                 logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
-                logger.error("❌ Failed to process %s: %s", exchange, e, exc_info=True)
+                logger.exception("Failed to process %s: %s", exchange, e)
                 return {}
 
         results: list[dict[str, InstrumentDefinition]] = await asyncio.gather(

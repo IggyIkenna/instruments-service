@@ -17,12 +17,6 @@ from typing import TYPE_CHECKING, cast
 
 import ccxt
 
-if TYPE_CHECKING:
-    from unified_market_interface import VenueMapping
-
-logger = logging.getLogger(__name__)
-
-
 from instruments_service.engine.venues.ccxt_types import (
     CCXTLeverageTier,
     CCXTLimits,
@@ -31,6 +25,11 @@ from instruments_service.engine.venues.ccxt_types import (
     CCXTMetadata,
     CCXTPrecision,
 )
+
+if TYPE_CHECKING:
+    from unified_market_interface import VenueMapping
+
+logger = logging.getLogger(__name__)
 
 
 class CCXTService:

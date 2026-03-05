@@ -151,7 +151,7 @@ class MarketProcessors:
                         context=ErrorContext(extra={"exc_type": type(e).__name__}),
                     )
                     logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
-                    logger.error("❌ Failed to process %s: %s", exchange, e, exc_info=True)
+                    logger.exception("Failed to process %s: %s", exchange, e)
                     return {}
 
             results: list[dict[str, InstrumentDefinition]] = await asyncio.gather(
@@ -349,7 +349,7 @@ class MarketProcessors:
                         logger.warning("⚠️ Venue access blocked: %s - %s", ex, error_msg)
                     accessible = [ex for ex in cefi_exchanges if ex not in blocked]
                     if not accessible:
-                        logger.error("❌ All %s CEFI venues blocked - skipping CEFI processing", len(cefi_exchanges))
+                        logger.error("All %s CEFI venues blocked - skipping CEFI processing", len(cefi_exchanges))
                         return []
                     else:
                         logger.warning(
@@ -492,5 +492,5 @@ class MarketProcessors:
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
             logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
-            logger.error("❌ Failed to process %s: %s", exchange, e, exc_info=True)
+            logger.exception("Failed to process %s: %s", exchange, e)
             return {}

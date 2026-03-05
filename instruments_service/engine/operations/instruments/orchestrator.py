@@ -175,7 +175,7 @@ class InstrumentsOrchestrator(OrchestratorBase):
                     ),
                 )
                 if not success:
-                    logger.error("❌ Failed to store instruments for %s", date_str)
+                    logger.error("Failed to store instruments for %s", date_str)
                     return {
                         "status": "error",
                         "date": date_str,
@@ -227,7 +227,7 @@ class InstrumentsOrchestrator(OrchestratorBase):
             return response
 
         except (ValueError, TypeError, KeyError) as e:
-            logger.error("❌ Critical error during instrument generation: %s", e, exc_info=True)
+            logger.exception("Critical error during instrument generation: %s", e)
             root_logger.removeHandler(error_warning_counter)
             return {
                 "status": "error",
