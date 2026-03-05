@@ -7,7 +7,7 @@ Tests the complete workflow for TradFi instruments:
 3. Verify data integrity
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -127,15 +127,15 @@ class TestTradfiTradingCalendar:
 
     def test_weekend_detection(self):
         """Test weekend dates are not trading days."""
-        saturday = datetime(2024, 1, 13, tzinfo=timezone.utc)
-        sunday = datetime(2024, 1, 14, tzinfo=timezone.utc)
+        saturday = datetime(2024, 1, 13, tzinfo=UTC)
+        sunday = datetime(2024, 1, 14, tzinfo=UTC)
 
         assert saturday.weekday() == 5  # Saturday
         assert sunday.weekday() == 6  # Sunday
 
     def test_weekday_is_potential_trading_day(self):
         """Test weekdays are potential trading days."""
-        monday = datetime(2024, 1, 15, tzinfo=timezone.utc)
+        monday = datetime(2024, 1, 15, tzinfo=UTC)
 
         assert monday.weekday() == 0  # Monday
         assert monday.weekday() < 5  # Is weekday

@@ -85,12 +85,11 @@ class TestCorporateActionsParsingErrorHandling:
         valid_calendar = pd.DataFrame({"Earnings Date": ["2024-01-15"]})
 
         try:
-            if valid_calendar is not None and not valid_calendar.empty:
-                if "Earnings Date" in valid_calendar.index:
-                    # Process earnings date
-                    pass
-        except Exception:
+            if valid_calendar is not None and not valid_calendar.empty and "Earnings Date" in valid_calendar.index:
+                # Process earnings date
+                pass
+        except Exception as err:
             # Should not reach here for valid calendar
-            assert False, "Should not raise for valid calendar"
+            raise AssertionError("Should not raise for valid calendar") from err
 
         assert True  # Successfully processed

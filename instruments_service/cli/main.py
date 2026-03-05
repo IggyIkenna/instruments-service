@@ -3,67 +3,264 @@ Instruments Service CLI Entry Point
 
 Clean CLI entry point following unified repository structure.
 
-Note: Credentials are automatically handled by unified-cloud-services
+Note: Credentials are automatically handled by unified-trading-library
 based on ENVIRONMENT variable (dev mode: auto-detects, production: VM service account).
 
-Query functionality has been moved to unified-cloud-services.
-Use InstrumentsDomainClient from unified-cloud-services to query instruments.
+Query functionality has been moved to unified-trading-library.
+Use InstrumentsDomainClient from unified-trading-library to query instruments.
 """
 
+import argparse
+import contextlib
 import logging
 import sys
 from pathlib import Path
+from typing import cast
 
 
 # CRITICAL: Load .env file explicitly before any other imports
 def _load_env_early():
-    try:
-        from dotenv import load_dotenv
+    from dotenv import load_dotenv
 
-        # Find .env file in current directory or project root
-        env_path = Path(".env")
-        if not env_path.exists():
-            # Try parent directory once
-            env_path = Path(__file__).parent.parent.parent / ".env"
+    env_path = Path(".env")
+    if not env_path.exists():
+        env_path = Path(__file__).parent.parent.parent / ".env"
 
-        if env_path.exists():
-            load_dotenv(dotenv_path=env_path, override=True)
-    except ImportError:
-        pass
+    if env_path.exists():
+        load_dotenv(dotenv_path=env_path, override=True)
 
 
 _load_env_early()
 
 # Setup structured JSON logging (split libraries - direct import per dependency matrix)
 from unified_events_interface import log_event, setup_events
-
-setup_events(mode="batch", service_name="instruments-service")
-
-from unified_cloud_services.core.signal_handler import GracefulShutdownHandler
+from unified_trading_library import BaseModeHandler, GCSEventSink, GracefulShutdownHandler, ServiceCLI
 
 logger = logging.getLogger(__name__)
 
 # Global shutdown handler (initialized in main())
 _shutdown_handler = None
 
-from instruments_service.config import instruments_config
-
-# CRITICAL: Patch unified_cloud_services config to use instruments_config
+# CRITICAL: Patch unified_trading_library config to use instruments_config
 # This ensures that get_bucket_for_category() uses the correct bucket configuration
 # from instruments-service instead of the default BaseServiceConfig
-try:
-    import unified_cloud_services.core.market_category
+import unified_trading_library.core.market_category as market_category_module
 
-    unified_cloud_services.core.market_category.unified_config = instruments_config
-    logger.info("✅ Patched unified_cloud_services config with instruments_config")
-except ImportError:
-    logger.warning("⚠️ Could not patch unified_cloud_services config (module not found)")
-except Exception as e:
-    logger.warning(f"⚠️ Failed to patch unified_cloud_services config: {e}")
+from instruments_service.config import instruments_config
+
+market_category_module.unified_config = instruments_config
+logger.info("✅ Patched unified_trading_library config with instruments_config")
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.cli.handlers import get_handler_for_mode
 from instruments_service.cli.parser import parse_arguments
+
+# ---------------------------------------------------------------------------
+# Pre-parser helpers (used by main_service_cli)
+# ---------------------------------------------------------------------------
+
+
+def _build_pre_parser() -> argparse.ArgumentParser:
+    """Build a pre-parser that strips instruments-specific flags before ServiceCLI."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--start-date", dest="start_date", default=None)
+    parser.add_argument("--end-date", dest="end_date", default=None)
+    parser.add_argument("--CEFI", action="store_true", default=False)
+    parser.add_argument("--TRADFI", action="store_true", default=False)
+    parser.add_argument("--DEFI", action="store_true", default=False)
+    parser.add_argument("--SPORTS", action="store_true", default=False)
+    parser.add_argument("--category", nargs="+", default=None)
+    parser.add_argument("--tickers", nargs="+", default=None)
+    parser.add_argument("--redo-all", dest="redo_all", action="store_true", default=False)
+    parser.add_argument("--log-level", dest="log_level", default="INFO")
+    return parser
+
+
+def _resolve_categories(config: dict[str, object]) -> dict[str, object]:
+    """Expand a ``category`` list into boolean ``cefi``/``tradfi``/``defi`` keys."""
+    result = dict(config)
+    categories: list[str] | None = cast(list[str] | None, result.pop("category", None))
+    if categories:
+        for cat in categories:
+            result[cat.lower()] = True
+    return result
+
+
+# ---------------------------------------------------------------------------
+# ServiceCLI-style async handler wrappers
+# ---------------------------------------------------------------------------
+
+
+class InstrumentsBatchHandler(BaseModeHandler):
+    """Async wrapper for the ``instruments`` mode handler."""
+
+    def validate_config(self) -> bool:
+        return bool(self.config.get("project_id"))
+
+    async def run(self) -> dict[str, object]:
+        start_date = cast(str | None, self.config.get("start_date"))
+        if not start_date:
+            raise ValueError("--start-date is required for instruments mode")
+
+        end_date = cast(str, self.config.get("end_date") or start_date)
+        cfg: dict[str, object] = {k: v for k, v in self.config.items() if k not in ("start_date", "end_date")}
+        handler = get_handler_for_mode("instruments", cfg)
+        result = handler.run(
+            start_date=start_date,
+            end_date=end_date,
+            cefi=bool(self.config.get("cefi", False)),
+            tradfi=bool(self.config.get("tradfi", False)),
+            defi=bool(self.config.get("defi", False)),
+            sports=bool(self.config.get("sports", False)),
+        )
+        return cast(dict[str, object], result)
+
+
+class AggregateServiceHandler(BaseModeHandler):
+    """Async wrapper for the ``aggregate`` mode handler."""
+
+    async def run(self) -> dict[str, object]:
+        redo_all = bool(self.config.get("redo_all", False))
+        handler = get_handler_for_mode("aggregate", self.config)
+        result = handler.run(redo_all=redo_all)
+        return cast(dict[str, object], result)
+
+
+class CorporateActionsServiceHandler(BaseModeHandler):
+    """Async wrapper for the ``corporate_actions`` mode handler."""
+
+    async def run(self) -> dict[str, object]:
+        start_date = cast(str | None, self.config.get("start_date"))
+        if not start_date:
+            raise ValueError("--start-date is required for corporate_actions mode")
+
+        handler = get_handler_for_mode("corporate_actions", self.config)
+        result = handler.run(
+            start_date=start_date,
+            end_date=cast(str | None, self.config.get("end_date")),
+            tickers=cast(list[str] | None, self.config.get("tickers")),
+            output_format=cast(str | None, self.config.get("output_format")),
+            upload_to_gcs=bool(self.config.get("upload_to_gcs", False)),
+        )
+        return cast(dict[str, object], result)
+
+
+class CorporateActionsBackfillServiceHandler(BaseModeHandler):
+    """Async wrapper for the ``corporate_actions_backfill`` mode handler."""
+
+    async def run(self) -> dict[str, object]:
+        handler = get_handler_for_mode("corporate_actions_backfill", self.config)
+        result = handler.run(
+            tickers=cast(list[str] | None, self.config.get("tickers")),
+            parallel_workers=cast(int | None, self.config.get("parallel_workers")),
+            max_retries=cast(int | None, self.config.get("max_retries")),
+        )
+        return cast(dict[str, object], result)
+
+
+class GenerateDateViewsServiceHandler(BaseModeHandler):
+    """Async wrapper for the ``generate_date_views`` mode handler."""
+
+    async def run(self) -> dict[str, object]:
+        handler = get_handler_for_mode("generate_date_views", self.config)
+        result = handler.run(
+            input_dir=cast(str | None, self.config.get("input_dir")),
+            output_dir=cast(str | None, self.config.get("output_dir")),
+        )
+        return cast(dict[str, object], result)
+
+
+class CorporateActionsUpdateServiceHandler(BaseModeHandler):
+    """Async wrapper for the ``corporate_actions_update`` mode handler."""
+
+    async def run(self) -> dict[str, object]:
+        handler = get_handler_for_mode("corporate_actions_update", self.config)
+        result = handler.run(
+            days_threshold=cast(int | None, self.config.get("days_threshold")),
+            parallel_workers=cast(int | None, self.config.get("parallel_workers")),
+        )
+        return cast(dict[str, object], result)
+
+
+class CorporateActionsProductionServiceHandler(BaseModeHandler):
+    """Async wrapper for the ``corporate_actions_production`` mode handler."""
+
+    async def run(self) -> dict[str, object]:
+        handler = get_handler_for_mode("corporate_actions_production", self.config)
+        result = handler.run(
+            tickers=cast(list[str] | None, self.config.get("tickers")),
+            parallel_workers=cast(int | None, self.config.get("parallel_workers")),
+            upload_to_gcs=bool(self.config.get("upload_to_gcs", True)),
+        )
+        return cast(dict[str, object], result)
+
+
+# ---------------------------------------------------------------------------
+# ServiceCLI entry-point
+# ---------------------------------------------------------------------------
+
+_SERVICE_HANDLERS: dict[str, type[BaseModeHandler]] = {
+    "instruments": InstrumentsBatchHandler,
+    "aggregate": AggregateServiceHandler,
+    "corporate_actions": CorporateActionsServiceHandler,
+    "corporate_actions_backfill": CorporateActionsBackfillServiceHandler,
+    "generate_date_views": GenerateDateViewsServiceHandler,
+    "corporate_actions_update": CorporateActionsUpdateServiceHandler,
+    "corporate_actions_production": CorporateActionsProductionServiceHandler,
+}
+
+
+def main_service_cli() -> None:
+    """
+    ServiceCLI-based entry point for instruments-service.
+
+    Pre-parses instruments-specific flags, then delegates to ServiceCLI.
+    """
+    original_argv = sys.argv[:]
+    try:
+        pre_parser = _build_pre_parser()
+        pre_args, remaining = pre_parser.parse_known_args()
+
+        start_date: str | None = cast(str | None, pre_args.start_date)
+        end_date: str | None = cast(str | None, pre_args.end_date)
+        cefi: bool = cast(bool, pre_args.CEFI)
+        tradfi: bool = cast(bool, pre_args.TRADFI)
+        defi: bool = cast(bool, pre_args.DEFI)
+        sports: bool = cast(bool, pre_args.SPORTS)
+        redo_all: bool = cast(bool, pre_args.redo_all)
+        category: list[str] | None = cast(list[str] | None, pre_args.category)
+        tickers: list[str] | None = cast(list[str] | None, pre_args.tickers)
+
+        config: dict[str, object] = {
+            "project_id": instruments_config.gcp_project_id,
+            "start_date": start_date,
+            "end_date": end_date,
+            "cefi": cefi,
+            "tradfi": tradfi,
+            "defi": defi,
+            "sports": sports,
+            "redo_all": redo_all,
+        }
+        if category:
+            config = _resolve_categories({**config, "category": category})
+        if tickers:
+            config["tickers"] = tickers
+
+        sys.argv = [original_argv[0], *remaining]
+
+        cli = ServiceCLI(
+            service_name="instruments-service",
+            handlers=_SERVICE_HANDLERS,
+            config=config,
+        )
+        cli.run()
+    finally:
+        sys.argv = original_argv
+
+
+# ---------------------------------------------------------------------------
+# Legacy synchronous CLI (backward-compat)
+# ---------------------------------------------------------------------------
 
 
 def main() -> dict[str, HandlerResultValue]:
@@ -88,10 +285,8 @@ def main() -> dict[str, HandlerResultValue]:
 
         nonlocal mode_handler
         if mode_handler is not None:
-            try:
+            with contextlib.suppress(RuntimeError, OSError, ValueError):
                 mode_handler.cleanup()
-            except Exception:
-                pass  # Suppress all errors during shutdown
 
     # Initialize graceful shutdown handler (handles SIGTERM/SIGINT)
     _shutdown_handler = GracefulShutdownHandler(cleanup_callback=cleanup_on_signal)
@@ -100,32 +295,48 @@ def main() -> dict[str, HandlerResultValue]:
         # Parse arguments
         args = parse_arguments()
 
-        # Setup logging level
-        logging.getLogger().setLevel(getattr(logging, args.log_level.upper()))
+        # Setup events with GCSEventSink now that we have config
+        setup_events(
+            sink=GCSEventSink(  # sink= required in production
+                project_id=instruments_config.gcp_project_id,
+                bucket=getattr(instruments_config, "events_bucket", f"{instruments_config.gcp_project_id}-events"),
+                service_name="instruments-service",
+            ),
+            mode=args.run_mode,
+            service_name="instruments-service",
+        )
 
-        logger.info(f"🚀 Starting {args.mode} operation")
+        # Setup logging level (getattr returns Any; cast to int for setLevel)
+        log_level_int = cast(int, getattr(logging, args.log_level.upper()))
+        logging.getLogger().setLevel(log_level_int)
+
+        logger.info("🚀 Starting %s operation", args.mode)
         if args.start_date:
-            logger.info(f"📅 Date range: {args.start_date} to {args.end_date or args.start_date}")
+            logger.info("📅 Date range: %s to %s", args.start_date, args.end_date or args.start_date)
 
         # Build configuration from arguments
-        config = {
-            "project_id": args.project_id,
-            "gcs_bucket": args.gcs_bucket,
-            "bigquery_dataset": args.bigquery_dataset,
+        config: dict[str, object] = {
+            "project_id": cast(str | None, args.project_id),
+            "gcs_bucket": cast(str | None, args.gcs_bucket),
+            "bigquery_dataset": cast(str, args.bigquery_dataset),
         }
 
         # Get handler for mode
-        handler: ModeHandler = get_handler_for_mode(args.mode, config)
+        handler: ModeHandler = get_handler_for_mode(cast(str, args.mode), config)
         mode_handler = handler  # Track for cleanup on signal
 
-        # Prepare arguments for handler
-        handler_kwargs = {}
+        # Prepare arguments for handler (typed for HandlerResultValue alignment)
+        handler_kwargs: dict[str, HandlerResultValue] = {}
 
         # Date range
         if args.start_date:
             handler_kwargs["start_date"] = args.start_date
         if args.end_date:
             handler_kwargs["end_date"] = args.end_date
+
+        # Aggregate mode options
+        if hasattr(args, "redo_all") and args.redo_all:
+            handler_kwargs["redo_all"] = args.redo_all
 
         # Common options
         if hasattr(args, "force") and args.force:
@@ -175,6 +386,8 @@ def main() -> dict[str, HandlerResultValue]:
                     categories.append("TRADFI")
                 if args.DEFI:
                     categories.append("DEFI")
+                if args.SPORTS:
+                    categories.append("SPORTS")
 
             if categories:
                 handler_kwargs["category"] = categories
@@ -190,6 +403,8 @@ def main() -> dict[str, HandlerResultValue]:
                         handler_kwargs["tradfi"] = True
                     elif cat.upper() == "DEFI":
                         handler_kwargs["defi"] = True
+                    elif cat.upper() == "SPORTS":
+                        handler_kwargs["sports"] = True
             else:
                 # Fallback to individual flags
                 if args.CEFI:
@@ -198,6 +413,8 @@ def main() -> dict[str, HandlerResultValue]:
                     handler_kwargs["tradfi"] = True
                 if args.DEFI:
                     handler_kwargs["defi"] = True
+                if args.SPORTS:
+                    handler_kwargs["sports"] = True
 
         # Venue filter (optional - filter to specific venues within a category)
         if hasattr(args, "venues") and args.venues:
@@ -215,18 +432,20 @@ def main() -> dict[str, HandlerResultValue]:
         is_success = result.get("status") == "success"
 
         if is_success:
-            logger.info(f"✅ {args.mode} operation completed successfully")
+            logger.info("✅ %s operation completed successfully", args.mode)
         else:
             status = result.get("status", "unknown")
             logger.error(
-                f"❌ {args.mode} operation failed (status={status}). "
-                f"Details: {result.get('error', result.get('message', 'no details'))}"
+                "❌ %s operation failed (status=%s). Details: %s",
+                args.mode,
+                status,
+                result.get("error", result.get("message", "no details")),
             )
 
         return result
 
-    except Exception as e:
-        logger.error(f"❌ CLI execution failed: {e}", exc_info=True)
+    except (ValueError, KeyError, TypeError, IndexError) as e:
+        logger.error("❌ CLI execution failed: %s", e, exc_info=True)
         return {"success": False, "status": "error", "error": str(e)}
 
 
@@ -238,8 +457,8 @@ def run_cli() -> dict[str, HandlerResultValue]:
     except KeyboardInterrupt:
         logger.info("🛑 Operation cancelled by user")
         return {"success": False, "status": "error", "error": "Cancelled by user"}
-    except Exception as e:
-        logger.error(f"❌ Unexpected error: {e}", exc_info=True)
+    except (OSError, ValueError, RuntimeError) as e:
+        logger.error("❌ Unexpected error: %s", e, exc_info=True)
         return {"success": False, "status": "error", "error": str(e)}
 
 

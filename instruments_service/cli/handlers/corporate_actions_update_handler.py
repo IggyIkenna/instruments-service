@@ -28,7 +28,7 @@ Workflow:
 import logging
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 import yaml
 
@@ -49,7 +49,7 @@ class CorporateActionsUpdateHandler(ModeHandler):
     Phase 3 of the optimized pipeline.
     """
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, object]) -> None:
         super().__init__(config)
 
         # Reuse backfill handler for fetching
@@ -60,12 +60,12 @@ class CorporateActionsUpdateHandler(ModeHandler):
 
         logger.info("✅ CorporateActionsUpdateHandler initialized")
 
-    def _load_ticker_registry(self, metadata_dir: Path) -> dict[str, Any]:
+    def _load_ticker_registry(self, metadata_dir: Path) -> dict[str, object]:
         """Load ticker registry from YAML."""
         registry_path = metadata_dir / "ticker_registry.yaml"
 
         if not registry_path.exists():
-            logger.warning(f"⚠️ Ticker registry not found: {registry_path}")
+            logger.warning("⚠️ Ticker registry not found: %s", registry_path)
             return {
                 "version": "1.0",
                 "tickers": {},
@@ -76,13 +76,13 @@ class CorporateActionsUpdateHandler(ModeHandler):
                 },
             }
 
-        with open(registry_path, "r") as f:
-            registry: dict[str, Any] = yaml.safe_load(f) or {}
+        with open(registry_path) as f:
+            registry: dict[str, object] = yaml.safe_load(f) or {}
         return registry
 
     def _get_outdated_tickers(
         self,
-        registry: dict[str, Any],
+        registry: dict[str, object],
         days_threshold: int,
     ) -> list[str]:
         """
@@ -98,32 +98,46 @@ class CorporateActionsUpdateHandler(ModeHandler):
         today = date.today()
         outdated: list[str] = []
 
-        for ticker, metadata in registry.get("tickers", {}).items():
-            last_download_str = metadata.get("last_download_date")
+        tickers_dict: dict[str, dict[str, object] | object] = cast(
+            dict[str, dict[str, object] | object], registry.get("tickers") or {}
+        )
+        if not isinstance(tickers_dict, dict):
+            return outdated
+
+        for ticker_key, metadata_val in tickers_dict.items():
+            ticker_str: str = str(ticker_key)
+            metadata_dict: dict[str, object] = (
+                cast(dict[str, object], metadata_val) if isinstance(metadata_val, dict) else {}
+            )
+            last_download_str: str | None = cast(str | None, metadata_dict.get("last_download_date"))
 
             # Never fetched
             if last_download_str is None:
-                outdated.append(ticker)
-                logger.debug(f"📋 {ticker}: Never fetched")
+                outdated.append(ticker_str)
+                logger.debug("📋 %s: Never fetched", ticker_str)
                 continue
 
             # Calculate days since last fetch
             try:
-                last_download = date.fromisoformat(last_download_str)
+                last_download = (
+                    date.fromisoformat(str(last_download_str)) if isinstance(last_download_str, str) else None
+                )
+                if last_download is None:
+                    raise ValueError
                 days_since = (today - last_download).days
 
                 if days_since >= days_threshold:
-                    outdated.append(ticker)
-                    logger.debug(f"📋 {ticker}: {days_since} days old (threshold: {days_threshold})")
+                    outdated.append(ticker_str)
+                    logger.debug("📋 %s: %s days old (threshold: %s)", ticker_str, days_since, days_threshold)
 
                 # Also retry failed tickers (status == 'error')
-                elif metadata.get("status") == "error" and days_since >= 1:
-                    outdated.append(ticker)
-                    logger.debug(f"📋 {ticker}: Retry failed ticker")
+                elif metadata_dict.get("status") == "error" and days_since >= 1:
+                    outdated.append(ticker_str)
+                    logger.debug("📋 %s: Retry failed ticker", ticker_str)
 
             except ValueError:
-                logger.warning(f"⚠️ {ticker}: Invalid date format: {last_download_str}")
-                outdated.append(ticker)
+                logger.warning("⚠️ %s: Invalid date format: %s", ticker_str, last_download_str)
+                outdated.append(ticker_str)
 
         return outdated
 
@@ -156,7 +170,7 @@ class CorporateActionsUpdateHandler(ModeHandler):
         registry = self._load_ticker_registry(metadata_dir)
 
         # Get outdated tickers
-        logger.info(f"🔍 Finding tickers older than {days_threshold} days...")
+        logger.info("🔍 Finding tickers older than %s days...", days_threshold)
         outdated_tickers = self._get_outdated_tickers(registry, days_threshold)
 
         if not outdated_tickers:
@@ -165,14 +179,14 @@ class CorporateActionsUpdateHandler(ModeHandler):
                 "success": True,
                 "status": "success",
                 "statistics": {
-                    "tickers_checked": len(registry.get("tickers", {})),
+                    "tickers_checked": len(cast(dict[str, object], registry.get("tickers") or {})),
                     "tickers_outdated": 0,
                     "tickers_updated": 0,
                 },
             }
 
-        logger.info(f"📊 Found {len(outdated_tickers)} tickers to update")
-        logger.info(f"⚙️ Examples: {', '.join(outdated_tickers[:10])}")
+        logger.info("📊 Found %s tickers to update", len(outdated_tickers))
+        logger.info("⚙️ Examples: %s", f"{', '.join(outdated_tickers[:10])}")
 
         # Use backfill handler to fetch outdated tickers
         logger.info("\n🚀 Fetching outdated tickers...")
@@ -184,7 +198,10 @@ class CorporateActionsUpdateHandler(ModeHandler):
             max_retries=max_retries,
         )
 
-        stats = result.get("statistics", {})
+        stats_value = result.get("statistics")
+        if stats_value is None:
+            stats_value = {}
+        stats = cast(dict[str, object], stats_value)
 
         # Regenerate date views if requested
         if regenerate_date_views:
@@ -193,20 +210,31 @@ class CorporateActionsUpdateHandler(ModeHandler):
                 upload_to_gcs=upload_to_gcs,
             )
 
-            stats["date_views"] = date_views_result.get("statistics", {})
+            date_views_stats = date_views_result.get("statistics")
+            if date_views_stats is None:
+                date_views_stats = {}
+            stats["date_views"] = date_views_stats
 
         logger.info("\n✅ Update complete")
-        logger.info(f"📈 Updated {stats['tickers_successful']}/{len(outdated_tickers)} tickers")
+        logger.info("📈 Updated %s/%s tickers", stats["tickers_successful"], len(outdated_tickers))
 
+        _total_div = stats.get("total_dividends")
+        _total_spl = stats.get("total_splits")
+        _total_ear = stats.get("total_earnings")
+        total_new_events = (
+            (int(_total_div) if isinstance(_total_div, (int, float)) else 0)
+            + (int(_total_spl) if isinstance(_total_spl, (int, float)) else 0)
+            + (int(_total_ear) if isinstance(_total_ear, (int, float)) else 0)
+        )
         return {
             "success": True,
             "status": "success",
             "statistics": {
-                "tickers_checked": len(registry.get("tickers", {})),
+                "tickers_checked": len(cast(dict[str, object], registry.get("tickers") or {})),
                 "tickers_outdated": len(outdated_tickers),
                 "tickers_updated": stats["tickers_successful"],
                 "tickers_failed": stats["tickers_failed"],
-                "total_new_events": stats["total_dividends"] + stats["total_splits"] + stats["total_earnings"],
+                "total_new_events": total_new_events,
             },
         }
 

@@ -27,7 +27,7 @@ The instruments-service is the **first service in the data pipeline**, providing
 ```
 instruments-service (this service)
     ↓
-market-tick-data-handler (downloads market data using instrument IDs)
+market-tick-data-service (downloads market data using instrument IDs)
     ↓
 market-data-processing-service (processes ticks into candles)
     ↓
@@ -39,13 +39,13 @@ execution-service (uses instruments for order execution)
 ```
 
 **Downstream Consumers**:
-- **market-tick-data-handler**: Uses instrument IDs to download market data (trades, order books, etc.)
+- **market-tick-data-service**: Uses instrument IDs to download market data (trades, order books, etc.)
 - **market-data-processing-service**: Uses instrument metadata for candle generation
 - **features-* services**: Use instrument metadata for feature calculation
 - **strategy-service**: Uses instrument definitions for trading decisions
 - **execution-service**: Uses instrument metadata (contract addresses, fee tiers) for order execution
 
-**Important**: Downstream clients should use `unified-cloud-services` directly to query instruments, NOT import `instruments-service`. See [`USAGE_GUIDE.md`](./USAGE_GUIDE.md) for examples.
+**Important**: Downstream clients should use `unified-trading-services` directly to query instruments, NOT import `instruments-service`. See [`USAGE_GUIDE.md`](./USAGE_GUIDE.md) for examples.
 
 ## Core Components
 
@@ -84,10 +84,10 @@ See [`VENUE_ADAPTERS.md`](./VENUE_ADAPTERS.md) for detailed adapter architecture
 
 Handles storage operations:
 - Stores instruments to GCS (Parquet format)
-- Validates schema using `unified-cloud-services.SchemaValidator`
+- Validates schema using `unified-trading-services.SchemaValidator`
 - Handles test bucket detection (automatically uses test buckets in test environment)
 - Generates CSV samples for local development
-- Uses `unified-cloud-services` for all cloud operations
+- Uses `unified-trading-services` for all cloud operations
 
 ### 4. InstrumentBatchProcessor (`app/core/batch_processor.py`)
 
@@ -128,7 +128,7 @@ Handles batch processing:
                           ↓
 ┌─────────────────────────────────────────────────────────────┐
 │         CloudInstrumentStorage                              │
-│  - Validates schema (unified-cloud-services)                │
+│  - Validates schema (unified-trading-services)                │
 │  - Stores to GCS (Parquet)                                  │
 │  - Generates CSV samples (local dev)                        │
 └─────────────────────────────────────────────────────────────┘
@@ -202,14 +202,14 @@ All data sources use adapters for consistent architecture:
 
 ### Unified Cloud Services
 
-Uses `unified-cloud-services` for **all** cloud operations:
+Uses `unified-trading-services` for **all** cloud operations:
 - **GCS**: Storage operations via `StandardizedDomainCloudService`
 - **BigQuery**: Available but not used (batch data to GCS only)
-- **Secret Manager**: API key retrieval via `get_secret_with_fallback`
+- **Secret Manager**: API key retrieval via `get_secret_client`
 - **Schema Validation**: Uses `SchemaValidator` with domain-specific schemas
 - **Sampling Service**: CSV sample generation for local development
 
-**DRY Compliance**: 100% - no custom cloud code, all operations use unified-cloud-services.
+**DRY Compliance**: 100% - no custom cloud code, all operations use unified-trading-services.
 
 ### Secret Manager Integration
 
@@ -265,7 +265,7 @@ gs://market-data-tick/instrument_availability/by_date/day-YYYY-MM-DD/instruments
 
 ## Integration Points
 
-### unified-cloud-services
+### unified-trading-services
 
 **Required dependency** - provides all cloud infrastructure:
 - GCS operations (read/write Parquet files)
@@ -320,7 +320,7 @@ Exchange metadata enrichment for CEX instruments:
 - **NOT** fetch market data (rates, prices, yields)
 
 **Market Data Should Come From**:
-- **market-tick-data-handler**: OHLCV, trades, funding rates (CEX + TradFi)
+- **market-tick-data-service**: OHLCV, trades, funding rates (CEX + TradFi)
 - **Separate Market Data Service** (future): DeFi rates, oracle prices, yields
 
 ## Instrument Lifecycle

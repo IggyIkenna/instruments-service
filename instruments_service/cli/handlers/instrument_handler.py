@@ -10,8 +10,8 @@ import logging
 from datetime import UTC, datetime
 from typing import TypedDict, cast
 
-from unified_cloud_services import get_date_range, parse_date
-from unified_market_interface.models.venue_config import VenueMapping
+from unified_market_interface import VenueMapping
+from unified_trading_library import get_date_range, parse_date
 
 from instruments_service.app.core.cloud_data_provider import CloudDataProvider
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
@@ -50,13 +50,14 @@ class InstrumentGenerationKwargs(TypedDict, total=False):
     cefi: bool
     tradfi: bool
     defi: bool
+    sports: bool
 
 
 class InstrumentHandler(ModeHandler):
     """Generate instruments with force mode and direct GCS checks only."""
 
     def __init__(self, config: InstrumentHandlerConfig) -> None:
-        super().__init__(cast(dict[str, object], config))
+        super().__init__(cast(dict[str, object], cast(object, config)))
 
         # Initialize services directly (no ServiceContainer)
         project_id = config.get("project_id") or get_config().gcp_project_id
@@ -67,7 +68,7 @@ class InstrumentHandler(ModeHandler):
             "enable_ccxt_integration": True,
             "enable_metadata_caching": True,
         }
-        self.instruments_service = InstrumentsService(cast(dict[str, object], service_config))
+        self.instruments_service = InstrumentsService(cast(dict[str, object], cast(object, service_config)))
 
         # Initialize cloud storage (for CLI-specific operations)
         self.cloud_storage = CloudInstrumentStorage()
@@ -110,8 +111,12 @@ class InstrumentHandler(ModeHandler):
 
     def run(self, **kwargs: object) -> dict[str, HandlerResultValue]:
         """Execute instrument generation."""
-        start_date = kwargs.get("start_date", "")
-        end_date = kwargs.get("end_date", "")
+        start_date = kwargs.get("start_date")
+        end_date = kwargs.get("end_date")
+        if start_date is None or start_date == "":
+            raise ValueError("start_date is required for instrument generation")
+        if end_date is None or end_date == "":
+            raise ValueError("end_date is required for instrument generation")
         force = bool(kwargs.get("force", False))
         return self._execute_instrument_generation(start_date, end_date, force, **kwargs)
 
@@ -147,11 +152,12 @@ class InstrumentHandler(ModeHandler):
             cefi: bool = bool(kwargs.get("cefi", False))
             tradfi: bool = bool(kwargs.get("tradfi", False))
             defi: bool = bool(kwargs.get("defi", False))
+            sports: bool = bool(kwargs.get("sports", False))
 
             # Default: process ALL if no flags specified
-            if not cefi and not tradfi and not defi:
-                cefi = tradfi = defi = True
-                logger.info("🌍 Processing ALL market types: CEFI, TRADFI, and DEFI")
+            if not cefi and not tradfi and not defi and not sports:
+                cefi = tradfi = defi = sports = True
+                logger.info("🌍 Processing ALL market types: CEFI, TRADFI, DEFI, and SPORTS")
             else:
                 market_types: list[str] = []
                 if cefi:
@@ -160,7 +166,9 @@ class InstrumentHandler(ModeHandler):
                     market_types.append("TRADFI")
                 if defi:
                     market_types.append("DEFI")
-                logger.info(f"🔍 Processing market types: {', '.join(market_types)}")
+                if sports:
+                    market_types.append("SPORTS")
+                logger.info("🔍 Processing market types: %s", ", ".join(market_types))
 
             # Build venue list based on categories + explicit venues
             venues_to_process = self._get_venues_to_process(requested_venues, cefi, tradfi, defi)
@@ -169,15 +177,15 @@ class InstrumentHandler(ModeHandler):
             try:
                 # Validate API keys (result not used yet, but validation ensures keys exist)
                 _ = validate_required_api_keys(venues_to_process)
-                logger.info(f"✅ Validated API keys for {len(venues_to_process)} venues")
+                logger.info("✅ Validated API keys for %s venues", len(venues_to_process))
             except ValueError as e:
-                log_event("VALIDATION_FAILED", f"API key validation: {str(e)}")
+                log_event("VALIDATION_FAILED", f"API key validation: {e!s}")
                 raise
 
             log_event("VALIDATION_COMPLETED")
-        except Exception as e:
+        except (ValueError, TypeError, KeyError) as e:
             log_event("VALIDATION_FAILED", str(e))
-            log_event("FAILED", f"Validation error: {str(e)}")
+            log_event("FAILED", f"Validation error: {e!s}")
             raise
 
         # Observability metrics tracking
@@ -200,7 +208,7 @@ class InstrumentHandler(ModeHandler):
         for date_idx, date in enumerate(date_range, start=1):
             # Skip future dates
             if date.date() > today:
-                logger.warning(f"⚠️ Skipping future date: {date.strftime('%Y-%m-%d')}")
+                logger.warning("⚠️ Skipping future date: %s", date.strftime("%Y-%m-%d"))
                 break
 
             try:
@@ -258,8 +266,8 @@ class InstrumentHandler(ModeHandler):
 
                             total_skipped += 1
                             continue
-                    except Exception:
-                        # File doesn't exist, proceed with generation
+                    except (OSError, FileNotFoundError, RuntimeError, ValueError):
+                        # File doesn't exist or check failed, proceed with generation
                         pass
 
                 # Level 1: Day-venue combination counters (shows overall progress)
@@ -280,8 +288,11 @@ class InstrumentHandler(ModeHandler):
                 )
 
                 logger.info(
-                    f"📅 Processing {date.strftime('%Y-%m-%d')} "
-                    f"({start_combination}-{end_combination}/{total_combinations} day-venue combinations)"
+                    "📅 Processing %s (%s-%s/%s day-venue combinations)",
+                    date.strftime("%Y-%m-%d"),
+                    start_combination,
+                    end_combination,
+                    total_combinations,
                 )
 
                 log_event("DATA_INGESTION_STARTED")
@@ -314,18 +325,19 @@ class InstrumentHandler(ModeHandler):
                 )
 
                 # Track error and warning counts from processing
-                processing_errors = _to_int(result.get("error_count", 0))
-                processing_warnings = _to_int(result.get("warning_count", 0))
+                processing_errors = _to_int(cast(HandlerResultValue, result.get("error_count", 0)))
+                processing_warnings = _to_int(cast(HandlerResultValue, result.get("warning_count", 0)))
                 total_processing_errors += processing_errors
                 total_processing_warnings += processing_warnings
 
-                instruments_count = _to_int(result.get("instruments_generated", 0))
+                instruments_count = _to_int(cast(HandlerResultValue, result.get("instruments_generated", 0)))
                 log_event("CLASSIFICATION_COMPLETED", str(instruments_count))
                 log_event("PROCESSING_COMPLETED")
                 log_event("ADAPTER_FETCH_COMPLETED", str(instruments_count))
                 log_event("DATA_INGESTION_COMPLETED", str(instruments_count))
-                log_event("UPLOAD_STARTED")
-                log_event("UPLOAD_COMPLETED")
+                log_event("DATA_BROADCAST")
+                log_event("PERSISTENCE_STARTED")
+                log_event("PERSISTENCE_COMPLETED")
 
                 # Venue completion event
                 log_event(
@@ -341,37 +353,37 @@ class InstrumentHandler(ModeHandler):
                     # Log if there were processing errors/warnings even though overall status is success
                     if processing_errors > 0 or processing_warnings > 0:
                         logger.info(
-                            f"⚠️ Processing completed with {processing_errors} \
-                                errors and {processing_warnings} warnings "
-                            f"for {date.strftime('%Y-%m-%d')}"
+                            "⚠️ Processing completed with %s errors and %s warnings for %s",
+                            processing_errors,
+                            processing_warnings,
+                            date.strftime("%Y-%m-%d"),
                         )
 
                     # Note: CSV sampling is handled automatically by CloudInstrumentStorage
-                    # when storing to GCS (via unified-cloud-services SamplingService).
+                    # when storing to GCS (via unified-trading-library SamplingService).
                     # No need to download and sample again here - that would be wasteful.
                 elif result.get("status") == "warning":
-                    logger.warning(f"⚠️ No instruments generated for {date.strftime('%Y-%m-%d')}")
+                    logger.warning("⚠️ No instruments generated for %s", date.strftime("%Y-%m-%d"))
                     total_dates_processed += 1
                     if processing_errors > 0 or processing_warnings > 0:
                         logger.info(
-                            f"   (Processing had {processing_errors} errors and {processing_warnings} warnings)"
+                            "   (Processing had %s errors and %s warnings)", processing_errors, processing_warnings
                         )
                 else:
                     logger.error(
-                        f"❌ Failed to generate instruments for {date.strftime('%Y-%m-%d')}: \
-                            {result.get('message', 'Unknown error')}"
+                        "❌ Failed to generate instruments for %s: %s",
+                        date.strftime("%Y-%m-%d"),
+                        result.get("message", "Unknown error"),
                     )
                     total_errors += 1
                     if processing_errors > 0 or processing_warnings > 0:
                         logger.info(
-                            f"   (Processing had {processing_errors} errors and {processing_warnings} warnings)"
+                            "   (Processing had %s errors and %s warnings)", processing_errors, processing_warnings
                         )
 
-            except Exception as e:
-                logger.error(
-                    f"❌ Failed to process {date.strftime('%Y-%m-%d')}: {e}",
-                    exc_info=True,
-                )
+            except (OSError, ValueError, TypeError, RuntimeError, Exception) as e:
+                # In-flight validation: catch any exception from service, log, continue with other dates
+                logger.error("❌ Failed to process %s: %s", date.strftime("%Y-%m-%d"), e, exc_info=True)
                 total_errors += 1
 
         # Calculate success rate and provide comprehensive summary
@@ -379,12 +391,14 @@ class InstrumentHandler(ModeHandler):
         success_rate = (total_dates_processed / total_attempted * 100) if total_attempted > 0 else 0
 
         logger.info("📊 Instrument generation pipeline complete:")
-        logger.info(f"   Generated: {total_generated} instruments")
-        logger.info(f"   Dates processed: {total_dates_processed}/{total_attempted} successful ({success_rate:.1f}%)")
-        logger.info(f"   Skipped: {total_skipped} (already existed)")
-        logger.info(f"   Date-level errors: {total_errors}")
-        logger.info(f"   Processing errors: {total_processing_errors}")
-        logger.info(f"   Processing warnings: {total_processing_warnings}")
+        logger.info("   Generated: %s instruments", total_generated)
+        logger.info(
+            "   Dates processed: %s/%s successful (%..1f%)", total_dates_processed, total_attempted, success_rate
+        )
+        logger.info("   Skipped: %s (already existed)", total_skipped)
+        logger.info("   Date-level errors: %s", total_errors)
+        logger.info("   Processing errors: %s", total_processing_errors)
+        logger.info("   Processing warnings: %s", total_processing_warnings)
 
         # Log completion status
         if total_errors == 0:

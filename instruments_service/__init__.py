@@ -6,7 +6,7 @@ Service for generating canonical instrument definitions from exchange APIs.
 Rebuild: Feb 19, 2026 - Pull latest UCS base image with bucket configuration fix.
 """
 
-from typing import Any, cast
+from typing import cast
 
 __version__ = "0.1.0"
 
@@ -17,10 +17,10 @@ __version__ = "0.1.0"
 __all__: list[str] = ["__version__"]
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     """Lazy import to avoid circular dependencies."""
     if name == "cli":
-        import instruments_service.cli  # noqa: F401
+        import instruments_service.cli
 
         return instruments_service.cli
     elif name == "InstrumentProcessingService":
@@ -46,7 +46,7 @@ def __getattr__(name: str) -> Any:
         )
 
         return cast(
-            Any,
+            object,
             {
                 "InstrumentDefinition": InstrumentDefinition,
                 "InstrumentKey": InstrumentKey,
@@ -68,7 +68,7 @@ def __getattr__(name: str) -> Any:
         )
 
         return cast(
-            Any,
+            object,
             {
                 "VenueMapping": VenueMapping,
                 "ExchangeInstrumentConfig": ExchangeInstrumentConfig,

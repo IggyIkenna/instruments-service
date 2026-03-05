@@ -4,12 +4,12 @@ This document describes the configuration options, environment variables, and se
 
 ## Overview
 
-Instruments-service uses Pydantic `BaseSettings` via `InstrumentsServiceConfig`, extending `UnifiedCloudServicesConfig` from `unified-cloud-services`.
+Instruments-service uses Pydantic `BaseSettings` via `InstrumentsServiceConfig`, extending `UnifiedCloudServicesConfig` from `unified-trading-services`.
 
 ## Config Class Structure
 
 ```python
-from unified_cloud_services import UnifiedCloudServicesConfig
+from unified_trading_services import UnifiedCloudServicesConfig
 from pydantic import Field, AliasChoices
 
 class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
@@ -89,12 +89,12 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
 | DEFI | `graph-api-key` | Yes |
 | DEFI | `alchemy-api-key` | No |
 
-### Using get_secret_with_fallback()
+### Using get_secret_client()
 
 ```python
-from unified_cloud_services import get_secret_with_fallback
+from unified_trading_services import get_secret_client
 
-api_key = get_secret_with_fallback(
+api_key = get_secret_client(
     secret_name=config.tardis_secret_name,
     project_id=config.gcp_project_id,
     fallback_env_var="TARDIS_API_KEY",

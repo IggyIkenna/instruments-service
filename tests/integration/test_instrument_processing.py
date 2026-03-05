@@ -5,10 +5,10 @@ Tests Tardis API integration, CCXT enrichment, and end-to-end processing
 with test bucket and real credentials.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-from unified_market_interface.models.venue_config import VenueMapping
+from unified_market_interface import VenueMapping
 
 from instruments_service.app.core.instrument_processing_service import (
     InstrumentProcessingService,
@@ -32,7 +32,7 @@ class TestInstrumentProcessingIntegration:
         service = InstrumentProcessingService(config)
 
         # Fetch instruments for a single exchange
-        target_date = datetime(2023, 5, 23, tzinfo=timezone.utc)
+        target_date = datetime(2023, 5, 23, tzinfo=UTC)
         result = await service.fetch_exchange_instruments(
             exchange="binance-futures", target_date=target_date, force=False
         )
@@ -57,7 +57,7 @@ class TestInstrumentProcessingIntegration:
 
         service = InstrumentProcessingService(config)
 
-        target_date = datetime(2023, 5, 23, tzinfo=timezone.utc)
+        target_date = datetime(2023, 5, 23, tzinfo=UTC)
         processed = await service.process_exchange_instruments(
             exchange="binance-futures", target_date=target_date, force=False
         )
@@ -94,7 +94,7 @@ class TestInstrumentProcessingIntegration:
         # Test with a subset of exchanges for faster testing
         test_exchanges = ["binance-futures", "deribit"]
 
-        target_date = datetime(2023, 5, 23, tzinfo=timezone.utc)
+        target_date = datetime(2023, 5, 23, tzinfo=UTC)
         all_instruments = await service.generate_instruments_for_exchanges(
             exchanges=test_exchanges, target_date=target_date
         )

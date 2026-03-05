@@ -1,6 +1,6 @@
 #!/bin/bash
 # Auto-bump library version if code changes
-# Used as pre-commit hook for library repos (unified-cloud-services, unified-*-interface)
+# Used as pre-commit hook for library repos (unified-trading-library, unified-*-interface)
 
 set -e
 

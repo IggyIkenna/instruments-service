@@ -17,19 +17,19 @@ phases:
     runtime-versions:
       python: 3.13
     commands:
-      - pip install --upgrade pip setuptools wheel
+      - pip install uv
 
   pre_build:
     commands:
       - echo "=== Cloning dependencies ==="
-      - git clone https://x-access-token:${GITHUB_TOKEN}@github.com/IggyIkenna/unified-cloud-services.git /tmp/unified-cloud-services
+      - git clone https://x-access-token:${GITHUB_TOKEN}@github.com/IggyIkenna/unified-trading-library.git /tmp/unified-trading-library
       - git clone https://x-access-token:${GITHUB_TOKEN}@github.com/IggyIkenna/unified-trading-deployment-v2.git /tmp/unified-trading-deployment-v2 || true
 
       - echo "=== Installing packages ==="
-      - pip install -e /tmp/unified-cloud-services
-      - pip install -e /tmp/unified-trading-deployment-v2 || true
-      - pip install -e . || pip install -e ".[dev]"
-      - pip install ruff pytest
+      - uv pip install -e /tmp/unified-trading-library
+      - uv pip install -e /tmp/unified-trading-deployment-v2 || true
+      - uv pip install -e . || uv pip install -e ".[dev]"
+      - uv pip install ruff pytest
 
       - echo "=== ECR login ==="
       - aws ecr get-login-password --region ${AWS_DEFAULT_REGION} | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com
@@ -37,7 +37,7 @@ phases:
   build:
     commands:
       - echo "=== Running linting ==="
-      - ruff check instruments_service/ tests/ --ignore E501 || exit 1
+      - ruff check --line-length 120 instruments_service/ tests/ || exit 1
 
       - echo "=== Running tests ==="
       - pytest tests/ -v --tb=short || exit 1

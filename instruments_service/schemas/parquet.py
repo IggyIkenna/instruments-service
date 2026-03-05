@@ -32,25 +32,36 @@ INSTRUMENTS_PARQUET_SCHEMA: list[dict[str, str | bool]] = [
         "name": "instrument_key",
         "type": "string",
         "required": True,
-        "description": "Canonical instrument key in format VENUE:INSTRUMENT_TYPE:SYMBOL. Example: BINANCE-FUTURES:PERPETUAL:BTC-USDT",
+        "description": (
+            "Canonical instrument key in format VENUE:INSTRUMENT_TYPE:SYMBOL. "
+            "Example: BINANCE-FUTURES:PERPETUAL:BTC-USDT"
+        ),
     },
     {
         "name": "venue",
         "type": "string",
         "required": True,
-        "description": "Venue identifier (e.g., BINANCE-FUTURES, DERIBIT, OKX). Must match first part of instrument_key",
+        "description": (
+            "Venue identifier (e.g., BINANCE-FUTURES, DERIBIT, OKX). Must match first part of instrument_key"
+        ),
     },
     {
         "name": "instrument_type",
         "type": "string",
         "required": True,
-        "description": "Instrument type (e.g., SPOT_PAIR, PERPETUAL, FUTURE, OPTION, LST, A_TOKEN, DEBT_TOKEN). Must match second part of instrument_key",
+        "description": (
+            "Instrument type (e.g., SPOT_PAIR, PERPETUAL, FUTURE, OPTION, LST, A_TOKEN, DEBT_TOKEN). "
+            "Must match second part of instrument_key"
+        ),
     },
     {
         "name": "symbol",
         "type": "string",
         "required": True,
-        "description": "Symbol string (e.g., BTC-USDT, ETH-USDT@LIN, BTC-USD@INV, BTC-USDT-20250101-50000-CALL). Extracted from instrument_key",
+        "description": (
+            "Symbol string (e.g., BTC-USDT, ETH-USDT@LIN, BTC-USD@INV, BTC-USDT-20250101-50000-CALL). "
+            "Extracted from instrument_key"
+        ),
     },
     {
         "name": "available_from_datetime",
@@ -97,7 +108,10 @@ INSTRUMENTS_PARQUET_SCHEMA: list[dict[str, str | bool]] = [
         "type": "datetime64[ns]",
         "required": False,
         "nullable": True,
-        "description": "ISO datetime string (timezone-naive UTC) when instrument expires. Empty/None for SPOT/PERPETUAL instruments.",
+        "description": (
+            "ISO datetime string (timezone-naive UTC) when instrument expires. "
+            "Empty/None for SPOT/PERPETUAL instruments."
+        ),
     },
     # ============================================================================
     # DATA TYPES
@@ -107,7 +121,10 @@ INSTRUMENTS_PARQUET_SCHEMA: list[dict[str, str | bool]] = [
         "type": "string",
         "required": False,
         "default": "trades,book_snapshot_5",
-        "description": "Comma-separated list of available data types: 'trades', 'book_snapshot_5', 'derivative_ticker', 'options_chain', 'liquidations'",
+        "description": (
+            "Comma-separated list of data types: 'trades', 'book_snapshot_5', "
+            "'derivative_ticker', 'options_chain', 'liquidations'"
+        ),
     },
     # ============================================================================
     # ASSET INFORMATION
@@ -299,14 +316,18 @@ INSTRUMENTS_PARQUET_SCHEMA: list[dict[str, str | bool]] = [
         "type": "float64",
         "required": False,
         "nullable": True,
-        "description": "Loan-to-Value ratio (as decimal, e.g., 0.75 = 75%) - maximum borrowing power against collateral",
+        "description": (
+            "Loan-to-Value ratio (as decimal, e.g., 0.75 = 75%) - maximum borrowing power against collateral"
+        ),
     },
     {
         "name": "liquidation_threshold",
         "type": "float64",
         "required": False,
         "nullable": True,
-        "description": "Liquidation threshold (as decimal, e.g., 0.80 = 80%) - price at which position becomes liquidatable",
+        "description": (
+            "Liquidation threshold (as decimal, e.g., 0.80 = 80%) - price at which position becomes liquidatable"
+        ),
     },
     {
         "name": "liquidation_bonus",
@@ -362,28 +383,33 @@ INSTRUMENTS_PARQUET_SCHEMA: list[dict[str, str | bool]] = [
         "type": "float64",
         "required": False,
         "nullable": True,
-        "description": "Optimal utilization rate (as decimal, e.g., 0.80 = 80%) - utilization rate where interest rate model changes slope",
+        "description": (
+            "Optimal utilization rate (as decimal, e.g., 0.80 = 80%) - "
+            "utilization where interest rate model changes slope"
+        ),
     },
     {
         "name": "base_variable_borrow_rate",
         "type": "float64",
         "required": False,
         "nullable": True,
-        "description": "Base variable borrow rate (as decimal, e.g., 0.01 = 1%) - minimum borrow rate at 0% utilization",
+        "description": (
+            "Base variable borrow rate (as decimal, e.g., 0.01 = 1%) - minimum borrow rate at 0% utilization"
+        ),
     },
     {
         "name": "variable_rate_slope1",
         "type": "float64",
         "required": False,
         "nullable": True,
-        "description": "Variable rate slope 1 (as decimal) - interest rate increase per utilization below optimal",
+        "description": ("Variable rate slope 1 (as decimal) - interest rate increase per utilization below optimal"),
     },
     {
         "name": "variable_rate_slope2",
         "type": "float64",
         "required": False,
         "nullable": True,
-        "description": "Variable rate slope 2 (as decimal) - interest rate increase per utilization above optimal",
+        "description": ("Variable rate slope 2 (as decimal) - interest rate increase per utilization above optimal"),
     },
     # ============================================================================
     # CEFI RISK PARAMETERS (from CCXT leverage tiers)
@@ -407,14 +433,14 @@ INSTRUMENTS_PARQUET_SCHEMA: list[dict[str, str | bool]] = [
         "type": "float64",
         "required": False,
         "nullable": True,
-        "description": "Initial margin rate required to open position (from tier 1, as decimal e.g., 0.01 = 1%)",
+        "description": ("Initial margin rate to open position (from tier 1, as decimal e.g., 0.01 = 1%)"),
     },
     {
         "name": "maintenance_margin_rate",
         "type": "float64",
         "required": False,
         "nullable": True,
-        "description": "Maintenance margin rate (liquidation threshold, from tier 1, as decimal e.g., 0.005 = 0.5%)",
+        "description": ("Maintenance margin rate (liquidation threshold, from tier 1, as decimal e.g., 0.005 = 0.5%)"),
     },
     {
         "name": "leverage_tiers_json",
@@ -431,35 +457,48 @@ INSTRUMENTS_PARQUET_SCHEMA: list[dict[str, str | bool]] = [
         "type": "string",
         "required": False,
         "nullable": True,
-        "description": "Trading hours open time in ISO time format with timezone (e.g., '09:30:00-05:00' for EST). Only populated for TradFi instruments.",
+        "description": (
+            "Trading hours open time in ISO time format with timezone "
+            "(e.g., '09:30:00-05:00' for EST). Only for TradFi instruments."
+        ),
     },
     {
         "name": "trading_hours_close",
         "type": "string",
         "required": False,
         "nullable": True,
-        "description": "Trading hours close time in ISO time format with timezone (e.g., '16:00:00-05:00' for EST). Only populated for TradFi instruments.",
+        "description": (
+            "Trading hours close time in ISO time format with timezone "
+            "(e.g., '16:00:00-05:00' for EST). Only for TradFi instruments."
+        ),
     },
     {
         "name": "trading_session",
         "type": "string",
         "required": False,
         "nullable": True,
-        "description": "Trading session identifier (e.g., 'regular', 'pre_market', 'after_hours', 'extended'). Only populated for TradFi instruments.",
+        "description": (
+            "Trading session identifier (e.g., 'regular', 'pre_market', 'after_hours', 'extended'). "
+            "Only for TradFi instruments."
+        ),
     },
     {
         "name": "is_trading_day",
         "type": "bool",
         "required": False,
         "nullable": True,
-        "description": "Whether instrument trades on given date (accounts for holidays). Only populated for TradFi instruments.",
+        "description": (
+            "Whether instrument trades on given date (accounts for holidays). Only for TradFi instruments."
+        ),
     },
     {
         "name": "holiday_calendar",
         "type": "string",
         "required": False,
         "nullable": True,
-        "description": "Exchange holiday calendar identifier (e.g., 'NYSE', 'CME', 'NASDAQ'). Only populated for TradFi instruments.",
+        "description": (
+            "Exchange holiday calendar identifier (e.g., 'NYSE', 'CME', 'NASDAQ'). Only for TradFi instruments."
+        ),
     },
     # ============================================================================
     # STORAGE METADATA (added during storage)
@@ -468,7 +507,10 @@ INSTRUMENTS_PARQUET_SCHEMA: list[dict[str, str | bool]] = [
         "name": "timestamp",
         "type": "datetime64[ns]",
         "required": True,
-        "description": "Generation timestamp (timezone-naive UTC) when instrument definition was created/stored. Added automatically during storage.",
+        "description": (
+            "Generation timestamp (timezone-naive UTC) when instrument was created/stored. "
+            "Added automatically during storage."
+        ),
     },
 ]
 
@@ -493,12 +535,12 @@ SCHEMA_METADATA: dict[str, str | list[str]] = {
 
 def get_required_columns() -> list[str]:
     """Get list of required column names."""
-    return [col["name"] for col in INSTRUMENTS_PARQUET_SCHEMA if col.get("required", False)]
+    return [str(col["name"]) for col in INSTRUMENTS_PARQUET_SCHEMA if col.get("required", False)]
 
 
 def get_optional_columns() -> list[str]:
     """Get list of optional column names."""
-    return [col["name"] for col in INSTRUMENTS_PARQUET_SCHEMA if not col.get("required", False)]
+    return [str(col["name"]) for col in INSTRUMENTS_PARQUET_SCHEMA if not col.get("required", False)]
 
 
 def get_column_info(column_name: str) -> dict[str, str | bool] | None:
@@ -528,7 +570,7 @@ def validate_schema_compliance(df_columns: list[str]) -> tuple[bool, list[str]]:
     return is_valid, missing_required
 
 
-def get_schema_summary() -> dict[str, str | int | list[str]]:
+def get_schema_summary() -> dict[str, str | int | list[str] | dict[str, str | list[str]]]:
     """Get summary of schema structure."""
     return {
         "total_fields": len(INSTRUMENTS_PARQUET_SCHEMA),

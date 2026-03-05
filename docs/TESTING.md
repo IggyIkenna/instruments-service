@@ -345,10 +345,10 @@ gcloud secrets describe tardis-api-key --project={project_id}
 
 ### Sampling is Centralized
 
-The `instruments-service` uses the **centralized sampling service** from `unified-cloud-services`:
+The `instruments-service` uses the **centralized sampling service** from `unified-trading-services`:
 
 ```python
-from unified_cloud_services import create_sampling_service
+from unified_trading_services import create_sampling_service
 sampling_service = create_sampling_service()
 sampling_service.generate_csv_sample(
     df=instruments_df,
@@ -359,7 +359,7 @@ sampling_service.generate_csv_sample(
 
 ### How Sampling Works
 
-1. **Sampling Service Location**: `unified-cloud-services/unified_cloud_services/core/sampling_service.py`
+1. **Sampling Service Location**: `unified-trading-services/unified_trading_services/core/sampling_service.py`
 2. **Sampling Logic**: Samples whatever DataFrame is passed to it (no venue filtering)
 3. **Sample Size**: Configurable via `CSV_SAMPLE_SIZE` env var (default: 10 rows)
 4. **Environment-Aware**: Only samples in non-production environments
@@ -397,7 +397,7 @@ This will generate a sample CSV with:
 - ✅ DeFi instruments (UNISWAPV3-ETH, CURVE-ETH, BALANCER-ETH, etc.)
 
 **Summary**:
-- ✅ **Sampling is centralized** - Uses `unified-cloud-services`
+- ✅ **Sampling is centralized** - Uses `unified-trading-services`
 - ✅ **Samples include all instrument types** - When generated with all venues
 - ✅ **Samples reflect what was generated** - Each run creates a sample of its output
 

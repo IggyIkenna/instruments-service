@@ -1,416 +1,539 @@
 #!/usr/bin/env bash
-# =============================================================================
-# Instruments Service - Complete Setup Script
-# =============================================================================
-# This script sets up everything needed to run instruments-service:
-#   - Python virtual environment
-#   - All Python dependencies (including unified-cloud-services)
-#   - GCP credentials detection
+# CANONICAL SETUP — unified-trading-system
+#
+# Single source of truth for repo-local development environment setup.
+# Copy to scripts/setup.sh in every repo. Idempotent — safe to re-run.
+#
+# SSOT: unified-trading-pm/scripts/setup.sh
+# Codex: unified-trading-codex/06-coding-standards/setup-standards.md
 #
 # Usage:
-#   source ./scripts/setup.sh
-#   ./scripts/setup.sh --help
+#   bash scripts/setup.sh              # Full setup (idempotent)
+#   bash scripts/setup.sh --check      # Verify setup without changes
+#   bash scripts/setup.sh --force      # Force reinstall (ignores cache)
+#   bash scripts/setup.sh --isolated   # Standalone repo setup (no workspace deps)
+#   source scripts/setup.sh            # Setup + activate venv in current shell
 #
-# Requirements:
-#   - Python 3.13 (REQUIRED for this service)
-#   - SSH key configured with GitHub (for unified-cloud-services)
-# =============================================================================
+# What this script does (in order):
+#
+#   ── REPO TYPE DETECTION (runs first) ──────────────────────────────────────
+#   Detects repo type before any setup steps:
+#     UI repo:     package.json present, no pyproject.toml → npm install path
+#     Python repo: pyproject.toml present → Python venv path (steps 1-13)
+#
+#   ── UI REPO PATH (React/TypeScript) ───────────────────────────────────────
+#   UI.1. Check Node.js version
+#   UI.2. Run npm install (idempotent: skips if node_modules newer than package.json)
+#   UI.3. Check TypeScript / tsc available
+#   → exits 0 after UI setup (never falls through to Python steps)
+#
+#   ── PYTHON REPO PATH ──────────────────────────────────────────────────────
+#    1. Validate Python version (>=3.13,<3.14 — or repo-specific override)
+#    2. Architecture check (macOS only, local dev only — skipped in CI)
+#       Rejects x86_64 Python on Apple Silicon (Rosetta) — ARM64 required
+#    3. Bootstrap uv (the only pip install allowed; must run before venv creation)
+#    4. Create .venv if missing or version mismatch (uv venv)
+#    5. Activate .venv (source .venv/bin/activate)
+#    6. Run uv lock if pyproject.toml changed (skipped if uv.lock is current)
+#    7. Install local path dependencies from workspace-manifest.json (SSOT)
+#       Reads unified-trading-pm/workspace-manifest.json; installs sibling repos
+#       Installs jq automatically (apt/brew) if needed; exits 1 if jq unavailable
+#    8. Install project + dev deps (uv pip install -e ".[dev]")
+#    9. Verify ripgrep available (required by quality-gates.sh) — always runs
+#   10. Verify ruff version matches workspace standard (0.15.0) — always runs
+#   11. Import smoke test (python -c "import <package>") — always runs
+#   12. GCP credentials check — informational only, never blocks; never reads
+#       SA JSON files from repo root (use ADC: gcloud auth application-default login)
+#   13. Print known caveats from AGENTS.md (if present)
+#
+# Idempotency:
+#   - UI:  node_modules skipped if package.json not newer than node_modules/
+#   - .venv creation: skipped if .venv/ exists with correct Python version
+#   - uv lock: skipped if uv.lock is newer than pyproject.toml
+#   - Dep install: skipped if .setup-stamp is newer than pyproject.toml + uv.lock
+#   - Each step prints [SKIP] or [OK], never re-does work unnecessarily
+#   - --force bypasses all skip checks and reinstalls from scratch
+#
+# CI detection (GITHUB_ACTIONS, CI, or CLOUD_BUILD set):
+#   Python repo: steps 1-8 (install/setup) are skipped — CI manages its own env.
+#   Steps 9-13 (verification) always run.
+#   UI repo: npm install step is skipped — CI manages node_modules.
+#
+# Exit codes:
+#   0 = success
+#   1 = fatal (wrong Python, missing deps, import failure)
+#   2 = check mode found issues (--check)
 
-set -e  # Exit on error
+set -e
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# ── PATH EXTENSIONS (Homebrew, pyenv, etc. — bash doesn't source .zshrc) ────
+for p in /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/.pyenv/shims"; do
+    [ -d "$p" ] && case ":$PATH:" in *":$p:"*) ;; *) export PATH="$p:$PATH" ;; esac
+done
 
-# Determine repo root - works in bash and zsh, sourced or executed
-SCRIPT_PATH=""
-if [ -n "${BASH_SOURCE[0]}" ] && [ "${BASH_SOURCE[0]}" != "$0" ]; then
-    SCRIPT_PATH="${BASH_SOURCE[0]}"
-elif [ -n "$0" ] && [[ "$0" == *"setup.sh"* ]]; then
-    SCRIPT_PATH="$0"
-fi
+# ── REPO-SPECIFIC SETTINGS (edit per repo) ──────────────────────────────────
+# Override these in each repo's copy. Only PACKAGE_NAME is required.
+PACKAGE_NAME="${PACKAGE_NAME:-}"        # e.g. "unified_api_contracts" — auto-detected from pyproject.toml if empty
+REQUIRED_PYTHON="${REQUIRED_PYTHON:-3.13}"  # Major.minor — read from pyproject.toml if possible
+REQUIRED_RUFF="${REQUIRED_RUFF:-0.15.0}"
+# ── END REPO-SPECIFIC ───────────────────────────────────────────────────────
 
-if [ -n "$SCRIPT_PATH" ] && [ -f "$SCRIPT_PATH" ]; then
-    SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
-    REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-else
-    # Fallback: check if we're in instruments-service or its subdirectory
-    if [ -f "pyproject.toml" ]; then
-        REPO_ROOT="$(pwd)"
-    elif [ -f "../pyproject.toml" ]; then
-        REPO_ROOT="$(cd .. && pwd)"
-    elif [ -f "instruments-service/pyproject.toml" ]; then
-        REPO_ROOT="$(cd instruments-service && pwd)"
-    else
-        # Last resort: assume current directory
-        REPO_ROOT="$(pwd)"
-    fi
-fi
+# ── COLORS + LOGGING ────────────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+log_ok()   { echo -e "${GREEN}  [OK] $1${NC}"; }
+log_skip() { echo -e "${BLUE}  [SKIP] $1${NC}"; }
+log_warn() { echo -e "${YELLOW}  [WARN] $1${NC}"; }
+log_fail() { echo -e "${RED}  [FAIL] $1${NC}"; }
+log_step() { echo -e "\n${BLUE}[$STEP_NUM] $1${NC}"; STEP_NUM=$((STEP_NUM + 1)); }
+STEP_NUM=1
 
-echo -e "${BLUE}============================================================${NC}"
-echo -e "${BLUE}Instruments Service - Setup Script${NC}"
-echo -e "${BLUE}============================================================${NC}"
-
-# Parse arguments
-HELP=false
+# ── PARSE ARGUMENTS ─────────────────────────────────────────────────────────
+CHECK_ONLY=false
+FORCE=false
+ISOLATED=false
 for arg in "$@"; do
     case $arg in
+        --check) CHECK_ONLY=true ;;
+        --force) FORCE=true ;;
+        --isolated) ISOLATED=true ;;
         --help|-h)
-            HELP=true
-            shift
+            echo "Usage: bash scripts/setup.sh [--check|--force|--isolated|--help]"
+            echo ""
+            echo "  --check      Verify environment without making changes"
+            echo "  --force      Force reinstall (ignores stamp cache)"
+            echo "  --isolated   Standalone repo setup (no workspace deps)"
+            echo "  --help       Show this message"
+            echo ""
+            echo "Idempotent. Safe to re-run. Skips steps already completed."
+            echo ""
+            echo "Flags can be combined: bash scripts/setup.sh --check --isolated"
+            exit 0
             ;;
     esac
 done
 
-if [ "$HELP" = true ]; then
+# ── RESOLVE PATHS ───────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_NAME=$(basename "$PROJECT_ROOT")
+WORKSPACE_ROOT="${WORKSPACE_ROOT:-$(cd "$PROJECT_ROOT/.." && pwd)}"
+cd "$PROJECT_ROOT"
+
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}  setup.sh — $REPO_NAME${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+# ── AUTO-DETECT PACKAGE_NAME ────────────────────────────────────────────────
+if [ -z "$PACKAGE_NAME" ] && [ -f "pyproject.toml" ]; then
+    # Try [project] name field first, convert dashes to underscores
+    PACKAGE_NAME=$(grep -A 1 '^\[project\]' pyproject.toml | grep '^name' | sed 's/.*= *"//;s/".*//' | tr '-' '_' 2>/dev/null || echo "")
+    # Verify the package directory actually exists (some repos have pyproject.toml but no Python package)
+    if [ -n "$PACKAGE_NAME" ] && [ ! -d "$PACKAGE_NAME" ] && [ ! -d "src/$PACKAGE_NAME" ]; then
+        PACKAGE_NAME=""
+    fi
+fi
+
+# ── AUTO-DETECT REQUIRED_PYTHON from pyproject.toml ─────────────────────────
+if [ -f "pyproject.toml" ]; then
+    PYVER=$(grep 'requires-python' pyproject.toml | grep -oE '[0-9]+\.[0-9]+' | head -1 2>/dev/null || echo "")
+    [ -n "$PYVER" ] && REQUIRED_PYTHON="$PYVER"
+fi
+
+# ── CI DETECTION ────────────────────────────────────────────────────────────
+IN_CI=false
+if [ -n "${GITHUB_ACTIONS:-}" ] || [ -n "${CI:-}" ] || [ -n "${CLOUD_BUILD:-}" ]; then
+    IN_CI=true
+    echo -e "  ${YELLOW}CI detected — skipping venv/deps setup (CI manages its own env)${NC}"
+fi
+
+SETUP_STAMP="$PROJECT_ROOT/.setup-stamp"
+ISSUES=0
+
+# ── REPO TYPE DETECTION ─────────────────────────────────────────────────────
+# UI repos (React/TypeScript): have package.json, no pyproject.toml
+# Python repos: have pyproject.toml (may also have package.json for tooling)
+IS_UI_REPO=false
+if [ -f "package.json" ] && [ ! -f "pyproject.toml" ]; then
+    IS_UI_REPO=true
+fi
+
+# ── UI REPO FLOW ─────────────────────────────────────────────────────────────
+# For UI repos, skip all Python steps and run npm install instead, then exit.
+if [ "$IS_UI_REPO" = true ]; then
+    echo -e "  ${BLUE}UI repo detected (package.json, no pyproject.toml)${NC}"
+
+    log_step "Node.js version"
+    if command -v node &>/dev/null; then
+        NODE_VER=$(node --version 2>&1)
+        log_ok "Node $NODE_VER"
+    else
+        log_fail "Node.js not found — install: https://nodejs.org or: brew install node"
+        ISSUES=$((ISSUES + 1))
+        [ "$CHECK_ONLY" = true ] || exit 1
+    fi
+
+    log_step "npm / node_modules"
+    if [ "$IN_CI" = true ]; then
+        log_skip "CI mode — dependencies managed by CI"
+    elif [ "$CHECK_ONLY" = true ]; then
+        if [ -d "node_modules" ]; then
+            log_ok "node_modules exists"
+        else
+            log_fail "node_modules missing — run: npm install"
+            ISSUES=$((ISSUES + 1))
+        fi
+    elif [ -d "node_modules" ] && [ "$FORCE" != true ]; then
+        # Re-install only if package.json is newer than node_modules
+        if [ "package.json" -nt "node_modules" ]; then
+            log_warn "package.json changed — running npm install"
+            npm install --silent
+            log_ok "npm install complete"
+        else
+            log_skip "node_modules up to date"
+        fi
+    else
+        npm install --silent
+        log_ok "npm install complete"
+    fi
+
+    log_step "TypeScript / build tools"
+    if [ -f "node_modules/.bin/tsc" ]; then
+        TSC_VER=$(node_modules/.bin/tsc --version 2>&1 || echo "installed")
+        log_ok "tsc $TSC_VER"
+    else
+        log_warn "tsc not found in node_modules (will be available after npm install)"
+    fi
+
     echo ""
-    echo "Usage: source ./scripts/setup.sh [OPTIONS]"
-    echo ""
-    echo "Options:"
-    echo "  --help, -h   Show this help message"
-    echo ""
-    echo "This script will:"
-    echo "  1. Verify Python version (MUST be 3.13.x)"
-    echo "  2. Check architecture on Apple Silicon (ARM64 required)"
-    echo "  3. Create/activate a virtual environment"
-    echo "  4. Install unified-cloud-services from GitHub main"
-    echo "  5. Install unified-events-interface (local path or GitHub)"
-    echo "  6. Install instruments-service as EDITABLE (for your changes)"
-    echo "  7. Auto-detect GCP credentials"
-    echo ""
-    echo "TIP: Run with 'source' to auto-activate the venv when done:"
-    echo "  source ./scripts/setup.sh"
-    echo ""
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    if [ "$ISSUES" -gt 0 ]; then
+        echo -e "${RED}  $ISSUES issue(s) found${NC}"
+        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        [ "$CHECK_ONLY" = true ] && exit 2 || exit 1
+    else
+        echo -e "${GREEN}  Setup complete — $REPO_NAME ready (UI repo)${NC}"
+        echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+        echo ""
+        echo "  Next steps:"
+        echo "    npm run dev                            # Start dev server"
+        echo "    bash scripts/quality-gates.sh          # Run quality gates"
+        echo "    bash scripts/quickmerge.sh \"message\"   # Full merge pipeline"
+        echo ""
+    fi
     exit 0
 fi
+# ── END UI REPO FLOW — Python repo continues below ──────────────────────────
 
-# =============================================================================
-# PYTHON 3.13 CONFIRMATION PROMPT
-# =============================================================================
-echo ""
-# Detect OS for platform-specific instructions
-OS_TYPE="unknown"
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    OS_TYPE="macos"
-    INSTALL_CMD="brew install python@3.13"
-elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-    OS_TYPE="linux"
-    INSTALL_CMD="sudo apt install python3.13 python3.13-venv"
-else
-    INSTALL_CMD="pyenv install 3.13.1 && pyenv local 3.13.1"
-fi
-
-echo -e "${YELLOW}╔════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${YELLOW}║  IMPORTANT: Python 3.13.x is REQUIRED                      ║${NC}"
-echo -e "${YELLOW}╠════════════════════════════════════════════════════════════╣${NC}"
-echo -e "${YELLOW}║  Before continuing, ensure you have installed Python 3.13: ║${NC}"
-echo -e "${YELLOW}║                                                            ║${NC}"
-if [[ "$OS_TYPE" == "macos" ]]; then
-echo -e "${YELLOW}║    brew install python@3.13                                ║${NC}"
-echo -e "${YELLOW}║    OR: pyenv install 3.13.1 && pyenv local 3.13.1          ║${NC}"
-elif [[ "$OS_TYPE" == "linux" ]]; then
-echo -e "${YELLOW}║    sudo apt install python3.13 python3.13-venv             ║${NC}"
-echo -e "${YELLOW}║    OR: pyenv install 3.13.1 && pyenv local 3.13.1          ║${NC}"
-else
-echo -e "${YELLOW}║    pyenv install 3.13.1 && pyenv local 3.13.1              ║${NC}"
-fi
-echo -e "${YELLOW}╚════════════════════════════════════════════════════════════╝${NC}"
-echo ""
-echo -n "Have you installed Python 3.13.x? (yes/no): "
-read PYTHON_CONFIRMED
-if [[ ! "$PYTHON_CONFIRMED" =~ ^[Yy][Ee]?[Ss]?$ ]]; then
-    echo ""
-    echo -e "${YELLOW}Please install Python 3.13 first:${NC}"
-    echo ""
-    echo "  pyenv install 3.13.1 && pyenv local 3.13.1"
-    echo "  OR: brew install python@3.13"
-    echo ""
-    echo "Then run this script again."
-    exit 1
-fi
-
-# =============================================================================
-# Step 0: Verify we're in instruments-service and pull latest
-# =============================================================================
-echo ""
-echo -e "${YELLOW}Step 0: Checking instruments-service...${NC}"
-
-# Verify we're inside the instruments-service repo
-if [ ! -f "$REPO_ROOT/pyproject.toml" ]; then
-    echo -e "${RED}ERROR: Cannot find pyproject.toml${NC}"
-    echo ""
-    echo "Looking in: $REPO_ROOT"
-    echo "Current dir: $(pwd)"
-    echo ""
-    echo "Make sure you're in the instruments-service directory:"
-    echo ""
-    echo "  cd instruments-service"
-    echo "  source ./scripts/setup.sh"
-    echo ""
-    exit 1
-fi
-
-echo -e "${GREEN}✓ Found instruments-service at: $REPO_ROOT${NC}"
-
-# Pull latest (optional - don't fail if offline)
-cd "$REPO_ROOT"
-if [ -d ".git" ]; then
-    echo "Pulling latest changes..."
-    git pull origin main --quiet 2>/dev/null || git pull --quiet 2>/dev/null || echo -e "${YELLOW}⚠ Could not pull (offline or no remote)${NC}"
-    echo -e "${GREEN}✓ instruments-service is ready${NC}"
-fi
-
-# =============================================================================
-# Step 1: Verify Python version (MUST be 3.13.x)
-# =============================================================================
-echo ""
-echo -e "${YELLOW}Step 1: Verifying Python version (MUST be 3.13.x)...${NC}"
+# ── [1] PYTHON VERSION ─────────────────────────────────────────────────────
+log_step "Python version (requires $REQUIRED_PYTHON)"
 
 PYTHON_CMD=""
-# Check for python3.13 first, then python3, then python
-for cmd in python3.13 python3 python; do
-    if command -v $cmd &> /dev/null; then
-        VERSION=$($cmd --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
-        MAJOR=$(echo $VERSION | cut -d. -f1)
-        MINOR=$(echo $VERSION | cut -d. -f2)
-
-        # ONLY accept Python 3.13
-        if [ "$MAJOR" -eq 3 ] && [ "$MINOR" -eq 13 ]; then
-            PYTHON_CMD=$cmd
-            echo -e "${GREEN}✓ Found $cmd (Python $VERSION) - REQUIRED version${NC}"
+for cmd in "python${REQUIRED_PYTHON}" python3 python; do
+    if command -v "$cmd" &>/dev/null; then
+        VER=$("$cmd" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1)
+        if [ "$VER" = "$REQUIRED_PYTHON" ]; then
+            PYTHON_CMD="$cmd"
             break
-        elif [ "$MAJOR" -eq 3 ] && [ "$MINOR" -eq 12 ]; then
-            echo -e "${RED}✗ Found Python $VERSION - NOT SUPPORTED${NC}"
-            echo -e "${RED}  This service requires Python 3.13.x${NC}"
-        elif [ "$MAJOR" -eq 3 ] && [ "$MINOR" -eq 11 ]; then
-            echo -e "${RED}✗ Found Python $VERSION - NOT SUPPORTED${NC}"
-            echo -e "${RED}  This service requires Python 3.13.x${NC}"
         fi
     fi
 done
 
-if [ -z "$PYTHON_CMD" ]; then
-    echo ""
-    echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${RED}║  ERROR: Python 3.13 is REQUIRED                            ║${NC}"
-    echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-    echo "Install Python 3.13:"
-    echo ""
-    echo "  macOS (Homebrew):"
-    echo "    brew install python@3.13"
-    echo "    # Then add to PATH or use pyenv:"
-    echo "    pyenv install 3.13.1 && pyenv local 3.13.1"
-    echo ""
-    echo "  Ubuntu/Debian:"
-    echo "    sudo add-apt-repository ppa:deadsnakes/ppa"
-    echo "    sudo apt update && sudo apt install python3.13 python3.13-venv"
-    echo ""
-    echo "  pyenv (recommended for version management):"
-    echo "    pyenv install 3.13.1"
-    echo "    pyenv local 3.13.1"
-    echo ""
-    exit 1
+if [ -n "$PYTHON_CMD" ]; then
+    log_ok "Python $VER ($PYTHON_CMD)"
+else
+    log_fail "Python $REQUIRED_PYTHON not found"
+    echo "  Install: pyenv install ${REQUIRED_PYTHON}.0 && pyenv local ${REQUIRED_PYTHON}.0"
+    echo "  Or: brew install python@${REQUIRED_PYTHON}"
+    ISSUES=$((ISSUES + 1))
+    [ "$CHECK_ONLY" = true ] || exit 1
 fi
 
-# =============================================================================
-# Step 1b: Architecture check (Apple Silicon)
-# =============================================================================
-if [[ "$OSTYPE" == "darwin"* ]]; then
+# ── [2] ARCHITECTURE CHECK (Apple Silicon — local dev only) ─────────────────
+log_step "Architecture check"
+
+if [ "$IN_CI" = true ]; then
+    log_skip "CI mode — CI runs on Linux, arch check not applicable"
+elif [[ "$OSTYPE" == "darwin"* ]] && [ -n "$PYTHON_CMD" ]; then
     ARCH=$(uname -m)
-    PYTHON_ARCH=$($PYTHON_CMD -c "import platform; print(platform.machine())")
-    if [ "$ARCH" = "arm64" ] && [ "$PYTHON_ARCH" = "x86_64" ]; then
-        echo ""
-        echo -e "${RED}╔════════════════════════════════════════════════════════════╗${NC}"
-        echo -e "${RED}║  ERROR: Architecture mismatch detected                     ║${NC}"
-        echo -e "${RED}╠════════════════════════════════════════════════════════════╣${NC}"
-        echo -e "${RED}║  Your Mac: Apple Silicon (ARM64)                           ║${NC}"
-        echo -e "${RED}║  Your Python: x86_64 (Intel via Rosetta)                   ║${NC}"
-        echo -e "${RED}║                                                            ║${NC}"
-        echo -e "${RED}║  This will cause package installation failures             ║${NC}"
-        echo -e "${RED}║  (pydantic_core, numpy, etc.)                              ║${NC}"
-        echo -e "${RED}╚════════════════════════════════════════════════════════════╝${NC}"
-        echo ""
-        echo "Fix: Install native ARM64 Python 3.13:"
-        echo "  brew install python@3.13"
-        echo "  OR: pyenv install 3.13.1 && pyenv local 3.13.1"
-        echo ""
-        exit 1
-    fi
-fi
-
-# =============================================================================
-# Step 2: Create virtual environment
-# =============================================================================
-echo ""
-echo -e "${YELLOW}Step 2: Setting up virtual environment...${NC}"
-
-VENV_DIR="$REPO_ROOT/.venv"
-
-if [ -d "$VENV_DIR" ]; then
-    echo -e "${GREEN}✓ Virtual environment already exists at $VENV_DIR${NC}"
-else
-    echo "Creating virtual environment..."
-    $PYTHON_CMD -m venv "$VENV_DIR"
-    echo -e "${GREEN}✓ Created virtual environment at $VENV_DIR${NC}"
-fi
-
-# Activate virtual environment
-source "$VENV_DIR/bin/activate"
-echo -e "${GREEN}✓ Activated virtual environment${NC}"
-
-# Upgrade pip
-echo "Upgrading pip..."
-pip install --upgrade pip > /dev/null 2>&1
-echo -e "${GREEN}✓ pip upgraded${NC}"
-
-# =============================================================================
-# Step 3: Install unified-cloud-services (always from GitHub main)
-# =============================================================================
-echo ""
-echo -e "${YELLOW}Step 3: Installing unified-cloud-services from GitHub...${NC}"
-
-# Ensure SSH agent has keys loaded (pip spawns subprocess that needs this)
-if [ -z "$SSH_AUTH_SOCK" ]; then
-    eval "$(ssh-agent -s)" > /dev/null 2>&1
-fi
-# Add default SSH keys to agent (silently, in case they're already added)
-ssh-add ~/.ssh/id_ed25519 2>/dev/null || ssh-add ~/.ssh/id_rsa 2>/dev/null || true
-
-UCS_SSH_URL="git+ssh://git@github.com/IggyIkenna/unified-cloud-services.git"
-
-echo "Installing unified-cloud-services..."
-
-# Install using modern pip syntax: 'package @ URL'
-if ! pip install "unified-cloud-services @ ${UCS_SSH_URL}"; then
-    echo ""
-    echo -e "${RED}✗ Failed to install unified-cloud-services${NC}"
-    echo ""
-    echo "This is likely an SSH authentication issue. Options:"
-    echo ""
-    echo "  1. Set up SSH key with GitHub:"
-    echo "     ssh-keygen -t ed25519 -C 'your_email@example.com'"
-    echo "     cat ~/.ssh/id_ed25519.pub"
-    echo "     # Add to: https://github.com/settings/keys"
-    echo ""
-    echo "  2. Or install manually with a Personal Access Token (PAT):"
-    echo "     pip install 'unified-cloud-services @ git+https://YOUR_PAT@github.com/IggyIkenna/unified-cloud-services.git'"
-    echo ""
-    echo "  3. Or clone manually and install:"
-    echo "     git clone git@github.com:IggyIkenna/unified-cloud-services.git ../unified-cloud-services"
-    echo "     pip install -e ../unified-cloud-services"
-    echo ""
-    exit 1
-fi
-
-echo -e "${GREEN}✓ Installed unified-cloud-services${NC}"
-
-# =============================================================================
-# Step 3b: Install unified-events-interface (local path or GitHub)
-# =============================================================================
-echo ""
-echo -e "${YELLOW}Step 3b: Installing unified-events-interface...${NC}"
-
-UEI_PATH=""
-if [ -d "$REPO_ROOT/../unified-events-interface" ] && [ -f "$REPO_ROOT/../unified-events-interface/pyproject.toml" ]; then
-    UEI_PATH="$REPO_ROOT/../unified-events-interface"
-elif [ -d "$REPO_ROOT/deps/unified-events-interface" ] && [ -f "$REPO_ROOT/deps/unified-events-interface/pyproject.toml" ]; then
-    UEI_PATH="$REPO_ROOT/deps/unified-events-interface"
-fi
-
-if [ -n "$UEI_PATH" ]; then
-    echo "Installing from local path: $UEI_PATH"
-    pip install -e "$UEI_PATH" > /dev/null 2>&1
-    echo -e "${GREEN}✓ Installed unified-events-interface from local path${NC}"
-else
-    echo "Local path not found, installing from GitHub..."
-    UEI_SSH_URL="git+ssh://git@github.com/IggyIkenna/unified-events-interface.git"
-    if ! pip install "unified-events-interface @ ${UEI_SSH_URL}" 2>/dev/null; then
-        echo -e "${YELLOW}⚠ Could not install unified-events-interface from GitHub${NC}"
-        echo "  For local dev: clone to ../unified-events-interface and re-run setup.sh"
-        echo "  Or: pip install -e ../unified-events-interface"
+    PY_ARCH=$("$PYTHON_CMD" -c "import platform; print(platform.machine())" 2>/dev/null || echo "unknown")
+    if [ "$ARCH" = "arm64" ] && [ "$PY_ARCH" = "x86_64" ]; then
+        log_fail "Python is x86_64 (Rosetta) on ARM64 Mac — native ARM64 required"
+        echo "  Fix: brew install python@${REQUIRED_PYTHON} (native ARM64)"
+        ISSUES=$((ISSUES + 1))
+        [ "$CHECK_ONLY" = true ] || exit 1
     else
-        echo -e "${GREEN}✓ Installed unified-events-interface from GitHub${NC}"
+        log_ok "Architecture: $ARCH / Python: $PY_ARCH"
+    fi
+else
+    log_skip "Not macOS or no Python — skipping arch check"
+fi
+
+# ── [3] BOOTSTRAP UV (before venv creation — venv creation needs uv) ────────
+log_step "Bootstrap uv"
+
+if [ "$IN_CI" = true ]; then
+    log_skip "CI mode"
+elif [ "$CHECK_ONLY" = true ]; then
+    command -v uv &>/dev/null && log_ok "uv available" || { log_fail "uv not found"; ISSUES=$((ISSUES + 1)); }
+elif command -v uv &>/dev/null; then
+    log_skip "uv already installed ($(uv --version 2>&1 | head -1))"
+else
+    "$PYTHON_CMD" -m pip install uv --quiet 2>/dev/null
+    log_ok "Installed uv"
+fi
+
+# ── [4] VENV CREATION ──────────────────────────────────────────────────────
+log_step "Virtual environment (.venv)"
+
+if [ "$IN_CI" = true ]; then
+    log_skip "CI mode — venv managed by CI"
+elif [ "$CHECK_ONLY" = true ]; then
+    if [ -d ".venv" ]; then
+        log_ok ".venv exists"
+    elif [ -d "../.venv-workspace" ] && [ -f "../.venv-workspace/bin/python" ]; then
+        log_ok ".venv-workspace available (workspace venv)"
+    else
+        log_fail ".venv missing"
+        ISSUES=$((ISSUES + 1))
+    fi
+elif [ -d ".venv" ] && [ "$FORCE" != true ]; then
+    VENV_PY=$(".venv/bin/python" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "")
+    if [ "$VENV_PY" = "$REQUIRED_PYTHON" ]; then
+        log_skip ".venv exists (Python $VENV_PY)"
+    else
+        log_warn ".venv has Python $VENV_PY, need $REQUIRED_PYTHON — recreating"
+        rm -rf .venv
+        uv venv .venv --python "$PYTHON_CMD" 2>/dev/null || "$PYTHON_CMD" -m venv .venv
+        log_ok "Recreated .venv with Python $REQUIRED_PYTHON"
+    fi
+else
+    uv venv .venv --python "$PYTHON_CMD" 2>/dev/null || "$PYTHON_CMD" -m venv .venv
+    log_ok "Created .venv"
+fi
+
+# ── [5] ACTIVATE VENV ──────────────────────────────────────────────────────
+log_step "Activate .venv"
+
+if [ "$IN_CI" = true ]; then
+    log_skip "CI mode"
+elif [ "$CHECK_ONLY" = true ]; then
+    log_skip "Check mode — not activating"
+elif [ -f ".venv/bin/activate" ]; then
+    source .venv/bin/activate
+    log_ok "Activated (.venv/bin/python)"
+elif [ -f ".venv/Scripts/activate" ]; then
+    source .venv/Scripts/activate
+    log_ok "Activated (.venv/Scripts/python)"
+else
+    log_fail "No .venv/bin/activate found"
+    ISSUES=$((ISSUES + 1))
+    [ "$CHECK_ONLY" = true ] || exit 1
+fi
+
+# ── [6] UV LOCK ─────────────────────────────────────────────────────────────
+log_step "uv lock sync"
+
+if [ "$IN_CI" = true ]; then
+    log_skip "CI mode"
+elif [ "$CHECK_ONLY" = true ]; then
+    [ -f "uv.lock" ] && log_ok "uv.lock present" || log_warn "uv.lock missing"
+elif [ ! -f "pyproject.toml" ]; then
+    log_skip "No pyproject.toml"
+elif [ -f "uv.lock" ] && [ "uv.lock" -nt "pyproject.toml" ] && [ "$FORCE" != true ]; then
+    log_skip "uv.lock is current (newer than pyproject.toml)"
+else
+    uv lock 2>/dev/null && log_ok "uv.lock synced" || log_warn "uv lock failed (non-fatal)"
+fi
+
+# ── [7] LOCAL PATH DEPENDENCIES ─────────────────────────────────────────────
+log_step "Local path dependencies"
+
+MANIFEST_PATH="$WORKSPACE_ROOT/unified-trading-pm/workspace-manifest.json"
+
+if [ "$IN_CI" = true ] || [ "$CHECK_ONLY" = true ]; then
+    log_skip "CI/check mode"
+elif [ ! -f "$MANIFEST_PATH" ]; then
+    log_skip "No workspace-manifest.json at $MANIFEST_PATH"
+else
+    # jq is required to parse workspace-manifest.json — install if missing
+    if ! command -v jq &>/dev/null; then
+        log_warn "jq not found — attempting install..."
+        if command -v apt-get &>/dev/null; then
+            sudo apt-get install -y jq --quiet 2>/dev/null && log_ok "Installed jq via apt" || { log_fail "jq install failed — run: sudo apt-get install jq"; ISSUES=$((ISSUES + 1)); exit 1; }
+        elif command -v brew &>/dev/null; then
+            brew install jq --quiet 2>/dev/null && log_ok "Installed jq via brew" || { log_fail "jq install failed — run: brew install jq"; ISSUES=$((ISSUES + 1)); exit 1; }
+        else
+            log_fail "jq required but not installable — install manually: https://jqlang.github.io/jq/download/"
+            ISSUES=$((ISSUES + 1))
+            exit 1
+        fi
+    fi
+
+    DEPS=$(jq -r '.repositories["'"$REPO_NAME"'"].dependencies[]?.name // empty' "$MANIFEST_PATH" 2>/dev/null || echo "")
+
+    if [ "$ISOLATED" = true ]; then
+        log_skip "Isolated mode — skipping workspace path deps"
+        if [ -n "$DEPS" ]; then
+            log_warn "This repo depends on: $DEPS"
+            log_warn "In isolated mode, install them from Artifact Registry (uv pip install <dep>)"
+            log_warn "Some tests requiring these deps will fail — this is expected"
+        fi
+    elif [ -n "$DEPS" ]; then
+        for dep in $DEPS; do
+            DEP_PATH="$WORKSPACE_ROOT/$dep"
+            if [ -d "$DEP_PATH" ] && [ -f "$DEP_PATH/pyproject.toml" ]; then
+                uv pip install -e "$DEP_PATH" --quiet 2>/dev/null && log_ok "$dep" || log_warn "$dep install failed"
+            else
+                log_warn "$dep not found at $DEP_PATH — install from Artifact Registry if needed"
+            fi
+        done
+    else
+        log_skip "No dependencies for $REPO_NAME in workspace-manifest.json"
     fi
 fi
 
-# =============================================================================
-# Step 4: Install instruments-service
-# =============================================================================
-echo ""
-echo -e "${YELLOW}Step 4: Installing instruments-service...${NC}"
+# ── [8] PROJECT DEPS ───────────────────────────────────────────────────────
+log_step "Project dependencies"
 
-cd "$REPO_ROOT"
-
-# Install with dev dependencies
-echo "Installing instruments-service with all dependencies..."
-pip install -e ".[dev]" > /dev/null 2>&1
-echo -e "${GREEN}✓ Installed instruments-service${NC}"
-
-# Verify installation
-if python -c "import instruments_service; print('OK')" 2>/dev/null | grep -q "OK"; then
-    echo -e "${GREEN}✓ instruments_service module importable${NC}"
+if [ "$IN_CI" = true ]; then
+    log_skip "CI mode"
+elif [ "$CHECK_ONLY" = true ]; then
+    log_skip "Check mode"
+elif [ ! -f "pyproject.toml" ]; then
+    log_skip "No pyproject.toml"
+elif [ -f "$SETUP_STAMP" ] && [ "$SETUP_STAMP" -nt "pyproject.toml" ] && [ "$FORCE" != true ]; then
+    if [ ! -f "uv.lock" ] || [ "$SETUP_STAMP" -nt "uv.lock" ]; then
+        log_skip "Dependencies up to date (stamp is current)"
+    else
+        uv pip install -e ".[dev]" --quiet 2>/dev/null || uv pip install -e . --quiet 2>/dev/null
+        touch "$SETUP_STAMP"
+        log_ok "Dependencies installed (uv.lock changed)"
+    fi
 else
-    echo -e "${RED}✗ Failed to import instruments_service${NC}"
-    exit 1
+    uv pip install -e ".[dev]" --quiet 2>/dev/null || uv pip install -e . --quiet 2>/dev/null
+    touch "$SETUP_STAMP"
+    log_ok "Dependencies installed"
 fi
 
-# =============================================================================
-# Step 5: Check GCP credentials
-# =============================================================================
-echo ""
-echo -e "${YELLOW}Step 5: Checking GCP credentials...${NC}"
+# ── [9] RIPGREP CHECK ──────────────────────────────────────────────────────
+log_step "ripgrep (required by quality-gates.sh)"
 
-# Look for credentials file in repo root
-CREDS_FILE=$(find "$REPO_ROOT" -maxdepth 1 -name "central-element-*.json" -type f 2>/dev/null | head -1)
+if command -v rg &>/dev/null; then
+    log_ok "ripgrep $(rg --version 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo 'installed')"
+else
+    log_fail "ripgrep not found — install: brew install ripgrep"
+    ISSUES=$((ISSUES + 1))
+fi
+
+# ── [10] RUFF VERSION ──────────────────────────────────────────────────────
+log_step "ruff version (workspace standard: $REQUIRED_RUFF)"
+
+RUFF_CMD=""
+[ -f ".venv/bin/ruff" ] && RUFF_CMD=".venv/bin/ruff"
+[ -z "$RUFF_CMD" ] && command -v ruff &>/dev/null && RUFF_CMD="ruff"
+
+if [ -n "$RUFF_CMD" ]; then
+    RUFF_VER=$("$RUFF_CMD" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+    if [ "$RUFF_VER" = "$REQUIRED_RUFF" ]; then
+        log_ok "ruff $RUFF_VER"
+    else
+        log_warn "ruff $RUFF_VER (expected $REQUIRED_RUFF)"
+    fi
+else
+    log_warn "ruff not found — will be installed with dev deps"
+fi
+
+# ── [11] IMPORT SMOKE TEST ─────────────────────────────────────────────────
+log_step "pytest deps (required by quality-gates.sh)"
+if [ -d "tests" ]; then
+  PY_CMD="${PYTHON_CMD:-python3}"
+  [ -f ".venv/bin/python" ] && PY_CMD=".venv/bin/python"
+  for mod in pytest pytest_cov pytest_timeout xdist; do
+    if $PY_CMD -c "import $mod" 2>/dev/null; then
+      log_ok "$mod"
+    else
+      log_fail "$mod not found — add to pyproject.toml [project.optional-dependencies] dev: pytest, pytest-cov, pytest-xdist, pytest-timeout"
+      ISSUES=$((ISSUES + 1))
+    fi
+  done
+else
+  log_skip "No tests/ — pytest deps optional"
+fi
+
+log_step "Import smoke test"
+
+if [ -n "$PACKAGE_NAME" ]; then
+    SMOKE_PYTHON="${PYTHON_CMD:-python3}"
+    [ -f ".venv/bin/python" ] && SMOKE_PYTHON=".venv/bin/python"
+    if $SMOKE_PYTHON -c "import $PACKAGE_NAME" 2>/dev/null; then
+        log_ok "import $PACKAGE_NAME"
+    else
+        if [ "$ISOLATED" = true ]; then
+            log_warn "import $PACKAGE_NAME FAILED (isolated mode — missing workspace deps may cause this)"
+        else
+            log_fail "import $PACKAGE_NAME FAILED"
+            ISSUES=$((ISSUES + 1))
+        fi
+    fi
+else
+    log_skip "PACKAGE_NAME not set and could not auto-detect"
+fi
+
+# ── [12] GCP CREDENTIALS (informational) ───────────────────────────────────
+log_step "GCP credentials (informational)"
 
 if [ -n "$GOOGLE_APPLICATION_CREDENTIALS" ] && [ -f "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
-    echo -e "${GREEN}✓ GCP credentials found at $GOOGLE_APPLICATION_CREDENTIALS${NC}"
-elif [ -n "$CREDS_FILE" ]; then
-    export GOOGLE_APPLICATION_CREDENTIALS="$CREDS_FILE"
-    echo -e "${GREEN}✓ GCP credentials found: $(basename $CREDS_FILE)${NC}"
-    echo -e "${GREEN}✓ Set GOOGLE_APPLICATION_CREDENTIALS=$CREDS_FILE${NC}"
+    log_ok "GOOGLE_APPLICATION_CREDENTIALS set"
 else
-    echo -e "${YELLOW}⚠ GCP credentials not found${NC}"
-    echo "  Place your service account JSON file in: $REPO_ROOT"
-    echo "  Or set: export GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json"
+    log_warn "No GCP credentials detected — run: gcloud auth application-default login"
+    log_warn "Never place SA JSON files in the repo root (use ADC or Secret Manager)"
 fi
 
-# =============================================================================
-# Summary and Auto-Activation
-# =============================================================================
-echo ""
-echo -e "${GREEN}============================================================${NC}"
-echo -e "${GREEN}Setup Complete!${NC}"
-echo -e "${GREEN}============================================================${NC}"
-echo ""
+# ── [13] KNOWN CAVEATS (per-repo) ─────────────────────────────────────────
+# If AGENTS.md exists, print a summary of known caveats for this repo.
+# This helps AI agents and new developers understand what to expect.
+if [ -f "AGENTS.md" ]; then
+    log_step "Known caveats (from AGENTS.md)"
+    # Extract lines between "## Known" and the next "##" heading
+    CAVEATS=$(sed -n '/^## Known/,/^## /{/^## Known/d;/^## /d;/^$/d;p}' AGENTS.md 2>/dev/null | head -10)
+    if [ -n "$CAVEATS" ]; then
+        echo -e "  ${YELLOW}${CAVEATS}${NC}"
+    else
+        log_ok "AGENTS.md present (no known caveats section)"
+    fi
+fi
 
-# Check if script was sourced (activation will persist) or executed (won't persist)
-if [[ "${BASH_SOURCE[0]}" != "${0}" ]] 2>/dev/null || [[ "$ZSH_EVAL_CONTEXT" == *:file:* ]] 2>/dev/null; then
-    # Script was sourced - venv activation persists!
-    echo -e "${GREEN}✓ Virtual environment is now ACTIVE${NC}"
-    echo ""
-    echo "You can now run:"
-    echo -e "  ${BLUE}python -m instruments_service --help${NC}"
-    echo ""
-    echo "Known working command (May 23, 2023):"
-    echo -e "  ${BLUE}python -m instruments_service --category CEFI --start-date 2023-05-23 --end-date 2023-05-23 --dry-run${NC}"
+# ── SUMMARY ─────────────────────────────────────────────────────────────────
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+if [ "$ISSUES" -gt 0 ]; then
+    echo -e "${RED}  $ISSUES issue(s) found${NC}"
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    [ "$CHECK_ONLY" = true ] && exit 2 || exit 1
 else
-    # Script was executed - need to activate manually
-    echo -e "${YELLOW}Run this command to activate the virtual environment:${NC}"
-    echo ""
-    echo -e "  ${BLUE}source .venv/bin/activate${NC}"
-    echo ""
-    echo -e "${YELLOW}TIP: Next time, run with 'source' for auto-activation:${NC}"
-    echo -e "  ${BLUE}source ./scripts/setup.sh${NC}"
-    echo ""
-    echo "Then run:"
-    echo -e "  ${BLUE}python -m instruments_service --help${NC}"
+    echo -e "${GREEN}  Setup complete — $REPO_NAME ready${NC}"
+    if [ "$ISOLATED" = true ]; then
+        echo -e "${YELLOW}  [ISOLATED MODE] Some tests may fail due to missing workspace deps${NC}"
+    fi
+    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+fi
+
+# ── SOURCE/EXECUTE DETECTION ────────────────────────────────────────────────
+if [[ "${BASH_SOURCE[0]:-}" != "${0}" ]] 2>/dev/null || [[ "$ZSH_EVAL_CONTEXT" == *:file:* ]] 2>/dev/null; then
+    echo -e "  ${GREEN}venv active in current shell${NC}"
+else
+    echo -e "  ${YELLOW}Activate venv: source .venv/bin/activate${NC}"
+    echo -e "  ${YELLOW}Or re-run with: source scripts/setup.sh${NC}"
 fi
 echo ""
-echo "Run quality gates:"
-echo -e "  ${BLUE}./scripts/quality-gates.sh${NC}"
+echo "  Next steps:"
+echo "    bash scripts/quality-gates.sh          # Run quality gates"
+echo "    bash scripts/quickmerge.sh \"message\"   # Full merge pipeline"
+if [ "$ISOLATED" = true ]; then
+    echo ""
+    echo "  Isolated mode notes:"
+    echo "    - Workspace path deps were skipped; install from Artifact Registry if needed"
+    echo "    - Cross-repo integration tests will fail — this is expected"
+    echo "    - See AGENTS.md (if present) for repo-specific caveats"
+fi
 echo ""

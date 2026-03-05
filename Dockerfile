@@ -1,6 +1,6 @@
 # Dockerfile for instruments-service
 #
-# Uses unified-cloud-services base image from Artifact Registry.
+# Uses unified-trading-services base image from Artifact Registry.
 # No GitHub token (GH_PAT) required.
 #
 # Build:
@@ -10,10 +10,10 @@
 #   docker run -v /path/to/credentials.json:/app/credentials.json \
 #     -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json \
 #     -e GCP_PROJECT_ID=your-gcp-project-id \
-#     instruments-service --mode instruments --start-date 2024-01-01 --CEFI
+#     instruments-service --mode instruments --run-mode batch --start-date 2024-01-01 --CEFI
 
 ARG PROJECT_ID
-FROM --platform=linux/amd64 asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-cloud-services/unified-cloud-services:latest
+FROM --platform=linux/amd64 asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-trading-services/unified-trading-services:latest
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -27,8 +27,8 @@ RUN useradd --create-home --shell /bin/bash appuser
 # Set working directory
 WORKDIR /app/instruments-service
 
-# Install uv package manager (bootstrap with pip - acceptable exception)
-RUN pip install --no-cache-dir uv
+# Install uv package manager (bootstrap with pip - acceptable exception per quality gate)
+RUN pip install uv
 
 # Install keyring FIRST (before pip.conf) to avoid auth loop
 # keyring must be installed from PyPI, not Artifact Registry
