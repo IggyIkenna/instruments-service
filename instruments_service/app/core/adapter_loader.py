@@ -11,10 +11,9 @@ Complies with:
 """
 
 import logging
-from typing import Dict, Optional, Protocol
+from typing import Protocol
 
-from unified_market_interface import DataSourceMapping
-from unified_market_interface.adapters.tradfi import YahooFinanceAdapter
+from unified_market_interface import DataSourceMapping, YahooFinanceAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +25,10 @@ class DataSourceAdapter(Protocol):
 
 
 # Singleton adapter cache (one instance per data source)
-_ADAPTER_CACHE: Dict[str, DataSourceAdapter] = {}
+_ADAPTER_CACHE: dict[str, DataSourceAdapter] = {}
 
 
-def get_adapter_for_venue(venue: str, api_keys: Optional[Dict[str, str]] = None) -> DataSourceAdapter:
+def get_adapter_for_venue(venue: str, api_keys: dict[str, str] | None = None) -> DataSourceAdapter:
     """
     Lazy-load adapter for a venue.
 
@@ -53,21 +52,21 @@ def get_adapter_for_venue(venue: str, api_keys: Optional[Dict[str, str]] = None)
 
     # Return cached adapter if already loaded
     if cache_key in _ADAPTER_CACHE:
-        logger.debug(f"Reusing cached adapter for {data_source}")
+        logger.debug("Reusing cached adapter for %s", data_source)
         return _ADAPTER_CACHE[cache_key]
 
     # Lazy import and instantiate adapter
-    logger.info(f"Lazy-loading adapter for {data_source} (venue: {venue})")
+    logger.info("Lazy-loading adapter for %s (venue: %s)", data_source, venue)
 
     try:
         if data_source == "tardis":
-            from unified_market_interface.adapters.tradfi import TardisAdapter
+            from unified_market_interface import TardisAdapter
 
             api_key = api_keys.get("tardis") if api_keys else None
             adapter = TardisAdapter(api_key=api_key)
 
         elif data_source == "databento":
-            from unified_market_interface.adapters.tradfi import DatabentoAdapter
+            from unified_market_interface import DatabentoAdapter
 
             api_key = api_keys.get("databento") if api_keys else None
             adapter = DatabentoAdapter(api_key=api_key)
@@ -79,8 +78,10 @@ def get_adapter_for_venue(venue: str, api_keys: Optional[Dict[str, str]] = None)
             )
 
         elif data_source == "hyperliquid":
-            from unified_market_interface import HyperliquidBaseClient
-            from unified_market_interface.adapters.onchain_perps import HyperliquidAdapter
+            from unified_market_interface import (
+                HyperliquidAdapter,  # TODO: Map to explicit import
+                HyperliquidBaseClient,
+            )
 
             adapter = HyperliquidAdapter(base_client=HyperliquidBaseClient())
 
@@ -103,67 +104,64 @@ def get_adapter_for_venue(venue: str, api_keys: Optional[Dict[str, str]] = None)
 
         # Cache and return
         _ADAPTER_CACHE[cache_key] = adapter
-        logger.info(f"✅ Loaded adapter for {data_source}")
+        logger.info("✅ Loaded adapter for %s", data_source)
         return adapter
 
-    except ImportError as e:
-        logger.error(f"Failed to import adapter for {data_source}: {e}")
-        raise
-    except Exception as e:
-        logger.error(f"Failed to initialize adapter for {data_source}: {e}")
+    except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
+        logger.error("Failed to initialize adapter for %s: %s", data_source, e)
         raise
 
 
-def _load_defi_adapter(venue: str, api_keys: Optional[Dict[str, str]]) -> DataSourceAdapter:
+def _load_defi_adapter(venue: str, api_keys: dict[str, str] | None) -> DataSourceAdapter:
     """Load DeFi adapter based on venue."""
     venue_upper = venue.upper()
 
     if venue_upper == "UNISWAP-V2":
-        from unified_market_interface.adapters.defi import UniswapV2Adapter
+        from unified_market_interface import UniswapV2Adapter  # TODO: Map to explicit import
 
         return UniswapV2Adapter()
     elif venue_upper == "UNISWAP-V3":
-        from unified_market_interface.adapters.defi import UniswapV3Adapter
+        from unified_market_interface import UniswapV3Adapter  # TODO: Map to explicit import
 
         return UniswapV3Adapter()
     elif venue_upper == "UNISWAP-V4":
-        from unified_market_interface.adapters.defi import UniswapV4Adapter
+        from unified_market_interface import UniswapV4Adapter  # TODO: Map to explicit import
 
         return UniswapV4Adapter()
     elif venue_upper == "AAVE-V3":
-        from unified_market_interface.adapters.defi import AaveV3Adapter
+        from unified_market_interface import AaveV3Adapter  # TODO: Map to explicit import
 
         return AaveV3Adapter()
     elif venue_upper == "CURVE":
-        from unified_market_interface.adapters.defi import CurveAdapter
+        from unified_market_interface import CurveAdapter  # TODO: Map to explicit import
 
         return CurveAdapter()
     elif venue_upper == "BALANCER":
-        from unified_market_interface.adapters.defi import BalancerAdapter
+        from unified_market_interface import BalancerAdapter  # TODO: Map to explicit import
 
         return BalancerAdapter()
     elif venue_upper == "MORPHO":
-        from unified_market_interface.adapters.defi import MorphoAdapter
+        from unified_market_interface import MorphoAdapter  # TODO: Map to explicit import
 
         return MorphoAdapter()
     elif venue_upper == "EULER":
-        from unified_market_interface.adapters.defi import EulerAdapter
+        from unified_market_interface import EulerAdapter  # TODO: Map to explicit import
 
         return EulerAdapter()
     elif venue_upper == "FLUID":
-        from unified_market_interface.adapters.defi import FluidAdapter
+        from unified_market_interface import FluidAdapter  # TODO: Map to explicit import
 
         return FluidAdapter()
     elif venue_upper == "LIDO":
-        from unified_market_interface.adapters.defi import LidoAdapter
+        from unified_market_interface import LidoAdapter  # TODO: Map to explicit import
 
         return LidoAdapter()
     elif venue_upper == "ETHERFI":
-        from unified_market_interface.adapters.defi import EtherFiAdapter
+        from unified_market_interface import EtherFiAdapter  # TODO: Map to explicit import
 
         return EtherFiAdapter()
     elif venue_upper == "ETHENA":
-        from unified_market_interface.adapters.defi import EthenaAdapter
+        from unified_market_interface import EthenaAdapter  # TODO: Map to explicit import
 
         return EthenaAdapter()
     else:
@@ -177,6 +175,6 @@ def clear_adapter_cache():
     logger.debug("Adapter cache cleared")
 
 
-def get_cached_adapters() -> Dict[str, DataSourceAdapter]:
+def get_cached_adapters() -> dict[str, DataSourceAdapter]:
     """Get currently cached adapters (for testing/debugging)."""
     return _ADAPTER_CACHE.copy()

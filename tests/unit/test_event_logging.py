@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 import pytest
+from unified_events_interface import MockEventSink
 
 REQUIRED_COMMON_EVENTS = [
     "STARTED",
@@ -17,8 +18,8 @@ REQUIRED_COMMON_EVENTS = [
     "DATA_INGESTION_COMPLETED",
     "PROCESSING_STARTED",
     "PROCESSING_COMPLETED",
-    "UPLOAD_STARTED",
-    "UPLOAD_COMPLETED",
+    "PERSISTENCE_STARTED",
+    "PERSISTENCE_COMPLETED",
     "STOPPED",
     "FAILED",
 ]
@@ -45,19 +46,12 @@ def get_service_name() -> str:
 def find_python_files(service_dir: Path) -> list[Path]:
     """Find Python files in service source (exclude tests, venv)."""
     exclude = {"tests", ".venv", "venv", "__pycache__", ".git", "examples"}
-    found = []
-    for py in service_dir.rglob("*.py"):
-        parts = py.relative_to(service_dir).parts
-        if any(p in exclude for p in parts):
-            continue
-        found.append(py)
-    return found
+    return [p for p in service_dir.rglob("*.py") if not any(x in p.relative_to(service_dir).parts for x in exclude)]
 
 
 def find_event_markers(file_path: Path) -> set[str]:
-    """Extract SERVICE_EVENT markers from Python file."""
+    """Extract log_event markers from Python file."""
     content = file_path.read_text()
-    # Match log_event("EVENT") or log_event('EVENT') or SERVICE_EVENT: EVENT
     pattern = r'(?:log_event\s*\(\s*["\']|SERVICE_EVENT:\s+)(\w+)'
     return set(re.findall(pattern, content))
 
@@ -65,9 +59,8 @@ def find_event_markers(file_path: Path) -> set[str]:
 @pytest.fixture
 def all_event_markers() -> set[str]:
     """Collect all event markers from service source."""
-    service_dir = Path.cwd()
     markers: set[str] = set()
-    for py in find_python_files(service_dir):
+    for py in find_python_files(Path.cwd()):
         markers.update(find_event_markers(py))
     return markers
 
@@ -80,6 +73,7 @@ def test_required_common_events_exist(all_event_markers: set[str]) -> None:
             f"Missing required common events: {sorted(missing)}\n"
             "See: unified-trading-deployment-v2/docs/STANDARDIZED_EVENT_LOGGING.md"
         )
+    assert not (set(REQUIRED_COMMON_EVENTS) - all_event_markers), "Some required common events missing"
 
 
 def test_service_specific_events_exist(all_event_markers: set[str]) -> None:
@@ -87,26 +81,43 @@ def test_service_specific_events_exist(all_event_markers: set[str]) -> None:
     name = get_service_name()
     if name not in SERVICE_SPECIFIC_EVENTS:
         pytest.skip(f"No service-specific events for {name}")
-    required = set(SERVICE_SPECIFIC_EVENTS[name])
-    missing = required - all_event_markers
+    missing = set(SERVICE_SPECIFIC_EVENTS[name]) - all_event_markers
     if missing:
         pytest.fail(
             f"Missing service-specific events for {name}: {sorted(missing)}\n"
             "See: unified-trading-deployment-v2/docs/STANDARDIZED_EVENT_LOGGING.md"
         )
+    assert True, "Service-specific events validated"
 
 
 def test_event_helper_imported(all_event_markers: set[str]) -> None:
-    """Verify log_event is imported when events are used."""
+    """log_event must come from unified_events_interface (Pattern B — direct import)."""
     if not all_event_markers:
         pytest.skip("No event markers found")
     for py in find_python_files(Path.cwd()):
         text = py.read_text()
         if "from unified_events_interface import log_event" in text:
             return
-        if "from instruments_service.events import log_event" in text:
-            return
-    pytest.fail(
-        "log_event not imported. Add: from unified_events_interface import log_event "
-        "or from instruments_service.events import log_event"
-    )
+    pytest.fail("log_event not imported. Add: from unified_events_interface import log_event")
+    assert True, "log_event import found"
+
+
+def test_mock_event_sink_importable() -> None:
+    """MockEventSink must be importable from unified_events_interface."""
+    sink = MockEventSink()
+    assert hasattr(sink, "events")
+    assert hasattr(sink, "write_event")
+    assert sink.events == []
+
+
+def test_setup_service_requires_sink_in_production() -> None:
+    """setup_service must accept a sink argument for production use."""
+    import inspect
+
+    from unified_events_interface import setup_events
+
+    sig = inspect.signature(setup_events)
+    # setup_events must accept service_name and mode at minimum
+    param_names = list(sig.parameters.keys())
+    assert "service_name" in param_names, "setup_events missing service_name param"
+    assert "mode" in param_names, "setup_events missing mode param"

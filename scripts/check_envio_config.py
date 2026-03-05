@@ -10,46 +10,32 @@ This script helps you:
 Supports multi-cloud via CLOUD_PROVIDER environment variable.
 """
 
-import os
+import logging
 import sys
 
 import requests
+from unified_trading_library import get_secret_client
 
 from instruments_service.config import instruments_config
 
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
 
-def get_envio_secret():
+
+def get_envio_secret() -> str | None:
     """Get Envio API token from Secret Manager (GCP or AWS)."""
-    project_id = (
-        os.environ.get("GCP_PROJECT_ID")
-        or os.environ.get("AWS_PROJECT_ID")
-        or os.environ.get("GOOGLE_CLOUD_PROJECT")
-        or os.environ.get("AWS_ACCOUNT_ID")
-    )
+    project_id = instruments_config.gcp_project_id
     if not project_id:
-        print("❌ Error: PROJECT_ID not found. Set GCP_PROJECT_ID or AWS_PROJECT_ID environment variable.")
+        logger.error("PROJECT_ID not found. Set GCP_PROJECT_ID environment variable.")
         return None
     secret_id = "envio-api-key"
 
-    try:
-        # Try unified-cloud-services first (multi-cloud)
-        from unified_cloud_services.core.client_factory import get_secret_client
-
-        secret_client = get_secret_client()
-        token = secret_client.get_secret(secret_id)
-        if token:
-            return token.strip()
-        return None
-    except ImportError:
-        # unified-cloud-services not available
-        print("❌ unified-cloud-services not installed, cannot retrieve secret")
-        return None
-    except Exception as e:
-        print(f"❌ Error retrieving secret: {e}")
-        return None
+    secret_client = get_secret_client()
+    token = secret_client.get_secret(secret_id)
+    return token.strip() if token else None
 
 
-def test_envio_endpoint(api_url: str, api_token: str):
+def test_envio_endpoint(api_url: str, api_token: str) -> bool:
     """Test Envio GraphQL endpoint with a simple query."""
     query = """
     {
@@ -72,66 +58,63 @@ def test_envio_endpoint(api_url: str, api_token: str):
         data = response.json()
 
         if "errors" in data:
-            print(f"⚠️  GraphQL errors: {data['errors']}")
+            logger.warning("GraphQL errors: %s", data["errors"])
             return False
 
-        print("✅ Endpoint is accessible and responding!")
-        print(f"   Query type: {data.get('data', {}).get('__schema', {}).get('queryType', {}).get('name', 'Unknown')}")
+        logger.info("Endpoint is accessible and responding!")
+        logger.info(
+            "   Query type: %s",
+            data.get("data", {}).get("__schema", {}).get("queryType", {}).get("name", "Unknown"),
+        )
         return True
 
     except requests.exceptions.RequestException as e:
-        print(f"❌ Failed to connect to endpoint: {e}")
+        logger.error("Failed to connect to endpoint: %s", e)
         return False
 
 
-def main():
-    print("=" * 60)
-    print("Envio Configuration Checker")
-    print("=" * 60)
+def main() -> int:
+    logger.info("=" * 60)
+    logger.info("Envio Configuration Checker")
+    logger.info("=" * 60)
 
     # Check API token
-    print("\n1. Checking Envio API token from Secret Manager...")
+    logger.info("1. Checking Envio API token from Secret Manager...")
     api_token = get_envio_secret()
     if api_token:
-        print(f"✅ API token retrieved: {api_token[:20]}...{api_token[-10:]}")
+        logger.info("API token retrieved: %s...%s", api_token[:20], api_token[-10:])
     else:
-        print("❌ Failed to retrieve API token")
+        logger.error("Failed to retrieve API token")
         return 1
 
     # Check endpoint URL
-    print("\n2. Checking ENVIO_API_URL environment variable...")
+    logger.info("2. Checking ENVIO_API_URL environment variable...")
     api_url = instruments_config.envio_api_url
     if api_url:
-        print(f"✅ Endpoint URL configured: {api_url}")
+        logger.info("Endpoint URL configured: %s", api_url)
 
         # Test endpoint
-        print("\n3. Testing endpoint connectivity...")
+        logger.info("3. Testing endpoint connectivity...")
         if test_envio_endpoint(api_url, api_token):
-            print("\n✅ All checks passed! Envio is configured correctly.")
+            logger.info("All checks passed! Envio is configured correctly.")
             return 0
         else:
-            print("\n⚠️  Endpoint configured but not accessible. Check the URL.")
+            logger.warning("Endpoint configured but not accessible. Check the URL.")
             return 1
     else:
-        print("⚠️  ENVIO_API_URL not set")
-        print("\n📋 Next Steps for Local Development:")
-        print("   1. Clone the Uniswap V4 Indexer:")
-        print("      git clone https://github.com/enviodev/uniswap-v4-indexer.git")
-        print("      cd uniswap-v4-indexer")
-        print("\n   2. Install dependencies:")
-        print("      pnpm install")
-        print("\n   3. Configure environment:")
-        print("      - Create .env file in uniswap-v4-indexer directory")
-        print("      - Add: ENVIO_API_TOKEN=<token-from-secret-manager>")
-        print("      - Optional: Add custom RPC endpoints")
-        print("\n   4. Start the indexer:")
-        print("      pnpm envio dev")
-        print("      (This starts Docker containers and begins indexing)")
-        print("\n   5. Set the endpoint URL in instruments-service/.env:")
-        print("      ENVIO_API_URL=http://localhost:8080/v1/graphql")
-        print("\n   6. Wait for initial sync (10-30 minutes)")
-        print("   7. Test connection: python3 scripts/check_envio_config.py")
-        print("\n   See docs/ENVIO_DEPLOYMENT_GUIDE.md for detailed instructions")
+        logger.warning("ENVIO_API_URL not set")
+        logger.info("Next Steps for Local Development:")
+        logger.info("   1. Clone the Uniswap V4 Indexer:")
+        logger.info("      git clone https://github.com/enviodev/uniswap-v4-indexer.git")
+        logger.info("      cd uniswap-v4-indexer")
+        logger.info("   2. Install dependencies: pnpm install")
+        logger.info("   3. Configure environment:")
+        logger.info("      - Create .env file in uniswap-v4-indexer directory")
+        logger.info("      - Add: ENVIO_API_TOKEN=<token-from-secret-manager>")
+        logger.info("   4. Start the indexer: pnpm envio dev")
+        logger.info("   5. Set ENVIO_API_URL=http://localhost:8080/v1/graphql in .env")
+        logger.info("   6. Wait for initial sync (10-30 minutes)")
+        logger.info("   7. Test connection: python3 scripts/check_envio_config.py")
         return 1
 
 

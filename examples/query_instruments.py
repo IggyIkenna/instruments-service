@@ -2,7 +2,7 @@
 """
 Example: Query Instruments Data
 
-Demonstrates how to query instruments data using unified-cloud-services.
+Demonstrates how to query instruments data using unified-trading-library.
 
 This example shows:
 - Querying instruments for a specific date
@@ -12,9 +12,12 @@ This example shows:
 """
 
 import logging
+from uuid import uuid4
 
 # Simple imports - assumes packages are installed
-from unified_cloud_services import create_instruments_client
+from unified_trading_library import create_instruments_client
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -160,7 +163,7 @@ def main():
     """Run all query examples."""
     print("🚀 Instruments Service - Query Examples")
     print("=" * 60)
-    print("\nThis demonstrates how to query instruments data using unified-cloud-services")
+    print("\nThis demonstrates how to query instruments data using unified-trading-library")
     print("=" * 60)
 
     try:
@@ -186,7 +189,16 @@ def main():
         print("✅ All examples completed successfully!")
         print("=" * 60)
 
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
         print(f"\n❌ Error: {e}")
         import traceback
 

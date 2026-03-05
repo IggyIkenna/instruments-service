@@ -34,14 +34,23 @@ Output Structure:
 """
 
 import logging
+from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import TypedDict
+from uuid import uuid4
 
 import pandas as pd
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 
 logger = logging.getLogger(__name__)
+
+
+class _ActionTypeStats(TypedDict):
+    total_records: int
+    dates_with_data: int
+    date_counts: dict[str, int]
 
 
 class GenerateDateViewsHandler(ModeHandler):
@@ -54,7 +63,7 @@ class GenerateDateViewsHandler(ModeHandler):
     Phase 2 of the optimized pipeline.
     """
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, object]) -> None:
         super().__init__(config)
         logger.info("✅ GenerateDateViewsHandler initialized")
 
@@ -73,7 +82,7 @@ class GenerateDateViewsHandler(ModeHandler):
         Returns:
             Combined DataFrame with all tickers
         """
-        all_data = []
+        all_data: list[pd.DataFrame] = []
         filename = f"{action_type}.csv"
 
         ticker_dirs = [d for d in by_ticker_dir.iterdir() if d.is_dir()]
@@ -87,14 +96,22 @@ class GenerateDateViewsHandler(ModeHandler):
                 df = pd.read_csv(csv_path)
                 if not df.empty:
                     all_data.append(df)
-            except Exception as e:
-                logger.warning(f"Failed to load {csv_path}: {e}")
-
+            except (OSError, PermissionError) as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.HIGH,
+                    recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         if not all_data:
             return pd.DataFrame()
 
         combined = pd.concat(all_data, ignore_index=True)
-        logger.info(f"📂 Loaded {len(combined)} {action_type} records from {len(all_data)} tickers")
+        logger.info("📂 Loaded %s %s records from %s tickers", len(combined), action_type, len(all_data))
         return combined
 
     def _generate_date_partitions(
@@ -117,7 +134,7 @@ class GenerateDateViewsHandler(ModeHandler):
             Dict mapping date -> number of records
         """
         if df.empty:
-            logger.info(f"No {action_type} data to partition")
+            logger.info("No %s data to partition", action_type)
             return {}
 
         # Convert date column to date type
@@ -128,7 +145,7 @@ class GenerateDateViewsHandler(ModeHandler):
 
         date_counts: dict[str, int] = {}
         for day, group in date_groups:
-            if pd.isna(day):
+            if pd.isna(day) or not isinstance(day, date):
                 continue
 
             day_str = day.isoformat()
@@ -140,9 +157,9 @@ class GenerateDateViewsHandler(ModeHandler):
             group.to_parquet(output_path, index=False)
 
             date_counts[day_str] = len(group)
-            logger.debug(f"💾 Saved {len(group)} {action_type} for {day_str}")
+            logger.debug("💾 Saved %s %s for %s", len(group), action_type, day_str)
 
-        logger.info(f"✅ Generated {len(date_counts)} date partitions for {action_type}")
+        logger.info("✅ Generated %s date partitions for %s", len(date_counts), action_type)
         return date_counts
 
     def run(
@@ -180,16 +197,14 @@ class GenerateDateViewsHandler(ModeHandler):
         by_date_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info("🚀 Generating date views")
-        logger.info(f"📂 Input: {by_ticker_dir}")
-        logger.info(f"📂 Output: {by_date_dir}")
+        logger.info("📂 Input: %s", by_ticker_dir)
+        logger.info("📂 Output: %s", by_date_dir)
 
-        stats: dict[str, Any] = {
-            "action_types": {},
-        }
+        action_types: dict[str, _ActionTypeStats] = {}
 
         # Process each action type
         for action_type in ["dividends", "splits", "earnings"]:
-            logger.info(f"\n📊 Processing {action_type}...")
+            logger.info("\n📊 Processing %s...", action_type)
 
             # Determine date column
             if action_type == "dividends":
@@ -210,19 +225,19 @@ class GenerateDateViewsHandler(ModeHandler):
                 by_date_dir,
             )
 
-            stats["action_types"][action_type] = {
+            action_types[action_type] = {
                 "total_records": len(combined_df),
                 "dates_with_data": len(date_counts),
                 "date_counts": date_counts,
             }
 
         # Summary statistics
-        total_records = sum(s["total_records"] for s in stats["action_types"].values())
-        total_dates = sum(s["dates_with_data"] for s in stats["action_types"].values())
+        total_records = sum(s["total_records"] for s in action_types.values())
+        total_dates = sum(s["dates_with_data"] for s in action_types.values())
 
         logger.info("\n✅ Date views generation complete")
-        logger.info(f"📈 Total records: {total_records}")
-        logger.info(f"📈 Total date files: {total_dates}")
+        logger.info("📈 Total records: %s", total_records)
+        logger.info("📈 Total date files: %s", total_dates)
 
         # TODO: Upload to GCS if requested
         if upload_to_gcs:
@@ -231,7 +246,7 @@ class GenerateDateViewsHandler(ModeHandler):
         return {
             "success": True,
             "status": "success",
-            "statistics": stats,
+            "statistics": {"action_types": action_types},
         }
 
     def cleanup(self) -> None:

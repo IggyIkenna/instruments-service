@@ -12,18 +12,18 @@ Used by:
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Optional, cast
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, cast
 
 import ccxt
 
 if TYPE_CHECKING:
-    from unified_market_interface.models.venue_config import VenueMapping
+    from unified_config_interface import VenueMapping
 
 logger = logging.getLogger(__name__)
 
-# CCXT market data has dynamic structure - use Any for untyped CCXT responses
-CCXTMarketData = dict[str, Any]
+# CCXT market data has dynamic structure - use object for untyped CCXT responses
+CCXTMarketData = dict[str, object]
 # Metadata and leverage limits from CCXT (str, float, int, None values)
 CCXTMetadata = dict[str, str | float | int | None]
 
@@ -56,7 +56,7 @@ class CCXTService:
         # Cache leverage tiers per venue (to avoid repeated API calls)
         self._leverage_tiers_cache: dict[str, CCXTMetadata] = {}
 
-        logger.info(f"✅ CCXTService initialized (cache TTL: {cache_ttl_hours}h)")
+        logger.info("✅ CCXTService initialized (cache TTL: %sh)", cache_ttl_hours)
 
     def preload_markets_parallel(self, venues: list[str], max_workers: int = 4) -> dict[str, bool]:
         """
@@ -94,7 +94,7 @@ class CCXTService:
             logger.info("📋 All CCXT markets already cached or skipped (spot-only)")
             return {}
 
-        logger.info(f"⚡ Pre-loading {len(to_load)} CCXT exchanges in parallel (max_workers={max_workers})...")
+        logger.info("⚡ Pre-loading %s CCXT exchanges in parallel (max_workers=%s)...", len(to_load), max_workers)
 
         results: dict[str, bool] = {}
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -107,13 +107,13 @@ class CCXTService:
                     result: CCXTMarketData | None = future.result()
                     results[ccxt_id] = result is not None
                     if result:
-                        logger.debug(f"✅ Pre-loaded {ccxt_id} markets")
-                except Exception as e:
-                    logger.warning(f"⚠️ Failed to pre-load {ccxt_id}: {e}")
+                        logger.debug("✅ Pre-loaded %s markets", ccxt_id)
+                except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
+                    logger.warning("⚠️ Failed to pre-load %s: %s", ccxt_id, e)
                     results[ccxt_id] = False
 
         success_count = sum(1 for v in results.values() if v)
-        logger.info(f"✅ Pre-loaded {success_count}/{len(to_load)} CCXT exchanges")
+        logger.info("✅ Pre-loaded %s/%s CCXT exchanges", success_count, len(to_load))
         return results
 
     def get_ccxt_exchange(self, venue: str) -> object | None:
@@ -128,19 +128,22 @@ class CCXTService:
         """
         ccxt_exchange_id = self.venue_mapping.venue_to_ccxt.get(venue)
         if not ccxt_exchange_id:
-            logger.debug(f"No CCXT mapping for venue: {venue}")
+            logger.debug("No CCXT mapping for venue: %s", venue)
             return None
 
         exchange_class = getattr(ccxt, ccxt_exchange_id, None)
         if not exchange_class:
-            logger.debug(f"CCXT exchange not available: {ccxt_exchange_id}")
+            logger.debug("CCXT exchange not available: %s", ccxt_exchange_id)
             return None
 
-        return exchange_class(
-            {
-                "enableRateLimit": True,
-                "timeout": 15000,  # 15s timeout for initial load
-            }
+        return cast(
+            object | None,
+            exchange_class(
+                {
+                    "enableRateLimit": True,
+                    "timeout": 15000,  # 15s timeout for initial load
+                }
+            ),
         )
 
     def load_markets(self, venue: str, force_refresh: bool = False) -> CCXTMarketData | None:
@@ -160,7 +163,7 @@ class CCXTService:
         """
         ccxt_exchange_id = self.venue_mapping.venue_to_ccxt.get(venue)
         if not ccxt_exchange_id:
-            logger.debug(f"No CCXT mapping for venue: {venue}")
+            logger.debug("No CCXT mapping for venue: %s", venue)
             return None
 
         # PERFORMANCE FIX: Use ccxt_exchange_id as cache key (not venue)
@@ -168,8 +171,14 @@ class CCXTService:
         cache_key = ccxt_exchange_id
         if not force_refresh and self._is_cache_valid(cache_key):
             logger.debug(
-                f"📋 Using cached CCXT markets for {venue} via {ccxt_exchange_id} "
-                f"({len(self._markets_cache[cache_key]['markets'])} markets)"
+                "📋 Using cached CCXT markets for %s via %s (%s markets)",
+                venue,
+                ccxt_exchange_id,
+                len(
+                    cast(dict[str, object], self._markets_cache[cache_key]["markets"])
+                    if "markets" in self._markets_cache[cache_key]
+                    else {}
+                ),
             )
             return self._markets_cache[cache_key]
 
@@ -180,10 +189,12 @@ class CCXTService:
 
         try:
             # Load markets ONCE per CCXT exchange (major performance optimization)
-            # CCXT has no stubs - cast to dict[str, Any] for type safety
-            markets = cast(dict[str, Any], exchange.load_markets())  # pyright: ignore[reportUnknownMemberType]
+            # CCXT has no stubs - cast to dict[str, object] for type safety
+            markets = cast(dict[str, object], exchange.load_markets())  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
             logger.info(
-                f"⚡ Loaded {len(markets)} CCXT markets for {ccxt_exchange_id} - CACHED for all venues using this exchange"
+                "⚡ Loaded %s CCXT markets for %s - CACHED for all venues using this exchange",
+                len(markets),
+                ccxt_exchange_id,
             )
 
             # Cache the results by ccxt_exchange_id
@@ -194,12 +205,12 @@ class CCXTService:
             }
 
             self._markets_cache[cache_key] = ccxt_data
-            self._cache_timestamps[cache_key] = datetime.now(timezone.utc)
+            self._cache_timestamps[cache_key] = datetime.now(UTC)
 
             return ccxt_data
 
-        except Exception as e:
-            logger.debug(f"CCXT data unavailable for {venue}: {e}")
+        except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
+            logger.debug("CCXT data unavailable for %s: %s", venue, e)
             return None
 
     def _build_symbol_formats(
@@ -208,8 +219,8 @@ class CCXTService:
         base_asset: str,
         quote_asset: str,
         symbol_id: str,
-        tardis_symbol: Optional[str] = None,
-        instrument_type: Optional[str] = None,
+        tardis_symbol: str | None = None,
+        instrument_type: str | None = None,
     ) -> list[str]:
         """
         Build possible CCXT symbol formats for a venue.
@@ -235,7 +246,7 @@ class CCXTService:
 
             # Handle compound symbols that likely don't exist as perpetuals in CCXT
             if len(base_asset) > 5:  # Compound symbols like ETHBTC, SHIB1000
-                logger.debug(f"🔍 Bybit compound symbol (likely unavailable in CCXT): {base_asset}")
+                logger.debug("🔍 Bybit compound symbol (likely unavailable in CCXT): %s", base_asset)
 
                 # Special mappings for known variations
                 special_mappings = {
@@ -395,7 +406,7 @@ class CCXTService:
         base_asset: str,
         quote_asset: str,
         symbol_id: str,
-        instrument_type: Optional[str] = None,
+        instrument_type: str | None = None,
     ) -> str:
         """
         Generate default CCXT symbol format when markets aren't available.
@@ -432,11 +443,9 @@ class CCXTService:
             elif instrument_type in ["PERPETUAL", "FUTURE"]:
                 return f"{base_asset}/{quote_asset}:{quote_asset}"
             return f"{base_asset}/{quote_asset}"
-        elif venue == "BYBIT" and base_asset and quote_asset:
-            if instrument_type in ["PERPETUAL", "FUTURE"]:
-                return f"{base_asset}/{quote_asset}:{quote_asset}"
-            return f"{base_asset}/{quote_asset}"
-        elif venue == "HYPERLIQUID" and base_asset and quote_asset:
+        elif (venue == "BYBIT" and base_asset and quote_asset) or (
+            venue == "HYPERLIQUID" and base_asset and quote_asset
+        ):
             if instrument_type in ["PERPETUAL", "FUTURE"]:
                 return f"{base_asset}/{quote_asset}:{quote_asset}"
             return f"{base_asset}/{quote_asset}"
@@ -454,8 +463,8 @@ class CCXTService:
         base_asset: str,
         quote_asset: str,
         symbol_id: str,
-        tardis_symbol: Optional[str] = None,
-        instrument_type: Optional[str] = None,
+        tardis_symbol: str | None = None,
+        instrument_type: str | None = None,
     ) -> CCXTMetadata:
         """
         Get CCXT metadata (tick_size, min_size, contract_size) for an instrument.
@@ -475,7 +484,7 @@ class CCXTService:
         # Just return default symbol format (Tardis provides the actual market data)
         spot_only_exchanges = {"UPBIT", "COINBASE"}
         if venue.upper() in spot_only_exchanges:
-            logger.debug(f"⏭️ Skipping CCXT market load for {venue} (spot-only exchange)")
+            logger.debug("⏭️ Skipping CCXT market load for %s (spot-only exchange)", venue)
             default_symbol = self.generate_default_ccxt_symbol(
                 venue, base_asset, quote_asset, symbol_id, instrument_type
             )
@@ -485,7 +494,10 @@ class CCXTService:
             }
 
         ccxt_data = self.load_markets(venue)
-        markets: dict[str, Any] | None = ccxt_data.get("markets") if ccxt_data else None
+        markets_raw: object = ccxt_data.get("markets") if ccxt_data else None
+        markets: dict[str, object] | None = (
+            cast(dict[str, object], markets_raw) if isinstance(markets_raw, dict) else None
+        )
 
         # Build possible symbol formats based on venue
         possible_symbols: list[str] = self._build_symbol_formats(
@@ -494,7 +506,7 @@ class CCXTService:
 
         # If no markets loaded, still return ccxt_symbol based on CCXT conventions
         if not markets:
-            logger.debug(f"No CCXT markets loaded for {venue}, using default symbol format")
+            logger.debug("No CCXT markets loaded for %s, using default symbol format", venue)
             # Generate default CCXT symbol based on venue conventions
             default_symbol = self.generate_default_ccxt_symbol(
                 venue, base_asset, quote_asset, symbol_id, instrument_type
@@ -505,16 +517,16 @@ class CCXTService:
             }
 
         # Try to find market in CCXT
-        ccxt_market: dict[str, Any] | None = None
+        ccxt_market: dict[str, object] | None = None
         matched_symbol_format: str | None = None
         for symbol_format in possible_symbols:
             if symbol_format in markets:
-                ccxt_market = markets[symbol_format]
+                ccxt_market = cast(dict[str, object], markets[symbol_format])
                 matched_symbol_format = symbol_format
                 break
 
         if not ccxt_market:
-            logger.debug(f"No CCXT market found for {venue}:{symbol_id} (tried {len(possible_symbols)} formats)")
+            logger.debug("No CCXT market found for %s:%s (tried %s formats)", venue, symbol_id, len(possible_symbols))
             # CRITICAL FIX: Still return ccxt_symbol even if market not found
             # Use the first reasonable format as default
             default_symbol = self.generate_default_ccxt_symbol(
@@ -526,8 +538,10 @@ class CCXTService:
             }
 
         # Extract metadata from CCXT market
-        precision: dict[str, Any] = ccxt_market.get("precision", {}) or {}
-        limits: dict[str, Any] = ccxt_market.get("limits", {}) or {}
+        precision_raw: object = ccxt_market.get("precision")
+        precision: dict[str, object] = cast(dict[str, object], precision_raw) if isinstance(precision_raw, dict) else {}
+        limits_raw: object = ccxt_market.get("limits")
+        limits: dict[str, object] = cast(dict[str, object], limits_raw) if isinstance(limits_raw, dict) else {}
 
         metadata: CCXTMetadata = {}
 
@@ -545,23 +559,25 @@ class CCXTService:
         if "price" in precision:
             tick_size_val = precision["price"]
             if tick_size_val:
-                metadata["tick_size"] = str(tick_size_val)
+                metadata["tick_size"] = str(cast(str | int | float, tick_size_val))
 
         # Min size (amount precision)
         if "amount" in precision:
             min_size_val = precision["amount"]
             if min_size_val:
-                metadata["min_size"] = str(min_size_val)
-        elif "cost" in limits and "min" in limits["cost"]:
-            # Some exchanges use cost_min instead
-            cost_min = limits["cost"]["min"]
-            if cost_min:
-                metadata["min_size"] = f"cost_min:{cost_min}"
+                metadata["min_size"] = str(cast(str | int | float, min_size_val))
+        elif "cost" in limits:
+            cost_val: object = limits["cost"]
+            if isinstance(cost_val, dict) and "min" in cost_val:
+                # Some exchanges use cost_min instead
+                cost_min: object = cost_val["min"]
+                if cost_min:
+                    metadata["min_size"] = f"cost_min:{cast(str | int | float, cost_min)}"
 
         # Contract size
         contract_size_val = ccxt_market.get("contractSize")
         if contract_size_val:
-            metadata["contract_size"] = float(contract_size_val)
+            metadata["contract_size"] = float(cast(str | int | float, contract_size_val))
 
         return metadata
 
@@ -572,8 +588,8 @@ class CCXTService:
         base_asset: str,
         quote_asset: str,
         symbol_id: str,
-        tardis_symbol: Optional[str] = None,
-        instrument_type: Optional[str] = None,
+        tardis_symbol: str | None = None,
+        instrument_type: str | None = None,
     ) -> CCXTMetadata:
         """
         Get leverage limits and risk parameters from CCXT leverage tiers.
@@ -596,7 +612,7 @@ class CCXTService:
         # Check cache first (leverage tiers are usually the same per venue)
         if venue in self._leverage_tiers_cache:
             cached_params = self._leverage_tiers_cache[venue]
-            logger.debug(f"Using cached leverage tiers for {venue}")
+            logger.debug("Using cached leverage tiers for %s", venue)
             return cached_params.copy()  # Return copy to avoid mutation
 
         # Skip CCXT for spot-only instruments and exchanges (no leverage needed)
@@ -604,8 +620,10 @@ class CCXTService:
         spot_only_exchanges = {"UPBIT", "COINBASE"}
         if instrument_type == "SPOT_PAIR" or venue.upper() in spot_only_exchanges:
             logger.debug(
-                f"⏭️ Skipping CCXT leverage lookup for {venue}:{symbol_id} "
-                f"(instrument_type={instrument_type}, spot-only exchange)"
+                "⏭️ Skipping CCXT leverage lookup for %s:%s (instrument_type=%s, spot-only exchange)",
+                venue,
+                symbol_id,
+                instrument_type,
             )
             fallback_params = self._get_leverage_limits_fallback(venue)
             if fallback_params:
@@ -624,7 +642,7 @@ class CCXTService:
 
         # Check if exchange supports fetchMarketLeverageTiers
         if not hasattr(exchange, "fetchMarketLeverageTiers"):
-            logger.debug(f"Exchange {venue} does not support fetchMarketLeverageTiers")
+            logger.debug("Exchange %s does not support fetchMarketLeverageTiers", venue)
             # Try fallback to Context7 documentation lookup
             fallback_params = self._get_leverage_limits_fallback(venue)
             if fallback_params:
@@ -638,21 +656,26 @@ class CCXTService:
             )
 
             # Try to fetch leverage tiers for each symbol format
-            # CCXT has no stubs - cast to list[dict[str, Any]] for type safety
-            leverage_tiers: list[dict[str, Any]] | None = None
+            # CCXT has no stubs - cast to list[dict[str, object]] for type safety
+            leverage_tiers: list[dict[str, object]] | None = None
 
             for symbol_format in possible_symbols:
                 try:
-                    tiers = cast(list[dict[str, Any]], exchange.fetchMarketLeverageTiers(symbol_format))
+                    tiers = cast(
+                        list[dict[str, object]],
+                        exchange.fetchMarketLeverageTiers(symbol_format),  # type: ignore[reportAttributeAccessIssue]
+                    )
                     if tiers:
                         leverage_tiers = tiers
                         break
-                except Exception as e:
-                    logger.debug(f"Failed to fetch leverage tiers for {symbol_format}: {e}")
+                except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
+                    logger.debug("Failed to fetch leverage tiers for %s: %s", symbol_format, e)
                     continue
 
             if not leverage_tiers:
-                logger.debug(f"No leverage tiers found for {venue}:{symbol_id} (tried {len(possible_symbols)} formats)")
+                logger.debug(
+                    "No leverage tiers found for %s:%s (tried %s formats)", venue, symbol_id, len(possible_symbols)
+                )
                 # Try fallback and cache it
                 fallback_params = self._get_leverage_limits_fallback(venue)
                 if fallback_params:
@@ -666,22 +689,23 @@ class CCXTService:
             self._leverage_tiers_cache[venue] = risk_params
 
             logger.info(
-                f"✅ Fetched and cached leverage tiers for {venue}: "
-                f"max_leverage={risk_params.get('max_leverage')}, "
-                f"max_position_size={risk_params.get('max_position_size')}"
+                "✅ Fetched and cached leverage tiers for %s: max_leverage=%s, max_position_size=%s",
+                venue,
+                risk_params.get("max_leverage"),
+                risk_params.get("max_position_size"),
             )
 
             return risk_params
 
-        except Exception as e:
-            logger.debug(f"Error fetching leverage tiers for {venue}:{symbol_id}: {e}")
+        except (ValueError, KeyError, TypeError, IndexError) as e:
+            logger.debug("Error fetching leverage tiers for %s:%s: %s", venue, symbol_id, e)
             # Try fallback and cache it
             fallback_params = self._get_leverage_limits_fallback(venue)
             if fallback_params:
                 self._leverage_tiers_cache[venue] = fallback_params
             return fallback_params
 
-    def _extract_risk_params_from_tiers(self, leverage_tiers: list[dict[str, Any]]) -> CCXTMetadata:
+    def _extract_risk_params_from_tiers(self, leverage_tiers: list[dict[str, object]]) -> CCXTMetadata:
         """
         Extract risk parameters from CCXT leverage tiers structure.
 
@@ -700,21 +724,20 @@ class CCXTService:
         tier_1 = leverage_tiers[0] if leverage_tiers else None
 
         if tier_1:
-            # Extract from tier 1
-            risk_params["max_leverage"] = tier_1.get("maxLeverage")
-            risk_params["initial_margin_rate"] = tier_1.get("initialMargin")
-            risk_params["maintenance_margin_rate"] = tier_1.get("maintenanceMargin")
+            # Extract from tier 1; cast object|None to str|float|int|None for CCXTMetadata
+            risk_params["max_leverage"] = cast(str | float | int | None, tier_1.get("maxLeverage"))
+            risk_params["initial_margin_rate"] = cast(str | float | int | None, tier_1.get("initialMargin"))
+            risk_params["maintenance_margin_rate"] = cast(str | float | int | None, tier_1.get("maintenanceMargin"))
 
         # Get highest tier (largest maxNotional = max position size)
         highest_tier = None
         max_notional = 0
 
         for tier in leverage_tiers:
-            tier_max_notional = tier.get("maxNotional", 0)
-            if isinstance(tier_max_notional, (int, float)):
-                if tier_max_notional > max_notional:
-                    max_notional = tier_max_notional
-                    highest_tier = tier
+            raw_notional = tier.get("maxNotional", 0)
+            if isinstance(raw_notional, (int, float)) and raw_notional > max_notional:
+                max_notional = raw_notional
+                highest_tier = tier
 
         if highest_tier:
             risk_params["max_position_size"] = max_notional
@@ -793,11 +816,16 @@ class CCXTService:
             },
         }
 
-        defaults: CCXTMetadata = cast(CCXTMetadata, exchange_defaults.get(venue, {}))
+        defaults_value = exchange_defaults.get(venue)
+        if defaults_value is None:
+            defaults_value = {}
+        defaults: CCXTMetadata = cast(CCXTMetadata, defaults_value)
         if defaults:
             logger.debug(
-                f"Using fallback defaults for {venue}: max_leverage={defaults.get('max_leverage')}, "
-                f"max_position_size={defaults.get('max_position_size')}"
+                "Using fallback defaults for %s: max_leverage=%s, max_position_size=%s",
+                venue,
+                defaults.get("max_leverage"),
+                defaults.get("max_position_size"),
             )
 
         return defaults
@@ -809,10 +837,10 @@ class CCXTService:
         if cache_key not in self._cache_timestamps:
             return False
 
-        cache_age = datetime.now(timezone.utc) - self._cache_timestamps[cache_key]
+        cache_age = datetime.now(UTC) - self._cache_timestamps[cache_key]
         return cache_age < timedelta(hours=self.cache_ttl_hours)
 
-    def clear_cache(self, venue: Optional[str] = None):
+    def clear_cache(self, venue: str | None = None):
         """
         Clear cache for a venue or all venues.
 
@@ -825,7 +853,7 @@ class CCXTService:
                 cache_key = f"{venue}_{ccxt_exchange_id}"
                 self._markets_cache.pop(cache_key, None)
                 self._cache_timestamps.pop(cache_key, None)
-                logger.info(f"Cleared CCXT cache for {venue}")
+                logger.info("Cleared CCXT cache for %s", venue)
         else:
             self._markets_cache.clear()
             self._cache_timestamps.clear()

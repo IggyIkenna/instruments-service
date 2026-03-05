@@ -4,7 +4,7 @@ Integration tests for CloudInstrumentStorage.
 Tests GCS/BigQuery operations with test bucket and real credentials.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
@@ -27,7 +27,7 @@ class TestCloudInstrumentStorage:
         storage = CloudInstrumentStorage(cloud_target=test_cloud_target)
 
         # Create test instruments DataFrame
-        test_date = datetime(2023, 5, 23, tzinfo=timezone.utc)
+        test_date = datetime(2023, 5, 23, tzinfo=UTC)
         instruments_df = pd.DataFrame(
             [
                 {

@@ -31,7 +31,7 @@ Instruments-service is the **ROOT of the data pipeline** with no upstream GCS de
 ## Custom Exceptions
 
 ```python
-from unified_cloud_services.core.dependency_checker import DependencyError
+from unified_trading_services.core.dependency_checker import DependencyError
 
 # DependencyError - raised when required API keys are missing
 # instruments-service has no upstream GCS dependencies (it's the root)
@@ -42,7 +42,7 @@ from unified_cloud_services.core.dependency_checker import DependencyError
 ### API Call Decorators
 
 ```python
-from unified_cloud_services import handle_api_errors, handle_storage_errors
+from unified_trading_services import handle_api_errors, handle_storage_errors
 
 @handle_api_errors(max_retries=3)
 async def fetch_tardis_instruments():

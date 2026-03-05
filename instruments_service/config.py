@@ -11,155 +11,26 @@ This file contains TradFiInstrument dataclass for static TradFi instrument confi
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Tuple
 
-# Import from unified-cloud-services (required dependency)
+# All ticker data loaded from consolidated data/tickers.json (ISS-049)
 from instruments_service.config.instrument_definitions import (
+    ETF_TICKERS,
+    NASDAQ_TICKERS,
     SP500_TICKERS,
     TRADFI_INSTRUMENTS_CONFIG,
 )
 
 logger = logging.getLogger(__name__)
 
-# ETF tickers including Bitcoin ETFs
-ETF_TICKERS = [
-    "SPY",
-    "QQQ",
-    "IVV",
-    "VOO",
-    "VTI",
-    "DIA",
-    "IWM",
-    "IBIT",
-    "FBTC",
-    "ARKB",
-    "GBTC",
-    "BITO",  # Bitcoin ETFs
-    "GLD",
-    "SLV",
-    "USO",  # Commodity ETFs
-    "XLF",
-    "XLE",
-    "XLK",
-    "XLV",  # Sector ETFs
-]
-
-# NASDAQ-listed tickers (subset of S&P 500 that trade on NASDAQ vs NYSE)
-NASDAQ_TICKERS = [
-    "AAPL",
-    "ADBE",
-    "ADI",
-    "ADP",
-    "ADSK",
-    "AEP",
-    "ALGN",
-    "AMAT",
-    "AMD",
-    "AMGN",
-    "AMZN",
-    "ANSS",
-    "ASML",
-    "AVGO",
-    "AZN",
-    "BIDU",
-    "BIIB",
-    "BKNG",
-    "CDNS",
-    "CDW",
-    "CEG",
-    "CHTR",
-    "CMCSA",
-    "COST",
-    "CPRT",
-    "CRWD",
-    "CSCO",
-    "CSGP",
-    "CSX",
-    "CTAS",
-    "CTSH",
-    "DDOG",
-    "DLTR",
-    "DXCM",
-    "EA",
-    "EBAY",
-    "ENPH",
-    "EXC",
-    "FANG",
-    "FAST",
-    "FTNT",
-    "GEHC",
-    "GFS",
-    "GILD",
-    "GOOG",
-    "GOOGL",
-    "HON",
-    "IDXX",
-    "ILMN",
-    "INTC",
-    "INTU",
-    "ISRG",
-    "JD",
-    "KDP",
-    "KHC",
-    "KLAC",
-    "LRCX",
-    "LULU",
-    "MAR",
-    "MCHP",
-    "MDLZ",
-    "MELI",
-    "META",
-    "MNST",
-    "MRNA",
-    "MRVL",
-    "MSFT",
-    "MU",
-    "NFLX",
-    "NVDA",
-    "NXPI",
-    "ODFL",
-    "ON",
-    "ORLY",
-    "PANW",
-    "PAYX",
-    "PCAR",
-    "PDD",
-    "PEP",
-    "PYPL",
-    "QCOM",
-    "REGN",
-    "RIVN",
-    "ROST",
-    "SBUX",
-    "SIRI",
-    "SNPS",
-    "TEAM",
-    "TMUS",
-    "TSLA",
-    "TTD",
-    "TXN",
-    "VRSK",
-    "VRTX",
-    "WBA",
-    "WDAY",
-    "XEL",
-    "ZM",
-    "ZS",
-    # Bitcoin ETFs also trade on NASDAQ
-    "IBIT",
-    "FBTC",
-    "ARKB",
-]
-
 # ============================================================================
 # DATA LOADING (now uses embedded constants, no external JSON)
 # ============================================================================
 
 # Caches for loaded data (for backward compatibility)
-_sp500_tickers_cache: Optional[list[str]] = None
-_nasdaq_tickers_cache: Optional[list[str]] = None
-_tradfi_instruments_cache: Optional[list[dict[str, str | None]]] = None
-_exchange_code_to_name_cache: Optional[dict[str, str]] = None
+_sp500_tickers_cache: list[str] | None = None
+_nasdaq_tickers_cache: list[str] | None = None
+_tradfi_instruments_cache: list[dict[str, str | None]] | None = None
+_exchange_code_to_name_cache: dict[str, str] | None = None
 
 
 def _get_data_dir() -> Path:
@@ -185,7 +56,7 @@ def _get_data_dir() -> Path:
 # TRADFI_INSTRUMENTS_CONFIG moved to instrument_definitions.py (Issue #90)
 
 # ============================================================================
-# VALID DATABENTO PARENT SYMBOLS - Used for validation in market-tick-data-handler
+# VALID DATABENTO PARENT SYMBOLS - Used for validation in market-tick-data-service
 # ============================================================================
 # Maps canonical underlying -> (databento_parent_symbol, dataset)
 # Only symbols in this map are valid for parent symbology downloads
@@ -375,8 +246,10 @@ def _load_sp500_tickers() -> tuple[list[str], list[str]]:
 
     _sp500_tickers_cache = all_tickers
     logger.debug(
-        f"Loaded {len(SP500_TICKERS)} S&P 500 tickers + {len(ETF_TICKERS)} ETF tickers = "
-        f"{len(_sp500_tickers_cache)} total from embedded config"
+        "Loaded %s S&P 500 tickers + %s ETF tickers = %s total from embedded config",
+        len(SP500_TICKERS),
+        len(ETF_TICKERS),
+        len(_sp500_tickers_cache),
     )
 
     return _sp500_tickers_cache, _nasdaq_tickers_cache
@@ -396,7 +269,7 @@ def _load_tradfi_instruments() -> tuple[list[dict[str, str | None]], dict[str, s
     # Use inline config instead of external JSON file
     _tradfi_instruments_cache = TRADFI_INSTRUMENTS_CONFIG
     _exchange_code_to_name_cache = EXCHANGE_CODE_TO_NAME
-    logger.debug(f"Loaded {len(_tradfi_instruments_cache)} TradFi instruments from inline config")
+    logger.debug("Loaded %s TradFi instruments from inline config", len(_tradfi_instruments_cache))
 
     return _tradfi_instruments_cache, _exchange_code_to_name_cache
 
@@ -415,10 +288,10 @@ class TradFiInstrument:
     instrument_type: str  # "FUTURE", "EQUITY", "OPTION", "ETF"
     dataset: str  # Databento dataset (e.g., "GLBX.MDP3", "DBEQ.BASIC")
     stype_in: str  # "parent" for futures/options, "raw_symbol" for equities/ETFs
-    base_asset: Optional[str] = None  # Human-readable base asset name
+    base_asset: str | None = None  # Human-readable base asset name
     quote_asset: str = "USD"  # Quote currency (default USD for TradFi)
-    exchange_code: Optional[str] = None  # Databento exchange code (e.g., "ES", "CL")
-    underlying: Optional[str] = None  # Underlying asset (e.g., "BTC" for Bitcoin ETFs)
+    exchange_code: str | None = None  # Databento exchange code (e.g., "ES", "CL")
+    underlying: str | None = None  # Underlying asset (e.g., "BTC" for Bitcoin ETFs)
 
 
 # Backward compatibility alias
@@ -435,8 +308,8 @@ class UnifiedInstrumentConfig:
     """
 
     # Cached instruments loaded from JSON (initialized lazily)
-    _instruments: Optional[list[TradFiInstrument]] = field(default=None, repr=False)
-    _exchange_code_to_name: Optional[dict[str, str]] = field(default=None, repr=False)
+    _instruments: list[TradFiInstrument] | None = field(default=None, repr=False)
+    _exchange_code_to_name: dict[str, str] | None = field(default=None, repr=False)
 
     def __post_init__(self):
         """Load instruments from JSON on first access."""
@@ -454,11 +327,11 @@ class UnifiedInstrumentConfig:
         for inst in raw_instruments:
             self._instruments.append(
                 TradFiInstrument(
-                    symbol=inst["symbol"],
-                    venue=inst["venue"],
-                    instrument_type=inst["type"],
-                    dataset=inst["dataset"],
-                    stype_in=inst["stype"],
+                    symbol=inst["symbol"] or "",
+                    venue=inst["venue"] or "",
+                    instrument_type=inst["type"] or "",
+                    dataset=inst["dataset"] or "",
+                    stype_in=inst["stype"] or "",
                     base_asset=inst.get("base"),
                     quote_asset="USD",
                     exchange_code=inst.get("code"),
@@ -497,7 +370,7 @@ class UnifiedInstrumentConfig:
         all_insts = self.get_all_instruments()
         return [inst.symbol for inst in all_insts if inst.instrument_type == instrument_type.upper()]
 
-    def get_dataset_and_stype(self, symbol: str) -> Optional[Tuple[str, str]]:
+    def get_dataset_and_stype(self, symbol: str) -> tuple[str, str] | None:
         """Get dataset and stype_in for a symbol"""
         all_insts = self.get_all_instruments()
         for inst in all_insts:
@@ -505,13 +378,12 @@ class UnifiedInstrumentConfig:
                 return (inst.dataset, inst.stype_in)
         return None
 
-    def get_instrument(self, symbol: str, venue: Optional[str] = None) -> Optional[InstrumentDefinition]:
+    def get_instrument(self, symbol: str, venue: str | None = None) -> InstrumentDefinition | None:
         """Get instrument definition by symbol (optionally filtered by venue)"""
         all_insts = self.get_all_instruments()
         for inst in all_insts:
-            if inst.symbol == symbol:
-                if venue is None or inst.venue == venue.upper():
-                    return inst
+            if inst.symbol == symbol and (venue is None or inst.venue == venue.upper()):
+                return inst
         return None
 
     def get_human_readable_name(self, exchange_code: str) -> str:

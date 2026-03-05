@@ -9,12 +9,12 @@ Tests the complete workflow:
 5. Verify data integrity (can query back from test bucket)
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 import pytest
-from unified_market_interface.models.venue_config import VenueMapping
+from unified_market_interface import VenueMapping
 
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
@@ -26,8 +26,8 @@ from instruments_service.app.core.instrument_processing_service import (
 from tests.conftest import get_config
 
 # Test configuration
-START_DATE = datetime(2023, 5, 23, tzinfo=timezone.utc)
-END_DATE = datetime(2023, 5, 24, tzinfo=timezone.utc)
+START_DATE = datetime(2023, 5, 23, tzinfo=UTC)
+END_DATE = datetime(2023, 5, 24, tzinfo=UTC)
 
 
 @pytest.mark.e2e
@@ -99,7 +99,7 @@ async def test_instrument_generation_e2e(
         # Convert to DataFrame
         if date_instruments:
             instruments_list = []
-            for inst_key, inst_obj in date_instruments.items():
+            for _inst_key, inst_obj in date_instruments.items():
                 if hasattr(inst_obj, "model_dump"):
                     instruments_list.append(inst_obj.model_dump())
                 else:

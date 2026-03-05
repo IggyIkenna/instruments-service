@@ -5,7 +5,7 @@ Databento Batch API Cost Comparison Script
 Compares the cost of a fresh batch download vs a re-download of the same data.
 Key insight: Databento batch re-downloads within 30 days are FREE.
 
-Uses DatabentoBaseClient from unified-cloud-services for:
+Uses DatabentoBaseClient from unified-trading-library for:
 - Deterministic API key selection (same params -> same key)
 - Expanded state checking (queued/processing/done)
 - GCS job cache for cross-shard deduplication
@@ -22,11 +22,19 @@ Usage:
 """
 
 import argparse
-import os
+import logging
 import sys
 from datetime import datetime, timedelta
+from uuid import uuid4
 
-from unified_cloud_services import DatabentoBaseClient
+from unified_trading_library import get_secret_client
+from unified_config_interface import UnifiedCloudConfig
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
+from unified_market_interface import DatabentoBaseClient
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 
 def format_cost(cost_usd: float | None) -> str:
@@ -39,13 +47,13 @@ def format_cost(cost_usd: float | None) -> str:
 
 
 def print_separator(title: str = "") -> None:
-    """Print a visual separator with optional title."""
+    """Log a visual separator with optional title."""
     if title:
-        print(f"\n{'=' * 60}")
-        print(f"  {title}")
-        print(f"{'=' * 60}")
+        logger.info("=" * 60)
+        logger.info("  %s", title)
+        logger.info("=" * 60)
     else:
-        print(f"\n{'-' * 60}")
+        logger.info("-" * 60)
 
 
 def main() -> None:
@@ -88,7 +96,7 @@ Examples:
     try:
         date_start = datetime.strptime(args.date, "%Y-%m-%d")
     except ValueError:
-        print(f"[ERROR] Invalid date format: {args.date}. Use YYYY-MM-DD.")
+        logger.error("Invalid date format: %s. Use YYYY-MM-DD.", args.date)
         sys.exit(1)
 
     date_end = date_start + timedelta(days=1)
@@ -98,23 +106,32 @@ Examples:
 
     # Initialize base client (handles API key resolution via Secret Manager + multi-key rotation)
     print_separator("DATABENTO BATCH COST COMPARISON")
-    print(f"  Dataset:   {args.dataset}")
-    print(f"  Symbols:   {symbols_list}")
-    print(f"  Schema:    {args.schema}")
-    print(f"  Stype-in:  {args.stype_in}")
-    print(f"  Date:      {start_str} -> {end_str}")
-    print(f"  Mode:      {'EXECUTE (will submit job)' if args.execute else 'DRY-RUN (estimate only)'}")
+    logger.info("  Dataset:   %s", args.dataset)
+    logger.info("  Symbols:   %s", symbols_list)
+    logger.info("  Schema:    %s", args.schema)
+    logger.info("  Stype-in:  %s", args.stype_in)
+    logger.info("  Date:      %s -> %s", start_str, end_str)
+    logger.info("  Mode:      %s", "EXECUTE (will submit job)" if args.execute else "DRY-RUN (estimate only)")
 
-    # Use env var API key if available, otherwise let base client resolve via Secret Manager
-    api_key = os.environ.get("DATABENTO_API_KEY")
-    base_client = DatabentoBaseClient(api_key=api_key)
+    # API key via get_secret_client (Secret Manager first, env fallback) per instruments-and-api-keys-standard
+    config = UnifiedCloudConfig()
+    project_id = config.gcp_project_id
+    api_key = (
+        get_secret_client(
+            secret_name="databento-api-key",
+            project_id=project_id or "",
+        )
+        if project_id
+        else None
+    )
+    base_client = DatabentoBaseClient(api_key=api_key, project_id=project_id)
 
     # Also get a raw db.Historical for metadata calls (cost estimate, billable size)
     raw_client = base_client.client
-    print("[OK] DatabentoBaseClient initialized (deterministic key selection enabled)")
+    logger.info("[OK] DatabentoBaseClient initialized (deterministic key selection enabled)")
 
     batch_key_index = base_client._get_batch_key_index(args.dataset, args.schema, symbols_list, start_str, end_str)
-    print(f"[OK] Deterministic batch key index for these params: {batch_key_index}")
+    logger.info("[OK] Deterministic batch key index for these params: %s", batch_key_index)
 
     # ---- Step 1: Estimate cost via metadata.get_cost() ----
     print_separator("STEP 1: Cost Estimate (metadata.get_cost)")
@@ -127,11 +144,18 @@ Examples:
             start=start_str,
             end=end_str,
         )
-        print(f"  Estimated cost for FRESH download: {format_cost(estimated_cost)}")
+        logger.info("  Estimated cost for FRESH download: %s", format_cost(estimated_cost))
     except Exception as e:
-        print(f"  [WARN] get_cost() failed: {e}")
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.warning("get_cost() failed: %s", e)
         estimated_cost = None
-
     # ---- Step 2: Estimated billable size ----
     print_separator("STEP 2: Billable Size (metadata.get_billable_size)")
     try:
@@ -145,13 +169,20 @@ Examples:
         if billable_size is not None:
             size_kb = billable_size / 1024
             size_mb = size_kb / 1024
-            print(f"  Billable size: {billable_size:,} bytes ({size_kb:.2f} KB / {size_mb:.4f} MB)")
+            logger.info("  Billable size: %s bytes (%.2f KB / %.4f MB)", f"{billable_size:,}", size_kb, size_mb)
         else:
-            print("  Billable size: N/A")
+            logger.info("  Billable size: N/A")
     except Exception as e:
-        print(f"  [WARN] get_billable_size() failed: {e}")
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.warning("get_billable_size() failed: %s", e)
         billable_size = None
-
     # ---- Step 3: Check for existing batch job (using base client with expanded states) ----
     print_separator("STEP 3: Check Existing Batch Jobs (queued/processing/done)")
     existing_job = base_client.find_matching_batch_job(
@@ -168,38 +199,35 @@ Examples:
         job_cost = existing_job.get("cost_usd")
         job_billed = existing_job.get("billed_size")
         job_state = existing_job.get("state", "unknown")
-        print("  FOUND existing batch job!")
-        print(f"    Job ID:      {job_id}")
-        print(f"    State:       {job_state}")
-        print(f"    Cost:        {format_cost(job_cost)}")
-        print(f"    Billed size: {job_billed:,} bytes" if job_billed else "    Billed size: N/A")
-        print()
+        logger.info("  FOUND existing batch job!")
+        logger.info("    Job ID:      %s", job_id)
+        logger.info("    State:       %s", job_state)
+        logger.info("    Cost:        %s", format_cost(job_cost))
+        logger.info("    Billed size: %s", f"{job_billed:,} bytes" if job_billed else "N/A")
         if job_state == "done":
-            print("  --> Re-downloading this job is FREE (within 30 days)")
+            logger.info("  --> Re-downloading this job is FREE (within 30 days)")
         else:
-            print(f"  --> Job is still {job_state}, will wait for completion")
+            logger.info("  --> Job is still %s, will wait for completion", job_state)
     else:
-        print("  No existing batch job found for these parameters.")
-        print("  A new batch job submission will incur the estimated cost above.")
+        logger.info("  No existing batch job found for these parameters.")
+        logger.info("  A new batch job submission will incur the estimated cost above.")
 
     # ---- Step 4: Dry-run gate ----
     if not args.execute:
         print_separator("DRY-RUN COMPLETE")
-        print("  No batch job was submitted (safe mode).")
-        print()
-        print("  To actually submit a batch job, re-run with --execute:")
-        print(f"    python scripts/test_batch_cost_comparison.py --date {args.date} --execute")
-        print()
+        logger.info("  No batch job was submitted (safe mode).")
+        logger.info("  To actually submit a batch job, re-run with --execute:")
+        logger.info("    python scripts/test_batch_cost_comparison.py --date %s --execute", args.date)
         if existing_job:
             state = existing_job.get("state", "unknown")
             if state == "done":
-                print("  NOTE: An existing done job was found. Re-running with --execute will")
-                print("  re-download it for FREE (no new cost).")
+                logger.info("  NOTE: An existing done job was found. Re-running with --execute will")
+                logger.info("  re-download it for FREE (no new cost).")
             else:
-                print(f"  NOTE: An existing {state} job was found. Re-running with --execute")
-                print("  will wait for it to complete, then download (no new cost).")
+                logger.info("  NOTE: An existing %s job was found. Re-running with --execute", state)
+                logger.info("  will wait for it to complete, then download (no new cost).")
         else:
-            print(f"  WARNING: Submitting a new job will cost ~{format_cost(estimated_cost)}")
+            logger.warning("  Submitting a new job will cost ~%s", format_cost(estimated_cost))
         return
 
     # ---- Step 5: Execute using base client's unified batch orchestration ----
@@ -208,10 +236,10 @@ Examples:
         job_id = existing_job.get("id", "unknown")
         job_state = existing_job.get("state", "unknown")
         if job_state == "done":
-            print(f"  Re-downloading existing job {job_id} (FREE)...")
+            logger.info("  Re-downloading existing job %s (FREE)...", job_id)
             final_job = existing_job
         else:
-            print(f"  Waiting for in-flight job {job_id} (state={job_state})...")
+            logger.info("  Waiting for in-flight job %s (state=%s)...", job_id, job_state)
             try:
                 final_job = base_client.wait_for_batch_job(
                     str(job_id),
@@ -222,12 +250,20 @@ Examples:
                     end_str,
                     timeout_minutes=args.timeout,
                 )
-                print("  Job completed!")
+                logger.info("  Job completed!")
             except Exception as e:
-                print(f"  [ERROR] Waiting for job failed: {e}")
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.error("Waiting for job failed: %s", e)
                 sys.exit(1)
     else:
-        print("  Submitting NEW batch job (via base client)...")
+        logger.info("  Submitting NEW batch job (via base client)...")
         try:
             new_job = base_client.submit_batch_job(
                 dataset=args.dataset,
@@ -238,8 +274,8 @@ Examples:
                 end=end_str,
             )
             job_id = new_job.get("id") if isinstance(new_job, dict) else getattr(new_job, "id", "unknown")
-            print(f"  Submitted job: {job_id}")
-            print(f"  Waiting for completion (timeout: {args.timeout} min)...")
+            logger.info("  Submitted job: %s", job_id)
+            logger.info("  Waiting for completion (timeout: %s min)...", args.timeout)
             final_job = base_client.wait_for_batch_job(
                 str(job_id),
                 args.dataset,
@@ -249,11 +285,18 @@ Examples:
                 end_str,
                 timeout_minutes=args.timeout,
             )
-            print("  Job completed!")
+            logger.info("  Job completed!")
         except Exception as e:
-            print(f"  [ERROR] Batch job submission/wait failed: {e}")
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.error("Batch job submission/wait failed: %s", e)
             sys.exit(1)
-
     # ---- Step 6: Report actual cost of the job ----
     print_separator("STEP 5: Actual Job Cost")
 
@@ -266,9 +309,16 @@ Examples:
             (j for j in jobs if (j.get("id") if isinstance(j, dict) else getattr(j, "id", None)) == job_id),
             final_job,
         )
-    except Exception:
+    except Exception as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
         refreshed_job = final_job
-
     actual_cost = (
         refreshed_job.get("cost_usd") if isinstance(refreshed_job, dict) else getattr(refreshed_job, "cost_usd", None)
     )
@@ -278,48 +328,55 @@ Examples:
         else getattr(refreshed_job, "billed_size", None)
     )
 
-    print(f"  Job ID:        {job_id}")
-    print(f"  Actual cost:   {format_cost(actual_cost)}")
-    print(f"  Billed size:   {actual_billed:,} bytes" if actual_billed else "  Billed size:   N/A")
-    print(
-        f"  Dataset:       {refreshed_job.get('dataset', 'N/A') if isinstance(refreshed_job, dict) else getattr(refreshed_job, 'dataset', 'N/A')}"
+    logger.info("  Job ID:        %s", job_id)
+    logger.info("  Actual cost:   %s", format_cost(actual_cost))
+    logger.info("  Billed size:   %s", f"{actual_billed:,} bytes" if actual_billed else "N/A")
+    dataset_val = (
+        refreshed_job.get("dataset", "N/A")
+        if isinstance(refreshed_job, dict)
+        else getattr(refreshed_job, "dataset", "N/A")
     )
-    print(
-        f"  Schema:        {refreshed_job.get('schema', 'N/A') if isinstance(refreshed_job, dict) else getattr(refreshed_job, 'schema', 'N/A')}"
+    schema_val = (
+        refreshed_job.get("schema", "N/A")
+        if isinstance(refreshed_job, dict)
+        else getattr(refreshed_job, "schema", "N/A")
     )
-    print(
-        f"  Symbols:       {refreshed_job.get('symbols', 'N/A') if isinstance(refreshed_job, dict) else getattr(refreshed_job, 'symbols', 'N/A')}"
+    symbols_val = (
+        refreshed_job.get("symbols", "N/A")
+        if isinstance(refreshed_job, dict)
+        else getattr(refreshed_job, "symbols", "N/A")
     )
-    print(
-        f"  Start:         {refreshed_job.get('start', 'N/A') if isinstance(refreshed_job, dict) else getattr(refreshed_job, 'start', 'N/A')}"
+    start_val = (
+        refreshed_job.get("start", "N/A") if isinstance(refreshed_job, dict) else getattr(refreshed_job, "start", "N/A")
     )
-    print(
-        f"  End:           {refreshed_job.get('end', 'N/A') if isinstance(refreshed_job, dict) else getattr(refreshed_job, 'end', 'N/A')}"
+    end_val = (
+        refreshed_job.get("end", "N/A") if isinstance(refreshed_job, dict) else getattr(refreshed_job, "end", "N/A")
     )
+    logger.info("  Dataset:       %s", dataset_val)
+    logger.info("  Schema:        %s", schema_val)
+    logger.info("  Symbols:       %s", symbols_val)
+    logger.info("  Start:         %s", start_val)
+    logger.info("  End:           %s", end_val)
 
     # ---- Step 7: Summary ----
     print_separator("SUMMARY")
     if estimated_cost is not None and actual_cost is not None:
-        print(f"  Estimated cost (get_cost):   {format_cost(estimated_cost)}")
-        print(f"  Actual cost (batch job):     {format_cost(actual_cost)}")
+        logger.info("  Estimated cost (get_cost):   %s", format_cost(estimated_cost))
+        logger.info("  Actual cost (batch job):     %s", format_cost(actual_cost))
         if estimated_cost > 0 and actual_cost == 0:
-            print()
-            print("  This was a FREE re-download of an existing batch job!")
-            print(f"  You saved {format_cost(estimated_cost)} by reusing the batch result.")
+            logger.info("  This was a FREE re-download of an existing batch job!")
+            logger.info("  You saved %s by reusing the batch result.", format_cost(estimated_cost))
         elif actual_cost > 0:
-            print()
-            print("  This was a FRESH batch job (first download).")
+            logger.info("  This was a FRESH batch job (first download).")
     else:
-        print(f"  Estimated cost: {format_cost(estimated_cost)}")
-        print(f"  Actual cost:    {format_cost(actual_cost)}")
+        logger.info("  Estimated cost: %s", format_cost(estimated_cost))
+        logger.info("  Actual cost:    %s", format_cost(actual_cost))
 
-    print()
-    print("  -------------------------------------------------------")
-    print("  Run this script again with the same --date to test")
-    print("  FREE re-download (batch jobs are free within 30 days):")
-    print()
-    print(f"    python scripts/test_batch_cost_comparison.py --date {args.date} --execute")
-    print("  -------------------------------------------------------")
+    logger.info("  -------------------------------------------------------")
+    logger.info("  Run this script again with the same --date to test")
+    logger.info("  FREE re-download (batch jobs are free within 30 days):")
+    logger.info("    python scripts/test_batch_cost_comparison.py --date %s --execute", args.date)
+    logger.info("  -------------------------------------------------------")
 
 
 if __name__ == "__main__":
