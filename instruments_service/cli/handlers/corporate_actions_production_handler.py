@@ -477,7 +477,7 @@ class CorporateActionsProductionHandler(ModeHandler):
             Result dictionary with statistics
         """
         logger.info("🚀 Starting Corporate Actions Production Pipeline")
-        logger.info("=" * 60)
+        logger.info("%s", "=" * 60)
 
         # Step 1: Load metadata
         logger.info("\n📂 STEP 1: Loading metadata from storage...")
@@ -612,15 +612,15 @@ class CorporateActionsProductionHandler(ModeHandler):
 
         # Summary
         successful: list[dict[str, object]] = [r for r in results if r.get("success")]
-        logger.info("\n" + "=" * 60)
+        logger.info("\n%s", "=" * 60)
         logger.info("✅ PIPELINE COMPLETE!")
-        logger.info("=" * 60)
+        logger.info("%s", "=" * 60)
         logger.info("📊 Tickers processed: %s/%s", len(successful), len(ticker_list))
         logger.info("📈 Total events: %s", len(all_dividends) + len(all_splits) + len(all_earnings))
         logger.info("📁 Local output: %s", self.base_dir)
         if upload_to_gcs:
             logger.info("☁️  GCS upload: %s", "✅ Success" if gcs_upload_success else "❌ Failed")
-        logger.info("=" * 60)
+        logger.info("%s", "=" * 60)
 
         return cast(
             dict[str, HandlerResultValue],

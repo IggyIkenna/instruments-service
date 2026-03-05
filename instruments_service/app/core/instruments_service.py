@@ -344,7 +344,7 @@ class InstrumentsService(
                         date_str,
                     )
                 else:
-                    logger.error("❌ No instruments generated for %s.", date_str)
+                    logger.error("No instruments generated for %s.", date_str)
                     error_count = error_warning_counter.error_count
                     warning_count = error_warning_counter.warning_count
                     root_logger.removeHandler(error_warning_counter)
@@ -410,7 +410,7 @@ class InstrumentsService(
                     }
                 return result
             else:
-                logger.error("❌ Failed to store instruments for %s", date_str)
+                logger.error("Failed to store instruments for %s", date_str)
                 return {
                     "status": "error",
                     "date": date_str,
@@ -433,7 +433,7 @@ class InstrumentsService(
             root_logger.removeHandler(error_warning_counter)
             error_count = error_warning_counter.error_count
             warning_count = error_warning_counter.warning_count
-            logger.error("❌ Exception during instrument generation: %s", e, exc_info=True)
+            logger.exception("Exception during instrument generation: %s", e)
             return {
                 "status": "error",
                 "date": date_str,
