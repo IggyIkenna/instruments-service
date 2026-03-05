@@ -64,7 +64,7 @@ def get_handler_for_mode(mode: str, config: dict[str, object]) -> ModeHandler:
         try:
             _populate_registry()
         except (ConnectionError, TimeoutError, OSError, ValueError) as e:
-            logger.error("Error registering handlers: %s", e, exc_info=True)
+            logger.exception("Error registering handlers: %s", e)
             raise
 
     if mode not in _handler_registry:

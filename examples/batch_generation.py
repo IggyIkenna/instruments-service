@@ -150,7 +150,7 @@ async def generate_instruments_batch(start_date: str, end_date: str, force: bool
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
             logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
-            logger.error("  ❌ Error processing %s: %s", date_str, e, exc_info=True)
+            logger.exception("  ❌ Error processing %s: %s", date_str, e)
             errors.append(f"{date_str}: {e}")
         # Move to next date
         current_date += timedelta(days=1)

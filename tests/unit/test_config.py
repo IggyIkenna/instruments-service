@@ -7,7 +7,6 @@ Verifies that:
 - get_config() returns an InstrumentsServiceConfig instance
 """
 
-
 from unified_config_interface import UnifiedCloudConfig
 
 from instruments_service.config import get_config
