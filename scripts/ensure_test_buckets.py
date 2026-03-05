@@ -1,49 +1,49 @@
-import os
+import logging
+import sys
+from uuid import uuid4
 
-# Cloud-agnostic storage client
-try:
-    from unified_cloud_services import get_storage_client
+from unified_trading_library import get_storage_client
+from unified_config_interface import UnifiedCloudConfig
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
-    STORAGE_AVAILABLE = True
-except ImportError:
-    STORAGE_AVAILABLE = False
-    get_storage_client = None
-    print("⚠️  unified-cloud-services not available")
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 
-def create_bucket_if_not_exists(bucket_name, location="asia-northeast1"):
-    """Create bucket using get_storage_client from unified-cloud-services."""
+def create_bucket_if_not_exists(bucket_name: str, location: str = "asia-northeast1") -> None:
+    """Create bucket using get_storage_client from unified-trading-library."""
     try:
-        if not STORAGE_AVAILABLE or get_storage_client is None:
-            print(f"❌ unified-cloud-services not available, cannot create bucket {bucket_name}")
-            return
-
         storage_client = get_storage_client()
         bucket = storage_client.bucket(bucket_name)
         if not bucket.exists():
-            print(f"Creating bucket {bucket_name} in {location}...")
+            logger.info("Creating bucket %s in %s...", bucket_name, location)
             bucket.create(location=location)
-            print(f"✅ Created {bucket_name}")
+            logger.info("Created %s", bucket_name)
         else:
-            print(f"✅ Bucket {bucket_name} already exists")
-    except Exception as e:
-        print(f"❌ Error checking/creating {bucket_name}: {e}")
+            logger.info("Bucket %s already exists", bucket_name)
+    except (OSError, ValueError, RuntimeError) as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.error("Error checking/creating %s: %s (correlation_id=%s)", bucket_name, e, _err.correlation_id)
 
 
 if __name__ == "__main__":
-    print("Ensuring test buckets exist...")
+    logger.info("Ensuring test buckets exist...")
 
-    # Get project ID from environment (supports both GCP and AWS)
-    project_id = (
-        os.environ.get("GCP_PROJECT_ID")
-        or os.environ.get("AWS_PROJECT_ID")
-        or os.environ.get("GOOGLE_CLOUD_PROJECT")
-        or os.environ.get("AWS_ACCOUNT_ID")
-    )
+    # Get project ID from UnifiedCloudConfig (fail-fast)
+    config = UnifiedCloudConfig()
+    project_id = config.gcp_project_id
 
     if not project_id:
-        print("❌ Error: PROJECT_ID not found. Set GCP_PROJECT_ID or AWS_PROJECT_ID environment variable.")
-        exit(1)
+        logger.error("PROJECT_ID not found. Set GCP_PROJECT_ID environment variable.")
+        sys.exit(1)
 
     # List of buckets to ensure exist
     # We include both suffix and infix patterns to cover configuration drift
@@ -62,4 +62,4 @@ if __name__ == "__main__":
     for b in buckets:
         create_bucket_if_not_exists(b)
 
-    print("Done.")
+    logger.info("Done.")

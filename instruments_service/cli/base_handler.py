@@ -51,7 +51,7 @@ class ModeHandler(ABC):
         # Validate critical configuration
         self._validate_config()
 
-        logger.debug(f"Initialized {self.__class__.__name__}")
+        logger.debug("Initialized %s", self.__class__.__name__)
 
     def _validate_config(self) -> None:
         """
@@ -114,7 +114,7 @@ class ModeHandler(ABC):
 
         Default implementation performs basic cleanup logging.
         """
-        logger.debug(f"Cleaning up {self.__class__.__name__}")
+        logger.debug("Cleaning up %s", self.__class__.__name__)
 
     def __repr__(self) -> str:
         """String representation of the handler."""

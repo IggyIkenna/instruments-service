@@ -1,0 +1,8 @@
+{
+  "pythonVersion": "3.13",
+  "strict": true,
+  "include": ["instruments_service"],
+  "typeCheckingMode": "strict",
+  "reportAny": "error",
+  "reportMissingTypeStubs": false
+}

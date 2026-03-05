@@ -1,60 +1,69 @@
 """
-Cloud Instrument Storage using unified-cloud-services.
+Cloud Instrument Storage using unified-trading-library.
 
 Stores instrument definitions to instruments domain (each domain has its own bucket and dataset).
-Uses unified-cloud-services directly for cloud operations.
+Uses unified-trading-library directly for cloud operations.
 """
 
+from __future__ import annotations
+
 import logging
-import os
-from datetime import datetime, timezone
-from typing import Any, cast
+from datetime import UTC, datetime
+from datetime import date as date_type
+from typing import cast
+from uuid import uuid4
 
 import pandas as pd
-from unified_cloud_services import (
+from unified_api_contracts.domain_config import DomainConfigProtocol
+from unified_domain_client import validate_timestamp_date_alignment
+from unified_events_interface import log_event
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
+from unified_trading_library import (
     CloudTarget,
+    CSVSampler,
     ParquetSchemaEnforcer,
+    SchemaValidationResult,
     StandardizedDomainCloudService,
+    create_sampling_service,
     determine_market_category,
     handle_storage_errors,
 )
-from unified_domain_services import validate_timestamp_date_alignment
 
 from instruments_service.config import instruments_config
 from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
+from instruments_service.schemas.parquet import get_required_columns
 
 logger = logging.getLogger(__name__)
 
 UNIFIED_CLOUD_SERVICES_AVAILABLE = True
-
-# Import centralized sampling service from unified-cloud-services
-_sampling_available = False
-try:
-    from unified_cloud_services import create_sampling_service
-
-    _sampling_available = True
-except ImportError:
-    logger.debug("Sampling service not available")
-SAMPLING_SERVICE_AVAILABLE = _sampling_available
+SAMPLING_SERVICE_AVAILABLE = True
 
 
 class CloudInstrumentStorage:
     """
-    Cloud instrument storage using unified-cloud-services.
+    Cloud instrument storage using unified-trading-library.
 
     Stores instrument definitions to instruments domain (each domain has its own bucket and dataset).
-    Uses unified-cloud-services directly (not MarketDataClient).
+    Uses unified-trading-library directly (not MarketDataClient).
     Per unified architecture plan specification.
     """
 
-    def __init__(self, cloud_target: CloudTarget | None = None):
-        """Initialize cloud instrument storage with unified-cloud-services."""
+    def __init__(
+        self,
+        cloud_target: CloudTarget | None = None,
+        domain_config: DomainConfigProtocol | None = None,
+        enable_async: bool = True,
+        testing_mode: bool = False,
+    ):
+        """Initialize cloud instrument storage with unified-trading-library and DomainConfigProtocol support."""
         if not UNIFIED_CLOUD_SERVICES_AVAILABLE:
             raise ImportError(
-                "unified-cloud-services not available. "
-                "Install unified-cloud-services package: "
-                "pip install -e ../unified-cloud-services"
+                "unified-trading-library not available. "
+                "Install unified-trading-library package: "
+                "pip install -e ../unified-trading-library"
             )
+
+        self._testing_mode = testing_mode
 
         # Configure CloudTarget for market_data domain (instruments are part of market_data)
         # Use asia-northeast1 location per .env configuration (GCS: asia-northeast1-c, BigQuery: asia-northeast1)
@@ -62,11 +71,11 @@ class CloudInstrumentStorage:
         if cloud_target is None:
             cfg = instruments_config
             environment = (cfg.environment or "development").lower()
-            is_test = environment in ["test", "testing"] or bool(os.environ.get("PYTEST_CURRENT_TEST"))
+            is_test = environment in ["test", "testing"] or self._testing_mode
 
             if is_test:
                 bucket_name = cfg.gcs_bucket_test or cfg.gcs_bucket_cefi_test or "instruments-store-test"
-                logger.info(f"🧪 Test mode detected: Using test bucket {bucket_name}")
+                logger.info("🧪 Test mode detected: Using test bucket %s", bucket_name)
             else:
                 bucket_name = cfg.gcs_bucket_cefi or cfg.get_bucket_for_category("cefi")
 
@@ -77,18 +86,37 @@ class CloudInstrumentStorage:
                 bigquery_location=cfg.bigquery_location or "asia-northeast1",
             )
 
-        # Create instruments service using direct instantiation (canonical pattern)
-        # Each domain has its own bucket and dataset (instruments domain)
+        # Create instruments service using legacy CloudTarget pattern
+        # (StandardizedDomainCloudService.from_config does not exist; cloud_target is always
+        # constructed above from either the caller-supplied target or instruments_config)
         self.cloud_service = StandardizedDomainCloudService(domain="instruments", cloud_target=cloud_target)
+        if domain_config:
+            logger.info("✅ Using cloud service with DomainConfig-derived CloudTarget")
+        else:
+            logger.info("⚠️ Using legacy CloudTarget pattern (consider migrating to DomainConfigProtocol)")
+
         self.cloud_target = cloud_target
 
-        logger.info(
-            f"Initialized CloudInstrumentStorage: "
-            f"project={cloud_target.project_id}, "
-            f"bucket={cloud_target.gcs_bucket}, "
-            f"dataset={cloud_target.bigquery_dataset}, "
-            f"location={cloud_target.bigquery_location}"
-        )
+        # Initialize debugging tools
+        self.csv_sampler = CSVSampler() if CSVSampler else None
+        if self.csv_sampler:
+            logger.info("🔍 CSV sampling enabled for debugging")
+
+        if cloud_target:
+            logger.info(
+                "Initialized CloudInstrumentStorage: project=%s, bucket=%s, dataset=%s, location=%s",
+                cloud_target.project_id,
+                cloud_target.gcs_bucket,
+                cloud_target.bigquery_dataset,
+                cloud_target.bigquery_location,
+            )
+        elif domain_config:
+            logger.info(
+                "Initialized CloudInstrumentStorage with DomainConfigProtocol: project=%s, bucket=%s, dataset=%s",
+                domain_config.gcp_project_id,
+                domain_config.gcs_bucket,
+                domain_config.bigquery_dataset,
+            )
 
     @handle_storage_errors(max_retries=2)
     def store_instruments(
@@ -122,9 +150,9 @@ class CloudInstrumentStorage:
         """
         try:
             # Generate CSV sample using centralized service (only in non-production)
-            if SAMPLING_SERVICE_AVAILABLE and instruments_df is not None and not instruments_df.empty:
+            if SAMPLING_SERVICE_AVAILABLE and not instruments_df.empty:
                 sampling_service = create_sampling_service()
-                sample_date = date if date else datetime.now(timezone.utc)
+                sample_date = date if date else datetime.now(UTC)
                 sampling_service.generate_csv_sample(
                     df=instruments_df,
                     filename_prefix="instruments",
@@ -139,23 +167,17 @@ class CloudInstrumentStorage:
             # The timestamp should reflect the date the instruments are valid for, not when they were generated
             if "timestamp" not in instruments_df.columns:
                 if date is not None:
-                    # Use target date (start of day UTC)
-                    if isinstance(date, datetime):
-                        target_timestamp = date.replace(hour=0, minute=0, second=0, microsecond=0)
-                        if target_timestamp.tzinfo is None:
-                            target_timestamp = target_timestamp.replace(tzinfo=timezone.utc)
-                    else:
-                        # date is a date object, convert to datetime
-                        target_timestamp = datetime.combine(date, datetime.min.time(), tzinfo=timezone.utc)
+                    # Use target date (start of day UTC); date is typed as datetime (not date)
+                    target_timestamp = date.replace(hour=0, minute=0, second=0, microsecond=0)
+                    if target_timestamp.tzinfo is None:
+                        target_timestamp = target_timestamp.replace(tzinfo=UTC)
                     instruments_df["timestamp"] = target_timestamp
                 else:
                     # Fallback to current time (should not happen in normal flow)
-                    instruments_df["timestamp"] = datetime.now(timezone.utc)
+                    instruments_df["timestamp"] = datetime.now(UTC)
                     logger.warning("No date parameter provided, using current time for timestamp column")
 
             # Validate required columns (ParquetSchemaEnforcer for full validation; minimal check here)
-            from instruments_service.schemas.parquet import get_required_columns
-
             required_columns = get_required_columns()
             missing_columns = [col for col in required_columns if col not in instruments_df.columns]
             if missing_columns:
@@ -183,7 +205,7 @@ class CloudInstrumentStorage:
                             ts_series_obj: pd.Series = cast(pd.Series, pd.to_datetime(instruments_df[ts_col], utc=True))
                             instruments_df[ts_col] = ts_series_obj.dt.tz_convert(None)
                         except (ValueError, TypeError, AttributeError) as e:
-                            logger.debug(f"Could not parse timestamp column {ts_col}: {e}")
+                            logger.debug("Could not parse timestamp column %s: %s", ts_col, e)
 
             # Determine date string for GCS path
             date_str: str
@@ -193,24 +215,39 @@ class CloudInstrumentStorage:
                 # Extract date from available_from_datetime if available
                 if "available_from_datetime" in instruments_df.columns:
                     try:
-                        first_val = instruments_df["available_from_datetime"].iloc[0]
-                        first_date: pd.Timestamp = cast(pd.Timestamp, pd.to_datetime(first_val, utc=True))
+                        first_val_raw: object = cast(object, instruments_df["available_from_datetime"].iloc[0])
+                        if first_val_raw is not None:
+                            first_ts = pd.to_datetime(str(first_val_raw), utc=True)
+                            first_date = pd.Timestamp(first_ts)
+                        else:
+                            first_date = pd.Timestamp(datetime.now(UTC))
                         date_str = first_date.strftime("%Y-%m-%d")
                     except (ValueError, TypeError, IndexError) as e:
-                        logger.debug(f"Could not extract date from available_from_datetime: {e}")
-                        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                        logger.debug("Could not extract date from available_from_datetime: %s", e)
+                        date_str = datetime.now(UTC).strftime("%Y-%m-%d")
                 else:
-                    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                    date_str = datetime.now(UTC).strftime("%Y-%m-%d")
 
             # Ensure market_category is populated for all instruments
-            logger.info(f"📊 Ensuring market_category is populated for {len(instruments_df)} instruments...")
+            logger.info("📊 Ensuring market_category is populated for %s instruments...", len(instruments_df))
             if "market_category" not in instruments_df.columns:
                 instruments_df["market_category"] = ""
             # Populate market_category for instruments that don't have it or have empty value
             mask: pd.Series = (instruments_df["market_category"].isna()) | (instruments_df["market_category"] == "")
-            if cast(bool, mask.any()):
+            if bool(mask.any()):
+
+                def _row_to_market_category(row: pd.Series) -> str:  # pyright: ignore[reportMissingTypeArgument]
+                    raw: dict[str, object] = cast(dict[str, object], row.to_dict())
+                    d: dict[str, object] = {}
+                    for k, val in raw.items():
+                        if val is None or (isinstance(val, float) and (val != val)):
+                            d[str(k)] = None
+                        else:
+                            d[str(k)] = str(val)
+                    return determine_market_category(d)
+
                 instruments_df.loc[mask, "market_category"] = instruments_df.loc[mask].apply(
-                    lambda row: determine_market_category(row.to_dict()), axis=1
+                    _row_to_market_category, axis=1
                 )
 
             # Group by category
@@ -221,11 +258,11 @@ class CloudInstrumentStorage:
             # Detect test mode for bucket selection
             cfg = instruments_config
             environment: str = str(cfg.environment or "development").lower()
-            is_test = environment in ["test", "testing"] or bool(os.environ.get("PYTEST_CURRENT_TEST"))
+            is_test = environment in ["test", "testing"] or self._testing_mode
 
             # Group uploads by bucket to use batch upload per bucket
             # (each bucket needs its own cloud service)
-            bucket_uploads: dict[str, list[tuple[str, Any, str]]] = {}  # bucket -> [(gcs_path, df, category)]
+            bucket_uploads: dict[str, list[tuple[str, pd.DataFrame, str]]] = {}  # bucket -> [(gcs_path, df, category)]
 
             # Create schema enforcer for validation
             schema_enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
@@ -247,7 +284,7 @@ class CloudInstrumentStorage:
 
                     # Coerce nullable float64/bool columns to correct dtypes
                     # When all values are None, pandas infers 'object' dtype
-                    _FLOAT64_COLS = [
+                    float64_cols = [
                         "contract_size",
                         "max_position_size",
                         "max_leverage",
@@ -264,38 +301,38 @@ class CloudInstrumentStorage:
                         "variable_rate_slope1",
                         "variable_rate_slope2",
                     ]
-                    _INT64_COLS = ["pool_fee_tier", "emode_category_id"]
-                    _BOOL_COLS = ["is_trading_day"]
-                    for col in _FLOAT64_COLS:
+                    int64_cols = ["pool_fee_tier", "emode_category_id"]
+                    bool_cols = ["is_trading_day"]
+                    for col in float64_cols:
                         if col in venue_df_to_store.columns:
                             venue_df_to_store[col] = pd.to_numeric(venue_df_to_store[col], errors="coerce")
-                    for col in _INT64_COLS:
+                    for col in int64_cols:
                         if col in venue_df_to_store.columns:
-                            ser: pd.Series = cast(pd.Series, pd.to_numeric(venue_df_to_store[col], errors="coerce"))
+                            ser = pd.to_numeric(venue_df_to_store[col], errors="coerce")
                             venue_df_to_store[col] = ser.astype("Int64") if hasattr(ser, "astype") else ser
-                    for col in _BOOL_COLS:
+                    for col in bool_cols:
                         if col in venue_df_to_store.columns:
                             venue_df_to_store[col] = venue_df_to_store[col].astype("boolean")
 
                     # Validate schema before upload
                     dimensions: dict[str, str] = {"category": category_str}
-                    validation_result = schema_enforcer.validate_dataframe(venue_df_to_store, dimensions)
+                    validation_result: SchemaValidationResult = schema_enforcer.validate_dataframe(
+                        venue_df_to_store, dimensions
+                    )  # pyright: ignore[reportUnknownMemberType]
 
                     if not validation_result.valid:
                         for error in validation_result.errors:
-                            logger.error(f"Schema validation failed for {category}/{venue}: {error}")
-                        logger.error(f"Skipping GCS upload for {category}/{venue} due to schema validation errors")
+                            logger.error("Schema validation failed for %s/%s: %s", category, venue, error)
+                        logger.error("Skipping GCS upload for %s/%s due to schema validation errors", category, venue)
                         all_successful = False
                         continue  # Skip this venue
 
                     # Log any warnings
                     for warning in validation_result.warnings:
-                        logger.warning(f"Schema validation warning for {category}/{venue}: {warning}")
+                        logger.warning("Schema validation warning for %s/%s: %s", category, venue, warning)
 
                     # Validate timestamp-date alignment (item_22c)
                     # Instruments use available_from_datetime which should align with the date folder
-                    from datetime import date as date_type
-
                     expected_date = date_type.fromisoformat(date_str)
                     alignment_result = validate_timestamp_date_alignment(
                         venue_df_to_store,
@@ -306,9 +343,12 @@ class CloudInstrumentStorage:
                     )
                     if not alignment_result.valid:
                         logger.error(
-                            f"TIMESTAMP_DATE_MISMATCH for {category}/{venue}: Expected {date_str}, "
-                            f"found dates: {alignment_result.actual_dates_found}. "
-                            f"Alignment: {alignment_result.alignment_percentage:.1f}%"
+                            "TIMESTAMP_DATE_MISMATCH for %s/%s: Expected %s, found dates: %s. Alignment: %.1f%%",
+                            category,
+                            venue,
+                            date_str,
+                            alignment_result.actual_dates_found,
+                            alignment_result.alignment_percentage,
                         )
                         # For instruments, this is a warning not a blocker since timestamp is generation time
                         # The actual data date is determined by available_from_datetime range
@@ -317,6 +357,7 @@ class CloudInstrumentStorage:
                         bucket_uploads[category_bucket] = []
                     bucket_uploads[category_bucket].append((gcs_path, venue_df_to_store, f"{category}/{venue}"))
 
+            log_event("UPLOAD_STARTED", details={"date": date_str, "bucket_count": len(bucket_uploads)})
             # Upload to each bucket using batch upload (thread-safe)
             for bucket_name, uploads_list in bucket_uploads.items():
                 try:
@@ -331,8 +372,8 @@ class CloudInstrumentStorage:
                         domain="instruments", cloud_target=bucket_cloud_target
                     )
 
-                    # Prepare batch upload
-                    batch_uploads: list[dict[str, str | pd.DataFrame]] = [
+                    # Prepare batch upload (uploads_list: list[tuple[str, pd.DataFrame, str]])
+                    batch_uploads: list[dict[str, object]] = [
                         {"data": df, "gcs_path": gcs_path, "format": "parquet"} for gcs_path, df, _ in uploads_list
                     ]
 
@@ -344,31 +385,55 @@ class CloudInstrumentStorage:
                         gcs_path, df, category_venue = uploads_list[i]
                         if result.get("success"):
                             logger.info(
-                                f"✅ Uploaded {len(df)} {category_venue} instruments to GCS: {bucket_name}/{gcs_path}"
+                                "✅ Uploaded %s %s instruments to GCS: %s/%s",
+                                len(df),
+                                category_venue,
+                                bucket_name,
+                                gcs_path,
                             )
                             total_stored += len(df)
                         else:
-                            logger.error(f"❌ GCS upload failed for {category_venue}: {result.get('error')}")
+                            logger.error("❌ GCS upload failed for %s: %s", category_venue, result.get("error"))
                             all_successful = False
 
-                except Exception as gcs_error:
-                    logger.error(f"❌ GCS upload failed for bucket {bucket_name}: {gcs_error}")
+                except (ValueError, KeyError, TypeError, IndexError) as gcs_error:
+                    _err = EnhancedError(
+                        message=str(gcs_error),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.MEDIUM,
+                        recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(gcs_error).__name__}),
+                    )
+                    logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                    logger.error("❌ GCS upload failed for bucket %s: %s", bucket_name, gcs_error)
                     all_successful = False
-
             if all_successful:
                 # Count unique venues stored
                 unique_venues: int = int(instruments_df["venue"].nunique()) if "venue" in instruments_df.columns else 0
                 logger.info(
-                    f"✅ Stored {total_stored} instruments across {unique_venues} venues to "
-                    f"category-specific buckets (by-venue folder structure)"
+                    "✅ Stored %s instruments across %s venues to category-specific buckets (by-venue folder structure)",
+                    total_stored,
+                    unique_venues,
                 )
+                log_event("UPLOAD_COMPLETED", details={"total_stored": total_stored, "date": date_str})
             else:
-                logger.warning(f"⚠️ Some venue uploads failed. Total stored: {total_stored}/{len(instruments_df)}")
+                logger.warning("⚠️ Some venue uploads failed. Total stored: %s/%s", total_stored, len(instruments_df))
+                log_event("UPLOAD_COMPLETED", details={"total_stored": total_stored, "date": date_str, "partial": True})
 
             return all_successful
 
-        except Exception as e:
-            logger.error(f"Failed to store instruments: {e}")
+        except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.error("Failed to store instruments: %s", e)
             return False
 
     def query_instruments(

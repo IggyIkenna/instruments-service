@@ -55,24 +55,25 @@ fi
 echo -e "${GREEN}✅ Repository: $REPO${NC}"
 echo ""
 
-# Check if GCP credentials file exists
-CREDENTIALS_FILE="central-element-323112-e35fb0ddafe2.json"
-if [ ! -f "$CREDENTIALS_FILE" ]; then
-    echo -e "${YELLOW}⚠️  Credentials file not found: $CREDENTIALS_FILE${NC}"
-    read -p "Enter path to GCP service account JSON file: " CREDENTIALS_FILE
-    if [ ! -f "$CREDENTIALS_FILE" ]; then
-        echo -e "${RED}❌ File not found: $CREDENTIALS_FILE${NC}"
-        exit 1
-    fi
+# Check if GCP credentials file exists (use ADC for local: gcloud auth application-default login)
+# instruments-service CI uses GH_PAT only; GCP_SA_KEY not required for quality gates
+CREDENTIALS_FILE="${GOOGLE_APPLICATION_CREDENTIALS:-}"
+if [ -z "$CREDENTIALS_FILE" ] || [ ! -f "$CREDENTIALS_FILE" ]; then
+    echo -e "${YELLOW}⚠️  No credentials file. Set GOOGLE_APPLICATION_CREDENTIALS or enter path below.${NC}"
+    echo -e "${YELLOW}   For local dev, prefer: gcloud auth application-default login (ADC)${NC}"
+    read -p "Enter path to GCP service account JSON file (or leave empty to skip): " CREDENTIALS_FILE
 fi
 
-# Set GCP_SERVICE_ACCOUNT_JSON secret
-echo -e "${BLUE}📝 Setting GCP_SERVICE_ACCOUNT_JSON secret...${NC}"
-if gh secret set GCP_SERVICE_ACCOUNT_JSON --repo "$REPO" < "$CREDENTIALS_FILE"; then
-    echo -e "${GREEN}✅ GCP_SERVICE_ACCOUNT_JSON secret set successfully${NC}"
+if [ -n "$CREDENTIALS_FILE" ] && [ -f "$CREDENTIALS_FILE" ]; then
+    echo -e "${BLUE}📝 Setting GCP_SERVICE_ACCOUNT_JSON secret...${NC}"
+    if gh secret set GCP_SERVICE_ACCOUNT_JSON --repo "$REPO" < "$CREDENTIALS_FILE"; then
+        echo -e "${GREEN}✅ GCP_SERVICE_ACCOUNT_JSON secret set successfully${NC}"
+    else
+        echo -e "${RED}❌ Failed to set GCP_SERVICE_ACCOUNT_JSON secret${NC}"
+        exit 1
+    fi
 else
-    echo -e "${RED}❌ Failed to set GCP_SERVICE_ACCOUNT_JSON secret${NC}"
-    exit 1
+    echo -e "${YELLOW}⏭️  Skipping GCP_SERVICE_ACCOUNT_JSON (instruments-service CI uses GH_PAT only)${NC}"
 fi
 
 echo ""

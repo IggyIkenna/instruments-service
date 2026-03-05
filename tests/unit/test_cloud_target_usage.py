@@ -1,11 +1,11 @@
 """Test that all CloudTarget instantiations are correct.
 
 IMPORTANT: These are UNIT TESTS ONLY (no real cloud APIs).
-unified-cloud-services validates real API usage via its own integration tests.
+unified-trading-services validates real API usage via its own integration tests.
 """
 
 import pytest
-from unified_cloud_services import CloudTarget
+from unified_trading_library import CloudTarget
 
 from instruments_service.config import instruments_config
 
@@ -33,7 +33,7 @@ class TestCloudTargetInstantiations:
         """CloudTarget should fail if bigquery_dataset is missing."""
         config = instruments_config
 
-        with pytest.raises((TypeError, ValueError), match="bigquery_dataset|required"):
+        with pytest.raises((TypeError, ValueError), match=r"bigquery_dataset|required"):
             CloudTarget(
                 project_id=config.gcp_project_id,
                 gcs_bucket=config.get_bucket_for_category("cefi"),

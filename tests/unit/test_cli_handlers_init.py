@@ -1,8 +1,8 @@
 """
 Tests for CLI handlers __init__.py to increase coverage.
 
-Note: Query functionality has been moved to unified-cloud-services.
-Use InstrumentsDomainClient from unified-cloud-services to query instruments.
+Note: Query functionality has been moved to unified-trading-services.
+Use InstrumentsDomainClient from unified-trading-services to query instruments.
 """
 
 from unittest.mock import Mock, patch

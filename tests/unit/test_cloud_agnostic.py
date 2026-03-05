@@ -2,7 +2,7 @@
 Cloud-Agnostic Architecture Tests for instruments-service.
 
 Verifies instruments-service uses cloud-agnostic patterns:
-- Uses unified-cloud-services (not direct GCP imports)
+- Uses unified-trading-services (not direct GCP imports)
 - Project ID injection in bucket names
 - Path format correctness (key=value for BigQuery)
 - Path ordering (day first, then other dimensions)
@@ -26,7 +26,7 @@ class TestCloudAgnosticArchitecture:
             try:
                 content = py_file.read_text()
 
-                # Check for direct google.cloud imports (bad - should use unified-cloud-services)
+                # Check for direct google.cloud imports (bad - should use unified-trading-services)
                 if "from google.cloud import storage" in content:
                     # Allow if it's in a comment or docstring
                     lines = content.split("\n")
@@ -48,7 +48,7 @@ class TestCloudAgnosticArchitecture:
                 continue
 
         assert len(violations) == 0, (
-            f"Found {len(violations)} violations - instruments-service should use unified-cloud-services, "
+            f"Found {len(violations)} violations - instruments-service should use unified-trading-services, "
             f"not direct google.cloud imports:\n" + "\n".join(violations)
         )
 
@@ -102,7 +102,7 @@ class TestCloudAgnosticArchitecture:
 
         # Search for hardcoded project ID
         hardcoded_patterns = [
-            "central-element-323112",
+            "test-project",
             "project_id='",
             'project_id="',
         ]

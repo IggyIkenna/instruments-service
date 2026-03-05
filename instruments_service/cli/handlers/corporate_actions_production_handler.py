@@ -22,16 +22,19 @@ import json
 import logging
 import subprocess
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timezone
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import cast
 
 import pandas as pd
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.config import SP500_TICKERS, corporate_actions_start_date, instruments_config
 from instruments_service.corporate_actions.adapter import CorporateActionsAdapter
+
+# Type alias for fetch result structure (avoids reportAny from dict[str, object] access)
+FetchResult = dict[str, object]
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +54,15 @@ class CorporateActionsProductionHandler(ModeHandler):
     - Local storage (data/temp/)
     """
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, object]) -> None:
         super().__init__(config)
 
-        self.project_id = config.get("project_id") or str(getattr(instruments_config, "gcp_project_id", "") or "")
+        raw_project_id = config.get("project_id")
+        self.project_id: str = (
+            str(raw_project_id)
+            if raw_project_id is not None
+            else str(getattr(instruments_config, "gcp_project_id", "") or "")
+        )
 
         # Initialize adapter
         self.adapter = CorporateActionsAdapter()
@@ -74,9 +82,9 @@ class CorporateActionsProductionHandler(ModeHandler):
         self.metadata_dir.mkdir(exist_ok=True)
 
         logger.info("✅ CorporateActionsProductionHandler initialized")
-        logger.info(f"📁 Output directory: {self.base_dir}")
+        logger.info("📁 Output directory: %s", self.base_dir)
 
-    def _load_metadata(self) -> dict[str, Any]:
+    def _load_metadata(self) -> dict[str, object]:
         """
         Load metadata from local storage (in production: from GCS).
 
@@ -86,14 +94,14 @@ class CorporateActionsProductionHandler(ModeHandler):
         metadata_path = self.metadata_dir / "ticker_registry.json"
 
         if metadata_path.exists():
-            logger.info(f"📂 Loading existing metadata from {metadata_path}")
-            with open(metadata_path, "r") as f:
-                return json.load(f)
+            logger.info("📂 Loading existing metadata from %s", metadata_path)
+            with open(metadata_path) as f:
+                return cast(dict[str, object], json.load(f))
         else:
             logger.info("📝 Creating new metadata (first run)")
             return {
                 "version": "1.0",
-                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "generated_at": datetime.now(UTC).isoformat(),
                 "tickers": {},
                 "config": {
                     "update_frequency_days": 7,
@@ -102,7 +110,7 @@ class CorporateActionsProductionHandler(ModeHandler):
                 },
             }
 
-    def _save_metadata(self, metadata: dict[str, Any]) -> None:
+    def _save_metadata(self, metadata: dict[str, object]) -> None:
         """
         Save metadata to local storage (in production: upload to GCS).
 
@@ -110,12 +118,12 @@ class CorporateActionsProductionHandler(ModeHandler):
             metadata: Metadata dictionary to save
         """
         metadata_path = self.metadata_dir / "ticker_registry.json"
-        metadata["last_updated"] = datetime.now(timezone.utc).isoformat()
+        metadata["last_updated"] = datetime.now(UTC).isoformat()
 
         with open(metadata_path, "w") as f:
             json.dump(metadata, f, indent=2)
 
-        logger.info(f"✅ Saved metadata to {metadata_path}")
+        logger.info("✅ Saved metadata to %s", metadata_path)
 
     def _get_tickers_from_gcs(self) -> list[str]:
         """
@@ -124,9 +132,9 @@ class CorporateActionsProductionHandler(ModeHandler):
         Returns:
             List of ticker symbols
         """
-        try:
-            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
+        from unified_trading_library import CloudTarget, StandardizedDomainCloudService
 
+        try:
             bucket_name = instruments_config.gcs_bucket_tradfi or instruments_config.get_bucket_for_category("tradfi")
 
             # Create cloud-agnostic service
@@ -144,30 +152,34 @@ class CorporateActionsProductionHandler(ModeHandler):
                 gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
 
                 try:
-                    df: pd.DataFrame = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    raw = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    if not isinstance(raw, pd.DataFrame):
+                        continue
+                    df = raw
                     if not df.empty:
                         # Filter for equities
                         equities: pd.DataFrame = df[df["venue"].isin(["NYSE", "NASDAQ"])]
                         tickers_raw: list[str] = list(equities["exchange_raw_symbol"].dropna().unique().tolist())
                         tickers: list[str] = [str(t).strip() for t in tickers_raw if t and str(t).strip()]
 
-                        logger.info(f"📂 Loaded {len(tickers)} tickers from GCS (day={date_str})")
+                        logger.info("📂 Loaded %s tickers from GCS (day=%s)", len(tickers), date_str)
                         return sorted(tickers)
-                except Exception:
+                except (OSError, FileNotFoundError, RuntimeError, ValueError) as e:
+                    logger.warning("Skipping item during operation: %s", e)
                     continue
 
             logger.warning("⚠️ No equity tickers found in GCS")
             return []
 
-        except Exception as e:
-            logger.error(f"❌ Failed to load tickers from GCS: {e}")
+        except (OSError, ValueError, TypeError, KeyError) as e:
+            logger.error("❌ Failed to load tickers from GCS: %s", e)
             return []
 
     def _fetch_symbol_data(
         self,
         ticker: str,
         max_retries: int = 3,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Fetch all corporate actions for a single symbol.
 
@@ -178,7 +190,7 @@ class CorporateActionsProductionHandler(ModeHandler):
         Returns:
             Dict with DataFrames and statistics
         """
-        result: dict[str, Any] = {
+        result: dict[str, object] = {
             "ticker": ticker,
             "success": False,
             "dividends_df": pd.DataFrame(),
@@ -207,16 +219,20 @@ class CorporateActionsProductionHandler(ModeHandler):
                 result["success"] = True
 
                 logger.debug(
-                    f"✅ {ticker}: {len(dividends_df)} dividends, {len(splits_df)} splits, {len(earnings_df)} earnings"
+                    "✅ %s: %s dividends, %s splits, %s earnings",
+                    ticker,
+                    len(dividends_df),
+                    len(splits_df),
+                    len(earnings_df),
                 )
                 break
 
-            except Exception as e:
+            except (OSError, ValueError, TypeError, KeyError, ConnectionError) as e:
                 result["error"] = str(e)
                 if attempt < max_retries:
-                    logger.warning(f"⚠️ {ticker}: Attempt {attempt}/{max_retries} failed: {e}. Retrying...")
+                    logger.warning("⚠️ %s: Attempt %s/%s failed: %s. Retrying...", ticker, attempt, max_retries, e)
                 else:
-                    logger.error(f"❌ {ticker}: All {max_retries} attempts failed: {e}")
+                    logger.error("❌ %s: All %s attempts failed: %s", ticker, max_retries, e)
 
         return result
 
@@ -279,7 +295,7 @@ class CorporateActionsProductionHandler(ModeHandler):
                 if pd.isna(day):
                     continue
 
-                day_str: str = day.isoformat()
+                day_str = day.isoformat() if isinstance(day, (date, datetime)) else str(day)
                 day_dir = self.by_date_dir / f"day={day_str}"
                 day_dir.mkdir(exist_ok=True)
 
@@ -294,7 +310,7 @@ class CorporateActionsProductionHandler(ModeHandler):
                 if pd.isna(day):
                     continue
 
-                day_str: str = day.isoformat()
+                day_str = day.isoformat() if isinstance(day, (date, datetime)) else str(day)
                 day_dir = self.by_date_dir / f"day={day_str}"
                 day_dir.mkdir(exist_ok=True)
 
@@ -309,7 +325,7 @@ class CorporateActionsProductionHandler(ModeHandler):
                 if pd.isna(day):
                     continue
 
-                day_str: str = day.isoformat()
+                day_str = day.isoformat() if isinstance(day, (date, datetime)) else str(day)
                 day_dir = self.by_date_dir / f"day={day_str}"
                 day_dir.mkdir(exist_ok=True)
 
@@ -320,7 +336,7 @@ class CorporateActionsProductionHandler(ModeHandler):
 
     def _generate_coverage_report(
         self,
-        results: list[dict[str, Any]],
+        results: list[dict[str, object]],
         by_date_stats: dict[str, int],
     ) -> None:
         """
@@ -330,19 +346,28 @@ class CorporateActionsProductionHandler(ModeHandler):
             results: List of fetch results
             by_date_stats: Statistics from by_date generation
         """
-        successful = [r for r in results if r["success"]]
-        failed = [r for r in results if not r["success"]]
+        successful: list[FetchResult] = [r for r in results if r["success"]]
+        failed: list[FetchResult] = [r for r in results if not r["success"]]
 
-        total_dividends = sum(len(r["dividends_df"]) for r in successful)
-        total_splits = sum(len(r["splits_df"]) for r in successful)
-        total_earnings = sum(len(r["earnings_df"]) for r in successful)
+        total_dividends = sum(len(cast(pd.DataFrame, r["dividends_df"])) for r in successful)
+        total_splits = sum(len(cast(pd.DataFrame, r["splits_df"])) for r in successful)
+        total_earnings = sum(len(cast(pd.DataFrame, r["earnings_df"])) for r in successful)
 
-        tickers_with_dividends = [r["ticker"] for r in successful if not r["dividends_df"].empty]
-        tickers_with_splits = [r["ticker"] for r in successful if not r["splits_df"].empty]
-        tickers_with_earnings = [r["ticker"] for r in successful if not r["earnings_df"].empty]
+        tickers_with_dividends: list[str] = [
+            cast(str, r["ticker"]) for r in successful if not cast(pd.DataFrame, r["dividends_df"]).empty
+        ]
+        tickers_with_splits: list[str] = [
+            cast(str, r["ticker"]) for r in successful if not cast(pd.DataFrame, r["splits_df"]).empty
+        ]
+        tickers_with_earnings: list[str] = [
+            cast(str, r["ticker"]) for r in successful if not cast(pd.DataFrame, r["earnings_df"]).empty
+        ]
 
-        report = {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+        report: dict[
+            str,
+            str | dict[str, int] | dict[str, dict[str, int]] | dict[str, list[dict[str, str]]],
+        ] = {
+            "generated_at": datetime.now(UTC).isoformat(),
             "version": "1.0",
             "summary": {
                 "total_tickers": len(results),
@@ -371,7 +396,9 @@ class CorporateActionsProductionHandler(ModeHandler):
                 },
             },
             "data_quality": {
-                "tickers_with_errors": [{"ticker": r["ticker"], "error": r["error"]} for r in failed],
+                "tickers_with_errors": [
+                    {"ticker": cast(str, r["ticker"]), "error": cast(str, r["error"])} for r in failed
+                ],
             },
         }
 
@@ -379,7 +406,7 @@ class CorporateActionsProductionHandler(ModeHandler):
         with open(report_path, "w") as f:
             json.dump(report, f, indent=2)
 
-        logger.info(f"✅ Generated coverage report: {report_path}")
+        logger.info("✅ Generated coverage report: %s", report_path)
 
     def _upload_to_gcs(self) -> bool:
         """
@@ -397,29 +424,42 @@ class CorporateActionsProductionHandler(ModeHandler):
             gcs_path = f"gs://{bucket_name}/corporate_actions/"
 
             logger.info("\n📤 STEP 8: Uploading to GCS...")
-            logger.info(f"📁 Source: {self.base_dir}")
-            logger.info(f"☁️  Destination: {gcs_path}")
+            logger.info("📁 Source: %s", self.base_dir)
+            logger.info("☁️  Destination: %s", gcs_path)
 
-            # Use gsutil to upload entire directory
-            cmd = ["gsutil", "-m", "cp", "-r", f"{self.base_dir}/*", gcs_path]
+            # Use gsutil to upload entire directory - safely without shell globbing
+            import glob
+            import os
 
-            subprocess.run(cmd, capture_output=True, text=True, check=True)
+            # Get all files in base_dir safely
+            files_to_upload = glob.glob(os.path.join(self.base_dir, "*"))
+
+            if not files_to_upload:
+                logger.warning("No files found in %s to upload", self.base_dir)
+                return False
+
+            # Upload files in batches to avoid command line limits
+            for file_path in files_to_upload:
+                cmd = ["gsutil", "-m", "cp", "-r", file_path, gcs_path]
+                subprocess.run(cmd, capture_output=True, text=True, check=True)
 
             logger.info("✅ Successfully uploaded to GCS")
-            logger.info(f"☁️  Location: {gcs_path}")
+            logger.info("☁️  Location: %s", gcs_path)
             return True
 
         except subprocess.CalledProcessError as e:
-            logger.error(f"❌ GCS upload failed: {e}")
-            logger.error(f"stderr: {e.stderr}")
+            _stderr: str | None = cast(str | None, getattr(e, "stderr", None))
+            stderr_val: str = _stderr or ""
+            logger.error("❌ GCS upload failed: %s", e)
+            logger.error("stderr: %s", stderr_val)
             return False
-        except Exception as e:
-            logger.error(f"❌ Unexpected error during GCS upload: {e}")
+        except (OSError, ValueError, TypeError, KeyError) as e:
+            logger.error("❌ Unexpected error during GCS upload: %s", e)
             return False
 
     def run(
         self,
-        tickers: Optional[list[str]] = None,
+        tickers: list[str] | None = None,
         parallel_workers: int = 2,  # Changed default from 10 to 2
         max_retries: int = 3,
         upload_to_gcs: bool = True,  # New parameter to control GCS upload
@@ -447,45 +487,45 @@ class CorporateActionsProductionHandler(ModeHandler):
         logger.info("\n📋 STEP 2: Getting ticker list...")
         if tickers:
             ticker_list = [t.upper() for t in tickers]
-            logger.info(f"Using provided tickers: {', '.join(ticker_list)}")
+            logger.info("Using provided tickers: %s", ", ".join(ticker_list))
         else:
             # Use S&P 500 list from config
             ticker_list = SP500_TICKERS.copy()
-            logger.info(f"Using S&P 500 tickers from config ({len(ticker_list)} tickers)")
+            logger.info("Using S&P 500 tickers from config (%s tickers)", len(ticker_list))
 
-        logger.info(f"📊 Processing {len(ticker_list)} tickers")
-        logger.info(f"📅 Data start date: {corporate_actions_start_date}")
+        logger.info("📊 Processing %s tickers", len(ticker_list))
+        logger.info("📅 Data start date: %s", corporate_actions_start_date)
 
         # Step 3: Fetch data for all symbols (parallel) and save immediately
-        logger.info(f"\n💾 STEP 3: Fetching data for all symbols (workers={parallel_workers})...")
-        results = []
+        logger.info("\n💾 STEP 3: Fetching data for all symbols (workers=%s)...", parallel_workers)
+        results: list[dict[str, object]] = []
 
         with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
-            future_to_ticker = {
+            future_to_ticker: dict[Future[FetchResult], str] = {
                 executor.submit(self._fetch_symbol_data, ticker, max_retries): ticker for ticker in ticker_list
             }
 
             for i, future in enumerate(as_completed(future_to_ticker), 1):
-                ticker = future_to_ticker[future]
+                ticker: str = future_to_ticker[future]
                 try:
-                    result = future.result()
+                    result: FetchResult = future.result()
                     results.append(result)
 
                     # Save immediately after fetch (Step 3b)
                     if result["success"]:
                         self._save_by_ticker(
-                            result["ticker"],
-                            result["dividends_df"],
-                            result["splits_df"],
-                            result["earnings_df"],
+                            cast(str, result["ticker"]),
+                            cast(pd.DataFrame, result["dividends_df"]),
+                            cast(pd.DataFrame, result["splits_df"]),
+                            cast(pd.DataFrame, result["earnings_df"]),
                         )
-                        logger.info(f"💾 Saved {ticker} to by_ticker/")
+                        logger.info("💾 Saved %s to by_ticker/", ticker)
 
                     pct = (i / len(ticker_list)) * 100
-                    logger.info(f"📊 [{i}/{len(ticker_list)}] ({pct:.1f}%) Processed {ticker}")
+                    logger.info("📊 [%s/%s] (%..1f%) Processed %s", i, len(ticker_list), pct, ticker)
 
-                except Exception as e:
-                    logger.error(f"❌ Unexpected error processing {ticker}: {e}")
+                except (OSError, ValueError, TypeError, KeyError, ConnectionError, TimeoutError) as e:
+                    logger.error("❌ Unexpected error processing %s: %s", ticker, e)
                     results.append(
                         {
                             "ticker": ticker,
@@ -498,48 +538,64 @@ class CorporateActionsProductionHandler(ModeHandler):
                     )
 
         logger.info(
-            f"\n✅ STEP 3 Complete: Fetched and saved {len([r for r in results if r['success']])} tickers to by_ticker/"
+            "✅ STEP 3 Complete: Fetched and saved %s tickers to by_ticker/",
+            len([r for r in results if r["success"]]),
         )
 
         # Step 4: Combine into single DataFrames (removed separate save step)
         logger.info("\n🔄 STEP 4: Combining all data into single DataFrames...")
 
         # Handle empty DataFrames safely
-        dividends_list = [r["dividends_df"] for r in results if not r["dividends_df"].empty]
-        splits_list = [r["splits_df"] for r in results if not r["splits_df"].empty]
-        earnings_list = [r["earnings_df"] for r in results if not r["earnings_df"].empty]
+        dividends_list: list[pd.DataFrame] = [
+            cast(pd.DataFrame, r["dividends_df"])
+            for r in results
+            if isinstance(r.get("dividends_df"), pd.DataFrame) and not cast(pd.DataFrame, r["dividends_df"]).empty
+        ]
+        splits_list: list[pd.DataFrame] = [
+            cast(pd.DataFrame, r["splits_df"])
+            for r in results
+            if isinstance(r.get("splits_df"), pd.DataFrame) and not cast(pd.DataFrame, r["splits_df"]).empty
+        ]
+        earnings_list: list[pd.DataFrame] = [
+            cast(pd.DataFrame, r["earnings_df"])
+            for r in results
+            if isinstance(r.get("earnings_df"), pd.DataFrame) and not cast(pd.DataFrame, r["earnings_df"]).empty
+        ]
 
         all_dividends = pd.concat(dividends_list, ignore_index=True) if dividends_list else pd.DataFrame()
         all_splits = pd.concat(splits_list, ignore_index=True) if splits_list else pd.DataFrame()
         all_earnings = pd.concat(earnings_list, ignore_index=True) if earnings_list else pd.DataFrame()
 
         logger.info(
-            f"📊 Combined: {len(all_dividends)} dividends, {len(all_splits)} splits, {len(all_earnings)} earnings"
+            "📊 Combined: %s dividends, %s splits, %s earnings", len(all_dividends), len(all_splits), len(all_earnings)
         )
 
         # Step 5: Generate by_date partitions
         logger.info("\n📅 STEP 5: Generating by_date partitions...")
         by_date_stats = self._generate_by_date(all_dividends, all_splits, all_earnings)
 
-        logger.info(f"✅ Created {by_date_stats['dividends_dates']} dividend dates")
-        logger.info(f"✅ Created {by_date_stats['splits_dates']} split dates")
-        logger.info(f"✅ Created {by_date_stats['earnings_dates']} earnings dates")
+        logger.info("✅ Created %s dividend dates", by_date_stats["dividends_dates"])
+        logger.info("✅ Created %s split dates", by_date_stats["splits_dates"])
+        logger.info("✅ Created %s earnings dates", by_date_stats["earnings_dates"])
 
         # Step 6: Update metadata
         logger.info("\n📝 STEP 6: Updating metadata...")
+        tickers_meta: dict[str, object] = cast(dict[str, object], metadata.get("tickers") or {})
         for result in results:
-            ticker = result["ticker"]
-            metadata["tickers"][ticker] = {
+            result_ticker: str = cast(str, result["ticker"])
+            ticker_data: dict[str, object] = {
                 "last_download_date": date.today().isoformat(),
                 "status": "active" if result["success"] else "error",
                 "stats": {
-                    "total_dividends": len(result["dividends_df"]),
-                    "total_splits": len(result["splits_df"]),
-                    "total_earnings": len(result["earnings_df"]),
+                    "total_dividends": len(cast(pd.DataFrame, result["dividends_df"])),
+                    "total_splits": len(cast(pd.DataFrame, result["splits_df"])),
+                    "total_earnings": len(cast(pd.DataFrame, result["earnings_df"])),
                 },
             }
             if not result["success"]:
-                metadata["tickers"][ticker]["last_error"] = result["error"]
+                ticker_data["last_error"] = result["error"]
+            tickers_meta[result_ticker] = ticker_data
+        metadata["tickers"] = tickers_meta
 
         self._save_metadata(metadata)
 
@@ -555,31 +611,34 @@ class CorporateActionsProductionHandler(ModeHandler):
             logger.info("\n⏭️  Skipping GCS upload (upload_to_gcs=False)")
 
         # Summary
-        successful = [r for r in results if r["success"]]
+        successful: list[dict[str, object]] = [r for r in results if r.get("success")]
         logger.info("\n" + "=" * 60)
         logger.info("✅ PIPELINE COMPLETE!")
         logger.info("=" * 60)
-        logger.info(f"📊 Tickers processed: {len(successful)}/{len(ticker_list)}")
-        logger.info(f"📈 Total events: {len(all_dividends) + len(all_splits) + len(all_earnings)}")
-        logger.info(f"📁 Local output: {self.base_dir}")
+        logger.info("📊 Tickers processed: %s/%s", len(successful), len(ticker_list))
+        logger.info("📈 Total events: %s", len(all_dividends) + len(all_splits) + len(all_earnings))
+        logger.info("📁 Local output: %s", self.base_dir)
         if upload_to_gcs:
-            logger.info(f"☁️  GCS upload: {'✅ Success' if gcs_upload_success else '❌ Failed'}")
+            logger.info("☁️  GCS upload: %s", "✅ Success" if gcs_upload_success else "❌ Failed")
         logger.info("=" * 60)
 
-        return {
-            "success": True,
-            "status": "success",
-            "gcs_upload_success": gcs_upload_success,
-            "statistics": {
-                "tickers_requested": len(ticker_list),
-                "tickers_successful": len(successful),
-                "tickers_failed": len(ticker_list) - len(successful),
-                "total_dividends": len(all_dividends),
-                "total_splits": len(all_splits),
-                "total_earnings": len(all_earnings),
-                "by_date_stats": by_date_stats,
+        return cast(
+            dict[str, HandlerResultValue],
+            {
+                "success": True,
+                "status": "success",
+                "gcs_upload_success": gcs_upload_success,
+                "statistics": {
+                    "tickers_requested": len(ticker_list),
+                    "tickers_successful": len(successful),
+                    "tickers_failed": len(ticker_list) - len(successful),
+                    "total_dividends": len(all_dividends),
+                    "total_splits": len(all_splits),
+                    "total_earnings": len(all_earnings),
+                    "by_date_stats": by_date_stats,
+                },
             },
-        }
+        )
 
     def cleanup(self) -> None:
         """Cleanup resources."""

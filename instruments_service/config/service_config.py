@@ -5,12 +5,12 @@ InstrumentsServiceConfig (Pydantic BaseSettings) and singleton access.
 """
 
 import logging
-from typing import Optional
+from typing import cast
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import SettingsConfigDict
-from unified_cloud_services import CloudTarget
 from unified_config_interface import UnifiedCloudConfig
+from unified_trading_library import CloudTarget
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,11 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_DEFI"),
         description="GCS bucket for DEFI instruments",
     )
+    gcs_bucket_sports: str = Field(
+        default="",
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_SPORTS"),
+        description="GCS bucket for SPORTS instruments",
+    )
     gcs_bucket_cefi_test: str = Field(
         default="",
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_CEFI_TEST"),
@@ -70,6 +75,11 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         default="",
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_DEFI_TEST"),
         description="Test GCS bucket for DEFI instruments",
+    )
+    gcs_bucket_sports_test: str = Field(
+        default="",
+        validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_SPORTS_TEST"),
+        description="Test GCS bucket for SPORTS instruments",
     )
 
     bigquery_dataset: str = Field(
@@ -151,21 +161,6 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         description="Comma-separated list of DeFi MVP tokens",
     )
 
-    clickup_secret_name: str = Field(
-        default="clickup-api-key",
-        validation_alias=AliasChoices("CLICKUP_SECRET_NAME"),
-        description="ClickUp API key secret name",
-    )
-    clickup_list_id: str = Field(
-        default="",
-        validation_alias=AliasChoices("clickup_list_id_instruments_service"),
-        description="ClickUp List ID",
-    )
-    clickup_user_id_ikenna: str = Field(default="254573729")
-    clickup_user_id_harsh: str = Field(default="100698878")
-    clickup_user_id_femi: str = Field(default="100698756")
-    clickup_user_id_daniel: str = Field(default="36559682")
-
     # Deployment orchestration metadata (set by VM startup scripts)
     deployment_id: str = Field(
         default="",
@@ -188,8 +183,10 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
                 bucket = self.gcs_bucket_tradfi
             elif category_upper == "DEFI":
                 bucket = self.gcs_bucket_defi
+            elif category_upper == "SPORTS":
+                bucket = self.gcs_bucket_sports
             else:
-                raise ValueError(f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI")
+                raise ValueError(f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI, SPORTS")
         else:
             bucket = self.gcs_bucket
 
@@ -217,6 +214,10 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         return self.gcs_bucket_defi
 
     @property
+    def INSTRUMENTS_GCS_BUCKET_SPORTS(self) -> str:
+        return self.gcs_bucket_sports
+
+    @property
     def INSTRUMENTS_GCS_BUCKET_CEFI_TEST(self) -> str:
         return self.gcs_bucket_cefi_test or f"{self.gcs_bucket_cefi}-test"
 
@@ -229,6 +230,10 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         return self.gcs_bucket_defi_test or f"{self.gcs_bucket_defi}-test"
 
     @property
+    def INSTRUMENTS_GCS_BUCKET_SPORTS_TEST(self) -> str:
+        return self.gcs_bucket_sports_test or f"{self.gcs_bucket_sports}-test"
+
+    @property
     def INSTRUMENTS_GCS_BUCKET(self) -> str:
         return self.gcs_bucket
 
@@ -239,20 +244,30 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
     def get_bucket_for_category(self, category: str, test_mode: bool = False) -> str:
         """Get the GCS bucket name for a specific market category."""
         category_upper = category.upper()
-        if category_upper not in ["CEFI", "TRADFI", "DEFI"]:
-            raise ValueError(f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI")
+        if category_upper not in ["CEFI", "TRADFI", "DEFI", "SPORTS"]:
+            raise ValueError(f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI, SPORTS")
         bucket_name = (
             f"gcs_bucket_{category_upper.lower()}_test" if test_mode else f"gcs_bucket_{category_upper.lower()}"
         )
-        bucket = getattr(self, bucket_name, None)
-        if bucket:
-            logger.debug(f"📦 Using bucket for {category_upper}: {bucket}")
+        bucket_raw: object = getattr(self, bucket_name, None)
+        if bucket_raw:
+            bucket: str = cast(str, bucket_raw)
+            logger.debug("📦 Using bucket for %s: %s", category_upper, bucket)
             return bucket
-        logger.warning(f"⚠️ Category-specific bucket not configured for {category_upper}. Using default bucket.")
+        logger.warning("⚠️ Category-specific bucket not configured for %s. Using default bucket.", category_upper)
         return self.gcs_bucket_test if test_mode else self.gcs_bucket
 
+    # =========================================================================
+    # DOMAIN CONFIG PROTOCOL IMPLEMENTATION
+    # =========================================================================
 
-_config: Optional[InstrumentsServiceConfig] = None
+    @property
+    def config(self) -> dict[str, object]:
+        """Generic config dict for extensibility (implements DomainConfigProtocol)."""
+        return self.model_dump()
+
+
+_config: InstrumentsServiceConfig | None = None
 
 
 def get_config() -> InstrumentsServiceConfig:

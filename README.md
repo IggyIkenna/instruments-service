@@ -6,16 +6,20 @@ Service for generating canonical instrument definitions from exchange APIs.
 
 **✅ COMPLETE**: Full end-to-end implementation with CLI, orchestration service, and comprehensive examples.
 
-**Migration Status**: ✅ All instrument-related code has been successfully migrated from `market-tick-data-handler`. Old files have been deleted and all imports updated.
+**Migration Status**: ✅ All instrument-related code has been successfully migrated from `market-tick-data-service`. Old files have been deleted and all imports updated.
 
 ## Dependencies
 
-- `unified-cloud-services` - For cloud operations (GCS, Secret Manager; BigQuery utilities for ad hoc use)
+- `unified-trading-services` - For cloud operations (GCS, Secret Manager; BigQuery utilities for ad hoc use)
 - `ccxt` - For exchange metadata enrichment
 - `pydantic` - For data validation
 - `requests` - For Tardis API integration
 
 ## Architecture
+
+**Implemented (UMI-INSTR-001):** instruments-service is a thin consumer of unified-market-interface (UMI). UMI owns CeFi (Tardis) instrument normalization; instruments-service calls UMI `get_adapter("tardis").fetch_instruments(normalize=True)`, converts to InstrumentDefinition, writes to GCS. TradFi and DeFi paths use InstrumentProcessingService. See: `unified-trading-codex/11-project-management/epics/umi-instrument-normalization-epic.md`
+
+**Optional (URDI):** unified-reference-data-interface provides direct exchange REST adapters. When `USE_URDI_REFERENCE_DATA=true` and URDI is installed, instruments-service can use `get_reference_adapter(venue).get_instruments()` for supported venues. URDI adapters handle API keys via `get_secret_client` internally.
 
 Follows unified repository structure per architecture plan:
 
@@ -26,7 +30,7 @@ instruments_service/
 │   │   ├── instruments_service.py        # Main orchestration service
 │   │   ├── instrument_processing_service.py  # Instrument processing logic
 │   │   ├── cloud_instrument_storage.py   # Stores instruments to GCS (batch data only)
-│   │   ├── cloud_data_provider.py        # Reads instruments from unified-cloud-services
+│   │   ├── cloud_data_provider.py        # Reads instruments from unified-trading-services
 │   │   ├── batch_processor.py            # Batch processing with lookback
 │   │   └── validation_service.py        # Service-specific validation
 │   ├── venues/                           # ⚠️ DEVIATION: Venue-specific adapters (future)
@@ -39,33 +43,33 @@ instruments_service/
 │   └── handlers/
 │       ├── instrument_handler.py         # Instrument generation handler
 │       └── instruments_query_handler.py  # Query handler
-├── models.py                             # InstrumentDefinition, InstrumentKey models
+├── models.py                             # InstrumentDefinition (from UMI), InstrumentKey, Venue, InstrumentType
 ├── config.py                             # VenueMapping, ExchangeInstrumentConfig, DataTypeConfig, InstrumentsServiceConfig
 └── requirements.txt
 ```
 
 ## Migration Status: ✅ COMPLETE
 
-**All components have been successfully extracted and migrated from `market-tick-data-handler`:**
+**All components have been successfully extracted and migrated from `market-tick-data-service`:**
 
-1. ✅ **Models** - `InstrumentDefinition`, `InstrumentKey`, `Venue`, `InstrumentType` (extracted and migrated)
+1. ✅ **Models** - `InstrumentDefinition` (from UMI), `InstrumentKey`, `Venue`, `InstrumentType` (extracted and migrated)
 2. ✅ **Configs** - `VenueMapping`, `ExchangeInstrumentConfig`, `DataTypeConfig` (extracted and migrated)
 3. ✅ **Service** - `InstrumentProcessingService` (extracted and migrated, ~1547 lines)
 4. ✅ **CLI Handlers** - Instrument generation and query handlers (extracted and migrated)
 
-**Old files deleted from `market-tick-data-handler`:**
+**Old files deleted from `market-tick-data-service`:**
 - ✅ `market_data_tick_handler/services/instrument_processing_service.py`
 - ✅ `market_data_tick_handler/cli/handlers/instrument_handler.py`
 - ✅ `market_data_tick_handler/cli/handlers/instruments_query_handler.py`
 - ✅ `market_data_tick_handler/clients/instruments_client.py`
 
 **Breaking Changes:**
-- `market-tick-data-handler` CLI no longer supports instrument modes - use `instruments-service` CLI directly
-- `market-tick-data-handler` clients module no longer exports `InstrumentsClient` - import from `instruments_service.clients.instruments_client`
+- `market-tick-data-service` CLI no longer supports instrument modes - use `instruments-service` CLI directly
+- `market-tick-data-service` clients module no longer exports `InstrumentsClient` - import from `instruments_service.clients.instruments_client`
 
 ### Integration Points:
 
-- Uses `unified-cloud-services` for cloud operations
+- Uses `unified-trading-services` for cloud operations
 - Stores instruments to `market-data-tick` GCS bucket (market_data domain)
 - Instruments are part of market_data domain (not separate domain)
 - Uses Secret Manager for API key retrieval (no env var required)
@@ -75,9 +79,9 @@ instruments_service/
 ### Prerequisites
 
 - Python 3.13.x (required - see installation below)
-- SSH key configured with GitHub (for unified-cloud-services)
+- SSH key configured with GitHub (for unified-trading-services)
 
-**Note:** GCP credentials are included in the repo (private repo). The setup script will auto-detect them.
+**Note:** For local dev, use ADC: `gcloud auth application-default login` (no key file needed). Copy `.env.example` to `.env` and fill in placeholders.
 
 ### One-Command Setup
 
@@ -104,7 +108,7 @@ The setup script will:
 2. Show installation instructions if needed (brew, pyenv)
 3. Verify architecture on Apple Silicon (ARM64 required)
 4. Create a virtual environment (.venv/)
-5. Install unified-cloud-services (latest) from GitHub
+5. Install unified-trading-services (latest) from GitHub
 6. Install instruments-service with all dependencies
 7. Auto-detect and configure GCP credentials
 
@@ -185,6 +189,18 @@ instruments_df = service.query_instruments(
     instrument_type='PERPETUAL'
 )
 ```
+
+## Sports Instruments
+
+Sports is the 4th asset class alongside CeFi, TradFi, and DeFi. The `instruments_service/sports/` module provides:
+
+- **League registry** — 101 leagues across football, basketball, tennis, etc.
+- **Team normalizer** — cross-provider fuzzy matching for consistent team identity
+- **Fixture parser** — converts provider fixture data into canonical instruments
+
+Canonical instrument key format: `{LEAGUE}:FIXTURE:{HOME_ID}-v-{AWAY_ID}@{YYYYMMDD}`
+
+See `spec/SPORTS_INTEGRATION.md` for full details.
 
 ## OpenBB Integration (Corporate Actions)
 
@@ -292,7 +308,7 @@ See [GitHub Project #9](https://github.com/users/IggyIkenna/projects/9) for trac
 
 **Deployment Model:** 1 deployment → 3 per-category deployments
 **Communication:** GCS only → Pub/Sub between categories (instruments writes, downstream reads)
-**Library Imports:** Standalone → Imported by market-tick-data-handler (within same category deployment)
+**Library Imports:** Standalone → Imported by market-tick-data-service (within same category deployment)
 
 See: `unified-trading-codex/04-architecture/deployment-grouping.md` for full architecture.
 

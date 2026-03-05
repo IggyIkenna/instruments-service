@@ -160,7 +160,7 @@ Query stored instruments from BigQuery.
 
 ## CloudDataProvider
 
-Provides read access to instrument data from unified-cloud-services.
+Provides read access to instrument data from unified-trading-services.
 
 ### `__init__(cloud_target: Optional[CloudTarget] = None)`
 
@@ -218,7 +218,7 @@ Validate a DataFrame of instruments.
 
 ## InstrumentsClient
 
-Convenience client for downstream integration (downstream should prefer unified-cloud-services directly).
+Convenience client for downstream integration (downstream should prefer unified-trading-services directly).
 
 ### `__init__(project_id: str = '{project_id}', bucket_name: str = 'market-data-tick')`  # Replace {project_id} with actual project ID
 
