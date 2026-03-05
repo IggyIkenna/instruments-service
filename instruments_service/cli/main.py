@@ -436,7 +436,7 @@ def main() -> dict[str, HandlerResultValue]:
         else:
             status = result.get("status", "unknown")
             logger.error(
-                "❌ %s operation failed (status=%s). Details: %s",
+                "%s operation failed (status=%s). Details: %s",
                 args.mode,
                 status,
                 result.get("error", result.get("message", "no details")),
@@ -445,7 +445,7 @@ def main() -> dict[str, HandlerResultValue]:
         return result
 
     except (ValueError, KeyError, TypeError, IndexError) as e:
-        logger.error("❌ CLI execution failed: %s", e, exc_info=True)
+        logger.exception("CLI execution failed: %s", e)
         return {"success": False, "status": "error", "error": str(e)}
 
 
@@ -458,7 +458,7 @@ def run_cli() -> dict[str, HandlerResultValue]:
         logger.info("🛑 Operation cancelled by user")
         return {"success": False, "status": "error", "error": "Cancelled by user"}
     except (OSError, ValueError, RuntimeError) as e:
-        logger.error("❌ Unexpected error: %s", e, exc_info=True)
+        logger.exception("Unexpected error: %s", e)
         return {"success": False, "status": "error", "error": str(e)}
 
 

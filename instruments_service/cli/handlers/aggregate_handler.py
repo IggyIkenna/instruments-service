@@ -75,7 +75,7 @@ class AggregateHandler(ModeHandler):
                     context=ErrorContext(extra={"exc_type": type(e).__name__}),
                 )
                 logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
-                logger.error("Aggregation failed for %s: %s", category, e, exc_info=True)
+                logger.exception("Aggregation failed for %s: %s", category, e)
                 log_event("CATEGORY_AGGREGATION_FAILED", f"{category}: {e}")
         log_event("AGGREGATION_COMPLETED", f"{categories_processed} categories, {total_instruments} total")
 
