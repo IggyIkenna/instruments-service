@@ -11,6 +11,10 @@ config is loaded; sets test env defaults.
 import logging
 import os
 from pathlib import Path
+from uuid import uuid4
+
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
 
 _logger = logging.getLogger("pytest_load_env")
 
@@ -22,9 +26,9 @@ def pytest_load_initial_conftests(early_config, parser, args):
     This ensures .env is loaded before test modules are imported, so skipif
     decorators can access environment variables.
     """
-    try:
-        from dotenv import load_dotenv
+    from dotenv import load_dotenv
 
+    try:
         # Find project root (instruments-service directory)
         # This file should be in the project root
         project_root = Path(__file__).parent
@@ -45,7 +49,7 @@ def pytest_load_initial_conftests(early_config, parser, args):
                     if abs_creds_path.exists():
                         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(abs_creds_path)
                     else:
-                        # Try parent directories (unified-cloud-services, etc.)
+                        # Try parent directories (unified-trading-library, etc.)
                         parent_creds = project_root.parent / creds_path
                         if parent_creds.exists():
                             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(parent_creds.resolve())
@@ -81,7 +85,13 @@ def pytest_load_initial_conftests(early_config, parser, args):
             )
         else:
             _logger.warning(".env file not found at %s", env_path)
-    except ImportError:
-        _logger.warning("python-dotenv not available, skipping .env file loading")
-    except Exception as e:
+    except (OSError, ValueError) as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
         _logger.warning("Error loading .env file: %s", e)

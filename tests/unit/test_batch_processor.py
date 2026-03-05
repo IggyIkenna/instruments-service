@@ -2,7 +2,7 @@
 Unit tests for InstrumentBatchProcessor.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 
@@ -28,7 +28,7 @@ class TestInstrumentBatchProcessor:
         """Test date range calculation without lookback."""
         config = {}
         processor = InstrumentBatchProcessor(config)
-        target_date = datetime(2023, 5, 23, tzinfo=timezone.utc)
+        target_date = datetime(2023, 5, 23, tzinfo=UTC)
         start_date, end_date = processor.calculate_date_range(target_date)
         assert start_date == target_date
         assert end_date == target_date
@@ -37,7 +37,7 @@ class TestInstrumentBatchProcessor:
         """Test date range calculation with lookback."""
         config = {"lookback_days": 7}
         processor = InstrumentBatchProcessor(config)
-        target_date = datetime(2023, 5, 23, tzinfo=timezone.utc)
+        target_date = datetime(2023, 5, 23, tzinfo=UTC)
         start_date, end_date = processor.calculate_date_range(target_date)
         assert start_date == target_date - timedelta(days=7)
         assert end_date == target_date
@@ -46,7 +46,7 @@ class TestInstrumentBatchProcessor:
         """Test getting required periods."""
         config = {}
         processor = InstrumentBatchProcessor(config)
-        target_date = datetime(2023, 5, 23, tzinfo=timezone.utc)
+        target_date = datetime(2023, 5, 23, tzinfo=UTC)
         periods = processor.get_required_periods(target_date)
         assert len(periods) == 1
         assert periods[0] == target_date
@@ -55,7 +55,7 @@ class TestInstrumentBatchProcessor:
         """Test getting required periods for multiple days."""
         config = {"lookback_days": 2}
         processor = InstrumentBatchProcessor(config)
-        target_date = datetime(2023, 5, 23, tzinfo=timezone.utc)
+        target_date = datetime(2023, 5, 23, tzinfo=UTC)
         periods = processor.get_required_periods(target_date)
         assert len(periods) == 3  # 2 lookback + 1 target
 

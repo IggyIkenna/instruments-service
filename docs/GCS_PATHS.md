@@ -71,7 +71,7 @@ The `instruments.parquet` file contains the following key columns:
 ### Reading Instrument Definitions
 
 ```python
-from unified_cloud_services import StandardizedDomainCloudService, CloudTarget
+from unified_trading_services import StandardizedDomainCloudService, CloudTarget
 
 # Create cloud-agnostic service
 target = CloudTarget(
@@ -105,7 +105,7 @@ gsutil ls gs://instruments-store-cefi-{project_id}/instrument_availability/by_da
 
 The following services read instrument definitions from these paths:
 
-1. **market-tick-data-handler** - Uses instrument IDs to determine what data to download
+1. **market-tick-data-service** - Uses instrument IDs to determine what data to download
 2. **strategy-service** - Uses instrument definitions for strategy configuration
 3. **execution-services** - Uses instrument specs (tick size, lot size) for execution simulation
 

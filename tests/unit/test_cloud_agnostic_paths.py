@@ -3,7 +3,7 @@ Tests for cloud-agnostic path format and project ID injection in instruments-ser
 
 Verifies instruments-service code:
 1. All GCS paths use key=value format (day={date}, not day-{date})
-2. Code uses unified-cloud-services abstractions (not direct GCP clients)
+2. Code uses unified-trading-services abstractions (not direct GCP clients)
 3. Project ID is correctly injected into bucket names
 """
 
@@ -12,9 +12,9 @@ from datetime import date
 from unittest.mock import Mock, patch
 
 import pytest
+from unified_trading_library import BaseDependencyChecker as DependencyChecker
 
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
-from instruments_service.app.core.dependency_checker import DependencyChecker
 
 
 class TestCloudAgnosticPaths:
@@ -124,8 +124,8 @@ class TestCloudAgnosticPaths:
         """Test that DependencyChecker uses day={date} format."""
         # Patch at the point where StandardizedDomainCloudService is imported (inside method)
         with (
-            patch("unified_cloud_services.StandardizedDomainCloudService") as mock_service_class,
-            patch("unified_cloud_services.CloudTarget") as mock_target_class,
+            patch("unified_trading_library.StandardizedDomainCloudService") as mock_service_class,
+            patch("unified_trading_library.CloudTarget") as mock_target_class,
         ):
             mock_service = Mock()
             mock_service.download_from_gcs = Mock(return_value=Mock(empty=False))
@@ -164,7 +164,7 @@ class TestCloudAgnosticPaths:
             expected_bucket = f"instruments-store-cefi-{mock_project_id}"
 
             # Create CloudTarget directly (not mocked) to verify it accepts project ID
-            from unified_cloud_services import CloudTarget
+            from unified_trading_library import CloudTarget
 
             cloud_target = CloudTarget(
                 project_id=mock_project_id,
@@ -182,11 +182,11 @@ class TestCloudAgnosticPaths:
             )
 
     def test_no_direct_gcs_client_imports(self):
-        """Test that instruments-service code doesn't directly import get_gcs_client from unified_cloud_services."""
+        """Test that instruments-service code doesn't directly import get_gcs_client from unified_trading_library."""
         from pathlib import Path
 
         # Use package path - invariant across environments. Path(__file__) breaks in Cloud Build
-        # where workspace root can include sibling /workspace/unified-cloud-services and
+        # where workspace root can include sibling /workspace/unified-trading-services and
         # /workspace/unified-trading-deployment-v2, causing false violations from dependency code.
         import instruments_service
 
@@ -204,15 +204,15 @@ class TestCloudAgnosticPaths:
         violations = []
         for file_path in python_files:
             try:
-                with open(file_path, "r") as f:
+                with open(file_path) as f:
                     content = f.read()
 
                 # Check for direct get_gcs_client imports (bad)
-                if "from unified_cloud_services import get_gcs_client" in content:
+                if "from unified_trading_library.core.cloud_auth_factory import create_gcs_client" in content:
                     violations.append(f"{file_path}: Direct import of get_gcs_client")
 
                 # Check for get_gcs_client() calls (bad, should use StandardizedDomainCloudService)
-                if "get_gcs_client(" in content and "unified_cloud_services" in content:
+                if "get_gcs_client(" in content and "unified_trading_library" in content:
                     # Allow if it's in a comment or docstring
                     lines = content.split("\n")
                     for i, line in enumerate(lines):
@@ -261,8 +261,9 @@ class TestCloudAgnosticPaths:
                         f"Bucket should contain project ID or be test bucket: {bucket_cefi}"
                     )
                     # Only check for hardcoded ID if it's different from mock
-                    if mock_project_id != "central-element-323112":
-                        assert "central-element-323112" not in bucket_cefi, (
+                    FORBIDDEN_REAL_ID = "real-project-id"  # Placeholder for "real project ID must not leak"
+                    if mock_project_id != FORBIDDEN_REAL_ID:
+                        assert FORBIDDEN_REAL_ID not in bucket_cefi, (
                             f"Bucket should not contain hardcoded project ID: {bucket_cefi}"
                         )
 

@@ -10,16 +10,14 @@ Categories:
 - DEFI: Decentralized finance instruments (on-chain data)
 
 Usage:
-    from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
-    from unified_cloud_services import ParquetSchemaEnforcer
-
+    # from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
+    # from unified_trading_library import ParquetSchemaEnforcer  # TODO: Map to explicit import
     enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
     result = enforcer.validate_dataframe(df, {"category": "CEFI"})
 """
 
-from unified_cloud_services import ColumnSchema, SchemaDefinition
+from unified_trading_library import ColumnSchema, SchemaDefinition
 
-# ==============================================================================
 # INSTRUMENTS OUTPUT SCHEMA
 # ==============================================================================
 # Defines all columns with dimension-aware nullability rules
@@ -77,7 +75,10 @@ INSTRUMENTS_SCHEMA = SchemaDefinition(
             name="instruction_type",
             dtype="string",
             nullable=True,
-            description="Instruction type for execution algorithm selection: TRADE (CLOB), SWAP (DEX), or ZERO_ALPHA (lending/staking)",
+            description=(
+                "Instruction type for execution algorithm selection: "
+                "TRADE (CLOB), SWAP (DEX), or ZERO_ALPHA (lending/staking)"
+            ),
         ),
         # ==========================================================================
         # METADATA FIELDS (nullable by default, defaults exist)
@@ -472,7 +473,10 @@ INSTRUMENTS_SCHEMA = SchemaDefinition(
             name="session_date_tag",
             dtype="string",
             nullable=True,
-            description="UTC midnight spanning tag: 'close_date' (primary/full session) or 'open_date' (duplicate for prev day ticks). Only for CME/ICE.",
+            description=(
+                "UTC midnight spanning tag: 'close_date' (primary/full session) or "
+                "'open_date' (duplicate for prev day ticks). Only for CME/ICE."
+            ),
         ),
     ],
 )

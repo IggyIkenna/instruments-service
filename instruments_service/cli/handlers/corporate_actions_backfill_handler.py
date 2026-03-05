@@ -37,9 +37,9 @@ Storage Structure:
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, Optional
+from typing import cast
 
 import pandas as pd
 import yaml
@@ -62,10 +62,15 @@ class CorporateActionsBackfillHandler(ModeHandler):
     Phase 1 of the optimized pipeline.
     """
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, object]) -> None:
         super().__init__(config)
 
-        self.project_id = config.get("project_id") or str(getattr(instruments_config, "gcp_project_id", "") or "")
+        raw_project_id = config.get("project_id")
+        self.project_id: str = (
+            str(raw_project_id)
+            if raw_project_id is not None
+            else str(getattr(instruments_config, "gcp_project_id", "") or "")
+        )
 
         # Initialize adapter (yfinance only - free, no API key needed)
         self.adapter = CorporateActionsAdapter()
@@ -83,15 +88,15 @@ class CorporateActionsBackfillHandler(ModeHandler):
 
         logger.info("✅ CorporateActionsBackfillHandler initialized")
 
-    def _get_tickers_from_gcs(self, reference_date: Optional[date] = None) -> list[str]:
+    def _get_tickers_from_gcs(self, reference_date: date | None = None) -> list[str]:
         """
         Fetch equity tickers from GCS instruments store.
 
         Same logic as original corporate_actions_handler.
         """
-        try:
-            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
+        from unified_trading_library import CloudTarget, StandardizedDomainCloudService
 
+        try:
             bucket_name = instruments_config.gcs_bucket_tradfi or instruments_config.get_bucket_for_category("tradfi")
 
             # Create cloud-agnostic service
@@ -105,7 +110,10 @@ class CorporateActionsBackfillHandler(ModeHandler):
             def try_load_tickers(gcs_path: str) -> list[str]:
                 """Try to load tickers from a specific GCS path."""
                 try:
-                    df: pd.DataFrame = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    raw = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    if not isinstance(raw, pd.DataFrame):
+                        return []
+                    df = cast(pd.DataFrame, raw)
                     if df.empty:
                         return []
 
@@ -114,7 +122,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
                     tickers_raw: list[str] = list(equities["exchange_raw_symbol"].dropna().unique().tolist())
                     tickers: list[str] = [str(t).strip() for t in tickers_raw if t and str(t).strip()]
                     return sorted(tickers)
-                except Exception:
+                except (OSError, FileNotFoundError, RuntimeError, ValueError):
                     return []
 
             # Try known good dates
@@ -129,18 +137,18 @@ class CorporateActionsBackfillHandler(ModeHandler):
                 gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
                 tickers = try_load_tickers(gcs_path)
                 if tickers:
-                    logger.info(f"📂 Using instruments from: day={date_str}")
-                    logger.info(f"📊 Loaded {len(tickers)} equity tickers from GCS")
+                    logger.info("📂 Using instruments from: day=%s", date_str)
+                    logger.info("📊 Loaded %s equity tickers from GCS", len(tickers))
                     return tickers
 
             logger.warning("⚠️ No equity tickers found in any GCS instruments file")
             return []
 
-        except Exception as e:
-            logger.error(f"❌ Failed to load tickers from GCS: {e}")
+        except (OSError, ValueError, TypeError, KeyError) as e:
+            logger.error("❌ Failed to load tickers from GCS: %s", e)
             return []
 
-    def _get_tickers(self, tickers: Optional[list[str]] = None) -> list[str]:
+    def _get_tickers(self, tickers: list[str] | None = None) -> list[str]:
         """Get list of tickers to process."""
         if tickers:
             return [t.upper() for t in tickers]
@@ -159,7 +167,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
         ticker: str,
         append_mode: bool = True,
         max_retries: int = 3,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Fetch FULL history for a single ticker and save to CSV.
 
@@ -174,7 +182,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
         ticker_dir = self.by_ticker_dir / ticker
         ticker_dir.mkdir(exist_ok=True)
 
-        result: dict[str, Any] = {
+        result: dict[str, object] = {
             "ticker": ticker,
             "success": False,
             "dividends_count": 0,
@@ -220,16 +228,20 @@ class CorporateActionsBackfillHandler(ModeHandler):
 
                 result["success"] = True
                 logger.debug(
-                    f"✅ {ticker}: {result['dividends_count']} dividends, {result['splits_count']} splits, {result['earnings_count']} earnings"
+                    "✅ %s: %s dividends, %s splits, %s earnings",
+                    ticker,
+                    result["dividends_count"],
+                    result["splits_count"],
+                    result["earnings_count"],
                 )
                 break  # Success, exit retry loop
 
-            except Exception as e:
+            except (OSError, ValueError, TypeError, KeyError, ConnectionError) as e:
                 result["error"] = str(e)
                 if attempt < max_retries:
-                    logger.warning(f"⚠️ {ticker}: Attempt {attempt}/{max_retries} failed: {e}. Retrying...")
+                    logger.warning("⚠️ %s: Attempt %s/%s failed: %s. Retrying...", ticker, attempt, max_retries, e)
                 else:
-                    logger.error(f"❌ {ticker}: All {max_retries} attempts failed: {e}")
+                    logger.error("❌ %s: All %s attempts failed: %s", ticker, max_retries, e)
 
         return result
 
@@ -269,23 +281,23 @@ class CorporateActionsBackfillHandler(ModeHandler):
             new_events: pd.DataFrame = new_df[~new_df[date_column].isin(existing_dates)]
 
             if new_events.empty:
-                logger.debug(f"No new events to append for {csv_path.name}")
+                logger.debug("No new events to append for %s", csv_path.name)
                 return existing_df
 
             # Combine and sort
             combined: pd.DataFrame = pd.concat([existing_df, new_events], ignore_index=True)
             combined = combined.sort_values([date_column])
 
-            logger.debug(f"Appended {len(new_events)} new events to {csv_path.name}")
+            logger.debug("Appended %s new events to %s", len(new_events), csv_path.name)
             return combined
 
-        except Exception as e:
-            logger.warning(f"Failed to append to {csv_path}: {e}. Returning new data only.")
+        except (OSError, ValueError, TypeError, KeyError) as e:
+            logger.warning("Failed to append to %s: %s. Returning new data only.", csv_path, e)
             return new_df
 
     def _update_ticker_registry(
         self,
-        results: list[dict[str, Any]],
+        results: list[dict[str, object]],
     ) -> None:
         """
         Update ticker_registry.yaml with fetch results and statistics.
@@ -296,9 +308,9 @@ class CorporateActionsBackfillHandler(ModeHandler):
         registry_path = self.metadata_dir / "ticker_registry.yaml"
 
         # Load existing registry if exists
-        registry: dict[str, Any]
+        registry: dict[str, object]
         if registry_path.exists():
-            with open(registry_path, "r") as f:
+            with open(registry_path) as f:
                 registry = yaml.safe_load(f) or {}
         else:
             registry = {
@@ -311,20 +323,34 @@ class CorporateActionsBackfillHandler(ModeHandler):
                 },
             }
 
-        registry["last_updated"] = datetime.now(timezone.utc).isoformat()
+        registry["last_updated"] = datetime.now(UTC).isoformat()
         registry["total_tickers"] = len(results)
 
         # Update ticker entries
+        tickers_map: dict[str, object] = cast(dict[str, object], registry.get("tickers") or {})
         for result in results:
-            ticker = result["ticker"]
+            ticker_val: object = result.get("ticker")
+            ticker: str = str(ticker_val) if ticker_val is not None else ""
 
-            ticker_entry: dict[str, Any] = registry["tickers"].get(
-                ticker,
-                {
+            raw_entry: dict[str, object] = cast(
+                dict[str, object],
+                tickers_map.get(
+                    ticker,
+                    {
+                        "exchange": "UNKNOWN",
+                        "instrument_type": "equity",
+                        "fetch_history": [],
+                    },
+                ),
+            )
+            ticker_entry: dict[str, object] = (
+                raw_entry
+                if isinstance(raw_entry, dict)
+                else {
                     "exchange": "UNKNOWN",
                     "instrument_type": "equity",
                     "fetch_history": [],
-                },
+                }
             )
 
             # Update metadata
@@ -341,29 +367,48 @@ class CorporateActionsBackfillHandler(ModeHandler):
                 ticker_entry["last_error"] = result["error"]
 
             # Add to fetch history
-            ticker_entry["fetch_history"].append(
+            fetch_history_raw: object = ticker_entry.get("fetch_history")
+            fetch_history: list[dict[str, object]] = (
+                list(cast(list[dict[str, object]], fetch_history_raw)) if isinstance(fetch_history_raw, list) else []
+            )
+            fetch_history.append(
                 {
-                    "date": datetime.now(timezone.utc).isoformat(),
+                    "date": datetime.now(UTC).isoformat(),
                     "result": "success" if result["success"] else "error",
-                    "events_found": result["dividends_count"] + result["splits_count"] + result["earnings_count"],
+                    "events_found": (
+                        (
+                            int(result["dividends_count"])
+                            if isinstance(result["dividends_count"], (int, float, str))
+                            else 0
+                        )
+                        + (int(result["splits_count"]) if isinstance(result["splits_count"], (int, float, str)) else 0)
+                        + (
+                            int(result["earnings_count"])
+                            if isinstance(result["earnings_count"], (int, float, str))
+                            else 0
+                        )
+                    ),
                     "error": result["error"] if not result["success"] else None,
                 }
             )
 
             # Keep only last 10 fetch history entries
-            ticker_entry["fetch_history"] = ticker_entry["fetch_history"][-10:]
+            ticker_entry["fetch_history"] = fetch_history[-10:]
 
-            registry["tickers"][ticker] = ticker_entry
+            tickers_map[ticker] = ticker_entry
+
+        # Ensure the updated tickers_map is reflected in registry
+        registry["tickers"] = tickers_map
 
         # Save registry
         with open(registry_path, "w") as f:
             yaml.dump(registry, f, default_flow_style=False, sort_keys=False)
 
-        logger.info(f"✅ Updated ticker registry: {registry_path}")
+        logger.info("✅ Updated ticker registry: %s", registry_path)
 
     def _generate_coverage_report(
         self,
-        results: list[dict[str, Any]],
+        results: list[dict[str, object]],
     ) -> None:
         """
         Generate coverage_report.json with data quality metrics.
@@ -376,21 +421,33 @@ class CorporateActionsBackfillHandler(ModeHandler):
         successful = [r for r in results if r["success"]]
         failed = [r for r in results if not r["success"]]
 
-        tickers_with_dividends = [r["ticker"] for r in successful if r["dividends_count"] > 0]
-        tickers_with_splits = [r["ticker"] for r in successful if r["splits_count"] > 0]
-        tickers_with_earnings = [r["ticker"] for r in successful if r["earnings_count"] > 0]
+        def _gt_zero(r: dict[str, object], key: str) -> bool:
+            val = r.get(key)
+            return isinstance(val, (int, float)) and val > 0
+
+        def _eq_zero(r: dict[str, object], key: str) -> bool:
+            val = r.get(key)
+            return not isinstance(val, (int, float)) or val == 0
+
+        tickers_with_dividends = [r["ticker"] for r in successful if _gt_zero(r, "dividends_count")]
+        tickers_with_splits = [r["ticker"] for r in successful if _gt_zero(r, "splits_count")]
+        tickers_with_earnings = [r["ticker"] for r in successful if _gt_zero(r, "earnings_count")]
         tickers_no_data = [
             r["ticker"]
             for r in successful
-            if r["dividends_count"] == 0 and r["splits_count"] == 0 and r["earnings_count"] == 0
+            if _eq_zero(r, "dividends_count") and _eq_zero(r, "splits_count") and _eq_zero(r, "earnings_count")
         ]
 
-        total_dividends = sum(r["dividends_count"] for r in successful)
-        total_splits = sum(r["splits_count"] for r in successful)
-        total_earnings = sum(r["earnings_count"] for r in successful)
+        def _count(r: dict[str, object], key: str) -> int:
+            val = r[key]
+            return int(val) if isinstance(val, (int, float, str)) else 0
 
-        report: dict[str, Any] = {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+        total_dividends = sum(_count(r, "dividends_count") for r in successful)
+        total_splits = sum(_count(r, "splits_count") for r in successful)
+        total_earnings = sum(_count(r, "earnings_count") for r in successful)
+
+        report: dict[str, object] = {
+            "generated_at": datetime.now(UTC).isoformat(),
             "version": "1.0",
             "summary": {
                 "total_tickers": len(results),
@@ -418,17 +475,17 @@ class CorporateActionsBackfillHandler(ModeHandler):
                 "tickers_with_errors": [{"ticker": r["ticker"], "error": r["error"]} for r in failed],
                 "tickers_no_data": tickers_no_data,
             },
-            "last_update_check": datetime.now(timezone.utc).isoformat(),
+            "last_update_check": datetime.now(UTC).isoformat(),
         }
 
         with open(report_path, "w") as f:
             json.dump(report, f, indent=2)
 
-        logger.info(f"✅ Generated coverage report: {report_path}")
+        logger.info("✅ Generated coverage report: %s", report_path)
 
     def run(
         self,
-        tickers: Optional[list[str]] = None,
+        tickers: list[str] | None = None,
         parallel_workers: int = 10,
         append_mode: bool = True,
         upload_to_gcs: bool = False,
@@ -451,13 +508,13 @@ class CorporateActionsBackfillHandler(ModeHandler):
         # Get tickers
         ticker_list = self._get_tickers(tickers)
 
-        logger.info(f"🚀 Starting backfill for {len(ticker_list)} tickers")
-        logger.info(f"⚙️ Parallel workers: {parallel_workers}")
-        logger.info(f"📝 Append mode: {append_mode}")
-        logger.info(f"🔄 Max retries: {max_retries}")
+        logger.info("🚀 Starting backfill for %s tickers", len(ticker_list))
+        logger.info("⚙️ Parallel workers: %s", parallel_workers)
+        logger.info("📝 Append mode: %s", append_mode)
+        logger.info("🔄 Max retries: %s", max_retries)
 
         # Fetch data with parallel processing
-        results: list[dict[str, Any]] = []
+        results: list[dict[str, object]] = []
 
         with ThreadPoolExecutor(max_workers=parallel_workers) as executor:
             # Submit all tasks
@@ -479,10 +536,10 @@ class CorporateActionsBackfillHandler(ModeHandler):
                     results.append(result)
 
                     pct = (i / len(ticker_list)) * 100
-                    logger.info(f"📊 [{i}/{len(ticker_list)}] ({pct:.1f}%) Processed {ticker}")
+                    logger.info("📊 [%s/%s] (%..1f%) Processed %s", i, len(ticker_list), pct, ticker)
 
-                except Exception as e:
-                    logger.error(f"❌ Unexpected error processing {ticker}: {e}")
+                except (OSError, ValueError, TypeError, KeyError, ConnectionError, TimeoutError) as e:
+                    logger.error("❌ Unexpected error processing %s: %s", ticker, e)
                     results.append(
                         {
                             "ticker": ticker,
@@ -499,33 +556,42 @@ class CorporateActionsBackfillHandler(ModeHandler):
         self._generate_coverage_report(results)
 
         # Calculate statistics
-        successful: list[dict[str, Any]] = [r for r in results if r["success"]]
-        failed: list[dict[str, Any]] = [r for r in results if not r["success"]]
+        successful: list[dict[str, object]] = [r for r in results if r["success"]]
+        failed: list[dict[str, object]] = [r for r in results if not r["success"]]
+
+        def _to_int(val: object) -> int:
+            return int(val) if isinstance(val, (int, float, str)) else 0
 
         stats: dict[str, int] = {
             "tickers_requested": len(ticker_list),
             "tickers_successful": len(successful),
             "tickers_failed": len(failed),
-            "total_dividends": sum(r["dividends_count"] for r in successful),
-            "total_splits": sum(r["splits_count"] for r in successful),
-            "total_earnings": sum(r["earnings_count"] for r in successful),
+            "total_dividends": sum(_to_int(r["dividends_count"]) for r in successful),
+            "total_splits": sum(_to_int(r["splits_count"]) for r in successful),
+            "total_earnings": sum(_to_int(r["earnings_count"]) for r in successful),
         }
 
-        logger.info(f"📈 Results: {stats['tickers_successful']}/{stats['tickers_requested']} tickers successful")
+        logger.info("📈 Results: %s/%s tickers successful", stats["tickers_successful"], stats["tickers_requested"])
         logger.info(
-            f"📈 Total events: {stats['total_dividends']} dividends, {stats['total_splits']} splits, {stats['total_earnings']} earnings"
+            "📈 Total events: %s dividends, %s splits, %s earnings",
+            stats["total_dividends"],
+            stats["total_splits"],
+            stats["total_earnings"],
         )
 
         # TODO: Upload to GCS if requested
         if upload_to_gcs:
             logger.warning("⚠️ GCS upload not yet implemented (testing phase)")
 
-        return {
-            "success": True,
-            "status": "success",
-            "statistics": stats,
-            "results": results,
-        }
+        return cast(
+            dict[str, HandlerResultValue],
+            {
+                "success": True,
+                "status": "success",
+                "statistics": stats,
+                "results": results,
+            },
+        )
 
     def cleanup(self) -> None:
         """Cleanup resources."""

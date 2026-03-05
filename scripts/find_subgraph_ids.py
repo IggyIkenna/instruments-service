@@ -5,10 +5,17 @@ Script to find The Graph subgraph IDs for Ethereum subgraphs.
 This script queries The Graph Explorer API to find subgraph IDs for popular DeFi protocols.
 """
 
-import os
-from typing import Optional
+import logging
+from uuid import uuid4
 
 import requests
+from unified_trading_library import get_secret_client
+from unified_config_interface import UnifiedCloudConfig
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 # Subgraph names we need IDs for (Ethereum only)
 SUBDGRAPH_NAMES = {
@@ -59,13 +66,19 @@ def verify_subgraph_id(subgraph_name: str, subgraph_id: str, api_key: str) -> bo
             data = response.json()
             if "errors" not in data:
                 return True
-    except Exception:
-        pass
-
+    except (ConnectionError, TimeoutError, OSError, ValueError) as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.LOW,
+            recovery_strategy=ErrorRecoveryStrategy.SKIP,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
     return False
 
 
-def query_subgraph_registry(subgraph_name: str) -> Optional[str]:
+def query_subgraph_registry(subgraph_name: str) -> str | None:
     """
     Query The Graph's subgraph registry to find subgraph ID.
 
@@ -86,27 +99,24 @@ def query_subgraph_registry(subgraph_name: str) -> Optional[str]:
     org, name = parts
 
     # Query for subgraphs matching the name
-    query = (
-        """
-    {
+    query = f"""
+    {{
         subgraphs(
-            where: {
-                displayName_contains: "%s"
-            }
+            where: {{
+                displayName_contains: "{name}"
+            }}
             first: 20
-        ) {
+        ) {{
             id
             displayName
-            currentVersion {
-                subgraphDeployment {
+            currentVersion {{
+                subgraphDeployment {{
                     ipfsHash
-                }
-            }
-        }
-    }
+                }}
+            }}
+        }}
+    }}
     """
-        % name
-    )
 
     try:
         response = requests.post(
@@ -133,68 +143,84 @@ def query_subgraph_registry(subgraph_name: str) -> Optional[str]:
                 subgraph_id = subgraphs[0].get("id")
                 if subgraph_id:
                     return subgraph_id
-    except Exception as e:
-        print(f"   ⚠️  Error querying registry: {e}")
-
+    except (ConnectionError, TimeoutError, OSError, ValueError) as e:
+        _err = EnhancedError(
+            message=str(e),
+            category=ErrorCategory.SERVER_ERROR,
+            severity=ErrorSeverity.MEDIUM,
+            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+            correlation_id=str(uuid4()),
+            context=ErrorContext(extra={"exc_type": type(e).__name__}),
+        )
+        logger.warning("Error querying registry: %s", e)
     return None
 
 
-def main():
+def main() -> None:
     """Main function to find all subgraph IDs."""
-    print("🔍 Finding Ethereum subgraph IDs...")
-    print("=" * 60)
+    logger.info("Finding Ethereum subgraph IDs...")
+    logger.info("=" * 60)
 
-    # Get API key from environment or use placeholder
+    # API key via get_secret_client (Secret Manager first, env fallback) per instruments-and-api-keys-standard
+    config = UnifiedCloudConfig()
+    project_id = config.gcp_project_id
+    api_key = (
+        get_secret_client(
+            secret_name="thegraph-api-key",
+            project_id=project_id or "",
+        )
+        if project_id
+        else None
+    )
+    api_key = api_key or "test-key"  # Placeholder for dry-run when no key available
 
-    api_key = os.getenv("THEGRAPH_API_KEY", "test-key")
-
-    subgraph_ids = {}
+    subgraph_ids: dict[str, str | None] = {}
 
     for subgraph_name, display_name in SUBDGRAPH_NAMES.items():
-        print(f"\n📊 Looking up: {display_name} ({subgraph_name})")
+        logger.info("Looking up: %s (%s)", display_name, subgraph_name)
 
         # Try known IDs first
         subgraph_id = KNOWN_SUBGRAPH_IDS.get(subgraph_name)
 
         if not subgraph_id:
             # Try querying registry
-            print("   🔍 Querying subgraph registry...")
+            logger.info("   Querying subgraph registry...")
             subgraph_id = query_subgraph_registry(subgraph_name)
 
         if subgraph_id:
             subgraph_ids[subgraph_name] = subgraph_id
-            print(f"   ✅ Found ID: {subgraph_id}")
+            logger.info("   Found ID: %s", subgraph_id)
 
             # Verify if we have a real API key
             if api_key != "test-key":
                 if verify_subgraph_id(subgraph_name, subgraph_id, api_key):
-                    print("   ✅ Verified: ID works with API key")
+                    logger.info("   Verified: ID works with API key")
                 else:
-                    print("   ⚠️  Warning: ID may not be valid")
+                    logger.warning("   Warning: ID may not be valid")
         else:
-            print("   ⚠️  Could not find ID (will use name-based URL)")
+            logger.warning("   Could not find ID (will use name-based URL)")
             subgraph_ids[subgraph_name] = None
 
-    print("\n" + "=" * 60)
-    print("📋 Subgraph ID Mapping:")
-    print("=" * 60)
-    print("\nSUBGRAPH_IDS = {")
+    logger.info("=" * 60)
+    logger.info("Subgraph ID Mapping:")
+    logger.info("=" * 60)
+    logger.info("SUBGRAPH_IDS = {")
     for subgraph_name, subgraph_id in subgraph_ids.items():
         if subgraph_id:
-            print(f"    '{subgraph_name}': '{subgraph_id}',")
+            logger.info("    '%s': '%s',", subgraph_name, subgraph_id)
         else:
-            print(f"    # '{subgraph_name}': None,  # Need to look up")
-    print("}")
+            logger.info("    # '%s': None,  # Need to look up", subgraph_name)
+    logger.info("}")
 
-    # Also print as Python dict (only with IDs)
-    print("\n" + "=" * 60)
-    print("📝 Copy this to the_graph_client.py:")
-    print("=" * 60)
-    print("\nSUBGRAPH_IDS = {")
+    # Also log as Python dict (only with IDs)
+    logger.info("=" * 60)
+    logger.info("Copy this to the_graph_client.py:")
+    logger.info("=" * 60)
+    logger.info("SUBGRAPH_IDS = {")
     for subgraph_name, subgraph_id in subgraph_ids.items():
         if subgraph_id:
-            print(f"    '{subgraph_name}': '{subgraph_id}',")
-    print("}")
+            logger.info("    '%s': '%s',", subgraph_name, subgraph_id)
+    logger.info("}")
 
 
 if __name__ == "__main__":

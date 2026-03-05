@@ -9,7 +9,7 @@ These tests use real services and require GCP credentials.
 
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -17,6 +17,8 @@ from instruments_service.app.core.instruments_service import InstrumentsService
 
 # Import get_config from conftest (avoids circular import issues)
 from tests.conftest import get_config
+
+pytestmark = pytest.mark.integration
 
 
 class TestPerformance:
@@ -31,10 +33,10 @@ class TestPerformance:
     async def test_cefi_performance(self):
         """Test CEFI instrument generation performance (target: <45s)."""
         config = {
-            "project_id": get_config("GCP_PROJECT_ID", "central-element-323112"),
+            "project_id": get_config("GCP_PROJECT_ID", "test-project"),
         }
         service = InstrumentsService(config)
-        test_date = datetime(2025, 11, 10, tzinfo=timezone.utc)
+        test_date = datetime(2025, 11, 10, tzinfo=UTC)
 
         start_time = time.time()
 
@@ -64,10 +66,10 @@ class TestPerformance:
     async def test_tradfi_performance(self):
         """Test TRADFI instrument generation performance (target: <30s)."""
         config = {
-            "project_id": get_config("GCP_PROJECT_ID", "central-element-323112"),
+            "project_id": get_config("GCP_PROJECT_ID", "test-project"),
         }
         service = InstrumentsService(config)
-        test_date = datetime(2025, 11, 10, tzinfo=timezone.utc)
+        test_date = datetime(2025, 11, 10, tzinfo=UTC)
 
         start_time = time.time()
 
@@ -102,10 +104,10 @@ class TestPerformance:
         The 180s target accounts for cold-start scenarios with API fallbacks.
         """
         config = {
-            "project_id": get_config("GCP_PROJECT_ID", "central-element-323112"),
+            "project_id": get_config("GCP_PROJECT_ID", "test-project"),
         }
         service = InstrumentsService(config)
-        test_date = datetime(2025, 11, 10, tzinfo=timezone.utc)
+        test_date = datetime(2025, 11, 10, tzinfo=UTC)
 
         start_time = time.time()
 
@@ -143,10 +145,10 @@ class TestPerformance:
         With some parallelism, total is usually <150s.
         """
         config = {
-            "project_id": get_config("GCP_PROJECT_ID", "central-element-323112"),
+            "project_id": get_config("GCP_PROJECT_ID", "test-project"),
         }
         service = InstrumentsService(config)
-        test_date = datetime(2025, 11, 10, tzinfo=timezone.utc)
+        test_date = datetime(2025, 11, 10, tzinfo=UTC)
 
         start_time = time.time()
 

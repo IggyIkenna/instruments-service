@@ -5,23 +5,25 @@ Only validates API keys for data sources required by requested venues.
 Prevents misleading API key errors and reduces Secret Manager API calls.
 
 Complies with:
-- Cursor rules: cloud-agnostic (use get_secret_with_fallback)
+- Cursor rules: cloud-agnostic (use get_secret_client)
 - Codex: 07-security/secrets-management.md
 - Audit: SEC-01, SEC-02 (secrets from Secret Manager)
 """
 
 import logging
-from typing import Optional, Protocol
+from typing import Protocol
+from uuid import uuid4
 
-from unified_cloud_services import get_secret_with_fallback
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 from unified_market_interface import DataSourceMapping
+from unified_trading_library import get_secret_client
 
 from instruments_service.config import instruments_config
 
 logger = logging.getLogger(__name__)
 
 
-def validate_required_api_keys(venues: list[str], project_id: Optional[str] = None) -> dict[str, str]:
+def validate_required_api_keys(venues: list[str], project_id: str | None = None) -> dict[str, str]:
     """
     Validate and fetch API keys for requested venues only.
 
@@ -45,57 +47,59 @@ def validate_required_api_keys(venues: list[str], project_id: Optional[str] = No
         logger.info("No API keys required for requested venues")
         return {}
 
-    logger.info(f"Validating API keys for data sources: {list(required_secrets.keys())}")
+    logger.info("Validating API keys for data sources: %s", list(required_secrets.keys()))
 
     api_keys: dict[str, str] = {}
     errors: list[str] = []
 
-    for data_source, secret_name in required_secrets.items():
+    for data_source, _ in required_secrets.items():
         try:
             # Map data source to config secret name
             if data_source == "tardis":
                 config_secret_name = instruments_config.tardis_secret_name
-                fallback_env = "TARDIS_API_KEY"
             elif data_source == "databento":
                 config_secret_name = instruments_config.databento_secret_name
-                fallback_env = "DATABENTO_API_KEY"
             elif data_source == "thegraph":
                 config_secret_name = instruments_config.graph_secret_name
-                fallback_env = "THE_GRAPH_API_KEY"
             elif data_source == "alchemy":
                 config_secret_name = "alchemy-api-key"  # Not in config yet
-                fallback_env = "ALCHEMY_API_KEY"
             elif data_source == "barchart":
                 config_secret_name = "barchart-api-key"  # Not in config yet
-                fallback_env = "BARCHART_API_KEY"
             else:
-                logger.warning(f"Unknown data source: {data_source}")
+                logger.warning("Unknown data source: %s", data_source)
                 continue
 
             # Fetch API key
-            api_key = get_secret_with_fallback(
+            api_key = get_secret_client(
                 project_id=project_id,
-                secret_name=config_secret_name,
-                fallback_env_var=fallback_env,
-            )
+            ).get_secret(config_secret_name)
 
             if api_key:
                 api_keys[data_source] = api_key.strip()
-                logger.info(f"✅ Validated API key for {data_source}")
+                logger.info("✅ Validated API key for %s", data_source)
             else:
-                error_msg = f"Missing API key for {data_source} (venues: {[v for v in venues if DataSourceMapping.get_data_source_for_venue(v) == data_source]})"
+                error_msg = f"Missing API key for {data_source} \
+                    (venues: {[v for v in venues if DataSourceMapping.get_data_source_for_venue(v) == data_source]})"
                 errors.append(error_msg)
                 logger.error(error_msg)
 
-        except Exception as e:
+        except (ConnectionError, TimeoutError, OSError, ValueError) as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             error_msg = f"Failed to fetch API key for {data_source}: {e}"
             errors.append(error_msg)
             logger.error(error_msg)
-
     if errors:
         raise ValueError(f"API key validation failed: {'; '.join(errors)}")
 
-    logger.info(f"✅ Validated {len(api_keys)} API keys for {len(venues)} venues")
+    logger.info("✅ Validated %s API keys for %s venues", len(api_keys), len(venues))
     return api_keys
 
 
