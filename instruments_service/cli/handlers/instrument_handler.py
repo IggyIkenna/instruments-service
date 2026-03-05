@@ -371,7 +371,7 @@ class InstrumentHandler(ModeHandler):
                         )
                 else:
                     logger.error(
-                        "❌ Failed to generate instruments for %s: %s",
+                        "Failed to generate instruments for %s: %s",
                         date.strftime("%Y-%m-%d"),
                         result.get("message", "Unknown error"),
                     )
@@ -383,7 +383,7 @@ class InstrumentHandler(ModeHandler):
 
             except (OSError, ValueError, TypeError, RuntimeError, Exception) as e:
                 # In-flight validation: catch any exception from service, log, continue with other dates
-                logger.error("❌ Failed to process %s: %s", date.strftime("%Y-%m-%d"), e, exc_info=True)
+                logger.exception("Failed to process %s: %s", date.strftime("%Y-%m-%d"), e)
                 total_errors += 1
 
         # Calculate success rate and provide comprehensive summary

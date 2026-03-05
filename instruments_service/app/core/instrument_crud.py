@@ -145,11 +145,10 @@ class InstrumentCrudMixin:
                     context=ErrorContext(extra={"exc_type": type(e).__name__}),
                 )
                 logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
-                logger.error(
-                    "❌ Failed to process %s: %s",
+                logger.exception(
+                    "Failed to process %s: %s",
                     date.strftime("%Y-%m-%d"),
                     e,
-                    exc_info=True,
                 )
                 total_errors += 1
                 results.append(
