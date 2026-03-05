@@ -23,9 +23,12 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import date
-from typing import Any, Optional
+from typing import cast
+from uuid import uuid4
 
 import pandas as pd
+import yfinance as yf
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 
 from instruments_service.corporate_actions.models import (
     CorporateActionsBundle,
@@ -71,14 +74,12 @@ class CorporateActionsAdapter:
 
     @property
     def yf(self):
-        """Lazy load yfinance."""
+        """Lazy load yfinance (cached)."""
         if self._yf is None:
-            import yfinance as yf
-
             self._yf = yf
         return self._yf
 
-    def _rate_limit(self, delay: Optional[float] = None) -> None:
+    def _rate_limit(self, delay: float | None = None) -> None:
         """Apply rate limiting between requests."""
         delay = delay or self.rate_limit_delay
         elapsed = time.time() - self._last_request_time
@@ -97,7 +98,7 @@ class CorporateActionsAdapter:
         ticker: str,
         start_date: date,
         end_date: date,
-        instrument_key: Optional[str] = None,
+        instrument_key: str | None = None,
     ) -> list[DividendRecord]:
         """
         Fetch dividend history for a ticker.
@@ -118,7 +119,7 @@ class CorporateActionsAdapter:
         ticker: str,
         start_date: date,
         end_date: date,
-        instrument_key: Optional[str] = None,
+        instrument_key: str | None = None,
     ) -> list[DividendRecord]:
         """Fetch dividends using yfinance."""
         self._rate_limit()
@@ -129,7 +130,7 @@ class CorporateActionsAdapter:
             div_df: pd.Series = stock.dividends
 
             if div_df is None or div_df.empty:
-                logger.debug(f"No dividends found for {ticker}")
+                logger.debug("No dividends found for %s", ticker)
                 return []
 
             # Convert index to date for filtering
@@ -139,28 +140,47 @@ class CorporateActionsAdapter:
             mask = (div_df.index >= start_date) & (div_df.index <= end_date)
             div_df = div_df[mask]
 
-            for ex_date, amount in div_df.items():
-                if pd.isna(amount) or amount <= 0:
+            _div_raw: list[tuple[object, object]] = cast(list[tuple[object, object]], list(div_df.items()))
+            div_items: list[tuple[object, object]] = _div_raw
+            for ex_date, amount in div_items:
+                if not isinstance(amount, (int, float)) or pd.isna(amount) or amount <= 0:
                     continue
+                amount_float = float(amount)
 
                 try:
                     record = DividendRecord(
                         ticker=ticker,
-                        ex_date=ex_date,
-                        amount=float(amount),
+                        ex_date=cast(date, ex_date),
+                        amount=amount_float,
                         dividend_type=DividendType.UNSPECIFIED,
                         source="yfinance",
                         instrument_key=instrument_key,
                     )
                     dividends.append(record)
-                except Exception as e:
-                    logger.warning(f"Failed to parse dividend for {ticker} on {ex_date}: {e}")
+                except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.HIGH,
+                        recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                    raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
+            logger.debug("Fetched %s dividends for %s", len(dividends), ticker)
 
-            logger.debug(f"Fetched {len(dividends)} dividends for {ticker}")
-
-        except Exception as e:
-            logger.error(f"Failed to fetch dividends for {ticker}: {e}")
-
+        except (OSError, ValueError, RuntimeError) as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.HIGH,
+                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return dividends
 
     def fetch_splits(
@@ -168,7 +188,7 @@ class CorporateActionsAdapter:
         ticker: str,
         start_date: date,
         end_date: date,
-        instrument_key: Optional[str] = None,
+        instrument_key: str | None = None,
     ) -> list[StockSplitRecord]:
         """
         Fetch stock split history for a ticker.
@@ -187,10 +207,11 @@ class CorporateActionsAdapter:
 
         try:
             stock = self.yf.Ticker(ticker)
-            splits_df: pd.Series = stock.splits  # type: ignore[assignment]
+            splits_data = stock.splits
+            splits_df: pd.Series = splits_data if isinstance(splits_data, pd.Series) else pd.Series(dtype=float)
 
             if splits_df is None or splits_df.empty:
-                logger.debug(f"No splits found for {ticker}")
+                logger.debug("No splits found for %s", ticker)
                 return []
 
             # Convert index to date for filtering
@@ -200,14 +221,16 @@ class CorporateActionsAdapter:
             mask = (splits_df.index >= start_date) & (splits_df.index <= end_date)
             splits_df = splits_df[mask]
 
-            for effective_date, ratio in splits_df.items():
-                if pd.isna(ratio) or ratio <= 0:
+            _splits_raw: list[tuple[object, object]] = cast(list[tuple[object, object]], list(splits_df.items()))
+            splits_items: list[tuple[object, object]] = _splits_raw
+            for effective_date, ratio in splits_items:
+                if not isinstance(ratio, (int, float)) or pd.isna(ratio) or ratio <= 0:
                     continue
+                ratio_float = float(ratio)
 
                 try:
                     # yfinance returns ratio as "new shares per old share"
                     # e.g., 4.0 means 4:1 split (1 share becomes 4)
-                    ratio_float = float(ratio)
 
                     # Determine split_from and split_to
                     if ratio_float >= 1:
@@ -220,7 +243,7 @@ class CorporateActionsAdapter:
 
                     record = StockSplitRecord(
                         ticker=ticker,
-                        effective_date=effective_date,
+                        effective_date=cast(date, effective_date),
                         ratio=ratio_float,
                         split_from=split_from,
                         split_to=split_to,
@@ -228,14 +251,30 @@ class CorporateActionsAdapter:
                         instrument_key=instrument_key,
                     )
                     splits.append(record)
-                except Exception as e:
-                    logger.warning(f"Failed to parse split for {ticker} on {effective_date}: {e}")
+                except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.HIGH,
+                        recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                    raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
+            logger.debug("Fetched %s splits for %s", len(splits), ticker)
 
-            logger.debug(f"Fetched {len(splits)} splits for {ticker}")
-
-        except Exception as e:
-            logger.error(f"Failed to fetch splits for {ticker}: {e}")
-
+        except (OSError, ValueError, RuntimeError) as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.HIGH,
+                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return splits
 
     def fetch_earnings(
@@ -243,7 +282,7 @@ class CorporateActionsAdapter:
         ticker: str,
         start_date: date,
         end_date: date,
-        instrument_key: Optional[str] = None,
+        instrument_key: str | None = None,
     ) -> list[EarningsRecord]:
         """
         Fetch earnings history for a ticker.
@@ -264,7 +303,7 @@ class CorporateActionsAdapter:
         ticker: str,
         start_date: date,
         end_date: date,
-        instrument_key: Optional[str] = None,
+        instrument_key: str | None = None,
     ) -> list[EarningsRecord]:
         """Fetch earnings using yfinance."""
         self._rate_limit()
@@ -275,26 +314,34 @@ class CorporateActionsAdapter:
 
             # Try to get earnings dates from calendar
             try:
-                calendar: Any = stock.calendar
-                if calendar is not None and not calendar.empty:
-                    # Future earnings date
-                    if "Earnings Date" in calendar.index:
-                        _ = calendar.loc["Earnings Date"]  # noqa: F841
+                calendar: object = stock.calendar  # pyright: ignore[reportAny]
+                if calendar is not None:
+                    cal_df = cast(pd.DataFrame, cast(object, calendar))
+                    if not cal_df.empty and "Earnings Date" in cal_df.index:
+                        _ = cal_df.loc["Earnings Date"]
                         # This is typically future dates, not historical
-            except Exception as e:
-                logger.debug(f"Failed to process earnings date from calendar: {e}")
+            except (OSError, ValueError, RuntimeError) as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                logger.debug("Failed to process earnings date from calendar: %s", e)
                 # Error handled, continue processing next calendar entry
                 pass
-
             # Get historical earnings from earnings_history or quarterly_earnings
             try:
-                earnings_df: pd.DataFrame = stock.earnings_dates  # type: ignore[assignment]
+                earnings_df: pd.DataFrame = stock.earnings_dates  # pyright: ignore[reportAssignmentType]
 
                 if earnings_df is not None and not earnings_df.empty:
                     for idx, row in earnings_df.iterrows():
                         try:
                             # idx is the earnings date (datetime)
-                            earnings_date: date = pd.to_datetime(idx, utc=True).date()
+                            earnings_date = pd.to_datetime(cast(float | str | date, idx), utc=True).date()
 
                             # Filter by date range
                             if earnings_date < start_date or earnings_date > end_date:
@@ -322,17 +369,41 @@ class CorporateActionsAdapter:
                                 instrument_key=instrument_key,
                             )
                             earnings.append(record)
-                        except Exception as e:
-                            logger.warning(f"Failed to parse earnings for {ticker} on {idx}: {e}")
+                        except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
+                            _err = EnhancedError(
+                                message=str(e),
+                                category=ErrorCategory.SERVER_ERROR,
+                                severity=ErrorSeverity.HIGH,
+                                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                                correlation_id=str(uuid4()),
+                                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                            )
+                            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
+            except (OSError, ValueError, RuntimeError) as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.HIGH,
+                    recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+                raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
+            logger.debug("Fetched %s earnings records for %s", len(earnings), ticker)
 
-            except Exception as e:
-                logger.debug(f"No earnings_dates for {ticker}: {e}")
-
-            logger.debug(f"Fetched {len(earnings)} earnings records for {ticker}")
-
-        except Exception as e:
-            logger.error(f"Failed to fetch earnings for {ticker}: {e}")
-
+        except (OSError, ValueError, RuntimeError) as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.HIGH,
+                recovery_strategy=ErrorRecoveryStrategy.RETRY,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
+            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return earnings
 
     def fetch_corporate_actions(
@@ -340,7 +411,7 @@ class CorporateActionsAdapter:
         ticker: str,
         start_date: date,
         end_date: date,
-        instrument_key: Optional[str] = None,
+        instrument_key: str | None = None,
     ) -> CorporateActionsBundle:
         """
         Fetch all corporate actions for a ticker.
@@ -373,7 +444,7 @@ class CorporateActionsAdapter:
         tickers: list[str],
         start_date: date,
         end_date: date,
-        progress_callback: Optional[Callable[[str, int, int], None]] = None,
+        progress_callback: Callable[[str, int, int], None] | None = None,
     ) -> dict[str, CorporateActionsBundle]:
         """
         Fetch corporate actions for multiple tickers.
@@ -387,10 +458,10 @@ class CorporateActionsAdapter:
         Returns:
             Dict mapping ticker -> CorporateActionsBundle
         """
-        results = {}
+        results: dict[str, CorporateActionsBundle] = {}
         total = len(tickers)
 
-        logger.info(f"Fetching corporate actions for {total} tickers ({start_date} to {end_date})")
+        logger.info("Fetching corporate actions for %s tickers (%s to %s)", total, start_date, end_date)
 
         for i, ticker in enumerate(tickers):
             try:
@@ -401,13 +472,21 @@ class CorporateActionsAdapter:
                     progress_callback(ticker, i + 1, total)
 
                 if (i + 1) % 50 == 0:
-                    logger.info(f"Progress: {i + 1}/{total} tickers processed")
+                    logger.info("Progress: %s/%s tickers processed", i + 1, total)
 
-            except Exception as e:
-                logger.error(f"Failed to fetch corporate actions for {ticker}: {e}")
+            except (OSError, ValueError, RuntimeError) as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                logger.error("Failed to fetch corporate actions for %s: %s", ticker, e)
                 # Continue with next ticker
-
-        logger.info(f"Completed: {len(results)}/{total} tickers fetched successfully")
+        logger.info("Completed: %s/%s tickers fetched successfully", len(results), total)
         return results
 
     def to_dataframes(
@@ -423,11 +502,11 @@ class CorporateActionsAdapter:
         Returns:
             Tuple of (dividends_df, splits_df, earnings_df)
         """
-        dividends: list[dict[str, Any]] = []
-        splits: list[dict[str, Any]] = []
-        earnings: list[dict[str, Any]] = []
+        dividends: list[dict[str, str | float | None]] = []
+        splits: list[dict[str, str | float | int | None]] = []
+        earnings: list[dict[str, str | float | int | None]] = []
 
-        for ticker, bundle in bundles.items():
+        for _, bundle in bundles.items():
             for div in bundle.dividends:
                 dividends.append(div.to_dict())
             for split in bundle.splits:

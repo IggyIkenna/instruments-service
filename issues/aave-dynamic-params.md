@@ -144,4 +144,3 @@ query GetEModeCategory($categoryId: Int!, $blockNumber: Int) {
 - **Priority**: Medium
 - **Estimated Effort**: 2-3 days
 - **Dependencies**: None
-

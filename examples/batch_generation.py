@@ -20,11 +20,12 @@ Note: For production batch processing, use the CLI instead:
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict
+from uuid import uuid4
 
-from unified_market_interface.models.venue_config import VenueMapping
+from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.schemas.errors import ErrorContext
+from unified_market_interface import VenueMapping
 
-# Simple imports - assumes packages are installed
 from instruments_service import (
     CloudInstrumentStorage,
     InstrumentBatchProcessor,
@@ -52,7 +53,7 @@ async def generate_instruments_batch(start_date: str, end_date: str, force: bool
 
     # Configuration for InstrumentProcessingService (uses config class)
     instruments_config = get_config()
-    config: Dict[str, Any] = {
+    config: dict[str, object] = {
         "project_id": instruments_config.gcp_project_id,
         "max_batch_size": 1000,
         "lookback_days": 0,
@@ -68,8 +69,8 @@ async def generate_instruments_batch(start_date: str, end_date: str, force: bool
     venue_mapping = VenueMapping()
     exchanges = venue_mapping.all_tardis_exchanges
 
-    logger.info(f"📅 Processing date range: {start_date} to {end_date}")
-    logger.info(f"🏦 Processing exchanges: {exchanges}")
+    logger.info("📅 Processing date range: %s to %s", start_date, end_date)
+    logger.info("🏦 Processing exchanges: %s", exchanges)
 
     # Process each date
     current_date = start_dt
@@ -79,32 +80,40 @@ async def generate_instruments_batch(start_date: str, end_date: str, force: bool
 
     while current_date <= end_dt:
         date_str = current_date.strftime("%Y-%m-%d")
-        logger.info(f"\n{'=' * 60}")
-        logger.info(f"📅 Processing date: {date_str}")
-        logger.info(f"{'=' * 60}")
+        logger.info("\n%s", "=" * 60)
+        logger.info("📅 Processing date: %s", date_str)
+        logger.info("%s", "=" * 60)
 
         try:
             # Generate instruments for all exchanges
             all_instruments = {}
             for exchange in exchanges:
                 try:
-                    logger.info(f"  🔍 Processing {exchange}...")
+                    logger.info("  🔍 Processing %s...", exchange)
                     exchange_instruments = await processing_service.process_exchange_instruments(
                         exchange=exchange, target_date=current_date, force=force
                     )
                     if exchange_instruments:
                         all_instruments.update(exchange_instruments)
-                        logger.info(f"  ✅ {exchange}: {len(exchange_instruments)} instruments")
-                except Exception as e:
-                    logger.error(f"  ❌ Failed to process {exchange}: {e}")
+                        logger.info("  ✅ %s: %s instruments", exchange, len(exchange_instruments))
+                except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
+                    _err = EnhancedError(
+                        message=str(e),
+                        category=ErrorCategory.SERVER_ERROR,
+                        severity=ErrorSeverity.MEDIUM,
+                        recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                        correlation_id=str(uuid4()),
+                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                    )
+                    logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                    logger.error("  ❌ Failed to process %s: %s", exchange, e)
                     errors.append(f"{date_str}/{exchange}: {e}")
-
             if all_instruments:
                 # Convert to DataFrame
                 import pandas as pd
 
                 instruments_list = []
-                for inst_key, inst_obj in all_instruments.items():
+                for _inst_key, inst_obj in all_instruments.items():
                     if hasattr(inst_obj, "model_dump"):
                         instruments_list.append(inst_obj.model_dump())
                     else:
@@ -113,7 +122,7 @@ async def generate_instruments_batch(start_date: str, end_date: str, force: bool
                 instruments_df = pd.DataFrame(instruments_list)
 
                 # Store to cloud
-                logger.info(f"  📤 Uploading {len(instruments_df)} instruments...")
+                logger.info("  📤 Uploading %s instruments...", len(instruments_df))
                 success = storage_service.store_instruments(
                     instruments_df=instruments_df,
                     table_name="instruments",
@@ -121,34 +130,42 @@ async def generate_instruments_batch(start_date: str, end_date: str, force: bool
                 )
 
                 if success:
-                    logger.info(f"  ✅ Successfully stored instruments for {date_str}")
+                    logger.info("  ✅ Successfully stored instruments for %s", date_str)
                     total_instruments += len(instruments_df)
                     total_dates += 1
                 else:
-                    logger.error(f"  ❌ Failed to store instruments for {date_str}")
+                    logger.error("  ❌ Failed to store instruments for %s", date_str)
                     errors.append(f"{date_str}: Storage failed")
             else:
-                logger.warning(f"  ⚠️ No instruments generated for {date_str}")
+                logger.warning("  ⚠️ No instruments generated for %s", date_str)
                 errors.append(f"{date_str}: No instruments")
 
-        except Exception as e:
-            logger.error(f"  ❌ Error processing {date_str}: {e}", exc_info=True)
+        except (OSError, ValueError, RuntimeError, ConnectionError, TimeoutError) as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.error("  ❌ Error processing %s: %s", date_str, e, exc_info=True)
             errors.append(f"{date_str}: {e}")
-
         # Move to next date
         current_date += timedelta(days=1)
 
     # Summary
-    logger.info(f"\n{'=' * 60}")
+    logger.info("\n%s", "=" * 60)
     logger.info("📊 Batch Processing Summary")
-    logger.info(f"{'=' * 60}")
-    logger.info(f"  Dates processed: {total_dates}")
-    logger.info(f"  Total instruments: {total_instruments}")
-    logger.info(f"  Errors: {len(errors)}")
+    logger.info("%s", "=" * 60)
+    logger.info("  Dates processed: %s", total_dates)
+    logger.info("  Total instruments: %s", total_instruments)
+    logger.info("  Errors: %s", len(errors))
     if errors:
         logger.warning("  Error details:")
         for error in errors[:10]:  # Show first 10 errors
-            logger.warning(f"    - {error}")
+            logger.warning("    - %s", error)
 
     return {
         "dates_processed": total_dates,

@@ -19,13 +19,14 @@ Output Structure:
 import logging
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Optional, cast
+from typing import cast
 
 import pandas as pd
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.config import instruments_config
 from instruments_service.corporate_actions.adapter import CorporateActionsAdapter
+from instruments_service.corporate_actions.models import CorporateActionsBundle
 
 logger = logging.getLogger(__name__)
 
@@ -107,10 +108,15 @@ class CorporateActionsHandler(ModeHandler):
     Results are saved to Parquet files locally and optionally to GCS.
     """
 
-    def __init__(self, config: dict[str, Any]) -> None:
+    def __init__(self, config: dict[str, object]) -> None:
         super().__init__(config)
 
-        self.project_id = config.get("project_id") or str(getattr(instruments_config, "gcp_project_id", "") or "")
+        raw_project_id = config.get("project_id")
+        self.project_id: str = (
+            str(raw_project_id)
+            if raw_project_id is not None
+            else str(getattr(instruments_config, "gcp_project_id", "") or "")
+        )
 
         # Initialize adapter (yfinance only - free, no API key needed)
         self.adapter = CorporateActionsAdapter()
@@ -121,7 +127,7 @@ class CorporateActionsHandler(ModeHandler):
 
         logger.info("✅ CorporateActionsHandler initialized (TRADFI only)")
 
-    def _get_tickers_from_gcs(self, reference_date: Optional[date] = None) -> list[str]:
+    def _get_tickers_from_gcs(self, reference_date: date | None = None) -> list[str]:
         """
         Fetch equity tickers from GCS instruments store.
 
@@ -134,9 +140,9 @@ class CorporateActionsHandler(ModeHandler):
         Returns:
             List of ticker symbols (e.g., ['AAPL', 'MSFT', ...])
         """
-        try:
-            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
+        from unified_trading_library import CloudTarget, StandardizedDomainCloudService
 
+        try:
             bucket_name = instruments_config.gcs_bucket_tradfi or _get_tradfi_bucket()
 
             # Create cloud-agnostic service
@@ -150,18 +156,22 @@ class CorporateActionsHandler(ModeHandler):
             def try_load_tickers(gcs_path: str) -> list[str]:
                 """Try to load tickers from a specific GCS path."""
                 try:
-                    df: pd.DataFrame = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    raw = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    if not isinstance(raw, pd.DataFrame):
+                        return []
+                    df = cast(pd.DataFrame, raw)
                     if df.empty:
                         return []
 
                     # Filter for equities (NYSE, NASDAQ)
                     venue_series: pd.Series = df["venue"]
                     equities: pd.DataFrame = df[venue_series.isin(["NYSE", "NASDAQ"])]
-                    symbol_series: pd.Series = equities["exchange_raw_symbol"].dropna().unique()
-                    tickers_raw: list[str] = cast(list[str], symbol_series.tolist())
-                    tickers = [str(t).strip() for t in tickers_raw if t and str(t).strip()]
+                    symbol_arr = equities["exchange_raw_symbol"].dropna().unique()
+                    symbol_list: list[str | int | float] = cast(list[str | int | float], symbol_arr.tolist())
+                    tickers_raw: list[str] = [str(s).strip() for s in symbol_list if s is not None and str(s).strip()]
+                    tickers = [t.strip() for t in tickers_raw if t and t.strip()]
                     return sorted(tickers)
-                except Exception:
+                except (OSError, FileNotFoundError, RuntimeError, ValueError):
                     return []
 
             # If specific date provided, use it
@@ -169,10 +179,10 @@ class CorporateActionsHandler(ModeHandler):
                 gcs_path = f"instrument_availability/by_date/day={reference_date}/instruments.parquet"
                 tickers = try_load_tickers(gcs_path)
                 if tickers:
-                    logger.info(f"📂 Using instruments from: day={reference_date}")
-                    logger.info(f"📊 Loaded {len(tickers)} equity tickers from GCS")
+                    logger.info("📂 Using instruments from: day=%s", reference_date)
+                    logger.info("📊 Loaded %s equity tickers from GCS", len(tickers))
                     return tickers
-                logger.warning(f"⚠️ No equities found for {reference_date}")
+                logger.warning("⚠️ No equities found for %s", reference_date)
 
             # Try known good dates that have equities (2024-07-01 verified to have 596 equities)
             known_good_dates = [
@@ -186,21 +196,18 @@ class CorporateActionsHandler(ModeHandler):
                 gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
                 tickers = try_load_tickers(gcs_path)
                 if tickers:
-                    logger.info(f"📂 Using instruments from: day={date_str}")
-                    logger.info(f"📊 Loaded {len(tickers)} equity tickers from GCS")
+                    logger.info("📂 Using instruments from: day=%s", date_str)
+                    logger.info("📊 Loaded %s equity tickers from GCS", len(tickers))
                     return tickers
 
             logger.warning("⚠️ No equity tickers found in any GCS instruments file")
             return []
 
-        except ImportError:
-            logger.error("❌ unified-cloud-services not available")
-            return []
-        except Exception as e:
-            logger.error(f"❌ Failed to load tickers from GCS: {e}")
+        except (OSError, ValueError, TypeError, KeyError) as e:
+            logger.error("❌ Failed to load tickers from GCS: %s", e)
             return []
 
-    def _get_tickers(self, tickers: Optional[list[str]] = None, reference_date: Optional[date] = None) -> list[str]:
+    def _get_tickers(self, tickers: list[str] | None = None, reference_date: date | None = None) -> list[str]:
         """
         Get list of tickers to process.
 
@@ -225,21 +232,13 @@ class CorporateActionsHandler(ModeHandler):
     def _progress_callback(self, ticker: str, current: int, total: int):
         """Progress callback for batch processing."""
         pct = (current / total) * 100
-        logger.info(f"📊 [{current}/{total}] ({pct:.1f}%) Processing {ticker}")
+        logger.info("📊 [%s/%s] (%..1f%) Processing %s", current, total, pct, ticker)
 
-    def run(
-        self,
-        start_date: str,
-        end_date: str,
-        tickers: Optional[list[str]] = None,
-        output_format: str = "parquet",
-        upload_to_gcs: bool = False,
-        **kwargs: object,
-    ) -> dict[str, HandlerResultValue]:
+    def run(self, **kwargs: object) -> dict[str, HandlerResultValue]:
         """
         Execute corporate actions fetch.
 
-        Args:
+        Args (via kwargs):
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
             tickers: Optional list of tickers (defaults to S&P 500)
@@ -249,32 +248,41 @@ class CorporateActionsHandler(ModeHandler):
         Returns:
             Result dictionary with status and statistics
         """
-        # Parse dates
-        start = parse_date(start_date) if isinstance(start_date, str) else start_date
-        end = parse_date(end_date) if isinstance(end_date, str) else end_date
+        start_date = kwargs.get("start_date")
+        end_date = kwargs.get("end_date")
+        if start_date is None or start_date == "":
+            raise ValueError("start_date is required for corporate actions")
+        if end_date is None or end_date == "":
+            raise ValueError("end_date is required for corporate actions")
+        tickers = kwargs.get("tickers")
+        output_format = str(kwargs.get("output_format", "parquet"))
+        upload_to_gcs = bool(kwargs.get("upload_to_gcs", False))
+
+        # Parse dates (narrow type for type checker)
+        start = parse_date(str(start_date)) if isinstance(start_date, str) else start_date
+        end = parse_date(str(end_date)) if isinstance(end_date, str) else end_date
+        if not isinstance(start, date) or not isinstance(end, date):
+            raise ValueError("start_date and end_date must be date or YYYY-MM-DD string")
 
         # Get tickers
-        ticker_list = self._get_tickers(tickers)
+        ticker_list = self._get_tickers(cast(list[str] | None, tickers))
 
-        logger.info(f"🚀 Fetching corporate actions for {len(ticker_list)} tickers")
-        logger.info(f"📅 Date range: {start} to {end}")
+        logger.info("🚀 Fetching corporate actions for %s tickers", len(ticker_list))
+        logger.info("📅 Date range: %s to %s", start, end)
 
         # Fetch data
-        bundles: dict[str, Any] = cast(
-            dict[str, Any],
-            self.adapter.fetch_batch(
-                tickers=ticker_list,
-                start_date=start,
-                end_date=end,
-                progress_callback=self._progress_callback,
-            ),
+        bundles: dict[str, CorporateActionsBundle] = self.adapter.fetch_batch(
+            tickers=ticker_list,
+            start_date=start,
+            end_date=end,
+            progress_callback=self._progress_callback,
         )
 
         # Convert to DataFrames
         dividends_df, splits_df, earnings_df = self.adapter.to_dataframes(bundles)
 
         # Calculate statistics
-        stats: dict[str, Any] = {
+        stats: dict[str, object] = {
             "tickers_requested": len(ticker_list),
             "tickers_fetched": len(bundles),
             "dividends_count": len(dividends_df),
@@ -284,7 +292,10 @@ class CorporateActionsHandler(ModeHandler):
         }
 
         logger.info(
-            f"📈 Results: {stats['dividends_count']} dividends, {stats['splits_count']} splits, {stats['earnings_count']} earnings"
+            "📈 Results: %s dividends, %s splits, %s earnings",
+            stats["dividends_count"],
+            stats["splits_count"],
+            stats["earnings_count"],
         )
 
         # Save to files
@@ -307,7 +318,7 @@ class CorporateActionsHandler(ModeHandler):
             "success": True,
             "status": "success",
             "statistics": stats,
-            "bundles": bundles,  # For programmatic access
+            "bundles": cast(dict[str, object], bundles),  # For programmatic access
         }
 
     def _save_results(
@@ -369,7 +380,7 @@ class CorporateActionsHandler(ModeHandler):
             )
             output_files.extend(day_files)
 
-        logger.info(f"💾 Saved files for {days_with_data} days with corporate actions")
+        logger.info("💾 Saved files for %s days with corporate actions", days_with_data)
         return output_files
 
     def _normalize_date_column(self, df: pd.DataFrame, column: str) -> pd.DataFrame:
@@ -435,7 +446,7 @@ class CorporateActionsHandler(ModeHandler):
             else:
                 dividends_df.to_csv(path, index=False)
             output_files.append({"action_type": "dividends", "date": day_str, "path": str(path)})
-            logger.debug(f"💾 Saved {len(dividends_df)} dividends for {day_str}")
+            logger.debug("💾 Saved %s dividends for %s", len(dividends_df), day_str)
 
         # Write splits if present
         if not splits_df.empty:
@@ -445,7 +456,7 @@ class CorporateActionsHandler(ModeHandler):
             else:
                 splits_df.to_csv(path, index=False)
             output_files.append({"action_type": "splits", "date": day_str, "path": str(path)})
-            logger.debug(f"💾 Saved {len(splits_df)} splits for {day_str}")
+            logger.debug("💾 Saved %s splits for %s", len(splits_df), day_str)
 
         # Write earnings if present
         if not earnings_df.empty:
@@ -455,7 +466,7 @@ class CorporateActionsHandler(ModeHandler):
             else:
                 earnings_df.to_csv(path, index=False)
             output_files.append({"action_type": "earnings", "date": day_str, "path": str(path)})
-            logger.debug(f"💾 Saved {len(earnings_df)} earnings for {day_str}")
+            logger.debug("💾 Saved %s earnings for %s", len(earnings_df), day_str)
 
         return output_files
 
@@ -485,7 +496,7 @@ class CorporateActionsHandler(ModeHandler):
                 return {}
 
             # Use cloud-agnostic service for uploads
-            from unified_cloud_services import CloudTarget, StandardizedDomainCloudService
+            from unified_trading_library import CloudTarget, StandardizedDomainCloudService
 
             target = CloudTarget(
                 project_id=self.project_id,
@@ -505,20 +516,17 @@ class CorporateActionsHandler(ModeHandler):
 
                 # Read file as DataFrame and upload (cloud-agnostic)
                 df = pd.read_parquet(local_path)
-                service.upload_to_gcs(df=df, gcs_path=gcs_path, format="parquet")
+                service.upload_to_gcs(data=df, gcs_path=gcs_path, format="parquet")
 
                 full_gcs_path = f"gs://{bucket_name}/{gcs_path}"
                 gcs_paths[f"{action_type}:{day_str}"] = full_gcs_path
-                logger.debug(f"☁️ Uploaded {action_type} ({day_str}) to {full_gcs_path}")
+                logger.debug("☁️ Uploaded %s (%s) to %s", action_type, day_str, full_gcs_path)
 
-            logger.info(f"✅ Uploaded {len(gcs_paths)} files to GCS")
+            logger.info("✅ Uploaded %s files to GCS", len(gcs_paths))
             return gcs_paths
 
-        except ImportError:
-            logger.warning("⚠️ google-cloud-storage not installed - skipping GCS upload")
-            return {}
-        except Exception as e:
-            logger.error(f"❌ Failed to upload to GCS: {e}")
+        except (OSError, ValueError, TypeError, KeyError) as e:
+            logger.error("❌ Failed to upload to GCS: %s", e)
             return {}
 
     def cleanup(self) -> None:

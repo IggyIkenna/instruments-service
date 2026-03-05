@@ -8,7 +8,7 @@ Extracted from InstrumentProcessingService.generate_canonical_key.
 import logging
 import re
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Optional, Protocol
+from typing import TYPE_CHECKING, Protocol, cast
 
 if TYPE_CHECKING:
     from unified_config_interface import DataTypeConfig, ExchangeInstrumentConfig
@@ -19,11 +19,11 @@ logger = logging.getLogger(__name__)
 class CanonicalKeyServiceProtocol(Protocol):
     """Protocol for InstrumentProcessingService used by generate_canonical_key."""
 
-    def normalize_venue(self, exchange: str) -> str: ...
-    def normalize_instrument_type(self, symbol_type: str) -> str: ...
-    def _parse_symbol_components(self, symbol_id: str, exchange: str) -> dict[str, Any]: ...
-    def _parse_expiry_from_symbol(self, symbol_id: str, exchange: str) -> Optional[str]: ...
-    def _parse_option_components(self, symbol_id: str, exchange: str) -> dict[str, Any]: ...
+    def normalize_venue(self, exchange: str) -> str | None: ...
+    def normalize_instrument_type(self, symbol_type: str) -> str | None: ...
+    def parse_symbol_components(self, symbol_id: str, exchange: str) -> dict[str, object]: ...
+    def parse_expiry_from_symbol(self, symbol_id: str, exchange: str) -> str | None: ...
+    def parse_option_components(self, symbol_id: str, exchange: str) -> dict[str, object]: ...
 
     exchange_config: "ExchangeInstrumentConfig"
     data_config: "DataTypeConfig"
@@ -34,8 +34,8 @@ def generate_canonical_key(
     exchange: str,
     symbol_type: str,
     symbol_id: str,
-    symbol_info: dict[str, Any],
-) -> Optional[str]:
+    symbol_info: dict[str, object],
+) -> str | None:
     """
     Generate canonical instrument key following INSTRUMENT_KEY.md specification.
 
@@ -59,21 +59,30 @@ def generate_canonical_key(
     quote_asset = str(symbol_info.get("quote_asset") or "").upper()
 
     if not base_asset or not quote_asset:
-        parsed_components = service._parse_symbol_components(symbol_id, exchange)
+        parsed_components = service.parse_symbol_components(symbol_id, exchange)
         base_asset = str(parsed_components.get("base_asset") or "").upper()
         quote_asset = str(parsed_components.get("quote_asset") or "").upper()
 
     if not base_asset or not quote_asset:
         logger.debug(
-            f"🔄 Skipping instrument with parsing issues: {symbol_id} (exchange: {exchange}) - base:'{base_asset}' quote:'{quote_asset}'"
+            "🔄 Skipping instrument with parsing issues: %s (exchange: %s) - base:'%s' quote:'%s'",
+            symbol_id,
+            exchange,
+            base_asset,
+            quote_asset,
         )
         return None
+
+    _raw_deribit = service.exchange_config.valid_quote_currencies.get("DERIBIT")
+    deribit_quotes: list[str] = list(_raw_deribit) if _raw_deribit is not None else []
 
     if instrument_type == "SPOT_PAIR":
         clean_base = base_asset.strip() if base_asset else ""
         clean_quote = quote_asset.strip() if quote_asset else ""
         if not clean_base or not clean_quote:
-            logger.debug(f"Skipping SPOT_PAIR with missing base/quote: '{base_asset}'/'{quote_asset}' for {symbol_id}")
+            logger.debug(
+                "Skipping SPOT_PAIR with missing base/quote: '%s'/'%s' for %s", base_asset, quote_asset, symbol_id
+            )
             return None
         return f"{venue}:SPOT_PAIR:{clean_base}-{clean_quote}"
 
@@ -86,13 +95,15 @@ def generate_canonical_key(
 
         if not clean_base or not clean_quote:
             logger.debug(
-                f"Skipping PERPETUAL with invalid/missing base/quote: '{base_asset}'/'{quote_asset}' for {symbol_id}"
+                "Skipping PERPETUAL with invalid/missing base/quote: '%s'/'%s' for %s",
+                base_asset,
+                quote_asset,
+                symbol_id,
             )
             return None
 
         settle_asset = "USDT"
         if venue == "DERIBIT":
-            deribit_quotes: list[str] = service.exchange_config.valid_quote_currencies.get("DERIBIT", [])
             if clean_quote == "USD":
                 settle_asset = clean_base
             elif clean_quote in deribit_quotes and clean_quote != "USD":
@@ -107,8 +118,11 @@ def generate_canonical_key(
         else:
             perp_flavor = "LIN"
             logger.debug(
-                f"⚠️ Could not determine perpetual flavor for {symbol_id}, defaulting to @LIN "
-                f"(settle_asset={settle_asset}, quote={clean_quote}, base={clean_base})"
+                "⚠️ Could not determine perpetual flavor for %s, defaulting to @LIN (settle_asset=%s, quote=%s, base=%s)",
+                symbol_id,
+                settle_asset,
+                clean_quote,
+                clean_base,
             )
 
         return f"{venue}:PERPETUAL:{clean_base}-{clean_quote}@{perp_flavor}"
@@ -117,9 +131,9 @@ def generate_canonical_key(
         expiry_date = symbol_info.get("expiry_date")
 
         if not expiry_date:
-            expiry_date = service._parse_expiry_from_symbol(symbol_id, exchange)
+            expiry_date = service.parse_expiry_from_symbol(symbol_id, exchange)
             if expiry_date:
-                logger.debug(f"✅ Parsed expiry from symbol: {symbol_id} → {expiry_date}")
+                logger.debug("✅ Parsed expiry from symbol: %s → %s", symbol_id, expiry_date)
 
         if expiry_date:
             if isinstance(expiry_date, str):
@@ -129,13 +143,15 @@ def generate_canonical_key(
                 except (ValueError, AttributeError):
                     expiry_str = expiry_date
             else:
-                expiry_str = str(expiry_date)
+                expiry_str = str(cast(str | int | float, expiry_date))
 
             clean_base = base_asset.strip() if base_asset else ""
             clean_quote = quote_asset.strip() if quote_asset else ""
 
             if not clean_base or not clean_quote:
-                logger.debug(f"Skipping FUTURE with missing base/quote: '{base_asset}'/'{quote_asset}' for {symbol_id}")
+                logger.debug(
+                    "Skipping FUTURE with missing base/quote: '%s'/'%s' for %s", base_asset, quote_asset, symbol_id
+                )
                 return None
 
             if expiry_str and len(expiry_str) > 6:
@@ -145,7 +161,6 @@ def generate_canonical_key(
 
             settle_asset = "USDT"
             if venue == "DERIBIT":
-                deribit_quotes: list[str] = service.exchange_config.valid_quote_currencies.get("DERIBIT", [])
                 if clean_quote == "USD":
                     settle_asset = clean_base
                 elif clean_quote in deribit_quotes and clean_quote != "USD":
@@ -160,19 +175,22 @@ def generate_canonical_key(
             else:
                 future_flavor = "LIN"
                 logger.debug(
-                    f"⚠️ Could not determine future flavor for {symbol_id}, defaulting to @LIN "
-                    f"(settle_asset={settle_asset}, quote={clean_quote}, base={clean_base})"
+                    "⚠️ Could not determine future flavor for %s, defaulting to @LIN (settle_asset=%s, quote=%s, base=%s)",
+                    symbol_id,
+                    settle_asset,
+                    clean_quote,
+                    clean_base,
                 )
 
             return f"{venue}:FUTURE:{clean_base}-{clean_quote}-{expiry_str}@{future_flavor}"
         else:
-            logger.warning(f"Missing expiry date for future {symbol_id} exchange: {exchange}")
+            logger.warning("Missing expiry date for future %s exchange: %s", symbol_id, exchange)
             return None
 
     elif instrument_type == "OPTION":
         excluded_strategies: list[str] = service.data_config.excluded_deribit_strategies
         if exchange == "deribit" and any(strategy in symbol_id for strategy in excluded_strategies):
-            logger.debug(f"Filtered complex Deribit strategy option: {symbol_id}")
+            logger.debug("Filtered complex Deribit strategy option: %s", symbol_id)
             return None
 
         expiry_date = symbol_info.get("expiry_date")
@@ -180,13 +198,13 @@ def generate_canonical_key(
         option_type: str = str(symbol_info.get("option_type") or "").upper()
 
         if not all([expiry_date, strike_price, option_type]):
-            parsed_option = service._parse_option_components(symbol_id, exchange)
+            parsed_option = service.parse_option_components(symbol_id, exchange)
             expiry_date = expiry_date or parsed_option.get("expiry_date")
             strike_price = strike_price or parsed_option.get("strike_price")
             option_type = option_type or str(parsed_option.get("option_type") or "").upper()
 
         if not all([expiry_date, strike_price, option_type]):
-            logger.warning(f"Missing option parameters for {symbol_id}")
+            logger.warning("Missing option parameters for %s", symbol_id)
             return None
 
         if isinstance(expiry_date, str):
@@ -196,13 +214,12 @@ def generate_canonical_key(
             except (ValueError, AttributeError):
                 expiry_str = expiry_date
         else:
-            expiry_str = str(expiry_date)
+            expiry_str = str(cast(str | int | float, expiry_date))
 
         clean_base = base_asset.upper()
         clean_quote = quote_asset.upper()
         settle_asset = "USDT"
         if venue == "DERIBIT":
-            deribit_quotes: list[str] = service.exchange_config.valid_quote_currencies.get("DERIBIT", [])
             if clean_quote == "USD":
                 settle_asset = clean_base
             elif clean_quote in deribit_quotes and clean_quote != "USD":
@@ -217,12 +234,15 @@ def generate_canonical_key(
         else:
             option_flavor = "LIN"
             logger.debug(
-                f"⚠️ Could not determine option flavor for {symbol_id}, defaulting to @LIN "
-                f"(settle_asset={settle_asset}, quote={clean_quote}, base={clean_base})"
+                "⚠️ Could not determine option flavor for %s, defaulting to @LIN (settle_asset=%s, quote=%s, base=%s)",
+                symbol_id,
+                settle_asset,
+                clean_quote,
+                clean_base,
             )
 
         return f"{venue}:OPTION:{base_asset}-{quote_asset}-{expiry_str}-{strike_price}-{option_type}@{option_flavor}"
 
     else:
-        logger.warning(f"Unhandled instrument type: {instrument_type}")
+        logger.warning("Unhandled instrument type: %s", instrument_type)
         return None

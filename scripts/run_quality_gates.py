@@ -11,24 +11,28 @@ Usage:
     --skip-performance: Skip performance tests (faster for development)
 """
 
+import argparse
+import importlib.util
 import json
+import logging
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-# Load .env file if it exists (for local development)
-# This allows GH_PAT to be stored in .env instead of environment variables
-try:
+from unified_config_interface import UnifiedCloudConfig
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
+
+_HAS_DOTENV = importlib.util.find_spec("dotenv") is not None
+if _HAS_DOTENV:
     from dotenv import load_dotenv
 
-    # Find .env file in instruments-service directory
     env_path = Path(__file__).parent.parent / ".env"
     if env_path.exists():
         load_dotenv(dotenv_path=env_path, override=False)
-except ImportError:
-    # python-dotenv not available, skip loading .env
-    pass
 
 # Get project root
 project_root = Path(__file__).parent.parent
@@ -42,8 +46,9 @@ def configure_git_credentials() -> None:
     hardcoding tokens in the URLs. When pip installs dependencies from
     pyproject.toml, git will use these credentials.
     """
-    github_token = os.getenv("GITHUB_TOKEN")
-    gh_pat = os.getenv("GH_PAT")
+    config = UnifiedCloudConfig()
+    github_token = getattr(config, "github_token", None) or os.getenv("GITHUB_TOKEN")
+    gh_pat = getattr(config, "gh_pat", None) or os.getenv("GH_PAT")
     token = github_token or gh_pat
 
     if token:
@@ -54,8 +59,6 @@ def configure_git_credentials() -> None:
         # Configure git credential helper to read from environment
         # This allows pip to authenticate when installing from git URLs in pyproject.toml
         # We'll create a temporary credential helper script
-        import tempfile
-
         # Create a credential helper script that outputs the token
         credential_helper_script = f"""#!/bin/sh
 echo "username=x-access-token"
@@ -104,32 +107,33 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
         force_github: If True, skip local monorepo and PyPI, only use GitHub sources
                      (mimics GitHub Actions workflow behavior)
     """
-    print("\n" + "=" * 70)
-    print("PACKAGE INSTALLATION")
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("PACKAGE INSTALLATION")
     if force_github:
-        print("(GitHub-only mode - mimicking CI/CD workflow)")
-    print("=" * 70)
+        logger.info("(GitHub-only mode - mimicking CI/CD workflow)")
+    logger.info("=" * 70)
 
     # Configure git credentials before installing
     configure_git_credentials()
 
     # Install instruments-service in editable mode
-    # First install without unified-cloud-services dependency (it's not on PyPI)
-    # Then install dev dependencies, then unified-cloud-services separately
-    print("\n📦 Installing instruments-service in editable mode...")
+    # First install without unified-trading-library dependency (it's not on PyPI)
+    # Then install dev dependencies, then unified-trading-library separately
+    logger.info("Installing instruments-service in editable mode...")
 
     # Step 1: Install instruments-service without dependencies
     cmd = [sys.executable, "-m", "pip", "install", "-e", ".", "--no-deps"]
     result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
 
     if result.returncode != 0:
-        print("❌ Failed to install instruments-service:")
-        print(result.stderr)
+        logger.error("Failed to install instruments-service:")
+        logger.error(result.stderr)
         return False
 
-    # Step 2: Install all dependencies EXCEPT unified-cloud-services
-    # Read pyproject.toml and install dependencies manually, skipping unified-cloud-services
-    print("\n📦 Installing dependencies (excluding unified-cloud-services)...")
+    # Step 2: Install all dependencies EXCEPT unified-trading-library
+    # Read pyproject.toml and install dependencies manually, skipping unified-trading-library
+    logger.info("Installing dependencies (excluding unified-trading-library)...")
     dependencies_to_install = [
         "pydantic>=2.12.4",
         "pydantic-settings>=2.12.0",
@@ -157,94 +161,98 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
     ]
 
     all_deps = dependencies_to_install + dev_dependencies
-    cmd = [sys.executable, "-m", "pip", "install"] + all_deps
+    cmd = [sys.executable, "-m", "pip", "install", *all_deps]
     result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
 
     if result.returncode != 0:
-        print("⚠️  Warning: Some dependencies failed to install:")
-        print(result.stderr)
-        print("Continuing anyway...")
+        logger.warning("Some dependencies failed to install:")
+        logger.warning(result.stderr)
+        logger.warning("Continuing anyway...")
 
-    print("✅ instruments-service installed successfully")
+    logger.info("instruments-service installed successfully")
 
-    # Install unified-cloud-services
-    unified_cloud_services_path = repo_root / "unified-cloud-services"
+    # Install unified-trading-library
+    unified_trading_library_path = repo_root / "unified-trading-library"
     installed = False
 
     if force_github:
-        print("\n🔧 GitHub-only mode: Checking for checked-out repository")
-        # In GitHub Actions, the workflow checks out unified-cloud-services to ../unified-cloud-services
+        logger.info("GitHub-only mode: Checking for checked-out repository")
+        # In GitHub Actions, the workflow checks out unified-trading-library to ../unified-trading-library
         # Check if it exists (checked out by workflow) and install from there
-        if unified_cloud_services_path.exists():
-            print("\n📦 Attempting installation from checked-out repository (editable mode)...")
-            cmd = [sys.executable, "-m", "pip", "install", "-e", str(unified_cloud_services_path)]
+        if unified_trading_library_path.exists():
+            logger.info("Attempting installation from checked-out repository (editable mode)...")
+            cmd = [sys.executable, "-m", "pip", "install", "-e", str(unified_trading_library_path)]
             result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
 
             if result.returncode == 0:
-                print("✅ unified-cloud-services installed successfully from checked-out repository")
+                logger.info("unified-trading-library installed successfully from checked-out repository")
                 installed = True
             else:
-                print(f"⚠️  Checked-out repository installation failed: {result.stderr[:200]}")
-                print("   Will try GitHub Packages and GitHub repository as fallback")
+                logger.warning("Checked-out repository installation failed: %s", result.stderr[:200])
+                logger.info("   Will try GitHub Packages and GitHub repository as fallback")
         else:
-            print("   Checked-out repository not found, will try GitHub Packages and GitHub repository")
+            logger.info("   Checked-out repository not found, will try GitHub Packages and GitHub repository")
     else:
         # Priority: Local monorepo (editable) > GitHub Packages > GitHub repo
-        # Note: PyPI is skipped - unified-cloud-services is a private package
+        # Note: PyPI is skipped - unified-trading-library is a private package
 
         # Try local monorepo first (for local development)
-        if unified_cloud_services_path.exists():
-            print("\n📦 Attempting local monorepo installation (editable mode)...")
-            cmd = [sys.executable, "-m", "pip", "install", "-e", str(unified_cloud_services_path)]
+        if unified_trading_library_path.exists():
+            logger.info("Attempting local monorepo installation (editable mode)...")
+            cmd = [sys.executable, "-m", "pip", "install", "-e", str(unified_trading_library_path)]
             result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
 
             if result.returncode == 0:
-                print("✅ unified-cloud-services installed successfully from local monorepo")
+                logger.info("unified-trading-library installed successfully from local monorepo")
                 installed = True
             else:
-                print(f"⚠️  Local monorepo installation failed: {result.stderr[:200]}")
+                logger.warning("Local monorepo installation failed: %s", result.stderr[:200])
 
     # Try GitHub Packages (always attempted if not installed yet)
     if not installed:
-        gh_pat = os.getenv("GH_PAT") or os.getenv("GITHUB_TOKEN")
+        config = UnifiedCloudConfig()
+        github_token = getattr(config, "github_token", None) or os.getenv("GITHUB_TOKEN")
+        gh_pat = getattr(config, "gh_pat", None) or os.getenv("GH_PAT")
+        gh_pat = gh_pat or github_token
         if gh_pat:
-            print("\n📦 Attempting GitHub Packages installation...")
+            logger.info("Attempting GitHub Packages installation...")
             # Use __token__ format for GitHub Packages (more secure)
             cmd = [
                 sys.executable,
                 "-m",
                 "pip",
                 "install",
-                "unified-cloud-services",
+                "unified-trading-library",
                 "--extra-index-url",
                 f"https://__token__:{gh_pat}@pypi.pkg.github.com/IggyIkenna/simple",
             ]
             result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
 
             if result.returncode == 0:
-                print("✅ unified-cloud-services installed successfully from GitHub Packages")
+                logger.info("unified-trading-library installed successfully from GitHub Packages")
                 installed = True
             else:
-                print("⚠️  GitHub Packages installation failed")
+                logger.warning("GitHub Packages installation failed")
                 if result.stderr:
-                    print(f"   Error: {result.stderr[:300]}")
+                    logger.warning("   Error: %s", result.stderr[:300])
                 # Check if package exists at all
                 if "Could not find a version" in result.stderr:
-                    print("   ℹ️  Package may not be published to GitHub Packages yet")
-                    print("   ℹ️  Run the publish workflow in unified-cloud-services repository")
+                    logger.info("   Package may not be published to GitHub Packages yet")
+                    logger.info("   Run the publish workflow in unified-trading-library repository")
         else:
-            print("⚠️  Skipping GitHub Packages (GH_PAT or GITHUB_TOKEN not set)")
+            logger.warning("Skipping GitHub Packages (GH_PAT or GITHUB_TOKEN not set)")
 
     # Try GitHub repo as final fallback
     if not installed:
         # Prioritize GITHUB_TOKEN (automatically available in GitHub Actions)
         # Fall back to GH_PAT (for local development or custom tokens)
-        github_token = os.getenv("GITHUB_TOKEN")
-        gh_pat = os.getenv("GH_PAT")
+        config = UnifiedCloudConfig()
+        github_token = getattr(config, "github_token", None) or os.getenv("GITHUB_TOKEN")
+        gh_pat = getattr(config, "gh_pat", None) or os.getenv("GH_PAT")
         token = github_token or gh_pat
 
         if token:
-            print("\n📦 Attempting GitHub repository installation...")
+            logger.info("Attempting GitHub repository installation...")
             # Disable interactive prompts
             env = os.environ.copy()
             env["GIT_TERMINAL_PROMPT"] = "0"
@@ -252,95 +260,103 @@ def ensure_packages_installed(force_github: bool = False) -> bool:
 
             # Always use x-access-token format - works for both GITHUB_TOKEN and PATs
             # This is the recommended format for GitHub authentication
-            print("   Using x-access-token format")
-            url = f"git+https://x-access-token:{token}@github.com/IggyIkenna/unified-cloud-services.git"
+            logger.info("   Using x-access-token format")
+            url = f"git+https://x-access-token:{token}@github.com/IggyIkenna/unified-trading-library.git"
 
             cmd = [sys.executable, "-m", "pip", "install", url]
             result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True, env=env)
 
             if result.returncode == 0:
-                print("✅ unified-cloud-services installed successfully from GitHub repository")
+                logger.info("unified-trading-library installed successfully from GitHub repository")
                 installed = True
             else:
-                print("⚠️  GitHub repository installation failed")
+                logger.warning("GitHub repository installation failed")
                 if result.stderr:
-                    print(f"   Error: {result.stderr[:300]}")
+                    logger.warning("   Error: %s", result.stderr[:300])
                 if result.stdout:
-                    print(f"   Output: {result.stdout[:300]}")
+                    logger.info("   Output: %s", result.stdout[:300])
 
                 # Additional debugging in CI
-                is_ci = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
+                config = UnifiedCloudConfig()
+                ci_env = getattr(config, "ci", None) or os.getenv("CI")
+                github_actions_env = getattr(config, "github_actions", None) or os.getenv("GITHUB_ACTIONS")
+                is_ci = ci_env == "true" or github_actions_env == "true"
                 if is_ci:
-                    print(f"   Debug: GITHUB_TOKEN={'set' if github_token else 'not set'}")
-                    print(f"   Debug: GH_PAT={'set' if gh_pat else 'not set'}")
-                    print(f"   Debug: Token length: {len(token) if token else 0}")
+                    logger.info("   Debug: GITHUB_TOKEN=%s", "set" if github_token else "not set")
+                    logger.info("   Debug: GH_PAT=%s", "set" if gh_pat else "not set")
+                    logger.info("   Debug: Token length: %d", len(token) if token else 0)
         else:
-            print("⚠️  Skipping GitHub repository (GH_PAT or GITHUB_TOKEN not set)")
+            logger.warning("Skipping GitHub repository (GH_PAT or GITHUB_TOKEN not set)")
 
     # Final check
     if not installed:
         # In CI/CD (GitHub Actions), fail if installation fails
         # Locally, warn but continue (for development flexibility)
-        is_ci = os.getenv("CI") == "true" or os.getenv("GITHUB_ACTIONS") == "true"
+        config = UnifiedCloudConfig()
+        ci_env = getattr(config, "ci", None) or os.getenv("CI")
+        github_actions_env = getattr(config, "github_actions", None) or os.getenv("GITHUB_ACTIONS")
+        is_ci = ci_env == "true" or github_actions_env == "true"
 
-        print("\n" + "=" * 70)
+        logger.info("")
+        logger.info("=" * 70)
         if is_ci:
-            print("❌ ERROR: unified-cloud-services could not be installed")
+            logger.error("unified-trading-library could not be installed")
         else:
-            print("⚠️  WARNING: unified-cloud-services could not be installed")
-        print("=" * 70)
-        print("Installation attempts failed from all sources:")
+            logger.warning("unified-trading-library could not be installed")
+        logger.info("=" * 70)
+        logger.info("Installation attempts failed from all sources:")
         if not force_github:
-            print("  - Local monorepo (../unified-cloud-services)")
-        print("  - GitHub Packages (requires GH_PAT)")
-        print("  - GitHub repository (requires GH_PAT)")
-        print("")
-        print("Note: PyPI is not attempted - unified-cloud-services is a private package")
-        print("")
-        print("To fix this:")
-        print("  1. Ensure unified-cloud-services is available in the monorepo, OR")
-        print("  2. Set GH_PAT in .env file or as environment variable")
-        print("     - Add GH_PAT=your_token to instruments-service/.env file (recommended for local dev)")
-        print("     - Or export GH_PAT=your_token in your shell")
-        print("     Create token at: https://github.com/settings/tokens/new")
-        print("     Required scopes: repo, read:packages")
-        print("")
+            logger.info("  - Local monorepo (../unified-trading-library)")
+        logger.info("  - GitHub Packages (requires GH_PAT)")
+        logger.info("  - GitHub repository (requires GH_PAT)")
+        logger.info("")
+        logger.info("Note: PyPI is not attempted - unified-trading-library is a private package")
+        logger.info("")
+        logger.info("To fix this:")
+        logger.info("  1. Ensure unified-trading-library is available in the monorepo, OR")
+        logger.info("  2. Set GH_PAT in .env file or as environment variable")
+        logger.info("     - Add GH_PAT=your_token to instruments-service/.env file (recommended for local dev)")
+        logger.info("     - Or export GH_PAT=your_token in your shell")
+        logger.info("     Create token at: https://github.com/settings/tokens/new")
+        logger.info("     Required scopes: repo, read:packages")
+        logger.info("")
 
         if is_ci:
-            print("❌ Failing in CI/CD environment - unified-cloud-services is required")
-            print("=" * 70)
+            logger.error("Failing in CI/CD environment - unified-trading-library is required")
+            logger.info("=" * 70)
             return False
         else:
-            print("⚠️  Continuing anyway - tests may fail if unified-cloud-services is required...")
-            print("=" * 70)
+            logger.warning("Continuing anyway - tests may fail if unified-trading-library is required...")
+            logger.info("=" * 70)
     else:
-        print("=" * 70)
+        logger.info("=" * 70)
 
     return True
 
 
 def check_dependencies() -> bool:
     """Check if required dependencies (pytest, pytest-cov) are installed."""
-    print("\n" + "=" * 70)
-    print("DEPENDENCY CHECK")
-    print("=" * 70)
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("DEPENDENCY CHECK")
+    logger.info("=" * 70)
 
     # Check pytest
-    print("\n🔍 Checking pytest...")
+    logger.info("Checking pytest...")
     result = subprocess.run([sys.executable, "-m", "pytest", "--version"], capture_output=True, text=True)
 
     if result.returncode != 0:
-        print("❌ pytest is not installed")
-        print("\nTo install pytest, run:")
-        print(f"  {sys.executable} -m pip install pytest pytest-cov")
-        print("\nOr install all dev dependencies:")
-        print(f"  {sys.executable} -m pip install -e .[dev]")
+        logger.error("pytest is not installed")
+        logger.info("To install pytest, run:")
+        logger.info("  %s -m pip install pytest pytest-cov", sys.executable)
+        logger.info("Or install all dev dependencies:")
+        logger.info("  %s -m pip install -e .[dev]", sys.executable)
         return False
 
-    print(f"✅ pytest is installed: {result.stdout.strip()}")
+    logger.info("pytest is installed: %s", result.stdout.strip())
 
     # Check pytest-cov
-    print("\n🔍 Checking pytest-cov...")
+    logger.info("Checking pytest-cov...")
     result = subprocess.run(
         [sys.executable, "-c", "import pytest_cov; print(pytest_cov.__version__)"],
         capture_output=True,
@@ -348,24 +364,25 @@ def check_dependencies() -> bool:
     )
 
     if result.returncode != 0:
-        print("❌ pytest-cov is not installed")
-        print("\nTo install pytest-cov, run:")
-        print(f"  {sys.executable} -m pip install pytest-cov")
-        print("\nOr install all dev dependencies:")
-        print(f"  {sys.executable} -m pip install -e .[dev]")
+        logger.error("pytest-cov is not installed")
+        logger.info("To install pytest-cov, run:")
+        logger.info("  %s -m pip install pytest-cov", sys.executable)
+        logger.info("Or install all dev dependencies:")
+        logger.info("  %s -m pip install -e .[dev]", sys.executable)
         return False
 
-    print(f"✅ pytest-cov is installed: {result.stdout.strip()}")
+    logger.info("pytest-cov is installed: %s", result.stdout.strip())
 
-    print("=" * 70)
+    logger.info("=" * 70)
     return True
 
 
-def run_performance_tests() -> dict:
+def run_performance_tests() -> dict[str, bool]:
     """Run performance tests only (no coverage)."""
-    print("\n" + "=" * 70)
-    print("PERFORMANCE TESTS")
-    print("=" * 70)
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("PERFORMANCE TESTS")
+    logger.info("=" * 70)
 
     cmd = [
         sys.executable,
@@ -376,37 +393,38 @@ def run_performance_tests() -> dict:
         "-s",  # Show print statements
     ]
 
-    print(f"Running: {' '.join(cmd)}\n")
+    logger.info("Running: %s", " ".join(cmd))
     result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
 
     # Check if pytest failed due to missing module
     if result.returncode != 0 and "No module named 'pytest'" in result.stderr:
-        print("❌ pytest is not installed or not available")
-        print("\nTo install pytest, run:")
-        print(f"  {sys.executable} -m pip install pytest pytest-cov")
-        print("\nOr install all dev dependencies:")
-        print(f"  {sys.executable} -m pip install -e .[dev]")
+        logger.error("pytest is not installed or not available")
+        logger.info("To install pytest, run:")
+        logger.info("  %s -m pip install pytest pytest-cov", sys.executable)
+        logger.info("Or install all dev dependencies:")
+        logger.info("  %s -m pip install -e .[dev]", sys.executable)
         return {"performance_passed": False}
 
     perf_passed = result.returncode == 0
-    print(result.stdout)
+    logger.info(result.stdout)
     if result.stderr:
-        print("STDERR:", result.stderr)
+        logger.info("STDERR: %s", result.stderr)
 
-    print("\n" + "=" * 70)
-    print(f"Performance Tests: {'✅ PASSED' if perf_passed else '❌ FAILED'}")
-    print("=" * 70)
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("Performance Tests: %s", "PASSED" if perf_passed else "FAILED")
+    logger.info("=" * 70)
 
     return {"performance_passed": perf_passed}
 
 
-def run_tests_with_coverage(coverage_threshold: int = 50) -> dict:
+def run_tests_with_coverage(coverage_threshold: int = 50) -> dict[str, bool | float]:
     """Run tests with coverage and check threshold."""
-    print("=" * 70)
-    print("INSTRUMENTS-SERVICE QUALITY GATES")
-    print("=" * 70)
-    print(f"Coverage Threshold: {coverage_threshold}%")
-    print("=" * 70)
+    logger.info("=" * 70)
+    logger.info("INSTRUMENTS-SERVICE QUALITY GATES")
+    logger.info("=" * 70)
+    logger.info("Coverage Threshold: %d%%", coverage_threshold)
+    logger.info("=" * 70)
 
     # Run pytest with coverage
     # Exclude performance tests (they're slow and run separately if needed)
@@ -422,16 +440,16 @@ def run_tests_with_coverage(coverage_threshold: int = 50) -> dict:
         "-v",
     ]
 
-    print(f"\nRunning: {' '.join(cmd)}\n")
+    logger.info("Running: %s", " ".join(cmd))
     result = subprocess.run(cmd, cwd=project_root, capture_output=True, text=True)
 
     # Check if pytest failed due to missing module
     if result.returncode != 0 and "No module named 'pytest'" in result.stderr:
-        print("❌ pytest is not installed or not available")
-        print("\nTo install pytest, run:")
-        print(f"  {sys.executable} -m pip install pytest pytest-cov")
-        print("\nOr install all dev dependencies:")
-        print(f"  {sys.executable} -m pip install -e .[dev]")
+        logger.error("pytest is not installed or not available")
+        logger.info("To install pytest, run:")
+        logger.info("  %s -m pip install pytest pytest-cov", sys.executable)
+        logger.info("Or install all dev dependencies:")
+        logger.info("  %s -m pip install -e .[dev]", sys.executable)
         return {
             "tests_passed": False,
             "coverage_percent": 0.0,
@@ -441,9 +459,9 @@ def run_tests_with_coverage(coverage_threshold: int = 50) -> dict:
 
     # Check test results
     test_passed = result.returncode == 0
-    print(result.stdout)
+    logger.info(result.stdout)
     if result.stderr:
-        print("STDERR:", result.stderr)
+        logger.info("STDERR: %s", result.stderr)
 
     # Parse coverage (pytest-cov generates coverage.json even if some tests fail)
     coverage_file = project_root / "coverage.json"
@@ -451,41 +469,45 @@ def run_tests_with_coverage(coverage_threshold: int = 50) -> dict:
 
     if coverage_file.exists():
         try:
-            with open(coverage_file, "r") as f:
+            with open(coverage_file) as f:
                 coverage_data = json.load(f)
                 coverage_percent = coverage_data.get("totals", {}).get("percent_covered", 0.0)
         except (json.JSONDecodeError, KeyError) as e:
-            print(f"⚠️  Warning: Failed to parse coverage.json: {e}")
+            logger.warning("Failed to parse coverage.json: %s", e)
             coverage_percent = 0.0
 
     # Check if coverage meets threshold
     coverage_meets_threshold = coverage_percent >= coverage_threshold
 
-    print("\n" + "=" * 70)
-    print("QUALITY GATES RESULTS")
-    print("=" * 70)
-    print(f"Tests: {'✅ PASSED' if test_passed else '⚠️  SOME FAILED'}")
-    print(
-        f"Coverage: {coverage_percent:.2f}% {'✅' if coverage_meets_threshold else '❌'} (threshold: {coverage_threshold}%)"
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("QUALITY GATES RESULTS")
+    logger.info("=" * 70)
+    logger.info("Tests: %s", "PASSED" if test_passed else "SOME FAILED")
+    logger.info(
+        "Coverage: %.2f%% %s (threshold: %d%%)",
+        coverage_percent,
+        "PASSED" if coverage_meets_threshold else "FAILED",
+        coverage_threshold,
     )
-    print("=" * 70)
+    logger.info("=" * 70)
 
     # Quality gates pass if coverage meets threshold (tests can be fixed incrementally)
     overall_status = coverage_meets_threshold
 
     if overall_status:
         if test_passed:
-            print("\n✅ ALL QUALITY GATES PASSED")
+            logger.info("ALL QUALITY GATES PASSED")
         else:
-            print("\n✅ QUALITY GATES PASSED (coverage threshold met)")
-            print("  ⚠️  Note: Some tests are failing but coverage requirement is met")
-            print("  💡 Consider fixing failing tests in future PRs")
+            logger.info("QUALITY GATES PASSED (coverage threshold met)")
+            logger.warning("  Note: Some tests are failing but coverage requirement is met")
+            logger.info("  Consider fixing failing tests in future PRs")
     else:
-        print("\n❌ QUALITY GATES FAILED")
+        logger.error("QUALITY GATES FAILED")
         if not test_passed:
-            print("  - Tests are failing")
+            logger.error("  - Tests are failing")
         if not coverage_meets_threshold:
-            print(f"  - Coverage {coverage_percent:.2f}% is below threshold {coverage_threshold}%")
+            logger.error("  - Coverage %.2f%% is below threshold %d%%", coverage_percent, coverage_threshold)
 
     return {
         "tests_passed": test_passed,
@@ -495,9 +517,7 @@ def run_tests_with_coverage(coverage_threshold: int = 50) -> dict:
     }
 
 
-def main():
-    import argparse
-
+def main() -> None:
     parser = argparse.ArgumentParser(description="Quality Gates for instruments-service")
     parser.add_argument(
         "--coverage-threshold",
@@ -521,35 +541,36 @@ def main():
 
     # Ensure packages are installed in editable mode
     if not ensure_packages_installed(force_github=args.use_github):
-        print("\n❌ Failed to install required packages. Exiting.")
+        logger.error("Failed to install required packages. Exiting.")
         sys.exit(1)
 
     # Ensure test buckets exist (fixes "The specified bucket does not exist" errors)
-    print("\n" + "=" * 70)
-    print("ENSURING TEST BUCKETS")
-    print("=" * 70)
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("ENSURING TEST BUCKETS")
+    logger.info("=" * 70)
     try:
         ensure_buckets_script = project_root / "scripts" / "ensure_test_buckets.py"
         if ensure_buckets_script.exists():
-            print(f"Running: {sys.executable} scripts/ensure_test_buckets.py")
+            logger.info("Running: %s scripts/ensure_test_buckets.py", sys.executable)
             subprocess.run([sys.executable, str(ensure_buckets_script)], cwd=project_root, check=True)
         else:
-            print("⚠️  Warning: scripts/ensure_test_buckets.py not found")
+            logger.warning("scripts/ensure_test_buckets.py not found")
     except subprocess.CalledProcessError as e:
-        print(f"⚠️  Warning: Failed to ensure test buckets: {e}")
-        print("   Tests may fail if buckets don't exist.")
+        logger.warning("Failed to ensure test buckets: %s", e)
+        logger.warning("   Tests may fail if buckets don't exist.")
 
     # Check dependencies before running tests
     if not check_dependencies():
-        print("\n❌ Required dependencies are missing. Exiting.")
+        logger.error("Required dependencies are missing. Exiting.")
         sys.exit(1)
 
     # Run performance tests first (if not skipped)
-    perf_results = {"performance_passed": True}
+    perf_results: dict[str, bool] = {"performance_passed": True}
     if not args.skip_performance:
         perf_results = run_performance_tests()
     else:
-        print("\n⏭️  Skipping performance tests (--skip-performance flag)")
+        logger.info("Skipping performance tests (--skip-performance flag)")
 
     # Run coverage tests
     coverage_results = run_tests_with_coverage(args.coverage_threshold)
@@ -557,17 +578,18 @@ def main():
     # Combined status
     all_passed = perf_results["performance_passed"] and coverage_results["overall_status"]
 
-    print("\n" + "=" * 70)
-    print("FINAL QUALITY GATES STATUS")
-    print("=" * 70)
-    print(f"Performance: {'✅ PASSED' if perf_results['performance_passed'] else '❌ FAILED'}")
-    print(f"Coverage: {'✅ PASSED' if coverage_results['overall_status'] else '❌ FAILED'}")
-    print("=" * 70)
+    logger.info("")
+    logger.info("=" * 70)
+    logger.info("FINAL QUALITY GATES STATUS")
+    logger.info("=" * 70)
+    logger.info("Performance: %s", "PASSED" if perf_results["performance_passed"] else "FAILED")
+    logger.info("Coverage: %s", "PASSED" if coverage_results["overall_status"] else "FAILED")
+    logger.info("=" * 70)
 
     if all_passed:
-        print("\n✅ ALL QUALITY GATES PASSED\n")
+        logger.info("ALL QUALITY GATES PASSED")
     else:
-        print("\n❌ SOME QUALITY GATES FAILED\n")
+        logger.error("SOME QUALITY GATES FAILED")
 
     sys.exit(0 if all_passed else 1)
 
