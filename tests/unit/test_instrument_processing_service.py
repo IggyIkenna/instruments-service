@@ -36,6 +36,7 @@ class TestInstrumentProcessingService:
     def test_service_creation_with_secret_manager(self, mock_get_secret):
         """Test creating service with Secret Manager."""
         from unittest.mock import MagicMock
+
         mock_client = MagicMock()
         mock_client.get_secret.return_value = "secret-api-key-67890"
         mock_get_secret.return_value = mock_client
@@ -53,6 +54,7 @@ class TestInstrumentProcessingService:
         """Test creating service without API key succeeds (lazy-loaded)."""
         config = {"project_id": "test-project"}
         from unittest.mock import MagicMock
+
         mock_client = MagicMock()
         mock_client.get_secret.return_value = None
         with patch(
