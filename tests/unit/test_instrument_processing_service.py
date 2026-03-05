@@ -5,13 +5,22 @@ Tests service orchestration logic with mocked dependencies.
 """
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from instruments_service.app.core.instrument_processing_service import (
     InstrumentProcessingService,
 )
+
+
+@pytest.fixture(autouse=True)
+def _mock_get_secret_client():
+    """Mock get_secret_client to avoid GCPSecretClient.get_secret AttributeError in unit tests."""
+    mock_client = MagicMock()
+    mock_client.get_secret.return_value = None
+    with patch("unified_trading_library.get_secret_client", return_value=mock_client):
+        yield
 
 
 class TestInstrumentProcessingService:
@@ -23,10 +32,13 @@ class TestInstrumentProcessingService:
         service = InstrumentProcessingService(config)
         assert service.api_key == "test-api-key-12345"
 
-    @patch("instruments_service.app.core.instrument_processing_service.get_secret_client")
+    @patch("instruments_service.app.core.instrument_processing_base.get_secret_client")
     def test_service_creation_with_secret_manager(self, mock_get_secret):
         """Test creating service with Secret Manager."""
-        mock_get_secret.return_value = "secret-api-key-67890"
+        from unittest.mock import MagicMock
+        mock_client = MagicMock()
+        mock_client.get_secret.return_value = "secret-api-key-67890"
+        mock_get_secret.return_value = mock_client
         config = {
             "project_id": "test-project"
             # No tardis_api_key provided - will be lazy-loaded when CeFi is requested
@@ -40,9 +52,12 @@ class TestInstrumentProcessingService:
     def test_service_creation_no_api_key(self):
         """Test creating service without API key succeeds (lazy-loaded)."""
         config = {"project_id": "test-project"}
+        from unittest.mock import MagicMock
+        mock_client = MagicMock()
+        mock_client.get_secret.return_value = None
         with patch(
-            "instruments_service.app.core.instrument_processing_service.get_secret_client",
-            return_value=None,
+            "instruments_service.app.core.instrument_processing_base.get_secret_client",
+            return_value=mock_client,
         ):
             # Tardis API key is now optional - service can be created without it
             # It will only fail when CeFi instruments are requested
