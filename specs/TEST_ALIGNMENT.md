@@ -5,6 +5,7 @@ This document ensures all three test environments run **exactly the same tests**
 ## ✅ Standardized Commands
 
 All three environments now use:
+
 - **Pytest**: `python -m pytest` (or `python3 -m pytest` for local)
 - **Same test filters**: `--ignore=tests/integration/test_performance.py -k "not api and not live and not download"`
 - **Same timeouts**: `--timeout=60` (unit), `--timeout=120` (integration), `--timeout=180` (e2e/smoke)
@@ -13,6 +14,7 @@ All three environments now use:
 ## Test Execution Order
 
 All environments run tests in this order:
+
 1. **Unit tests**: `python -m pytest tests/unit/ -v --tb=short --timeout=60`
 2. **Integration tests**: `python -m pytest tests/integration/ -v --tb=short --timeout=120 --ignore=tests/integration/test_performance.py -k "not api and not live and not download"`
 3. **E2E tests**: `python -m pytest tests/e2e/ -v --tb=short --timeout=180`
@@ -21,13 +23,15 @@ All environments run tests in this order:
 ## Environment Variables
 
 All environments set:
+
 - `CLOUD_MOCK_MODE="true"`
-- `GOOGLE_CLOUD_PROJECT="test-project"`
+- `GCP_PROJECT_ID="test-project"`
 - `DEPLOYMENT_CONFIG_DIR` (path to deployment configs)
 
 ## Dependency Installation Order
 
 All environments install dependencies in this order:
+
 1. `python -m pip install --upgrade pip setuptools wheel`
 2. `pip install -e deps/unified-trading-services` (or `/workspace/unified-trading-services` in Cloud Build)
 3. `pip install -e deps/unified-trading-deployment-v2` (optional)
@@ -38,6 +42,7 @@ All environments install dependencies in this order:
 ## Files to Keep in Sync
 
 When changing test commands, update **all three** files:
+
 1. `.github/workflows/quality-gates.yml` (GitHub Actions)
 2. `cloudbuild.yaml` (Cloud Build)
 3. `scripts/quality-gates.sh` (Local script)
@@ -45,6 +50,7 @@ When changing test commands, update **all three** files:
 ## Verification
 
 To verify alignment, run:
+
 ```bash
 # Local
 ./scripts/quality-gates.sh

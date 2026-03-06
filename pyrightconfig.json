@@ -1,5 +1,7 @@
 {
   "pythonVersion": "3.13",
+  "venvPath": "../",
+  "venv": ".venv-workspace",
   "strict": true,
   "include": ["instruments_service"],
   "typeCheckingMode": "strict",
