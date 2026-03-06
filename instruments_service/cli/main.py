@@ -317,8 +317,8 @@ def main() -> dict[str, HandlerResultValue]:
         # Build configuration from arguments
         config: dict[str, object] = {
             "project_id": cast(str | None, args.project_id),
-            "gcs_bucket": cast(str | None, args.gcs_bucket),
-            "bigquery_dataset": cast(str, args.bigquery_dataset),
+            "sink_bucket": cast(str | None, args.sink_bucket),
+            "analytics_dataset": cast(str, args.analytics_dataset),
         }
 
         # Get handler for mode

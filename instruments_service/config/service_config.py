@@ -30,61 +30,61 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
 
     service_name: str = Field(default="instruments-service", description="Service name")
 
-    gcs_bucket: str = Field(
+    sink_bucket: str = Field(
         default="",
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET"),
-        description="Primary GCS bucket for instruments",
+        description="Primary sink bucket for instruments",
     )
-    gcs_bucket_test: str = Field(
+    sink_bucket_test: str = Field(
         default="",
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_TEST"),
-        description="Test GCS bucket for instruments",
+        description="Test sink bucket for instruments",
     )
-    gcs_bucket_cefi: str = Field(
+    sink_bucket_cefi: str = Field(
         default="",
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_CEFI"),
-        description="GCS bucket for CEFI instruments",
+        description="Sink bucket for CEFI instruments",
     )
-    gcs_bucket_tradfi: str = Field(
+    sink_bucket_tradfi: str = Field(
         default="",
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_TRADFI"),
-        description="GCS bucket for TRADFI instruments",
+        description="Sink bucket for TRADFI instruments",
     )
-    gcs_bucket_defi: str = Field(
+    sink_bucket_defi: str = Field(
         default="",
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_DEFI"),
-        description="GCS bucket for DEFI instruments",
+        description="Sink bucket for DEFI instruments",
     )
-    gcs_bucket_sports: str = Field(
+    sink_bucket_sports: str = Field(
         default="",
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_SPORTS"),
-        description="GCS bucket for SPORTS instruments",
+        description="Sink bucket for SPORTS instruments",
     )
-    gcs_bucket_cefi_test: str = Field(
+    sink_bucket_cefi_test: str = Field(
         default="",
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_CEFI_TEST"),
-        description="Test GCS bucket for CEFI instruments",
+        description="Test sink bucket for CEFI instruments",
     )
-    gcs_bucket_tradfi_test: str = Field(
+    sink_bucket_tradfi_test: str = Field(
         default="",
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_TRADFI_TEST"),
-        description="Test GCS bucket for TRADFI instruments",
+        description="Test sink bucket for TRADFI instruments",
     )
-    gcs_bucket_defi_test: str = Field(
+    sink_bucket_defi_test: str = Field(
         default="",
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_DEFI_TEST"),
-        description="Test GCS bucket for DEFI instruments",
+        description="Test sink bucket for DEFI instruments",
     )
-    gcs_bucket_sports_test: str = Field(
+    sink_bucket_sports_test: str = Field(
         default="",
         validation_alias=AliasChoices("INSTRUMENTS_GCS_BUCKET_SPORTS_TEST"),
-        description="Test GCS bucket for SPORTS instruments",
+        description="Test sink bucket for SPORTS instruments",
     )
 
-    bigquery_dataset: str = Field(
+    analytics_dataset: str = Field(
         default="instruments",
         validation_alias=AliasChoices("INSTRUMENTS_BIGQUERY_DATASET", "BIGQUERY_DATASET"),
-        description="BigQuery dataset for instruments",
+        description="Analytics dataset for instruments",
     )
 
     enable_ccxt_integration: bool = Field(default=True, description="Enable CCXT metadata enrichment")
@@ -178,51 +178,51 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
 
     @property
     def INSTRUMENTS_GCS_BUCKET_CEFI(self) -> str:
-        return self.gcs_bucket_cefi
+        return self.sink_bucket_cefi
 
     @property
     def INSTRUMENTS_GCS_BUCKET_TRADFI(self) -> str:
-        return self.gcs_bucket_tradfi
+        return self.sink_bucket_tradfi
 
     @property
     def INSTRUMENTS_GCS_BUCKET_DEFI(self) -> str:
-        return self.gcs_bucket_defi
+        return self.sink_bucket_defi
 
     @property
     def INSTRUMENTS_GCS_BUCKET_SPORTS(self) -> str:
-        return self.gcs_bucket_sports
+        return self.sink_bucket_sports
 
     @property
     def INSTRUMENTS_GCS_BUCKET_CEFI_TEST(self) -> str:
-        return self.gcs_bucket_cefi_test or f"{self.gcs_bucket_cefi}-test"
+        return self.sink_bucket_cefi_test or f"{self.sink_bucket_cefi}-test"
 
     @property
     def INSTRUMENTS_GCS_BUCKET_TRADFI_TEST(self) -> str:
-        return self.gcs_bucket_tradfi_test or f"{self.gcs_bucket_tradfi}-test"
+        return self.sink_bucket_tradfi_test or f"{self.sink_bucket_tradfi}-test"
 
     @property
     def INSTRUMENTS_GCS_BUCKET_DEFI_TEST(self) -> str:
-        return self.gcs_bucket_defi_test or f"{self.gcs_bucket_defi}-test"
+        return self.sink_bucket_defi_test or f"{self.sink_bucket_defi}-test"
 
     @property
     def INSTRUMENTS_GCS_BUCKET_SPORTS_TEST(self) -> str:
-        return self.gcs_bucket_sports_test or f"{self.gcs_bucket_sports}-test"
+        return self.sink_bucket_sports_test or f"{self.sink_bucket_sports}-test"
 
     @property
     def INSTRUMENTS_GCS_BUCKET(self) -> str:
-        return self.gcs_bucket
+        return self.sink_bucket
 
     @property
     def INSTRUMENTS_GCS_BUCKET_TEST(self) -> str:
-        return self.gcs_bucket_test
+        return self.sink_bucket_test
 
     def get_bucket_for_category(self, category: str, test_mode: bool = False) -> str:
-        """Get the GCS bucket name for a specific market category."""
+        """Get the sink bucket name for a specific market category."""
         category_upper = category.upper()
         if category_upper not in ["CEFI", "TRADFI", "DEFI", "SPORTS"]:
             raise ValueError(f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI, SPORTS")
         bucket_name = (
-            f"gcs_bucket_{category_upper.lower()}_test" if test_mode else f"gcs_bucket_{category_upper.lower()}"
+            f"sink_bucket_{category_upper.lower()}_test" if test_mode else f"sink_bucket_{category_upper.lower()}"
         )
         bucket_raw: object = getattr(self, bucket_name, None)
         if bucket_raw:
@@ -230,7 +230,7 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
             logger.debug("📦 Using bucket for %s: %s", category_upper, bucket)
             return bucket
         logger.warning("⚠️ Category-specific bucket not configured for %s. Using default bucket.", category_upper)
-        return self.gcs_bucket_test if test_mode else self.gcs_bucket
+        return self.sink_bucket_test if test_mode else self.sink_bucket
 
     # =========================================================================
     # DOMAIN CONFIG PROTOCOL IMPLEMENTATION

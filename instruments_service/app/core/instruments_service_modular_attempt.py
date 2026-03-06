@@ -32,8 +32,8 @@ class InstrumentsService(InstrumentsServiceProcessors):
         Args:
             config: Configuration dictionary with:
                 - project_id: GCP project ID
-                - gcs_bucket: GCS bucket name (optional, auto-detected)
-                - bigquery_dataset: BigQuery dataset (optional, default: market_data_hft)
+                - sink_bucket: Sink bucket name (optional, auto-detected)
+                - analytics_dataset: Analytics dataset (optional, default: market_data_hft)
                 - enable_ccxt_integration: Enable CCXT enrichment (default: True)
                 - enable_metadata_caching: Enable metadata caching (default: True)
         """
