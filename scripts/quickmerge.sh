@@ -47,6 +47,7 @@ FILES_ARG=""
 DEP_BRANCH=""
 SKIP_TESTS=""
 SKIP_TYPECHECK=""
+SKIP_CODEX=""
 QUICK=false
 NO_PR=false
 
@@ -66,6 +67,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-typecheck)
       SKIP_TYPECHECK="--skip-typecheck"
+      shift
+      ;;
+    --skip-codex)
+      SKIP_CODEX="--skip-codex"
       shift
       ;;
     --quick)
@@ -287,10 +292,10 @@ echo ""
 
 if [ -f "scripts/quality-gates.sh" ]; then
   echo "[$REPO_NAME] Phase 1: auto-fix (ruff format + ruff check --fix)..."
-  bash scripts/quality-gates.sh $SKIP_TESTS $SKIP_TYPECHECK
+  bash scripts/quality-gates.sh $SKIP_TESTS $SKIP_TYPECHECK $SKIP_CODEX
 
   echo "[$REPO_NAME] Phase 2: verify (--no-fix mode)..."
-  if ! bash scripts/quality-gates.sh --no-fix $SKIP_TESTS $SKIP_TYPECHECK; then
+  if ! bash scripts/quality-gates.sh --no-fix $SKIP_TESTS $SKIP_TYPECHECK $SKIP_CODEX; then
     echo "[$REPO_NAME] ❌ Quality gates FAILED — fix remaining issues before merging"
     exit 1
   fi

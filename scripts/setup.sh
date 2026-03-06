@@ -484,9 +484,14 @@ log_step "GCP credentials (informational)"
 
 if [ -n "$GOOGLE_APPLICATION_CREDENTIALS" ] && [ -f "$GOOGLE_APPLICATION_CREDENTIALS" ]; then
     log_ok "GOOGLE_APPLICATION_CREDENTIALS set"
+elif [ -f "$HOME/.config/gcloud/application_default_credentials.json" ]; then
+    log_ok "ADC credentials (gcloud auth application-default login)"
 else
     log_warn "No GCP credentials detected — run: gcloud auth application-default login"
-    log_warn "Never place SA JSON files in the repo root (use ADC or Secret Manager)"
+    # Only warn about SA JSON if credential-like files found in repo root
+    if find . -maxdepth 1 \( -name '*credentials*.json' -o -name 'central-element*.json' -o -name '*service*account*.json' \) 2>/dev/null | grep -q .; then
+        log_warn "Never place SA JSON files in the repo root (use ADC or Secret Manager)"
+    fi
 fi
 
 # ── [13] KNOWN CAVEATS (per-repo) ─────────────────────────────────────────
