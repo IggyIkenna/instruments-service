@@ -32,9 +32,7 @@ def get_tickers_from_gcs(
         List of ticker symbols (e.g., ['AAPL', 'MSFT', ...])
     """
     try:
-        data_source: DataSource = get_data_source(
-            routing_key="tradfi", prefix="instrument_availability/by_date"
-        )
+        data_source: DataSource = get_data_source(routing_key="tradfi", prefix="instrument_availability/by_date")
 
         def try_load_tickers(date_str: str) -> list[str]:
             """Try to load tickers from a specific date partition."""
