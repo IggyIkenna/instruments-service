@@ -54,6 +54,7 @@ logger.info("✅ Patched unified_trading_library config with instruments_config"
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.cli.handlers import get_handler_for_mode
 from instruments_service.cli.parser import parse_arguments
+from instruments_service.config_reloaders import start_domain_config_reloaders, stop_domain_config_reloaders
 
 # ---------------------------------------------------------------------------
 # Pre-parser helpers (used by main_service_cli)
@@ -306,6 +307,8 @@ def main() -> dict[str, HandlerResultValue]:
             service_name="instruments-service",
         )
 
+        start_domain_config_reloaders(instruments_config)
+
         # Setup logging level (getattr returns Any; cast to int for setLevel)
         log_level_int = cast(int, getattr(logging, args.log_level.upper()))
         logging.getLogger().setLevel(log_level_int)
@@ -447,6 +450,8 @@ def main() -> dict[str, HandlerResultValue]:
     except (ValueError, KeyError, TypeError, IndexError) as e:
         logger.exception("CLI execution failed: %s", e)
         return {"success": False, "status": "error", "error": str(e)}
+    finally:
+        stop_domain_config_reloaders()
 
 
 def run_cli() -> dict[str, HandlerResultValue]:
