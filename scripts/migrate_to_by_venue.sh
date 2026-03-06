@@ -16,7 +16,7 @@
 set -e
 
 # Get project ID from environment (supports both GCP and AWS)
-PROJECT_ID="${GCP_PROJECT_ID:-${AWS_PROJECT_ID:-${GOOGLE_CLOUD_PROJECT:-${AWS_ACCOUNT_ID}}}}"
+PROJECT_ID="${GCP_PROJECT_ID:-${AWS_PROJECT_ID:-${GCP_PROJECT_ID:-${AWS_ACCOUNT_ID}}}}"
 if [ -z "$PROJECT_ID" ]; then
     echo "❌ Error: PROJECT_ID not found. Set GCP_PROJECT_ID or AWS_PROJECT_ID environment variable."
     exit 1

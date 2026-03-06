@@ -1,18 +1,13 @@
 """
-League Registry — backward-compatible re-export shim.
+League Registry — public API for sports league data.
 
-The implementation has been split into focused modules:
+The implementation is split into focused modules:
 
 - ``league_definition``  — ``LeagueDefinition`` dataclass + helper constants
 - ``league_data_prediction`` — Prediction-tier football leagues
 - ``league_data_other``  — Features, Reference, and Non-football leagues
 - ``league_lookup``  — assembled ``LEAGUE_REGISTRY`` + query functions
-- ``league_classification``  — Pydantic-based classification config (migrated
-  from ``sports-betting-services-previous``)
-
-All public names are re-exported here so existing ``from
-instruments_service.sports.league_registry import ...`` statements continue
-to work.
+- ``league_classification``  — Pydantic-based classification config
 """
 
 from instruments_service.sports.league_classification import (
