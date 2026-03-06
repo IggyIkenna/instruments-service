@@ -9,8 +9,9 @@ import logging
 from uuid import uuid4
 
 import pandas as pd
+from unified_domain_client import CloudTarget, StandardizedDomainCloudService
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
-from unified_trading_library import CloudTarget, StandardizedDomainCloudService, get_bucket_for_category
+from unified_trading_library import get_bucket_for_category
 
 logger = logging.getLogger(__name__)
 
