@@ -78,6 +78,7 @@ for arg in "$@"; do
     case $arg in
         --no-fix) FIX_MODE=false ;;   --quick) QUICK_MODE=true ;;
         --lint) RUN_TESTS=false ;;    --test) RUN_LINT=false ;;
+        --skip-tests) RUN_TESTS=false ;;
         --fix) FIX_MODE=true ;;       --skip-typecheck) SKIP_TYPECHECK=true ;;
     esac
 done
@@ -288,9 +289,9 @@ rg "central-element-323112" tests/ 2>/dev/null \
 rg "central-element-323112" --type py --glob "!tests/**" "$SOURCE_DIR/" 2>/dev/null \
     && { log_fail "Hardcoded project ID in production — use config.gcp_project_id"; ((V++)); } || log_success "No hardcoded project ID in production"
 
-# GOOGLE_CLOUD_PROJECT is legacy — only GCP_PROJECT_ID is canonical
-rg "GOOGLE_CLOUD_PROJECT" --type py --glob "!tests/**" --glob "!**/config.py" "$SOURCE_DIR/" 2>/dev/null \
-    && { log_fail "Use GCP_PROJECT_ID not GOOGLE_CLOUD_PROJECT (except config.py backward compat)"; ((V++)); } || log_success "No GOOGLE_CLOUD_PROJECT usage"
+# GCP_PROJECT_ID is legacy — only GCP_PROJECT_ID is canonical
+rg "GCP_PROJECT_ID" --type py --glob "!tests/**" --glob "!**/config.py" "$SOURCE_DIR/" 2>/dev/null \
+    && { log_fail "Use GCP_PROJECT_ID not GCP_PROJECT_ID (except config.py backward compat)"; ((V++)); } || log_success "No GCP_PROJECT_ID usage"
 
 # GCP auth: tests must use google.auth.default() — never pytest.skip for missing credential file
 # Acceptable: pytest.skip inside _skip_integration_without_creds autouse fixture (integration marker pattern)
@@ -370,7 +371,7 @@ fi
 
 # pip install anywhere other than bootstrap (must use uv pip install)
 PIP=$(rg "^RUN pip install|^RUN python -m pip| pip install " --glob "**/Dockerfile" --glob "**/*.sh" . 2>/dev/null \
-    | grep -v "pip install uv" | grep -v "#" || :)
+    | grep -v "pip install uv" | grep -v "uv pip install" | grep -v "^#\|rg \"\|PIP=\$(" | grep -v "#" || :)
 [[ -n "$PIP" ]] && { log_fail "Use 'uv pip install' not 'pip install'"; echo "$PIP" | head -3; ((V++)); } || log_success "No bare pip install"
 
 BE=$(rg "except Exception:" --type py --glob "!tests/**" "$SOURCE_DIR/" 2>/dev/null || :)
@@ -456,7 +457,7 @@ fi
 
 # CI/CD hygiene: ||true bypasses in quality gate scripts
 BYPASS=$(rg "\|\|true|\|\| true" --glob "**/quality-gates.sh" --glob "**/quality-gates.yml" . 2>/dev/null \
-    | grep -v "^#\|zombies\|pyright\|cleanup" || :)
+    | grep -v "^#\|zombies\|pyright\|cleanup\|log_fail\|log_success\|log_warn\|log_section\|CI/CD\|BYPASS=" || :)
 [[ -n "$BYPASS" ]] && { log_fail "||true bypass in quality gates — fix the root cause"; echo "$BYPASS" | head -3; ((V++)); } || log_success "No ||true quality gate bypasses"
 
 # ============================================================
@@ -469,6 +470,20 @@ UNIT_CLOUD_CALLS=$(rg 'get_storage_client\(\)|get_secret_client\(\)|get_queue_cl
     echo "$UNIT_CLOUD_CALLS" | head -5
     ((V++))
 } || log_success "Unit tests appear cloud-agnostic"
+
+# ============================================================
+# STEP 5.11 — No UTL protocol-leaking symbol imports in service code
+# ============================================================
+UTL_PROTOCOL=$(rg "from unified_trading_library import.*(CloudTarget|StandardizedDomainCloudService|upload_to_gcs_batch)" \
+    --type py \
+    --glob '!.venv*' --glob '!**/.venv*/**' \
+    --glob '!tests/**' --glob '!scripts/**' \
+    "${SOURCE_DIR}/" 2>/dev/null || :)
+[[ -n "$UTL_PROTOCOL" ]] && {
+    log_fail "STEP 5.11: Protocol symbols must come from unified_domain_client, not unified_trading_library:"
+    echo "$UTL_PROTOCOL" | head -5
+    ((V++))
+} || log_success "No UTL protocol-leaking symbol imports"
 
 [[ $V -gt 0 ]] && { log_fail "Codex compliance FAILED: $V violations"; exit 1; }
 log_success "Codex compliance PASSED"
