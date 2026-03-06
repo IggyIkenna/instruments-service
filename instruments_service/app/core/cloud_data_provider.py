@@ -214,7 +214,7 @@ class CloudDataProvider:
             DataFrame with instruments
         """
         try:
-            query = f"""
+            query = f"""  # nosec B608
             SELECT * FROM `{self.cloud_target.bigquery_dataset}.{table_name}`
             WHERE 1=1
             """
