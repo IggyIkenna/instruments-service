@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import cast
 
 import pandas as pd
+from unified_domain_client import CloudTarget, StandardizedDomainCloudService
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.config import SP500_TICKERS, corporate_actions_start_date, instruments_config
@@ -132,8 +133,6 @@ class CorporateActionsProductionHandler(ModeHandler):
         Returns:
             List of ticker symbols
         """
-        from unified_trading_library import CloudTarget, StandardizedDomainCloudService
-
         try:
             bucket_name = instruments_config.gcs_bucket_tradfi or instruments_config.get_bucket_for_category("tradfi")
 
