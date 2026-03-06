@@ -7,7 +7,7 @@ NO business logic, validation, or transformation - pure I/O only.
 import logging
 
 import pandas as pd
-from unified_trading_library import CloudTarget, StandardizedDomainCloudService
+from unified_domain_client import CloudTarget, StandardizedDomainCloudService
 
 from instruments_service.config import instruments_config
 
@@ -101,25 +101,16 @@ class StorageAdapter:
             domain="instruments", cloud_target=bucket_cloud_target
         )
 
-        batch_uploads: list[dict[str, object]] = [
-            {"data": df, "gcs_path": gcs_path, "format": "parquet"} for gcs_path, df, _ in uploads
-        ]
-
-        raw_results: list[dict[str, object]] = bucket_cloud_service.upload_to_gcs_batch(
-            batch_uploads, show_progress=False
-        )
-        # Narrow to the declared return type: each result has 'success' (bool) and optional 'error' (str)
+        # UDC StandardizedDomainCloudService has single-file upload; iterate for batch.
         results: list[dict[str, bool | str]] = []
-        for r in raw_results:
+        for gcs_path, df, _ in uploads:
             entry: dict[str, bool | str] = {}
-            success_val = r.get("success")
-            if isinstance(success_val, bool):
-                entry["success"] = success_val
-            else:
-                entry["success"] = bool(success_val)
-            error_val = r.get("error")
-            if isinstance(error_val, str):
-                entry["error"] = error_val
+            try:
+                bucket_cloud_service.upload_to_gcs(data=df, gcs_path=gcs_path, format="parquet")
+                entry["success"] = True
+            except Exception as exc:
+                entry["success"] = False
+                entry["error"] = str(exc)
             results.append(entry)
         return results
 
