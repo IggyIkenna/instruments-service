@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import cast
 
 import pandas as pd
+from unified_cloud_interface import DataSink, get_data_sink
 from unified_domain_client import CloudTarget, StandardizedDomainCloudService
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
@@ -471,59 +472,47 @@ class CorporateActionsHandler(ModeHandler):
 
     def _upload_to_gcs(self, output_files: list[dict[str, str]]) -> dict[str, str]:
         """
-        Upload corporate actions files to GCS TRADFI bucket.
+        Upload corporate actions files via UCI DataSink intent API (TRADFI routing).
 
-        Target path: gs://{tradfi_bucket}/corporate_actions/by_date/day={date}/{action_type}.parquet
+        Target path: corporate_actions/by_date/day={date}/{action_type}.parquet
 
         Args:
             output_files: List of dicts with action_type, date, and path keys
 
         Returns:
-            Dict mapping "{action_type}:{date}" to full GCS path
+            Dict mapping "{action_type}:{date}" to the written path
         """
-        gcs_paths: dict[str, str] = {}
+        written_paths: dict[str, str] = {}
 
         if not output_files:
             logger.info("📭 No files to upload to GCS")
-            return gcs_paths
+            return written_paths
 
         try:
-            # Get TRADFI bucket (corporate actions are TRADFI only)
-            bucket_name = instruments_config.gcs_bucket_tradfi
-            if not bucket_name:
-                logger.warning("⚠️ TRADFI GCS bucket not configured - skipping GCS upload")
-                return {}
-
-            # Use cloud-agnostic service for uploads
-            target = CloudTarget(
-                project_id=self.project_id,
-                gcs_bucket=bucket_name,
-                bigquery_dataset=instruments_config.bigquery_dataset,
-            )
-            service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
+            # PROTOCOL_DATA_SINK_BUCKET_TRADFI — set by deployment bootstrap
+            data_sink: DataSink = get_data_sink(routing_key="tradfi")
 
             for entry in output_files:
                 action_type = entry["action_type"]
                 day_str = entry["date"]
                 local_path = entry["path"]
-                filename = Path(local_path).name
 
-                # GCS path: corporate_actions/by_date/day={date}/{action_type}.parquet
-                gcs_path = f"corporate_actions/by_date/day={day_str}/{filename}"
-
-                # Read file as DataFrame and upload (cloud-agnostic)
+                # Read file as DataFrame and write via DataSink
                 df = pd.read_parquet(local_path)
-                service.upload_to_gcs(data=df, gcs_path=gcs_path, format="parquet")
+                written_path = data_sink.write(
+                    df,
+                    partition={"day": day_str, "action_type": action_type},
+                    format="parquet",
+                )
 
-                full_gcs_path = f"gs://{bucket_name}/{gcs_path}"
-                gcs_paths[f"{action_type}:{day_str}"] = full_gcs_path
-                logger.debug("☁️ Uploaded %s (%s) to %s", action_type, day_str, full_gcs_path)
+                written_paths[f"{action_type}:{day_str}"] = written_path
+                logger.debug("☁️ Uploaded %s (%s) to %s", action_type, day_str, written_path)
 
-            logger.info("✅ Uploaded %s files to GCS", len(gcs_paths))
-            return gcs_paths
+            logger.info("✅ Uploaded %s files to storage", len(written_paths))
+            return written_paths
 
         except (OSError, ValueError, TypeError, KeyError) as e:
-            logger.error("❌ Failed to upload to GCS: %s", e)
+            logger.error("❌ Failed to upload to storage: %s", e)
             return {}
 
     def cleanup(self) -> None:
