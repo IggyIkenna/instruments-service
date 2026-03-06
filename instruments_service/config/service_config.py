@@ -10,7 +10,6 @@ from typing import cast
 from pydantic import AliasChoices, Field
 from pydantic_settings import SettingsConfigDict
 from unified_config_interface import UnifiedCloudConfig
-from unified_domain_client import CloudTarget
 
 logger = logging.getLogger(__name__)
 
@@ -172,30 +171,6 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         validation_alias=AliasChoices("SHARD_LAUNCHED_AT"),
         description="Shard launch timestamp for race condition detection",
     )
-
-    def get_cloud_target(self, category: str | None = None) -> CloudTarget:
-        """Get CloudTarget for instruments service."""
-        if category:
-            category_upper = category.upper()
-            if category_upper == "CEFI":
-                bucket = self.gcs_bucket_cefi
-            elif category_upper == "TRADFI":
-                bucket = self.gcs_bucket_tradfi
-            elif category_upper == "DEFI":
-                bucket = self.gcs_bucket_defi
-            elif category_upper == "SPORTS":
-                bucket = self.gcs_bucket_sports
-            else:
-                raise ValueError(f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI, SPORTS")
-        else:
-            bucket = self.gcs_bucket
-
-        return CloudTarget(
-            project_id=self.gcp_project_id,
-            gcs_bucket=bucket,
-            bigquery_dataset=self.bigquery_dataset,
-            bigquery_location=self.bigquery_location,
-        )
 
     def is_test_environment(self) -> bool:
         """Check if the current environment is a test environment."""
