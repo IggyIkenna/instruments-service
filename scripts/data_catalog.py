@@ -21,7 +21,9 @@ from datetime import UTC, date, datetime, timedelta
 from typing import TypedDict
 from uuid import uuid4
 
-from unified_trading_library import CloudTarget, StandardizedDomainCloudService
+import io
+
+from unified_cloud_interface import download_from_storage
 from unified_config_interface import UnifiedCloudConfig
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
 from unified_internal_contracts.schemas.errors import ErrorContext
@@ -171,7 +173,27 @@ class CatalogReport:
         )
 
 
-def get_cloud_service(bucket_name: str) -> StandardizedDomainCloudService | None:
+class _BucketDownloader:
+    """Minimal UCI-backed storage reader for catalog checks."""
+
+    def __init__(self, bucket: str) -> None:
+        self._bucket = bucket
+
+    def download_from_gcs(
+        self,
+        gcs_path: str,
+        format: str = "parquet",
+        log_errors: bool = True,
+    ) -> object:
+        import pandas as pd
+        path = gcs_path.lstrip("/")
+        data = download_from_storage(self._bucket, path)
+        if format == "parquet":
+            return pd.read_parquet(io.BytesIO(data))
+        return data
+
+
+def get_cloud_service(bucket_name: str) -> _BucketDownloader | None:
     """Get cloud-agnostic service for a bucket."""
     mock_mode = (_cloud_config.cloud_mock_mode or "").lower() == "true"
 
@@ -180,12 +202,7 @@ def get_cloud_service(bucket_name: str) -> StandardizedDomainCloudService | None
         return None
 
     try:
-        target = CloudTarget(
-            project_id=PROJECT_ID,
-            gcs_bucket=bucket_name,
-            bigquery_dataset="instruments",
-        )
-        return StandardizedDomainCloudService(domain="instruments", cloud_target=target)
+        return _BucketDownloader(bucket=bucket_name)
     except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
         _err = EnhancedError(
             message=str(e),

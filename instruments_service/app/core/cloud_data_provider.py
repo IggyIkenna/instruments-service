@@ -180,9 +180,9 @@ class CloudDataProvider:
             DataFrame with instruments
         """
         try:
-            bigquery_dataset = instruments_config.bigquery_dataset or "instruments"
+            analytics_dataset = instruments_config.analytics_dataset or "instruments"
             query = f"""
-            SELECT * FROM `{bigquery_dataset}.{table_name}`
+            SELECT * FROM `{analytics_dataset}.{table_name}`
             WHERE 1=1
             """
 
