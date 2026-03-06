@@ -24,8 +24,8 @@ class ParsedArgs(Protocol):
     start_date: str | None
     end_date: str | None
     project_id: str | None
-    gcs_bucket: str | None
-    bigquery_dataset: str
+    sink_bucket: str | None
+    analytics_dataset: str
     redo_all: bool
     force: bool
     dry_run: bool
@@ -116,15 +116,17 @@ def parse_arguments() -> ParsedArgs:
     )
     parser.add_argument(
         "--gcs-bucket",
+        dest="sink_bucket",
         type=str,
         default=None,  # Category-specific buckets are used automatically
-        help="GCS bucket name (default: uses category-specific buckets from .env)",
+        help="Sink bucket name (default: uses category-specific buckets from .env)",
     )
     parser.add_argument(
         "--bigquery-dataset",
+        dest="analytics_dataset",
         type=str,
         default="market_data_hft",
-        help="BigQuery dataset name (default: market_data_hft)",
+        help="Analytics dataset name (default: market_data_hft)",
     )
 
     # Aggregate mode options
