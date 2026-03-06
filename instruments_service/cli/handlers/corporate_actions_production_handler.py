@@ -20,7 +20,6 @@ Usage:
 
 import json
 import logging
-import subprocess
 import time
 from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import UTC, date, datetime
@@ -28,7 +27,7 @@ from pathlib import Path
 from typing import cast
 
 import pandas as pd
-from unified_domain_client import CloudTarget, StandardizedDomainCloudService
+from unified_cloud_interface import DataSource, get_data_source
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.config import SP500_TICKERS, corporate_actions_start_date, instruments_config
@@ -128,30 +127,22 @@ class CorporateActionsProductionHandler(ModeHandler):
 
     def _get_tickers_from_gcs(self) -> list[str]:
         """
-        Fetch equity tickers from GCS instruments store.
+        Fetch equity tickers from TRADFI instruments store via UCI DataSource.
 
         Returns:
             List of ticker symbols
         """
         try:
-            bucket_name = instruments_config.gcs_bucket_tradfi or instruments_config.get_bucket_for_category("tradfi")
-
-            # Create cloud-agnostic service
-            target = CloudTarget(
-                project_id=self.project_id,
-                gcs_bucket=bucket_name,
-                bigquery_dataset=instruments_config.bigquery_dataset,
+            data_source: DataSource = get_data_source(
+                routing_key="tradfi", prefix="instrument_availability/by_date"
             )
-            service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
 
             # Try known good dates
             known_good_dates = ["2024-07-01", "2024-06-01", "2024-05-01", "2023-05-23"]
 
             for date_str in known_good_dates:
-                gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
-
                 try:
-                    raw = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    raw = data_source.read(partition={"day": date_str}, format="parquet")
                     if not isinstance(raw, pd.DataFrame):
                         continue
                     df = raw
@@ -161,17 +152,17 @@ class CorporateActionsProductionHandler(ModeHandler):
                         tickers_raw: list[str] = list(equities["exchange_raw_symbol"].dropna().unique().tolist())
                         tickers: list[str] = [str(t).strip() for t in tickers_raw if t and str(t).strip()]
 
-                        logger.info("📂 Loaded %s tickers from GCS (day=%s)", len(tickers), date_str)
+                        logger.info("Loaded %s tickers from storage (day=%s)", len(tickers), date_str)
                         return sorted(tickers)
-                except (OSError, FileNotFoundError, RuntimeError, ValueError) as e:
+                except (FileNotFoundError, OSError, RuntimeError, ValueError) as e:
                     logger.warning("Skipping item during operation: %s", e)
                     continue
 
-            logger.warning("⚠️ No equity tickers found in GCS")
+            logger.warning("No equity tickers found in any instruments partition")
             return []
 
         except (OSError, ValueError, TypeError, KeyError) as e:
-            logger.error("❌ Failed to load tickers from GCS: %s", e)
+            logger.error("Failed to load tickers from storage: %s", e)
             return []
 
     def _fetch_symbol_data(
@@ -409,51 +400,41 @@ class CorporateActionsProductionHandler(ModeHandler):
 
     def _upload_to_gcs(self) -> bool:
         """
-        Upload all local data to GCS bucket.
+        Upload all local data to storage via UCI DataSink (TRADFI routing).
 
         Returns:
             True if upload successful, False otherwise
         """
+        from unified_cloud_interface import DataSink, get_data_sink
+
         try:
-            # Use config or generate bucket name with project ID (cloud-agnostic)
-            bucket_name = instruments_config.gcs_bucket_tradfi or instruments_config.get_bucket_for_category("tradfi")
-            if not bucket_name:
-                # Fallback: construct bucket name using project ID
-                bucket_name = f"instruments-store-tradfi-{self.project_id}"
-            gcs_path = f"gs://{bucket_name}/corporate_actions/"
+            logger.info("STEP 8: Uploading to storage (TRADFI routing)...")
+            logger.info("Source: %s", self.base_dir)
 
-            logger.info("\n📤 STEP 8: Uploading to GCS...")
-            logger.info("📁 Source: %s", self.base_dir)
-            logger.info("☁️  Destination: %s", gcs_path)
+            data_sink: DataSink = get_data_sink(routing_key="tradfi")
 
-            # Use gsutil to upload entire directory - safely without shell globbing
-            import glob
-            import os
+            # Upload by_date partitions
+            uploaded_count = 0
+            for day_dir in self.by_date_dir.iterdir():
+                if not day_dir.is_dir():
+                    continue
+                # day_dir name is like "day=2024-07-01"
+                day_str = day_dir.name.replace("day=", "")
+                for parquet_file in day_dir.glob("*.parquet"):
+                    df = pd.read_parquet(parquet_file)
+                    action_type = parquet_file.stem  # dividends, splits, earnings
+                    data_sink.write(
+                        df,
+                        partition={"day": day_str, "action_type": action_type},
+                        format="parquet",
+                    )
+                    uploaded_count += 1
 
-            # Get all files in base_dir safely
-            files_to_upload = glob.glob(os.path.join(self.base_dir, "*"))
-
-            if not files_to_upload:
-                logger.warning("No files found in %s to upload", self.base_dir)
-                return False
-
-            # Upload files in batches to avoid command line limits
-            for file_path in files_to_upload:
-                cmd = ["gsutil", "-m", "cp", "-r", file_path, gcs_path]
-                subprocess.run(cmd, capture_output=True, text=True, check=True)
-
-            logger.info("✅ Successfully uploaded to GCS")
-            logger.info("☁️  Location: %s", gcs_path)
+            logger.info("Successfully uploaded %s files to storage", uploaded_count)
             return True
 
-        except subprocess.CalledProcessError as e:
-            _stderr: str | None = cast(str | None, getattr(e, "stderr", None))
-            stderr_val: str = _stderr or ""
-            logger.error("❌ GCS upload failed: %s", e)
-            logger.error("stderr: %s", stderr_val)
-            return False
         except (OSError, ValueError, TypeError, KeyError) as e:
-            logger.error("❌ Unexpected error during GCS upload: %s", e)
+            logger.error("Unexpected error during storage upload: %s", e)
             return False
 
     def run(
