@@ -4,7 +4,6 @@ pyproject.toml
 instruments_service/__init__.py
 instruments_service/__main__.py
 instruments_service/config.py
-instruments_service/events.py
 instruments_service/models.py
 instruments_service.egg-info/PKG-INFO
 instruments_service.egg-info/SOURCES.txt

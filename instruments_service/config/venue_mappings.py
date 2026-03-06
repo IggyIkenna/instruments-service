@@ -92,7 +92,6 @@ DEFI_PROTOCOLS: list[tuple[str, str | None]] = [
     ("raydium", "SOLANA"),
 ]
 
-# Alias for backwards compatibility
 TRADFI_INSTRUMENTS_CONFIG: list[dict[str, str | None]] = TRADFI_VENUE_MAPPINGS
 
 __all__ = [
