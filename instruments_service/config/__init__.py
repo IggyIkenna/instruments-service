@@ -1,7 +1,7 @@
 """
 Configuration for Instruments Service
 
-Unified instrument configuration. Re-exports from submodules for backward compatibility.
+Unified instrument configuration. Re-exports from submodules.
 
 Submodules:
 - venue_config: TradFi tickers, instruments, exchange mappings
@@ -43,9 +43,6 @@ from instruments_service.config.venue_config import (
     UnifiedInstrumentConfig,
 )
 
-# Alias for backward compatibility (used by io/writer.py)
-get_service_config = get_config
-
 __all__ = [
     "DATABENTO_VALID_OPTIONS_SYMBOLS",
     "DATABENTO_VALID_PARENT_SYMBOLS",
@@ -65,6 +62,5 @@ __all__ = [
     "VenueMapping",
     "corporate_actions_start_date",
     "get_config",
-    "get_service_config",
     "instruments_config",
 ]

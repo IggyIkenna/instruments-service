@@ -31,18 +31,18 @@ from instruments_service.app.core.processors.canonical_key_generator import (
     generate_canonical_key as _generate_canonical_key,
 )
 from instruments_service.app.core.processors.ccxt_manual_fallback import get_manual_ccxt_fallback
-from instruments_service.app.core.processors.defi_processor import (
-    DefiServiceProtocol,
-)
-from instruments_service.app.core.processors.defi_processor import (
-    fetch_defi_instruments as _fetch_defi_instruments,
-)
 from instruments_service.app.core.processors.derived_fields_populator import (
     DerivedFieldsServiceProtocol,
     populate_derived_fields,
 )
 from instruments_service.app.core.processors.symbol_parser import SymbolParser
 from instruments_service.config import instruments_config
+from instruments_service.engine.processors.defi_processor import (
+    DefiServiceProtocol,
+)
+from instruments_service.engine.processors.defi_processor import (
+    fetch_defi_instruments as _fetch_defi_instruments,
+)
 from instruments_service.models import InstrumentDefinition
 from instruments_service.utils.ccxt_service import CCXTService
 

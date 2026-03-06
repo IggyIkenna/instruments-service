@@ -43,6 +43,7 @@ from typing import cast
 
 import pandas as pd
 import yaml
+from unified_domain_client import CloudTarget, StandardizedDomainCloudService
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.config import instruments_config
@@ -94,8 +95,6 @@ class CorporateActionsBackfillHandler(ModeHandler):
 
         Same logic as original corporate_actions_handler.
         """
-        from unified_trading_library import CloudTarget, StandardizedDomainCloudService
-
         try:
             bucket_name = instruments_config.gcs_bucket_tradfi or instruments_config.get_bucket_for_category("tradfi")
 
