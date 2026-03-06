@@ -16,12 +16,12 @@ from typing import cast
 from uuid import uuid4
 
 import pandas as pd
+from unified_events_interface import log_event
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 from unified_trading_library import get_instruments_bucket_for_category, get_storage_client
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.config import get_config
-from instruments_service.events import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class AggregateHandler(ModeHandler):
         if not project_id:
             return {"status": "error", "message": "project_id required for aggregation"}
 
-        log_event("AGGREGATION_STARTED", "redo_all" if redo_all else "delta-only")
+        log_event("AGGREGATION_STARTED", details={"message": "redo_all" if redo_all else "delta-only"})
 
         total_instruments = 0
         categories_processed = 0
@@ -64,7 +64,7 @@ class AggregateHandler(ModeHandler):
                 if count >= 0:
                     total_instruments += count
                     categories_processed += 1
-                    log_event("CATEGORY_AGGREGATION_COMPLETED", f"{category}: {count} instruments")
+                    log_event("CATEGORY_AGGREGATION_COMPLETED", details={"message": f"{category}: {count} instruments"})
             except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
                 _err = EnhancedError(
                     message=str(e),
@@ -76,8 +76,11 @@ class AggregateHandler(ModeHandler):
                 )
                 logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                 logger.exception("Aggregation failed for %s: %s", category, e)
-                log_event("CATEGORY_AGGREGATION_FAILED", f"{category}: {e}")
-        log_event("AGGREGATION_COMPLETED", f"{categories_processed} categories, {total_instruments} total")
+                log_event("CATEGORY_AGGREGATION_FAILED", details={"message": f"{category}: {e}"})
+        log_event(
+            "AGGREGATION_COMPLETED",
+            details={"message": f"{categories_processed} categories, {total_instruments} total"},
+        )
 
         return {
             "status": "success",
