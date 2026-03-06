@@ -1,8 +1,8 @@
 """
 Cloud Data Provider
 
-Provides read access to instrument data from unified-trading-library.
-Each domain has its own bucket and dataset (instruments domain).
+Provides read access to instrument data via UCI protocol APIs.
+Each domain has its own routing key (instruments domain).
 """
 
 import logging
@@ -10,9 +10,8 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pandas as pd
-from unified_domain_client import CloudTarget, StandardizedDomainCloudService
+from unified_cloud_interface import DataSource, get_analytics_client, get_data_source
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
-from unified_trading_library import get_bucket_for_category
 
 from instruments_service.config import instruments_config
 from instruments_service.utils.dump_to_csv import dump_to_csv
@@ -22,41 +21,21 @@ logger = logging.getLogger(__name__)
 
 class CloudDataProvider:
     """
-    Provides read access to instrument data from unified-trading-library.
+    Provides read access to instrument data via UCI protocol APIs.
 
-    Each domain has its own bucket and dataset (instruments domain).
+    Each category maps to its own UCI routing key (cefi, tradfi, defi).
     """
 
-    def __init__(self, cloud_target: CloudTarget | None = None, testing_mode: bool = False):
+    def __init__(self, testing_mode: bool = False):
         """
         Initialize cloud data provider.
 
         Args:
-            cloud_target: Optional CloudTarget configuration (auto-detects if not provided)
             testing_mode: When True, uses test buckets instead of production buckets
         """
         self._testing_mode = testing_mode
-        if cloud_target is None:
-            # NOTE: This default is only used when no category is specified.
-            # Production flow should always use category-specific buckets via get_bucket_for_category()
-            cfg = instruments_config
-            cloud_target = CloudTarget(
-                project_id=cfg.gcp_project_id,
-                gcs_bucket=cfg.get_bucket_for_category("cefi"),
-                bigquery_dataset=cfg.bigquery_dataset or "instruments",
-                bigquery_location=cfg.bigquery_location or "asia-northeast1",
-            )
 
-        # Create instruments service (each domain has its own bucket and dataset)
-        # Direct instantiation (canonical pattern per unified architecture)
-        self.cloud_service = StandardizedDomainCloudService(domain="instruments", cloud_target=cloud_target)
-        self.cloud_target = cloud_target
-
-        logger.info(
-            "✅ CloudDataProvider initialized: project=%s, dataset=%s",
-            cloud_target.project_id,
-            cloud_target.bigquery_dataset,
-        )
+        logger.info("CloudDataProvider initialized")
 
     def get_instruments_from_gcs(
         self, date: datetime, gcs_path: str | None = None, category: str | None = None
@@ -66,41 +45,42 @@ class CloudDataProvider:
 
         Args:
             date: Target date
-            gcs_path: Optional custom GCS path (default: uses standard path format)
+            gcs_path: Optional custom GCS path prefix override (ignored; kept for API compatibility)
             category: Optional market category ("CEFI", "TRADFI", "DEFI") to read from category-specific bucket
 
         Returns:
             DataFrame with instruments
         """
-        if gcs_path is None:
-            date_str = date.strftime("%Y-%m-%d")
-            gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
+        date_str = date.strftime("%Y-%m-%d")
 
+        # If category specified, use category-specific source
+        if category:
+            return self.get_instruments_from_category(date, category)
+
+        # Default: use cefi routing key
+        routing_key = "cefi"
         try:
-            # If category specified, use category-specific bucket
-            if category:
-                return self.get_instruments_from_category(date, category, gcs_path=gcs_path)
-
-            logger.info("📥 Loading instruments from GCS: %s", gcs_path)
-            raw: pd.DataFrame | object = self.cloud_service.download_from_gcs(
-                gcs_path=gcs_path, format="parquet", log_errors=False
+            logger.info("Loading instruments for %s (routing_key=%s)", date_str, routing_key)
+            data_source: DataSource = get_data_source(
+                routing_key=routing_key, prefix="instrument_availability/by_date"
             )
+            raw: object = data_source.read(partition={"day": date_str}, format="parquet")
             if not isinstance(raw, pd.DataFrame):
                 return pd.DataFrame()
             df: pd.DataFrame = raw
             if df.empty:
-                logger.warning("⚠️ No instruments found at %s", gcs_path)
+                logger.warning("No instruments found for %s", date_str)
             else:
-                logger.info("✅ Loaded %s instruments from GCS", len(df))
-
-                # CSV sampling for instruments data
+                logger.info("Loaded %s instruments from storage", len(df))
                 dump_to_csv(
                     df,
                     filename=f"instruments_service_data_{date.strftime('%Y%m%d')}_{datetime.now(UTC).strftime('%H%M%S')}.csv",
                 )
-
             return df
 
+        except FileNotFoundError:
+            logger.info("No instruments found (not found) for %s", date_str)
+            return pd.DataFrame()
         except (OSError, PermissionError) as e:
             _err = EnhancedError(
                 message=str(e),
@@ -112,71 +92,59 @@ class CloudDataProvider:
             )
             logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             error_msg = str(e)
-            # Handle 404/Not Found gracefully - this is an expected state when data hasn't been generated yet
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
-                logger.info("No instruments found (404): %s", gcs_path)
+                logger.info("No instruments found (404) for %s", date_str)
                 return pd.DataFrame()
-
-            logger.error("❌ Failed to load instruments from GCS: %s", e)
+            logger.error("Failed to load instruments from storage: %s", e)
             return pd.DataFrame()
 
     def get_instruments_from_category(self, date: datetime, category: str, gcs_path: str | None = None) -> pd.DataFrame:
         """
-        Get instruments from category-specific bucket for a specific date.
+        Get instruments from category-specific routing key for a specific date.
 
         Args:
             date: Target date
             category: Market category ("CEFI", "TRADFI", or "DEFI")
-            gcs_path: Optional custom GCS path (default: uses standard path format)
+            gcs_path: Ignored (kept for API compatibility)
 
         Returns:
-            DataFrame with instruments from the specified category bucket
+            DataFrame with instruments from the specified category routing key
         """
-        if gcs_path is None:
-            date_str = date.strftime("%Y-%m-%d")
-            gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
+        date_str = date.strftime("%Y-%m-%d")
+        routing_key = category.lower()
 
-        # Initialize before try so it's always bound (even in exception handler)
-        category_bucket: str = ""
+        # Parse venue from gcs_path if provided (venue-level path format)
+        # e.g. "instrument_availability/by_date/day=2024-01-01/venue=BINANCE-SPOT/instruments.parquet"
+        partition: dict[str, str] = {"day": date_str}
+        if gcs_path is not None and "venue=" in gcs_path:
+            # Extract venue value from the path
+            for part in gcs_path.split("/"):
+                if part.startswith("venue="):
+                    partition["venue"] = part[len("venue="):]
+                    break
+
         try:
-            # Detect test mode
-            environment: str = str(instruments_config.environment or "development").lower()
-            is_test = environment in ["test", "testing"] or self._testing_mode
-
-            # Get bucket for category
-            category_bucket = get_bucket_for_category(category, test_mode=is_test)
-
-            # Create cloud service for category bucket
-            category_cloud_target = CloudTarget(
-                project_id=self.cloud_target.project_id,
-                gcs_bucket=category_bucket,
-                bigquery_dataset=self.cloud_target.bigquery_dataset,
-                bigquery_location=self.cloud_target.bigquery_location,
+            logger.info("Loading %s instruments for %s", category, date_str)
+            data_source: DataSource = get_data_source(
+                routing_key=routing_key, prefix="instrument_availability/by_date"
             )
-            category_cloud_service = StandardizedDomainCloudService(
-                domain="instruments", cloud_target=category_cloud_target
-            )
-
-            logger.info("📥 Loading %s instruments from GCS: %s/%s", category, category_bucket, gcs_path)
-            raw: pd.DataFrame | object = category_cloud_service.download_from_gcs(
-                gcs_path=gcs_path, format="parquet", log_errors=False
-            )
+            raw: object = data_source.read(partition=partition, format="parquet")
             if not isinstance(raw, pd.DataFrame):
                 return pd.DataFrame()
             df: pd.DataFrame = raw
             if df.empty:
-                logger.warning("⚠️ No %s instruments found at %s/%s", category, category_bucket, gcs_path)
+                logger.warning("No %s instruments found for %s", category, date_str)
             else:
-                logger.info("✅ Loaded %s %s instruments from GCS", len(df), category)
-
-                # CSV sampling for category-specific instruments data
+                logger.info("Loaded %s %s instruments from storage", len(df), category)
                 dump_to_csv(
                     df,
                     filename=f"instruments_service_{category.lower()}_data_{date.strftime('%Y%m%d')}_{datetime.now(UTC).strftime('%H%M%S')}.csv",
                 )
-
             return df
 
+        except FileNotFoundError:
+            logger.info("No %s instruments found (not found) for %s", category, date_str)
+            return pd.DataFrame()
         except (OSError, PermissionError) as e:
             _err = EnhancedError(
                 message=str(e),
@@ -188,12 +156,10 @@ class CloudDataProvider:
             )
             logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             error_msg = str(e)
-            # Handle 404/Not Found gracefully - this is an expected state when data hasn't been generated yet
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
-                logger.info("No %s instruments found (404): %s/%s", category, category_bucket, gcs_path)
+                logger.info("No %s instruments found (404) for %s", category, date_str)
                 return pd.DataFrame()
-
-            logger.error("❌ Failed to load %s instruments from GCS: %s", category, e)
+            logger.error("Failed to load %s instruments from storage: %s", category, e)
             return pd.DataFrame()
 
     def get_instruments_from_bigquery(
@@ -203,19 +169,20 @@ class CloudDataProvider:
         table_name: str = "instruments",
     ) -> pd.DataFrame:
         """
-        Query instruments from BigQuery.
+        Query instruments from analytics backend.
 
         Args:
             venue: Optional venue filter
             instrument_type: Optional instrument type filter
-            table_name: BigQuery table name (default: "instruments")
+            table_name: Table name (default: "instruments")
 
         Returns:
             DataFrame with instruments
         """
         try:
+            bigquery_dataset = instruments_config.bigquery_dataset or "instruments"
             query = f"""
-            SELECT * FROM `{self.cloud_target.bigquery_dataset}.{table_name}`
+            SELECT * FROM `{bigquery_dataset}.{table_name}`
             WHERE 1=1
             """
 
@@ -231,10 +198,12 @@ class CloudDataProvider:
 
             query += " ORDER BY instrument_key"
 
-            logger.info("📥 Querying instruments from BigQuery: %s", table_name)
-            result: pd.DataFrame = self.cloud_service.query_bigquery(query=query, parameters=parameters)
+            logger.info("Querying instruments from analytics: %s", table_name)
+            rows: object = get_analytics_client().execute_query(query, params=parameters)
+            rows_list = rows if isinstance(rows, list) else []
+            result: pd.DataFrame = pd.DataFrame(rows_list)
 
-            logger.info("✅ Queried %s instruments from BigQuery", len(result))
+            logger.info("Queried %s instruments from analytics", len(result))
             return result
 
         except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
@@ -247,7 +216,7 @@ class CloudDataProvider:
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
             logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
-            logger.error("❌ Failed to query instruments from BigQuery: %s", e)
+            logger.error("Failed to query instruments from analytics: %s", e)
             return pd.DataFrame()
 
     def check_instruments_exist(

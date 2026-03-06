@@ -43,7 +43,7 @@ from typing import cast
 
 import pandas as pd
 import yaml
-from unified_domain_client import CloudTarget, StandardizedDomainCloudService
+from unified_cloud_interface import DataSource, get_data_source
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.config import instruments_config
@@ -91,25 +91,19 @@ class CorporateActionsBackfillHandler(ModeHandler):
 
     def _get_tickers_from_gcs(self, reference_date: date | None = None) -> list[str]:
         """
-        Fetch equity tickers from GCS instruments store.
+        Fetch equity tickers from TRADFI instruments store via UCI DataSource.
 
         Same logic as original corporate_actions_handler.
         """
         try:
-            bucket_name = instruments_config.gcs_bucket_tradfi or instruments_config.get_bucket_for_category("tradfi")
-
-            # Create cloud-agnostic service
-            target = CloudTarget(
-                project_id=self.project_id,
-                gcs_bucket=bucket_name,
-                bigquery_dataset=instruments_config.bigquery_dataset,
+            data_source: DataSource = get_data_source(
+                routing_key="tradfi", prefix="instrument_availability/by_date"
             )
-            service = StandardizedDomainCloudService(domain="instruments", cloud_target=target)
 
-            def try_load_tickers(gcs_path: str) -> list[str]:
-                """Try to load tickers from a specific GCS path."""
+            def try_load_tickers(date_str: str) -> list[str]:
+                """Try to load tickers from a specific date partition."""
                 try:
-                    raw = service.download_from_gcs(gcs_path=gcs_path, format="parquet", log_errors=False)
+                    raw = data_source.read(partition={"day": date_str}, format="parquet")
                     if not isinstance(raw, pd.DataFrame):
                         return []
                     df = cast(pd.DataFrame, raw)
@@ -121,7 +115,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
                     tickers_raw: list[str] = list(equities["exchange_raw_symbol"].dropna().unique().tolist())
                     tickers: list[str] = [str(t).strip() for t in tickers_raw if t and str(t).strip()]
                     return sorted(tickers)
-                except (OSError, FileNotFoundError, RuntimeError, ValueError):
+                except (FileNotFoundError, OSError, RuntimeError, ValueError):
                     return []
 
             # Try known good dates
@@ -133,18 +127,17 @@ class CorporateActionsBackfillHandler(ModeHandler):
             ]
 
             for date_str in known_good_dates:
-                gcs_path = f"instrument_availability/by_date/day={date_str}/instruments.parquet"
-                tickers = try_load_tickers(gcs_path)
+                tickers = try_load_tickers(date_str)
                 if tickers:
-                    logger.info("📂 Using instruments from: day=%s", date_str)
-                    logger.info("📊 Loaded %s equity tickers from GCS", len(tickers))
+                    logger.info("Using instruments from: day=%s", date_str)
+                    logger.info("Loaded %s equity tickers from storage", len(tickers))
                     return tickers
 
-            logger.warning("⚠️ No equity tickers found in any GCS instruments file")
+            logger.warning("No equity tickers found in any instruments partition")
             return []
 
         except (OSError, ValueError, TypeError, KeyError) as e:
-            logger.error("❌ Failed to load tickers from GCS: %s", e)
+            logger.error("Failed to load tickers from storage: %s", e)
             return []
 
     def _get_tickers(self, tickers: list[str] | None = None) -> list[str]:
