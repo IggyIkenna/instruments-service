@@ -10,7 +10,7 @@ from typing import cast
 from pydantic import AliasChoices, Field
 from pydantic_settings import SettingsConfigDict
 from unified_config_interface import UnifiedCloudConfig
-from unified_trading_library import CloudTarget
+from unified_domain_client import CloudTarget
 
 logger = logging.getLogger(__name__)
 
