@@ -9,6 +9,7 @@ from datetime import date
 from typing import cast
 
 import pandas as pd
+from unified_domain_client import CloudTarget, StandardizedDomainCloudService
 
 from instruments_service.config import instruments_config
 
@@ -37,8 +38,6 @@ def get_tickers_from_gcs(
     Returns:
         List of ticker symbols (e.g., ['AAPL', 'MSFT', ...])
     """
-    from unified_trading_library import CloudTarget, StandardizedDomainCloudService
-
     try:
         bucket_name = instruments_config.gcs_bucket_tradfi or get_tradfi_bucket()
 

@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "instruments-service"
-version = "0.1.15"
+version = "0.1.17"
 description = "Service for generating canonical instrument definitions from exchange APIs"
 readme = "README.md"
 authors = [
