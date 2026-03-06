@@ -30,9 +30,25 @@ Inherits all rules from workspace `.cursorrules`: quality gates, quickmerge (wit
 - **Package Manager**: UV only. NEVER use `pip install` (except `pip install uv` bootstrap).
 - Use `uv pip install -e ".[dev]"` locally; `uv pip install --system -e ".[dev]"` in Docker.
 
-## Quality Gates
+## Quality Gates (Three-Stage Consistency)
 
-See: .cursor/rules/quality-gates/quality-gates.mdc. Same ruff==0.15.0 across Local/GitHub Actions/Cloud Build. UV only.
+**CRITICAL**: Same `ruff==0.15.0` across all three stages:
+1. **Local**: `pyproject.toml` dev deps + pre-commit hooks (`v0.15.0`)
+2. **GitHub Actions**: `.github/workflows/quality-gates.yml` (`ruff==0.15.0`)
+3. **Cloud Build**: Tests run INSIDE Docker image with `.[dev]` deps
+
+**Package Manager**: Use `uv` for all installs:
+```dockerfile
+RUN uv pip install --system -e ".[dev]"
+```
+
+**Cloud Build Architecture** (test-in-image):
+- Pull `unified-trading-services:latest` base (requires auth step)
+- Build image (includes source + tests + dev deps)
+- Run `scripts/quality-gates.sh --no-fix --quick` inside image
+- Push ONLY if tests pass
+
+Verify consistency: `cd unified-trading-deployment-v2 && ./scripts/check-ruff-versions.sh`
 
 ## Service-Specific Patterns
 
