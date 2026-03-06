@@ -1,8 +1,8 @@
 """
-Cloud Instrument Storage using unified-trading-library.
+Cloud Instrument Storage using UCI DataSink intent-level API.
 
-Stores instrument definitions to instruments domain (each domain has its own bucket and dataset).
-Uses unified-trading-library directly for cloud operations.
+Stores instrument definitions to instruments domain via DataSink routing.
+Uses unified-cloud-interface (UCI) for cloud-agnostic storage operations.
 """
 
 from __future__ import annotations
@@ -14,109 +14,44 @@ from typing import cast
 from uuid import uuid4
 
 import pandas as pd
-from unified_api_contracts.domain_config import DomainConfigProtocol
+from unified_cloud_interface import DataSink, ServiceMode, get_data_sink, get_service_mode
 from unified_domain_client import validate_timestamp_date_alignment
 from unified_events_interface import log_event
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 from unified_trading_library import (
-    CloudTarget,
-    CSVSampler,
     ParquetSchemaEnforcer,
     SchemaValidationResult,
-    StandardizedDomainCloudService,
     create_sampling_service,
     determine_market_category,
     handle_storage_errors,
 )
 
-from instruments_service.config import instruments_config
 from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
 from instruments_service.schemas.parquet import get_required_columns
 
 logger = logging.getLogger(__name__)
 
-UNIFIED_CLOUD_SERVICES_AVAILABLE = True
 SAMPLING_SERVICE_AVAILABLE = True
 
 
 class CloudInstrumentStorage:
     """
-    Cloud instrument storage using unified-trading-library.
+    Cloud instrument storage using UCI DataSink intent-level API.
 
-    Stores instrument definitions to instruments domain (each domain has its own bucket and dataset).
-    Uses unified-trading-library directly (not MarketDataClient).
-    Per unified architecture plan specification.
+    Stores instrument definitions via DataSink routing keyed by market category.
+    Routing is resolved at deployment time via PROTOCOL_DATA_SINK_BUCKET_{CATEGORY_UPPER} env vars.
     """
 
-    def __init__(
-        self,
-        cloud_target: CloudTarget | None = None,
-        domain_config: DomainConfigProtocol | None = None,
-        enable_async: bool = True,
-        testing_mode: bool = False,
-    ):
-        """Initialize cloud instrument storage with unified-trading-library and DomainConfigProtocol support."""
-        if not UNIFIED_CLOUD_SERVICES_AVAILABLE:
-            raise ImportError(
-                "unified-trading-library not available. "
-                "Install unified-trading-library package: "
-                "pip install -e ../unified-trading-library"
-            )
-
+    def __init__(self, testing_mode: bool = False) -> None:
+        """Initialize cloud instrument storage using UCI DataSink."""
         self._testing_mode = testing_mode
-
-        # Configure CloudTarget for market_data domain (instruments are part of market_data)
-        # Use asia-northeast1 location per .env configuration (GCS: asia-northeast1-c, BigQuery: asia-northeast1)
-        # Detect test environment and use test bucket if applicable
-        if cloud_target is None:
-            cfg = instruments_config
-            environment = (cfg.environment or "development").lower()
-            is_test = environment in ["test", "testing"] or self._testing_mode
-
-            if is_test:
-                bucket_name = cfg.gcs_bucket_test or cfg.gcs_bucket_cefi_test or "instruments-store-test"
-                logger.info("🧪 Test mode detected: Using test bucket %s", bucket_name)
-            else:
-                bucket_name = cfg.gcs_bucket_cefi or cfg.get_bucket_for_category("cefi")
-
-            cloud_target = CloudTarget(
-                project_id=cfg.gcp_project_id,
-                gcs_bucket=bucket_name,
-                bigquery_dataset=cfg.bigquery_dataset or "instruments",
-                bigquery_location=cfg.bigquery_location or "asia-northeast1",
-            )
-
-        # Create instruments service using legacy CloudTarget pattern
-        # (StandardizedDomainCloudService.from_config does not exist; cloud_target is always
-        # constructed above from either the caller-supplied target or instruments_config)
-        self.cloud_service = StandardizedDomainCloudService(domain="instruments", cloud_target=cloud_target)
-        if domain_config:
-            logger.info("✅ Using cloud service with DomainConfig-derived CloudTarget")
-        else:
-            logger.info("⚠️ Using legacy CloudTarget pattern (consider migrating to DomainConfigProtocol)")
-
-        self.cloud_target = cloud_target
-
-        # Initialize debugging tools
-        self.csv_sampler = CSVSampler() if CSVSampler else None
-        if self.csv_sampler:
-            logger.info("🔍 CSV sampling enabled for debugging")
-
-        if cloud_target:
-            logger.info(
-                "Initialized CloudInstrumentStorage: project=%s, bucket=%s, dataset=%s, location=%s",
-                cloud_target.project_id,
-                cloud_target.gcs_bucket,
-                cloud_target.bigquery_dataset,
-                cloud_target.bigquery_location,
-            )
-        elif domain_config:
-            logger.info(
-                "Initialized CloudInstrumentStorage with DomainConfigProtocol: project=%s, bucket=%s, dataset=%s",
-                domain_config.gcp_project_id,
-                domain_config.gcs_bucket,
-                domain_config.bigquery_dataset,
-            )
+        # Mode is injected at deployment time — service just reads it
+        try:
+            self._mode = get_service_mode()
+        except RuntimeError:
+            # SERVICE_MODE not set — default to batch for instruments (always batch)
+            self._mode = ServiceMode.BATCH
+        logger.info("CloudInstrumentStorage initialized in %s mode", self._mode.value)
 
     @handle_storage_errors(max_retries=2)
     def store_instruments(
@@ -255,32 +190,22 @@ class CloudInstrumentStorage:
             total_stored = 0
             all_successful = True
 
-            # Detect test mode for bucket selection
-            cfg = instruments_config
-            environment: str = str(cfg.environment or "development").lower()
-            is_test = environment in ["test", "testing"] or self._testing_mode
-
-            # Group uploads by bucket to use batch upload per bucket
-            # (each bucket needs its own cloud service)
-            bucket_uploads: dict[str, list[tuple[str, pd.DataFrame, str]]] = {}  # bucket -> [(gcs_path, df, category)]
-
             # Create schema enforcer for validation
             schema_enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
 
+            venue_count = 0
+            log_event("UPLOAD_STARTED", details={"date": date_str})
+
             for category, category_df in category_groups:
                 category_str = str(category)
-                category_bucket = cfg.get_bucket_for_category(category_str, test_mode=is_test)
 
-                # NEW: Group by venue within category for by-venue folder structure
+                # Group by venue within category for by-venue folder structure
                 venue_groups = category_df.groupby("venue")
 
                 for venue, venue_df in venue_groups:
                     venue_folder = str(venue).replace("/", "-").replace("\\", "-")
-                    # Use key=value format for BigQuery hive partitioning
-                    gcs_path = (
-                        f"instrument_availability/by_date/day={date_str}/venue={venue_folder}/instruments.parquet"
-                    )
                     venue_df_to_store = venue_df.copy()
+                    category_venue = f"{category_str}/{venue}"
 
                     # Coerce nullable float64/bool columns to correct dtypes
                     # When all values are None, pandas infers 'object' dtype
@@ -323,7 +248,7 @@ class CloudInstrumentStorage:
                     if not validation_result.valid:
                         for error in validation_result.errors:
                             logger.error("Schema validation failed for %s/%s: %s", category, venue, error)
-                        logger.error("Skipping GCS upload for %s/%s due to schema validation errors", category, venue)
+                        logger.error("Skipping upload for %s/%s due to schema validation errors", category, venue)
                         all_successful = False
                         continue  # Skip this venue
 
@@ -353,72 +278,47 @@ class CloudInstrumentStorage:
                         # For instruments, this is a warning not a blocker since timestamp is generation time
                         # The actual data date is determined by available_from_datetime range
 
-                    if category_bucket not in bucket_uploads:
-                        bucket_uploads[category_bucket] = []
-                    bucket_uploads[category_bucket].append((gcs_path, venue_df_to_store, f"{category}/{venue}"))
-
-            log_event("UPLOAD_STARTED", details={"date": date_str, "bucket_count": len(bucket_uploads)})
-            # Upload to each bucket using batch upload (thread-safe)
-            for bucket_name, uploads_list in bucket_uploads.items():
-                try:
-                    # Create cloud service for this bucket
-                    bucket_cloud_target = CloudTarget(
-                        project_id=self.cloud_target.project_id,
-                        gcs_bucket=bucket_name,
-                        bigquery_dataset=self.cloud_target.bigquery_dataset,
-                        bigquery_location=self.cloud_target.bigquery_location,
-                    )
-                    bucket_cloud_service = StandardizedDomainCloudService(
-                        domain="instruments", cloud_target=bucket_cloud_target
-                    )
-
-                    # Prepare batch upload (uploads_list: list[tuple[str, pd.DataFrame, str]])
-                    batch_uploads: list[dict[str, object]] = [
-                        {"data": df, "gcs_path": gcs_path, "format": "parquet"} for gcs_path, df, _ in uploads_list
-                    ]
-
-                    # Use thread-safe batch upload
-                    results = bucket_cloud_service.upload_to_gcs_batch(batch_uploads, show_progress=False)
-
-                    # Process results
-                    for i, result in enumerate(results):
-                        gcs_path, df, category_venue = uploads_list[i]
-                        if result.get("success"):
+                    # Write via UCI DataSink — routing_key maps to deployment-injected bucket config
+                    try:
+                        data_sink: DataSink = get_data_sink(routing_key=category_str)
+                        result_uri: str = data_sink.write(
+                            venue_df_to_store,
+                            partition={"day": date_str, "venue": venue_folder},
+                            format="parquet",
+                        )
+                        if result_uri:
                             logger.info(
-                                "✅ Uploaded %s %s instruments to GCS: %s/%s",
-                                len(df),
+                                "Uploaded %s %s instruments via DataSink: %s",
+                                len(venue_df_to_store),
                                 category_venue,
-                                bucket_name,
-                                gcs_path,
+                                result_uri,
                             )
-                            total_stored += len(df)
+                            total_stored += len(venue_df_to_store)
+                            venue_count += 1
                         else:
-                            logger.error("❌ GCS upload failed for %s: %s", category_venue, result.get("error"))
+                            logger.error("DataSink write failed for %s", category_venue)
                             all_successful = False
-
-                except (ValueError, KeyError, TypeError, IndexError) as gcs_error:
-                    _err = EnhancedError(
-                        message=str(gcs_error),
-                        category=ErrorCategory.SERVER_ERROR,
-                        severity=ErrorSeverity.MEDIUM,
-                        recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
-                        correlation_id=str(uuid4()),
-                        context=ErrorContext(extra={"exc_type": type(gcs_error).__name__}),
-                    )
-                    logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
-                    logger.error("❌ GCS upload failed for bucket %s: %s", bucket_name, gcs_error)
-                    all_successful = False
+                    except (ValueError, KeyError, TypeError, IndexError) as sink_error:
+                        _err = EnhancedError(
+                            message=str(sink_error),
+                            category=ErrorCategory.SERVER_ERROR,
+                            severity=ErrorSeverity.MEDIUM,
+                            recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                            correlation_id=str(uuid4()),
+                            context=ErrorContext(extra={"exc_type": type(sink_error).__name__}),
+                        )
+                        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                        logger.error("DataSink write failed for %s: %s", category_venue, sink_error)
+                        all_successful = False
             if all_successful:
-                # Count unique venues stored
-                unique_venues: int = int(instruments_df["venue"].nunique()) if "venue" in instruments_df.columns else 0
                 logger.info(
-                    "✅ Stored %s instruments across %s venues to category-specific buckets (by-venue folder structure)",
+                    "Stored %s instruments across %s venues via DataSink (by-venue folder structure)",
                     total_stored,
-                    unique_venues,
+                    venue_count,
                 )
                 log_event("UPLOAD_COMPLETED", details={"total_stored": total_stored, "date": date_str})
             else:
-                logger.warning("⚠️ Some venue uploads failed. Total stored: %s/%s", total_stored, len(instruments_df))
+                logger.warning("Some venue uploads failed. Total stored: %s/%s", total_stored, len(instruments_df))
                 log_event("UPLOAD_COMPLETED", details={"total_stored": total_stored, "date": date_str, "partial": True})
 
             return all_successful

@@ -10,8 +10,7 @@ from __future__ import annotations
 import logging
 
 from unified_config_interface import InstrumentType, Venue
-from unified_domain_client import InstrumentKey
-from unified_internal_contracts import InstrumentDefinition
+from unified_internal_contracts import InstrumentDefinition, InstrumentKey
 
 logger = logging.getLogger(__name__)
 

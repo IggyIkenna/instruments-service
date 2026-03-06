@@ -26,8 +26,8 @@ jobs:
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
-          cache: 'pip'
+          python-version: "3.13"
+          cache: "pip"
 
       - name: Checkout dependencies
         env:
@@ -51,17 +51,16 @@ jobs:
             clone_dep unified-config-interface
             clone_dep unified-market-interface
 
-            # Clone unified-trading-deployment-v3 (for smoke tests config)
-            git clone -b "$DEP_BRANCH" https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-trading-deployment-v3.git ../unified-trading-deployment-v3 2>/dev/null \
-              || git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/unified-trading-deployment-v3.git ../unified-trading-deployment-v3 \
-              || echo "⚠️ Could not clone unified-trading-deployment-v3 (optional)"
+            # Clone deployment-service (for smoke tests config)
+            git clone -b "$DEP_BRANCH" https://x-access-token:${GH_PAT}@github.com/IggyIkenna/deployment-service.git ../deployment-service 2>/dev/null \
+              || git clone https://x-access-token:${GH_PAT}@github.com/IggyIkenna/deployment-service.git ../deployment-service \
+              || echo "⚠️ Could not clone deployment-service (optional)"
           else
             echo "❌ GH_PAT not set" && exit 1
           fi
 
       - name: Install ripgrep (required for codex checks)
         run: sudo apt-get update && sudo apt-get install -y ripgrep
-
 
       - name: Install dependencies
         run: |
@@ -149,7 +148,7 @@ jobs:
       - name: Run e2e tests
         env:
           CLOUD_MOCK_MODE: "true"
-          GOOGLE_CLOUD_PROJECT: "test-project"
+          GCP_PROJECT_ID: "test-project"
         run: |
           echo "=== Running e2e tests ==="
           if [ -d "tests/e2e" ]; then
@@ -165,11 +164,11 @@ jobs:
       - name: Run smoke tests
         env:
           CLOUD_MOCK_MODE: "true"
-          GOOGLE_CLOUD_PROJECT: "test-project"
-          DEPLOYMENT_CONFIG_DIR: "../unified-trading-deployment-v3/configs"
+          GCP_PROJECT_ID: "test-project"
+          DEPLOYMENT_CONFIG_DIR: "../deployment-service/configs"
         run: |
           echo "=== Running smoke tests ==="
-          if [ -d "tests/smoke" ] && [ -d "../unified-trading-deployment-v3/configs" ]; then
+          if [ -d "tests/smoke" ] && [ -d "../deployment-service/configs" ]; then
             python -m pytest tests/smoke/ -v --tb=short --timeout=180 -n 2
             echo "✅ Smoke tests passed"
           else
