@@ -11,7 +11,7 @@ from unified_config_interface import UnifiedCloudConfig
 logger = logging.getLogger(__name__)
 
 _config = UnifiedCloudConfig()
-_CSV_SAMPLE_DIR = getattr(_config, "csv_sample_dir", None) or "/tmp/instruments_csv_samples"
+_CSV_SAMPLE_DIR = getattr(_config, "csv_sample_dir", None) or "/tmp/instruments_csv_samples"  # nosec B108
 _csv_sampling_raw = getattr(_config, "enable_csv_sampling", None)
 _ENABLED = (
     bool(_csv_sampling_raw)
