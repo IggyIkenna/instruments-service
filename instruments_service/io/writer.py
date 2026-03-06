@@ -8,7 +8,7 @@ from datetime import datetime
 
 from unified_trading_library import BaseGCSWriter
 
-from instruments_service.config import InstrumentsServiceConfig, get_service_config
+from instruments_service.config import InstrumentsServiceConfig, get_config
 from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
 
 logger = logging.getLogger(__name__)
@@ -30,7 +30,7 @@ class InstrumentWriter(BaseGCSWriter):
             category: Market category (CEFI, TRADFI, DEFI)
             dry_run: If True, write to local data/sample/ instead of GCS
         """
-        config: InstrumentsServiceConfig = get_service_config()
+        config: InstrumentsServiceConfig = get_config()
         bucket = f"instruments-store-{category.lower()}-{config.gcp_project_id}"
 
         super().__init__(  # pyright: ignore[reportUnknownMemberType]
