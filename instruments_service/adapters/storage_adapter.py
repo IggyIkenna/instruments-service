@@ -1,13 +1,13 @@
 """Storage Adapter for Instruments Service.
 
-Thin I/O layer - delegates to unified-trading-library for GCS operations.
+Thin I/O layer - delegates to unified-cloud-interface for storage operations.
 NO business logic, validation, or transformation - pure I/O only.
 """
 
 import logging
 
 import pandas as pd
-from unified_domain_client import CloudTarget, StandardizedDomainCloudService
+from unified_cloud_interface import DataSink, get_data_sink
 
 from instruments_service.config import instruments_config
 
@@ -20,7 +20,7 @@ class StorageAdapter:
 
     Responsibilities (I/O only):
     - Build GCS paths (by-venue folder structure)
-    - Upload to GCS (batch operations)
+    - Upload to storage (batch operations) via UCI DataSink intent API
     - Bucket selection
 
     NOT responsible for:
@@ -29,38 +29,15 @@ class StorageAdapter:
     - Market category determination (done by engine)
     """
 
-    def __init__(self, cloud_target: CloudTarget | None = None):
+    def __init__(self) -> None:
         """
         Initialize storage adapter.
 
-        Args:
-            cloud_target: Optional CloudTarget (auto-configured if None)
+        Sink backends and buckets are injected at deployment time via
+        PROTOCOL_DATA_SINK_BACKEND / PROTOCOL_DATA_SINK_BUCKET_{CATEGORY} env vars.
+        Defaults to LocalDataSink when env vars are absent (CI/local).
         """
-        if cloud_target is None:
-            cfg = instruments_config
-            environment = (cfg.environment or "development").lower()
-            is_test = environment in ["test", "testing"]
-
-            if is_test:
-                bucket_name = cfg.gcs_bucket_test or cfg.gcs_bucket_cefi_test or "instruments-store-test"
-            else:
-                bucket_name = cfg.gcs_bucket_cefi or cfg.get_bucket_for_category("cefi")
-
-            cloud_target = CloudTarget(
-                project_id=cfg.gcp_project_id,
-                gcs_bucket=bucket_name,
-                bigquery_dataset=cfg.bigquery_dataset or "instruments",
-                bigquery_location=cfg.bigquery_location or "asia-northeast1",
-            )
-
-        self.cloud_service: StandardizedDomainCloudService = StandardizedDomainCloudService(
-            domain="instruments", cloud_target=cloud_target
-        )
-        self.cloud_target = cloud_target
-
-        logger.info(
-            "Initialized StorageAdapter: project=%s, bucket=%s", cloud_target.project_id, cloud_target.gcs_bucket
-        )
+        logger.info("Initialized StorageAdapter (UCI DataSink)")
 
     def build_gcs_path(self, date_str: str, venue: str) -> str:
         """
@@ -79,34 +56,35 @@ class StorageAdapter:
     def upload_batch(
         self,
         uploads: list[tuple[str, pd.DataFrame, str]],
-        bucket_name: str,
+        category: str,
     ) -> list[dict[str, bool | str]]:
         """
-        Upload multiple DataFrames to GCS bucket.
+        Upload multiple DataFrames via UCI DataSink intent API.
 
         Args:
             uploads: List of (gcs_path, dataframe, category_venue) tuples
-            bucket_name: Target GCS bucket
+            category: Market category routing key (e.g. "cefi", "tradfi", "defi")
+                      Reads PROTOCOL_DATA_SINK_BUCKET_{CATEGORY} — set by deployment bootstrap
 
         Returns:
             List of result dicts with 'success' and optional 'error' keys
         """
-        bucket_cloud_target = CloudTarget(
-            project_id=self.cloud_target.project_id,
-            gcs_bucket=bucket_name,
-            bigquery_dataset=self.cloud_target.bigquery_dataset,
-            bigquery_location=self.cloud_target.bigquery_location,
-        )
-        bucket_cloud_service: StandardizedDomainCloudService = StandardizedDomainCloudService(
-            domain="instruments", cloud_target=bucket_cloud_target
-        )
+        # PROTOCOL_DATA_SINK_BUCKET_{CATEGORY} — set by deployment bootstrap
+        data_sink: DataSink = get_data_sink(routing_key=category.lower())
 
-        # UDC StandardizedDomainCloudService has single-file upload; iterate for batch.
         results: list[dict[str, bool | str]] = []
         for gcs_path, df, _ in uploads:
             entry: dict[str, bool | str] = {}
             try:
-                bucket_cloud_service.upload_to_gcs(data=df, gcs_path=gcs_path, format="parquet")
+                # Parse partition info from gcs_path:
+                # instrument_availability/by_date/day={date}/venue={venue}/instruments.parquet
+                parts = gcs_path.split("/")
+                partition: dict[str, str] = {}
+                for part in parts[:-1]:
+                    if "=" in part:
+                        k, v = part.split("=", 1)
+                        partition[k] = v
+                data_sink.write(df, partition=partition if partition else None, format="parquet")
                 entry["success"] = True
             except Exception as exc:
                 entry["success"] = False

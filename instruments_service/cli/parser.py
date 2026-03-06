@@ -365,10 +365,8 @@ Corporate Actions (dividends, splits, earnings):
 
 Query Instruments (use unified-trading-library):
 
-  # Query instruments from Python
-  from unified_domain_client import StandardizedDomainCloudService, CloudTarget
-  service = StandardizedDomainCloudService(domain='instruments', cloud_target=CloudTarget(...))
-  df = service.download_from_gcs(
-      gcs_path='CEFI/by_date/day-2023-05-23/instruments.parquet'
-  )
+  # Query instruments from Python via UCI DataSource
+  from unified_cloud_interface import get_data_source
+  source = get_data_source(routing_key="cefi")
+  df = source.read(partition={"day": "2023-05-23"}, format="parquet")
 """
