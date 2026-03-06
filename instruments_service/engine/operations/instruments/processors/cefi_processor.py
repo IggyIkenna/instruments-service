@@ -65,7 +65,7 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
 
     @property
     def api_key(self) -> str | None:
-        """Get Tardis API key for backward compatibility."""
+        """Get Tardis API key."""
         return self.processing_config.api_key if self.processing_config.api_key else None
 
     def _get_tardis_adapter(self) -> TardisAdapter:

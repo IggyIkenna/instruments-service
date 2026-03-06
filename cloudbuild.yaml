@@ -7,29 +7,30 @@
 #
 steps:
   # Step 0: Extract version from pyproject.toml for semver tagging
-  - name: 'gcr.io/cloud-builders/git'
-    id: 'extract-version'
-    entrypoint: 'bash'
+  - name: "gcr.io/cloud-builders/git"
+    id: "extract-version"
+    entrypoint: "bash"
     args:
-      - '-c'
+      - "-c"
       - |
         VERSION=$(grep '^version' pyproject.toml | head -1 | sed 's/version = "//;s/"//')
         echo "$$VERSION" > /workspace/VERSION
         echo "Building version $$VERSION"
-    waitFor: ['-']
+    waitFor: ["-"]
 
   # Step 1: Configure Docker authentication
-  - name: 'gcr.io/cloud-builders/gcloud'
-    id: 'configure-docker'
-    args: ['auth', 'configure-docker', 'asia-northeast1-docker.pkg.dev', '--quiet']
-    waitFor: ['-']
+  - name: "gcr.io/cloud-builders/gcloud"
+    id: "configure-docker"
+    args:
+      ["auth", "configure-docker", "asia-northeast1-docker.pkg.dev", "--quiet"]
+    waitFor: ["-"]
 
   # Step 2: Ensure artifact repository exists
-  - name: 'gcr.io/cloud-builders/gcloud'
-    id: 'ensure-repo'
-    entrypoint: 'bash'
+  - name: "gcr.io/cloud-builders/gcloud"
+    id: "ensure-repo"
+    entrypoint: "bash"
     args:
-      - '-c'
+      - "-c"
       - |
         gcloud artifacts repositories describe instruments \
           --location=asia-northeast1 &>/dev/null || \
@@ -37,20 +38,24 @@ steps:
           --repository-format=docker \
           --location=asia-northeast1 \
           --description="instruments-service Docker images"
-    waitFor: ['-']
+    waitFor: ["-"]
 
   # Step 3: Pull base image (required for authenticated access during build)
-  - name: 'gcr.io/cloud-builders/docker'
-    id: 'pull-base-image'
-    args: ['pull', 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/unified-trading-library/unified-trading-library:latest']
-    waitFor: ['configure-docker']
+  - name: "gcr.io/cloud-builders/docker"
+    id: "pull-base-image"
+    args:
+      [
+        "pull",
+        "asia-northeast1-docker.pkg.dev/$PROJECT_ID/unified-trading-library/unified-trading-library:latest",
+      ]
+    waitFor: ["configure-docker"]
 
   # Step 4: Build the image
-  - name: 'gcr.io/cloud-builders/docker'
-    id: 'build'
-    entrypoint: 'bash'
+  - name: "gcr.io/cloud-builders/docker"
+    id: "build"
+    entrypoint: "bash"
     args:
-      - '-c'
+      - "-c"
       - |
         VERSION=$(cat /workspace/VERSION)
         docker build -f Dockerfile \
@@ -58,14 +63,14 @@ steps:
           -t asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service:$$VERSION \
           -t asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service:latest \
           .
-    waitFor: ['pull-base-image', 'ensure-repo', 'extract-version']
+    waitFor: ["pull-base-image", "ensure-repo", "extract-version"]
 
   # Step 5: Run quality gates INSIDE the image
-  - name: 'gcr.io/cloud-builders/docker'
-    id: 'quality-gates'
-    entrypoint: 'bash'
+  - name: "gcr.io/cloud-builders/docker"
+    id: "quality-gates"
+    entrypoint: "bash"
     args:
-      - '-c'
+      - "-c"
       - |
         set -e
         echo "Running quality gates inside instruments-service image..."
@@ -74,25 +79,30 @@ steps:
           -e CLOUD_BUILD=true \
           -e CLOUD_MOCK_MODE=true \
           -e GCP_PROJECT_ID=$PROJECT_ID \
-          -e GOOGLE_CLOUD_PROJECT=$PROJECT_ID \
+          -e GCP_PROJECT_ID=$PROJECT_ID \
           -e INSTRUMENTS_GCS_BUCKET=mock-instruments-bucket \
           -e INSTRUMENTS_GCS_BUCKET_CEFI=mock-instruments-bucket \
           asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service:$$(cat /workspace/VERSION) \
           /bin/bash -c "scripts/quality-gates.sh --no-fix --quick"
-    waitFor: ['build']
+    waitFor: ["build"]
 
   # Step 6: Push image ONLY if quality gates passed
-  - name: 'gcr.io/cloud-builders/docker'
-    id: 'push'
-    args: ['push', '--all-tags', 'asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service']
-    waitFor: ['quality-gates']
+  - name: "gcr.io/cloud-builders/docker"
+    id: "push"
+    args:
+      [
+        "push",
+        "--all-tags",
+        "asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service",
+      ]
+    waitFor: ["quality-gates"]
 
   # Step 7: Notify deployment-v3 to update stable_versions.yaml (requires GH_PAT in Secret Manager)
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
-    id: 'notify-deployment'
-    entrypoint: 'bash'
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk"
+    id: "notify-deployment"
+    entrypoint: "bash"
     args:
-      - '-c'
+      - "-c"
       - |
         VERSION=$(cat /workspace/VERSION)
         IMAGE="asia-northeast1-docker.pkg.dev/$PROJECT_ID/instruments/instruments-service:$$VERSION"
@@ -101,21 +111,21 @@ steps:
           curl -sS -X POST \
             -H "Authorization: token $$GH_PAT" \
             -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/IggyIkenna/unified-trading-deployment-v3/dispatches \
+            https://api.github.com/repos/IggyIkenna/deployment-service/dispatches \
             -d "{\"event_type\":\"service-deployed\",\"client_payload\":{\"service_name\":\"instruments-service\",\"version\":\"$$VERSION\",\"image\":\"$$IMAGE\"}}"
-          echo "Notified deployment-v3: instruments-service $$VERSION"
+          echo "Notified deployment-service: instruments-service $$VERSION"
         else
           echo "GH_PAT not configured - skipping dispatch"
         fi
-    waitFor: ['push']
+    waitFor: ["push"]
     allowFailure: true
 
   # Step 8: Build and publish Python wheel to Artifact Registry (for cross-service imports)
-  - name: 'python:3.13-slim'
-    id: 'publish-wheel'
-    entrypoint: 'bash'
+  - name: "python:3.13-slim"
+    id: "publish-wheel"
+    entrypoint: "bash"
     args:
-      - '-c'
+      - "-c"
       - |
         set -e
         pip install uv build twine keyrings.google-artifactregistry-auth
@@ -125,14 +135,14 @@ steps:
         uv pip install --system unified-trading-library unified-events-interface unified-config-interface unified-domain-client
         python -m build --wheel --outdir dist/
         python -m twine upload --repository-url https://asia-northeast1-python.pkg.dev/$PROJECT_ID/unified-libraries/ --non-interactive dist/*.whl || true
-    waitFor: ['quality-gates']
+    waitFor: ["quality-gates"]
 
 # Images pushed via push step (semver + latest tags)
 options:
   logging: CLOUD_LOGGING_ONLY
-  machineType: 'E2_HIGHCPU_8'
+  machineType: "E2_HIGHCPU_8"
 
 # GH_PAT: Create secret in Secret Manager for repository_dispatch to deployment-v3
 # notify-deployment fetches it via gcloud; allowFailure if not configured
 
-timeout: '1800s'
+timeout: "1800s"

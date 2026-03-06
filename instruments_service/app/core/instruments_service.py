@@ -8,10 +8,6 @@ This module is the main entry point. Implementation is split across:
 - instrument_crud.py — query, batch processing, stats, cleanup, ErrorWarningCounter
 - instrument_sync.py — CEFI/TRADFI/DEFI venue processing
 - instrument_validation.py — venue validation and filtering
-
-This module also re-exports split processing components for backward compatibility:
-- InstrumentProcessingBase, InstrumentProcessingConfig, InstrumentProcessingHandlers
-- InstrumentProcessingService and specialized integration mixins
 """
 
 from __future__ import annotations
@@ -31,39 +27,14 @@ from instruments_service.app.core.cloud_instrument_storage import CloudInstrumen
 
 # Import mixins for this file's SRP split
 from instruments_service.app.core.instrument_crud import ErrorWarningCounter, InstrumentCrudMixin
-
-# Re-exports from split modules (SRP split of instrument_processing_service)
-from instruments_service.app.core.instrument_processing_base import (
-    InstrumentProcessingBase,
-    InstrumentProcessingConfig,
-)
-from instruments_service.app.core.instrument_processing_handlers import (
-    InstrumentProcessingHandlers,
-)
-from instruments_service.app.core.instrument_processing_mixins import (
-    CCXTIntegrationMixin,
-    DatabentoIntegrationMixin,
-    DefiIntegrationMixin,
-    SymbolProcessingMixin,
-    TardisIntegrationMixin,
-)
 from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
 from instruments_service.app.core.instrument_sync import InstrumentSyncMixin
 from instruments_service.app.core.instrument_validation import InstrumentValidationMixin
 from instruments_service.models import InstrumentDefinition
 
 __all__ = [
-    "CCXTIntegrationMixin",
-    "DatabentoIntegrationMixin",
-    "DefiIntegrationMixin",
     "ErrorWarningCounter",
-    "InstrumentProcessingBase",
-    "InstrumentProcessingConfig",
-    "InstrumentProcessingHandlers",
-    "InstrumentProcessingService",
     "InstrumentsService",
-    "SymbolProcessingMixin",
-    "TardisIntegrationMixin",
 ]
 
 logger = logging.getLogger(__name__)
