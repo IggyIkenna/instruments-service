@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # DATA LOADING (now uses embedded constants, no external JSON)
 # ============================================================================
 
-# Caches for loaded data (for backward compatibility)
+# Caches for loaded data
 _sp500_tickers_cache: list[str] | None = None
 _nasdaq_tickers_cache: list[str] | None = None
 _tradfi_instruments_cache: list[dict[str, str | None]] | None = None

@@ -3,7 +3,7 @@
 from instruments_service.app.core.processors.canonical_key_generator import (
     generate_canonical_key,
 )
-from instruments_service.app.core.processors.defi_processor import (
+from instruments_service.engine.processors.defi_processor import (
     fetch_defi_instruments,
 )
 
