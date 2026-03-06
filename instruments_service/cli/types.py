@@ -13,9 +13,9 @@ class HandlerConfig(TypedDict):
 
     project_id: NotRequired[object]
     gcp_project_id: NotRequired[object]
-    gcs_bucket_tradfi: NotRequired[object]
-    gcs_bucket_cefi: NotRequired[object]
-    gcs_bucket_defi: NotRequired[object]
+    sink_bucket_tradfi: NotRequired[object]
+    sink_bucket_cefi: NotRequired[object]
+    sink_bucket_defi: NotRequired[object]
     events_bucket: NotRequired[object]
 
 
