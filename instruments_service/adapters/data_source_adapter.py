@@ -1,7 +1,7 @@
 """
 Data Source Adapter
 
-Thin I/O adapter that delegates to unified-trading-library.
+Thin I/O adapter that delegates to UCI DataSource protocol.
 NO business logic, validation, or transformation - just I/O operations.
 """
 
@@ -9,50 +9,58 @@ import logging
 from uuid import uuid4
 
 import pandas as pd
-from unified_domain_client import CloudTarget, StandardizedDomainCloudService
+from unified_cloud_interface import DataSource, get_data_source
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
-from unified_trading_library import get_bucket_for_category
 
 logger = logging.getLogger(__name__)
 
 
 class DataSourceAdapter:
     """
-    Thin I/O adapter for reading instrument data from GCS.
+    Thin I/O adapter for reading instrument data via UCI DataSource protocol.
 
-    Delegates all actual I/O to unified-trading-library.
-    NO business logic - just reads parquet files from GCS.
+    Delegates all actual I/O to UCI DataSource.
+    NO business logic - just reads parquet files from storage.
     """
 
-    def __init__(self, cloud_target: CloudTarget):
+    def __init__(self, routing_key: str = "cefi") -> None:
         """
         Initialize data source adapter.
 
         Args:
-            cloud_target: CloudTarget configuration (project, bucket, dataset)
+            routing_key: UCI routing key for the category (e.g., "cefi", "tradfi", "defi")
         """
-        self.cloud_service: StandardizedDomainCloudService = StandardizedDomainCloudService(
-            domain="instruments", cloud_target=cloud_target
-        )
-        self.cloud_target = cloud_target
+        self._routing_key = routing_key
 
     def read_parquet(self, gcs_path: str) -> pd.DataFrame:
         """
-        Read parquet file from GCS.
+        Read parquet file from storage using the default routing key.
 
         Args:
-            gcs_path: GCS path (e.g., "instrument_availability/by_date/day=2024-01-01/instruments.parquet")
+            gcs_path: Path used to derive partition keys
+                      (e.g., "instrument_availability/by_date/day=2024-01-01/instruments.parquet")
 
         Returns:
             DataFrame with data from parquet file (empty if not found)
         """
+        # Parse partition from path
+        partition: dict[str, str] = {}
+        for part in gcs_path.split("/"):
+            if "=" in part and not part.endswith(".parquet"):
+                k, _, v = part.partition("=")
+                partition[k] = v
+
         try:
-            raw: pd.DataFrame | object = self.cloud_service.download_from_gcs(
-                gcs_path=gcs_path, format="parquet", log_errors=False
+            data_source: DataSource = get_data_source(
+                routing_key=self._routing_key, prefix="instrument_availability/by_date"
             )
+            raw: object = data_source.read(partition=partition, format="parquet")
             if not isinstance(raw, pd.DataFrame):
                 return pd.DataFrame()
             return raw
+        except FileNotFoundError:
+            logger.debug("File not found: %s", gcs_path)
+            return pd.DataFrame()
         except (OSError, ValueError, RuntimeError) as e:
             _err = EnhancedError(
                 message=str(e),
@@ -64,46 +72,42 @@ class DataSourceAdapter:
             )
             logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             error_msg = str(e)
-            # 404/Not Found is expected when data doesn't exist yet
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
                 logger.debug("File not found (404): %s", gcs_path)
                 return pd.DataFrame()
-            logger.error("Failed to read parquet from GCS: %s", e)
+            logger.error("Failed to read parquet from storage: %s", e)
             return pd.DataFrame()
 
     def read_parquet_from_category(self, gcs_path: str, category: str, test_mode: bool = False) -> pd.DataFrame:
         """
-        Read parquet file from category-specific bucket.
+        Read parquet file from category-specific routing key.
 
         Args:
-            gcs_path: GCS path within the category bucket
+            gcs_path: Path used to derive partition keys
             category: Market category ("CEFI", "TRADFI", or "DEFI")
-            test_mode: Whether to use test bucket (default: False)
+            test_mode: Ignored (kept for API compatibility; environment is set via UCI config)
 
         Returns:
             DataFrame with data from parquet file (empty if not found)
         """
+        # Parse partition from path
+        partition: dict[str, str] = {}
+        for part in gcs_path.split("/"):
+            if "=" in part and not part.endswith(".parquet"):
+                k, _, v = part.partition("=")
+                partition[k] = v
+
         try:
-            # Get bucket for category
-            category_bucket = get_bucket_for_category(category, test_mode=test_mode)
-
-            # Create cloud service for category bucket
-            category_cloud_target = CloudTarget(
-                project_id=self.cloud_target.project_id,
-                gcs_bucket=category_bucket,
-                bigquery_dataset=self.cloud_target.bigquery_dataset,
-                bigquery_location=self.cloud_target.bigquery_location,
+            data_source: DataSource = get_data_source(
+                routing_key=category.lower(), prefix="instrument_availability/by_date"
             )
-            category_cloud_service: StandardizedDomainCloudService = StandardizedDomainCloudService(
-                domain="instruments", cloud_target=category_cloud_target
-            )
-
-            raw: pd.DataFrame | object = category_cloud_service.download_from_gcs(
-                gcs_path=gcs_path, format="parquet", log_errors=False
-            )
+            raw: object = data_source.read(partition=partition, format="parquet")
             if not isinstance(raw, pd.DataFrame):
                 return pd.DataFrame()
             return raw
+        except FileNotFoundError:
+            logger.debug("File not found in %s: %s", category, gcs_path)
+            return pd.DataFrame()
         except (OSError, ValueError, RuntimeError) as e:
             _err = EnhancedError(
                 message=str(e),
@@ -115,9 +119,8 @@ class DataSourceAdapter:
             )
             logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             error_msg = str(e)
-            # 404/Not Found is expected when data doesn't exist yet
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
-                logger.debug("File not found (404) in %s bucket: %s", category, gcs_path)
+                logger.debug("File not found (404) in %s: %s", category, gcs_path)
                 return pd.DataFrame()
-            logger.error("Failed to read parquet from %s bucket: %s", category, e)
+            logger.error("Failed to read parquet from %s: %s", category, e)
             return pd.DataFrame()
