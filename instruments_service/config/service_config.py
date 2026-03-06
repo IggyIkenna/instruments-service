@@ -160,6 +160,12 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         description="Comma-separated list of DeFi MVP tokens",
     )
 
+    config_store_bucket: str = Field(
+        default="",
+        validation_alias=AliasChoices("CONFIG_STORE_BUCKET"),
+        description="Cloud storage bucket for dynamic domain config store",
+    )
+
     # Deployment orchestration metadata (set by VM startup scripts)
     deployment_id: str = Field(
         default="",
