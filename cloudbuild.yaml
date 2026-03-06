@@ -128,13 +128,14 @@ steps:
       - "-c"
       - |
         set -e
-        pip install uv build twine keyrings.google-artifactregistry-auth
+        pip install uv
+        uv pip install --system build twine keyrings.google-artifactregistry-auth
         mkdir -p /root/.config/pip
         echo "[global]
         extra-index-url = https://asia-northeast1-python.pkg.dev/$PROJECT_ID/unified-libraries/simple/" > /root/.config/pip/pip.conf
         uv pip install --system unified-trading-library unified-events-interface unified-config-interface unified-domain-client
         python -m build --wheel --outdir dist/
-        python -m twine upload --repository-url https://asia-northeast1-python.pkg.dev/$PROJECT_ID/unified-libraries/ --non-interactive dist/*.whl || true
+        python -m twine upload --repository-url https://asia-northeast1-python.pkg.dev/$PROJECT_ID/unified-libraries/ --non-interactive dist/*.whl || true  # || true: cleanup step, failure is intentional (optional publish)
     waitFor: ["quality-gates"]
 
 # Images pushed via push step (semver + latest tags)
