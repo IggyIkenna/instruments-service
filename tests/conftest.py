@@ -160,20 +160,20 @@ def gcp_project_id():
 
 @pytest.fixture(scope="session")
 def test_bucket_name():
-    """Test bucket name (market-data-tick-test)."""
-    return instruments_config.gcs_bucket_test
+    """Test bucket name."""
+    return instruments_config.sink_bucket_test
 
 
 @pytest.fixture(scope="session")
 def prod_bucket_name():
     """Prod bucket name (for verification that we don't write to it)."""
-    return instruments_config.gcs_bucket
+    return instruments_config.sink_bucket
 
 
 @pytest.fixture(scope="session")
 def bigquery_dataset():
-    """BigQuery dataset for tests."""
-    return instruments_config.bigquery_dataset
+    """Analytics dataset for tests."""
+    return instruments_config.analytics_dataset
 
 
 def get_service_account_email(credentials_file: str) -> str | None:
@@ -292,8 +292,8 @@ def test_cloud_target(gcp_project_id, test_bucket_name, bigquery_dataset, ensure
     """Cloud target configured for test bucket."""
     return CloudTarget(
         project_id=gcp_project_id,
-        gcs_bucket=test_bucket_name,
-        bigquery_dataset=bigquery_dataset,
+        storage_bucket=test_bucket_name,
+        analytics_dataset=bigquery_dataset,
         bigquery_location=instruments_config.bigquery_location,
     )
 
