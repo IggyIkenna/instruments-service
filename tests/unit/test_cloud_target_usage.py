@@ -14,30 +14,30 @@ class TestCloudTargetInstantiations:
     """Verify CloudTarget usage across the codebase (unit tests with mocks)."""
 
     def test_all_cloudtarget_calls_have_required_params(self):
-        """All CloudTarget instantiations must include bigquery_dataset."""
+        """All CloudTarget instantiations must include analytics_dataset."""
         config = instruments_config
 
         # Pattern that all code should follow
         target = CloudTarget(
             project_id=config.gcp_project_id,
-            gcs_bucket=config.get_bucket_for_category("cefi"),
-            bigquery_dataset=config.bigquery_dataset,  # REQUIRED
+            storage_bucket=config.get_bucket_for_category("cefi"),
+            analytics_dataset=config.bigquery_dataset,  # REQUIRED
         )
 
         # Verify it works
         assert target.project_id
-        assert target.gcs_bucket
-        assert target.bigquery_dataset
+        assert target.storage_bucket
+        assert target.analytics_dataset
 
-    def test_cloudtarget_fails_without_bigquery_dataset(self):
-        """CloudTarget should fail if bigquery_dataset is missing."""
+    def test_cloudtarget_fails_without_analytics_dataset(self):
+        """CloudTarget should fail if analytics_dataset is missing."""
         config = instruments_config
 
-        with pytest.raises((TypeError, ValueError), match=r"bigquery_dataset|required"):
+        with pytest.raises((TypeError, ValueError), match=r"analytics_dataset|required"):
             CloudTarget(
                 project_id=config.gcp_project_id,
-                gcs_bucket=config.get_bucket_for_category("cefi"),
-                # bigquery_dataset missing - should fail!
+                storage_bucket=config.get_bucket_for_category("cefi"),
+                # analytics_dataset missing - should fail!
             )
 
     def test_config_provides_all_cloudtarget_params(self):

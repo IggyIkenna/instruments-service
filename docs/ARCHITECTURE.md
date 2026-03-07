@@ -1,6 +1,7 @@
- # Instruments Service Architecture
+# Instruments Service Architecture
 
 > **Related Documentation**:
+>
 > - [`SETUP_GUIDE.md`](./SETUP_GUIDE.md) - Setup, installation, and quick start guide
 > - [`INSTRUMENT_SPECIFICATION.md`](./INSTRUMENT_SPECIFICATION.md) - Complete instrument ID specification
 > - [`VENUE_ADAPTERS.md`](./VENUE_ADAPTERS.md) - Venue adapter pattern and data sources
@@ -14,6 +15,7 @@
 The Instruments Service generates canonical instrument definitions (metadata for centralized/normalized definitions and lookup of instrument attributes) from exchange APIs and DeFi protocol SDKs and stores them to GCS. It serves as the authoritative source for instrument metadata across the trading system.
 
 **Key Responsibilities**:
+
 - Discover available instruments (what instruments exist)
 - Generate canonical instrument IDs following unified specification
 - Enrich with metadata (contract addresses, fee tiers, tick sizes, etc.)
@@ -39,9 +41,10 @@ execution-service (uses instruments for order execution)
 ```
 
 **Downstream Consumers**:
+
 - **market-tick-data-service**: Uses instrument IDs to download market data (trades, order books, etc.)
 - **market-data-processing-service**: Uses instrument metadata for candle generation
-- **features-* services**: Use instrument metadata for feature calculation
+- **features-\* services**: Use instrument metadata for feature calculation
 - **strategy-service**: Uses instrument definitions for trading decisions
 - **execution-service**: Uses instrument metadata (contract addresses, fee tiers) for order execution
 
@@ -52,6 +55,7 @@ execution-service (uses instruments for order execution)
 ### 1. InstrumentProcessingService (`app/core/instrument_processing_service.py`)
 
 Main orchestration service that:
+
 - Coordinates venue adapters to fetch instruments from various data sources
 - Generates canonical instrument IDs following unified specification
 - Enriches with CCXT metadata (for CEX instruments)
@@ -72,6 +76,7 @@ All data sources use a consistent venue adapter pattern:
   - EtherFi, Lido (Protocol SDKs, Alchemy)
 
 Each adapter handles:
+
 - API communication with retry logic
 - Response caching (TTL-based)
 - Date filtering (availability windows)
@@ -83,6 +88,7 @@ See [`VENUE_ADAPTERS.md`](./VENUE_ADAPTERS.md) for detailed adapter architecture
 ### 3. CloudInstrumentStorage (`app/core/cloud_instrument_storage.py`)
 
 Handles storage operations:
+
 - Stores instruments to GCS (Parquet format)
 - Validates schema using `unified-trading-services.SchemaValidator`
 - Handles test bucket detection (automatically uses test buckets in test environment)
@@ -92,6 +98,7 @@ Handles storage operations:
 ### 4. InstrumentBatchProcessor (`app/core/batch_processor.py`)
 
 Handles batch processing:
+
 - Date range processing (start date to end date)
 - Memory estimation for large batches
 - Batch splitting for memory-constrained environments
@@ -151,6 +158,7 @@ bucket = os.getenv("INSTRUMENTS_GCS_BUCKET")  # Avoid this pattern
 ```
 
 **Why centralize configuration?**
+
 - **Single Source of Truth**: All environment variable names defined in one place
 - **Easy Refactoring**: Rename env vars or change defaults in one file
 - **Environment-Aware**: Logic for test vs production routing handled centrally
@@ -158,6 +166,7 @@ bucket = os.getenv("INSTRUMENTS_GCS_BUCKET")  # Avoid this pattern
 - **Documentation**: All config options visible in one file with docstrings
 
 **Key Config Classes**:
+
 - `InstrumentsServiceConfig`: Service-level settings (buckets, project ID, secrets)
 - `UnifiedInstrumentConfig`: Domain-specific instrument definitions loaded from JSON
 
@@ -172,6 +181,7 @@ instruments_service/data/
 ```
 
 **Why externalize static data?**
+
 - **Testability**: Tests can exclude data files or mock them easily
 - **Maintainability**: Update instrument definitions without modifying Python code
 - **Separation of Concerns**: Data vs logic clearly separated
@@ -179,6 +189,7 @@ instruments_service/data/
 - **Reduced File Size**: `config.py` reduced from 829 to 618 lines after externalization
 
 **Loading Pattern**:
+
 ```python
 # Data loaded lazily with caching
 _TRADFI_INSTRUMENTS_CACHE = None
@@ -195,6 +206,7 @@ def _load_tradfi_instruments():
 ### Venue Adapter Pattern
 
 All data sources use adapters for consistent architecture:
+
 - **Separation of Concerns**: API communication separated from business logic
 - **Testability**: Adapters can be tested independently
 - **Extensibility**: Easy to add new data sources
@@ -203,6 +215,7 @@ All data sources use adapters for consistent architecture:
 ### Unified Cloud Services
 
 Uses `unified-trading-services` for **all** cloud operations:
+
 - **GCS**: Storage operations via `StandardizedDomainCloudService`
 - **BigQuery**: Available but not used (batch data to GCS only)
 - **Secret Manager**: API key retrieval via `get_secret_client`
@@ -214,6 +227,7 @@ Uses `unified-trading-services` for **all** cloud operations:
 ### Secret Manager Integration
 
 All API keys retrieved from Secret Manager (no env vars for keys):
+
 - Tardis API key: `tardis-api-key`
 - Databento API key: `databento-api-key`
 - The Graph API key: `thegraph-api-key`
@@ -225,6 +239,7 @@ Environment variables only specify secret names, not actual keys.
 ### Test Bucket Isolation
 
 Automatically detects test environment and uses test buckets:
+
 - Test buckets: `market-data-tick-test`, `market-data-hft-test`
 - Production buckets: `market-data-tick`, `market-data-hft`
 - Detection via environment variables or GCP project configuration
@@ -232,6 +247,7 @@ Automatically detects test environment and uses test buckets:
 ### Domain Boundaries
 
 Instruments are part of `market_data` domain:
+
 - GCS bucket: `market-data-tick`
 - BigQuery dataset: `market_data_hft`
 - Schema domain: `market_data`
@@ -241,10 +257,11 @@ Instruments are part of `market_data` domain:
 ### GCS Path Format
 
 ```
-gs://market-data-tick/instrument_availability/by_date/day-YYYY-MM-DD/instruments.parquet
+gs://market-data-tick-{project_id}/instrument_availability/by_date/day=YYYY-MM-DD/instruments.parquet
 ```
 
 **Path Components**:
+
 - `instrument_availability`: Top-level prefix
 - `by_date`: Date-based partitioning
 - `day=YYYY-MM-DD`: Daily partitions (e.g., `day=2025-01-15`)
@@ -268,6 +285,7 @@ gs://market-data-tick/instrument_availability/by_date/day-YYYY-MM-DD/instruments
 ### unified-trading-services
 
 **Required dependency** - provides all cloud infrastructure:
+
 - GCS operations (read/write Parquet files)
 - BigQuery operations (query instrument definitions)
 - Secret Manager (API key retrieval)
@@ -277,6 +295,7 @@ gs://market-data-tick/instrument_availability/by_date/day-YYYY-MM-DD/instruments
 ### Venue Adapters
 
 Abstract data source integrations:
+
 - **TardisAdapter**: Crypto exchanges (Binance, Bybit, OKX, Deribit)
 - **DatabentoAdapter**: TradFi exchanges (CME, NASDAQ, NYSE)
 - **The Graph Adapters**: DeFi DEX pools (Uniswap V3, Curve, Balancer)
@@ -286,6 +305,7 @@ Abstract data source integrations:
 ### CCXT (Optional)
 
 Exchange metadata enrichment for CEX instruments:
+
 - Provides standardized exchange metadata
 - Used for tick size, min size, contract size, etc.
 - Optional - adapters work without CCXT
@@ -315,11 +335,13 @@ Exchange metadata enrichment for CEX instruments:
 ### This Is Intentional
 
 **Instruments-Service Purpose**:
+
 - Discover **what instruments exist** (instrument catalog)
 - Provide **metadata** for execution (addresses, fee tiers)
 - **NOT** fetch market data (rates, prices, yields)
 
 **Market Data Should Come From**:
+
 - **market-tick-data-service**: OHLCV, trades, funding rates (CEX + TradFi)
 - **Separate Market Data Service** (future): DeFi rates, oracle prices, yields
 
@@ -337,6 +359,7 @@ Exchange metadata enrichment for CEX instruments:
 ### Date Range Processing
 
 Processes instruments for date ranges:
+
 - Start date to end date (inclusive)
 - Handles large date ranges with memory estimation
 - Splits batches if memory constrained
