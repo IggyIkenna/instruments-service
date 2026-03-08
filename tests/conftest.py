@@ -86,10 +86,6 @@ from instruments_service.config import instruments_config
 logger = logging.getLogger(__name__)
 
 
-def pytest_configure(config: pytest.Config) -> None:
-    config.addinivalue_line("markers", "integration: mark test as integration test (requires external services)")
-
-
 def get_config(key: str, default: str | None = None) -> str | None:
     """
     Get configuration value from environment or instruments_config.
