@@ -39,3 +39,4 @@ coverage/
 htmlcov/
 .nyc_output/
 logs/
+*.bak
