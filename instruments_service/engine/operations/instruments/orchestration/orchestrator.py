@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Protocol, cast
 from uuid import uuid4
@@ -22,6 +23,7 @@ from instruments_service.config import (
     instruments_config,
 )
 from instruments_service.engine.operations.instruments.batch_orchestrator import InstrumentBatchProcessor
+from instruments_service.metrics import PROCESSING_LATENCY, RECORDS_PROCESSED
 from instruments_service.models import InstrumentDefinition
 from instruments_service.utils import ErrorWarningCounter
 
@@ -156,6 +158,7 @@ class InstrumentsOrchestrator:
         success = False
         instruments_df = None
         date_str = date.strftime("%Y-%m-%d")
+        _prom_start = time.perf_counter()
 
         try:
             logger.info(
@@ -242,6 +245,7 @@ class InstrumentsOrchestrator:
                 else:
                     logger.error("❌ Failed to store instruments for %s", date_str)
 
+            RECORDS_PROCESSED.labels(status="success").inc()
             return {
                 "success": success,
                 "count": len(instruments_df),
@@ -261,6 +265,7 @@ class InstrumentsOrchestrator:
             )
             logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.error("❌ Error in generate_instruments_for_date: %s", e)
+            RECORDS_PROCESSED.labels(status="error").inc()
             return {
                 "success": False,
                 "error": str(e),
@@ -269,6 +274,7 @@ class InstrumentsOrchestrator:
                 "warning_count": error_warning_counter.warning_count,
             }
         finally:
+            PROCESSING_LATENCY.observe(time.perf_counter() - _prom_start)
             # Remove handler to avoid memory leaks
             root_logger.removeHandler(error_warning_counter)  # pyright: ignore[reportArgumentType]
 
