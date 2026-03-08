@@ -118,7 +118,9 @@ class InstrumentHandler(ModeHandler):
         if end_date is None or end_date == "":
             raise ValueError("end_date is required for instrument generation")
         force = bool(kwargs.get("force", False))
-        return self._execute_instrument_generation(start_date, end_date, force, **kwargs)
+        # Remove already-extracted keys so they aren't passed twice to _execute_instrument_generation
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ("start_date", "end_date", "force")}
+        return self._execute_instrument_generation(start_date, end_date, force, **filtered_kwargs)
 
     def _execute_instrument_generation(
         self,
