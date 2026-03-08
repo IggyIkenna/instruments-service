@@ -61,9 +61,7 @@ class CloudDataProvider:
         routing_key = "cefi"
         try:
             logger.info("Loading instruments for %s (routing_key=%s)", date_str, routing_key)
-            data_source: DataSource = get_data_source(
-                routing_key=routing_key, prefix="instrument_availability/by_date"
-            )
+            data_source: DataSource = get_data_source(routing_key=routing_key, prefix="instrument_availability/by_date")
             raw: object = data_source.read(partition={"day": date_str}, format="parquet")
             if not isinstance(raw, pd.DataFrame):
                 return pd.DataFrame()
@@ -120,14 +118,12 @@ class CloudDataProvider:
             # Extract venue value from the path
             for part in gcs_path.split("/"):
                 if part.startswith("venue="):
-                    partition["venue"] = part[len("venue="):]
+                    partition["venue"] = part[len("venue=") :]
                     break
 
         try:
             logger.info("Loading %s instruments for %s", category, date_str)
-            data_source: DataSource = get_data_source(
-                routing_key=routing_key, prefix="instrument_availability/by_date"
-            )
+            data_source: DataSource = get_data_source(routing_key=routing_key, prefix="instrument_availability/by_date")
             raw: object = data_source.read(partition=partition, format="parquet")
             if not isinstance(raw, pd.DataFrame):
                 return pd.DataFrame()
