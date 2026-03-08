@@ -25,12 +25,13 @@ Usage:
 from __future__ import annotations
 
 import logging
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 
 import yaml
 from unified_events_interface import log_event
+
+from instruments_service.config.service_config import get_config
 
 logger = logging.getLogger(__name__)
 
@@ -46,15 +47,15 @@ def _resolve_catalogue_path() -> Path:
     Resolve the catalogue YAML path.
 
     Priority:
-    1. INSTRUMENTS_CATALOGUE_PATH env var (allows override in tests / CI)
+    1. config.catalogue_path_override (INSTRUMENTS_CATALOGUE_PATH; allows override in tests / CI)
     2. Workspace-relative path: deployment-service/configs/data-catalogue.instruments-service.yaml
 
     Returns:
         Path to the catalogue YAML file.
     """
-    env_override = os.environ.get("INSTRUMENTS_CATALOGUE_PATH")
-    if env_override:
-        return Path(env_override)
+    config = get_config()
+    if config.catalogue_path_override:
+        return Path(config.catalogue_path_override)
     return _CATALOGUE_PATH
 
 
