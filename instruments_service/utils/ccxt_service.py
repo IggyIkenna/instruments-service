@@ -663,7 +663,7 @@ class CCXTService:
                 try:
                     tiers = cast(
                         list[dict[str, object]],
-                        exchange.fetchMarketLeverageTiers(symbol_format),  # type: ignore[reportAttributeAccessIssue]
+                        exchange.fetchMarketLeverageTiers(symbol_format),  # pyright: ignore[reportAttributeAccessIssue]
                     )
                     if tiers:
                         leverage_tiers = tiers
