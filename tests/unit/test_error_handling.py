@@ -22,7 +22,7 @@ class TestStringConversionErrorHandling:
             result = str(invalid_value)
             if result and result != "None":
                 result = result
-        except (OSError, ValueError, KeyError, TypeError, ImportError, RuntimeError):
+        except Exception:
             # Failed to convert value to string
             result = None
 
