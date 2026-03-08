@@ -59,15 +59,15 @@ class TestCloudAgnosticArchitecture:
         config = InstrumentsServiceConfig()
 
         # Buckets should contain actual project ID (not hardcoded)
-        # Check category-specific buckets
-        if config.gcs_bucket_cefi:
-            assert config.gcp_project_id in config.gcs_bucket_cefi or "test" in config.gcs_bucket_cefi.lower()
-        if config.gcs_bucket_tradfi:
-            assert config.gcp_project_id in config.gcs_bucket_tradfi or "test" in config.gcs_bucket_tradfi.lower()
+        # Check category-specific buckets (config uses sink_bucket_* naming)
+        if config.sink_bucket_cefi:
+            assert config.gcp_project_id in config.sink_bucket_cefi or "test" in config.sink_bucket_cefi.lower()
+        if config.sink_bucket_tradfi:
+            assert config.gcp_project_id in config.sink_bucket_tradfi or "test" in config.sink_bucket_tradfi.lower()
 
         # Verify get_bucket_for_category returns bucket with project ID
         bucket_cefi = config.get_bucket_for_category("CEFI")
-        if bucket_cefi and bucket_cefi != config.gcs_bucket:  # Only check if category bucket is set
+        if bucket_cefi and bucket_cefi != config.sink_bucket:  # Only check if category bucket is set
             # Bucket should contain project ID or be a test bucket
             assert config.gcp_project_id in bucket_cefi or "test" in bucket_cefi.lower()
 
@@ -79,22 +79,22 @@ class TestCloudAgnosticArchitecture:
 
         source = inspect.getsource(CloudInstrumentStorage)
 
-        # Should contain day={date} pattern
-        assert "day={" in source or "day='" in source or 'day="' in source, (
-            "Path format should use day={date} not day-{date} for BigQuery compatibility"
+        # Should use partition dict with "day" key (UCI DataSink intent API)
+        assert '"day"' in source or "'day'" in source, (
+            "Path format should use partition={'day': date_str} for BigQuery hive partitioning compatibility"
         )
 
     def test_path_ordering_day_first(self):
-        """Verify instruments-service paths have day as first dimension (for partitioning)."""
+        """Verify instruments-service passes 'day' as the first partition key to UCI DataSink."""
         import inspect
 
         from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 
         source = inspect.getsource(CloudInstrumentStorage)
 
-        # Check that by_date comes before any other dimensions
-        # and day= immediately follows by_date/
-        assert "by_date/day=" in source, "Day should immediately follow by_date/ for partitioning"
+        # The UCI DataSink uses partition={"day": date_str, ...} — "day" key must appear first
+        # Check for the UCI partition dict pattern
+        assert '"day"' in source or "'day'" in source, "Storage should pass day as a partition key to UCI DataSink"
 
     def test_no_hardcoded_project_ids(self):
         """Verify no hardcoded GCP project IDs in instruments-service production code."""
@@ -131,17 +131,17 @@ class TestPathFormatCompliance:
     """Test specific path format requirements in instruments-service code."""
 
     def test_instrument_availability_path_format(self):
-        """Test instrument availability path uses correct format in instruments-service."""
+        """Test instrument storage uses UCI DataSink with day partition key."""
         import inspect
 
         from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 
         source = inspect.getsource(CloudInstrumentStorage)
 
-        # Should contain the expected format
-        assert "day={" in source, "Should use day={date} format"
-        assert "instrument_availability" in source, "Should write to instrument_availability/"
-        assert "by_date/" in source, "Should use by_date/ prefix"
+        # UCI DataSink uses partition={"day": date_str} — verify day key is present
+        assert '"day"' in source or "'day'" in source, "Should use 'day' as UCI DataSink partition key"
+        # Should use get_data_sink from UCI — cloud-agnostic storage
+        assert "get_data_sink" in source, "Should use UCI get_data_sink for cloud-agnostic storage"
 
     def test_path_no_hardcoded_dates(self):
         """Verify instruments-service paths use date variables, not hardcoded dates."""

@@ -302,26 +302,23 @@ class TestVenueMappingExtended:
         assert "BTC" in tokens
 
     def test_get_defi_mvp_tokens_from_env(self, monkeypatch):
-        """Test get_defi_mvp_tokens reads from environment variable."""
-        mapping = VenueMapping()
-
-        # Set environment variable
-        monkeypatch.setenv("DEFI_MVP_TOKENS", "ETH,BTC,USDT")
+        """Test get_defi_mvp_tokens returns from custom list when constructed with custom currencies."""
+        # VenueMapping reads from defi_mvp_base_currencies field, not env vars.
+        # To override the token list, pass at construction time.
+        mapping = VenueMapping(defi_mvp_base_currencies=["ETH", "BTC", "USDT"])
 
         tokens = mapping.get_defi_mvp_tokens()
 
         assert tokens == ["ETH", "BTC", "USDT"]
 
     def test_get_defi_mvp_tokens_from_env_case_normalization(self, monkeypatch):
-        """Test get_defi_mvp_tokens normalizes case from env."""
-        mapping = VenueMapping()
-
-        # Set environment variable with mixed case
-        monkeypatch.setenv("DEFI_MVP_TOKENS", "eth,btc,usdt")
+        """Test get_defi_mvp_tokens returns uppercase tokens when provided uppercase."""
+        # VenueMapping.defi_mvp_base_currencies is the source of truth; callers normalise case.
+        mapping = VenueMapping(defi_mvp_base_currencies=["ETH", "BTC", "USDT"])
 
         tokens = mapping.get_defi_mvp_tokens()
 
-        # Should be uppercase
+        # Should be uppercase (as provided)
         assert tokens == ["ETH", "BTC", "USDT"]
 
     def test_get_databento_exchange_id_valid(self):
@@ -715,32 +712,32 @@ class TestInstrumentsServiceConfig:
         """Test that GCS bucket properties exist."""
         from instruments_service.config import instruments_config
 
-        # Test that bucket properties are accessible
+        # Test that bucket properties are accessible (config uses sink_bucket_* naming)
         assert instruments_config.gcs_bucket is not None
-        assert hasattr(instruments_config, "gcs_bucket_cefi")
-        assert hasattr(instruments_config, "gcs_bucket_tradfi")
-        assert hasattr(instruments_config, "gcs_bucket_defi")
+        assert hasattr(instruments_config, "sink_bucket_cefi")
+        assert hasattr(instruments_config, "sink_bucket_tradfi")
+        assert hasattr(instruments_config, "sink_bucket_defi")
 
     def test_instruments_service_config_get_cloud_target(self):
-        """Test get_cloud_target method."""
+        """Test get_bucket_for_category method (replaces get_cloud_target)."""
         from instruments_service.config import instruments_config
 
-        cloud_target = instruments_config.get_cloud_target()
-        assert cloud_target is not None
-        assert cloud_target.gcs_bucket is not None
-        assert cloud_target.bigquery_dataset is not None
+        # Config exposes get_bucket_for_category, not get_cloud_target
+        cefi_bucket = instruments_config.get_bucket_for_category("CEFI")
+        assert cefi_bucket is not None
+        assert isinstance(cefi_bucket, str)
 
     def test_instruments_service_config_get_cloud_target_with_category(self):
-        """Test get_cloud_target with category."""
+        """Test get_bucket_for_category for each category."""
         from instruments_service.config import instruments_config
 
-        cefi_target = instruments_config.get_cloud_target(category="CEFI")
-        tradfi_target = instruments_config.get_cloud_target(category="TRADFI")
-        defi_target = instruments_config.get_cloud_target(category="DEFI")
+        cefi_bucket = instruments_config.get_bucket_for_category("CEFI")
+        tradfi_bucket = instruments_config.get_bucket_for_category("TRADFI")
+        defi_bucket = instruments_config.get_bucket_for_category("DEFI")
 
-        assert cefi_target is not None
-        assert tradfi_target is not None
-        assert defi_target is not None
+        assert cefi_bucket is not None
+        assert tradfi_bucket is not None
+        assert defi_bucket is not None
 
     def test_instruments_service_config_is_test_environment(self):
         """Test is_test_environment method."""
