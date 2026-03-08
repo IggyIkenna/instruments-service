@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import io
 import json
 import logging
 import os
@@ -20,8 +21,6 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import TypedDict
 from uuid import uuid4
-
-import io
 
 from unified_cloud_interface import download_from_storage
 from unified_config_interface import UnifiedCloudConfig
@@ -186,6 +185,7 @@ class _BucketDownloader:
         log_errors: bool = True,
     ) -> object:
         import pandas as pd
+
         path = gcs_path.lstrip("/")
         data = download_from_storage(self._bucket, path)
         if format == "parquet":
@@ -448,7 +448,7 @@ def main():
         logger.info("Report saved to %s", args.output)
 
     if args.json:
-        print(json.dumps(report.to_dict(), indent=2))
+        logger.info(json.dumps(report.to_dict(), indent=2))
     else:
         print_report(report)
 
