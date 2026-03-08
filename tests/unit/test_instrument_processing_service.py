@@ -4,6 +4,7 @@ Unit tests for InstrumentProcessingService.
 Tests service orchestration logic with mocked dependencies.
 """
 
+import os
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,10 +17,14 @@ from instruments_service.app.core.instrument_processing_service import (
 
 @pytest.fixture(autouse=True)
 def _mock_get_secret_client():
-    """Mock get_secret_client to avoid GCPSecretClient.get_secret AttributeError in unit tests."""
+    """Mock get_secret_client and remove GOOGLE_APPLICATION_CREDENTIALS for unit tests."""
     mock_client = MagicMock()
     mock_client.get_secret.return_value = None
-    with patch("unified_trading_library.get_secret_client", return_value=mock_client):
+    env_overrides = {"GOOGLE_APPLICATION_CREDENTIALS": ""}
+    with (
+        patch("unified_trading_library.get_secret_client", return_value=mock_client),
+        patch.dict(os.environ, env_overrides),
+    ):
         yield
 
 
