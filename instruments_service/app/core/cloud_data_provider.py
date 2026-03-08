@@ -180,7 +180,7 @@ class CloudDataProvider:
             query = f"""
             SELECT * FROM `{analytics_dataset}.{table_name}`
             WHERE 1=1
-            """
+            """  # nosec B608 — BigQuery template; dataset/table come from UnifiedCloudConfig, not user input
 
             parameters: dict[str, object] = {}
 

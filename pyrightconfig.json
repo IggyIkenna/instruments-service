@@ -1,8 +1,16 @@
 {
   "pythonVersion": "3.13",
-  "venvPath": "../",
-  "venv": ".venv-workspace",
+  "venvPath": ".",
+  "venv": ".venv",
   "include": ["instruments_service"],
+  "exclude": [
+    "instruments_service/app/core/instruments_service_modular_attempt.py",
+    "**/__pycache__",
+    ".venv*",
+    "build",
+    "dist"
+  ],
+  "extraPaths": ["../unified-market-interface"],
   "typeCheckingMode": "strict",
   "reportAny": "error",
   "reportMissingTypeStubs": false

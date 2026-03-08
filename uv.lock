@@ -1142,7 +1142,7 @@ wheels = [
 
 [[package]]
 name = "instruments-service"
-version = "0.1.23"
+version = "0.1.27"
 source = { editable = "." }
 dependencies = [
     { name = "ccxt" },
@@ -2506,7 +2506,7 @@ wheels = [
 
 [[package]]
 name = "unified-api-contracts"
-version = "0.1.63"
+version = "0.1.83"
 source = { directory = "../unified-api-contracts" }
 dependencies = [
     { name = "pydantic" },
@@ -2539,7 +2539,7 @@ provides-extras = ["schema-validation", "dev"]
 
 [[package]]
 name = "unified-cloud-interface"
-version = "0.11.14"
+version = "0.11.15"
 source = { directory = "../unified-cloud-interface" }
 dependencies = [
     { name = "redis" },
@@ -2589,7 +2589,7 @@ provides-extras = ["gcp", "aws", "cache", "dev"]
 
 [[package]]
 name = "unified-config-interface"
-version = "0.1.35"
+version = "0.1.37"
 source = { directory = "../unified-config-interface" }
 dependencies = [
     { name = "pydantic" },
@@ -2624,7 +2624,7 @@ provides-extras = ["aws", "dev"]
 
 [[package]]
 name = "unified-domain-client"
-version = "0.1.19"
+version = "0.1.31"
 source = { directory = "../unified-domain-client" }
 dependencies = [
     { name = "pandas" },
@@ -2683,7 +2683,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "unified-internal-contracts"
-version = "0.1.8"
+version = "0.1.19"
 source = { directory = "../unified-internal-contracts" }
 dependencies = [
     { name = "pandas" },
@@ -2712,7 +2712,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "unified-market-interface"
-version = "0.3.10"
+version = "0.3.32"
 source = { editable = "../unified-market-interface" }
 dependencies = [
     { name = "aiohttp" },
@@ -2729,6 +2729,7 @@ dependencies = [
     { name = "unified-api-contracts" },
     { name = "unified-cloud-interface", extra = ["gcp"] },
     { name = "unified-config-interface" },
+    { name = "unified-events-interface" },
     { name = "unified-internal-contracts" },
     { name = "web3" },
     { name = "websockets" },
@@ -2762,6 +2763,7 @@ requires-dist = [
     { name = "unified-api-contracts", directory = "../unified-api-contracts" },
     { name = "unified-cloud-interface", extras = ["gcp"], directory = "../unified-cloud-interface" },
     { name = "unified-config-interface", directory = "../unified-config-interface" },
+    { name = "unified-events-interface", directory = "../unified-events-interface" },
     { name = "unified-internal-contracts", directory = "../unified-internal-contracts" },
     { name = "web3", specifier = ">=6.0.0,<7.0.0" },
     { name = "websockets", specifier = ">=14.0,<15.0.0" },
@@ -2771,7 +2773,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "unified-reference-data-interface"
-version = "0.1.8"
+version = "0.1.14"
 source = { directory = "../unified-reference-data-interface" }
 dependencies = [
     { name = "aiohttp" },
@@ -2807,7 +2809,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "unified-trading-library"
-version = "0.3.57"
+version = "0.3.67"
 source = { directory = "../unified-trading-library" }
 dependencies = [
     { name = "fsspec" },
