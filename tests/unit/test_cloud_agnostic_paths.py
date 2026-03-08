@@ -166,7 +166,7 @@ class TestCloudAgnosticPaths:
                         ):
                             violations.append(f"{file_path}:{i + 1}: Direct call to get_gcs_client()")
 
-            except Exception:
+            except (OSError, ValueError, KeyError, TypeError, ImportError, RuntimeError):
                 continue
 
         assert len(violations) == 0, (

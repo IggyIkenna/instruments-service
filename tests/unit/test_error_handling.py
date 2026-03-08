@@ -22,7 +22,7 @@ class TestStringConversionErrorHandling:
             result = str(invalid_value)
             if result and result != "None":
                 result = result
-        except Exception:
+        except (OSError, ValueError, KeyError, TypeError, ImportError, RuntimeError):
             # Failed to convert value to string
             result = None
 
@@ -37,7 +37,7 @@ class TestStringConversionErrorHandling:
             result = str(valid_value)
             if result and result != "None":
                 result = result
-        except Exception:
+        except (OSError, ValueError, KeyError, TypeError, ImportError, RuntimeError):
             # Should not reach here for valid value
             result = None
 
@@ -52,7 +52,7 @@ class TestStringConversionErrorHandling:
             result = str(none_value)
             if result and result != "None":
                 result = result
-        except Exception:
+        except (OSError, ValueError, KeyError, TypeError, ImportError, RuntimeError):
             # Should handle None
             result = None
 
@@ -71,7 +71,7 @@ class TestCorporateActionsParsingErrorHandling:
             if invalid_calendar is None:
                 raise ValueError("Calendar is None")
             # Corporate actions parsing logic would go here
-        except Exception:
+        except (OSError, ValueError, KeyError, TypeError, ImportError, RuntimeError):
             # Failed to process earnings date from calendar
             pass
 
@@ -88,7 +88,7 @@ class TestCorporateActionsParsingErrorHandling:
             if valid_calendar is not None and not valid_calendar.empty and "Earnings Date" in valid_calendar.index:
                 # Process earnings date
                 pass
-        except Exception as err:
+        except (OSError, ValueError, KeyError, TypeError, ImportError, RuntimeError) as err:
             # Should not reach here for valid calendar
             raise AssertionError("Should not raise for valid calendar") from err
 
