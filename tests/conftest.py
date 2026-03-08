@@ -52,7 +52,8 @@ def _load_env_early():
 
     # Set test defaults for CI/unit tests when .env is absent (CloudTarget requires non-empty gcs_bucket)
     for key, default_val in [
-        ("INSTRUMENTS_GCS_BUCKET", "instruments-store-test"),
+        ("INSTRUMENTS_GCS_BUCKET", "instruments-store-prod"),
+        ("INSTRUMENTS_GCS_BUCKET_TEST", "instruments-store-test"),
         ("INSTRUMENTS_GCS_BUCKET_CEFI", "instruments-store-cefi-test"),
         ("INSTRUMENTS_GCS_BUCKET_TRADFI", "instruments-store-tradfi-test"),
         ("INSTRUMENTS_GCS_BUCKET_DEFI", "instruments-store-defi-test"),
@@ -78,7 +79,7 @@ import pytest
 from google.auth import default
 from google.auth.exceptions import DefaultCredentialsError
 from google.oauth2 import service_account
-from unified_cloud_interface import get_secret_client, get_storage_client
+from unified_cloud_interface import get_storage_client
 from unified_trading_library import CloudTarget
 
 from instruments_service.config import instruments_config
@@ -297,10 +298,12 @@ def test_cloud_target(gcp_project_id, test_bucket_name, bigquery_dataset, ensure
 @pytest.fixture(scope="session")
 def tardis_api_key(gcp_project_id: str, gcp_credentials: str | None) -> str:
     """Get Tardis API key from Secret Manager."""
-    api_key = get_secret_client(
-        project_id=gcp_project_id,
-        secret_name="tardis-api-key",
-    )
+    from unified_trading_library import get_secret
+
+    try:
+        api_key = get_secret("tardis-api-key")
+    except Exception:
+        api_key = None
 
     if not api_key:
         pytest.skip("Tardis API key not available from Secret Manager or env var")
