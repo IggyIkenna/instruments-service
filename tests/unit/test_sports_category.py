@@ -776,20 +776,22 @@ class TestServiceConfigSports:
     """Tests for SPORTS category in InstrumentsServiceConfig."""
 
     def test_get_cloud_target_sports(self) -> None:
-        """get_cloud_target('SPORTS') returns a CloudTarget."""
+        """get_bucket_for_category('SPORTS') returns a bucket string."""
         from instruments_service.config.service_config import InstrumentsServiceConfig
 
         config = InstrumentsServiceConfig()
-        target = config.get_cloud_target("SPORTS")
-        assert target is not None
+        # Config uses get_bucket_for_category instead of get_cloud_target
+        bucket = config.get_bucket_for_category("SPORTS")
+        assert bucket is not None
+        assert isinstance(bucket, str)
 
     def test_get_cloud_target_invalid_category(self) -> None:
-        """get_cloud_target with invalid category raises ValueError."""
+        """get_bucket_for_category with invalid category raises ValueError."""
         from instruments_service.config.service_config import InstrumentsServiceConfig
 
         config = InstrumentsServiceConfig()
         with pytest.raises(ValueError, match="Invalid category"):
-            config.get_cloud_target("INVALID")
+            config.get_bucket_for_category("INVALID")
 
     def test_get_bucket_for_category_sports(self) -> None:
         """get_bucket_for_category('SPORTS') returns a bucket name."""

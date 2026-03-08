@@ -148,7 +148,7 @@ class TestGenerateInstrumentsSingleDate:
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-            patch("instruments_service.app.core.instruments_service.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
         ):
             # Setup mocks - CeFi uses UMI get_adapter + fetch_instruments
             mock_proc = Mock()
@@ -200,7 +200,7 @@ class TestGenerateInstrumentsSingleDate:
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-            patch("instruments_service.app.core.instruments_service.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
         ):
             mock_proc = Mock()
             mock_proc.api_key = "test-key"
@@ -240,7 +240,7 @@ class TestGenerateInstrumentsSingleDate:
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-            patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig") as mock_config,
+            patch("instruments_service.app.core.instrument_sync.UnifiedInstrumentConfig") as mock_config,
         ):
             # Setup mocks
             mock_proc = Mock()
@@ -346,7 +346,7 @@ class TestGenerateInstrumentsSingleDate:
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-            patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig") as mock_config_class,
+            patch("instruments_service.app.core.instrument_sync.UnifiedInstrumentConfig") as mock_config_class,
         ):
             mock_config = Mock()
             mock_config.get_symbols_for_venue.return_value = ["SPY"]
@@ -407,17 +407,33 @@ class TestGenerateInstrumentsSingleDate:
     @pytest.mark.asyncio
     async def test_generate_no_mode_specified_processes_all(self):
         """Test that when no mode flags are specified, all modes are processed."""
+        import sys
+        import types
+
+        mock_sports_orchestrator = Mock()
+        mock_sports_orchestrator.process_sports = AsyncMock(return_value={})
+        mock_sports_module = types.ModuleType(
+            "instruments_service.engine.operations.instruments.orchestration.sports_orchestration"
+        )
+        mock_sports_module.SportsOrchestrator = Mock(return_value=mock_sports_orchestrator)  # type: ignore[attr-defined]
+
         with (
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-            patch("instruments_service.app.core.instruments_service.UnifiedInstrumentConfig"),
-            patch("instruments_service.app.core.instruments_service.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.UnifiedInstrumentConfig"),
+            patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
+            patch.dict(
+                sys.modules,
+                {
+                    "instruments_service.engine.operations.instruments.orchestration.sports_orchestration": mock_sports_module,
+                },
+            ),
         ):
             mock_proc = Mock()
             mock_proc.api_key = "test-key"
             mock_proc._tardis_project_id = "test-project"
-            mock_proc.fetch_databento_instruments = Mock(return_value={})
+            mock_proc.fetch_databento_instruments = AsyncMock(return_value={})
             mock_proc.fetch_defi_instruments = Mock(return_value={})
 
             mock_tardis_adapter = Mock()
@@ -452,7 +468,7 @@ class TestGenerateInstrumentsSingleDate:
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage"),
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-            patch("instruments_service.app.core.instruments_service.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
         ):
             mock_proc = Mock()
             mock_proc.api_key = "test-key"
@@ -485,7 +501,7 @@ class TestGenerateInstrumentsSingleDate:
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-            patch("instruments_service.app.core.instruments_service.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
         ):
             mock_proc = Mock()
             mock_proc.api_key = "test-key"
@@ -531,7 +547,7 @@ class TestGenerateInstrumentsSingleDate:
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-            patch("instruments_service.app.core.instruments_service.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
         ):
             mock_proc = Mock()
             mock_proc.api_key = "test-key"
@@ -541,7 +557,7 @@ class TestGenerateInstrumentsSingleDate:
             # First exchange (binance) fails, second (deribit) succeeds
             async def fetch_side_effect(exchange, **kwargs):
                 if exchange == "binance":
-                    raise Exception("API error")
+                    raise ValueError("API error")
                 return [
                     {
                         "instrument_key": "TEST:SPOT:BTC-USDT",
@@ -581,7 +597,7 @@ class TestGenerateInstrumentsSingleDate:
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-            patch("instruments_service.app.core.instruments_service.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
         ):
             mock_proc = Mock()
             mock_proc.api_key = "test-key"
