@@ -166,6 +166,12 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         description="Cloud storage bucket for dynamic domain config store",
     )
 
+    catalogue_path_override: str = Field(
+        default="",
+        validation_alias=AliasChoices("INSTRUMENTS_CATALOGUE_PATH"),
+        description="Override path to data catalogue YAML (for tests/CI)",
+    )
+
     # Deployment orchestration metadata (set by VM startup scripts)
     deployment_id: str = Field(
         default="",
