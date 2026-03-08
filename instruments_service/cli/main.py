@@ -297,15 +297,12 @@ def main() -> dict[str, HandlerResultValue]:
         args = parse_arguments()
 
         # Setup events with GCSEventSink now that we have config
-        setup_events(
-            sink=GCSEventSink(  # sink= required in production
-                project_id=instruments_config.gcp_project_id,
-                bucket=getattr(instruments_config, "events_bucket", f"{instruments_config.gcp_project_id}-events"),
-                service_name="instruments-service",
-            ),
-            mode=args.run_mode,
+        _sink = GCSEventSink(
+            project_id=instruments_config.gcp_project_id,
+            bucket=getattr(instruments_config, "events_bucket", f"{instruments_config.gcp_project_id}-events"),
             service_name="instruments-service",
         )
+        setup_events(sink=_sink, mode=args.run_mode, service_name="instruments-service")
 
         start_domain_config_reloaders(instruments_config)
 
