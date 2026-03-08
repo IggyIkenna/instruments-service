@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 LIVE_DIRECTORY_PREFIX = "live/"
 
 
-class _PersistenceItem(TypedDict):
+class _PersistenceItem(TypedDict):  # CORRECT-LOCAL: private service-internal queue item, not a domain contract
     """Item queued for async GCS persistence."""
 
     data: pd.DataFrame
@@ -99,15 +99,12 @@ class LiveModeHandler(ModeHandler):
         config = get_config()
 
         # Setup events (direct import per dependency matrix)
-        setup_events(
-            sink=GCSEventSink(  # sink= required in production
-                project_id=config.gcp_project_id,
-                bucket=getattr(config, "events_bucket", f"{config.gcp_project_id}-events"),
-                service_name="instruments-service",
-            ),
-            mode="live",
+        _sink = GCSEventSink(
+            project_id=config.gcp_project_id,
+            bucket=getattr(config, "events_bucket", f"{config.gcp_project_id}-events"),
             service_name="instruments-service",
         )
+        setup_events(sink=_sink, mode="live", service_name="instruments-service")
 
         log_event(
             "LIVE_MODE_STARTED",

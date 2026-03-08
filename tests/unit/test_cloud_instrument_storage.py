@@ -175,9 +175,11 @@ class TestCloudInstrumentStorage:
 
     def test_init_import_error(self):
         """CloudInstrumentStorage is importable."""
-        from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage as CIS
+        from instruments_service.app.core.cloud_instrument_storage import (
+            CloudInstrumentStorage as InstrumentStorage,
+        )
 
-        assert CIS is not None
+        assert InstrumentStorage is not None
 
     def test_store_instruments_date_extraction_fallback(self, mock_data_sink):
         """Falls back gracefully when date extraction fails."""
@@ -253,8 +255,6 @@ class TestCloudInstrumentStorage:
         call_kwargs = mock_data_sink.write.call_args
         assert call_kwargs is not None
         # partition dict must contain day and venue for hive-style paths
-        _, kwargs = call_kwargs
-        partition = kwargs.get("partition") or (call_kwargs[0][1] if len(call_kwargs[0]) > 1 else {})
         assert "day" in str(call_kwargs) or "venue" in str(call_kwargs)
 
     def test_store_instruments_venue_with_special_chars(self, mock_data_sink):
