@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import warnings
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Protocol, cast
 from uuid import uuid4
 
 from unified_config_interface import DataTypeConfig, ExchangeInstrumentConfig, VenueMapping
@@ -23,6 +23,12 @@ from instruments_service.models import InstrumentDefinition
 from instruments_service.utils.ccxt_service import CCXTService
 
 logger = logging.getLogger(__name__)
+
+
+class _ClearCacheable(Protocol):
+    """Protocol for objects that expose a clear_cache() method."""
+
+    def clear_cache(self) -> None: ...
 
 
 class InstrumentProcessingHandlers:
@@ -620,7 +626,7 @@ class InstrumentProcessingHandlers:
         if hasattr(self, "subgraph_service"):
             sg = self.subgraph_service
             if hasattr(sg, "clear_cache"):
-                sg.clear_cache()  # type: ignore[reportAttributeAccessIssue]
+                cast(_ClearCacheable, sg).clear_cache()
 
         # Clear metadata cache
         self._metadata_cache.clear()
