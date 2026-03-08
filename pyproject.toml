@@ -181,6 +181,10 @@ max-complexity = 10
     "E402",
     "F821",
 ]
+"tests/**/*.py" = [
+    "N817",
+    "F841",
+]
 
 [tool.ruff.format]
 quote-style = "double"
