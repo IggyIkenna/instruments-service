@@ -358,7 +358,7 @@ def check_dependencies() -> bool:
     # Check pytest-cov
     logger.info("Checking pytest-cov...")
     result = subprocess.run(
-        [sys.executable, "-c", "import pytest_cov; print(pytest_cov.__version__)"],
+        [sys.executable, "-c", "import pytest_cov; logger.info(pytest_cov.__version__)"],
         capture_output=True,
         text=True,
     )

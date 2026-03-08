@@ -24,27 +24,36 @@ logger = logging.getLogger(__name__)
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Geocode stadium/venue names to lat/lon")
-    parser.add_argument("--secret-name", default="GOOGLE_MAPS_API_KEY", help="Secret Manager secret for Google Maps API key")
+    parser.add_argument(
+        "--secret-name", default="GOOGLE_MAPS_API_KEY", help="Secret Manager secret for Google Maps API key"
+    )
     parser.add_argument("--output", "-o", help="Output JSON file path")
     parser.add_argument("--dry-run", action="store_true", help="List venues without calling API")
     args = parser.parse_args()
 
     import importlib.util
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "instruments_service", "sports", "team_mapping_data.py")
+
+    path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "instruments_service",
+        "sports",
+        "team_mapping_data.py",
+    )
     spec = importlib.util.spec_from_file_location("team_mapping_data", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    STADIUM_MAPPINGS = mod.STADIUM_MAPPINGS
+    stadium_mappings = mod.STADIUM_MAPPINGS
 
-    venues = list(STADIUM_MAPPINGS.values())
+    venues = list(stadium_mappings.values())
     logger.info("Venues to geocode: %d", len(venues))
 
     if args.dry_run:
         for v in sorted(set(venues)):
-            print(v)
+            logger.info(v)
         return 0
 
     from unified_config_interface import UnifiedCloudConfig
+
     config = UnifiedCloudConfig()
     project_id = config.gcp_project_id
     if not project_id or not str(project_id).strip():
@@ -59,8 +68,8 @@ def main() -> int:
         return 1
 
     try:
-        import urllib.request
         import urllib.parse
+        import urllib.request
 
         results: dict[str, dict[str, float]] = {}
         for venue in sorted(set(venues)):
@@ -81,7 +90,7 @@ def main() -> int:
                 f.write(out)
             logger.info("Wrote %s", args.output)
         else:
-            print(out)
+            logger.info(out)
         return 0
     except Exception as e:
         logger.exception("%s", e)
