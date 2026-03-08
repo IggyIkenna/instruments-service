@@ -239,9 +239,9 @@ class GenerateDateViewsHandler(ModeHandler):
         logger.info("📈 Total records: %s", total_records)
         logger.info("📈 Total date files: %s", total_dates)
 
-        # TODO: Upload to GCS if requested
+        # TODO(GH-BACKLOG): Upload to GCS if requested — use DataSink.upload() from UCI
         if upload_to_gcs:
-            logger.warning("⚠️ GCS upload not yet implemented (testing phase)")
+            logger.warning("GCS upload not yet implemented (testing phase)")
 
         return {
             "success": True,

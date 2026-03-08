@@ -569,9 +569,9 @@ class CorporateActionsBackfillHandler(ModeHandler):
             stats["total_earnings"],
         )
 
-        # TODO: Upload to GCS if requested
+        # TODO(GH-BACKLOG): Upload to GCS if requested — use DataSink.upload() from UCI
         if upload_to_gcs:
-            logger.warning("⚠️ GCS upload not yet implemented (testing phase)")
+            logger.warning("GCS upload not yet implemented (testing phase)")
 
         return cast(
             dict[str, HandlerResultValue],
