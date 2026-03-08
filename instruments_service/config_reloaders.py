@@ -19,7 +19,7 @@ def _on_instruments_reload(config: InstrumentDomainConfig) -> None:
         len(config.subscription_list),
         len(config.enabled_venues),
     )
-    # TODO: Hook into InstrumentsService subscription list update
+    # TODO(GH-BACKLOG): Hook into InstrumentsService subscription list update when live reload is wired
 
 
 def start_domain_config_reloaders(service_config: object) -> None:
