@@ -30,6 +30,7 @@ from instruments_service.app.core.instrument_crud import ErrorWarningCounter, In
 from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
 from instruments_service.app.core.instrument_sync import InstrumentSyncMixin
 from instruments_service.app.core.instrument_validation import InstrumentValidationMixin
+from instruments_service.catalogue_updater import update_catalogue_entry
 from instruments_service.models import InstrumentDefinition
 
 __all__ = [
@@ -361,6 +362,20 @@ class InstrumentsService(
             root_logger.removeHandler(error_warning_counter)
             error_count = error_warning_counter.error_count
             warning_count = error_warning_counter.warning_count
+
+            # Post-batch hook: update data-catalogue YAML with fresh metadata.
+            # Runs only when instruments were actually written to cloud (not live/skip_storage mode).
+            # Best-effort: a failure here must never fail the batch run itself.
+            if success and not skip_storage and not instruments_df.empty:
+                _row_count = len(instruments_df)
+                _categories: list[str] = (
+                    [str(c) for c in instruments_df["market_category"].unique().tolist()]
+                    if "market_category" in instruments_df.columns
+                    else []
+                )
+                for _cat in _categories:
+                    _dataset_id = f"instruments_{_cat.lower()}"
+                    update_catalogue_entry(dataset_id=_dataset_id, row_count=_row_count)
 
             if success:
                 logger.info("✅ Successfully stored instruments for %s", date_str)
