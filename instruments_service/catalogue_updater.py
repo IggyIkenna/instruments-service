@@ -13,8 +13,7 @@ The catalogue YAML lives at:
 
 After updating, emits a CATALOGUE_UPDATED coordination event so downstream caches can refresh.
 
-Usage:
-    from instruments_service.catalogue_updater import update_catalogue_entry
+Usage (import update_catalogue_entry at module level, then call):
     update_catalogue_entry(
         dataset_id="instruments_cefi_binance",
         row_count=3200,
@@ -59,6 +58,59 @@ def _resolve_catalogue_path() -> Path:
     return _CATALOGUE_PATH
 
 
+def _load_catalogue(catalogue_path: Path, dataset_id: str) -> dict[str, object] | None:
+    """Read and parse the catalogue YAML file. Returns None on any error."""
+    try:
+        raw_text = catalogue_path.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.warning(
+            "catalogue_updater: could not read catalogue file %s: %s — skipping update for dataset_id=%s",
+            catalogue_path,
+            e,
+            dataset_id,
+        )
+        return None
+    try:
+        return yaml.safe_load(raw_text) or {}
+    except yaml.YAMLError as e:
+        logger.warning(
+            "catalogue_updater: could not parse catalogue YAML %s: %s — skipping update for dataset_id=%s",
+            catalogue_path,
+            e,
+            dataset_id,
+        )
+        return None
+
+
+def _save_catalogue(catalogue_path: Path, catalogue: dict[str, object]) -> bool:
+    """Write updated catalogue YAML to disk. Returns False on error."""
+    try:
+        updated_text = yaml.dump(catalogue, default_flow_style=False, allow_unicode=True, sort_keys=False)
+        catalogue_path.write_text(updated_text, encoding="utf-8")
+        return True
+    except OSError as e:
+        logger.warning("catalogue_updater: could not write catalogue file %s: %s", catalogue_path, e)
+        return False
+
+
+def _patch_flat_entry(
+    catalogue: dict[str, object],
+    dataset_id: str,
+    last_updated: datetime,
+    row_count: int,
+) -> bool:
+    """Patch flat-list layout: datasets: [{dataset_id: ..., ...}, ...]."""
+    datasets_raw = catalogue.get("datasets")
+    if not isinstance(datasets_raw, list):
+        return False
+    for entry in datasets_raw:
+        if isinstance(entry, dict) and entry.get("dataset_id") == dataset_id:
+            entry["last_updated"] = last_updated.strftime("%Y-%m-%dT%H:%M:%SZ")
+            entry["row_count_last_batch"] = row_count
+            return True
+    return False
+
+
 def update_catalogue_entry(
     dataset_id: str,
     row_count: int,
@@ -70,20 +122,7 @@ def update_catalogue_entry(
     Reads the existing YAML, locates the dataset entry by ``dataset_id``, patches
     ``last_updated`` and ``row_count_last_batch``, and writes it back in place.
     Emits a ``CATALOGUE_UPDATED`` coordination event on success.
-
-    This function is intentionally narrow: it only patches the two mutable stats
-    fields. All other fields (schema_ref, gcp_path, status, etc.) are managed by
-    humans and must not be overwritten here.
-
-    Args:
-        dataset_id: Unique dataset identifier matching the ``dataset_id`` field in
-            the catalogue YAML entry, e.g. ``"instruments_cefi_binance"``.
-        row_count: Row count from the most recent batch write.
-        last_updated: Datetime of the batch write. Defaults to ``datetime.now(UTC)``.
-
-    Returns:
-        True if the entry was found and updated; False if the entry was not found or
-        the catalogue file does not exist (logged as a warning, not raised).
+    Returns False if the entry was not found or the catalogue file does not exist.
     """
     if last_updated is None:
         last_updated = datetime.now(UTC)
@@ -98,46 +137,13 @@ def update_catalogue_entry(
         )
         return False
 
-    try:
-        raw_text = catalogue_path.read_text(encoding="utf-8")
-    except OSError as e:
-        logger.warning(
-            "catalogue_updater: could not read catalogue file %s: %s — skipping update for dataset_id=%s",
-            catalogue_path,
-            e,
-            dataset_id,
-        )
+    catalogue = _load_catalogue(catalogue_path, dataset_id)
+    if catalogue is None:
         return False
 
-    try:
-        catalogue: dict[str, object] = yaml.safe_load(raw_text) or {}
-    except yaml.YAMLError as e:
-        logger.warning(
-            "catalogue_updater: could not parse catalogue YAML %s: %s — skipping update for dataset_id=%s",
-            catalogue_path,
-            e,
-            dataset_id,
-        )
-        return False
-
-    # Locate the dataset entry by dataset_id.
-    # Supports two catalogue layouts:
-    #   (a) flat list: datasets: [{dataset_id: ..., ...}, ...]
-    #   (b) nested by category: cefi: {binance: {dataset_id: ..., ...}}
-    # Also patches the top-level service shard_status.last_updated field if present.
-
-    entry_found = False
-    datasets_raw = catalogue.get("datasets")
-    if isinstance(datasets_raw, list):
-        for entry in datasets_raw:
-            if isinstance(entry, dict) and entry.get("dataset_id") == dataset_id:
-                entry["last_updated"] = last_updated.strftime("%Y-%m-%dT%H:%M:%SZ")
-                entry["row_count_last_batch"] = row_count
-                entry_found = True
-                break
-
+    # Supports two catalogue layouts: flat list and nested-by-category.
+    entry_found = _patch_flat_entry(catalogue, dataset_id, last_updated, row_count)
     if not entry_found:
-        # Fallback: walk all nested dicts looking for {"dataset_id": dataset_id}
         entry_found = _patch_nested_entry(catalogue, dataset_id, last_updated, row_count)
 
     if not entry_found:
@@ -148,18 +154,8 @@ def update_catalogue_entry(
         )
         return False
 
-    # Patch top-level last_updated on the catalogue file itself
     catalogue["last_updated"] = last_updated.strftime("%Y-%m-%d")
-
-    try:
-        updated_text = yaml.dump(catalogue, default_flow_style=False, allow_unicode=True, sort_keys=False)
-        catalogue_path.write_text(updated_text, encoding="utf-8")
-    except OSError as e:
-        logger.warning(
-            "catalogue_updater: could not write catalogue file %s: %s",
-            catalogue_path,
-            e,
-        )
+    if not _save_catalogue(catalogue_path, catalogue):
         return False
 
     logger.info(
@@ -169,9 +165,6 @@ def update_catalogue_entry(
         row_count,
         catalogue_path.name,
     )
-
-    # Emit coordination event so downstream caches (UCI MetadataClient, instruments-service
-    # in-memory snapshot) can refresh without a restart.
     log_event(
         "CATALOGUE_UPDATED",
         details={
@@ -181,7 +174,6 @@ def update_catalogue_entry(
             "catalogue_file": catalogue_path.name,
         },
     )
-
     return True
 
 
