@@ -122,6 +122,13 @@ python_files = [
     "test_*.py",
 ]
 asyncio_mode = "auto"
+markers = [
+    "integration: mark test as integration test (deselect with '-m \"not integration\"')",
+    "e2e: mark test as end-to-end test (deselect with '-m \"not e2e\"')",
+    "live: mark test as requiring live external API access (skip in CI)",
+    "smoke: mark test as smoke test",
+    "unit: mark test as unit test",
+]
 
 [tool.ruff]
 line-length = 120
