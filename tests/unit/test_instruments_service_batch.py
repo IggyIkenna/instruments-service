@@ -114,12 +114,13 @@ class TestGenerateInstrumentsDateRange:
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
 
-            # One success, one error, one exception
+            # One success, one error, one caught exception
+            # generate_instruments_date_range catches ValueError/KeyError/TypeError/IndexError
             service.generate_instruments_for_date = AsyncMock(
                 side_effect=[
                     {"status": "success", "date": "2024-01-01", "instruments_generated": 100},
                     {"status": "error", "date": "2024-01-02", "instruments_generated": 0},
-                    Exception("Processing failed"),
+                    ValueError("Processing failed"),
                 ]
             )
 
@@ -258,7 +259,7 @@ class TestGenerateInstrumentsEdgeCases:
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-            patch("instruments_service.app.core.instruments_service.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
         ):
             mock_proc = Mock()
             mock_proc.api_key = "test-key"
@@ -306,7 +307,7 @@ class TestUpbitCoinbaseIntegration:
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-            patch("instruments_service.app.core.instruments_service.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
         ):
             mock_proc = Mock()
             mock_proc.api_key = "test-key"
@@ -352,7 +353,7 @@ class TestUpbitCoinbaseIntegration:
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-            patch("instruments_service.app.core.instruments_service.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
         ):
             mock_proc = Mock()
             mock_proc.api_key = "test-key"
