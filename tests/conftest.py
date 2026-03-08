@@ -178,7 +178,7 @@ def get_service_account_email(credentials_file: str) -> str | None:
         with open(credentials_file) as f:
             creds = json.load(f)
             return creds.get("client_email")
-    except Exception:
+    except (OSError, ValueError, KeyError, TypeError, ImportError, RuntimeError):
         return None
 
 
@@ -211,7 +211,7 @@ def ensure_test_bucket_exists(
             try:
                 bucket.reload()
                 return True
-            except Exception as e:
+            except (OSError, ValueError, KeyError, TypeError, ImportError, RuntimeError) as e:
                 pytest.skip(f"Test bucket exists but not accessible: {e}")
                 return False
 
@@ -249,7 +249,7 @@ def ensure_test_bucket_exists(
 
                 bucket.set_iam_policy(policy)
                 logger.info("Granted permissions to %s", service_account_email)
-            except Exception as e:
+            except (OSError, ValueError, KeyError, TypeError, ImportError, RuntimeError) as e:
                 # If we can't set IAM policy, that's okay - might already have project-level permissions
                 # or service account might not have IAM admin permissions (which is fine for tests)
                 logger.warning(
@@ -259,7 +259,7 @@ def ensure_test_bucket_exists(
 
         return True
 
-    except Exception as e:
+    except (OSError, ValueError, KeyError, TypeError, ImportError, RuntimeError) as e:
         pytest.skip(f"Could not create/access test bucket {bucket_name}: {e}")
         return False
 

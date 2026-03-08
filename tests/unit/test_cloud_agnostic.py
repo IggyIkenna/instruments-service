@@ -44,7 +44,7 @@ class TestCloudAgnosticArchitecture:
                         ):
                             violations.append(f"{py_file}:{i + 1}: Direct import of google.cloud.storage")
 
-            except Exception:
+            except (OSError, ValueError, KeyError, TypeError, ImportError, RuntimeError):
                 continue
 
         assert len(violations) == 0, (
