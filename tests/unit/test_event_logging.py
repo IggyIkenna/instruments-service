@@ -59,8 +59,10 @@ def find_event_markers(file_path: Path) -> set[str]:
 @pytest.fixture
 def all_event_markers() -> set[str]:
     """Collect all event markers from service source."""
+    # Use file location, not cwd, so the test works when run from workspace root
+    service_dir = Path(__file__).parent.parent.parent
     markers: set[str] = set()
-    for py in find_python_files(Path.cwd()):
+    for py in find_python_files(service_dir):
         markers.update(find_event_markers(py))
     return markers
 
