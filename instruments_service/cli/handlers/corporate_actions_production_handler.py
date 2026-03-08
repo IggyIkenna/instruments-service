@@ -133,9 +133,7 @@ class CorporateActionsProductionHandler(ModeHandler):
             List of ticker symbols
         """
         try:
-            data_source: DataSource = get_data_source(
-                routing_key="tradfi", prefix="instrument_availability/by_date"
-            )
+            data_source: DataSource = get_data_source(routing_key="tradfi", prefix="instrument_availability/by_date")
 
             # Try known good dates
             known_good_dates = ["2024-07-01", "2024-06-01", "2024-05-01", "2023-05-23"]

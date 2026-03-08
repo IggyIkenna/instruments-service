@@ -12,8 +12,8 @@ from datetime import datetime
 from typing import cast
 
 import pandas as pd
-from unified_events_interface import ErrorWarningCounter
 
+from instruments_service.app.core.instrument_crud import ErrorWarningCounter
 from instruments_service.engine.operations.instruments.orchestrator_base import OrchestratorBase
 from instruments_service.engine.operations.instruments.orchestrator_helpers import (
     add_tradfi_placeholders,
