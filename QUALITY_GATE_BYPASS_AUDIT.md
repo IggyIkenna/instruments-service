@@ -86,6 +86,52 @@ These deep imports cannot be converted to top-level imports because the symbols 
 | `app/core/cloud_instrument_storage.py` | `from unified_api_contracts.domain_config import DomainConfigProtocol`                                   | `DomainConfigProtocol` not exported at top-level of unified_api_contracts; needs addition to UAC `__init__.py`                           |
 | `sports/team_aliases.py`               | `from unified_api_contracts.unified_api_contracts_external.sports.canonical.mappings import TeamMapping` | `TeamMapping` not exported at top-level of unified_api_contracts; needs addition to UAC `__init__.py` via `unified_api_contracts.sports` |
 
+### 1.7 Function/Method Size Bypasses (2026-03-08)
+
+The following files are excluded from the function/class/method size check. All are complex data-processing
+orchestration files or CLI handlers where the business logic cannot be trivially decomposed without
+introducing additional abstractions. Tracked for Phase 3 refactoring.
+
+**Files excluded from function-size check:**
+
+- `app/core/cloud_instrument_storage.py` — `store_instruments()` 281L (batch write orchestration)
+- `app/core/instrument_processing_base.py` — `__init__()` 70L (complex DI wiring)
+- `app/core/instrument_processing_handlers.py` — class 602L, `process_exchange_instruments()` 353L
+- `app/core/instrument_processing_mixins.py` — Tardis/Databento integration mixins
+- `app/core/instrument_sync.py` — exchange sync methods 73–185L
+- `app/core/instrument_validation.py` — `_validate_venues_filter()` 85L
+- `app/core/instruments_service.py` — `generate_instruments_for_date()` 320L
+- `app/core/cloud_data_provider.py` — GCS/BQ data loading methods 56–113L
+- `app/core/instrument_crud.py` — `generate_instruments_date_range()` 99L
+- `app/core/processors/symbol_parser.py` — parsing methods 56–234L
+- `app/core/processors/canonical_key_generator.py` — `generate_canonical_key()` 217L
+- `app/core/processors/derived_fields_populator.py` — `populate_derived_fields()` 133L
+- `cli/parser.py` — `parse_arguments()` 227L (CLI with many subcommands)
+- `cli/main.py` — `main()` 185L
+- `cli/handlers/live_mode_handler.py` — cycle/run methods 92–96L
+- `cli/handlers/instrument_handler.py` — `_execute_instrument_generation()` 316L
+- `cli/handlers/corporate_actions_*.py` — 4 handler files, run/fetch methods
+- `cli/handlers/generate_date_views_handler.py` — `run()` 86L
+- `corporate_actions/adapter.py` — fetch methods 68–107L
+- `utils/ccxt_service.py` — class 830L, various methods
+- `utils/special_instruments.py` — `create_bitcoin_etf_instrument_definition()` 111L
+- `sports/fixture_parser.py` — `parse_fixture()` 77L
+- `sports/league_data_classification_a.py`, `league_data_classification_b.py`, `league_data_other.py` — pure data
+- `engine/operations/*` — all engine operation files (orchestrators, processors, schedulers)
+- `engine/processors/*` — all engine processor files
+- `engine/venues/ccxt_service.py`, `engine/venues/special_instruments.py`
+- `download_sample_data.py` — sample/dev script with large download functions
+
+**Files excluded from imports-inside-functions check (additions 2026-03-08):**
+
+- `config_reloaders.py` — lazy imports of unified_config_interface/unified_trading_library to allow hot-reload startup without requiring libs at module load time
+- `instrument_crud.py` — lazy imports to avoid circular imports with batch_processor, cloud_instrument_storage, instrument_processing_service
+- `instrument_sync.py` — lazy import of instrument_processing_service to avoid circular
+- `defi_orchestration.py`, `tradfi_orchestration.py` — lazy import of InstrumentProcessingService
+- `orchestrator_base.py` — lazy import of InstrumentProcessingService
+- `team_aliases.py` — lazy import of pandas (optional dep)
+- `cefi_processor.py` — lazy import of derived_fields_populator
+
 ### 1.6 File Size Bypass (pure data files exceeding 900-line limit)
 
 | File                                   | Lines | Reason                                                                                                                                                                                                                                                                                                                                                                            |
