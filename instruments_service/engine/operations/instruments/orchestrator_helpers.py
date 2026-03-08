@@ -16,9 +16,9 @@ from datetime import date as date_type
 from typing import cast
 
 import pandas as pd
-from unified_events_interface import ErrorWarningCounter
 from unified_trading_library import determine_market_category
 
+from instruments_service.app.core.instrument_crud import ErrorWarningCounter
 from instruments_service.models import InstrumentDefinition
 from instruments_service.utils.dump_to_csv import dump_to_csv
 

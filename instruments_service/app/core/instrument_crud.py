@@ -216,6 +216,6 @@ class InstrumentCrudMixin:
 
     def cleanup(self):
         """Cleanup resources."""
-        if hasattr(self, "processing_service"):
+        if hasattr(self, "processing_service") and self.processing_service is not None:
             self.processing_service.cleanup()
         logger.info("🧹 InstrumentsService cleanup completed")

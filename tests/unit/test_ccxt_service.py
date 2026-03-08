@@ -182,12 +182,13 @@ class TestCCXTService:
             assert "BTC/USDT:USDT" in result["markets"]
 
     def test_load_markets_exception(self, ccxt_service):
-        """Test load_markets when exception occurs."""
+        """Test load_markets returns None when a connection-level exception occurs."""
         ccxt_service.venue_mapping.venue_to_ccxt = {"BINANCE-FUTURES": "binance"}
 
         with patch("instruments_service.engine.venues.ccxt_service.CCXTService.get_ccxt_exchange") as mock_get_exchange:
             mock_exchange = Mock()
-            mock_exchange.load_markets.side_effect = Exception("API Error")
+            # Use ConnectionError — one of the specific exception types caught by load_markets
+            mock_exchange.load_markets.side_effect = ConnectionError("API Error")
             mock_get_exchange.return_value = mock_exchange
 
             result = ccxt_service.load_markets("BINANCE-FUTURES")
