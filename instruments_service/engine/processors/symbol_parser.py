@@ -18,14 +18,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class SymbolComponents(TypedDict):
+class SymbolComponents(
+    TypedDict
+):  # CORRECT-LOCAL: private parser-internal result type, not a cross-service domain contract
     """Symbol parsing results with base and quote assets."""
 
     base_asset: str
     quote_asset: str
 
 
-class OptionComponents(TypedDict):
+class OptionComponents(
+    TypedDict
+):  # CORRECT-LOCAL: private parser-internal result type, not a cross-service domain contract
     """Option parsing results with expiry, strike, and option type."""
 
     expiry_date: str

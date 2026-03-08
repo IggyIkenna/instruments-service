@@ -47,7 +47,7 @@ from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 logger = logging.getLogger(__name__)
 
 
-class _ActionTypeStats(TypedDict):
+class _ActionTypeStats(TypedDict):  # CORRECT-LOCAL: private CLI-internal stats struct, not a domain contract
     total_records: int
     dates_with_data: int
     date_counts: dict[str, int]
