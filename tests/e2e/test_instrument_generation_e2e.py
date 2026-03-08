@@ -188,5 +188,5 @@ def test_secret_manager_access(tardis_api_key):
 def test_gcp_credentials(gcp_credentials):
     """Verify GCP credentials are configured (skipped when using ADC without explicit JSON file)."""
     if gcp_credentials is None:
-        pytest.skip("No explicit credentials file — using Application Default Credentials")
+        pytest.skip("No SA key file found — running with ADC only; skipping SA file validation")
     assert Path(gcp_credentials).exists(), f"Credentials file must exist: {gcp_credentials}"
