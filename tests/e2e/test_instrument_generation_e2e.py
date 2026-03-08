@@ -186,6 +186,7 @@ def test_secret_manager_access(tardis_api_key):
 
 @pytest.mark.e2e
 def test_gcp_credentials(gcp_credentials):
-    """Verify GCP credentials are configured."""
-    assert gcp_credentials is not None, "GCP credentials must be configured"
+    """Verify GCP credentials are configured (skipped when using ADC without explicit JSON file)."""
+    if gcp_credentials is None:
+        pytest.skip("No explicit credentials file — using Application Default Credentials")
     assert Path(gcp_credentials).exists(), f"Credentials file must exist: {gcp_credentials}"

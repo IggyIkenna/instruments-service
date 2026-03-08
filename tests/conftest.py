@@ -135,11 +135,12 @@ def gcp_auth_info():
 
 @pytest.fixture(autouse=True)
 def _skip_integration_without_creds(request: pytest.FixtureRequest, gcp_auth_info: tuple) -> None:
-    """Skip @pytest.mark.integration tests when no GCP credentials are available."""
+    """Skip @pytest.mark.integration tests when no real GCP project is available."""
     if "integration" in request.keywords:
         credentials, _, _ = gcp_auth_info
-        if credentials is None:
-            pytest.skip("No GCP credentials — skipping integration test")
+        env_project_id = os.getenv("GCP_PROJECT_ID", "")
+        if credentials is None or env_project_id == "test-project":
+            pytest.skip("No real GCP project — skipping integration test")
 
 
 @pytest.fixture(scope="session")
