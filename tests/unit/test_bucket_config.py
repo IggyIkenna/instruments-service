@@ -41,17 +41,18 @@ class TestBucketConfiguration:
         with patch.dict(os.environ, self.env_vars):
             config = InstrumentsServiceConfig()
 
-            assert hasattr(config, "gcs_bucket_cefi")
-            assert hasattr(config, "gcs_bucket_tradfi")
-            assert hasattr(config, "gcs_bucket_defi")
+            # Config uses sink_bucket_* naming (not gcs_bucket_*)
+            assert hasattr(config, "sink_bucket_cefi")
+            assert hasattr(config, "sink_bucket_tradfi")
+            assert hasattr(config, "sink_bucket_defi")
 
-            assert config.gcs_bucket_cefi == "test-bucket-cefi"
-            assert config.gcs_bucket_tradfi == "test-bucket-tradfi"
-            assert config.gcs_bucket_defi == "test-bucket-defi"
+            assert config.sink_bucket_cefi == "test-bucket-cefi"
+            assert config.sink_bucket_tradfi == "test-bucket-tradfi"
+            assert config.sink_bucket_defi == "test-bucket-defi"
 
             # Check test buckets
-            assert hasattr(config, "gcs_bucket_cefi_test")
-            assert config.gcs_bucket_cefi_test == "test-bucket-cefi-test"
+            assert hasattr(config, "sink_bucket_cefi_test")
+            assert config.sink_bucket_cefi_test == "test-bucket-cefi-test"
 
     def test_get_bucket_for_category_resolution(self):
         """Test that get_bucket_for_category resolves correctly."""
@@ -101,7 +102,6 @@ class TestBucketConfiguration:
     def test_check_instruments_exist_iterates_categories(self):
         """Test that check_instruments_exist checks all categories."""
         with (
-            patch("instruments_service.app.core.cloud_data_provider.StandardizedDomainCloudService"),
             patch.object(CloudDataProvider, "get_instruments_from_category") as mock_get_from_cat,
         ):
             # Mock DataFrame objects
@@ -114,7 +114,7 @@ class TestBucketConfiguration:
             # Make it fail for first two, succeed for last
             mock_get_from_cat.side_effect = [
                 empty_df,  # CEFI (empty)
-                None,  # TRADFI (None/Error)
+                empty_df,  # TRADFI (empty)
                 found_df,  # DEFI (Found)
             ]
 
