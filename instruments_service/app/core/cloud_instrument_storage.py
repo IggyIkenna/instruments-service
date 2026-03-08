@@ -17,7 +17,14 @@ import pandas as pd
 from unified_cloud_interface import DataSink, ServiceMode, get_data_sink, get_service_mode
 from unified_domain_client import validate_timestamp_date_alignment
 from unified_events_interface import log_event
-from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts import (
+    EnhancedError,
+    ErrorCategory,
+    ErrorContext,
+    ErrorRecoveryStrategy,
+    ErrorSeverity,
+    LifecycleEventType,
+)
 from unified_trading_library import (
     ParquetSchemaEnforcer,
     SchemaValidationResult,
@@ -194,7 +201,7 @@ class CloudInstrumentStorage:
             schema_enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
 
             venue_count = 0
-            log_event("UPLOAD_STARTED", details={"date": date_str})
+            log_event(LifecycleEventType.PERSISTENCE_STARTED, details={"date": date_str})
 
             for category, category_df in category_groups:
                 category_str = str(category)
@@ -316,10 +323,15 @@ class CloudInstrumentStorage:
                     total_stored,
                     venue_count,
                 )
-                log_event("UPLOAD_COMPLETED", details={"total_stored": total_stored, "date": date_str})
+                log_event(
+                    LifecycleEventType.PERSISTENCE_COMPLETED, details={"total_stored": total_stored, "date": date_str}
+                )
             else:
                 logger.warning("Some venue uploads failed. Total stored: %s/%s", total_stored, len(instruments_df))
-                log_event("UPLOAD_COMPLETED", details={"total_stored": total_stored, "date": date_str, "partial": True})
+                log_event(
+                    LifecycleEventType.PERSISTENCE_COMPLETED,
+                    details={"total_stored": total_stored, "date": date_str, "partial": True},
+                )
 
             return all_successful
 
