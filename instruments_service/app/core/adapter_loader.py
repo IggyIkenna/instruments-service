@@ -13,7 +13,26 @@ Complies with:
 import logging
 from typing import Protocol
 
-from unified_market_interface import DataSourceMapping, YahooFinanceAdapter
+from unified_market_interface import (
+    AaveV3Adapter,
+    BalancerAdapter,
+    CurveAdapter,
+    DatabentoAdapter,
+    DataSourceMapping,
+    EthenaAdapter,
+    EtherFiAdapter,
+    EulerAdapter,
+    FluidAdapter,
+    HyperliquidAdapter,
+    HyperliquidBaseClient,
+    LidoAdapter,
+    MorphoAdapter,
+    TardisAdapter,
+    UniswapV2Adapter,
+    UniswapV3Adapter,
+    UniswapV4Adapter,
+    YahooFinanceAdapter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -60,14 +79,10 @@ def get_adapter_for_venue(venue: str, api_keys: dict[str, str] | None = None) ->
 
     try:
         if data_source == "tardis":
-            from unified_market_interface import TardisAdapter
-
             api_key = api_keys.get("tardis") if api_keys else None
             adapter = TardisAdapter(api_key=api_key)
 
         elif data_source == "databento":
-            from unified_market_interface import DatabentoAdapter
-
             api_key = api_keys.get("databento") if api_keys else None
             adapter = DatabentoAdapter(api_key=api_key)
 
@@ -78,11 +93,6 @@ def get_adapter_for_venue(venue: str, api_keys: dict[str, str] | None = None) ->
             )
 
         elif data_source == "hyperliquid":
-            from unified_market_interface import (
-                HyperliquidAdapter,  # TODO: Map to explicit import
-                HyperliquidBaseClient,
-            )
-
             adapter = HyperliquidAdapter(base_client=HyperliquidBaseClient())
 
         elif data_source == "thegraph":
@@ -117,52 +127,28 @@ def _load_defi_adapter(venue: str, api_keys: dict[str, str] | None) -> DataSourc
     venue_upper = venue.upper()
 
     if venue_upper == "UNISWAP-V2":
-        from unified_market_interface import UniswapV2Adapter  # TODO: Map to explicit import
-
         return UniswapV2Adapter()
     elif venue_upper == "UNISWAP-V3":
-        from unified_market_interface import UniswapV3Adapter  # TODO: Map to explicit import
-
         return UniswapV3Adapter()
     elif venue_upper == "UNISWAP-V4":
-        from unified_market_interface import UniswapV4Adapter  # TODO: Map to explicit import
-
         return UniswapV4Adapter()
     elif venue_upper == "AAVE-V3":
-        from unified_market_interface import AaveV3Adapter  # TODO: Map to explicit import
-
         return AaveV3Adapter()
     elif venue_upper == "CURVE":
-        from unified_market_interface import CurveAdapter  # TODO: Map to explicit import
-
         return CurveAdapter()
     elif venue_upper == "BALANCER":
-        from unified_market_interface import BalancerAdapter  # TODO: Map to explicit import
-
         return BalancerAdapter()
     elif venue_upper == "MORPHO":
-        from unified_market_interface import MorphoAdapter  # TODO: Map to explicit import
-
         return MorphoAdapter()
     elif venue_upper == "EULER":
-        from unified_market_interface import EulerAdapter  # TODO: Map to explicit import
-
         return EulerAdapter()
     elif venue_upper == "FLUID":
-        from unified_market_interface import FluidAdapter  # TODO: Map to explicit import
-
         return FluidAdapter()
     elif venue_upper == "LIDO":
-        from unified_market_interface import LidoAdapter  # TODO: Map to explicit import
-
         return LidoAdapter()
     elif venue_upper == "ETHERFI":
-        from unified_market_interface import EtherFiAdapter  # TODO: Map to explicit import
-
         return EtherFiAdapter()
     elif venue_upper == "ETHENA":
-        from unified_market_interface import EthenaAdapter  # TODO: Map to explicit import
-
         return EthenaAdapter()
     else:
         raise ValueError(f"Unknown DeFi venue: {venue}")
