@@ -239,15 +239,47 @@ class GenerateDateViewsHandler(ModeHandler):
         logger.info("📈 Total records: %s", total_records)
         logger.info("📈 Total date files: %s", total_dates)
 
-        # TODO(GH-BACKLOG): Upload to GCS if requested — use DataSink.upload() from UCI
         if upload_to_gcs:
-            logger.warning("GCS upload not yet implemented (testing phase)")
+            self._upload_to_gcs(by_date_dir)
 
         return {
             "success": True,
             "status": "success",
             "statistics": {"action_types": action_types},
         }
+
+    def _upload_to_gcs(self, by_date_dir: Path) -> None:
+        """Upload local by_date Parquet files to cloud storage via UCI DataSink.
+
+        Walks ``by_date_dir`` and uploads each Parquet file partitioned by
+        ``{day}/{action_type}`` so downstream consumers can read via DataSource.
+        Uses the ``tradfi`` routing key (PROTOCOL_DATA_SINK_BUCKET_TRADFI env var).
+        """
+        from unified_cloud_interface import DataSink, get_data_sink
+
+        try:
+            data_sink: DataSink = get_data_sink(routing_key="tradfi")
+            uploaded_count = 0
+
+            for day_dir in by_date_dir.iterdir():
+                if not day_dir.is_dir():
+                    continue
+                # day_dir name is like "day=2024-01-04"
+                day_str = day_dir.name.replace("day=", "")
+                for parquet_file in day_dir.glob("*.parquet"):
+                    action_type = parquet_file.stem  # dividends, splits, earnings
+                    df = pd.read_parquet(parquet_file)
+                    data_sink.write(
+                        df,
+                        partition={"day": day_str, "action_type": action_type},
+                        format="parquet",
+                    )
+                    uploaded_count += 1
+                    logger.debug("Uploaded day=%s/%s to storage", day_str, action_type)
+
+            logger.info("Uploaded %s date-view files to storage (tradfi routing)", uploaded_count)
+        except (OSError, ValueError, TypeError, KeyError) as e:
+            logger.error("Failed to upload date views to storage: %s", e)
 
     def cleanup(self) -> None:
         """Cleanup resources."""
