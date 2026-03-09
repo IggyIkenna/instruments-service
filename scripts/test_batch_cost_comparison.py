@@ -27,11 +27,11 @@ import sys
 from datetime import datetime, timedelta
 from uuid import uuid4
 
-from unified_trading_library import get_secret_client
 from unified_config_interface import UnifiedCloudConfig
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
 from unified_internal_contracts.schemas.errors import ErrorContext
 from unified_market_interface import DatabentoBaseClient
+from unified_trading_library import get_secret_client
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
