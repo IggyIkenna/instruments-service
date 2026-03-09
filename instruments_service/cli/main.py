@@ -34,7 +34,7 @@ _load_env_early()
 
 # Setup structured JSON logging (split libraries - direct import per dependency matrix)
 from unified_events_interface import log_event, setup_events
-from unified_trading_library import BaseModeHandler, GCSEventSink, GracefulShutdownHandler, ServiceCLI
+from unified_trading_library import BaseModeHandler, GCSEventSink, GracefulShutdownHandler, ServiceCLI, setup_tracing
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +217,7 @@ def main_service_cli() -> None:
 
     Pre-parses instruments-specific flags, then delegates to ServiceCLI.
     """
+    setup_tracing("instruments-service")
     original_argv = sys.argv[:]
     try:
         pre_parser = _build_pre_parser()
@@ -303,6 +304,7 @@ def main() -> dict[str, HandlerResultValue]:
             service_name="instruments-service",
         )
         setup_events(sink=_sink, mode=args.run_mode, service_name="instruments-service")
+        setup_tracing("instruments-service")
 
         start_domain_config_reloaders(instruments_config)
 
