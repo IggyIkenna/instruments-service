@@ -10,14 +10,14 @@ Single source of truth for how API keys are resolved, when they are required, an
 
 **Other services do NOT import instruments-service as a package.** They use shared libraries:
 
-| Consumer | How They Read Instruments |
-|----------|---------------------------|
-| **market-tick-data-service** | `InstrumentsDomainClient` from unified-trading-services |
-| **market-data-processing-service** | `InstrumentsDomainClient` from unified-trading-services |
-| **features-*** services | `InstrumentsDomainClient` from unified-trading-services |
-| **UTDv3 data-status** | `InstrumentsDomainClient.get_aggregated_instruments()` (aggregated cache) |
-| **deployment scripts** | `InstrumentsDomainClient` or instruments-service CLI |
-| **instruments-service itself** | `CloudInstrumentStorage.query_instruments`, `InstrumentsService.query_instruments` |
+| Consumer                           | How They Read Instruments                                                          |
+| ---------------------------------- | ---------------------------------------------------------------------------------- |
+| **market-tick-data-service**       | `InstrumentsDomainClient` from unified-trading-services                            |
+| **market-data-processing-service** | `InstrumentsDomainClient` from unified-trading-services                            |
+| **features-\*** services           | `InstrumentsDomainClient` from unified-trading-services                            |
+| **UTDv3 data-status**              | `InstrumentsDomainClient.get_aggregated_instruments()` (aggregated cache)          |
+| **deployment scripts**             | `InstrumentsDomainClient` or instruments-service CLI                               |
+| **instruments-service itself**     | `CloudInstrumentStorage.query_instruments`, `InstrumentsService.query_instruments` |
 
 **Standard:** All consumers use **InstrumentsDomainClient** (unified-trading-services). No duplicate `_load_instruments_by_venue` or direct GCS reads. Aggregated instruments via `get_aggregated_instruments(category)`.
 
@@ -29,14 +29,14 @@ Single source of truth for how API keys are resolved, when they are required, an
 
 Not all modes need all API keys. Use **selective validation** — only fetch keys for requested venues.
 
-| Mode / Category | Required API Keys | Optional |
-|-----------------|-------------------|----------|
-| **CEFI** (Tardis venues) | Tardis | — |
-| **TRADFI** (Databento venues) | Databento | — |
-| **DEFI** (DeFi venues) | The Graph | Alchemy, AaveScan |
-| **Corporate actions only** | None | — |
-| **TRADFI-only (no CEFI)** | Databento | Tardis not needed |
-| **DEFI-only (no CEFI)** | The Graph | Tardis not needed |
+| Mode / Category               | Required API Keys | Optional          |
+| ----------------------------- | ----------------- | ----------------- |
+| **CEFI** (Tardis venues)      | Tardis            | —                 |
+| **TRADFI** (Databento venues) | Databento         | —                 |
+| **DEFI** (DeFi venues)        | The Graph         | Alchemy, AaveScan |
+| **Corporate actions only**    | None              | —                 |
+| **TRADFI-only (no CEFI)**     | Databento         | Tardis not needed |
+| **DEFI-only (no CEFI)**       | The Graph         | Tardis not needed |
 
 **DataSourceMapping** (unified-market-interface) maps venues → data sources → required secrets. Use `DataSourceMapping.get_required_secrets(venues)` before validating.
 
@@ -46,12 +46,12 @@ Not all modes need all API keys. Use **selective validation** — only fetch key
 
 **All API keys live in Secret Manager (GCP).** No credentials in code or env vars in production.
 
-| Layer | Responsibility |
-|-------|----------------|
-| **Secret Manager** | Store all API keys |
-| **unified-config-interface** | Define secret names in `UnifiedCloudConfig` |
-| **unified-trading-services** | `get_secret_client` — **only** way to resolve API keys |
-| **Services** | Call `get_secret_client` via config secret names. Never `os.environ.get` for API keys. |
+| Layer                        | Responsibility                                                                         |
+| ---------------------------- | -------------------------------------------------------------------------------------- |
+| **Secret Manager**           | Store all API keys                                                                     |
+| **unified-config-interface** | Define secret names in `UnifiedCloudConfig`                                            |
+| **unified-trading-services** | `get_secret_client` — **only** way to resolve API keys                                 |
+| **Services**                 | Call `get_secret_client` via config secret names. Never `os.environ.get` for API keys. |
 
 **Resolution order** (never `os.getenv` alone for API keys):
 
@@ -77,13 +77,13 @@ api_key = get_secret_client(
 
 All secret names come from config (UnifiedCloudConfig). Never hardcode secret names.
 
-| Config Field | Env Var | Default | Used For |
-|--------------|---------|---------|----------|
-| `tardis_secret_name` | `TARDIS_SECRET_NAME` | `tardis-api-key-full` | CEFI (Tardis) |
-| `databento_secret_name` | `DATABENTO_SECRET_NAME` | `databento-api-key` | TRADFI (Databento) |
-| `graph_secret_name` | `GRAPH_SECRET_NAME` | `graph-api-key` | DEFI (The Graph) |
-| `alchemy_secret_name` | `ALCHEMY_SECRET_NAME` | `alchemy-api-key` | DEFI (Alchemy RPC) |
-| `aavescan_secret_name` | `AAVESCAN_SECRET_NAME` | `aavescan-api-key` | DEFI (AaveScan) |
+| Config Field            | Env Var                 | Default               | Used For           |
+| ----------------------- | ----------------------- | --------------------- | ------------------ |
+| `tardis_secret_name`    | `TARDIS_SECRET_NAME`    | `tardis-api-key-full` | CEFI (Tardis)      |
+| `databento_secret_name` | `DATABENTO_SECRET_NAME` | `databento-api-key`   | TRADFI (Databento) |
+| `graph_secret_name`     | `GRAPH_SECRET_NAME`     | `graph-api-key`       | DEFI (The Graph)   |
+| `alchemy_secret_name`   | `ALCHEMY_SECRET_NAME`   | `alchemy-api-key`     | DEFI (Alchemy RPC) |
+| `aavescan_secret_name`  | `AAVESCAN_SECRET_NAME`  | `aavescan-api-key`    | DEFI (AaveScan)    |
 
 Instruments-service inherits these from `UnifiedCloudConfig` (unified-config-interface). Override in `InstrumentsServiceConfig` only if needed.
 
@@ -91,14 +91,14 @@ Instruments-service inherits these from `UnifiedCloudConfig` (unified-config-int
 
 ## 5. Current Implementation Map
 
-| Location | Pattern | Compliant? |
-|----------|---------|------------|
-| `instrument_processing_service` | config → Secret Manager → env | ✅ |
-| `selective_validation` | `validate_required_api_keys(venues)` → get_secret_client | ✅ |
-| `dependency_checker` | get_secret_client | ✅ |
-| `conftest` | get_secret_client for Tardis | ✅ |
-| `scripts/test_batch_cost_comparison.py` | `os.environ.get("DATABENTO_API_KEY")` | ❌ Use get_secret_client |
-| `scripts/find_subgraph_ids.py` | `os.environ.get("THEGRAPH_API_KEY", "test-key")` | ❌ Use get_secret_client |
+| Location                                | Pattern                                                  | Compliant?               |
+| --------------------------------------- | -------------------------------------------------------- | ------------------------ |
+| `instrument_processing_service`         | config → Secret Manager → env                            | ✅                       |
+| `selective_validation`                  | `validate_required_api_keys(venues)` → get_secret_client | ✅                       |
+| `dependency_checker`                    | get_secret_client                                        | ✅                       |
+| `conftest`                              | get_secret_client for Tardis                             | ✅                       |
+| `scripts/test_batch_cost_comparison.py` | `os.environ.get("DATABENTO_API_KEY")`                    | ❌ Use get_secret_client |
+| `scripts/find_subgraph_ids.py`          | `os.environ.get("THEGRAPH_API_KEY", "test-key")`         | ❌ Use get_secret_client |
 
 ---
 
@@ -131,11 +131,11 @@ When adding a new data source, verify we have a secret for it:
 
 **Known data sources and keys:**
 
-| Data Source | Secret | Status |
-|-------------|--------|--------|
-| Tardis | tardis_secret_name | ✅ |
-| Databento | databento_secret_name | ✅ |
-| The Graph | graph_secret_name | ✅ |
-| Alchemy | alchemy_secret_name | ✅ |
-| AaveScan | aavescan_secret_name | ✅ |
-| Envio | envio_secret_name | ✅ Used (UniswapV4, features-onchain) |
+| Data Source | Secret                | Status                                |
+| ----------- | --------------------- | ------------------------------------- |
+| Tardis      | tardis_secret_name    | ✅                                    |
+| Databento   | databento_secret_name | ✅                                    |
+| The Graph   | graph_secret_name     | ✅                                    |
+| Alchemy     | alchemy_secret_name   | ✅                                    |
+| AaveScan    | aavescan_secret_name  | ✅                                    |
+| Envio       | envio_secret_name     | ✅ Used (UniswapV4, features-onchain) |

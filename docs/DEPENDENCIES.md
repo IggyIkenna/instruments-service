@@ -18,13 +18,14 @@ It has NO upstream GCS data dependencies. All data sources are external APIs.
 
 **Primary path:** instruments-service uses **UMI (unified-market-interface)** `get_adapter("tardis", "tradfi")` for CeFi. No direct exchange REST calls — UMI TardisAdapter fetches and normalizes instrument data.
 
-| API | Purpose | Secret Name | Required |
-|-----|---------|-------------|----------|
-| Tardis API | Exchange instrument data (via UMI) | `tardis-api-key` | Yes |
+| API        | Purpose                            | Secret Name      | Required |
+| ---------- | ---------------------------------- | ---------------- | -------- |
+| Tardis API | Exchange instrument data (via UMI) | `tardis-api-key` | Yes      |
 
 **Optional path:** `unified-reference-data-interface` (URDI) provides direct exchange REST adapters. When `USE_URDI_REFERENCE_DATA=true` and URDI is installed, instruments-service can use `get_reference_adapter(venue).get_instruments()` for supported venues (binance, bybit, okx, deribit, coinbase, hyperliquid). URDI adapters call `get_secret_client` internally — secrets never surface to the service.
 
 **Supported Exchanges:**
+
 - BINANCE-SPOT
 - BINANCE-FUTURES
 - DERIBIT
@@ -35,12 +36,13 @@ It has NO upstream GCS data dependencies. All data sources are external APIs.
 
 ### TRADFI (Traditional Finance)
 
-| API | Purpose | Secret Name | Required |
-|-----|---------|-------------|----------|
-| Databento API | Market data metadata | `databento-api-key` | Yes |
-| yfinance | Corporate actions | None (free) | No |
+| API           | Purpose              | Secret Name         | Required |
+| ------------- | -------------------- | ------------------- | -------- |
+| Databento API | Market data metadata | `databento-api-key` | Yes      |
+| yfinance      | Corporate actions    | None (free)         | No       |
 
 **Supported Venues:**
+
 - CME (Globex)
 - NASDAQ
 - NYSE
@@ -49,14 +51,15 @@ It has NO upstream GCS data dependencies. All data sources are external APIs.
 
 ### DEFI (Decentralized Finance)
 
-| API | Purpose | Secret Name | Required |
-|-----|---------|-------------|----------|
-| The Graph | Subgraph queries | `graph-api-key` | Yes |
-| Alchemy | Ethereum RPC | `alchemy-api-key` | No |
-| AAVEScan | AAVE protocol data | `aavescan-api-key` | No |
-| Envio | Price data | None | No |
+| API       | Purpose            | Secret Name        | Required |
+| --------- | ------------------ | ------------------ | -------- |
+| The Graph | Subgraph queries   | `graph-api-key`    | Yes      |
+| Alchemy   | Ethereum RPC       | `alchemy-api-key`  | No       |
+| AAVEScan  | AAVE protocol data | `aavescan-api-key` | No       |
+| Envio     | Price data         | None               | No       |
 
 **Supported Protocols:**
+
 - Uniswap V2/V3/V4
 - AAVE V3
 - Hyperliquid
@@ -76,6 +79,7 @@ Services that depend on instruments-service output:
 **Why:** Needs instrument IDs to know what market data to download.
 
 **Check Path:**
+
 ```
 gs://instruments-store-{category}-{project_id}/instrument_availability/by_date/day={date}/instruments.parquet
 ```
@@ -85,6 +89,7 @@ gs://instruments-store-{category}-{project_id}/instrument_availability/by_date/d
 **Why:** Needs instrument definitions for strategy configuration.
 
 **Check Path:**
+
 ```
 gs://instruments-store-{category}-{project_id}/instrument_availability/by_date/day={date}/instruments.parquet
 ```
@@ -94,6 +99,7 @@ gs://instruments-store-{category}-{project_id}/instrument_availability/by_date/d
 **Why:** Needs instrument specs (tick size, lot size) for execution simulation.
 
 **Check Path:**
+
 ```
 gs://instruments-store-{category}-{project_id}/instrument_availability/by_date/day={date}/instruments.parquet
 ```
@@ -155,29 +161,30 @@ In the unified trading system deployment:
 
 ### GCP Services
 
-| Service | Purpose |
-|---------|---------|
-| Cloud Storage (GCS) | Output storage |
-| Secret Manager | API key storage |
-| Cloud Run | Deployment platform |
-| Cloud Build | CI/CD |
+| Service             | Purpose             |
+| ------------------- | ------------------- |
+| Cloud Storage (GCS) | Output storage      |
+| Secret Manager      | API key storage     |
+| Cloud Run           | Deployment platform |
+| Cloud Build         | CI/CD               |
 
 ### Python Packages
 
-| Package | Purpose |
-|---------|---------|
-| `unified-trading-services` | Cloud operations |
-| `unified-market-interface` | CeFi instrument fetch via TardisAdapter (no direct REST) |
-| `unified-reference-data-interface` | Optional: direct exchange reference data adapters |
-| `databento` | TradFi API client |
-| `ccxt` | Exchange metadata |
-| `web3` | Ethereum interactions |
+| Package                            | Purpose                                                  |
+| ---------------------------------- | -------------------------------------------------------- |
+| `unified-trading-services`         | Cloud operations                                         |
+| `unified-market-interface`         | CeFi instrument fetch via TardisAdapter (no direct REST) |
+| `unified-reference-data-interface` | Optional: direct exchange reference data adapters        |
+| `databento`                        | TradFi API client                                        |
+| `ccxt`                             | Exchange metadata                                        |
+| `web3`                             | Ethereum interactions                                    |
 
 ## Failure Modes
 
 ### Missing API Keys
 
 If required API keys are missing:
+
 1. Service will fail fast with clear error message
 2. Specify which category requires which key
 3. Instructions to add key to Secret Manager
@@ -185,6 +192,7 @@ If required API keys are missing:
 ### API Rate Limits
 
 External APIs have rate limits:
+
 - Tardis: Contact for limits
 - Databento: 5 requests/second
 - The Graph: Varies by plan

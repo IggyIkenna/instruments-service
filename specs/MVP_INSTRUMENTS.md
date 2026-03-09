@@ -1,6 +1,7 @@
 # MVP Instruments
 
 > **Related Documentation**:
+>
 > - [`INSTRUMENT_SPECIFICATION.md`](./INSTRUMENT_SPECIFICATION.md) - Instrument ID specification
 > - [`DEFI_GUIDE.md`](./DEFI_GUIDE.md) - DeFi instruments guide
 > - [`VENUE_ADAPTERS.md`](./VENUE_ADAPTERS.md) - Venue adapter details
@@ -62,23 +63,28 @@ To manage GCS and BigQuery storage costs during MVP development, we focus on a c
 ### Example Instrument IDs
 
 **Binance Futures Perpetuals**:
+
 - `BINANCE-FUTURES:PERPETUAL:SOL-USDT@LIN`
 - `BINANCE-FUTURES:PERPETUAL:BTC-USDT@LIN`
 - `BINANCE-FUTURES:PERPETUAL:ETH-USDT@LIN`
 
 **OKX Spot**:
+
 - `OKX:SPOT_PAIR:SOL-USDT`
 - `OKX:SPOT_PAIR:BTC-USDT`
 
 **Bybit Spot**:
+
 - `BYBIT:SPOT_PAIR:ETH-USDT`
 
 **Upbit Spot** (Korean Won - for kimchi premium):
+
 - `UPBIT:SPOT_PAIR:BTC-KRW`
 - `UPBIT:SPOT_PAIR:ETH-KRW`
 - `UPBIT:SPOT_PAIR:SOL-KRW`
 
 **Coinbase Spot** (USD - for coinbase premium):
+
 - `COINBASE:SPOT_PAIR:BTC-USD`
 - `COINBASE:SPOT_PAIR:ETH-USD`
 - `COINBASE:SPOT_PAIR:SOL-USD`
@@ -88,34 +94,42 @@ To manage GCS and BigQuery storage costs during MVP development, we focus on a c
 ### Position Instruments
 
 #### Wallet Positions (SPOT_ASSET)
+
 - `WALLET:SPOT_ASSET:USDT`
 - `WALLET:SPOT_ASSET:ETH`
 - `WALLET:SPOT_ASSET:EIGEN`
 - `WALLET:SPOT_ASSET:ETHFI`
 
 #### AAVE V3 Lending Positions (A_TOKEN)
+
 - `AAVE_V3_ETH:A_TOKEN:AUSDT@ETHEREUM`
 - `AAVE_V3_ETH:A_TOKEN:AWETH@ETHEREUM`
 
 #### AAVE V3 Borrowing Positions (DEBT_TOKEN)
+
 - `AAVE_V3_ETH:DEBT_TOKEN:DEBTWETH@ETHEREUM`
 
 #### EtherFi Staking Positions (LST)
+
 - `ETHERFI:LST:WEETH@ETHEREUM`
 
 #### Lido Staking Positions (LST)
+
 - `LIDO:LST:STETH@ETHEREUM`
 - `LIDO:LST:WSTETH@ETHEREUM`
 
 #### DEX Market Pricing (SPOT_ASSET)
+
 - `CURVE-ETH:SPOT_ASSET:WEETH@ETHEREUM`
 
 #### Flash Loan Provider (SPOT_ASSET)
+
 - `MORPHO:SPOT_ASSET:WETH@ETHEREUM`
 
 ### Trading Instruments (SPOT_PAIR)
 
 #### DEX Swap Trading Pairs
+
 - `UNISWAPV3-ETH:SPOT_PAIR:ETH-USDT@ETHEREUM`
 - `CURVE-ETH:SPOT_PAIR:ETH-USDT@ETHEREUM`
 - `CURVE-ETH:SPOT_PAIR:ETH-WEETH@ETHEREUM`
@@ -128,6 +142,7 @@ To manage GCS and BigQuery storage costs during MVP development, we focus on a c
 ### Default TradFi Exchanges
 
 When running `--TRADFI` without specifying exchanges, the following are processed:
+
 - **CME** - Futures and options (via Databento GLBX.MDP3)
 - **CBOE** - VIX index (static definition)
 - **NASDAQ** - Bitcoin ETFs and equities (via Databento DBEQ.BASIC)
@@ -138,11 +153,11 @@ When running `--TRADFI` without specifying exchanges, the following are processe
 
 Bitcoin ETFs track the price of Bitcoin and trade on US stock exchanges.
 
-| ETF | Name | Instrument Key |
-|-----|------|----------------|
-| **IBIT** | BlackRock iShares Bitcoin Trust | `NASDAQ:ETF:IBIT-USD` |
+| ETF      | Name                              | Instrument Key        |
+| -------- | --------------------------------- | --------------------- |
+| **IBIT** | BlackRock iShares Bitcoin Trust   | `NASDAQ:ETF:IBIT-USD` |
 | **FBTC** | Fidelity Wise Origin Bitcoin Fund | `NASDAQ:ETF:FBTC-USD` |
-| **ARKB** | ARK 21Shares Bitcoin ETF | `NASDAQ:ETF:ARKB-USD` |
+| **ARKB** | ARK 21Shares Bitcoin ETF          | `NASDAQ:ETF:ARKB-USD` |
 
 - **Data Provider**: Databento (DBEQ.BASIC dataset)
 - **Data Types**: OHLCV 1-minute
@@ -155,23 +170,27 @@ Bitcoin ETFs track the price of Bitcoin and trade on US stock exchanges.
 S&P 500 **historical constituents (2020-2025)** are automatically generated from `sp500_tickers.json`:
 
 **Universe Scope**:
+
 - **Period**: 2020-2025 (all stocks that appeared in S&P 500 during this time)
 - **Includes Removed**: Yes - stocks removed from index since 2020 are included for basket/historical analysis
 - **Total Tickers**: ~603 (current + historical constituents)
 - **Future Enhancements**: Can add weights, adjust for dividends/corporate actions later
 
 **NASDAQ Stocks (~102 tech stocks)**:
+
 - Major tech: AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA, NFLX, ADBE
 - Semiconductors: AVGO, AMD, QCOM, TXN, AMAT, MU, LRCX, KLAC, INTC
 - Software/SaaS: CRM, NOW, WDAY, PANW, CRWD, FTNT, DDOG
 - And ~80 more NASDAQ-listed S&P 500 stocks
 
 **NYSE Stocks (~501 stocks)**:
+
 - All other S&P 500 constituents (current and historical)
 - Includes stocks removed due to acquisitions (e.g., ATVI→MSFT, ALXN→AZN)
 - Includes stocks removed due to market cap changes
 
 **ETFs (classified as EQUITY by Databento)**:
+
 - SPY (S&P 500 ETF)
 - QQQ (NASDAQ-100 ETF)
 
@@ -180,6 +199,7 @@ S&P 500 **historical constituents (2020-2025)** are automatically generated from
 ### CME Futures (via Databento GLBX.MDP3)
 
 #### Equity Index Futures (5)
+
 - **ES** (E-mini S&P 500) - `CME:FUTURE:SP500-USD-{expiry}@LIN`
 - **NQ** (E-mini NASDAQ-100) - `CME:FUTURE:NASDAQ100-USD-{expiry}@LIN`
 - **RTY** (E-mini Russell 2000) - `CME:FUTURE:RUSSELL2000-USD-{expiry}@LIN`
@@ -187,6 +207,7 @@ S&P 500 **historical constituents (2020-2025)** are automatically generated from
 - **NKD** (Nikkei 225 Dollar) - `CME:FUTURE:NIKKEI225-USD-{expiry}@LIN`
 
 #### Sector Futures (8) - SPDR Sector ETF Futures
+
 - **XAF** (Energy Select Sector) - `CME:FUTURE:ENERGY_SECTOR-USD-{expiry}@LIN`
 - **XAK** (Technology Select Sector) - `CME:FUTURE:TECH_SECTOR-USD-{expiry}@LIN`
 - **XAY** (Consumer Discretionary) - `CME:FUTURE:CONSUMER_DISC_SECTOR-USD-{expiry}@LIN`
@@ -197,27 +218,32 @@ S&P 500 **historical constituents (2020-2025)** are automatically generated from
 - **XAU** (Utilities) - `CME:FUTURE:UTILITIES_SECTOR-USD-{expiry}@LIN`
 
 #### Treasury Futures (4) - CBOT via CME
+
 - **ZT** (2-Year T-Note) - `CME:FUTURE:TREASURY_2Y-USD-{expiry}@LIN`
 - **ZF** (5-Year T-Note) - `CME:FUTURE:TREASURY_5Y-USD-{expiry}@LIN`
 - **ZN** (10-Year T-Note) - `CME:FUTURE:TREASURY_10Y-USD-{expiry}@LIN`
 - **ZB** (30-Year T-Bond) - `CME:FUTURE:TREASURY_30Y-USD-{expiry}@LIN`
 
 #### Crypto Futures (2)
+
 - **BTC** (Bitcoin) - `CME:FUTURE:BTC-USD-{expiry}@LIN`
 - **ETH** (Ethereum) - `CME:FUTURE:ETH-USD-{expiry}@LIN`
 
 #### Energy Commodities (4)
+
 - **CL** (WTI Crude Oil) - `CME:FUTURE:CRUDE-USD-{expiry}@LIN`
 - **NG** (Natural Gas) - `CME:FUTURE:NATGAS-USD-{expiry}@LIN`
 - **HO** (Heating Oil) - `CME:FUTURE:HEATING_OIL-USD-{expiry}@LIN`
 - **RB** (RBOB Gasoline) - `CME:FUTURE:GASOLINE-USD-{expiry}@LIN`
 
 #### Metals (3)
+
 - **GC** (Gold) - `CME:FUTURE:GOLD-USD-{expiry}@LIN`
 - **SI** (Silver) - `CME:FUTURE:SILVER-USD-{expiry}@LIN`
 - **HG** (Copper) - `CME:FUTURE:COPPER-USD-{expiry}@LIN`
 
 #### Agricultural Commodities (6)
+
 - **CT** (Cotton) - `CME:FUTURE:COTTON-USD-{expiry}@LIN`
 - **ZS** (Soybeans) - `CME:FUTURE:SOYBEANS-USD-{expiry}@LIN`
 - **ZC** (Corn) - `CME:FUTURE:CORN-USD-{expiry}@LIN`
@@ -226,6 +252,7 @@ S&P 500 **historical constituents (2020-2025)** are automatically generated from
 - **ZM** (Soybean Meal) - `CME:FUTURE:SOYBEAN_MEAL-USD-{expiry}@LIN`
 
 #### FX Futures (10)
+
 - **6E** (Euro) - `CME:FUTURE:EUR-USD-{expiry}@LIN`
 - **6B** (British Pound) - `CME:FUTURE:GBP-USD-{expiry}@LIN`
 - **6J** (Japanese Yen) - `CME:FUTURE:JPY-USD-{expiry}@LIN`
@@ -240,6 +267,7 @@ S&P 500 **historical constituents (2020-2025)** are automatically generated from
 ### CME Options (via Databento)
 
 #### Equity Index Options - E-mini S&P 500
+
 - **ES.OPT** (Standard Monthly/Quarterly) - `CME:OPTION:SP500-USD-{expiry}-{strike}-{CALL|PUT}@LIN`
 - **EW1.OPT** (1st Week Friday) - `CME:OPTION:SP500-USD-{expiry}-{strike}-{CALL|PUT}@LIN`
 - **EW2.OPT** (2nd Week Friday) - `CME:OPTION:SP500-USD-{expiry}-{strike}-{CALL|PUT}@LIN`
@@ -250,6 +278,7 @@ S&P 500 **historical constituents (2020-2025)** are automatically generated from
 ### CBOE Instruments
 
 #### Index (via Barchart)
+
 - **VIX** (CBOE Volatility Index) - `CBOE:INDEX:VIX-USD`
   - **Data Provider**: Barchart (OHLCV 15-minute data)
   - **Trading Hours**: 9:30 AM - 4:15 PM ET
@@ -258,22 +287,26 @@ S&P 500 **historical constituents (2020-2025)** are automatically generated from
 ### Trading Hours
 
 **CME Futures & Options**: Nearly 24-hour trading
+
 - **Hours**: Sunday 5:00 PM CT to Friday 4:00 PM CT
 - **Maintenance Break**: Daily 4:00-5:00 PM CT (1 hour)
 - **Total**: 23 hours per day, 5 days per week
 - **Advantage**: Global market coverage, react to overnight news
 
 **CBOE VIX**: Regular trading hours
+
 - **Hours**: 9:30 AM - 4:15 PM ET (weekdays only)
 - **Data Source**: Barchart (15-minute OHLCV data)
 
 **NASDAQ/NYSE Equities & ETFs**: Regular trading hours
+
 - **Hours**: 9:30 AM - 4:00 PM ET (weekdays only)
 - **UTC Conversion**: Hours are automatically converted to UTC (DST-aware)
   - Winter (EST): 14:30 - 21:00 UTC
   - Summer (EDT): 13:30 - 20:00 UTC
 
 **Yahoo Finance KRW/USD**: 24/7 forex market
+
 - **Hours**: Continuous (forex market)
 - **Data Type**: Daily OHLCV (ohlcv_24h)
 
@@ -293,6 +326,7 @@ The system uses the `exchange_calendars` library to accurately detect US market 
 - **Christmas** - December 25
 
 When a holiday is detected:
+
 - `is_trading_day: False`
 - `trading_hours_open: holiday`
 - `trading_hours_close: holiday`
@@ -323,19 +357,23 @@ When a holiday is detected:
 ## Performance Benchmarks
 
 ### Compute Time
+
 - **1 day**: ~30-60 seconds (depends on exchange)
 - **Batch (730 days)**: ~6-12 hours (with optimizations)
 
 ### Memory Usage
+
 - **Per exchange**: ~500MB
 - **Batch processing**: Scales linearly with date range
 
 ### Throughput
+
 - **Instruments/second**: ~100-200 instruments/second
 
 ### Performance Optimizations
 
 **Key Optimizations Implemented**:
+
 1. **Module-Level DeFi Adapter Imports**: Eliminates repeated import overhead
 2. **Cached Secret Manager API Keys**: Reduces Secret Manager calls from O(n*dates*protocols) to O(secrets)
 3. **Cached DeFi Adapter Instances**: Eliminates expensive adapter initialization for repeated calls
@@ -348,11 +386,13 @@ When a holiday is detected:
 ### Date-Specific vs Date-Agnostic Instruments
 
 **Date-Specific (TradFi)**:
+
 - **Tardis exchanges**: Instruments can change daily (new listings, delistings)
 - **Databento**: Futures/options have expiry dates, new contracts listed daily
 - **Action**: Fetch per-date ✅
 
 **Date-Agnostic (DeFi)**:
+
 - **Uniswap V3/V2/V4 pools**: Current pool state (doesn't change historically)
 - **Curve/Balancer pools**: Current pool state
 - **AAVE markets**: Current reserve state
@@ -362,6 +402,7 @@ When a holiday is detected:
 ## Cost Management Benefits
 
 ### Storage Impact
+
 - **Reduced Scope**: MVP instruments vs. full universe (4,374+ instruments)
 - **Focused Coverage**: High-liquidity pairs only
 - **Cross-Exchange Analysis**: Multiple exchanges × assets × markets
@@ -369,12 +410,14 @@ When a holiday is detected:
 ### Data Volume Estimates
 
 **Crypto Instruments** (1-minute OHLCV):
+
 - **Per Instrument**: ~1,440 candles per day
 - **Daily Total**: ~241,920 candles (168 crypto instruments × 1,440)
 - **Monthly Storage**: ~7.2M candles (~3-4 GB BigQuery storage)
 - **Premium Data**: 42 additional instruments for kimchi/coinbase premium calculations
 
 **TradFi Instruments**:
+
 - **CME Futures** (1-minute OHLCV via Databento): ~1,440 candles per day per contract
   - 42 futures × multiple expiries × 1,440 candles = ~60,480+ candles per day
 - **CME Options** (1-minute OHLCV via Databento): ~1,440 candles per day per option
@@ -384,7 +427,9 @@ When a holiday is detected:
 - **Combined Daily Total**: ~241,000-281,000+ candles (crypto + TradFi)
 
 ### Expansion Strategy
+
 As MVP proves successful, expand incrementally:
+
 1. ✅ **CME Futures**: Equity indices (ES, NQ, RTY, YM, NKD), Treasuries (ZT, ZF, ZN, ZB), Sectors (XAF-XAU)
 2. ✅ **CME Options**: ES options (monthly, quarterly, weekly)
 3. ✅ **CBOE VIX**: Added volatility index via Barchart (15-minute OHLCV data)
