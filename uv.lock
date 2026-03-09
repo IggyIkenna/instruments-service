@@ -1142,7 +1142,7 @@ wheels = [
 
 [[package]]
 name = "instruments-service"
-version = "0.1.77"
+version = "0.1.79"
 source = { editable = "." }
 dependencies = [
     { name = "ccxt" },
@@ -2515,7 +2515,7 @@ wheels = [
 
 [[package]]
 name = "unified-api-contracts"
-version = "0.1.166"
+version = "0.1.172"
 source = { editable = "../unified-api-contracts" }
 dependencies = [
     { name = "pydantic" },
@@ -2548,7 +2548,7 @@ provides-extras = ["schema-validation", "dev"]
 
 [[package]]
 name = "unified-cloud-interface"
-version = "0.11.35"
+version = "0.11.36"
 source = { editable = "../unified-cloud-interface" }
 dependencies = [
     { name = "redis" },
@@ -2725,7 +2725,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "unified-market-interface"
-version = "0.3.68"
+version = "0.3.71"
 source = { editable = "../unified-market-interface" }
 dependencies = [
     { name = "aiohttp" },
