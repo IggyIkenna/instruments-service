@@ -119,11 +119,12 @@ def get_venues_for_category(category: str, venue_mapping: VenueMappingProtocol) 
     Get all venues for a category.
 
     Args:
-        category: Category name ("CEFI", "TRADFI", "DEFI")
+        category: Category name ("CEFI", "TRADFI", "DEFI", "SPORTS")
         venue_mapping: VenueMapping instance
 
     Returns:
-        List of venue names
+        List of venue names.  For SPORTS, returns registered league IDs
+        from the sports league registry rather than a market-data venue mapping.
     """
     if category == "CEFI":
         return venue_mapping.all_tardis_exchanges
@@ -131,5 +132,12 @@ def get_venues_for_category(category: str, venue_mapping: VenueMappingProtocol) 
         return venue_mapping.all_databento_venues
     elif category == "DEFI":
         return venue_mapping.all_defi_venues
+    elif category == "SPORTS":
+        # Sports uses league IDs (e.g. "EPL", "NBA") rather than exchange venues.
+        # Import is deferred to avoid a hard dependency on the sports sub-package
+        # in environments that only run CEFI/TRADFI/DEFI.
+        from instruments_service.sports.league_registry import LEAGUE_REGISTRY
+
+        return sorted(LEAGUE_REGISTRY.keys())
     else:
-        raise ValueError(f"Unknown category: {category}")
+        raise ValueError(f"Unknown category: {category}. Must be one of: CEFI, TRADFI, DEFI, SPORTS")
