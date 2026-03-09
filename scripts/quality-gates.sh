@@ -29,7 +29,7 @@ set -e
 # ── REPO-SPECIFIC SETTINGS ────────────────────────────────────────────────────
 SERVICE_NAME="instruments-service"          # e.g. instruments-service
 SOURCE_DIR="instruments_service"            # e.g. instruments_service  (underscore form)
-MIN_COVERAGE=51  # Actual coverage 52.97% (2026-03-08); set to actual-2%. See test-coverage-targets.mdc
+MIN_COVERAGE=51  # Template default — set to (actual coverage - 1%) after first test run. See test-coverage-targets.mdc
 RUN_INTEGRATION=false              # Set true when integration tests are stable
 PYTEST_WORKERS=${PYTEST_WORKERS:-2} # Default 2; override via env (cap to avoid OOM)
 
@@ -69,15 +69,13 @@ run_timeout() {
 }
 
 # ── MODE ──────────────────────────────────────────────────────────────────────
-# BYPASS: SKIP_TYPECHECK defaults to true — 438 pre-existing basedpyright errors (JUSTIFIED/MIGRATION_PENDING
-# per QUALITY_GATE_BYPASS_AUDIT.md §9). Re-enable with --typecheck flag once Phase 2/3 hardening completes.
-FIX_MODE=true; QUICK_MODE=false; RUN_LINT=true; RUN_TESTS=true; SKIP_TYPECHECK=true
+FIX_MODE=true; QUICK_MODE=false; RUN_LINT=true; RUN_TESTS=true; SKIP_TYPECHECK=false
 for arg in "$@"; do
     case $arg in
         --no-fix) FIX_MODE=false ;;   --quick) QUICK_MODE=true ;;
         --lint) RUN_TESTS=false ;;    --test) RUN_LINT=false ;;
         --skip-tests) RUN_TESTS=false ;;
-        --fix) FIX_MODE=true ;;       --skip-typecheck) SKIP_TYPECHECK=true ;; --typecheck) SKIP_TYPECHECK=false ;;
+        --fix) FIX_MODE=true ;;       --skip-typecheck) SKIP_TYPECHECK=true ;;
     esac
 done
 
@@ -114,9 +112,11 @@ RUFF_VER=$($RUFF_CMD --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -
 
 # ── [1] AUTO-FIX (prettier + ruff, 30s each) ──────────────────────────────────
 # Prettier runs FIRST on non-Python files to prevent ruff/prettier conflict in pre-commit hooks.
+# Without this, committing JSON/YAML/MD files causes "MM" status and hook stash conflicts.
 # See: 06-coding-standards/quality-gates.md § Formatter Conflict Resolution
 if [ "$RUN_LINT" = true ] && [ "$FIX_MODE" = true ]; then
     log_section "[1/6] AUTO-FIX"
+    # Pre-format non-Python files with prettier to avoid pre-commit hook conflicts
     if command -v npx &>/dev/null; then
         npx prettier --write "**/*.{md,json,yaml,yml}" --ignore-path .gitignore 2>/dev/null \
             && log_success "Prettier: non-Python files formatted" \
@@ -159,7 +159,7 @@ if [ "$RUN_TESTS" = true ]; then
 
     # @pytest.mark.skip must have a reason comment on the preceding line
     SKIP_NO_REASON=$(rg "@pytest\.mark\.skip" --type py tests/ -B 1 2>/dev/null \
-        | grep -v "# reason:\|# noqa\|^--\|skipif" | grep "@pytest\.mark\.skip" || :)
+        | grep -v "# reason:\|# noqa\|^--" | grep "@pytest\.mark\.skip" || :)
     [[ -n "$SKIP_NO_REASON" ]] && { log_fail "pytest.mark.skip without reason comment — add '# reason: ...' above"; echo "$SKIP_NO_REASON" | head -3; exit 1; }
     log_success "All pytest.mark.skip have reason comments"
 fi
@@ -202,7 +202,7 @@ if [ "$SKIP_TYPECHECK" != "true" ]; then
     fi
     export BASEDPYRIGHT_CACHE_DIR="${TMPDIR:-/tmp}/basedpyright-cache/${SERVICE_NAME:-$(basename "$PWD")}"
     mkdir -p "$BASEDPYRIGHT_CACHE_DIR"
-    PYRIGHT_OUT=$(basedpyright "$SOURCE_DIR/" 2>&1); PYRIGHT_EXIT=$?
+    PYRIGHT_OUT=$(run_timeout 120 basedpyright "$SOURCE_DIR/" 2>&1); PYRIGHT_EXIT=$?
     if [ "$PYRIGHT_EXIT" -ne 0 ]; then echo "$PYRIGHT_OUT"; log_fail "Type check FAILED/timeout"; exit 1; fi
     WARN_COUNT=$(echo "$PYRIGHT_OUT" | grep -c " warning:" || :)
     if [ "${WARN_COUNT:-0}" -gt 0 ]; then
@@ -240,33 +240,11 @@ for f in $(rg "import requests" --type py --glob "!tests/**" --glob "!scripts/**
     grep -q "async def" "$f" && { log_fail "requests in async: $f — use aiohttp"; ((V++)); break; }
 done; [[ ${V} -eq $(( V )) ]] && log_success "No requests in async" 2>/dev/null || :
 
-for f in $(rg "asyncio\.run\(" --type py --glob "!tests/**" --glob "!scripts/**" \
-    --glob "!**/venues/defi/*" --glob "!**/cli/**" --glob "!**/defi_processor.py" \
-    "$SOURCE_DIR/" -l 2>/dev/null || :); do
+for f in $(rg "asyncio\.run\(" --type py --glob "!tests/**" --glob "!scripts/**" "$SOURCE_DIR/" -l 2>/dev/null || :); do
     grep -q "for \|while " "$f" && { log_fail "asyncio.run() in loop: $f — use asyncio.gather()"; ((V++)); break; }
 done
 
 INSIDE=$(rg "^[[:space:]]+import |^[[:space:]]+from .* import" --type py --glob "!tests/**" --glob "!**/__init__.py" \
-    --glob "!**/adapter_loader.py" --glob "!**/venue_adapter_loader.py" \
-    --glob "!**/dependency_checker.py" --glob "!**/instruments_service.py" \
-    --glob "!**/instrument_processing_service.py" --glob "!**/symbol_parser.py" \
-    --glob "!**/canonical_key_generator.py" --glob "!**/live_mode_handler.py" \
-    --glob "!**/cloud_instrument_storage.py" --glob "!**/parser.py" \
-    --glob "!**/main.py" --glob "!**/ccxt_service.py" \
-    --glob "!**/corporate_actions_handler.py" --glob "!**/corporate_actions_backfill_handler.py" \
-    --glob "!**/corporate_actions_production_handler.py" --glob "!**/corporate_actions_update_handler.py" \
-    --glob "!**/instrument_utils.py" \
-    --glob "!**/derived_fields_populator.py" \
-    --glob "!**/cefi_orchestration.py" \
-    --glob "!**/orchestrator.py" \
-    --glob "!**/config_reloaders.py" \
-    --glob "!**/instrument_crud.py" \
-    --glob "!**/instrument_sync.py" \
-    --glob "!**/defi_orchestration.py" \
-    --glob "!**/tradfi_orchestration.py" \
-    --glob "!**/orchestrator_base.py" \
-    --glob "!**/team_aliases.py" \
-    --glob "!**/cefi_processor.py" \
     "$SOURCE_DIR/" 2>/dev/null || :)
 # Bypass: add --glob exclusions for files in QUALITY_GATE_BYPASS_AUDIT.md §1.2
 [[ -n "$INSIDE" ]] && { log_fail "Imports inside functions — move to top"; echo "$INSIDE" | head -3; ((V++)); } || log_success "No imports inside functions"
@@ -305,9 +283,8 @@ UCS_DOMAIN=$(rg 'from unified_trading_library import[^#]*?(InstrumentsDomainClie
 [[ -n "$UCS_DOMAIN" ]] && { log_fail "Domain clients must come from unified_domain_client, not unified_trading_library"; echo "$UCS_DOMAIN" | head -5; ((V++)); } || log_success "Domain clients imported from unified_domain_client"
 
 # No domain imports from UCS
-# Bypass: determine_market_category is a UTL utility, not a domain client (not in unified_domain_client)
 DOMAIN_FROM_UCS=$(rg 'from unified_trading_library import.*(market_category|DomainValidation|UnifiedCloudServicesConfig)' \
-    --type py "$SOURCE_DIR/" 2>/dev/null | grep -v "determine_market_category" || :)
+    --type py "$SOURCE_DIR/" 2>/dev/null || :)
 [[ -n "$DOMAIN_FROM_UCS" ]] && { log_fail "Service imports domain symbols from UCS — use unified_domain_client instead"; echo "$DOMAIN_FROM_UCS" | head -5; ((V++)); } || log_success "No domain imports from UCS"
 
 # setup_events/setup_service uses sink= in production
@@ -325,9 +302,7 @@ BAD_AUTH_SKIP=$(rg 'pytest\.skip.*[Cc]redential|pytest\.skip.*GOOGLE_APPLICATION
 [[ -f ".env.example" ]] && rg "GOOGLE_APPLICATION_CREDENTIALS" .env.example 2>/dev/null \
     && { log_fail ".env.example contains GOOGLE_APPLICATION_CREDENTIALS — remove it (use ADC, not SA key files)"; ((V++)); } || log_success "No GOOGLE_APPLICATION_CREDENTIALS in .env.example"
 
-DI=$(rg 'from unified_[a-z_]+\.[a-zA-Z0-9_.]+\s+import' --type py --glob "!tests/**" --glob "!**/__init__.py" \
-    --glob "!**/team_aliases.py" --glob "!**/cloud_instrument_storage.py" \
-    "$SOURCE_DIR/" 2>/dev/null || :)
+DI=$(rg 'from unified_[a-z_]+\.[a-zA-Z0-9_.]+\s+import' --type py --glob "!tests/**" --glob "!**/__init__.py" "$SOURCE_DIR/" 2>/dev/null || :)
 [[ -n "$DI" ]] && { log_fail "Deep unified lib imports — use top-level"; echo "$DI" | head -3; ((V++)); } || log_success "No deep imports"
 
 # Old event logging pattern — must use unified_events_interface directly
@@ -371,7 +346,7 @@ fi
 
 # pip install anywhere other than bootstrap (must use uv pip install)
 PIP=$(rg "^RUN pip install|^RUN python -m pip" --glob "**/Dockerfile" --glob "**/*.sh" . 2>/dev/null \
-    | grep -v "uv pip install" | grep -v "pip install.*uv" | grep -v "#" || :)
+    | grep -v "uv pip install" | grep -v "pip install uv" | grep -v "#" || :)
 [[ -n "$PIP" ]] && { log_fail "Use 'uv pip install' not 'pip install'"; echo "$PIP" | head -3; ((V++)); } || log_success "No bare pip install"
 
 BE=$(rg "except Exception:" --type py --glob "!tests/**" "$SOURCE_DIR/" 2>/dev/null || :)
@@ -394,47 +369,8 @@ done
 [[ -n "$SWARN" ]] && log_warn "Approaching limit:$SWARN"
 
 # Function/class/method size
-# Bypass: files listed in QUALITY_GATE_BYPASS_AUDIT.md §1.7 are excluded (complex data-processing pipelines
-# and CLI handlers with inherently large orchestration functions; refactoring tracked in Phase 3 hardening)
 FSIZES=""
-for f in $(find . -name "*.py" \
-    ! -path "./.venv/*" ! -path "./scripts/*" ! -path "./.git/*" \
-    ! -path "./tests/*" \
-    ! -path "./examples/*" \
-    ! -path "./download_sample_data.py" \
-    ! -path "*/app/core/cloud_instrument_storage.py" \
-    ! -path "*/app/core/instrument_processing_base.py" \
-    ! -path "*/app/core/instrument_processing_handlers.py" \
-    ! -path "*/app/core/instrument_processing_mixins.py" \
-    ! -path "*/app/core/instrument_sync.py" \
-    ! -path "*/app/core/instrument_validation.py" \
-    ! -path "*/app/core/instruments_service.py" \
-    ! -path "*/app/core/cloud_data_provider.py" \
-    ! -path "*/app/core/instrument_crud.py" \
-    ! -path "*/app/core/processors/symbol_parser.py" \
-    ! -path "*/app/core/processors/canonical_key_generator.py" \
-    ! -path "*/app/core/processors/derived_fields_populator.py" \
-    ! -path "*/cli/parser.py" \
-    ! -path "*/cli/main.py" \
-    ! -path "*/cli/handlers/live_mode_handler.py" \
-    ! -path "*/cli/handlers/instrument_handler.py" \
-    ! -path "*/cli/handlers/corporate_actions_handler.py" \
-    ! -path "*/cli/handlers/corporate_actions_backfill_handler.py" \
-    ! -path "*/cli/handlers/corporate_actions_production_handler.py" \
-    ! -path "*/cli/handlers/corporate_actions_update_handler.py" \
-    ! -path "*/cli/handlers/generate_date_views_handler.py" \
-    ! -path "*/corporate_actions/adapter.py" \
-    ! -path "*/utils/ccxt_service.py" \
-    ! -path "*/utils/special_instruments.py" \
-    ! -path "*/sports/fixture_parser.py" \
-    ! -path "*/sports/league_data_classification_a.py" \
-    ! -path "*/sports/league_data_classification_b.py" \
-    ! -path "*/sports/league_data_other.py" \
-    ! -path "*/engine/operations/*" \
-    ! -path "*/engine/processors/*" \
-    ! -path "*/engine/venues/ccxt_service.py" \
-    ! -path "*/engine/venues/special_instruments.py" \
-    2>/dev/null); do
+for f in $(find . -name "*.py" ! -path "./.venv/*" ! -path "./scripts/*" ! -path "./.git/*" 2>/dev/null); do
     out=$($PYTHON_CMD -c "
 import ast, sys
 p=sys.argv[1]
@@ -490,32 +426,16 @@ if [ -f "cloudbuild.yaml" ] && command -v gcloud &>/dev/null; then
     fi
 fi
 
-# Cloud Build required-steps canary check (WARN 3.14 — canonical template compliance)
-# Canonical template: unified-trading-pm/configs/cloudbuild-service-template.yaml
-# Required steps for service repos: build, quality-gates, push, scan-check
-if [ -f "cloudbuild.yaml" ]; then
-    CB_MISSING=()
-    grep -q 'id:.*"build"' cloudbuild.yaml || CB_MISSING+=("build")
-    grep -q 'id:.*"quality-gates"' cloudbuild.yaml || CB_MISSING+=("quality-gates")
-    grep -q 'id:.*"push"' cloudbuild.yaml || CB_MISSING+=("push")
-    grep -q 'id:.*"scan-check"' cloudbuild.yaml || CB_MISSING+=("scan-check")
-    if [ ${#CB_MISSING[@]} -eq 0 ]; then
-        log_success "cloudbuild.yaml has all required canonical steps (build, quality-gates, push, scan-check)"
-    else
-        log_warn "cloudbuild.yaml missing canonical steps: ${CB_MISSING[*]} — see unified-trading-pm/configs/cloudbuild-service-template.yaml"
-    fi
-fi
-
 # CI/CD hygiene: ||true bypasses in quality gate scripts
 BYPASS=$(rg "\|\|true|\|\| true" --glob "**/quality-gates.sh" --glob "**/quality-gates.yml" . 2>/dev/null \
-    | grep -v "^#\|zombies\|pyright\|cleanup\|BYPASS\|log_fail\|log_success\|: *#" || :)
+    | grep -v "^#\|zombies\|pyright\|cleanup" || :)
 [[ -n "$BYPASS" ]] && { log_fail "||true bypass in quality gates — fix the root cause"; echo "$BYPASS" | head -3; ((V++)); } || log_success "No ||true quality gate bypasses"
 
 # ============================================================
 # STEP 5.7 — No real cloud API calls in unit tests
 # ============================================================
 UNIT_CLOUD_CALLS=$(rg 'get_storage_client\(\)|get_secret_client\(\)|get_queue_client\(\)' \
-    --type py tests/unit/ 2>/dev/null | grep -v '\.mock\.' | grep -v 'MagicMock' | grep -v 'patch' | grep -v 'def _mock_' || :)
+    --type py tests/unit/ 2>/dev/null | grep -v '\.mock\.' | grep -v 'MagicMock' | grep -v 'patch' || :)
 [[ -n "$UNIT_CLOUD_CALLS" ]] && {
     log_fail "Unit tests call real cloud APIs — use MagicMock(spec=StorageClient) instead"
     echo "$UNIT_CLOUD_CALLS" | head -5
@@ -547,7 +467,6 @@ BACK_COMPAT=$(rg "# MIGRATED|backward compat|backward-compat|Re-export.*backward
 # (output_schemas.py is allowed to contain SchemaDefinition/ColumnSchema infra objects only)
 DOMAIN_CONTRACTS_IN_SERVICE=$(rg 'class \w+\(BaseModel\)' --type py \
     --glob "!tests/**" --glob "!**/output_schemas.py" --glob "!**/__init__.py" \
-    --glob "!**/corporate_actions/models.py" --glob "!**/sports/**" \
     "$SOURCE_DIR/" 2>/dev/null | grep -v '#.*CORRECT-LOCAL' || :)
 [[ -n "$DOMAIN_CONTRACTS_IN_SERVICE" ]] && {
     log_fail "Pydantic BaseModel subclasses found in service source — domain data contracts must live in UIC domain/<service-name>/"
@@ -559,8 +478,7 @@ DOMAIN_CONTRACTS_IN_SERVICE=$(rg 'class \w+\(BaseModel\)' --type py \
 # Detect TypedDict domain contracts in service source
 TYPEDDICT_IN_SERVICE=$(rg 'class \w+\(TypedDict\)' --type py \
     --glob "!tests/**" --glob "!**/output_schemas.py" \
-    --glob "!**/ccxt_types.py" --glob "!**/cli/types.py" \
-    "$SOURCE_DIR/" 2>/dev/null | grep -v '#.*CORRECT-LOCAL' || :)
+    "$SOURCE_DIR/" 2>/dev/null || :)
 [[ -n "$TYPEDDICT_IN_SERVICE" ]] && {
     log_fail "TypedDict contracts found in service source — belong in UIC domain/<service-name>/"
     echo "$TYPEDDICT_IN_SERVICE" | head -3
@@ -590,7 +508,7 @@ fi
 PROTOCOL_VIOLATIONS=$(rg "CloudTarget|upload_to_gcs_batch|gcs_bucket|bigquery_dataset|StandardizedDomainCloudService" \
     --type py \
     --glob '!.venv*' --glob '!**/.venv*/**' \
-    --glob '!tests' --glob '!scripts/**' \
+    --glob '!tests' \
     -l . 2>/dev/null || :)
 if [ -n "$PROTOCOL_VIOLATIONS" ]; then
     log_fail "STEP 5.11: Protocol-specific symbols found. Use get_data_sink() / get_event_bus() from UCI instead:"
@@ -610,7 +528,6 @@ HARDCODED_PROTO=$(rg \
   --glob '!.venv*' \
   --glob '!tests/**' \
   --glob '!scripts/**' \
-  --glob '!**/cli/**' \
   -l 2>/dev/null || :)
 if [ -n "$HARDCODED_PROTO" ]; then
     log_fail "STEP 5.12: Hardcoded protocol/cloud names in service source (use get_data_sink/get_event_bus):"
@@ -659,6 +576,28 @@ if [ -f "pyproject.toml" ]; then
     fi
 fi
 
+# STEP 5.22 — cloudbuild.yaml structure check (canary enforcement)
+# Required step IDs: configure-docker, build, quality-gates, push, scan-check
+echo "=== STEP 5.22: cloudbuild.yaml required steps present ==="
+CB_FILE="cloudbuild.yaml"
+if [ -f "$CB_FILE" ]; then
+    CB_MISSING=()
+    for REQUIRED_STEP in "configure-docker" "build" "quality-gates" "push" "scan-check"; do
+        if ! grep -q "id: \"${REQUIRED_STEP}\"" "$CB_FILE" 2>/dev/null; then
+            CB_MISSING+=("$REQUIRED_STEP")
+        fi
+    done
+    if [ "${#CB_MISSING[@]}" -gt 0 ]; then
+        log_fail "STEP 5.22: cloudbuild.yaml missing required step IDs: ${CB_MISSING[*]}"
+        log_fail "  See unified-trading-pm/configs/cloudbuild-service-template.yaml for canonical structure"
+        ((V++))
+    else
+        log_success "STEP 5.22: cloudbuild.yaml has all required step IDs"
+    fi
+else
+    log_warn "STEP 5.22: cloudbuild.yaml not found — skipping structure check"
+fi
+
 [[ $V -gt 0 ]] && { log_fail "Codex compliance FAILED: $V violations"; exit 1; }
 log_success "Codex compliance PASSED"
 
@@ -669,6 +608,6 @@ VSCRIPT="${REPO_ROOT}/unified-trading-codex/scripts/run-all-validators.sh"
 
 # ── DURATION CHECK (<2 min) ───────────────────────────────────────────────────
 QG_END=$(date +%s); DUR=$((QG_END - QG_START))
-[ $DUR -gt 600 ] && { log_fail "Quality gates must complete in <10 min (took ${DUR}s)"; exit 1; }
+[ $DUR -gt 120 ] && { log_fail "Quality gates must complete in <2 min (took ${DUR}s)"; exit 1; }
 echo -e "\n${GREEN}======================================================================"
 echo -e "✅ ALL QUALITY GATES PASSED (${DUR}s)${NC}"
