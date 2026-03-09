@@ -58,12 +58,14 @@ instruments_service/
 4. ✅ **CLI Handlers** - Instrument generation and query handlers (extracted and migrated)
 
 **Old files deleted from `market-tick-data-service`:**
+
 - ✅ `market_data_tick_handler/services/instrument_processing_service.py`
 - ✅ `market_data_tick_handler/cli/handlers/instrument_handler.py`
 - ✅ `market_data_tick_handler/cli/handlers/instruments_query_handler.py`
 - ✅ `market_data_tick_handler/clients/instruments_client.py`
 
 **Breaking Changes:**
+
 - `market-tick-data-service` CLI no longer supports instrument modes - use `instruments-service` CLI directly
 - `market-tick-data-service` clients module no longer exports `InstrumentsClient` - import from `instruments_service.clients.instruments_client`
 
@@ -104,6 +106,7 @@ python -m instruments_service --help
 ```
 
 The setup script will:
+
 1. Ask you to confirm Python 3.13 is installed
 2. Show installation instructions if needed (brew, pyenv)
 3. Verify architecture on Apple Silicon (ARM64 required)
@@ -134,6 +137,7 @@ python -m instruments_service \
 ### Troubleshooting
 
 If terminal fails with exit code 1, check Python version:
+
 ```bash
 # What Python version is active?
 python --version
@@ -209,8 +213,8 @@ This service uses **OpenBB** for enhanced corporate actions data (earnings, divi
 ### Data Sources
 
 | Data Type | Primary Provider | Fallback |
-|-----------|-----------------|----------|
-| Earnings | FMP (via OpenBB) | yfinance |
+| --------- | ---------------- | -------- |
+| Earnings  | FMP (via OpenBB) | yfinance |
 | Dividends | FMP (via OpenBB) | yfinance |
 
 OpenBB provides richer data (revenue, fiscal periods, surprise %) compared to yfinance.
@@ -229,8 +233,8 @@ pip install openbb
 
 API keys are loaded from Secret Manager or environment variables:
 
-| Secret Name | Env Fallback | Purpose |
-|-------------|--------------|---------|
+| Secret Name          | Env Fallback  | Purpose                            |
+| -------------------- | ------------- | ---------------------------------- |
 | `openbb-fmp-api-key` | `FMP_API_KEY` | FMP fundamentals/corporate actions |
 
 Get a free FMP API key at: https://financialmodelingprep.com/developer/docs/ (250 calls/day free tier)
@@ -261,6 +265,7 @@ dividends = adapter.fetch_dividends("AAPL", start_date, end_date)
 - [Usage Guide](docs/USAGE_GUIDE.md) - Usage examples and patterns
 - [Setup Guide](docs/SETUP_GUIDE.md) - Installation and configuration
 - [Instrument Key Specification](docs/INSTRUMENT_KEY.md) - Instrument ID format
+
 # Build trigger test Tue Jan 27 15:04:47 GMT 2026
 
 ---

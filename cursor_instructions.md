@@ -13,13 +13,13 @@ These are **TradFi ETFs**, even though the underlying is crypto, so they must be
 
 This requires coordinated updates across:
 
-* instrument ingestion
-* instrument spec
-* venue adapters
-* validation
-* tests
-* documentation
-* architecture references
+- instrument ingestion
+- instrument spec
+- venue adapters
+- validation
+- tests
+- documentation
+- architecture references
 
 Everything below assumes the current codebase structure reflected in:
 `MVP_INSTRUMENTS.md`, `INSTRUMENT_SPECIFICATION.md`, `VENUE_ADAPTERS.md`, `ARCHITECTURE.md`, `TESTING.md`, `SETUP_GUIDE.md`, `API_REFERENCE.md`, and
@@ -64,8 +64,8 @@ Add these new instruments to:
 
 `instrument_processing_service.py`
 
-* Add ETF symbols to allowed instrument list
-* Ensure class = "ETF" and venue = "DATACENTER/DATABENTO"
+- Add ETF symbols to allowed instrument list
+- Ensure class = "ETF" and venue = "DATACENTER/DATABENTO"
 
 ---
 
@@ -83,14 +83,14 @@ Add these new instruments to:
    ```
    "IBIT" → Instrument("IBIT", type="ETF", class="ETF", venue="DATABENTO")
    ```
+
 3. Implement fallback logic:
+   - If symbol starts with a known Bitcoin ETF ticker → treat as ETF, not CRYPTO.
 
-   * If symbol starts with a known Bitcoin ETF ticker → treat as ETF, not CRYPTO.
 4. Update the `normalize_instrument()` method to emit:
-
-   * instrument_class="ETF"
-   * asset_type="crypto_underlying_etf"
-   * reference_underlying="BTC"
+   - instrument_class="ETF"
+   - asset_type="crypto_underlying_etf"
+   - reference_underlying="BTC"
 
 ### Update contract types:
 
@@ -109,14 +109,13 @@ Modify:
 
 Add logic:
 
-* Recognize Bitcoin ETFs as **TradFi ETFs**.
-* Skip crypto validation paths.
-* Use existing TradFi code paths for:
-
-  * trading hours
-  * corporate actions (if data available)
-  * split/merge adjustments
-  * settlement conventions
+- Recognize Bitcoin ETFs as **TradFi ETFs**.
+- Skip crypto validation paths.
+- Use existing TradFi code paths for:
+  - trading hours
+  - corporate actions (if data available)
+  - split/merge adjustments
+  - settlement conventions
 
 Add mapping:
 
@@ -134,9 +133,9 @@ Modify tests in:
 `TESTING.md`
 Typically in `tests/` under:
 
-* `test_instrument_processing_service.py`
-* `test_databento_adapter.py`
-* `test_instrument_specification.py`
+- `test_instrument_processing_service.py`
+- `test_databento_adapter.py`
+- `test_instrument_specification.py`
 
 ### Add:
 
@@ -158,9 +157,9 @@ test_databento_maps_btc_etf_symbols_correctly()
 
 Verify:
 
-* adapter returns the correct internal instrument
-* correct asset type
-* correct class hierarchy
+- adapter returns the correct internal instrument
+- correct asset type
+- correct class hierarchy
 
 ### **C. Pipeline tests**
 
@@ -172,9 +171,9 @@ test_etf_ingestion_pipeline()
 
 Verifies:
 
-* ETF symbols propagate through pipeline without crypto-parsing logic
-* Timestamps normalized correctly
-* Price fields populated
+- ETF symbols propagate through pipeline without crypto-parsing logic
+- Timestamps normalized correctly
+- Price fields populated
 
 ---
 
@@ -190,8 +189,8 @@ Add a full row for each Bitcoin ETF.
 
 Under “ETF Instruments” add explanation of:
 
-* why Bitcoin ETFs live in TradFi
-* how underlying = BTC is handled
+- why Bitcoin ETFs live in TradFi
+- how underlying = BTC is handled
 
 ### **C. `VENUE_ADAPTERS.md`**
 
@@ -222,14 +221,14 @@ Bitcoin ETFs require new classification tests and adapter mapping tests...
 
 Add:
 
-* Example command for fetching Bitcoin ETF symbols from Databento
-* Note that no crypto-specific keys are required
+- Example command for fetching Bitcoin ETF symbols from Databento
+- Note that no crypto-specific keys are required
 
 ### **G. `API_REFERENCE.md`**
 
 Add:
 
-* New fields in the instrument schema (reference_underlying, crypto_underlying_etf flag)
+- New fields in the instrument schema (reference_underlying, crypto_underlying_etf flag)
 
 ---
 
@@ -237,11 +236,11 @@ Add:
 
 Cursor must ensure:
 
-* All new ETF instruments pass `Instrument.from_dict()` validation
-* All existing pipelines run without ambiguous classification
-* Tests must cover both success + failure modes
-* No changes break existing crypto pipelines
-* ETF tickers do NOT pollute crypto namespace
+- All new ETF instruments pass `Instrument.from_dict()` validation
+- All existing pipelines run without ambiguous classification
+- Tests must cover both success + failure modes
+- No changes break existing crypto pipelines
+- ETF tickers do NOT pollute crypto namespace
 
 ---
 
@@ -249,9 +248,9 @@ Cursor must ensure:
 
 If helpful, instruct Cursor to also add:
 
-* simple caching for ETF metadata
-* mapping table for ETF → issuer
-* tests for daylight saving handling (TradFi exchanges)
+- simple caching for ETF metadata
+- mapping table for ETF → issuer
+- tests for daylight saving handling (TradFi exchanges)
 
 ---
 
