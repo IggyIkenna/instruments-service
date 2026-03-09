@@ -5,19 +5,23 @@ This directory contains schema definitions for instruments-service data storage.
 ## Files
 
 ### `parquet.py`
+
 Defines the expected schema for Parquet files stored in GCS (batch historical data).
 
 **Storage Location:**
+
 - GCS Bucket: `instruments-store` (or `instruments-store-test` for tests)
 - Path Format: `instrument_availability/by_date/day-{YYYY-MM-DD}/instruments.parquet`
 - Format: Parquet (with headers/column names)
 
 **Schema Source:**
+
 - Based on `InstrumentDefinition` Pydantic model (`models.py`)
 - Additional fields added during storage (e.g., `timestamp`)
 - All fields validated via Pydantic before storage
 
 **Usage:**
+
 ```python
 from instruments_service.schemas.parquet import (
     INSTRUMENTS_PARQUET_SCHEMA,

@@ -21,12 +21,12 @@ principle: **sports is an asset class, not a separate system.**
 The instruments-service already processes instruments by `market_category`. SPORTS follows the same
 pattern:
 
-| Category | Instrument Example | Provider |
-|----------|--------------------|----------|
-| CRYPTO_CEFI | `BTC-USDT:BINANCE:SPOT` | Binance, Coinbase |
-| DEFI | `WETH-USDC:UNISWAP_V3:SWAP` | Uniswap, Aave |
-| TRADFI | `AAPL:NASDAQ:EQUITY` | Alpaca, Interactive Brokers |
-| SPORTS | `FOOTBALL:BETFAIR:MATCH_ODDS:ENG-PREMIER_LEAGUE:...` | Betfair, Pinnacle, Polymarket |
+| Category    | Instrument Example                                   | Provider                      |
+| ----------- | ---------------------------------------------------- | ----------------------------- |
+| CRYPTO_CEFI | `BTC-USDT:BINANCE:SPOT`                              | Binance, Coinbase             |
+| DEFI        | `WETH-USDC:UNISWAP_V3:SWAP`                          | Uniswap, Aave                 |
+| TRADFI      | `AAPL:NASDAQ:EQUITY`                                 | Alpaca, Interactive Brokers   |
+| SPORTS      | `FOOTBALL:BETFAIR:MATCH_ODDS:ENG-PREMIER_LEAGUE:...` | Betfair, Pinnacle, Polymarket |
 
 The SPORTS category uses the same `InstrumentRecord` Pydantic model, with sports-specific fields
 mapped into the unified schema.

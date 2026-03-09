@@ -48,46 +48,46 @@ class InstrumentsServiceConfig(UnifiedCloudServicesConfig):
 
 ### Required Variables
 
-| Variable | Description |
-|----------|-------------|
-| `GCP_PROJECT_ID` | GCP project ID |
+| Variable                         | Description                  |
+| -------------------------------- | ---------------------------- |
+| `GCP_PROJECT_ID`                 | GCP project ID               |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to service account JSON |
 
 ### Bucket Configuration
 
-| Variable | Description |
-|----------|-------------|
-| `INSTRUMENTS_GCS_BUCKET_CEFI` | CEFI instruments output bucket |
+| Variable                        | Description                      |
+| ------------------------------- | -------------------------------- |
+| `INSTRUMENTS_GCS_BUCKET_CEFI`   | CEFI instruments output bucket   |
 | `INSTRUMENTS_GCS_BUCKET_TRADFI` | TRADFI instruments output bucket |
-| `INSTRUMENTS_GCS_BUCKET_DEFI` | DEFI instruments output bucket |
-| `INSTRUMENTS_GCS_BUCKET_TEST` | Test bucket (optional) |
+| `INSTRUMENTS_GCS_BUCKET_DEFI`   | DEFI instruments output bucket   |
+| `INSTRUMENTS_GCS_BUCKET_TEST`   | Test bucket (optional)           |
 
 ### Secret Names
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TARDIS_SECRET_NAME` | `tardis-api-key` | Tardis API key secret name |
+| Variable                | Default             | Description                   |
+| ----------------------- | ------------------- | ----------------------------- |
+| `TARDIS_SECRET_NAME`    | `tardis-api-key`    | Tardis API key secret name    |
 | `DATABENTO_SECRET_NAME` | `databento-api-key` | Databento API key secret name |
-| `GRAPH_SECRET_NAME` | `graph-api-key` | The Graph API key secret name |
+| `GRAPH_SECRET_NAME`     | `graph-api-key`     | The Graph API key secret name |
 
 ### DeFi Configuration
 
-| Variable | Description |
-|----------|-------------|
-| `UNISWAP_V3_GRAPH_URL` | Uniswap V3 subgraph URL |
-| `ENVIO_API_URL` | Envio API URL |
-| `ALCHEMY_API_KEY` | Alchemy RPC key (optional) |
+| Variable               | Description                |
+| ---------------------- | -------------------------- |
+| `UNISWAP_V3_GRAPH_URL` | Uniswap V3 subgraph URL    |
+| `ENVIO_API_URL`        | Envio API URL              |
+| `ALCHEMY_API_KEY`      | Alchemy RPC key (optional) |
 
 ## Secret Management
 
 ### Required Secrets by Category
 
-| Category | Secret Name | Required |
-|----------|-------------|----------|
-| CEFI | `tardis-api-key` | Yes |
-| TRADFI | `databento-api-key` | Yes |
-| DEFI | `graph-api-key` | Yes |
-| DEFI | `alchemy-api-key` | No |
+| Category | Secret Name         | Required |
+| -------- | ------------------- | -------- |
+| CEFI     | `tardis-api-key`    | Yes      |
+| TRADFI   | `databento-api-key` | Yes      |
+| DEFI     | `graph-api-key`     | Yes      |
+| DEFI     | `alchemy-api-key`   | No       |
 
 ### Using get_secret_client()
 
@@ -121,6 +121,7 @@ instruments-store-{category}-{project_id}
 ```
 
 Examples:
+
 - `instruments-store-cefi-{project_id}`
 - `instruments-store-tradfi-{project_id}`
 - `instruments-store-defi-{project_id}`

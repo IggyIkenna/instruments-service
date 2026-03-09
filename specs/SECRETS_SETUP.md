@@ -3,6 +3,7 @@
 Complete guide for setting up all secrets required by instruments-service.
 
 > **Related Documentation**:
+>
 > - [`SETUP_GUIDE.md`](./SETUP_GUIDE.md) - Installation and setup
 > - [`TESTING.md`](./TESTING.md) - Testing guide
 
@@ -11,6 +12,7 @@ Complete guide for setting up all secrets required by instruments-service.
 ## Overview
 
 The instruments-service requires several API keys stored in GCP Secret Manager. This guide covers all secrets setup including:
+
 - GCP credentials and authentication
 - GitHub secrets for CI/CD
 - External API keys (Tardis, Databento, The Graph, etc.)
@@ -35,6 +37,7 @@ The service searches for credentials files in these locations (in order of prefe
 4. **Home directory**
 
 It looks for these filenames:
+
 - `{project_id}-e35fb0ddafe2.json` (project-specific, replace {project_id} with actual project ID)
 - `credentials.json`
 - `gcp-credentials.json`
@@ -59,6 +62,7 @@ export GOOGLE_APPLICATION_CREDENTIALS=/path/to/{project_id}-e35fb0ddafe2.json  #
 This is the service account JSON file content needed for GCP authentication in GitHub Actions.
 
 **Steps:**
+
 1. Go to your `instruments-service` repository on GitHub
 2. Navigate to **Settings** → **Secrets and variables** → **Actions**
 3. Click **New repository secret**
@@ -73,6 +77,7 @@ This is the service account JSON file content needed for GCP authentication in G
 A GitHub Personal Access Token (PAT) with access to the private `unified-trading-services` repository.
 
 **Steps:**
+
 1. Go to GitHub.com → **Settings** → **Developer settings** → **Personal access tokens** → **Tokens (classic)**
 2. Click **Generate new token** → **Generate new token (classic)**
 3. Give it a name: `instruments-service-ci`
@@ -85,7 +90,7 @@ A GitHub Personal Access Token (PAT) with access to the private `unified-trading
 8. Go back to your `instruments-service` repository
 9. Navigate to **Settings** → **Secrets and variables** → **Actions**
 10. Click **New repository secret**
-11. Name: `GH_PAT` (note: cannot start with GITHUB_)
+11. Name: `GH_PAT` (note: cannot start with GITHUB\_)
 12. Value: Paste the token you copied
 13. Click **Add secret**
 
@@ -202,14 +207,14 @@ ENVIRONMENT=development
 
 ## 5. API Key Sources
 
-| Secret | Provider | Get Key From | Purpose | Pricing |
-|--------|----------|--------------|---------|---------|
-| `tardis-api-key` | Tardis | https://tardis.dev | CeFi crypto data | Subscription-based |
-| `databento-api-key` | Databento | https://databento.com | TradFi data | Pay-per-use |
-| `graph-api-key` | The Graph | https://thegraph.com/studio | DeFi subgraphs | **$2 per 100k queries** |
-| `alchemy-api-key` | Alchemy | https://dashboard.alchemy.com | DeFi RPC | Pay-as-you-go |
-| `envio-api-key` | Envio | https://envio.dev/app/api-tokens | Uniswap V4 | Free tier available |
-| `aavescan-api-key` | AaveScan | https://aavescan.com | AAVE fallback | Free |
+| Secret              | Provider  | Get Key From                     | Purpose          | Pricing                 |
+| ------------------- | --------- | -------------------------------- | ---------------- | ----------------------- |
+| `tardis-api-key`    | Tardis    | https://tardis.dev               | CeFi crypto data | Subscription-based      |
+| `databento-api-key` | Databento | https://databento.com            | TradFi data      | Pay-per-use             |
+| `graph-api-key`     | The Graph | https://thegraph.com/studio      | DeFi subgraphs   | **$2 per 100k queries** |
+| `alchemy-api-key`   | Alchemy   | https://dashboard.alchemy.com    | DeFi RPC         | Pay-as-you-go           |
+| `envio-api-key`     | Envio     | https://envio.dev/app/api-tokens | Uniswap V4       | Free tier available     |
+| `aavescan-api-key`  | AaveScan  | https://aavescan.com             | AAVE fallback    | Free                    |
 
 ### The Graph Billing Notes
 
@@ -255,12 +260,14 @@ echo "YOUR_API_KEY" | gcloud secrets create SECRET_NAME \
 ## 7. Quick Reference
 
 ### Required Secrets
+
 - ✅ `tardis-api-key` - Required for CeFi crypto
 - ✅ `databento-api-key` - Required for TradFi
 - ✅ `graph-api-key` - Required for DeFi (The Graph)
 - ✅ `alchemy-api-key` - Required for DeFi (RPC)
 
 ### Optional Secrets
+
 - ⚠️ `envio-api-key` - Optional (Uniswap V4 fallback)
 - ⚠️ `aavescan-api-key` - Optional (AAVE fallback)
 
@@ -273,10 +280,12 @@ The repository has two GitHub Actions workflows in `.github/workflows/`:
 ### Quality Gates Workflow (`quality-gates.yml`)
 
 Runs automatically on:
+
 - Push to `main` branch
 - Pull requests to `main` branch
 
 **What it does:**
+
 1. Sets up Python 3.13
 2. Creates GCP credentials from `GCP_SERVICE_ACCOUNT_JSON` secret
 3. Clones `unified-trading-services` (sibling repo)
@@ -284,6 +293,7 @@ Runs automatically on:
 5. Uploads coverage reports as artifacts
 
 **Testing locally before push:**
+
 ```bash
 python scripts/run_quality_gates.py --coverage-threshold 65
 ```
@@ -293,6 +303,7 @@ python scripts/run_quality_gates.py --coverage-threshold 65
 ### Publish Package Workflow (`publish-package.yml`)
 
 Runs on:
+
 - GitHub Release creation
 - Tag push (e.g., `v0.1.0`)
 - Manual workflow dispatch
@@ -312,6 +323,7 @@ git push origin v1.0.0
 ```
 
 **Installing from GitHub:**
+
 ```bash
 # Install directly from GitHub repo
 pip install git+https://x-access-token:$GH_PAT@github.com/IggyIkenna/instruments-service.git
@@ -329,33 +341,37 @@ pip install git+ssh://git@github.com/IggyIkenna/instruments-service.git
 To replicate this CI/CD setup in another repository:
 
 ### Step 1: Copy Workflows
+
 ```bash
 cp -r .github/workflows/ ../new-repo/.github/workflows/
 ```
 
 ### Step 2: Add Required GitHub Secrets
 
-| Secret | Required | Description |
-|--------|----------|-------------|
-| `GCP_SERVICE_ACCOUNT_JSON` | ✅ Yes | Full contents of GCP service account JSON file |
-| `GH_PAT` | ✅ Yes | GitHub PAT with `repo` + `read:packages` scopes |
-| `SSH_PRIVATE_KEY` | ⚠️ Optional | SSH key for git clone (alternative to PAT) |
+| Secret                     | Required    | Description                                     |
+| -------------------------- | ----------- | ----------------------------------------------- |
+| `GCP_SERVICE_ACCOUNT_JSON` | ✅ Yes      | Full contents of GCP service account JSON file  |
+| `GH_PAT`                   | ✅ Yes      | GitHub PAT with `repo` + `read:packages` scopes |
+| `SSH_PRIVATE_KEY`          | ⚠️ Optional | SSH key for git clone (alternative to PAT)      |
 
 ### Step 3: Ensure unified-trading-services is accessible
 
 The workflow clones `unified-trading-services` from GitHub. Ensure:
+
 - Your `GH_PAT` has access to the `unified-trading-services` repo
 - Or set up `SSH_PRIVATE_KEY` for SSH access
 
 ### Step 4: Update repo-specific values in workflow
 
 Edit `quality-gates.yml`:
+
 - Line 91: Update repo URL `git@github.com:IggyIkenna/unified-trading-services.git`
 - Line 262: Adjust coverage threshold `--coverage-threshold 65`
 
 ### Step 5: Configure branch protection (optional)
 
 Go to Settings → Branches → Add rule:
+
 - Branch name pattern: `main`
 - ✅ Require status checks to pass before merging
 - Select "quality-gates" as required check
@@ -365,19 +381,23 @@ Go to Settings → Branches → Add rule:
 ## 10. Verifying CI/CD Setup
 
 ### Test Quality Gates Locally
+
 ```bash
 # Run the same script CI uses
 python scripts/run_quality_gates.py --coverage-threshold 65 --skip-performance
 ```
 
 ### Verify GitHub Secrets Are Set
+
 Go to repository Settings → Secrets and variables → Actions
 
 You should see:
+
 - ✅ `GCP_SERVICE_ACCOUNT_JSON` (required)
 - ✅ `GH_PAT` (required for private repos)
 
 ### Test Workflow Manually
+
 ```bash
 # Trigger a test run by pushing to main
 git add .
@@ -389,4 +409,4 @@ git push origin main
 
 ---
 
-*Last Updated: December 2025*
+_Last Updated: December 2025_
