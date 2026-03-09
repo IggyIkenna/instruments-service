@@ -569,9 +569,8 @@ class CorporateActionsBackfillHandler(ModeHandler):
             stats["total_earnings"],
         )
 
-        # TODO(GH-BACKLOG): Upload to GCS if requested — use DataSink.upload() from UCI
         if upload_to_gcs:
-            logger.warning("GCS upload not yet implemented (testing phase)")
+            self._upload_to_gcs()
 
         return cast(
             dict[str, HandlerResultValue],
@@ -582,6 +581,38 @@ class CorporateActionsBackfillHandler(ModeHandler):
                 "results": results,
             },
         )
+
+    def _upload_to_gcs(self) -> None:
+        """Upload local by_ticker output files to cloud storage via UCI DataSink.
+
+        Walks ``self.by_ticker_dir`` and uploads each CSV file partitioned by
+        ``{ticker}/{action_type}`` so downstream consumers can read via DataSource.
+        Uses the ``tradfi`` routing key (PROTOCOL_DATA_SINK_BUCKET_TRADFI env var).
+        """
+        from unified_cloud_interface import DataSink, get_data_sink
+
+        try:
+            data_sink: DataSink = get_data_sink(routing_key="tradfi")
+            uploaded_count = 0
+
+            for ticker_dir in self.by_ticker_dir.iterdir():
+                if not ticker_dir.is_dir():
+                    continue
+                ticker = ticker_dir.name
+                for csv_file in ticker_dir.glob("*.csv"):
+                    action_type = csv_file.stem  # dividends, splits, earnings
+                    df = pd.read_csv(csv_file)
+                    data_sink.write(
+                        df,
+                        partition={"ticker": ticker, "action_type": action_type},
+                        format="parquet",
+                    )
+                    uploaded_count += 1
+                    logger.debug("Uploaded %s/%s to storage", ticker, action_type)
+
+            logger.info("Uploaded %s files to storage (tradfi routing)", uploaded_count)
+        except (OSError, ValueError, TypeError, KeyError) as e:
+            logger.error("Failed to upload corporate actions backfill to storage: %s", e)
 
     def cleanup(self) -> None:
         """Cleanup resources."""
