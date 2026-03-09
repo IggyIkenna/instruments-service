@@ -5,13 +5,13 @@ on:
     types: [created]
   push:
     tags:
-      - 'v*'  # Publish when tags like v0.1.0, v0.2.0, etc. are pushed
+      - "v*" # Publish when tags like v0.1.0, v0.2.0, etc. are pushed
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to publish (e.g., 0.1.0)'
+        description: "Version to publish (e.g., 0.1.0)"
         required: true
-        default: '0.1.0'
+        default: "0.1.0"
 
 jobs:
   publish:
@@ -27,8 +27,8 @@ jobs:
       - name: Set up Python 3.13
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
-          cache: 'pip'
+          python-version: "3.13"
+          cache: "pip"
 
       - name: Install build tools
         run: |

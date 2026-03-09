@@ -3,6 +3,7 @@
 Complete setup and installation guide for instruments-service.
 
 > **Related Documentation**:
+>
 > - [`SECRETS_SETUP.md`](./SECRETS_SETUP.md) - API keys and secrets setup
 > - [`ARCHITECTURE.md`](./ARCHITECTURE.md) - Service overview and architecture
 > - [`USAGE_GUIDE.md`](./USAGE_GUIDE.md) - Usage examples after setup
@@ -40,6 +41,7 @@ pip install -e .
 ### Credentials Setup
 
 **Automatic**: Place your GCP credentials file (`{project_id}-e35fb0ddafe2.json`, replace {project_id} with actual project ID) in:
+
 - Current directory
 - Parent directory
 - Grandparent directory (unified-trading-system-repos root)
@@ -48,6 +50,7 @@ pip install -e .
 The service will automatically detect it in development mode.
 
 **Manual**: Set environment variable:
+
 ```bash
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json
 ```
@@ -248,4 +251,4 @@ instruments_df = client.get_instruments_for_date(
 
 ---
 
-*Last Updated: December 2025*
+_Last Updated: December 2025_

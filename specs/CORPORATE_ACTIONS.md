@@ -76,6 +76,7 @@ python -m instruments_service.cli.main \
 ### Storage Structure
 
 #### Local (during processing)
+
 ```
 data/temp/corporate_actions/
 ├── by_ticker/              # Raw data organized by ticker
@@ -95,6 +96,7 @@ data/temp/corporate_actions/
 ```
 
 #### GCS (after upload)
+
 ```
 gs://instruments-store-tradfi-{project_id}/corporate_actions/
 ├── by_ticker/      # Same structure as local
@@ -106,27 +108,30 @@ gs://instruments-store-tradfi-{project_id}/corporate_actions/
 
 ## CLI Arguments
 
-| Argument | Default | Description |
-|----------|---------|-------------|
-| `--mode` | Required | Use `corporate_actions_production` |
-| `--tickers` | SP500_TICKERS | Specific tickers (optional, space-separated) |
-| `--parallel-workers` | 2 | Number of concurrent fetches |
-| `--max-retries` | 3 | Retry attempts per ticker |
-| `--upload-to-gcs` | False | Upload to GCS after processing |
+| Argument             | Default       | Description                                  |
+| -------------------- | ------------- | -------------------------------------------- |
+| `--mode`             | Required      | Use `corporate_actions_production`           |
+| `--tickers`          | SP500_TICKERS | Specific tickers (optional, space-separated) |
+| `--parallel-workers` | 2             | Number of concurrent fetches                 |
+| `--max-retries`      | 3             | Retry attempts per ticker                    |
+| `--upload-to-gcs`    | False         | Upload to GCS after processing               |
 
 ### Examples
 
 **Full backfill with GCS upload**:
+
 ```bash
 --mode corporate_actions_production --parallel-workers 2 --upload-to-gcs
 ```
 
 **Test with 5 tickers, no upload**:
+
 ```bash
 --mode corporate_actions_production --tickers AAPL MSFT GOOGL AMZN TSLA
 ```
 
 **Increase workers for faster processing** (may hit rate limits):
+
 ```bash
 --mode corporate_actions_production --parallel-workers 5 --upload-to-gcs
 ```
@@ -162,6 +167,7 @@ This prevents yfinance API rate limiting errors.
 ## Data Schema
 
 ### Dividends
+
 - `ticker`: Stock symbol (str)
 - `ex_date`: Ex-dividend date (date)
 - `pay_date`: Payment date (date, optional)
@@ -175,6 +181,7 @@ This prevents yfinance API rate limiting errors.
 - `instrument_key`: Instrument key (str, optional)
 
 ### Stock Splits
+
 - `ticker`: Stock symbol (str)
 - `effective_date`: Split effective date (date)
 - `split_ratio`: Split ratio as string (str, e.g., "2:1")
@@ -184,6 +191,7 @@ This prevents yfinance API rate limiting errors.
 - `instrument_key`: Instrument key (str, optional)
 
 ### Earnings
+
 - `ticker`: Stock symbol (str)
 - `earnings_date`: Earnings report date (date)
 - `eps_estimate`: EPS estimate (float, optional)
@@ -273,11 +281,11 @@ Provides data quality metrics:
 
 ### Benchmarks (Tested)
 
-| Scale | Tickers | Events | Runtime | Files Created |
-|-------|---------|--------|---------|---------------|
-| Small | 5 | 185 | ~12s | 156 |
-| Medium | 10 | 460 | ~21s | 404 |
-| **Full S&P 500** | **503** | **~23,000** | **~17 min** | **~21,000** |
+| Scale            | Tickers | Events      | Runtime     | Files Created |
+| ---------------- | ------- | ----------- | ----------- | ------------- |
+| Small            | 5       | 185         | ~12s        | 156           |
+| Medium           | 10      | 460         | ~21s        | 404           |
+| **Full S&P 500** | **503** | **~23,000** | **~17 min** | **~21,000**   |
 
 ### Optimization Features
 
@@ -329,6 +337,7 @@ gsutil cat gs://instruments-store-tradfi-{project_id}/corporate_actions/metadata
 **Symptom**: "Invalid Crumb" or HTTP 401 errors
 
 **Solution**: Reduce parallel workers:
+
 ```bash
 --parallel-workers 1
 ```
@@ -344,6 +353,7 @@ gsutil cat gs://instruments-store-tradfi-{project_id}/corporate_actions/metadata
 **Symptom**: GCS upload error in Step 8
 
 **Solution**: Manual upload:
+
 ```bash
 gsutil -m cp -r data/temp/corporate_actions/* \
   gs://instruments-store-tradfi-{project_id}/corporate_actions/
@@ -456,6 +466,7 @@ Before running the full pipeline:
 ## Support
 
 For issues or questions:
+
 1. Check the Troubleshooting section above
 2. Review logs in terminal output
 3. Inspect coverage report for data quality issues

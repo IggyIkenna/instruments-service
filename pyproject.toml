@@ -83,21 +83,27 @@ Repository = "https://github.com/iggyikenna/instruments-service"
 
 [tool.uv.sources.unified-api-contracts]
 path = "../unified-api-contracts"
+editable = true
 
 [tool.uv.sources.unified-internal-contracts]
 path = "../unified-internal-contracts"
+editable = true
 
 [tool.uv.sources.unified-trading-library]
 path = "../unified-trading-library"
+editable = true
 
 [tool.uv.sources.unified-config-interface]
 path = "../unified-config-interface"
+editable = true
 
 [tool.uv.sources.unified-events-interface]
 path = "../unified-events-interface"
+editable = true
 
 [tool.uv.sources.unified-domain-client]
 path = "../unified-domain-client"
+editable = true
 
 [tool.uv.sources.unified-market-interface]
 path = "../unified-market-interface"
@@ -105,9 +111,11 @@ editable = true
 
 [tool.uv.sources.unified-reference-data-interface]
 path = "../unified-reference-data-interface"
+editable = true
 
 [tool.uv.sources.unified-cloud-interface]
 path = "../unified-cloud-interface"
+editable = true
 
 [tool.setuptools]
 packages = [

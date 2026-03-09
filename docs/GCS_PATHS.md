@@ -10,42 +10,44 @@ The instruments-service generates instrument definitions for all market categori
 
 ### Production Buckets
 
-| Category | Bucket Name |
-|----------|-------------|
-| CEFI | `gs://instruments-store-cefi-{project_id}/` |
-| TRADFI | `gs://instruments-store-tradfi-{project_id}/` |
-| DEFI | `gs://instruments-store-defi-{project_id}/` |
+| Category | Bucket Name                                   |
+| -------- | --------------------------------------------- |
+| CEFI     | `gs://instruments-store-cefi-{project_id}/`   |
+| TRADFI   | `gs://instruments-store-tradfi-{project_id}/` |
+| DEFI     | `gs://instruments-store-defi-{project_id}/`   |
 
 ### Test Buckets (for E2E tests)
 
-| Category | Bucket Name |
-|----------|-------------|
-| CEFI | `gs://instruments-store-test-cefi-{project_id}/` |
-| TRADFI | `gs://instruments-store-test-tradfi-{project_id}/` |
-| DEFI | `gs://instruments-store-test-defi-{project_id}/` |
+| Category | Bucket Name                                        |
+| -------- | -------------------------------------------------- |
+| CEFI     | `gs://instruments-store-test-cefi-{project_id}/`   |
+| TRADFI   | `gs://instruments-store-test-tradfi-{project_id}/` |
+| DEFI     | `gs://instruments-store-test-defi-{project_id}/`   |
 
 ## Path Structure
 
 ### Instrument Definitions
 
 **Pattern:**
+
 ```
 instrument_availability/by_date/day={YYYY-MM-DD}/instruments.parquet
 ```
 
 **Full Path Example:**
+
 ```
 gs://instruments-store-cefi-{project_id}/instrument_availability/by_date/day=2024-01-15/instruments.parquet
 ```
 
 ### Path Components
 
-| Component | Description | Example |
-|-----------|-------------|---------|
-| `instrument_availability/` | Top-level prefix for instrument data | - |
-| `by_date/` | Date-partitioned data | - |
-| `day={YYYY-MM-DD}/` | Specific date partition | `day=2024-01-15/` |
-| `instruments.parquet` | Parquet file with instrument definitions | - |
+| Component                  | Description                              | Example           |
+| -------------------------- | ---------------------------------------- | ----------------- |
+| `instrument_availability/` | Top-level prefix for instrument data     | -                 |
+| `by_date/`                 | Date-partitioned data                    | -                 |
+| `day={YYYY-MM-DD}/`        | Specific date partition                  | `day=2024-01-15/` |
+| `instruments.parquet`      | Parquet file with instrument definitions | -                 |
 
 ## File Format
 
@@ -53,18 +55,18 @@ gs://instruments-store-cefi-{project_id}/instrument_availability/by_date/day=202
 
 The `instruments.parquet` file contains the following key columns:
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `instrument_id` | string | Canonical instrument ID |
-| `venue` | string | Exchange/venue name |
-| `market_category` | string | CEFI, TRADFI, or DEFI |
-| `instrument_type` | string | SPOT_PAIR, PERPETUAL, FUTURE, OPTION, etc. |
-| `base_currency` | string | Base asset |
-| `quote_currency` | string | Quote asset |
-| `trading_hours_utc` | string | Trading hours in UTC |
-| `tick_size` | float | Minimum price increment |
-| `lot_size` | float | Minimum quantity increment |
-| `metadata` | struct | Additional venue-specific metadata |
+| Column              | Type   | Description                                |
+| ------------------- | ------ | ------------------------------------------ |
+| `instrument_id`     | string | Canonical instrument ID                    |
+| `venue`             | string | Exchange/venue name                        |
+| `market_category`   | string | CEFI, TRADFI, or DEFI                      |
+| `instrument_type`   | string | SPOT_PAIR, PERPETUAL, FUTURE, OPTION, etc. |
+| `base_currency`     | string | Base asset                                 |
+| `quote_currency`    | string | Quote asset                                |
+| `trading_hours_utc` | string | Trading hours in UTC                       |
+| `tick_size`         | float  | Minimum price increment                    |
+| `lot_size`          | float  | Minimum quantity increment                 |
+| `metadata`          | struct | Additional venue-specific metadata         |
 
 ## Usage Examples
 

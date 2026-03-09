@@ -5,6 +5,7 @@
 Configure the following branch protection rules for the `main` branch:
 
 ### Required Settings
+
 - **Require pull request reviews**: 1 approval minimum
 - **Dismiss stale reviews on new commits**: Enabled
 - **Require status checks to pass**: Enabled
@@ -13,7 +14,9 @@ Configure the following branch protection rules for the `main` branch:
 - **Include administrators**: Enabled (applies to all users)
 
 ### Status Check Requirements
+
 The following status checks must pass before merging:
+
 - `quality-gates` workflow completion
 - Ruff linting (no E, F, W, I rule violations)
 - Basedpyright type checking (with 60s timeout)
@@ -23,6 +26,7 @@ The following status checks must pass before merging:
 ### Quality Gate Requirements
 
 #### Python Service: instruments-service
+
 - **Ruff linting**: PASS (no E, F, W, I rule violations)
 - **Basedpyright**: PASS (with 60s timeout to prevent hangs)
 - **Tests**: PASS with 35% minimum coverage
@@ -32,18 +36,20 @@ The following status checks must pass before merging:
 
 All long-running operations have strict timeouts to prevent hanging builds:
 
-| Operation | Timeout | Rationale |
-|-----------|---------|-----------|
-| Global job | 15 minutes | Prevents runaway builds |
-| Basedpyright | 60 seconds | **CRITICAL**: prevents infinite hangs |
-| Unit tests | 60 seconds | Fast feedback |
-| Integration tests | 120 seconds | Reasonable test time |
-| E2E tests | 180 seconds | Complete end-to-end validation |
+| Operation         | Timeout     | Rationale                             |
+| ----------------- | ----------- | ------------------------------------- |
+| Global job        | 15 minutes  | Prevents runaway builds               |
+| Basedpyright      | 60 seconds  | **CRITICAL**: prevents infinite hangs |
+| Unit tests        | 60 seconds  | Fast feedback                         |
+| Integration tests | 120 seconds | Reasonable test time                  |
+| E2E tests         | 180 seconds | Complete end-to-end validation        |
 
 ## Enforcement Rules
 
 ### No Merge Conditions
+
 Pull requests will be blocked from merging if:
+
 - Any required status check fails
 - Code coverage falls below 35%
 - Ruff linting errors exist
@@ -52,7 +58,9 @@ Pull requests will be blocked from merging if:
 - Tests fail or timeout
 
 ### Emergency Procedures
+
 In case of critical hotfixes:
+
 1. Create emergency branch from `main`
 2. Apply minimal fix with tests
 3. Run local quality gates: `make ci-local`
@@ -78,11 +86,13 @@ This mirrors the exact CI checks and catches issues before pushing.
 ## Troubleshooting
 
 ### Common Issues
+
 - **Basedpyright timeout**: Usually indicates complex types or circular imports - simplify type definitions
 - **Coverage drops**: Add tests for new code paths, ensure 35% minimum maintained
 - **Ruff failures**: Run `ruff format .` and `ruff check . --fix` locally before committing
 
 ### Getting Help
+
 - Check workflow logs in GitHub Actions tab
 - Review specific error messages in PR comments
 - Run `bash scripts/quality-gates.sh` locally to reproduce issues
