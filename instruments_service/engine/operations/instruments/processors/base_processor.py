@@ -13,9 +13,9 @@ from datetime import UTC, datetime
 from typing import cast
 
 from unified_config_interface import DataTypeConfig, ExchangeInstrumentConfig, VenueMapping
-from unified_domain_client import DateFilterService
 from unified_market_interface import SubgraphService
 from unified_market_interface import VenueMapping as UMI_VenueMapping
+from unified_trading_library import DateFilterService
 
 from instruments_service.config import instruments_config
 from instruments_service.engine.processors.symbol_parser import OptionComponents, SymbolComponents, SymbolParser
