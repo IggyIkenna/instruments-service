@@ -34,6 +34,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 # Cloud project/account configuration via UnifiedCloudConfig (fail-fast)
+# scripts only: UnifiedCloudConfig() single use — caching not required
 _cloud_config = UnifiedCloudConfig()
 PROJECT_ID = _cloud_config.gcp_project_id
 if not PROJECT_ID:
