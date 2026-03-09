@@ -65,17 +65,21 @@ jobs:
       - name: Install dependencies
         run: |
           pip install uv
-          uv pip install --system -e ../api-contracts 2>/dev/null || true
-          uv pip install --system -e ../unified-trading-library
-          uv pip install --system -e ../unified-events-interface
-          uv pip install --system -e ../unified-domain-client
-          uv pip install --system -e ../unified-config-interface
-          uv pip install --system -e ../unified-market-interface
-          uv pip install --system -e . --no-deps
-          uv pip install --system pydantic pydantic-settings pandas numpy python-dateutil \
+          uv venv .venv
+          uv pip install --python .venv/bin/python -e ../api-contracts 2>/dev/null || true
+          uv pip install --python .venv/bin/python -e ../unified-trading-library
+          uv pip install --python .venv/bin/python -e ../unified-events-interface
+          uv pip install --python .venv/bin/python -e ../unified-domain-client
+          uv pip install --python .venv/bin/python -e ../unified-config-interface
+          uv pip install --python .venv/bin/python -e ../unified-market-interface
+          uv pip install --python .venv/bin/python -e . --no-deps
+          uv pip install --python .venv/bin/python pydantic pydantic-settings pandas numpy python-dateutil \
             python-dotenv requests ccxt plotly web3 eth-abi databento boto3 \
             exchange-calendars yfinance polars
-          uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout pytest-xdist ruff==0.15.0 basedpyright pip-audit>=2.7.0
+          uv pip install --python .venv/bin/python pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout pytest-xdist ruff==0.15.0 basedpyright pip-audit>=2.7.0
+
+      - name: Add venv to PATH
+        run: echo "${{ github.workspace }}/.venv/bin" >> $GITHUB_PATH
 
       # ========================================================================
       # DEPENDENCY VULNERABILITY SCAN (pip-audit)
