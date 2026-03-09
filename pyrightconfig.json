@@ -8,7 +8,8 @@
     "**/__pycache__",
     ".venv*",
     "build",
-    "dist"
+    "dist",
+    "tests"
   ],
   "extraPaths": ["../unified-market-interface"],
   "typeCheckingMode": "strict",
