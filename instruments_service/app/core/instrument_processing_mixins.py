@@ -17,11 +17,10 @@ from uuid import uuid4
 import unified_market_interface.clients.subgraph_service as sg_module
 import unified_market_interface.clients.thegraph_base_client as tgc_module
 from unified_config_interface import DataTypeConfig, ExchangeInstrumentConfig, VenueMapping
-from unified_domain_client import DateFilterService
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 from unified_market_interface import DatabentoAdapter, SubgraphService, TardisAdapter
 from unified_market_interface import VenueMapping as UMI_VenueMapping
-from unified_trading_library import get_secret_client, handle_api_errors
+from unified_trading_library import DateFilterService, get_secret_client, handle_api_errors
 
 from instruments_service.app.core.instrument_processing_base import InstrumentProcessingConfig
 from instruments_service.app.core.processors.canonical_key_generator import (
