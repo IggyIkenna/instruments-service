@@ -15,7 +15,6 @@ from uuid import uuid4
 
 import pandas as pd
 from unified_cloud_interface import DataSink, ServiceMode, get_data_sink, get_service_mode
-from unified_domain_client import validate_timestamp_date_alignment
 from unified_events_interface import log_event
 from unified_internal_contracts import (
     EnhancedError,
@@ -31,6 +30,7 @@ from unified_trading_library import (
     create_sampling_service,
     determine_market_category,
     handle_storage_errors,
+    validate_timestamp_date_alignment,
 )
 
 from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
