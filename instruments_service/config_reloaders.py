@@ -12,14 +12,56 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 _instrument_reloader: DomainConfigReloader[InstrumentDomainConfig] | None = None
 
+# Module-level snapshot of the latest reloaded subscription list.
+# Consumers (e.g. InstrumentsService engine) call get_active_subscription_list()
+# to obtain the current live set without holding a reference to the reloader.
+_active_subscription_list: list[str] = []
+_active_enabled_venues: list[str] = []
+
+
+def get_active_subscription_list() -> list[str]:
+    """Return the latest hot-reloaded instrument subscription list.
+
+    Returns an empty list if the reloader has not yet fired or GCS reload
+    is disabled (CONFIG_STORE_BUCKET not set).
+    """
+    return list(_active_subscription_list)
+
+
+def get_active_enabled_venues() -> list[str]:
+    """Return the latest hot-reloaded enabled venue list."""
+    return list(_active_enabled_venues)
+
 
 def _on_instruments_reload(config: InstrumentDomainConfig) -> None:
+    global _active_subscription_list, _active_enabled_venues
+
+    _active_subscription_list = list(config.subscription_list)
+    _active_enabled_venues = list(config.enabled_venues)
+
     logger.info(
         "Instruments domain config reloaded: %d instruments, %d venues",
-        len(config.subscription_list),
-        len(config.enabled_venues),
+        len(_active_subscription_list),
+        len(_active_enabled_venues),
     )
-    # TODO(GH-BACKLOG): Hook into InstrumentsService subscription list update when live reload is wired
+    logger.debug(
+        "Active subscription list: %s",
+        _active_subscription_list[:10],  # log first 10 to avoid log spam
+    )
+
+    try:
+        from unified_events_interface import log_event
+
+        log_event(
+            "CONFIG_RELOADED",
+            details={
+                "domain": "instruments",
+                "subscription_count": len(_active_subscription_list),
+                "venue_count": len(_active_enabled_venues),
+            },
+        )
+    except Exception:
+        logger.warning("Could not emit CONFIG_RELOADED event (events not yet set up)")
 
 
 def start_domain_config_reloaders(service_config: object) -> None:
