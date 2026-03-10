@@ -20,6 +20,7 @@ from instruments_service.catalogue_updater import (
 
 # ─── _load_catalogue ──────────────────────────────────────────────────────────
 
+
 class TestLoadCatalogue:
     def test_returns_none_on_os_error(self, tmp_path):
         missing_path = tmp_path / "nonexistent.yaml"
@@ -48,6 +49,7 @@ class TestLoadCatalogue:
 
 # ─── _save_catalogue ──────────────────────────────────────────────────────────
 
+
 class TestSaveCatalogue:
     def test_writes_yaml_to_disk(self, tmp_path):
         catalogue_path = tmp_path / "catalogue.yaml"
@@ -66,6 +68,7 @@ class TestSaveCatalogue:
 
 
 # ─── _patch_flat_entry ────────────────────────────────────────────────────────
+
 
 class TestPatchFlatEntry:
     def test_patches_matching_dataset(self):
@@ -102,12 +105,11 @@ class TestPatchFlatEntry:
 
 # ─── _patch_nested_entry ─────────────────────────────────────────────────────
 
+
 class TestPatchNestedEntry:
     def test_patches_direct_dict_child(self):
         dt = datetime(2025, 3, 28, tzinfo=UTC)
-        catalogue = {
-            "cefi": {"dataset_id": "instruments_cefi_binance", "row_count_last_batch": 0}
-        }
+        catalogue = {"cefi": {"dataset_id": "instruments_cefi_binance", "row_count_last_batch": 0}}
         result = _patch_nested_entry(catalogue, "instruments_cefi_binance", dt, 500)
         assert result is True
         assert catalogue["cefi"]["row_count_last_batch"] == 500
@@ -132,19 +134,13 @@ class TestPatchNestedEntry:
 
     def test_patches_deeply_nested(self):
         dt = datetime(2025, 3, 28, tzinfo=UTC)
-        catalogue = {
-            "level1": {
-                "level2": {
-                    "dataset_id": "deep_dataset",
-                    "row_count_last_batch": 0
-                }
-            }
-        }
+        catalogue = {"level1": {"level2": {"dataset_id": "deep_dataset", "row_count_last_batch": 0}}}
         result = _patch_nested_entry(catalogue, "deep_dataset", dt, 42)
         assert result is True
 
 
 # ─── update_catalogue_entry ───────────────────────────────────────────────────
+
 
 class TestUpdateCatalogueEntry:
     def test_returns_false_when_file_missing(self, tmp_path):
@@ -172,9 +168,7 @@ class TestUpdateCatalogueEntry:
 
     def test_successfully_updates_flat_entry(self, tmp_path):
         catalogue_path = tmp_path / "catalogue.yaml"
-        catalogue = {
-            "datasets": [{"dataset_id": "instruments_cefi_binance", "row_count_last_batch": 0}]
-        }
+        catalogue = {"datasets": [{"dataset_id": "instruments_cefi_binance", "row_count_last_batch": 0}]}
         catalogue_path.write_text(yaml.dump(catalogue), encoding="utf-8")
         dt = datetime(2025, 3, 28, 12, 0, 0, tzinfo=UTC)
         with patch("instruments_service.catalogue_updater._resolve_catalogue_path") as mock_resolve:
@@ -186,9 +180,7 @@ class TestUpdateCatalogueEntry:
 
     def test_uses_current_time_when_last_updated_none(self, tmp_path):
         catalogue_path = tmp_path / "catalogue.yaml"
-        catalogue = {
-            "datasets": [{"dataset_id": "ds1", "row_count_last_batch": 0}]
-        }
+        catalogue = {"datasets": [{"dataset_id": "ds1", "row_count_last_batch": 0}]}
         catalogue_path.write_text(yaml.dump(catalogue), encoding="utf-8")
         with patch("instruments_service.catalogue_updater._resolve_catalogue_path") as mock_resolve:
             mock_resolve.return_value = catalogue_path
@@ -197,11 +189,7 @@ class TestUpdateCatalogueEntry:
 
     def test_successfully_updates_nested_entry(self, tmp_path):
         catalogue_path = tmp_path / "catalogue.yaml"
-        catalogue = {
-            "cefi": {
-                "binance": {"dataset_id": "instruments_cefi_binance", "row_count_last_batch": 0}
-            }
-        }
+        catalogue = {"cefi": {"binance": {"dataset_id": "instruments_cefi_binance", "row_count_last_batch": 0}}}
         catalogue_path.write_text(yaml.dump(catalogue), encoding="utf-8")
         dt = datetime(2025, 3, 28, 12, 0, 0, tzinfo=UTC)
         with patch("instruments_service.catalogue_updater._resolve_catalogue_path") as mock_resolve:

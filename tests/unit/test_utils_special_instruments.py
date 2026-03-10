@@ -93,8 +93,7 @@ class TestUtilsSpecialInstruments:
                 "auction_close_utc": None,
                 "early_close_utc": None,
             }
-        result = create_bitcoin_etf_instrument_definition(
-            "FBTC", datetime(2025, 3, 28, tzinfo=UTC), no_start
-        )
+
+        result = create_bitcoin_etf_instrument_definition("FBTC", datetime(2025, 3, 28, tzinfo=UTC), no_start)
         assert result is not None
         assert result["available_from_datetime"] is not None

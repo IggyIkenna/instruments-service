@@ -12,15 +12,15 @@ from instruments_service.engine.processors.symbol_parser import SymbolParser
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 
+
 def _make_parser(deribit_quotes: list[str] | None = None) -> SymbolParser:
     mock_exchange_config = MagicMock()
-    mock_exchange_config.valid_quote_currencies = {
-        "DERIBIT": deribit_quotes or ["BTC", "ETH", "USDC", "USD"]
-    }
+    mock_exchange_config.valid_quote_currencies = {"DERIBIT": deribit_quotes or ["BTC", "ETH", "USDC", "USD"]}
     return SymbolParser(exchange_config=mock_exchange_config)
 
 
 # ─── parse_symbol_components — Deribit ──────────────────────────────────────
+
 
 class TestParseSymbolComponentsDeribit:
     def setup_method(self):
@@ -57,6 +57,7 @@ class TestParseSymbolComponentsDeribit:
 
 
 # ─── parse_symbol_components — Binance ──────────────────────────────────────
+
 
 class TestParseSymbolComponentsBinance:
     def setup_method(self):
@@ -102,6 +103,7 @@ class TestParseSymbolComponentsBinance:
 
 # ─── parse_symbol_components — Bybit ────────────────────────────────────────
 
+
 class TestParseSymbolComponentsBybit:
     def setup_method(self):
         self.parser = _make_parser()
@@ -118,6 +120,7 @@ class TestParseSymbolComponentsBybit:
 
 
 # ─── parse_symbol_components — Upbit ────────────────────────────────────────
+
 
 class TestParseSymbolComponentsUpbit:
     def setup_method(self):
@@ -136,6 +139,7 @@ class TestParseSymbolComponentsUpbit:
 
 # ─── parse_symbol_components — Coinbase ────────────────────────────────────
 
+
 class TestParseSymbolComponentsCoinbase:
     def setup_method(self):
         self.parser = _make_parser()
@@ -152,6 +156,7 @@ class TestParseSymbolComponentsCoinbase:
 
 
 # ─── parse_symbol_components — OKX ──────────────────────────────────────────
+
 
 class TestParseSymbolComponentsOKX:
     def setup_method(self):
@@ -174,6 +179,7 @@ class TestParseSymbolComponentsOKX:
 
 
 # ─── parse_option_components — Deribit ──────────────────────────────────────
+
 
 class TestParseOptionComponentsDeribit:
     def setup_method(self):
@@ -209,6 +215,7 @@ class TestParseOptionComponentsDeribit:
 
 # ─── parse_deribit_date ───────────────────────────────────────────────────────
 
+
 class TestParseDeribitDate:
     def setup_method(self):
         self.parser = _make_parser()
@@ -236,6 +243,7 @@ class TestParseDeribitDate:
 
 
 # ─── parse_expiry_from_symbol ─────────────────────────────────────────────────
+
 
 class TestParseExpiryFromSymbol:
     def setup_method(self):
