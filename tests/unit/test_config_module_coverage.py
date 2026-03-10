@@ -11,17 +11,24 @@ Covers:
 - UnifiedInstrumentConfig class methods
 """
 
-from instruments_service.config import (
-    DATABENTO_VALID_OPTIONS_SYMBOLS,
-    DATABENTO_VALID_PARENT_SYMBOLS,
-    EXCHANGE_CODE_TO_NAME,
-    InstrumentDefinition,
-    TradFiInstrument,
-    UnifiedInstrumentConfig,
-    _get_data_dir,
-    _load_sp500_tickers,
-    _load_tradfi_instruments,
-)
+import importlib.util as _ilu
+import pathlib as _pl
+
+_cfg_path = _pl.Path(__file__).parents[2] / "instruments_service" / "config.py"
+_cfg_spec = _ilu.spec_from_file_location("instruments_service._config_module", _cfg_path)
+assert _cfg_spec is not None and _cfg_spec.loader is not None
+_cfg = _ilu.module_from_spec(_cfg_spec)
+_cfg_spec.loader.exec_module(_cfg)  # type: ignore[union-attr]
+
+DATABENTO_VALID_OPTIONS_SYMBOLS = _cfg.DATABENTO_VALID_OPTIONS_SYMBOLS
+DATABENTO_VALID_PARENT_SYMBOLS = _cfg.DATABENTO_VALID_PARENT_SYMBOLS
+EXCHANGE_CODE_TO_NAME = _cfg.EXCHANGE_CODE_TO_NAME
+InstrumentDefinition = _cfg.InstrumentDefinition
+TradFiInstrument = _cfg.TradFiInstrument
+UnifiedInstrumentConfig = _cfg.UnifiedInstrumentConfig
+_get_data_dir = _cfg._get_data_dir
+_load_sp500_tickers = _cfg._load_sp500_tickers
+_load_tradfi_instruments = _cfg._load_tradfi_instruments
 
 
 class TestDatabentoDicts:
