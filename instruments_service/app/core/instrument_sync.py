@@ -46,10 +46,10 @@ class InstrumentSyncMixin:
         - self.processing_service: InstrumentProcessingService
     """
 
-    # Attribute stubs provided by the concrete host class.
-    # cast(T, cast(object, None)) satisfies reportUninitializedInstanceVariable.
-    venue_mapping: VenueMapping = cast(VenueMapping, cast(object, None))
-    processing_service: InstrumentProcessingService = cast("InstrumentProcessingService", cast(object, None))
+    # Attribute stubs — declared here so mixin methods can reference them;
+    # concrete host classes must assign real values in __init__.
+    venue_mapping: VenueMapping
+    processing_service: InstrumentProcessingService
 
     async def _process_cefi_exchanges(
         self,
@@ -68,14 +68,11 @@ class InstrumentSyncMixin:
 
         # Apply venue filtering for CEFI
         if venues_filter:
-            tardis_venue_values: set[str] = set(cast(dict[str, str], self.venue_mapping.tardis_to_venue).values())
+            tardis_venue_values: set[str] = set(self.venue_mapping.tardis_to_venue.values())
             cefi_venues: list[str] = [v for v in venues_filter if v in tardis_venue_values]
 
             if cefi_venues:
-                venue_to_exchanges: dict[str, list[str]] = cast(
-                    dict[str, list[str]],
-                    self.venue_mapping.get_venue_to_tardis_exchanges(),
-                )
+                venue_to_exchanges: dict[str, list[str]] = self.venue_mapping.get_venue_to_tardis_exchanges()
                 filtered_exchanges: list[str] = []
                 for canonical_venue in cefi_venues:
                     if canonical_venue in venue_to_exchanges:
@@ -197,7 +194,7 @@ class InstrumentSyncMixin:
                     all_instruments.update(result)
 
         # Process on-chain CLOB venues (Hyperliquid, Aster) as part of CEFI
-        cefi_onchain_clob_venues: list[str] = cast(list[str], self.venue_mapping.all_cefi_onchain_clob_venues)
+        cefi_onchain_clob_venues: list[str] = self.venue_mapping.all_cefi_onchain_clob_venues
         cefi_clob_protocols: list[tuple[str, None]] = []
 
         if venues_filter:
@@ -252,7 +249,7 @@ class InstrumentSyncMixin:
         all_instruments: dict[str, InstrumentDefinition] = {}
 
         databento_config = UnifiedInstrumentConfig()
-        all_databento_exchanges: list[str] = cast(list[str], self.venue_mapping.all_databento_venues)
+        all_databento_exchanges: list[str] = self.venue_mapping.all_databento_venues
 
         # Apply venue filtering for TRADFI
         databento_exchanges: list[str]
@@ -422,9 +419,7 @@ class InstrumentSyncMixin:
 
         # Filter protocols if venues specified
         if venues_filter:
-            defi_venues: list[str] = [
-                v for v in venues_filter if v in cast(list[str], self.venue_mapping.all_defi_venues)
-            ]
+            defi_venues: list[str] = [v for v in venues_filter if v in self.venue_mapping.all_defi_venues]
 
             if defi_venues:
                 defi_protocols: list[tuple[str, str | None]] = []

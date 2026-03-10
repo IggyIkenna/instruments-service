@@ -81,9 +81,10 @@ class InstrumentRefreshScheduler:
                     event_dict["venue"] = venue
 
                     try:
-                        # Publish event dict directly (InstrumentLifecycleEvent schema pending in unified_internal_contracts)
+                        # Publish instrument lifecycle events via SERVICE_EVENTS topic
+                        # (InstrumentLifecycleEvent schema pending in unified_internal_contracts)
                         publisher.publish(
-                            InternalPubSubTopic.INSTRUMENT_LIFECYCLE,
+                            InternalPubSubTopic.SERVICE_EVENTS,
                             event_dict,
                         )
                         logger.info("Published %s for %s", event_type, instrument_key)

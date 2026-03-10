@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 @runtime_checkable
-class _ProcessorHost(Protocol):
+class ProcessorHost(Protocol):
     """Structural interface required by MarketProcessors methods."""
 
     venue_mapping: object
@@ -512,7 +512,7 @@ class MarketProcessors:
 
 
 async def process_cefi(
-    orchestrator: _ProcessorHost,
+    orchestrator: ProcessorHost,
     date: datetime,
     venues_filter: list[str],
 ) -> dict[str, InstrumentDefinition]:
@@ -525,7 +525,7 @@ async def process_cefi(
 
 
 async def process_tradfi(
-    orchestrator: _ProcessorHost,
+    orchestrator: ProcessorHost,
     date: datetime,
     venues_filter: list[str],
     tradfi_venues: list[str] | None,
@@ -537,7 +537,7 @@ async def process_tradfi(
 
 
 async def process_defi(
-    orchestrator: _ProcessorHost,
+    orchestrator: ProcessorHost,
     date: datetime,
     venues_filter: list[str],
 ) -> dict[str, InstrumentDefinition]:
