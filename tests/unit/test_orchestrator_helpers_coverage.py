@@ -85,10 +85,12 @@ class TestExtractVenuesFromInstrumentIds:
         assert "BINANCE" in result
 
     def test_multiple_ids(self) -> None:
-        result = extract_venues_from_instrument_ids([
-            "BINANCE:PERPETUAL:BTC-USDT@LIN",
-            "DERIBIT:OPTION:ETH-USD-1234",
-        ])
+        result = extract_venues_from_instrument_ids(
+            [
+                "BINANCE:PERPETUAL:BTC-USDT@LIN",
+                "DERIBIT:OPTION:ETH-USD-1234",
+            ]
+        )
         assert "BINANCE" in result
         assert "DERIBIT" in result
 
@@ -101,10 +103,12 @@ class TestExtractVenuesFromInstrumentIds:
         assert result == []
 
     def test_deduplicates_venues(self) -> None:
-        result = extract_venues_from_instrument_ids([
-            "BINANCE:PERPETUAL:BTC-USDT@LIN",
-            "BINANCE:SPOT_PAIR:ETH-USDT",
-        ])
+        result = extract_venues_from_instrument_ids(
+            [
+                "BINANCE:PERPETUAL:BTC-USDT@LIN",
+                "BINANCE:SPOT_PAIR:ETH-USDT",
+            ]
+        )
         assert result.count("BINANCE") == 1
 
 
@@ -133,12 +137,12 @@ class TestValidateVenues:
 
     def test_invalid_venue_excluded(self) -> None:
         vm = self._make_venue_mapping()
-        valid, tradfi = validate_venues(["NONEXISTENT"], vm, cefi=True, tradfi=True, defi=True)
+        valid, _tradfi = validate_venues(["NONEXISTENT"], vm, cefi=True, tradfi=True, defi=True)
         assert "NONEXISTENT" not in valid
 
     def test_mixed_valid_invalid(self) -> None:
         vm = self._make_venue_mapping()
-        valid, tradfi = validate_venues(["BINANCE", "FAKE"], vm, cefi=True, tradfi=False, defi=False)
+        valid, _tradfi = validate_venues(["BINANCE", "FAKE"], vm, cefi=True, tradfi=False, defi=False)
         assert "BINANCE" in valid
         assert "FAKE" not in valid
 
@@ -286,11 +290,15 @@ class TestAddTradfiPlaceholders:
 
     def test_no_placeholder_when_venue_present(self) -> None:
         vm = self._make_venue_mapping()
-        df = pd.DataFrame([{
-            "venue": "CME",
-            "instrument_key": "CME:FUTURE:ES",
-            "instrument_type": "FUTURE",
-        }])
+        df = pd.DataFrame(
+            [
+                {
+                    "venue": "CME",
+                    "instrument_key": "CME:FUTURE:ES",
+                    "instrument_type": "FUTURE",
+                }
+            ]
+        )
         date = datetime(2024, 1, 1, tzinfo=UTC)
         result = add_tradfi_placeholders(df, date, ["CME"], vm)
         # No new rows added since CME already present
