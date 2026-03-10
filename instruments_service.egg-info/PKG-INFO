@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: instruments-service
-Version: 0.1.89
+Version: 0.1.91
 Summary: Service for generating canonical instrument definitions from exchange APIs
 Author-email: Unified Trading System <ikenna@odum-research.com>
 License: MIT
