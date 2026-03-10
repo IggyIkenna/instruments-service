@@ -73,21 +73,21 @@ class TestInstrumentProcessingService:
 
     def test_normalize_venue(self):
         """Test venue normalization."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         service = InstrumentProcessingService(config)
         venue = service.normalize_venue("binance-futures")
         assert venue == "BINANCE-FUTURES"
 
     def test_normalize_instrument_type(self):
         """Test instrument type normalization."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         service = InstrumentProcessingService(config)
         inst_type = service.normalize_instrument_type("perpetual")
         assert inst_type == "PERPETUAL"
 
     def test_generate_canonical_key_spot(self):
         """Test canonical key generation for spot pair."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         service = InstrumentProcessingService(config)
         key = service.generate_canonical_key(
             exchange="binance",
@@ -99,7 +99,7 @@ class TestInstrumentProcessingService:
 
     def test_generate_canonical_key_perpetual(self):
         """Test canonical key generation for perpetual."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         service = InstrumentProcessingService(config)
         key = service.generate_canonical_key(
             exchange="binance-futures",
@@ -113,21 +113,21 @@ class TestInstrumentProcessingService:
 
     def test_normalize_venue_upbit(self):
         """Test venue normalization for Upbit."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         service = InstrumentProcessingService(config)
         venue = service.normalize_venue("upbit")
         assert venue == "UPBIT"
 
     def test_normalize_venue_coinbase(self):
         """Test venue normalization for Coinbase."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         service = InstrumentProcessingService(config)
         venue = service.normalize_venue("coinbase")
         assert venue == "COINBASE"
 
     def test_generate_canonical_key_upbit_spot(self):
         """Test canonical key generation for Upbit spot pair."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         service = InstrumentProcessingService(config)
         key = service.generate_canonical_key(
             exchange="upbit",
@@ -139,7 +139,7 @@ class TestInstrumentProcessingService:
 
     def test_generate_canonical_key_coinbase_spot(self):
         """Test canonical key generation for Coinbase spot pair."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         service = InstrumentProcessingService(config)
         key = service.generate_canonical_key(
             exchange="coinbase",
@@ -155,19 +155,19 @@ class TestUpbitCoinbaseMVPFiltering:
 
     def test_upbit_in_spot_mvp_filtered_venues(self):
         """Test that UPBIT is in spot_mvp_filtered_venues."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         service = InstrumentProcessingService(config)
         assert "UPBIT" in service.venue_mapping.spot_mvp_filtered_venues
 
     def test_coinbase_in_spot_mvp_filtered_venues(self):
         """Test that COINBASE is in spot_mvp_filtered_venues."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         service = InstrumentProcessingService(config)
         assert "COINBASE" in service.venue_mapping.spot_mvp_filtered_venues
 
     def test_mvp_base_assets_for_filtering(self):
         """Test MVP base assets list used for filtering."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         service = InstrumentProcessingService(config)
         mvp_assets = service.venue_mapping.hyperliquid_aster_mvp_base_assets
 
@@ -182,28 +182,28 @@ class TestUpbitCoinbaseMVPFiltering:
 
     def test_exchange_config_upbit_spot_only(self):
         """Test ExchangeInstrumentConfig for Upbit is spot only."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         service = InstrumentProcessingService(config)
         upbit_types = service.exchange_config.exchange_instrument_types.get("UPBIT", [])
         assert upbit_types == ["SPOT_PAIR"]
 
     def test_exchange_config_coinbase_spot_only(self):
         """Test ExchangeInstrumentConfig for Coinbase is spot only."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         service = InstrumentProcessingService(config)
         coinbase_types = service.exchange_config.exchange_instrument_types.get("COINBASE", [])
         assert coinbase_types == ["SPOT_PAIR"]
 
     def test_quote_currency_upbit_krw(self):
         """Test Upbit uses KRW as quote currency."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         service = InstrumentProcessingService(config)
         upbit_quotes = service.exchange_config.valid_quote_currencies.get("UPBIT", [])
         assert upbit_quotes == ["KRW"]
 
     def test_quote_currency_coinbase_usd(self):
         """Test Coinbase uses USD as quote currency."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         service = InstrumentProcessingService(config)
         coinbase_quotes = service.exchange_config.valid_quote_currencies.get("COINBASE", [])
         assert coinbase_quotes == ["USD"]
@@ -272,7 +272,7 @@ class TestSymbolParsing:
     @pytest.fixture(scope="class")
     def service(self):
         """Create processing service for testing (class-scoped for performance)."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         return InstrumentProcessingService(config)
 
     def test_parse_symbol_upbit_krw_sol(self, service):
@@ -360,7 +360,7 @@ class TestTardisSymbolConversion:
     @pytest.fixture
     def service(self):
         """Create processing service for testing."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         return InstrumentProcessingService(config)
 
     def test_convert_to_tardis_symbol_binance(self, service):
@@ -395,7 +395,7 @@ class TestProblematicInstruments:
     @pytest.fixture(scope="class")
     def service(self):
         """Create processing service for testing (class-scoped for performance)."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         return InstrumentProcessingService(config)
 
     def test_is_problematic_binance_instrument_basic(self, service):
@@ -429,7 +429,7 @@ class TestDeribitParsing:
     @pytest.fixture
     def service(self):
         """Create processing service for testing."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         return InstrumentProcessingService(config)
 
     def test_parse_deribit_date(self, service):
@@ -481,7 +481,7 @@ class TestOptionParsing:
     @pytest.fixture(scope="class")
     def service(self):
         """Create processing service for testing (class-scoped for performance)."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         return InstrumentProcessingService(config)
 
     def test_parse_option_components_deribit_new_format(self, service):
@@ -605,7 +605,7 @@ class TestCanonicalKeyGeneration:
     @pytest.fixture(scope="class")
     def service(self):
         """Create processing service for testing (class-scoped for performance)."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         return InstrumentProcessingService(config)
 
     def test_generate_canonical_key_future_with_expiry(self, service):
@@ -697,7 +697,7 @@ class TestServiceOperations:
     @pytest.fixture(scope="class")
     def service(self):
         """Create processing service for testing (class-scoped for performance)."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         return InstrumentProcessingService(config)
 
     def test_get_processing_stats(self, service):
@@ -729,7 +729,7 @@ class TestInstrumentFiltering:
     @pytest.fixture
     def service(self):
         """Create processing service for testing."""
-        config = {"tardis_api_key": "test-key"}
+        config = {"tardis_api_key": "test-key", "enable_defi_integration": False}
         return InstrumentProcessingService(config)
 
     def test_filter_instruments_by_exchange_config(self, service):

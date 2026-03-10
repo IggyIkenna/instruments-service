@@ -31,6 +31,7 @@ class InstrumentProcessingConfig:
     retry_max_attempts: int = 3
     retry_backoff_factor: float = 1.0
     enable_ccxt_integration: bool = True
+    enable_defi_integration: bool = True
     enable_metadata_caching: bool = True
     cache_ttl_hours: int = 24
     supported_exchanges: list[str] = field(
@@ -110,6 +111,7 @@ class InstrumentProcessingBase:
             retry_max_attempts=retry_attempts,
             retry_backoff_factor=retry_backoff,
             enable_ccxt_integration=cast(bool, config.get("enable_ccxt_integration", True)),
+            enable_defi_integration=cast(bool, config.get("enable_defi_integration", True)),
             enable_metadata_caching=cast(bool, config.get("enable_metadata_caching", True)),
             cache_ttl_hours=cache_ttl,
             supported_exchanges=self.venue_mapping.all_tardis_exchanges,

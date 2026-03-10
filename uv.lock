@@ -2515,7 +2515,7 @@ wheels = [
 
 [[package]]
 name = "unified-api-contracts"
-version = "0.1.220"
+version = "0.1.227"
 source = { editable = "../unified-api-contracts" }
 dependencies = [
     { name = "pydantic" },
@@ -2701,7 +2701,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "unified-internal-contracts"
-version = "0.1.60"
+version = "0.1.61"
 source = { editable = "../unified-internal-contracts" }
 dependencies = [
     { name = "pandas" },
@@ -2730,7 +2730,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "unified-market-interface"
-version = "0.3.73"
+version = "0.3.83"
 source = { editable = "../unified-market-interface" }
 dependencies = [
     { name = "aiohttp" },
@@ -2876,7 +2876,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "unified-trading-library"
-version = "0.3.159"
+version = "0.3.161"
 source = { editable = "../unified-trading-library" }
 dependencies = [
     { name = "fsspec" },
