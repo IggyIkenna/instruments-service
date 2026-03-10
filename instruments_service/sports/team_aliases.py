@@ -24,7 +24,7 @@ from collections import defaultdict
 from typing import cast
 
 from pydantic import BaseModel, ConfigDict
-from unified_api_contracts.unified_api_contracts_external.sports.canonical.mappings import TeamMapping
+from unified_api_contracts import TeamMapping
 
 from instruments_service.sports.team_normalizer import normalize_for_fuzzy as _normalize_for_fuzzy
 
