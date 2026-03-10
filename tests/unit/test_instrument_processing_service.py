@@ -726,9 +726,9 @@ class TestServiceOperations:
 class TestInstrumentFiltering:
     """Tests for instrument filtering."""
 
-    @pytest.fixture(scope="class")
+    @pytest.fixture
     def service(self):
-        """Create processing service for testing (class-scoped for performance)."""
+        """Create processing service for testing."""
         config = {"tardis_api_key": "test-key"}
         return InstrumentProcessingService(config)
 
