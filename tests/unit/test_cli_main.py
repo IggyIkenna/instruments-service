@@ -340,6 +340,8 @@ class TestMainServiceCli:
 
         with (
             patch("instruments_service.cli.main.ServiceCLI", return_value=mock_cli),
+            patch("instruments_service.cli.main.GCSEventSink", return_value=MagicMock()),
+            patch("instruments_service.cli.main.setup_service_observability"),
             patch.object(sys, "argv", ["instruments-service", "aggregate", "--redo-all"]),
         ):
             main_service_cli()
@@ -354,6 +356,8 @@ class TestMainServiceCli:
 
         with (
             patch("instruments_service.cli.main.ServiceCLI", return_value=mock_cli),
+            patch("instruments_service.cli.main.GCSEventSink", return_value=MagicMock()),
+            patch("instruments_service.cli.main.setup_service_observability"),
             patch.object(sys, "argv", ["instruments-service", "aggregate"]),
             pytest.raises(RuntimeError, match="boom"),
         ):
@@ -377,6 +381,8 @@ class TestMainServiceCli:
 
         with (
             patch("instruments_service.cli.main.ServiceCLI", side_effect=fake_service_cli),
+            patch("instruments_service.cli.main.GCSEventSink", return_value=MagicMock()),
+            patch("instruments_service.cli.main.setup_service_observability"),
             patch.object(
                 sys,
                 "argv",
