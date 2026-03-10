@@ -17,6 +17,7 @@ Targets the following 0% / low-coverage modules:
 
 from __future__ import annotations
 
+import sys
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -698,8 +699,6 @@ class TestAggregateHandler:
 # Live mode handler imports JsonValue from UEI which may not be present in the
 # installed version — we mock the symbol at the UEI level before importing.
 # ---------------------------------------------------------------------------
-
-import sys
 
 
 def _patch_uei_json_value():
