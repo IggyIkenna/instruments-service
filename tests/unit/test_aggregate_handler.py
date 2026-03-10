@@ -19,6 +19,7 @@ from instruments_service.cli.handlers.aggregate_handler import (
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
+
 def _make_parquet_bytes(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
     df.to_parquet(buf, index=False)
@@ -37,14 +38,17 @@ def _make_handler(project_id: str = "test-project") -> AggregateHandler:
 
 # ─── _deduplicate ─────────────────────────────────────────────────────────────
 
+
 class TestAggregateHandlerDeduplicate:
     def test_deduplicates_by_instrument_key(self):
         handler = _make_handler()
-        df = pd.DataFrame([
-            {"instrument_key": "A", "timestamp": "2025-03-28", "val": 2},
-            {"instrument_key": "A", "timestamp": "2025-03-27", "val": 1},
-            {"instrument_key": "B", "timestamp": "2025-03-28", "val": 3},
-        ])
+        df = pd.DataFrame(
+            [
+                {"instrument_key": "A", "timestamp": "2025-03-28", "val": 2},
+                {"instrument_key": "A", "timestamp": "2025-03-27", "val": 1},
+                {"instrument_key": "B", "timestamp": "2025-03-28", "val": 3},
+            ]
+        )
         result = handler._deduplicate(df)
         assert len(result) == 2
         a_row = result[result["instrument_key"] == "A"]
@@ -52,24 +56,29 @@ class TestAggregateHandlerDeduplicate:
 
     def test_no_instrument_key_col_uses_fallback(self):
         handler = _make_handler()
-        df = pd.DataFrame([
-            {"instrument_id": "A"},
-            {"instrument_id": "A"},
-        ])
+        df = pd.DataFrame(
+            [
+                {"instrument_id": "A"},
+                {"instrument_id": "A"},
+            ]
+        )
         result = handler._deduplicate(df)
         assert len(result) == 1
 
     def test_no_timestamp_col_still_deduplicates(self):
         handler = _make_handler()
-        df = pd.DataFrame([
-            {"instrument_key": "A", "val": 1},
-            {"instrument_key": "A", "val": 2},
-        ])
+        df = pd.DataFrame(
+            [
+                {"instrument_key": "A", "val": 1},
+                {"instrument_key": "A", "val": 2},
+            ]
+        )
         result = handler._deduplicate(df)
         assert len(result) == 1
 
 
 # ─── _download_parquet ────────────────────────────────────────────────────────
+
 
 class TestAggregateHandlerDownloadParquet:
     def test_returns_dataframe(self):
@@ -84,6 +93,7 @@ class TestAggregateHandlerDownloadParquet:
 
 
 # ─── _load_all_from_gcs ───────────────────────────────────────────────────────
+
 
 class TestAggregateHandlerLoadAllFromGcs:
     def test_empty_blobs_returns_empty_df(self):
@@ -115,6 +125,7 @@ class TestAggregateHandlerLoadAllFromGcs:
 
 
 # ─── _load_latest_aggregated ─────────────────────────────────────────────────
+
 
 class TestAggregateHandlerLoadLatestAggregated:
     def test_no_blobs_returns_empty(self):
@@ -151,15 +162,15 @@ class TestAggregateHandlerLoadLatestAggregated:
 
 # ─── run() ───────────────────────────────────────────────────────────────────
 
+
 class TestAggregateHandlerRun:
     def test_run_returns_error_without_project_id(self):
-        handler = _make_handler()
+        # Handler with non-empty config but empty project_id; get_config also returns empty
+        handler = AggregateHandler(config={"mode": "aggregate"})
         with patch("instruments_service.cli.handlers.aggregate_handler.get_config") as mock_cfg:
             mock_cfg.return_value.gcp_project_id = ""
-            # config has project_id but we patch config to return empty
             result = handler.run()
-        # With project_id from handler.config, this is actually successful; just verify it doesn't crash
-        assert "status" in result
+        assert result["status"] == "error"
 
     def test_run_with_redo_all_and_empty_buckets(self):
         handler = _make_handler()
@@ -167,7 +178,10 @@ class TestAggregateHandlerRun:
         mock_storage.list_blobs.return_value = []
         with (
             patch("instruments_service.cli.handlers.aggregate_handler.get_storage_client", return_value=mock_storage),
-            patch("instruments_service.cli.handlers.aggregate_handler.get_instruments_bucket_for_category", return_value="test-bucket"),
+            patch(
+                "instruments_service.cli.handlers.aggregate_handler.get_instruments_bucket_for_category",
+                return_value="test-bucket",
+            ),
         ):
             result = handler.run(redo_all=True)
         assert result["status"] == "success"
@@ -177,7 +191,10 @@ class TestAggregateHandlerRun:
         handler = _make_handler()
         with (
             patch("instruments_service.cli.handlers.aggregate_handler.get_storage_client") as mock_storage,
-            patch("instruments_service.cli.handlers.aggregate_handler.get_instruments_bucket_for_category", return_value="test-bucket"),
+            patch(
+                "instruments_service.cli.handlers.aggregate_handler.get_instruments_bucket_for_category",
+                return_value="test-bucket",
+            ),
         ):
             mock_storage.side_effect = ValueError("storage error")
             result = handler.run(redo_all=False)

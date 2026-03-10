@@ -20,6 +20,7 @@ import pandas as pd
 # (that function does not exist — pre-existing repo bug). We insert stubs so
 # the package initialises without error, then load orchestrator_helpers directly.
 
+
 def _stub_package() -> None:
     pkg = "instruments_service.engine.operations.instruments"
     if pkg in sys.modules:
@@ -61,6 +62,7 @@ from instruments_service.engine.operations.instruments.orchestrator_helpers impo
 
 # ─── normalize_venues_filter ─────────────────────────────────────────────────
 
+
 class TestNormalizeVenuesFilter:
     def test_none_returns_empty_list(self):
         assert normalize_venues_filter(None) == []
@@ -83,16 +85,19 @@ class TestNormalizeVenuesFilter:
 
 # ─── extract_venues_from_instrument_ids ───────────────────────────────────────
 
+
 class TestExtractVenuesFromInstrumentIds:
     def test_single_id_with_colon(self):
         result = extract_venues_from_instrument_ids("BINANCE:SPOT_PAIR:BTC-USDT")
         assert "BINANCE" in result
 
     def test_list_of_ids(self):
-        result = extract_venues_from_instrument_ids([
-            "BINANCE:SPOT_PAIR:BTC-USDT",
-            "DERIBIT:PERPETUAL:BTC-USD@INV",
-        ])
+        result = extract_venues_from_instrument_ids(
+            [
+                "BINANCE:SPOT_PAIR:BTC-USDT",
+                "DERIBIT:PERPETUAL:BTC-USD@INV",
+            ]
+        )
         assert "BINANCE" in result
         assert "DERIBIT" in result
 
@@ -101,10 +106,12 @@ class TestExtractVenuesFromInstrumentIds:
         assert result == []
 
     def test_deduplication(self):
-        result = extract_venues_from_instrument_ids([
-            "BINANCE:SPOT_PAIR:BTC-USDT",
-            "BINANCE:SPOT_PAIR:ETH-USDT",
-        ])
+        result = extract_venues_from_instrument_ids(
+            [
+                "BINANCE:SPOT_PAIR:BTC-USDT",
+                "BINANCE:SPOT_PAIR:ETH-USDT",
+            ]
+        )
         assert result.count("BINANCE") == 1
 
     def test_string_input_treated_as_single_id(self):
@@ -113,6 +120,7 @@ class TestExtractVenuesFromInstrumentIds:
 
 
 # ─── validate_venues ─────────────────────────────────────────────────────────
+
 
 class TestValidateVenues:
     def _make_mapping(self, tardis=None, databento=None, defi=None):
@@ -160,6 +168,7 @@ class TestValidateVenues:
 
 # ─── filter_by_instrument_ids ─────────────────────────────────────────────────
 
+
 class TestFilterByInstrumentIds:
     def _make_instruments(self, keys: list[str]) -> dict:
         result = {}
@@ -169,24 +178,25 @@ class TestFilterByInstrumentIds:
         return result
 
     def test_exact_match(self):
-        instruments = self._make_instruments([
-            "BINANCE:SPOT_PAIR:BTC-USDT",
-            "BINANCE:SPOT_PAIR:ETH-USDT",
-        ])
+        instruments = self._make_instruments(
+            [
+                "BINANCE:SPOT_PAIR:BTC-USDT",
+                "BINANCE:SPOT_PAIR:ETH-USDT",
+            ]
+        )
         result = filter_by_instrument_ids(instruments, "BINANCE:SPOT_PAIR:BTC-USDT")
         assert "BINANCE:SPOT_PAIR:BTC-USDT" in result
         assert "BINANCE:SPOT_PAIR:ETH-USDT" not in result
 
     def test_list_of_ids(self):
-        instruments = self._make_instruments([
-            "BINANCE:SPOT_PAIR:BTC-USDT",
-            "BINANCE:SPOT_PAIR:ETH-USDT",
-            "DERIBIT:PERPETUAL:BTC-USD@INV",
-        ])
-        result = filter_by_instrument_ids(
-            instruments,
-            ["BINANCE:SPOT_PAIR:BTC-USDT", "DERIBIT:PERPETUAL:BTC-USD@INV"]
+        instruments = self._make_instruments(
+            [
+                "BINANCE:SPOT_PAIR:BTC-USDT",
+                "BINANCE:SPOT_PAIR:ETH-USDT",
+                "DERIBIT:PERPETUAL:BTC-USD@INV",
+            ]
         )
+        result = filter_by_instrument_ids(instruments, ["BINANCE:SPOT_PAIR:BTC-USDT", "DERIBIT:PERPETUAL:BTC-USD@INV"])
         assert len(result) == 2
 
     def test_no_match_returns_empty(self):
@@ -201,6 +211,7 @@ class TestFilterByInstrumentIds:
 
 
 # ─── convert_to_dataframe ─────────────────────────────────────────────────────
+
 
 class TestConvertToDataframe:
     def test_empty_dict_returns_empty_df(self):
@@ -229,6 +240,7 @@ class TestConvertToDataframe:
 
 
 # ─── handle_no_instruments ────────────────────────────────────────────────────
+
 
 class TestHandleNoInstruments:
     def _make_counter(self, errors=0, warnings=0):
@@ -278,6 +290,7 @@ class TestHandleNoInstruments:
 
 # ─── add_tradfi_placeholders ─────────────────────────────────────────────────
 
+
 class TestAddTradfiPlaceholders:
     def _make_mapping(self, databento_venues=None):
         mapping = MagicMock()
@@ -295,11 +308,15 @@ class TestAddTradfiPlaceholders:
 
     def test_no_placeholder_when_venue_already_present(self):
         mapping = self._make_mapping()
-        df = pd.DataFrame([{
-            "venue": "CME",
-            "instrument_key": "CME:FUTURE:ES-USD-250328@LIN",
-            "instrument_type": "FUTURE",
-        }])
+        df = pd.DataFrame(
+            [
+                {
+                    "venue": "CME",
+                    "instrument_key": "CME:FUTURE:ES-USD-250328@LIN",
+                    "instrument_type": "FUTURE",
+                }
+            ]
+        )
         date = datetime(2025, 3, 28, tzinfo=UTC)
         result = add_tradfi_placeholders(df, date, ["CME"], mapping)
         # Should not add a placeholder since CME is present
