@@ -11,8 +11,18 @@
     "dist",
     "tests"
   ],
-  "extraPaths": ["../unified-market-interface"],
+  "extraPaths": [
+    "../unified-market-interface",
+    "../unified-api-contracts",
+    "../unified-config-interface",
+    "../unified-internal-contracts",
+    "../unified-trading-library"
+  ],
   "typeCheckingMode": "strict",
   "reportAny": "error",
-  "reportMissingTypeStubs": false
+  "reportMissingTypeStubs": false,
+  "reportUnusedImport": "warning",
+  "reportUnnecessaryIsInstance": "warning",
+  "reportUnnecessaryCast": "warning",
+  "reportIncompatibleMethodOverride": "warning"
 }

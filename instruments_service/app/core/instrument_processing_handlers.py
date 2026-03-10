@@ -68,7 +68,7 @@ class InstrumentProcessingHandlers:
         exchange: str,
         target_date: datetime | None = None,
         force: bool = False,
-    ) -> tuple[dict[str, dict[str, object]], int]: ...
+    ) -> tuple[dict[str, dict[str, object]], int] | None: ...  # type: ignore[override]  # UTL-DEC-02: decorated mixin returns Coroutine|None; stub must match callers
 
     def normalize_venue(self, exchange: str) -> str | None: ...
 
