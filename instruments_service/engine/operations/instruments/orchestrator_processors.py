@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
-from typing import cast
+from typing import Protocol, cast, runtime_checkable
 from uuid import uuid4
 
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
@@ -31,6 +31,14 @@ from instruments_service.engine.venues.special_instruments import (
 from instruments_service.models import InstrumentDefinition
 
 logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class _ProcessorHost(Protocol):
+    """Structural interface required by MarketProcessors methods."""
+
+    venue_mapping: object
+    processing_service: object
 
 
 class MarketProcessors:
@@ -494,3 +502,44 @@ class MarketProcessors:
             logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
             logger.exception("Failed to process %s: %s", exchange, e)
             return {}
+
+
+# ─── Module-level function adapters ──────────────────────────────────────────
+# orchestrator.py imports and calls these as free functions with the orchestrator
+# as the first positional argument. Because InstrumentsOrchestrator has the same
+# attributes (venue_mapping, processing_service) that MarketProcessors methods
+# access via self, we simply delegate via unbound-method call.
+
+
+async def process_cefi(
+    orchestrator: _ProcessorHost,
+    date: datetime,
+    venues_filter: list[str],
+) -> dict[str, InstrumentDefinition]:
+    """Delegate to MarketProcessors.process_cefi using the orchestrator as receiver."""
+    exchanges: list[str] | None = cast(list[str] | None, getattr(orchestrator, "_exchanges", None))
+    force: bool = bool(getattr(orchestrator, "_force", False))
+    return await MarketProcessors.process_cefi(
+        cast(MarketProcessors, orchestrator), date, exchanges, force, venues_filter
+    )
+
+
+async def process_tradfi(
+    orchestrator: _ProcessorHost,
+    date: datetime,
+    venues_filter: list[str],
+    tradfi_venues: list[str] | None,
+) -> dict[str, InstrumentDefinition]:
+    """Delegate to MarketProcessors.process_tradfi using the orchestrator as receiver."""
+    return await MarketProcessors.process_tradfi(
+        cast(MarketProcessors, orchestrator), date, venues_filter, tradfi_venues
+    )
+
+
+async def process_defi(
+    orchestrator: _ProcessorHost,
+    date: datetime,
+    venues_filter: list[str],
+) -> dict[str, InstrumentDefinition]:
+    """Delegate to MarketProcessors.process_defi using the orchestrator as receiver."""
+    return await MarketProcessors.process_defi(cast(MarketProcessors, orchestrator), date, venues_filter)
