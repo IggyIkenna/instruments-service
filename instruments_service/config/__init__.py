@@ -12,6 +12,8 @@ Submodules:
 - tradfi_exchange_mappings: Databento symbol mappings
 """
 
+from pathlib import Path as _Path
+
 from unified_config_interface import (
     DataTypeConfig,
     ExchangeInstrumentConfig,
@@ -42,6 +44,18 @@ from instruments_service.config.venue_config import (
     TradFiInstrument,
     UnifiedInstrumentConfig,
 )
+from instruments_service.config.venue_config import (
+    _load_sp500_tickers as _load_sp500_tickers,
+)
+from instruments_service.config.venue_config import (
+    _load_tradfi_instruments as _load_tradfi_instruments,
+)
+
+
+def _get_data_dir() -> _Path:
+    """Get the data directory for the config package."""
+    return _Path(__file__).parent / "data"
+
 
 __all__ = [
     "DATABENTO_VALID_OPTIONS_SYMBOLS",
