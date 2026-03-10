@@ -33,8 +33,14 @@ def _load_env_early():
 _load_env_early()
 
 # Setup structured JSON logging (split libraries - direct import per dependency matrix)
-from unified_events_interface import log_event, setup_events
-from unified_trading_library import BaseModeHandler, GCSEventSink, GracefulShutdownHandler, ServiceCLI, setup_tracing
+from unified_events_interface import log_event
+from unified_trading_library import (
+    BaseModeHandler,
+    GCSEventSink,
+    GracefulShutdownHandler,
+    ServiceCLI,
+    setup_service_observability,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +223,18 @@ def main_service_cli() -> None:
 
     Pre-parses instruments-specific flags, then delegates to ServiceCLI.
     """
-    setup_tracing("instruments-service")
+    _sink = GCSEventSink(
+        project_id=instruments_config.gcp_project_id,
+        bucket=getattr(instruments_config, "events_bucket", f"{instruments_config.gcp_project_id}-events"),
+        service_name="instruments-service",
+    )
+    setup_service_observability(
+        "instruments-service",
+        mode="batch",
+        sink=_sink,
+        enable_tracing=True,
+        memory_threshold_pct=85.0,
+    )
     original_argv = sys.argv[:]
     try:
         pre_parser = _build_pre_parser()
@@ -303,8 +320,13 @@ def main() -> dict[str, HandlerResultValue]:
             bucket=getattr(instruments_config, "events_bucket", f"{instruments_config.gcp_project_id}-events"),
             service_name="instruments-service",
         )
-        setup_events(sink=_sink, mode=args.run_mode, service_name="instruments-service")
-        setup_tracing("instruments-service")
+        setup_service_observability(
+            "instruments-service",
+            mode=args.run_mode,
+            sink=_sink,
+            enable_tracing=True,
+            memory_threshold_pct=85.0,
+        )
 
         start_domain_config_reloaders(instruments_config)
 
