@@ -4,34 +4,6 @@ tickers:
     exchange: UNKNOWN
     instrument_type: equity
     fetch_history:
-    - date: '2026-03-10T18:28:06.236098+00:00'
-      result: error
-      events_found: 0
-      error: not enough values to unpack (expected 3, got 0)
-    - date: '2026-03-10T18:30:17.433048+00:00'
-      result: error
-      events_found: 0
-      error: not enough values to unpack (expected 3, got 0)
-    - date: '2026-03-10T18:33:17.996897+00:00'
-      result: error
-      events_found: 0
-      error: not enough values to unpack (expected 3, got 0)
-    - date: '2026-03-10T18:38:09.249416+00:00'
-      result: error
-      events_found: 0
-      error: not enough values to unpack (expected 3, got 0)
-    - date: '2026-03-10T18:41:08.451319+00:00'
-      result: error
-      events_found: 0
-      error: not enough values to unpack (expected 3, got 0)
-    - date: '2026-03-10T18:44:18.225339+00:00'
-      result: error
-      events_found: 0
-      error: not enough values to unpack (expected 3, got 0)
-    - date: '2026-03-10T18:49:39.718808+00:00'
-      result: error
-      events_found: 0
-      error: not enough values to unpack (expected 3, got 0)
     - date: '2026-03-10T18:52:56.869273+00:00'
       result: error
       events_found: 0
@@ -44,6 +16,34 @@ tickers:
       result: error
       events_found: 0
       error: not enough values to unpack (expected 3, got 0)
+    - date: '2026-03-10T19:44:21.152543+00:00'
+      result: error
+      events_found: 0
+      error: not enough values to unpack (expected 3, got 0)
+    - date: '2026-03-10T19:46:49.835593+00:00'
+      result: error
+      events_found: 0
+      error: not enough values to unpack (expected 3, got 0)
+    - date: '2026-03-10T19:50:00.307446+00:00'
+      result: error
+      events_found: 0
+      error: not enough values to unpack (expected 3, got 0)
+    - date: '2026-03-10T19:53:55.309155+00:00'
+      result: error
+      events_found: 0
+      error: not enough values to unpack (expected 3, got 0)
+    - date: '2026-03-10T20:23:47.856553+00:00'
+      result: error
+      events_found: 0
+      error: not enough values to unpack (expected 3, got 0)
+    - date: '2026-03-10T20:26:10.823059+00:00'
+      result: error
+      events_found: 0
+      error: not enough values to unpack (expected 3, got 0)
+    - date: '2026-03-10T20:30:26.101432+00:00'
+      result: error
+      events_found: 0
+      error: not enough values to unpack (expected 3, got 0)
     last_download_date: '2026-03-10'
     status: error
     last_error: not enough values to unpack (expected 3, got 0)
@@ -51,5 +51,5 @@ config:
   update_frequency_days: 7
   parallel_workers: 10
   source: yfinance
-last_updated: '2026-03-10T19:00:53.073925+00:00'
+last_updated: '2026-03-10T20:30:26.101415+00:00'
 total_tickers: 1
