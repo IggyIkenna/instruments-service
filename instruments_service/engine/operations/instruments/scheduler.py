@@ -16,6 +16,7 @@ from unified_internal_contracts import (
 )
 
 from instruments_service.engine.operations.instruments.lifecycle_monitor import InstrumentLifecycleMonitor
+from instruments_service.monitors import InstrumentsFreshnessChecker
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ class InstrumentRefreshScheduler:
             publisher: has publish(topic, event_dict) method
         """
         monitor = InstrumentLifecycleMonitor(pre_expiry_warning_hours=self._pre_expiry_warning_hours)
+        freshness_checker = InstrumentsFreshnessChecker()
         self._running = True
 
         logger.info(
@@ -64,10 +66,13 @@ class InstrumentRefreshScheduler:
 
         while self._running:
             cycle_start = time.monotonic()
+            cycle_start_utc = datetime.now(UTC)
             try:
                 records: dict[str, object] = orchestrator.fetch_all()
                 events = monitor.diff(self._last_keys, records)
                 self._last_keys = set(records.keys())
+                # Check freshness after each successful fetch.
+                freshness_checker.check(last_fetch_ts=cycle_start_utc)
 
                 for event_dict in events:
                     venue = str(event_dict.get("venue", "unknown"))
