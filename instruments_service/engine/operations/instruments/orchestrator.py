@@ -26,6 +26,7 @@ from instruments_service.engine.operations.instruments.orchestrator_helpers impo
     validate_venues,
 )
 from instruments_service.engine.operations.instruments.orchestrator_processors import (
+    ProcessorHost,
     process_cefi,
     process_defi,
     process_tradfi,
@@ -134,17 +135,17 @@ class InstrumentsOrchestrator(OrchestratorBase):
         try:
             # Process CeFi exchanges
             if cefi:
-                cefi_instruments = await process_cefi(self, date, venues_filter)
+                cefi_instruments = await process_cefi(cast(ProcessorHost, self), date, venues_filter)
                 all_instruments.update(cefi_instruments)
 
             # Process TradFi exchanges
             if tradfi:
-                tradfi_instruments = await process_tradfi(self, date, venues_filter, tradfi_venues)
+                tradfi_instruments = await process_tradfi(cast(ProcessorHost, self), date, venues_filter, tradfi_venues)
                 all_instruments.update(tradfi_instruments)
 
             # Process DeFi protocols
             if defi:
-                defi_instruments = await process_defi(self, date, venues_filter)
+                defi_instruments = await process_defi(cast(ProcessorHost, self), date, venues_filter)
                 all_instruments.update(defi_instruments)
 
             # Filter by instrument_ids if specified
