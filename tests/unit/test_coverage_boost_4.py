@@ -51,8 +51,13 @@ class TestErrorWarningCounter:
 
         counter = ErrorWarningCounter()
         record = logging.LogRecord(
-            name="test", level=logging.ERROR, pathname="", lineno=0,
-            msg="error msg", args=(), exc_info=None,
+            name="test",
+            level=logging.ERROR,
+            pathname="",
+            lineno=0,
+            msg="error msg",
+            args=(),
+            exc_info=None,
         )
         counter.emit(record)
         assert counter.error_count == 1
@@ -63,8 +68,13 @@ class TestErrorWarningCounter:
 
         counter = ErrorWarningCounter()
         record = logging.LogRecord(
-            name="test", level=logging.CRITICAL, pathname="", lineno=0,
-            msg="critical msg", args=(), exc_info=None,
+            name="test",
+            level=logging.CRITICAL,
+            pathname="",
+            lineno=0,
+            msg="critical msg",
+            args=(),
+            exc_info=None,
         )
         counter.emit(record)
         assert counter.error_count == 1
@@ -74,8 +84,13 @@ class TestErrorWarningCounter:
 
         counter = ErrorWarningCounter()
         record = logging.LogRecord(
-            name="test", level=logging.WARNING, pathname="", lineno=0,
-            msg="warning msg", args=(), exc_info=None,
+            name="test",
+            level=logging.WARNING,
+            pathname="",
+            lineno=0,
+            msg="warning msg",
+            args=(),
+            exc_info=None,
         )
         counter.emit(record)
         assert counter.error_count == 0
@@ -86,8 +101,13 @@ class TestErrorWarningCounter:
 
         counter = ErrorWarningCounter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname="", lineno=0,
-            msg="info msg", args=(), exc_info=None,
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="info msg",
+            args=(),
+            exc_info=None,
         )
         counter.emit(record)
         assert counter.error_count == 0
@@ -99,12 +119,22 @@ class TestErrorWarningCounter:
         counter = ErrorWarningCounter()
         # Add some counts
         err_record = logging.LogRecord(
-            name="test", level=logging.ERROR, pathname="", lineno=0,
-            msg="err", args=(), exc_info=None,
+            name="test",
+            level=logging.ERROR,
+            pathname="",
+            lineno=0,
+            msg="err",
+            args=(),
+            exc_info=None,
         )
         warn_record = logging.LogRecord(
-            name="test", level=logging.WARNING, pathname="", lineno=0,
-            msg="warn", args=(), exc_info=None,
+            name="test",
+            level=logging.WARNING,
+            pathname="",
+            lineno=0,
+            msg="warn",
+            args=(),
+            exc_info=None,
         )
         counter.emit(err_record)
         counter.emit(warn_record)
@@ -119,15 +149,29 @@ class TestErrorWarningCounter:
 
         counter = ErrorWarningCounter()
         for _ in range(3):
-            counter.emit(logging.LogRecord(
-                name="test", level=logging.ERROR, pathname="", lineno=0,
-                msg="err", args=(), exc_info=None,
-            ))
+            counter.emit(
+                logging.LogRecord(
+                    name="test",
+                    level=logging.ERROR,
+                    pathname="",
+                    lineno=0,
+                    msg="err",
+                    args=(),
+                    exc_info=None,
+                )
+            )
         for _ in range(5):
-            counter.emit(logging.LogRecord(
-                name="test", level=logging.WARNING, pathname="", lineno=0,
-                msg="warn", args=(), exc_info=None,
-            ))
+            counter.emit(
+                logging.LogRecord(
+                    name="test",
+                    level=logging.WARNING,
+                    pathname="",
+                    lineno=0,
+                    msg="warn",
+                    args=(),
+                    exc_info=None,
+                )
+            )
         assert counter.error_count == 3
         assert counter.warning_count == 5
 
@@ -174,19 +218,24 @@ class TestDumpToCsv:
         """When enabled, should write a CSV file."""
         import instruments_service.utils.dump_to_csv as m
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            with patch.object(m, "_ENABLED", True), patch.object(m, "_CSV_SAMPLE_DIR", tmpdir):
-                df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
-                m.dump_to_csv(df, "test_output.csv")
-                assert Path(tmpdir, "test_output.csv").exists()
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch.object(m, "_ENABLED", True),
+            patch.object(m, "_CSV_SAMPLE_DIR", tmpdir),
+        ):
+            df = pd.DataFrame({"a": [1, 2], "b": [3, 4]})
+            m.dump_to_csv(df, "test_output.csv")
+            assert Path(tmpdir, "test_output.csv").exists()
 
     def test_enabled_oserror_logs_warning(self) -> None:
         """OS errors during write should be logged as warnings, not raised."""
         import instruments_service.utils.dump_to_csv as m
 
-        with patch.object(m, "_ENABLED", True), \
-             patch.object(m, "_CSV_SAMPLE_DIR", "/nonexistent/path/that/cannot/be/created"), \
-             patch("pathlib.Path.mkdir", side_effect=OSError("no space")):
+        with (
+            patch.object(m, "_ENABLED", True),
+            patch.object(m, "_CSV_SAMPLE_DIR", "/nonexistent/path/that/cannot/be/created"),
+            patch("pathlib.Path.mkdir", side_effect=OSError("no space")),
+        ):
             df = pd.DataFrame({"x": [1]})
             # Should not raise
             m.dump_to_csv(df, "fail.csv")
@@ -421,9 +470,7 @@ class TestLeagueLookup:
         )
 
         # Find a league with an api_football_id
-        leagues_with_id = [
-            lg for lg in LEAGUE_REGISTRY.values() if lg.api_football_id is not None
-        ]
+        leagues_with_id = [lg for lg in LEAGUE_REGISTRY.values() if lg.api_football_id is not None]
         if leagues_with_id:
             test_league = leagues_with_id[0]
             result = get_league_by_api_football_id(test_league.api_football_id)
@@ -592,9 +639,7 @@ class TestFixtureParser:
 
         parser = FixtureParser()
         # Find a league with api_football_id
-        league_with_id = next(
-            (lg for lg in LEAGUE_REGISTRY.values() if lg.api_football_id is not None), None
-        )
+        league_with_id = next((lg for lg in LEAGUE_REGISTRY.values() if lg.api_football_id is not None), None)
         if league_with_id:
             result = parser.resolve_league_for_api_football_id(league_with_id.api_football_id)
             assert result == league_with_id.league_id
@@ -612,15 +657,11 @@ class TestFixtureParser:
         from instruments_service.sports.league_registry import LEAGUE_REGISTRY
 
         parser = FixtureParser()
-        league_with_id = next(
-            (lg for lg in LEAGUE_REGISTRY.values() if lg.api_football_id is not None), None
-        )
+        league_with_id = next((lg for lg in LEAGUE_REGISTRY.values() if lg.api_football_id is not None), None)
         if league_with_id:
             kickoff = datetime(2026, 3, 15, 15, 0, 0)
             # Find valid teams -- we'll use EPL teams since EPL has api_football_id
-            result = parser.parse_fixture(
-                str(league_with_id.api_football_id), "Arsenal", "Chelsea", kickoff
-            )
+            result = parser.parse_fixture(str(league_with_id.api_football_id), "Arsenal", "Chelsea", kickoff)
             assert result["venue"] == league_with_id.league_id
 
     def test_parse_fixture_bundesliga(self) -> None:
@@ -655,9 +696,7 @@ def _import_sports_orchestrator() -> type | None:
         "/Users/ikennaigboaka/Code/unified-trading-system-repos/instruments-service/"
         "instruments_service/engine/operations/instruments/orchestration/sports_orchestration.py"
     )
-    spec = importlib.util.spec_from_file_location(
-        "_sports_orchestration_direct", module_path
-    )
+    spec = importlib.util.spec_from_file_location("_sports_orchestration_direct", module_path)
     if spec is None or spec.loader is None:
         return None
     mod = importlib.util.module_from_spec(spec)
@@ -722,9 +761,7 @@ class TestSportsOrchestrator:
             pytest.skip("Could not import SportsOrchestrator directly")
         orchestrator = cls()
         # With unknown venue filter, should return empty
-        result = await orchestrator.process_sports(
-            datetime(2026, 3, 15), ["XXXXUNKNOWN"]
-        )
+        result = await orchestrator.process_sports(datetime(2026, 3, 15), ["XXXXUNKNOWN"])
         assert result == {}
 
     @pytest.mark.asyncio

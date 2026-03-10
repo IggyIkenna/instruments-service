@@ -41,7 +41,7 @@ class TestCalculateNextAlignedTime:
         handler = self._make_handler()
         from instruments_service.cli.handlers.live_mode_handler import LiveModeHandler
 
-        sleep_secs, next_run = LiveModeHandler._calculate_next_aligned_time(handler, interval_minutes=15)
+        sleep_secs, _next_run = LiveModeHandler._calculate_next_aligned_time(handler, interval_minutes=15)
         assert sleep_secs > 0
         assert sleep_secs <= 15 * 60 + 2  # at most one interval
 
@@ -49,7 +49,7 @@ class TestCalculateNextAlignedTime:
         handler = self._make_handler()
         from instruments_service.cli.handlers.live_mode_handler import LiveModeHandler
 
-        sleep_secs, next_run = LiveModeHandler._calculate_next_aligned_time(handler, interval_minutes=15)
+        _sleep_secs, next_run = LiveModeHandler._calculate_next_aligned_time(handler, interval_minutes=15)
         assert next_run.minute % 15 == 0
         assert next_run.second == 0
         assert next_run.microsecond == 0

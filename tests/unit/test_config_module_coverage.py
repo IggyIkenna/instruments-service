@@ -48,7 +48,7 @@ class TestDatabentoDicts:
 
     def test_es_options_in_options_symbols(self) -> None:
         assert "ES" in DATABENTO_VALID_OPTIONS_SYMBOLS
-        sym, dataset = DATABENTO_VALID_OPTIONS_SYMBOLS["ES"]
+        sym, _dataset = DATABENTO_VALID_OPTIONS_SYMBOLS["ES"]
         assert sym == "ES.OPT"
 
     def test_exchange_code_to_name_non_empty(self) -> None:
@@ -71,12 +71,12 @@ class TestGetDataDir:
 
 class TestLoadSp500Tickers:
     def test_loads_sp500_tickers(self) -> None:
-        sp500, nasdaq = _load_sp500_tickers()
+        sp500, _nasdaq = _load_sp500_tickers()
         assert isinstance(sp500, list)
         assert len(sp500) > 100  # S&P 500 has ~500 tickers
 
     def test_loads_nasdaq_tickers(self) -> None:
-        sp500, nasdaq = _load_sp500_tickers()
+        _sp500, nasdaq = _load_sp500_tickers()
         assert isinstance(nasdaq, list)
         assert len(nasdaq) > 50
 
@@ -93,12 +93,12 @@ class TestLoadSp500Tickers:
 
 class TestLoadTradfiInstruments:
     def test_loads_instruments(self) -> None:
-        instruments, exchange_map = _load_tradfi_instruments()
+        instruments, _exchange_map = _load_tradfi_instruments()
         assert isinstance(instruments, list)
         assert len(instruments) > 0
 
     def test_loads_exchange_map(self) -> None:
-        instruments, exchange_map = _load_tradfi_instruments()
+        _instruments, exchange_map = _load_tradfi_instruments()
         assert isinstance(exchange_map, dict)
         assert len(exchange_map) > 0
 
