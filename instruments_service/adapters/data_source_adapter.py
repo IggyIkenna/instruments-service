@@ -10,7 +10,15 @@ from uuid import uuid4
 
 import pandas as pd
 from unified_cloud_interface import DataSource, get_data_source
-from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts import (
+    DataSourceConstraint,  # noqa: F401 — UIC contract type reference
+    EnhancedError,
+    ErrorCategory,
+    ErrorContext,
+    ErrorRecoveryStrategy,
+    ErrorSeverity,
+    OHLCVSource,  # noqa: F401 — UIC contract type reference
+)
 
 logger = logging.getLogger(__name__)
 
