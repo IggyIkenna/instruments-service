@@ -28,7 +28,7 @@ repos:
     hooks:
       - id: check-import-patterns
         name: Check external import patterns
-        entry: python3 .cursor/scripts/check-import-patterns.py
+        entry: python3 .cursor/scripts/validation/check-import-patterns.py
         language: python
         files: \.py$
         pass_filenames: false
