@@ -320,7 +320,7 @@ class TestAddTradfiPlaceholders:
         row = result.iloc[0]
         assert row["market_category"] == "TRADFI"
         assert row["data_provider"] == "databento"
-        assert row["is_trading_day"] is False
+        assert row["is_trading_day"] == False  # noqa: E712 — numpy.False_ does not satisfy `is False`
         assert "CME:MARKET_CLOSED:PLACEHOLDER" in str(row["instrument_key"])
 
     def test_multiple_venues_get_placeholders(self) -> None:
