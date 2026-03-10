@@ -10,7 +10,7 @@ from __future__ import annotations
 
 def test_ccxt_order_validates_with_unified_api_contracts() -> None:
     """Validate a CCXT-like response with api-contracts schema."""
-    from unified_api_contracts.unified_api_contracts_external.ccxt.schemas import CcxtOrder
+    from unified_api_contracts.unified_api_contracts_external.ccxt.schemas import CcxtOrder  # noqa: uac-deep-import
 
     raw = {
         "id": "order-123",
@@ -26,7 +26,9 @@ def test_ccxt_order_validates_with_unified_api_contracts() -> None:
 
 def test_thegraph_response_validates_with_unified_api_contracts() -> None:
     """Validate a GraphQL response wrapper with api-contracts schema."""
-    from unified_api_contracts.unified_api_contracts_external.thegraph.schemas import TheGraphResponse
+    from unified_api_contracts.unified_api_contracts_external.thegraph.schemas import (
+        TheGraphResponse,  # noqa: uac-deep-import
+    )
 
     raw = {"data": {"pools": []}, "errors": None}
     resp = TheGraphResponse.model_validate(raw)
