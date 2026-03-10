@@ -19,8 +19,8 @@ from typing import cast
 from uuid import uuid4
 
 import pandas as pd
+from unified_config_interface import VenueMapping
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
-from unified_market_interface import VenueMapping
 
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
@@ -92,7 +92,7 @@ class InstrumentsService(
         }
         self.batch_processor = InstrumentBatchProcessor(batch_config)
 
-        # Venue mapping
+        # Venue mapping — instance assignment satisfies mixin stub
         self.venue_mapping: VenueMapping = VenueMapping()
 
         logger.info("✅ InstrumentsService initialized")
