@@ -37,13 +37,14 @@ class TestFetchDefiInstrumentsUnknownProtocol:
 
 class TestFetchDefiInstrumentsAster:
     def test_aster_raises_not_implemented(self) -> None:
+        import pytest
+
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service()
-        # aster protocol raises NotImplementedError, which is caught as ValueError/TypeError
-        # The outer except block catches it and returns {}
-        result = fetch_defi_instruments(service, "aster")
-        assert result == {}
+        # aster protocol raises NotImplementedError (adapter removed from UCS)
+        with pytest.raises(NotImplementedError, match="Aster adapter not available"):
+            fetch_defi_instruments(service, "aster")
 
 
 class TestFetchDefiInstrumentsBalancer:
