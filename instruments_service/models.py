@@ -9,6 +9,13 @@ from __future__ import annotations
 
 import logging
 
+from unified_api_contracts import (
+    HttpRateLimitHeaders,  # noqa: F401
+    VenueRateLimitSpec,  # noqa: F401
+)
+
+# UAC contract type references — canonical types for cross-service contract alignment
+# G6 rate limits STRONG
 from unified_config_interface import InstrumentType, Venue
 from unified_internal_contracts import InstrumentDefinition, InstrumentKey
 
