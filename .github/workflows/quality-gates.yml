@@ -81,103 +81,12 @@ jobs:
       - name: Add venv to PATH
         run: echo "${{ github.workspace }}/.venv/bin" >> $GITHUB_PATH
 
-      # ========================================================================
-      # DEPENDENCY VULNERABILITY SCAN (pip-audit)
-      # ========================================================================
-      - name: Dependency vulnerability scan (pip-audit)
-        run: |
-          pip-audit || { echo "❌ pip-audit found vulnerabilities. Run: pip-audit --desc"; exit 1; }
-
-      # ========================================================================
-      # LINT + FORMAT - format first (fixes line length), then check --fix
-      # ========================================================================
-      - name: Lint and format check
-        run: |
-          ruff format --line-length 120 instruments_service/ tests/
-          ruff check --fix --line-length 120 instruments_service/ tests/
-          git diff --exit-code || {
-            echo "❌ Code not formatted. Run locally: ruff format --line-length 120 . && ruff check --fix --line-length 120 ."
-            git diff
-            exit 1
-          }
-          echo "✅ Lint and format check passed"
-
-      # ========================================================================
-      # TYPE CHECK (basedpyright - matches IDE strict mode) with TIMEOUT
-      # ========================================================================
-      - name: Type check (basedpyright with timeout)
-        run: |
-          # CRITICAL: Use timeout to prevent hangs - basedpyright can hang without it
-          timeout 60 basedpyright instruments_service/ --level warning || exit_code=$?
-          if [ "${exit_code:-0}" -eq 124 ]; then
-            echo "::error::Basedpyright timed out after 60 seconds"
-            exit 1
-          elif [ "${exit_code:-0}" -ne 0 ]; then
-            echo "::error::Basedpyright failed with exit code $exit_code"
-            exit $exit_code
-          fi
-          echo "✅ Type check passed"
-
-      # ========================================================================
-      # UNIT TESTS - MUST PASS
-      # ========================================================================
-      - name: Run unit tests
-        run: |
-          echo "=== Running unit tests ==="
-          python -m pytest tests/unit/ -v --tb=short --timeout=60 -n 2 \
-            --cov=instruments_service \
-            --cov-report=term-missing \
-            --cov-fail-under=35 \
-            --no-cov-on-fail
-          echo "✅ Unit tests passed"
-
-      # ========================================================================
-      # INTEGRATION TESTS - MUST PASS
-      # ========================================================================
-      - name: Run integration tests
-        run: |
-          echo "=== Running integration tests ==="
-          if [ -d "tests/integration" ]; then
-            python -m pytest tests/integration/ -v --tb=short --timeout=120 -n 2 \
-              --ignore=tests/integration/test_performance.py \
-              -k "not api and not live and not download"
-            echo "✅ Integration tests passed"
-          else
-            echo "No integration tests directory found"
-          fi
-
-      # ========================================================================
-      # E2E TESTS - MUST PASS
-      # ========================================================================
-      - name: Run e2e tests
-        env:
-          CLOUD_MOCK_MODE: "true"
-          GCP_PROJECT_ID: "test-project"
-        run: |
-          echo "=== Running e2e tests ==="
-          if [ -d "tests/e2e" ]; then
-            python -m pytest tests/e2e/ -v --tb=short --timeout=180 -n 2
-            echo "✅ E2E tests passed"
-          else
-            echo "No e2e tests directory found"
-          fi
-
-      # ========================================================================
-      # SMOKE TESTS (shard combinatorics) - MUST PASS (if deployment configs available)
-      # ========================================================================
-      - name: Run smoke tests
+      - name: Run quality gates
         env:
           CLOUD_MOCK_MODE: "true"
           GCP_PROJECT_ID: "test-project"
           DEPLOYMENT_CONFIG_DIR: "../deployment-service/configs"
-        run: |
-          echo "=== Running smoke tests ==="
-          if [ -d "tests/smoke" ] && [ -d "../deployment-service/configs" ]; then
-            python -m pytest tests/smoke/ -v --tb=short --timeout=180 -n 2
-            echo "✅ Smoke tests passed"
-          else
-            echo "⚠️ Skipping smoke tests (deployment configs not available)"
-          fi
+        run: bash scripts/quality-gates.sh
 
       - name: Quality gates passed
         run: |
