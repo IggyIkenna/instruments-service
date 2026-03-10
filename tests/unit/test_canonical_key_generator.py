@@ -16,6 +16,7 @@ from instruments_service.engine.processors.canonical_key_generator import (
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 
+
 def _make_service(
     venue: str | None = "BINANCE",
     instrument_type: str | None = "SPOT_PAIR",
@@ -48,6 +49,7 @@ def _make_service(
 
 
 # ─── normalize_venue / instrument_type failures ───────────────────────────────
+
 
 class TestGenerateCanonicalKeyEdgeCases:
     def test_returns_none_when_venue_is_none(self):
@@ -85,6 +87,7 @@ class TestGenerateCanonicalKeyEdgeCases:
 
 # ─── SPOT_PAIR ────────────────────────────────────────────────────────────────
 
+
 class TestSpotPairKeys:
     def test_basic_spot_pair_from_symbol_info(self):
         svc = _make_service(venue="BINANCE", instrument_type="SPOT_PAIR")
@@ -109,20 +112,27 @@ class TestSpotPairKeys:
 
 # ─── PERPETUAL ────────────────────────────────────────────────────────────────
 
+
 class TestPerpetualKeys:
     def test_lin_perp_on_non_deribit(self):
         svc = _make_service(venue="BINANCE", instrument_type="PERPETUAL")
-        result = generate_canonical_key(svc, "binance", "perpetual", "BTCUSDT", {"base_asset": "BTC", "quote_asset": "USDT"})
+        result = generate_canonical_key(
+            svc, "binance", "perpetual", "BTCUSDT", {"base_asset": "BTC", "quote_asset": "USDT"}
+        )
         assert result == "BINANCE:PERPETUAL:BTC-USDT@LIN"
 
     def test_inv_perp_on_deribit_usd_quote(self):
         svc = _make_service(venue="DERIBIT", instrument_type="PERPETUAL")
-        result = generate_canonical_key(svc, "deribit", "perpetual", "BTC-PERPETUAL", {"base_asset": "BTC", "quote_asset": "USD"})
+        result = generate_canonical_key(
+            svc, "deribit", "perpetual", "BTC-PERPETUAL", {"base_asset": "BTC", "quote_asset": "USD"}
+        )
         assert result == "DERIBIT:PERPETUAL:BTC-USD@INV"
 
     def test_lin_perp_on_deribit_usdc_quote(self):
         svc = _make_service(venue="DERIBIT", instrument_type="PERPETUAL", deribit_quotes=["BTC", "ETH", "USDC"])
-        result = generate_canonical_key(svc, "deribit", "perpetual", "BTC_USDC-PERPETUAL", {"base_asset": "BTC", "quote_asset": "USDC"})
+        result = generate_canonical_key(
+            svc, "deribit", "perpetual", "BTC_USDC-PERPETUAL", {"base_asset": "BTC", "quote_asset": "USDC"}
+        )
         assert result == "DERIBIT:PERPETUAL:BTC-USDC@LIN"
 
     def test_perpetual_returns_none_when_base_non_ascii(self):
@@ -137,6 +147,7 @@ class TestPerpetualKeys:
 
 
 # ─── FUTURE ───────────────────────────────────────────────────────────────────
+
 
 class TestFutureKeys:
     def test_future_with_iso_expiry_in_symbol_info(self):
@@ -179,6 +190,7 @@ class TestFutureKeys:
 
 
 # ─── OPTION ───────────────────────────────────────────────────────────────────
+
 
 class TestOptionKeys:
     def test_basic_option_key(self):
@@ -237,6 +249,7 @@ class TestOptionKeys:
 
 
 # ─── Unhandled type ───────────────────────────────────────────────────────────
+
 
 class TestUnhandledType:
     def test_unhandled_instrument_type_returns_none(self):

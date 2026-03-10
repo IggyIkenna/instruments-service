@@ -20,6 +20,7 @@ from instruments_service.engine.operations.aggregate.aggregator import (
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
+
 def _make_parquet_bytes(df: pd.DataFrame) -> bytes:
     buf = io.BytesIO()
     df.to_parquet(buf, index=False)
@@ -34,6 +35,7 @@ def _make_blob(name: str) -> MagicMock:
 
 # ─── InstrumentAggregator.__init__ ───────────────────────────────────────────
 
+
 class TestInstrumentAggregatorInit:
     def test_default_max_workers(self):
         agg = InstrumentAggregator()
@@ -46,16 +48,19 @@ class TestInstrumentAggregatorInit:
 
 # ─── _deduplicate ─────────────────────────────────────────────────────────────
 
+
 class TestDeduplicate:
     def setup_method(self):
         self.agg = InstrumentAggregator()
 
     def test_deduplicates_by_instrument_key(self):
-        df = pd.DataFrame([
-            {"instrument_key": "A", "timestamp": "2025-01-02", "val": 2},
-            {"instrument_key": "A", "timestamp": "2025-01-01", "val": 1},
-            {"instrument_key": "B", "timestamp": "2025-01-01", "val": 3},
-        ])
+        df = pd.DataFrame(
+            [
+                {"instrument_key": "A", "timestamp": "2025-01-02", "val": 2},
+                {"instrument_key": "A", "timestamp": "2025-01-01", "val": 1},
+                {"instrument_key": "B", "timestamp": "2025-01-01", "val": 3},
+            ]
+        )
         result = self.agg._deduplicate(df)
         assert len(result) == 2
         # Latest timestamp kept for A
@@ -63,24 +68,29 @@ class TestDeduplicate:
         assert a_row.iloc[0]["val"] == 2
 
     def test_no_instrument_key_column_uses_fallback(self):
-        df = pd.DataFrame([
-            {"some_instrument_col": "A", "val": 1},
-            {"some_instrument_col": "A", "val": 2},
-        ])
+        df = pd.DataFrame(
+            [
+                {"some_instrument_col": "A", "val": 1},
+                {"some_instrument_col": "A", "val": 2},
+            ]
+        )
         result = self.agg._deduplicate(df)
         assert len(result) == 1
 
     def test_no_timestamp_col_still_deduplicates(self):
-        df = pd.DataFrame([
-            {"instrument_key": "A", "val": 1},
-            {"instrument_key": "A", "val": 2},
-            {"instrument_key": "B", "val": 3},
-        ])
+        df = pd.DataFrame(
+            [
+                {"instrument_key": "A", "val": 1},
+                {"instrument_key": "A", "val": 2},
+                {"instrument_key": "B", "val": 3},
+            ]
+        )
         result = self.agg._deduplicate(df)
         assert len(result) == 2
 
 
 # ─── aggregate_category ───────────────────────────────────────────────────────
+
 
 class TestAggregateCategory:
     def setup_method(self):
@@ -107,10 +117,12 @@ class TestAggregateCategory:
         assert result == 0
 
     def test_redo_all_writes_aggregated_file(self):
-        df = pd.DataFrame([
-            {"instrument_key": "A", "timestamp": "2025-01-01", "val": 1},
-            {"instrument_key": "B", "timestamp": "2025-01-01", "val": 2},
-        ])
+        df = pd.DataFrame(
+            [
+                {"instrument_key": "A", "timestamp": "2025-01-01", "val": 1},
+                {"instrument_key": "B", "timestamp": "2025-01-01", "val": 2},
+            ]
+        )
         data = _make_parquet_bytes(df)
 
         blob1 = _make_blob(f"{BASE_PREFIX}day=2025-01-01/venue=BINANCE/instruments.parquet")
@@ -124,9 +136,11 @@ class TestAggregateCategory:
         storage.upload_bytes.assert_called_once()
 
     def test_delta_mode_with_data_writes_file(self):
-        df = pd.DataFrame([
-            {"instrument_key": "A", "timestamp": "2025-03-27", "val": 10},
-        ])
+        df = pd.DataFrame(
+            [
+                {"instrument_key": "A", "timestamp": "2025-03-27", "val": 10},
+            ]
+        )
         data = _make_parquet_bytes(df)
 
         yesterday = (date.today() - timedelta(days=1)).isoformat()
@@ -152,6 +166,7 @@ class TestAggregateCategory:
 
 
 # ─── _load_latest_aggregated ─────────────────────────────────────────────────
+
 
 class TestLoadLatestAggregated:
     def setup_method(self):

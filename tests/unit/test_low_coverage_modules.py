@@ -15,8 +15,16 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-# ─── ErrorWarningCounter ─────────────────────────────────────────────────────
+from instruments_service.app.core.instrument_validation import InstrumentValidationMixin
+from instruments_service.engine.venues.special_instruments import (
+    create_bitcoin_etf_instrument_definition,
+    create_krwusd_instrument_definition,
+    create_vix_instrument_definition,
+    get_us_equity_trading_hours,
+)
 from instruments_service.utils.error_warning_counter import ErrorWarningCounter
+
+# ─── ErrorWarningCounter ─────────────────────────────────────────────────────
 
 
 class TestErrorWarningCounter:
@@ -80,8 +88,6 @@ class TestErrorWarningCounter:
 
 # ─── InstrumentValidationMixin ────────────────────────────────────────────────
 
-from instruments_service.app.core.instrument_validation import InstrumentValidationMixin
-
 
 class _MockService(InstrumentValidationMixin):
     """Test double that satisfies the InstrumentValidationMixin protocol."""
@@ -130,9 +136,7 @@ class TestInstrumentValidationMixin:
         # A venue in both cefi and tradfi lists
         self.svc.venue_mapping.all_cefi_venues = ["SHARED_VENUE"]
         self.svc.venue_mapping.all_databento_venues = ["SHARED_VENUE"]
-        result = self.svc._validate_venues_filter(
-            ["SHARED_VENUE"], cefi=True, tradfi=True, defi=False
-        )
+        result = self.svc._validate_venues_filter(["SHARED_VENUE"], cefi=True, tradfi=True, defi=False)
         assert result is not None
         assert "SHARED_VENUE" in result["CEFI"]
         assert "SHARED_VENUE" in result["TRADFI"]
@@ -143,9 +147,7 @@ class TestInstrumentValidationMixin:
         assert result == ["BINANCE"]
 
     def test_extracts_venue_from_id(self):
-        result = _MockService._extract_venues_from_instrument_ids(
-            ["BINANCE:SPOT_PAIR:BTC-USDT"], []
-        )
+        result = _MockService._extract_venues_from_instrument_ids(["BINANCE:SPOT_PAIR:BTC-USDT"], [])
         assert "BINANCE" in result
 
     def test_list_instrument_ids_extracted(self):
@@ -156,22 +158,16 @@ class TestInstrumentValidationMixin:
         assert "DERIBIT" in result
 
     def test_narrows_venues_filter_to_matching(self):
-        result = _MockService._extract_venues_from_instrument_ids(
-            ["BINANCE:SPOT_PAIR:BTC-USDT"], ["BINANCE", "CME"]
-        )
+        result = _MockService._extract_venues_from_instrument_ids(["BINANCE:SPOT_PAIR:BTC-USDT"], ["BINANCE", "CME"])
         assert result == ["BINANCE"]
         assert "CME" not in result
 
     def test_no_matching_venues_returns_empty(self):
-        result = _MockService._extract_venues_from_instrument_ids(
-            ["DERIBIT:PERPETUAL:BTC-USD@INV"], ["BINANCE"]
-        )
+        result = _MockService._extract_venues_from_instrument_ids(["DERIBIT:PERPETUAL:BTC-USD@INV"], ["BINANCE"])
         assert result == []
 
     def test_string_instrument_id_works(self):
-        result = _MockService._extract_venues_from_instrument_ids(
-            "CME:FUTURE:ES-USD-250328@LIN", []
-        )
+        result = _MockService._extract_venues_from_instrument_ids("CME:FUTURE:ES-USD-250328@LIN", [])
         assert "CME" in result
 
     # _filter_instruments_by_ids
@@ -189,9 +185,7 @@ class TestInstrumentValidationMixin:
 
     def test_case_insensitive_id_matching(self):
         instruments = {"BINANCE:SPOT_PAIR:BTC-USDT": "v1"}
-        result = _MockService._filter_instruments_by_ids(
-            instruments, ["binance:spot_pair:btc-usdt"]
-        )
+        result = _MockService._filter_instruments_by_ids(instruments, ["binance:spot_pair:btc-usdt"])
         assert len(result) == 1
 
     def test_no_match_returns_empty(self):
@@ -207,13 +201,6 @@ class TestInstrumentValidationMixin:
 
 
 # ─── special_instruments ─────────────────────────────────────────────────────
-
-from instruments_service.engine.venues.special_instruments import (
-    create_bitcoin_etf_instrument_definition,
-    create_krwusd_instrument_definition,
-    create_vix_instrument_definition,
-    get_us_equity_trading_hours,
-)
 
 
 class TestCreateVixInstrumentDefinition:
@@ -348,9 +335,8 @@ class TestCreateBitcoinEtfInstrumentDefinition:
                 "auction_close_utc": None,
                 "early_close_utc": None,
             }
-        result = create_bitcoin_etf_instrument_definition(
-            "IBIT", datetime(2025, 3, 28, tzinfo=UTC), no_session_start
-        )
+
+        result = create_bitcoin_etf_instrument_definition("IBIT", datetime(2025, 3, 28, tzinfo=UTC), no_session_start)
         assert result is not None
         # Falls back to midnight
         assert "available_from_datetime" in result
@@ -358,11 +344,13 @@ class TestCreateBitcoinEtfInstrumentDefinition:
 
 # ─── dump_to_csv ─────────────────────────────────────────────────────────────
 
+
 class TestDumpToCsv:
     """Test dump_to_csv utility via module-level patching."""
 
     def test_no_op_when_disabled(self, tmp_path):
         from instruments_service.utils import dump_to_csv as dump_module
+
         original = dump_module._ENABLED
         try:
             dump_module._ENABLED = False
@@ -375,6 +363,7 @@ class TestDumpToCsv:
 
     def test_no_op_when_empty_df(self, tmp_path):
         from instruments_service.utils import dump_to_csv as dump_module
+
         original_enabled = dump_module._ENABLED
         original_dir = dump_module._CSV_SAMPLE_DIR
         try:
@@ -389,6 +378,7 @@ class TestDumpToCsv:
 
     def test_writes_csv_when_enabled(self, tmp_path):
         from instruments_service.utils import dump_to_csv as dump_module
+
         original_enabled = dump_module._ENABLED
         original_dir = dump_module._CSV_SAMPLE_DIR
         try:
@@ -403,6 +393,7 @@ class TestDumpToCsv:
 
     def test_handles_os_error_gracefully(self, tmp_path):
         from instruments_service.utils import dump_to_csv as dump_module
+
         original_enabled = dump_module._ENABLED
         original_dir = dump_module._CSV_SAMPLE_DIR
         try:

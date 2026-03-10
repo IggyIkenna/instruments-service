@@ -13,8 +13,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# ─── ccxt_manual_fallback ─────────────────────────────────────────────────────
 from instruments_service.app.core.processors.ccxt_manual_fallback import get_manual_ccxt_fallback
+from instruments_service.app.core.processors.derived_fields_populator import populate_derived_fields
+from instruments_service.app.core.selective_validation import get_venues_for_category
+
+# ─── ccxt_manual_fallback ─────────────────────────────────────────────────────
 
 
 class TestGetManualCcxtFallback:
@@ -79,8 +82,6 @@ class TestGetManualCcxtFallback:
 
 # ─── selective_validation get_venues_for_category ────────────────────────────
 
-from instruments_service.app.core.selective_validation import get_venues_for_category
-
 
 class TestGetVenuesForCategory:
     def _make_mapping(self, tardis=None, databento=None, defi=None):
@@ -120,57 +121,63 @@ class TestGetVenuesForCategory:
 
 # ─── instruments_service.__init__ lazy imports ────────────────────────────────
 
+
 class TestInstrumentsServiceInit:
     def test_version_attribute(self):
         import instruments_service
+
         assert instruments_service.__version__ == "0.1.0"
 
     def test_lazy_instrument_processing_service(self):
         import instruments_service
+
         cls = instruments_service.InstrumentProcessingService
         assert cls is not None
 
     def test_lazy_cloud_instrument_storage(self):
         import instruments_service
+
         cls = instruments_service.CloudInstrumentStorage
         assert cls is not None
 
     def test_lazy_instrument_batch_processor(self):
         import instruments_service
+
         cls = instruments_service.InstrumentBatchProcessor
         assert cls is not None
 
     def test_lazy_instrument_definition(self):
         import instruments_service
+
         cls = instruments_service.InstrumentDefinition
         assert cls is not None
 
     def test_lazy_instrument_key(self):
         import instruments_service
+
         cls = instruments_service.InstrumentKey
         assert cls is not None
 
     def test_lazy_venue(self):
         import instruments_service
+
         cls = instruments_service.Venue
         assert cls is not None
 
     def test_lazy_instrument_type(self):
         import instruments_service
+
         cls = instruments_service.InstrumentType
         assert cls is not None
 
     def test_attribute_error_for_unknown(self):
         import instruments_service
+
         with pytest.raises(AttributeError):
             _ = instruments_service.NonExistentAttribute
 
 
 # ─── derived_fields_populator (async) ────────────────────────────────────────
-
-from instruments_service.app.core.processors.derived_fields_populator import (
-    populate_derived_fields,
-)
 
 
 def _make_derived_service(
