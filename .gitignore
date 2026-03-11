@@ -125,4 +125,6 @@ logs/
 # profile_default/
 
 # --- Repo-specific: keep sp500 tickers on remote ---
+!instruments_service/
+!instruments_service/data/
 !instruments_service/data/sp500_tickers.json
