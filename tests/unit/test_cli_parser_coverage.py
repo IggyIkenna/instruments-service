@@ -14,6 +14,14 @@ from instruments_service.cli.base_handler import ModeHandler
 from instruments_service.cli.parser import parse_arguments, validate_arguments
 
 
+@pytest.fixture(autouse=True)
+def restore_sys_argv():
+    """Restore sys.argv after each test to prevent cross-test contamination."""
+    original = sys.argv[:]
+    yield
+    sys.argv = original
+
+
 class TestCLIParserExtended:
     """Extended tests for CLI parser."""
 

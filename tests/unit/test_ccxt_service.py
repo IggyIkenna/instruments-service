@@ -71,7 +71,8 @@ class TestCCXTService:
         result = ccxt_service.load_markets("UNKNOWN-VENUE")
         assert result is None
 
-    def test_get_metadata_success(self, ccxt_service):
+    @patch("instruments_service.engine.venues.ccxt_service.CCXTService.load_markets", return_value=None)
+    def test_get_metadata_success(self, _mock_load, ccxt_service):
         """Test successful metadata retrieval."""
         # Setup cache with markets
         ccxt_service._markets_cache["BINANCE-FUTURES_binance"] = {
@@ -221,7 +222,8 @@ class TestCCXTService:
         )
         assert len(formats) > 0
 
-    def test_get_metadata_with_tick_size(self, ccxt_service):
+    @patch("instruments_service.engine.venues.ccxt_service.CCXTService.load_markets", return_value=None)
+    def test_get_metadata_with_tick_size(self, _mock_load, ccxt_service):
         """Test getting metadata with tick size."""
         ccxt_service._markets_cache["BINANCE-FUTURES_binance"] = {
             "exchange": Mock(),
@@ -255,7 +257,8 @@ class TestCCXTService:
         # Note: tick_size/min_size/contract_size are only present when symbol is found in CCXT markets
         # The mock may not trigger full metadata extraction depending on symbol format matching
 
-    def test_get_metadata_cost_min(self, ccxt_service):
+    @patch("instruments_service.engine.venues.ccxt_service.CCXTService.load_markets", return_value=None)
+    def test_get_metadata_cost_min(self, _mock_load, ccxt_service):
         """Test getting metadata with cost_min instead of amount precision."""
         ccxt_service._markets_cache["TEST_binance"] = {
             "exchange": Mock(),

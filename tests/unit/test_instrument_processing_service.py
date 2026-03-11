@@ -17,7 +17,7 @@ from instruments_service.app.core.instrument_processing_service import (
 
 @pytest.fixture(scope="session", autouse=True)
 def _mock_gcp_secret_client():
-    """Mock secret client for all tests (session-scoped for xdist compatibility)."""
+    """Mock secret client and CCXT preloading for all tests (session-scoped for xdist compatibility)."""
     mock_client = MagicMock()
     mock_client.get_secret.return_value = None
     env_overrides = {"GOOGLE_APPLICATION_CREDENTIALS": ""}
@@ -30,6 +30,10 @@ def _mock_gcp_secret_client():
         patch(
             "instruments_service.app.core.instrument_processing_base.get_secret_client",
             return_value=mock_client,
+        ),
+        # Prevent CCXT from making live network calls during service init
+        patch(
+            "instruments_service.app.core.instrument_processing_mixins.CCXTService.preload_markets_parallel",
         ),
         patch.dict(os.environ, env_overrides),
     ):

@@ -322,7 +322,7 @@ class LiveModeHandler(ModeHandler):
                         "DATA_PERSISTED",
                         details=cast(
                             dict[str, JsonValue],
-                            {"path": f"gs://{item['bucket']}/{item['path']}", "rows": len(item["data"])},
+                            {"path": f"gs://{item['bucket']}/{item['path']}", "rows": len(item["data"])},  # noqa: gs-uri — log payload only, I/O via UCI
                         ),
                     )
 
