@@ -10,8 +10,8 @@ from __future__ import annotations
 import logging
 
 from unified_api_contracts import (
-    HttpRateLimitHeaders,  # noqa: F401
-    VenueRateLimitSpec,  # noqa: F401
+    HttpRateLimitHeaders,
+    VenueRateLimitSpec,
 )
 
 # UAC contract type references — canonical types for cross-service contract alignment
@@ -21,4 +21,11 @@ from unified_internal_contracts import InstrumentDefinition, InstrumentKey
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["InstrumentDefinition", "InstrumentKey", "InstrumentType", "Venue"]
+__all__ = [
+    "HttpRateLimitHeaders",
+    "InstrumentDefinition",
+    "InstrumentKey",
+    "InstrumentType",
+    "Venue",
+    "VenueRateLimitSpec",
+]

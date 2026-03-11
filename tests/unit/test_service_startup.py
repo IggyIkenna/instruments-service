@@ -28,7 +28,9 @@ class TestInstrumentsServiceStartup:
 
     def test_import_instruments_service_package(self) -> None:
         """Package import must succeed — verifies __init__.py is valid."""
-        import instruments_service  # noqa: F401
+        import instruments_service
+
+        assert instruments_service.__name__ == "instruments_service"
 
     def test_cloud_instrument_storage_instantiation(self) -> None:
         """CloudInstrumentStorage can be constructed with mock UCI."""
@@ -93,7 +95,9 @@ class TestInstrumentsServiceHealth:
             patch("instruments_service.config_reloaders.start_domain_config_reloaders"),
         ):
             # Importing the module should not raise
-            import instruments_service.cli.main  # noqa: F401
+            import instruments_service.cli.main
+
+            assert instruments_service.cli.main.__name__ == "instruments_service.cli.main"
 
     def test_package_has_version_or_metadata(self) -> None:
         """Package should be importable with standard metadata attributes."""

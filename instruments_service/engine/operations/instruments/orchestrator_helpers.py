@@ -16,7 +16,7 @@ from datetime import date as date_type
 from typing import cast
 
 import pandas as pd
-from unified_trading_library import determine_market_category  # noqa: domain-ucs
+from unified_trading_library import determine_market_category
 
 from instruments_service.app.core.instrument_crud import ErrorWarningCounter
 from instruments_service.models import InstrumentDefinition

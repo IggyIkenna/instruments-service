@@ -7,50 +7,12 @@ handle_no_instruments, and add_tradfi_placeholders.
 """
 
 import logging
-import sys
 from datetime import UTC, datetime
-from types import ModuleType
 from unittest.mock import MagicMock
 
 import pandas as pd
 
-# ─── Bypass the broken __init__.py import chain ──────────────────────────────
-# instruments_service.engine.operations.instruments.__init__ imports
-# orchestrator.py which tries to import process_cefi from orchestrator_processors
-# (that function does not exist — pre-existing repo bug). We insert stubs so
-# the package initialises without error, then load orchestrator_helpers directly.
-
-
-def _stub_package() -> None:
-    pkg = "instruments_service.engine.operations.instruments"
-    if pkg in sys.modules:
-        return
-
-    # Stub orchestrator_processors with a fake process_cefi
-    procs_name = f"{pkg}.orchestrator_processors"
-    if procs_name not in sys.modules:
-        stub = ModuleType(procs_name)
-        stub.process_cefi = MagicMock()  # type: ignore[attr-defined]
-        sys.modules[procs_name] = stub
-
-    # Stub orchestrator with a fake InstrumentsOrchestrator
-    orch_name = f"{pkg}.orchestrator"
-    if orch_name not in sys.modules:
-        stub_orch = ModuleType(orch_name)
-        stub_orch.InstrumentsOrchestrator = MagicMock()  # type: ignore[attr-defined]
-        sys.modules[orch_name] = stub_orch
-
-    # Stub batch_orchestrator
-    batch_name = f"{pkg}.batch_orchestrator"
-    if batch_name not in sys.modules:
-        stub_batch = ModuleType(batch_name)
-        stub_batch.InstrumentBatchProcessor = MagicMock()  # type: ignore[attr-defined]
-        sys.modules[batch_name] = stub_batch
-
-
-_stub_package()
-
-from instruments_service.engine.operations.instruments.orchestrator_helpers import (  # noqa: E402
+from instruments_service.engine.operations.instruments.orchestrator_helpers import (
     add_tradfi_placeholders,
     convert_to_dataframe,
     extract_venues_from_instrument_ids,
@@ -339,4 +301,4 @@ class TestAddTradfiPlaceholders:
         result = add_tradfi_placeholders(df, date, ["ICE"], mapping)
         ice_rows = result[result["venue"] == "ICE"]
         # np.False_ == False but is not identical with `is`; use == instead
-        assert ice_rows.iloc[0]["is_trading_day"] == False  # noqa: E712
+        assert not ice_rows.iloc[0]["is_trading_day"]
