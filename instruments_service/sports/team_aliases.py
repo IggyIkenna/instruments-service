@@ -261,7 +261,7 @@ def load_team_mappings_from_gcs(
 
         mappings.append(TeamMapping.model_validate(row_dict))
 
-    logger.info("Loaded %d team mappings from gs://%s/%s", len(mappings), bucket, path)
+    logger.info("Loaded %d team mappings from gs://%s/%s", len(mappings), bucket, path)  # noqa: gs-uri — log message only
     return mappings
 
 

@@ -9,8 +9,9 @@ URDI_SUPPORTED_VENUES constant — the canonical registry of venues for which
 get_reference_adapter(venue).get_instruments() is available.
 """
 
+import asyncio
 import logging
-from typing import Literal
+from typing import Literal, cast
 
 from unified_reference_data_interface import InstrumentRecord, get_reference_adapter
 
@@ -55,7 +56,8 @@ async def fetch_instruments_via_urdi(
 
     try:
         adapter = get_reference_adapter(venue)
-        instruments = await adapter.get_instruments(instrument_type=instrument_type)
+        raw = await adapter.get_instruments(instrument_type=instrument_type)
+        instruments: list[InstrumentRecord] = cast(list[InstrumentRecord], raw)
         logger.info(
             "urdi_reference_provider: fetched %d %s instruments for venue=%s",
             len(instruments),
@@ -98,11 +100,10 @@ async def fetch_instruments_for_venues(
         Mapping of venue → list[InstrumentRecord]. Only venues with at least
         one record are included in the result dict.
     """
-    import asyncio
-
-    tasks = {v: fetch_instruments_via_urdi(v, instrument_type) for v in venues if v in URDI_SUPPORTED_VENUES}
-    if not tasks:
+    venue_list: list[str] = [v for v in venues if v in URDI_SUPPORTED_VENUES]
+    if not venue_list:
         return {}
 
-    results = await asyncio.gather(*tasks.values(), return_exceptions=False)
-    return {venue: records for venue, records in zip(tasks.keys(), results, strict=True) if records}
+    coros = [fetch_instruments_via_urdi(v, instrument_type) for v in venue_list]
+    results: list[list[InstrumentRecord]] = list(await asyncio.gather(*coros, return_exceptions=False))
+    return {venue: records for venue, records in zip(venue_list, results, strict=True) if records}

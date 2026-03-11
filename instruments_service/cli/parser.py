@@ -19,6 +19,7 @@ class ParsedArgs(Protocol):
     """Typed protocol for parsed CLI arguments (argparse.Namespace attributes)."""
 
     mode: str
+    run_mode: str
     log_level: str
     start_date: str | None
     end_date: str | None
@@ -86,20 +87,12 @@ def parse_arguments() -> ParsedArgs:
         ),
     )
 
-    # Execution mode: canonical flag is --mode; --run-mode kept as deprecated alias
-    parser.add_argument(
-        "--mode",
-        dest="mode",
-        choices=["batch", "live"],
-        default=None,
-        help="Execution mode: batch for historical date range, live for continuous",
-    )
     parser.add_argument(
         "--run-mode",
-        dest="mode",
+        dest="run_mode",
         choices=["batch", "live"],
-        default=None,
-        help="[DEPRECATED] Use --mode instead. Kept for backward compatibility.",
+        required=True,
+        help="Execution mode: batch for historical date range, live for continuous",
     )
 
     # Date range (required for instruments mode)
@@ -293,9 +286,6 @@ def validate_arguments(args: argparse.Namespace) -> None:
     Raises:
         ValueError: If arguments are invalid or inconsistent
     """
-    if args.mode is None:
-        raise ValueError("--mode (or deprecated --run-mode) is required")
-
     mode = cast(str, args.mode)
     start_date = cast(str | None, args.start_date)
     end_date = cast(str | None, args.end_date)
