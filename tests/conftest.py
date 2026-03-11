@@ -9,6 +9,21 @@ Provides:
 - Cloud target fixtures for test environment
 """
 
+import pytest
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Register --block-network option (enforced by base-service.sh quality gates)."""
+    parser.addoption(
+        "--block-network",
+        action="store_true",
+        default=False,
+        help="Block all socket connections to enforce credential-free CI runs.",
+    )
+
+
+pytest_plugins = ["unified_api_contracts.testing.network_block_plugin"]
+
 # ============================================================================
 # CRITICAL: Load .env file FIRST, before ANY imports that depend on env vars
 # This must happen at module level, before pytest collects fixtures
