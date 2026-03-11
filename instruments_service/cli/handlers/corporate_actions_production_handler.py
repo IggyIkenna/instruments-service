@@ -396,7 +396,7 @@ class CorporateActionsProductionHandler(ModeHandler):
 
         logger.info("✅ Generated coverage report: %s", report_path)
 
-    def _upload_to_gcs(self) -> bool:
+    def _upload_to_storage(self) -> bool:
         """
         Upload all local data to storage via UCI DataSink (TRADFI routing).
 
@@ -440,7 +440,7 @@ class CorporateActionsProductionHandler(ModeHandler):
         tickers: list[str] | None = None,
         parallel_workers: int = 2,  # Changed default from 10 to 2
         max_retries: int = 3,
-        upload_to_gcs: bool = True,  # New parameter to control GCS upload
+        upload_to_storage: bool = True,  # New parameter to control GCS upload
         **kwargs: object,
     ) -> dict[str, HandlerResultValue]:
         """
@@ -583,10 +583,10 @@ class CorporateActionsProductionHandler(ModeHandler):
 
         # Step 8: Upload to GCS (if requested)
         gcs_upload_success = False
-        if upload_to_gcs:
-            gcs_upload_success = self._upload_to_gcs()
+        if upload_to_storage:
+            gcs_upload_success = self._upload_to_storage()
         else:
-            logger.info("\n⏭️  Skipping GCS upload (upload_to_gcs=False)")
+            logger.info("\n⏭️  Skipping GCS upload (upload_to_storage=False)")
 
         # Summary
         successful: list[dict[str, object]] = [r for r in results if r.get("success")]
@@ -596,7 +596,7 @@ class CorporateActionsProductionHandler(ModeHandler):
         logger.info("📊 Tickers processed: %s/%s", len(successful), len(ticker_list))
         logger.info("📈 Total events: %s", len(all_dividends) + len(all_splits) + len(all_earnings))
         logger.info("📁 Local output: %s", self.base_dir)
-        if upload_to_gcs:
+        if upload_to_storage:
             logger.info("☁️  GCS upload: %s", "✅ Success" if gcs_upload_success else "❌ Failed")
         logger.info("%s", "=" * 60)
 

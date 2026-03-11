@@ -166,7 +166,7 @@ class GenerateDateViewsHandler(ModeHandler):
         self,
         input_dir: str | None = None,
         output_dir: str | None = None,
-        upload_to_gcs: bool = False,
+        upload_to_storage: bool = False,
         **kwargs: object,
     ) -> dict[str, HandlerResultValue]:
         """
@@ -175,7 +175,7 @@ class GenerateDateViewsHandler(ModeHandler):
         Args:
             input_dir: Input directory with by_ticker data (default: corporate_actions_backfill_output/by_ticker)
             output_dir: Output directory for by_date files (default: corporate_actions_output/by_date)
-            upload_to_gcs: Whether to upload to GCS (default: False for testing)
+            upload_to_storage: Whether to upload to GCS (default: False for testing)
 
         Returns:
             Result dictionary with status and statistics
@@ -239,8 +239,8 @@ class GenerateDateViewsHandler(ModeHandler):
         logger.info("📈 Total records: %s", total_records)
         logger.info("📈 Total date files: %s", total_dates)
 
-        if upload_to_gcs:
-            self._upload_to_gcs(by_date_dir)
+        if upload_to_storage:
+            self._upload_to_storage(by_date_dir)
 
         return {
             "success": True,
@@ -248,7 +248,7 @@ class GenerateDateViewsHandler(ModeHandler):
             "statistics": {"action_types": action_types},
         }
 
-    def _upload_to_gcs(self, by_date_dir: Path) -> None:
+    def _upload_to_storage(self, by_date_dir: Path) -> None:
         """Upload local by_date Parquet files to cloud storage via UCI DataSink.
 
         Walks ``by_date_dir`` and uploads each Parquet file partitioned by
