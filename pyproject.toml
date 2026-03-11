@@ -223,7 +223,6 @@ include = [
     "instruments_service",
 ]
 exclude = [
-    "tests",
     "**/__pycache__",
     ".venv*",
     "build",
