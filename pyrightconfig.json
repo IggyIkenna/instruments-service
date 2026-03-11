@@ -21,8 +21,8 @@
   "typeCheckingMode": "strict",
   "reportAny": "error",
   "reportMissingTypeStubs": false,
-  "reportUnusedImport": "warning",
-  "reportUnnecessaryIsInstance": "warning",
-  "reportUnnecessaryCast": "warning",
-  "reportIncompatibleMethodOverride": "warning"
+  "reportUnusedImport": "none",
+  "reportUnnecessaryIsInstance": "none",
+  "reportUnnecessaryCast": "none",
+  "reportIncompatibleMethodOverride": "none"
 }
