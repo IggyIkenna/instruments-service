@@ -1142,7 +1142,7 @@ wheels = [
 
 [[package]]
 name = "instruments-service"
-version = "0.1.101"
+version = "0.1.103"
 source = { editable = "." }
 dependencies = [
     { name = "ccxt" },
@@ -2527,7 +2527,7 @@ wheels = [
 
 [[package]]
 name = "unified-api-contracts"
-version = "0.2.6"
+version = "0.2.8"
 source = { editable = "../unified-api-contracts" }
 dependencies = [
     { name = "pydantic" },
@@ -2616,7 +2616,7 @@ provides-extras = ["gcp", "aws", "cache", "dev"]
 
 [[package]]
 name = "unified-config-interface"
-version = "0.1.55"
+version = "0.1.57"
 source = { editable = "../unified-config-interface" }
 dependencies = [
     { name = "pydantic" },
@@ -2693,7 +2693,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "unified-events-interface"
-version = "0.2.34"
+version = "0.2.38"
 source = { editable = "../unified-events-interface" }
 
 [package.metadata]
@@ -2713,7 +2713,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "unified-internal-contracts"
-version = "0.1.67"
+version = "0.1.78"
 source = { editable = "../unified-internal-contracts" }
 dependencies = [
     { name = "pandas" },
@@ -2742,7 +2742,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "unified-market-interface"
-version = "0.3.83"
+version = "0.3.91"
 source = { editable = "../unified-market-interface" }
 dependencies = [
     { name = "aiohttp" },
@@ -2848,7 +2848,7 @@ provides-extras = ["aws", "dev"]
 
 [[package]]
 name = "unified-reference-data-interface"
-version = "0.1.80"
+version = "0.1.82"
 source = { editable = "../unified-reference-data-interface" }
 dependencies = [
     { name = "aiohttp" },
@@ -2888,7 +2888,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "unified-trading-library"
-version = "0.3.167"
+version = "0.3.185"
 source = { editable = "../unified-trading-library" }
 dependencies = [
     { name = "fsspec" },
