@@ -95,7 +95,9 @@ jobs:
           CLOUD_MOCK_MODE: "true"
           GCP_PROJECT_ID: "test-project"
           DEPLOYMENT_CONFIG_DIR: "../deployment-service/configs"
-        run: bash scripts/quality-gates.sh
+        run: |
+          export PATH="$(pwd)/.venv/bin:$PATH"
+          bash scripts/quality-gates.sh --no-fix
 
       - name: Quality gates passed
         run: |
