@@ -146,9 +146,7 @@ class TestCloudDataProviderAdditional:
             patch(f"{_MODULE_CDP}.get_analytics_client"),
             patch(f"{_MODULE_CDP}.dump_to_csv"),
         ):
-            result = cdp.get_instruments_from_category(
-                datetime(2024, 1, 1, tzinfo=UTC), "CEFI", gcs_path=gcs_path
-            )
+            result = cdp.get_instruments_from_category(datetime(2024, 1, 1, tzinfo=UTC), "CEFI", gcs_path=gcs_path)
         # Verify venue was added to partition by checking the call args
         call_kwargs = mock_ds.read.call_args
         assert call_kwargs is not None
@@ -278,9 +276,7 @@ class TestCloudDataProviderAdditional:
         """check_all=True returns True when all specified categories have data."""
         cdp = _make_cdp()
         with patch.object(cdp, "get_instruments_from_category", return_value=_SAMPLE_DF.copy()):
-            result = cdp.check_instruments_exist(
-                datetime(2024, 1, 1, tzinfo=UTC), categories=["CEFI", "TRADFI"]
-            )
+            result = cdp.check_instruments_exist(datetime(2024, 1, 1, tzinfo=UTC), categories=["CEFI", "TRADFI"])
         assert result is True
 
     def test_check_instruments_exist_specific_categories_missing_one(self) -> None:
@@ -296,9 +292,7 @@ class TestCloudDataProviderAdditional:
             return pd.DataFrame()
 
         with patch.object(cdp, "get_instruments_from_category", side_effect=side_effect):
-            result = cdp.check_instruments_exist(
-                datetime(2024, 1, 1, tzinfo=UTC), categories=["CEFI", "TRADFI"]
-            )
+            result = cdp.check_instruments_exist(datetime(2024, 1, 1, tzinfo=UTC), categories=["CEFI", "TRADFI"])
         assert result is False
 
     def test_check_instruments_exist_with_venues_all_found(self) -> None:
@@ -326,9 +320,7 @@ class TestCloudDataProviderAdditional:
     def test_check_instruments_exist_with_venues_connection_error(self) -> None:
         """Connection error during venue check returns False."""
         cdp = _make_cdp()
-        with patch.object(
-            cdp, "get_instruments_from_category", side_effect=ConnectionError("no network")
-        ):
+        with patch.object(cdp, "get_instruments_from_category", side_effect=ConnectionError("no network")):
             result = cdp.check_instruments_exist(
                 datetime(2024, 1, 1, tzinfo=UTC),
                 categories=["CEFI"],
@@ -423,9 +415,7 @@ class TestInstrumentValidationMixin:
         """A venue that appears in both cefi and tradfi lists is added to both."""
         vm = _make_venue_mapping(cefi=["SHARED_VENUE"], tradfi=["SHARED_VENUE"])
         mixin = _ConcreteValidationMixin(vm)
-        result = mixin._validate_venues_filter(
-            ["SHARED_VENUE"], cefi=True, tradfi=True, defi=False
-        )
+        result = mixin._validate_venues_filter(["SHARED_VENUE"], cefi=True, tradfi=True, defi=False)
         assert result is not None
         assert "SHARED_VENUE" in result["CEFI"]
         assert "SHARED_VENUE" in result["TRADFI"]
@@ -435,15 +425,11 @@ class TestInstrumentValidationMixin:
         assert result == []
 
     def test_extract_venues_from_colon_format(self) -> None:
-        result = InstrumentValidationMixin._extract_venues_from_instrument_ids(
-            ["BINANCE:SPOT_PAIR:BTC-USDT"], []
-        )
+        result = InstrumentValidationMixin._extract_venues_from_instrument_ids(["BINANCE:SPOT_PAIR:BTC-USDT"], [])
         assert "BINANCE" in result
 
     def test_extract_venues_from_string_input(self) -> None:
-        result = InstrumentValidationMixin._extract_venues_from_instrument_ids(
-            "BYBIT:SPOT_PAIR:ETH-USDT", []
-        )
+        result = InstrumentValidationMixin._extract_venues_from_instrument_ids("BYBIT:SPOT_PAIR:ETH-USDT", [])
         assert "BYBIT" in result
 
     def test_extract_venues_merges_with_existing_filter(self) -> None:
@@ -471,29 +457,21 @@ class TestInstrumentValidationMixin:
             "BINANCE:SPOT_PAIR:BTC-USDT": {"v": 1},
             "BYBIT:SPOT_PAIR:ETH-USDT": {"v": 2},
         }
-        result = InstrumentValidationMixin._filter_instruments_by_ids(
-            instruments, ["BINANCE:SPOT_PAIR:BTC-USDT"]
-        )
+        result = InstrumentValidationMixin._filter_instruments_by_ids(instruments, ["BINANCE:SPOT_PAIR:BTC-USDT"])
         assert "BINANCE:SPOT_PAIR:BTC-USDT" in result
         assert "BYBIT:SPOT_PAIR:ETH-USDT" not in result
 
     def test_filter_instruments_by_ids_case_insensitive(self) -> None:
         instruments = {"BINANCE:SPOT_PAIR:BTC-USDT": {"v": 1}}
-        result = InstrumentValidationMixin._filter_instruments_by_ids(
-            instruments, ["binance:spot_pair:btc-usdt"]
-        )
+        result = InstrumentValidationMixin._filter_instruments_by_ids(instruments, ["binance:spot_pair:btc-usdt"])
         assert "BINANCE:SPOT_PAIR:BTC-USDT" in result
 
     def test_filter_instruments_by_ids_no_match_returns_empty(self) -> None:
         instruments = {"BINANCE:SPOT_PAIR:BTC-USDT": {"v": 1}}
-        result = InstrumentValidationMixin._filter_instruments_by_ids(
-            instruments, ["COINBASE:SPOT_PAIR:ETH-USDT"]
-        )
+        result = InstrumentValidationMixin._filter_instruments_by_ids(instruments, ["COINBASE:SPOT_PAIR:ETH-USDT"])
         assert result == {}
 
     def test_filter_instruments_by_ids_accepts_string_input(self) -> None:
         instruments = {"BINANCE:SPOT_PAIR:BTC-USDT": {"v": 1}}
-        result = InstrumentValidationMixin._filter_instruments_by_ids(
-            instruments, "BINANCE:SPOT_PAIR:BTC-USDT"
-        )
+        result = InstrumentValidationMixin._filter_instruments_by_ids(instruments, "BINANCE:SPOT_PAIR:BTC-USDT")
         assert "BINANCE:SPOT_PAIR:BTC-USDT" in result

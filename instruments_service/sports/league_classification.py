@@ -38,7 +38,7 @@ class LeagueClassificationType(StrEnum):
 # ---------------------------------------------------------------------------
 
 
-class LeagueClassification(BaseModel):
+class LeagueClassification(BaseModel):  # CORRECT-LOCAL
     """Canonical classification entry for a football league.
 
     Migrated from the old ``LEAGUE_CLASSIFICATION`` dict in

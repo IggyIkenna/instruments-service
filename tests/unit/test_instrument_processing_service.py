@@ -15,14 +15,22 @@ from instruments_service.app.core.instrument_processing_service import (
 )
 
 
-@pytest.fixture(autouse=True)
-def _mock_get_secret_client():
-    """Mock get_secret_client and remove GOOGLE_APPLICATION_CREDENTIALS for unit tests."""
+@pytest.fixture(scope="session", autouse=True)
+def _mock_gcp_secret_client():
+    """Mock secret client for all tests (session-scoped for xdist compatibility)."""
     mock_client = MagicMock()
     mock_client.get_secret.return_value = None
     env_overrides = {"GOOGLE_APPLICATION_CREDENTIALS": ""}
     with (
         patch("unified_trading_library.get_secret_client", return_value=mock_client),
+        patch(
+            "instruments_service.app.core.instrument_processing_mixins.get_secret_client",
+            return_value=mock_client,
+        ),
+        patch(
+            "instruments_service.app.core.instrument_processing_base.get_secret_client",
+            return_value=mock_client,
+        ),
         patch.dict(os.environ, env_overrides),
     ):
         yield

@@ -478,7 +478,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
         tickers: list[str] | None = None,
         parallel_workers: int = 10,
         append_mode: bool = True,
-        upload_to_gcs: bool = False,
+        upload_to_storage: bool = False,
         max_retries: int = 3,
         **kwargs: object,
     ) -> dict[str, HandlerResultValue]:
@@ -489,7 +489,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
             tickers: Optional list of tickers (defaults to all from GCS)
             parallel_workers: Number of parallel workers (default: 10)
             append_mode: Only append new events to existing data (default: True)
-            upload_to_gcs: Whether to upload to GCS (default: False for testing)
+            upload_to_storage: Whether to upload to GCS (default: False for testing)
             max_retries: Maximum retry attempts per ticker (default: 3)
 
         Returns:
@@ -569,8 +569,8 @@ class CorporateActionsBackfillHandler(ModeHandler):
             stats["total_earnings"],
         )
 
-        if upload_to_gcs:
-            self._upload_to_gcs()
+        if upload_to_storage:
+            self._upload_to_storage()
 
         return cast(
             dict[str, HandlerResultValue],
@@ -582,7 +582,7 @@ class CorporateActionsBackfillHandler(ModeHandler):
             },
         )
 
-    def _upload_to_gcs(self) -> None:
+    def _upload_to_storage(self) -> None:
         """Upload local by_ticker output files to cloud storage via UCI DataSink.
 
         Walks ``self.by_ticker_dir`` and uploads each CSV file partitioned by

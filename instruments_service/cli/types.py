@@ -8,7 +8,7 @@ the CLI handlers, providing better type safety and IDE support.
 from typing import NotRequired, TypedDict
 
 
-class HandlerConfig(TypedDict):
+class HandlerConfig(TypedDict):  # CORRECT-LOCAL
     """Configuration dictionary for CLI handlers."""
 
     project_id: NotRequired[object]
@@ -19,7 +19,7 @@ class HandlerConfig(TypedDict):
     events_bucket: NotRequired[object]
 
 
-class TickerMetadata(TypedDict):
+class TickerMetadata(TypedDict):  # CORRECT-LOCAL
     """Metadata for a single ticker in the registry."""
 
     fetch_history: NotRequired[list["FetchHistoryEntry"]]
@@ -27,7 +27,7 @@ class TickerMetadata(TypedDict):
     status: NotRequired[str]
 
 
-class FetchHistoryEntry(TypedDict):
+class FetchHistoryEntry(TypedDict):  # CORRECT-LOCAL
     """Entry in ticker fetch history."""
 
     timestamp: str
@@ -36,7 +36,7 @@ class FetchHistoryEntry(TypedDict):
     error: NotRequired[str]
 
 
-class TickerRegistry(TypedDict):
+class TickerRegistry(TypedDict):  # CORRECT-LOCAL
     """Complete ticker registry structure."""
 
     tickers: dict[str, TickerMetadata]
@@ -44,7 +44,7 @@ class TickerRegistry(TypedDict):
     version: NotRequired[str]
 
 
-class BackfillResult(TypedDict):
+class BackfillResult(TypedDict):  # CORRECT-LOCAL
     """Result from backfilling a single ticker."""
 
     ticker: str
@@ -57,7 +57,7 @@ class BackfillResult(TypedDict):
     earnings_count: NotRequired[int]
 
 
-class CoverageReport(TypedDict):
+class CoverageReport(TypedDict):  # CORRECT-LOCAL
     """Coverage report for backfill operation."""
 
     total_tickers: int
@@ -69,7 +69,7 @@ class CoverageReport(TypedDict):
     failed_ticker_list: list[str]
 
 
-class ProductionMetadata(TypedDict):
+class ProductionMetadata(TypedDict):  # CORRECT-LOCAL
     """Metadata for production corporate actions."""
 
     last_run_date: NotRequired[str]
@@ -77,7 +77,7 @@ class ProductionMetadata(TypedDict):
     version: NotRequired[str]
 
 
-class ProductionRunEntry(TypedDict):
+class ProductionRunEntry(TypedDict):  # CORRECT-LOCAL
     """Entry in production run history."""
 
     date: str
@@ -88,7 +88,7 @@ class ProductionRunEntry(TypedDict):
     error: NotRequired[str]
 
 
-class BundleStats(TypedDict):
+class BundleStats(TypedDict):  # CORRECT-LOCAL
     """Statistics for a date bundle."""
 
     date: str
@@ -100,7 +100,7 @@ class BundleStats(TypedDict):
     success_rate: float
 
 
-class OperationStats(TypedDict):
+class OperationStats(TypedDict):  # CORRECT-LOCAL
     """Overall operation statistics."""
 
     start_time: str
@@ -112,7 +112,7 @@ class OperationStats(TypedDict):
     success_rate: float
 
 
-class BackfillStats(TypedDict):
+class BackfillStats(TypedDict):  # CORRECT-LOCAL
     """Statistics for backfill operation."""
 
     tickers_requested: int
@@ -123,14 +123,14 @@ class BackfillStats(TypedDict):
     total_earnings: int
 
 
-class CliArgs(TypedDict, total=False):
+class CliArgs(TypedDict, total=False):  # CORRECT-LOCAL
     """CLI arguments for handlers."""
 
     # Common arguments
     start_date: str
     end_date: str
     force: bool
-    upload_to_gcs: bool
+    upload_to_storage: bool
     parallel_workers: int
 
     # Live mode arguments

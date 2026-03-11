@@ -58,7 +58,7 @@ class CCXTMarket(TypedDict, total=False):
     info: dict[str, str | float | int | bool | None] | None
 
 
-class CCXTMarketData(TypedDict):
+class CCXTMarketData(TypedDict):  # CORRECT-LOCAL
     """CCXT service market data container."""
 
     exchange: object  # CCXT exchange instance

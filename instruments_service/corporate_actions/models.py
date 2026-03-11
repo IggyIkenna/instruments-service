@@ -31,7 +31,7 @@ class DividendType(StrEnum):
     UNSPECIFIED = "unspecified"  # Unknown/not specified
 
 
-class DividendRecord(BaseModel):
+class DividendRecord(BaseModel):  # CORRECT-LOCAL
     """
     Dividend record for an equity instrument.
 
@@ -88,7 +88,7 @@ class DividendRecord(BaseModel):
         }
 
 
-class StockSplitRecord(BaseModel):
+class StockSplitRecord(BaseModel):  # CORRECT-LOCAL
     """
     Stock split record for an equity instrument.
 
@@ -163,7 +163,7 @@ class StockSplitRecord(BaseModel):
         }
 
 
-class EarningsRecord(BaseModel):
+class EarningsRecord(BaseModel):  # CORRECT-LOCAL
     """
     Earnings announcement record for an equity instrument.
 
@@ -236,7 +236,7 @@ class EarningsRecord(BaseModel):
         }
 
 
-class CorporateActionsBundle(BaseModel):
+class CorporateActionsBundle(BaseModel):  # CORRECT-LOCAL
     """
     Bundle of all corporate actions for a ticker.
 

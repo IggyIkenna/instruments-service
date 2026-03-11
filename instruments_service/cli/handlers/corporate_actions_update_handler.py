@@ -145,7 +145,7 @@ class CorporateActionsUpdateHandler(ModeHandler):
         self,
         days_threshold: int = 7,
         parallel_workers: int = 10,
-        upload_to_gcs: bool = False,
+        upload_to_storage: bool = False,
         max_retries: int = 3,
         regenerate_date_views: bool = True,
         **kwargs: object,
@@ -156,7 +156,7 @@ class CorporateActionsUpdateHandler(ModeHandler):
         Args:
             days_threshold: Days before ticker is considered outdated (default: 7)
             parallel_workers: Number of parallel workers (default: 10)
-            upload_to_gcs: Whether to upload to GCS (default: False for testing)
+            upload_to_storage: Whether to upload to GCS (default: False for testing)
             max_retries: Maximum retry attempts per ticker (default: 3)
             regenerate_date_views: Whether to regenerate date views after update (default: True)
 
@@ -194,7 +194,7 @@ class CorporateActionsUpdateHandler(ModeHandler):
             tickers=outdated_tickers,
             parallel_workers=parallel_workers,
             append_mode=True,  # Only append new data
-            upload_to_gcs=upload_to_gcs,
+            upload_to_storage=upload_to_storage,
             max_retries=max_retries,
         )
 
@@ -207,7 +207,7 @@ class CorporateActionsUpdateHandler(ModeHandler):
         if regenerate_date_views:
             logger.info("\n🔄 Regenerating date views...")
             date_views_result = self.date_views_handler.run(
-                upload_to_gcs=upload_to_gcs,
+                upload_to_storage=upload_to_storage,
             )
 
             date_views_stats = date_views_result.get("statistics")

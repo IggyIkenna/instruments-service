@@ -60,7 +60,7 @@ def _on_instruments_reload(config: InstrumentDomainConfig) -> None:
                 "venue_count": len(_active_enabled_venues),
             },
         )
-    except Exception:
+    except (RuntimeError, OSError, AttributeError, ValueError):
         logger.warning("Could not emit CONFIG_RELOADED event (events not yet set up)")
 
 

@@ -147,7 +147,7 @@ class CorporateActionsServiceHandler(BaseModeHandler):
             end_date=cast(str | None, self.config.get("end_date")),
             tickers=cast(list[str] | None, self.config.get("tickers")),
             output_format=cast(str | None, self.config.get("output_format")),
-            upload_to_gcs=bool(self.config.get("upload_to_gcs", False)),
+            upload_to_storage=bool(self.config.get("upload_to_storage", False)),
         )
         return cast(dict[str, object], result)
 
@@ -197,7 +197,7 @@ class CorporateActionsProductionServiceHandler(BaseModeHandler):
         result = handler.run(
             tickers=cast(list[str] | None, self.config.get("tickers")),
             parallel_workers=cast(int | None, self.config.get("parallel_workers")),
-            upload_to_gcs=bool(self.config.get("upload_to_gcs", True)),
+            upload_to_storage=bool(self.config.get("upload_to_storage", True)),
         )
         return cast(dict[str, object], result)
 
@@ -377,8 +377,8 @@ def main() -> dict[str, HandlerResultValue]:
             handler_kwargs["tickers"] = args.tickers
         if hasattr(args, "output_format") and args.output_format:
             handler_kwargs["output_format"] = args.output_format
-        if hasattr(args, "upload_to_gcs") and args.upload_to_gcs:
-            handler_kwargs["upload_to_gcs"] = args.upload_to_gcs
+        if hasattr(args, "upload_to_storage") and args.upload_to_storage:
+            handler_kwargs["upload_to_storage"] = args.upload_to_storage
 
         # Backfill/update specific options
         if hasattr(args, "parallel_workers") and args.parallel_workers:

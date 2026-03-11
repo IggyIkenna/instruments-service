@@ -25,10 +25,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from unified_internal_contracts.reference.data_freshness import (
-    FEATURE_FRESHNESS,
-    DataFreshnessContract,
-)
+from unified_internal_contracts import FEATURE_FRESHNESS, DataFreshnessContract
 from unified_trading_library import FreshnessMonitor
 
 logger = logging.getLogger(__name__)

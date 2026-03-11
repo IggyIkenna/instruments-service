@@ -52,7 +52,7 @@ _PROVIDER_ID_FIELDS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
-class TeamNameHistory(BaseModel):
+class TeamNameHistory(BaseModel):  # CORRECT-LOCAL
     """Records a historical team name change.
 
     Frozen so instances can be stored in sets and used as dict keys.

@@ -32,7 +32,7 @@ class ParsedArgs(Protocol):
     max_workers: int
     tickers: list[str] | None
     output_format: str
-    upload_to_gcs: bool
+    upload_to_storage: bool
     parallel_workers: int
     days_threshold: int
     input_dir: str | None
