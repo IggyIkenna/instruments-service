@@ -9,7 +9,7 @@ Auto-updates two mutable fields per dataset entry:
   - row_count_last_batch: row count from the most recent batch write
 
 The catalogue YAML lives at:
-  deployment-service/configs/data-catalogue.instruments-service.yaml
+  unified-trading-pm/configs/data-catalogue.instruments-service.yaml
 
 After updating, emits a CATALOGUE_UPDATED coordination event so downstream caches can refresh.
 
@@ -34,11 +34,11 @@ from instruments_service.config.service_config import get_config
 
 logger = logging.getLogger(__name__)
 
-# Canonical path: deployment-service/configs/data-catalogue.instruments-service.yaml
+# Canonical path: unified-trading-pm/configs/data-catalogue.instruments-service.yaml
 # Resolved relative to the workspace root (parent of instruments-service/)
 _REPO_ROOT = Path(__file__).parent.parent
 _WORKSPACE_ROOT = _REPO_ROOT.parent
-_CATALOGUE_PATH = _WORKSPACE_ROOT / "deployment-service" / "configs" / "data-catalogue.instruments-service.yaml"
+_CATALOGUE_PATH = _WORKSPACE_ROOT / "unified-trading-pm" / "configs" / "data-catalogue.instruments-service.yaml"
 
 
 def _resolve_catalogue_path() -> Path:
@@ -47,7 +47,7 @@ def _resolve_catalogue_path() -> Path:
 
     Priority:
     1. config.catalogue_path_override (INSTRUMENTS_CATALOGUE_PATH; allows override in tests / CI)
-    2. Workspace-relative path: deployment-service/configs/data-catalogue.instruments-service.yaml
+    2. Workspace-relative path: unified-trading-pm/configs/data-catalogue.instruments-service.yaml
 
     Returns:
         Path to the catalogue YAML file.
