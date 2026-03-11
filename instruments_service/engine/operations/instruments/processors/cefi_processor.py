@@ -21,7 +21,7 @@ from uuid import uuid4
 
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 from unified_market_interface import TardisAdapter
-from unified_trading_library import determine_market_category, get_secret_client  # noqa: domain-ucs
+from unified_trading_library import determine_market_category, get_secret_client
 
 from instruments_service.config import instruments_config
 from instruments_service.engine.operations.instruments.processors.base_processor import BaseInstrumentProcessor

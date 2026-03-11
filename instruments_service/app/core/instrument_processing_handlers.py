@@ -16,7 +16,7 @@ from uuid import uuid4
 from unified_config_interface import DataTypeConfig, ExchangeInstrumentConfig, VenueMapping
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 from unified_market_interface import SubgraphService, TardisAdapter
-from unified_trading_library import determine_market_category  # noqa: domain-ucs
+from unified_trading_library import determine_market_category
 
 from instruments_service.app.core.instrument_processing_base import InstrumentProcessingConfig
 from instruments_service.models import InstrumentDefinition

@@ -288,7 +288,7 @@ class InstrumentsService(
 
             # Ensure market_category populated for live mode
             if skip_storage and not instruments_df.empty:
-                from unified_trading_library import determine_market_category  # noqa: domain-ucs
+                from unified_trading_library import determine_market_category
 
                 def _row_to_market_category(row: pd.Series) -> str:  # pyright: ignore[reportMissingTypeArgument]
                     raw: dict[str, object] = cast(dict[str, object], row.to_dict())

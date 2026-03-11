@@ -69,6 +69,44 @@ def _load_env_early():
 # Load env vars immediately at import time
 _load_env_early()
 
+
+def _stub_instruments_engine_package() -> None:
+    """Inject sys.modules stubs so orchestrator_helpers is importable without the full engine.
+
+    instruments_service.engine.operations.instruments.__init__ imports orchestrator.py
+    which tries to import process_cefi from orchestrator_processors (that function does
+    not exist — pre-existing repo bug). Stubs are inserted here so the package initialises
+    without error.
+    """
+    import sys
+    from types import ModuleType
+    from unittest.mock import MagicMock
+
+    pkg = "instruments_service.engine.operations.instruments"
+    if pkg in sys.modules:
+        return
+
+    procs_name = f"{pkg}.orchestrator_processors"
+    if procs_name not in sys.modules:
+        stub = ModuleType(procs_name)
+        stub.process_cefi = MagicMock()  # type: ignore[attr-defined]
+        sys.modules[procs_name] = stub
+
+    orch_name = f"{pkg}.orchestrator"
+    if orch_name not in sys.modules:
+        stub_orch = ModuleType(orch_name)
+        stub_orch.InstrumentsOrchestrator = MagicMock()  # type: ignore[attr-defined]
+        sys.modules[orch_name] = stub_orch
+
+    batch_name = f"{pkg}.batch_orchestrator"
+    if batch_name not in sys.modules:
+        stub_batch = ModuleType(batch_name)
+        stub_batch.InstrumentBatchProcessor = MagicMock()  # type: ignore[attr-defined]
+        sys.modules[batch_name] = stub_batch
+
+
+_stub_instruments_engine_package()
+
 # ============================================================================
 # Now safe to import modules that depend on environment variables
 # ============================================================================
