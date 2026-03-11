@@ -4,6 +4,7 @@ batch mode → upload_to_storage (GCS) used for persistence
 live mode  → LiveModeHandler initialises and uses GCSEventSink + upload_to_storage
              (IS uses GCS pull pattern for reference data, not PubSub streaming)
 """
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -84,7 +85,8 @@ class TestLiveModeTransport:
             "handlers",
             "live_mode_handler.py",
         )
-        source = open(path).read()
+        with open(path) as f:
+            source = f.read()
         assert "upload_to_storage" in source, "live_mode_handler must use upload_to_storage (GCS)"
         assert "get_queue_client" not in source, "live_mode_handler must not use PubSub queue client"
 
@@ -99,5 +101,6 @@ class TestLiveModeTransport:
             "handlers",
             "live_mode_handler.py",
         )
-        source = open(path).read()
+        with open(path) as f:
+            source = f.read()
         assert "persistence_queue" in source, "live_mode_handler must define persistence_queue"
