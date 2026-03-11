@@ -149,7 +149,7 @@ class InstrumentUtils:
 
     def _add_market_category(self, instruments_df: pd.DataFrame) -> None:
         """Add market category to instruments DataFrame."""
-        from unified_trading_library import determine_market_category
+        from unified_trading_library import determine_market_category  # noqa: domain-ucs — not yet in UDC
 
         def _row_to_market_category(row: pd.Series[object]) -> str:
             raw = cast(dict[str, object], row.to_dict())

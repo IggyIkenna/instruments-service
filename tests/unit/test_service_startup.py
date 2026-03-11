@@ -50,6 +50,9 @@ class TestInstrumentsServiceStartup:
         with (
             patch("instruments_service.app.core.cloud_instrument_storage.get_service_mode"),
             patch("instruments_service.app.core.cloud_instrument_storage.get_data_sink"),
+            patch(
+                "instruments_service.app.core.instrument_processing_mixins.CCXTService.preload_markets_parallel",
+            ),
         ):
             from instruments_service.app.core.instruments_service import InstrumentsService
 

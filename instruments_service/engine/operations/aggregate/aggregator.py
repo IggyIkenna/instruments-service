@@ -91,7 +91,7 @@ class InstrumentAggregator:
             data=buf.getvalue(),
         )
 
-        logger.info("✅ Wrote %s instruments to gs://%s/%s", len(deduped), bucket_name, gcs_path)
+        logger.info("✅ Wrote %s instruments to gs://%s/%s", len(deduped), bucket_name, gcs_path)  # noqa: gs-uri — log message only
         return len(deduped)
 
     def _load_all_from_storage(
@@ -109,7 +109,7 @@ class InstrumentAggregator:
         if not blobs:
             return pd.DataFrame()
 
-        logger.info("Loading %s parquet files from gs://%s/%s", len(blobs), bucket_name, BASE_PREFIX)
+        logger.info("Loading %s parquet files from gs://%s/%s", len(blobs), bucket_name, BASE_PREFIX)  # noqa: gs-uri — log message only
 
         all_dfs: list[pd.DataFrame] = []
         with ThreadPoolExecutor(max_workers=min(self.max_workers, len(blobs))) as executor:
