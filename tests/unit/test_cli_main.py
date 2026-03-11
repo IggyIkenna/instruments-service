@@ -219,7 +219,7 @@ class TestCorporateActionsServiceHandler:
                     "end_date": "2024-06-01",
                     "tickers": ["AAPL"],
                     "output_format": "csv",
-                    "upload_to_gcs": True,
+                    "upload_to_storage": True,
                 }
             )
             await handler.run()
@@ -228,7 +228,7 @@ class TestCorporateActionsServiceHandler:
         assert call_kwargs["start_date"] == "2024-01-01"
         assert call_kwargs["tickers"] == ["AAPL"]
         assert call_kwargs["output_format"] == "csv"
-        assert call_kwargs["upload_to_gcs"] is True
+        assert call_kwargs["upload_to_storage"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -319,13 +319,13 @@ class TestCorporateActionsProductionServiceHandler:
             return_value=mock_inner,
         ):
             handler = CorporateActionsProductionServiceHandler(
-                {"tickers": ["NVDA"], "parallel_workers": 4, "upload_to_gcs": False}
+                {"tickers": ["NVDA"], "parallel_workers": 4, "upload_to_storage": False}
             )
             await handler.run()
 
         call_kwargs = mock_inner.run.call_args[1]
         assert call_kwargs["tickers"] == ["NVDA"]
-        assert call_kwargs["upload_to_gcs"] is False
+        assert call_kwargs["upload_to_storage"] is False
 
 
 # ---------------------------------------------------------------------------

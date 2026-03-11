@@ -154,7 +154,7 @@ class TestCliTypes:
             "start_date": "2024-01-01",
             "end_date": "2024-12-31",
             "force": False,
-            "upload_to_gcs": False,
+            "upload_to_storage": False,
             "parallel_workers": 4,
         }
         assert args["parallel_workers"] == 4

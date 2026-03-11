@@ -227,7 +227,7 @@ class CorporateActionsHandler(ModeHandler):
             end_date: End date (YYYY-MM-DD)
             tickers: Optional list of tickers (defaults to S&P 500)
             output_format: Output format ('parquet' or 'csv')
-            upload_to_gcs: Whether to upload to GCS
+            upload_to_storage: Whether to upload to GCS
 
         Returns:
             Result dictionary with status and statistics
@@ -240,7 +240,7 @@ class CorporateActionsHandler(ModeHandler):
             raise ValueError("end_date is required for corporate actions")
         tickers = kwargs.get("tickers")
         output_format = str(kwargs.get("output_format", "parquet"))
-        upload_to_gcs = bool(kwargs.get("upload_to_gcs", False))
+        upload_to_storage = bool(kwargs.get("upload_to_storage", False))
 
         # Parse dates (narrow type for type checker)
         start = parse_date(str(start_date)) if isinstance(start_date, str) else start_date
@@ -294,8 +294,8 @@ class CorporateActionsHandler(ModeHandler):
         stats["output_files"] = output_files
 
         # Optionally upload to GCS
-        if upload_to_gcs:
-            gcs_paths = self._upload_to_gcs(output_files)
+        if upload_to_storage:
+            gcs_paths = self._upload_to_storage(output_files)
             stats["gcs_paths"] = gcs_paths
 
         return {
@@ -454,7 +454,7 @@ class CorporateActionsHandler(ModeHandler):
 
         return output_files
 
-    def _upload_to_gcs(self, output_files: list[dict[str, str]]) -> dict[str, str]:
+    def _upload_to_storage(self, output_files: list[dict[str, str]]) -> dict[str, str]:
         """
         Upload corporate actions files via UCI DataSink intent API (TRADFI routing).
 
