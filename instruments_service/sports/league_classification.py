@@ -17,6 +17,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
+from instruments_service.sports.league_data_classification import LEAGUE_CLASSIFICATION_DATA
+
 logger = logging.getLogger(__name__)
 
 
@@ -150,14 +152,6 @@ class LeagueClassificationRegistry:
         """Number of leagues in the registry."""
         return len(self._leagues)
 
-
-# ---------------------------------------------------------------------------
-# Data import (extracted to league_data_classification.py for file size compliance)
-# ---------------------------------------------------------------------------
-
-from instruments_service.sports.league_data_classification import (  # noqa: E402
-    LEAGUE_CLASSIFICATION_DATA,
-)
 
 # ---------------------------------------------------------------------------
 # Default registry instance — built from the embedded data

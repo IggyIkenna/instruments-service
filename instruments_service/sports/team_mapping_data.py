@@ -16,6 +16,8 @@ Data is expressed as plain dicts so it can be loaded via
 
 from __future__ import annotations
 
+from instruments_service.sports.team_mapping_data_bundesliga import BUNDESLIGA_TEAM_MAPPINGS
+
 # ---------------------------------------------------------------------------
 # EPL team mappings — 28 current + recent teams, plus historical ones
 # ---------------------------------------------------------------------------
@@ -433,6 +435,4 @@ EPL_TEAM_MAPPINGS: list[dict[str, str | int | None | list[str]]] = [
 # ---------------------------------------------------------------------------
 # Bundesliga data extracted to team_mapping_data_bundesliga.py for file size
 # ---------------------------------------------------------------------------
-from instruments_service.sports.team_mapping_data_bundesliga import BUNDESLIGA_TEAM_MAPPINGS  # noqa: E402
-
 __all__ = ["BUNDESLIGA_TEAM_MAPPINGS", "EPL_TEAM_MAPPINGS"]

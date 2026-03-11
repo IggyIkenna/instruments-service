@@ -10,43 +10,74 @@ from uuid import uuid4
 
 import pandas as pd
 from unified_api_contracts import (
-    BinanceFuturesExchangeInfo,  # noqa: F401  # UAC contract type reference
-    BinanceInstrumentInfo,  # noqa: F401  # UAC contract type reference
-    BinanceOptionInstrumentInfo,  # noqa: F401  # UAC contract type reference
-    BybitInstrumentInfo,  # noqa: F401  # UAC contract type reference
-    BybitInstrumentsResponse,  # noqa: F401  # UAC contract type reference
-    CoinbaseProductInfo,  # noqa: F401  # UAC contract type reference
-    CoinbaseProductsResponse,  # noqa: F401  # UAC contract type reference
-    DatabentoError,  # noqa: F401  # UAC contract type reference
-    DatabentoReferenceInstrument,  # noqa: F401  # UAC contract type reference
-    DeribitGetInstrumentResponse,  # noqa: F401  # UAC contract type reference
-    DeribitGetInstrumentsResponse,  # noqa: F401  # UAC contract type reference
-    DeribitInstrumentInfoFull,  # noqa: F401  # UAC contract type reference
-    HyperliquidAssetInfo,  # noqa: F401  # UAC contract type reference
-    HyperliquidMeta,  # noqa: F401  # UAC contract type reference
-    IBKRAccountValue,  # noqa: F401  # UAC contract type reference
-    IBKRCorporateAction,  # noqa: F401  # UAC contract type reference
-    OKXInstrumentInfo,  # noqa: F401  # UAC contract type reference
-    OKXInstrumentsResponse,  # noqa: F401  # UAC contract type reference
-    PolygonOptionContract,  # noqa: F401  # UAC contract type reference
-    PolygonOptionContractsResponse,  # noqa: F401  # UAC contract type reference
-    PolygonTicker,  # noqa: F401  # UAC contract type reference
-    PolygonTickersResponse,  # noqa: F401  # UAC contract type reference
-    TardisExchangeDetail,  # noqa: F401  # UAC contract type reference
-    TardisInstrumentDetail,  # noqa: F401  # UAC contract type reference
+    BinanceFuturesExchangeInfo,
+    BinanceInstrumentInfo,
+    BinanceOptionInstrumentInfo,
+    BybitInstrumentInfo,
+    BybitInstrumentsResponse,
+    CoinbaseProductInfo,
+    CoinbaseProductsResponse,
+    DatabentoError,
+    DatabentoReferenceInstrument,
+    DeribitGetInstrumentResponse,
+    DeribitGetInstrumentsResponse,
+    DeribitInstrumentInfoFull,
+    HyperliquidAssetInfo,
+    HyperliquidMeta,
+    IBKRAccountValue,
+    IBKRCorporateAction,
+    OKXInstrumentInfo,
+    OKXInstrumentsResponse,
+    PolygonOptionContract,
+    PolygonOptionContractsResponse,
+    PolygonTicker,
+    PolygonTickersResponse,
+    TardisExchangeDetail,
+    TardisInstrumentDetail,
 )
 from unified_cloud_interface import DataSource, get_data_source
 from unified_internal_contracts import (
-    DataSourceConstraint,  # noqa: F401 — UIC contract type reference
+    DataSourceConstraint,
     EnhancedError,
     ErrorCategory,
     ErrorContext,
     ErrorRecoveryStrategy,
     ErrorSeverity,
-    OHLCVSource,  # noqa: F401 — UIC contract type reference
+    OHLCVSource,
 )
 
 logger = logging.getLogger(__name__)
+
+# UAC contract type references — re-exported for cross-service contract alignment
+__all__ = [
+    "BinanceFuturesExchangeInfo",
+    "BinanceInstrumentInfo",
+    "BinanceOptionInstrumentInfo",
+    "BybitInstrumentInfo",
+    "BybitInstrumentsResponse",
+    "CoinbaseProductInfo",
+    "CoinbaseProductsResponse",
+    "DataSourceAdapter",
+    "DataSourceConstraint",
+    "DatabentoError",
+    "DatabentoReferenceInstrument",
+    "DeribitGetInstrumentResponse",
+    "DeribitGetInstrumentsResponse",
+    "DeribitInstrumentInfoFull",
+    "HyperliquidAssetInfo",
+    "HyperliquidMeta",
+    "IBKRAccountValue",
+    "IBKRCorporateAction",
+    "OHLCVSource",
+    "OKXInstrumentInfo",
+    "OKXInstrumentsResponse",
+    "PolygonOptionContract",
+    "PolygonOptionContractsResponse",
+    "PolygonTicker",
+    "PolygonTickersResponse",
+    "TardisExchangeDetail",
+    "TardisInstrumentDetail",
+]
 
 
 class DataSourceAdapter:
