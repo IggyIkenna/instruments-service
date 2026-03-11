@@ -9,6 +9,7 @@ Verifies that:
 
 from __future__ import annotations
 
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -95,9 +96,11 @@ class TestInstrumentsServiceHealth:
             patch("instruments_service.config_reloaders.start_domain_config_reloaders"),
         ):
             # Importing the module should not raise
-            import instruments_service.cli.main
+            import instruments_service.cli.main  # noqa: F401
 
-            assert instruments_service.cli.main.__name__ == "instruments_service.cli.main"
+            # cli/__init__.py exports a `main` function that shadows the submodule
+            # attribute, so we verify via sys.modules rather than attribute lookup.
+            assert "instruments_service.cli.main" in sys.modules
 
     def test_package_has_version_or_metadata(self) -> None:
         """Package should be importable with standard metadata attributes."""
