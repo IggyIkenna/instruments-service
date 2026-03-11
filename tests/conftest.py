@@ -11,17 +11,6 @@ Provides:
 
 import pytest
 
-
-def pytest_addoption(parser: pytest.Parser) -> None:
-    """Register --block-network option (enforced by base-service.sh quality gates)."""
-    parser.addoption(
-        "--block-network",
-        action="store_true",
-        default=False,
-        help="Block all socket connections to enforce credential-free CI runs.",
-    )
-
-
 pytest_plugins = ["unified_api_contracts.testing.network_block_plugin"]
 
 # ============================================================================
@@ -128,7 +117,6 @@ _stub_instruments_engine_package()
 import json
 import logging
 
-import pytest
 from google.auth import default
 from google.auth.exceptions import DefaultCredentialsError
 from google.oauth2 import service_account
