@@ -20,7 +20,7 @@ from typing import TypedDict, cast
 from uuid import uuid4
 
 import pandas as pd
-from unified_events_interface import JsonValue, log_event, publish_coordination_event, setup_events
+from unified_events_interface import JSONDict, log_event, publish_coordination_event, setup_events
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 
 # Unified cloud services (cloud-agnostic)
@@ -109,7 +109,7 @@ class LiveModeHandler(ModeHandler):
         log_event(
             "LIVE_MODE_STARTED",
             details=cast(
-                dict[str, JsonValue],
+                JSONDict,
                 {
                     "interval_minutes": interval,
                     "categories": categories,
@@ -132,7 +132,7 @@ class LiveModeHandler(ModeHandler):
                 log_event(
                     "LIVE_WAITING_FOR_ALIGNMENT",
                     details=cast(
-                        dict[str, JsonValue],
+                        JSONDict,
                         {
                             "next_run_utc": next_run.isoformat(),
                             "sleep_seconds": sleep_seconds,
@@ -150,7 +150,7 @@ class LiveModeHandler(ModeHandler):
                 log_event(
                     "LIVE_CYCLE_STARTED",
                     details=cast(
-                        dict[str, JsonValue],
+                        JSONDict,
                         {"cycle": cycle_count, "timestamp": actual_time.isoformat(), "minute": actual_time.minute},
                     ),
                 )
@@ -159,7 +159,7 @@ class LiveModeHandler(ModeHandler):
                 await self._process_cycle(actual_time, categories, venues, cycle_count)
 
         except KeyboardInterrupt:
-            log_event("LIVE_MODE_STOPPED", details=cast(dict[str, JsonValue], {"total_cycles": cycle_count}))
+            log_event("LIVE_MODE_STOPPED", details=cast(JSONDict, {"total_cycles": cycle_count}))
             logger.info("Stopped by user after %s cycles", cycle_count)
             return {"status": "stopped", "cycles": cycle_count}
 
@@ -173,7 +173,7 @@ class LiveModeHandler(ModeHandler):
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
             logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
-            log_event("LIVE_MODE_FAILED", severity="CRITICAL", details=cast(dict[str, JsonValue], {"error": str(e)}))
+            log_event("LIVE_MODE_FAILED", severity="CRITICAL", details=cast(JSONDict, {"error": str(e)}))
             logger.exception("Live mode failed")
             return {"status": "failed", "error": str(e)}
         finally:
@@ -234,7 +234,7 @@ class LiveModeHandler(ModeHandler):
                 publish_coordination_event(
                     event_type="INSTRUMENTS_READY",
                     payload=cast(
-                        dict[str, JsonValue],
+                        JSONDict,
                         {
                             "timestamp": timestamp.isoformat(),
                             "minute": timestamp.minute,
@@ -247,13 +247,13 @@ class LiveModeHandler(ModeHandler):
                 log_event(
                     "LIVE_CYCLE_COMPLETED",
                     details=cast(
-                        dict[str, JsonValue],
+                        JSONDict,
                         {"cycle": cycle, "instruments": total_instruments, "minute": timestamp.minute},
                     ),
                 )
 
             else:
-                log_event("LIVE_CYCLE_FAILED", severity="ERROR", details=cast(dict[str, JsonValue], {"cycle": cycle}))
+                log_event("LIVE_CYCLE_FAILED", severity="ERROR", details=cast(JSONDict, {"cycle": cycle}))
 
         except (ValueError, KeyError, TypeError, IndexError) as e:
             _err = EnhancedError(
@@ -268,7 +268,7 @@ class LiveModeHandler(ModeHandler):
             log_event(
                 "LIVE_CYCLE_EXCEPTION",
                 severity="ERROR",
-                details=cast(dict[str, JsonValue], {"cycle": cycle, "error": str(e)}),
+                details=cast(JSONDict, {"cycle": cycle, "error": str(e)}),
             )
             logger.exception("Cycle %s failed", cycle)
 
@@ -321,7 +321,7 @@ class LiveModeHandler(ModeHandler):
                     log_event(
                         "DATA_PERSISTED",
                         details=cast(
-                            dict[str, JsonValue],
+                            JSONDict,
                             {"path": f"gs://{item['bucket']}/{item['path']}", "rows": len(item["data"])},  # noqa: gs-uri — log payload only, I/O via UCI
                         ),
                     )
@@ -339,7 +339,7 @@ class LiveModeHandler(ModeHandler):
                     log_event(
                         "PERSIST_FAILED",
                         severity="ERROR",
-                        details=cast(dict[str, JsonValue], {"path": item["path"], "error": str(e)}),
+                        details=cast(JSONDict, {"path": item["path"], "error": str(e)}),
                     )
 
         thread = threading.Thread(target=worker, daemon=True, name="GCS-Persistence")

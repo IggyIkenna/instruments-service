@@ -100,7 +100,7 @@ class InstrumentRefreshScheduler:
                         logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                         log_event(
                             "INSTRUMENT_SCHEMA_VIOLATION",
-                            metadata={
+                            details={
                                 "instrument_key": instrument_key,
                                 "error": str(e),
                             },
