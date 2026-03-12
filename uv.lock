@@ -2572,7 +2572,7 @@ requires-dist = [
     { name = "requests", marker = "extra == 'schema-validation'", specifier = ">=2.32.5,<3.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.0" },
     { name = "tardis-client", marker = "extra == 'schema-validation'", specifier = ">=1.3.7,<2.0.0" },
-    { name = "vcrpy", marker = "extra == 'dev'", specifier = ">=6.0.0,<7.0.0" },
+    { name = "vcrpy", marker = "extra == 'dev'", specifier = ">=8.0.0,<9.0.0" },
 ]
 provides-extras = ["testing", "schema-validation", "dev"]
 
@@ -2630,7 +2630,7 @@ requires-dist = [
     { name = "redis", specifier = ">=5.0.0,<6.0.0" },
     { name = "redis", marker = "extra == 'cache'", specifier = ">=5.0.0,<6.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.0" },
-    { name = "vcrpy", marker = "extra == 'dev'", specifier = ">=6.0.0,<7.0.0" },
+    { name = "vcrpy", marker = "extra == 'dev'", specifier = ">=8.0.0,<9.0.0" },
 ]
 provides-extras = ["gcp", "aws", "cache", "dev"]
 
@@ -2825,7 +2825,7 @@ requires-dist = [
     { name = "unified-config-interface", editable = "../unified-config-interface" },
     { name = "unified-events-interface", editable = "../unified-events-interface" },
     { name = "unified-internal-contracts", editable = "../unified-internal-contracts" },
-    { name = "vcrpy", marker = "extra == 'dev'", specifier = ">=6.0.0,<7.0.0" },
+    { name = "vcrpy", marker = "extra == 'dev'", specifier = ">=8.0.0,<9.0.0" },
     { name = "web3", specifier = ">=6.0.0,<7.0.0" },
     { name = "websockets", specifier = ">=14.0,<15.0.0" },
     { name = "yfinance", specifier = ">=0.2.66,<1.0.0" },
@@ -2914,7 +2914,7 @@ requires-dist = [
     { name = "unified-cloud-interface", extras = ["gcp"], marker = "extra == 'dev'", editable = "../unified-cloud-interface" },
     { name = "unified-events-interface", editable = "../unified-events-interface" },
     { name = "unified-internal-contracts", editable = "../unified-internal-contracts" },
-    { name = "vcrpy", marker = "extra == 'dev'", specifier = ">=6.0.0,<7.0.0" },
+    { name = "vcrpy", marker = "extra == 'dev'", specifier = ">=8.0.0,<9.0.0" },
 ]
 provides-extras = ["dev"]
 
