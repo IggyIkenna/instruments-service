@@ -1493,6 +1493,94 @@ wheels = [
 ]
 
 [[package]]
+name = "opentelemetry-exporter-otlp-proto-common"
+version = "1.39.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-proto" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e9/9d/22d241b66f7bbde88a3bfa6847a351d2c46b84de23e71222c6aae25c7050/opentelemetry_exporter_otlp_proto_common-1.39.1.tar.gz", hash = "sha256:763370d4737a59741c89a67b50f9e39271639ee4afc999dadfe768541c027464", size = 20409, upload-time = "2025-12-11T13:32:40.885Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8c/02/ffc3e143d89a27ac21fd557365b98bd0653b98de8a101151d5805b5d4c33/opentelemetry_exporter_otlp_proto_common-1.39.1-py3-none-any.whl", hash = "sha256:08f8a5862d64cc3435105686d0216c1365dc5701f86844a8cd56597d0c764fde", size = 18366, upload-time = "2025-12-11T13:32:20.2Z" },
+]
+
+[[package]]
+name = "opentelemetry-exporter-otlp-proto-grpc"
+version = "1.39.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "googleapis-common-protos" },
+    { name = "grpcio" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-common" },
+    { name = "opentelemetry-proto" },
+    { name = "opentelemetry-sdk" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/53/48/b329fed2c610c2c32c9366d9dc597202c9d1e58e631c137ba15248d8850f/opentelemetry_exporter_otlp_proto_grpc-1.39.1.tar.gz", hash = "sha256:772eb1c9287485d625e4dbe9c879898e5253fea111d9181140f51291b5fec3ad", size = 24650, upload-time = "2025-12-11T13:32:41.429Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/81/a3/cc9b66575bd6597b98b886a2067eea2693408d2d5f39dad9ab7fc264f5f3/opentelemetry_exporter_otlp_proto_grpc-1.39.1-py3-none-any.whl", hash = "sha256:fa1c136a05c7e9b4c09f739469cbdb927ea20b34088ab1d959a849b5cc589c18", size = 19766, upload-time = "2025-12-11T13:32:21.027Z" },
+]
+
+[[package]]
+name = "opentelemetry-instrumentation"
+version = "0.60b1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "packaging" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/41/0f/7e6b713ac117c1f5e4e3300748af699b9902a2e5e34c9cf443dde25a01fa/opentelemetry_instrumentation-0.60b1.tar.gz", hash = "sha256:57ddc7974c6eb35865af0426d1a17132b88b2ed8586897fee187fd5b8944bd6a", size = 31706, upload-time = "2025-12-11T13:36:42.515Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/77/d2/6788e83c5c86a2690101681aeef27eeb2a6bf22df52d3f263a22cee20915/opentelemetry_instrumentation-0.60b1-py3-none-any.whl", hash = "sha256:04480db952b48fb1ed0073f822f0ee26012b7be7c3eac1a3793122737c78632d", size = 33096, upload-time = "2025-12-11T13:35:33.067Z" },
+]
+
+[[package]]
+name = "opentelemetry-instrumentation-aiohttp-client"
+version = "0.60b1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "opentelemetry-util-http" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c0/79/95be90c555fd7efde79dcba36ea5c668815aa2d0a4250b63687e0f91c74a/opentelemetry_instrumentation_aiohttp_client-0.60b1.tar.gz", hash = "sha256:d0e7d5aa057791ca4d9090b0d3c9982f253c1a24b6bc78a734fc18d8dd97927b", size = 15907, upload-time = "2025-12-11T13:36:44.434Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ca/f4/1a1ec632c86269750ae833c8fbdd4c8d15316eb1c21e3544e34791c805ee/opentelemetry_instrumentation_aiohttp_client-0.60b1-py3-none-any.whl", hash = "sha256:34c5097256a30b16c5a2a88a409ed82b92972a494c43212c85632d204a78c2a1", size = 12694, upload-time = "2025-12-11T13:35:35.034Z" },
+]
+
+[[package]]
+name = "opentelemetry-instrumentation-requests"
+version = "0.60b1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "opentelemetry-util-http" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9d/4a/bb9d47d7424fc33aeba75275256ae6e6031f44b6a9a3f778d611c0c3ac27/opentelemetry_instrumentation_requests-0.60b1.tar.gz", hash = "sha256:9a1063c16c44a3ba6e81870c4fa42a0fac3ecef5a4d60a11d0976eec9046f3d4", size = 16366, upload-time = "2025-12-11T13:37:12.456Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f2/7f/969b59a5acccb4c35317421843d63d7853ad7a18078ca3a9b80c248be448/opentelemetry_instrumentation_requests-0.60b1-py3-none-any.whl", hash = "sha256:eec9fac3fab84737f663a2e08b12cb095b4bd67643b24587a8ecfa3cf4d0ca4c", size = 13141, upload-time = "2025-12-11T13:36:23.696Z" },
+]
+
+[[package]]
+name = "opentelemetry-proto"
+version = "1.39.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "protobuf" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/49/1d/f25d76d8260c156c40c97c9ed4511ec0f9ce353f8108ca6e7561f82a06b2/opentelemetry_proto-1.39.1.tar.gz", hash = "sha256:6c8e05144fc0d3ed4d22c2289c6b126e03bcd0e6a7da0f16cedd2e1c2772e2c8", size = 46152, upload-time = "2025-12-11T13:32:48.681Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/51/95/b40c96a7b5203005a0b03d8ce8cd212ff23f1793d5ba289c87a097571b18/opentelemetry_proto-1.39.1-py3-none-any.whl", hash = "sha256:22cdc78efd3b3765d09e68bfbd010d4fc254c9818afd0b6b423387d9dee46007", size = 72535, upload-time = "2025-12-11T13:32:33.866Z" },
+]
+
+[[package]]
 name = "opentelemetry-sdk"
 version = "1.39.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1517,6 +1605,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/91/df/553f93ed38bf22f4b999d9be9c185adb558982214f33eae539d3b5cd0858/opentelemetry_semantic_conventions-0.60b1.tar.gz", hash = "sha256:87c228b5a0669b748c76d76df6c364c369c28f1c465e50f661e39737e84bc953", size = 137935, upload-time = "2025-12-11T13:32:50.487Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7a/5e/5958555e09635d09b75de3c4f8b9cae7335ca545d77392ffe7331534c402/opentelemetry_semantic_conventions-0.60b1-py3-none-any.whl", hash = "sha256:9fa8c8b0c110da289809292b0591220d3a7b53c1526a23021e977d68597893fb", size = 219982, upload-time = "2025-12-11T13:32:36.955Z" },
+]
+
+[[package]]
+name = "opentelemetry-util-http"
+version = "0.60b1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/50/fc/c47bb04a1d8a941a4061307e1eddfa331ed4d0ab13d8a9781e6db256940a/opentelemetry_util_http-0.60b1.tar.gz", hash = "sha256:0d97152ca8c8a41ced7172d29d3622a219317f74ae6bb3027cfbdcf22c3cc0d6", size = 11053, upload-time = "2025-12-11T13:37:25.115Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/16/5c/d3f1733665f7cd582ef0842fb1d2ed0bc1fba10875160593342d22bba375/opentelemetry_util_http-0.60b1-py3-none-any.whl", hash = "sha256:66381ba28550c91bee14dcba8979ace443444af1ed609226634596b4b0faf199", size = 8947, upload-time = "2025-12-11T13:36:37.151Z" },
 ]
 
 [[package]]
@@ -2554,38 +2651,32 @@ requires-dist = [
     { name = "ccxt", marker = "extra == 'schema-validation'", specifier = ">=4.5.24,<5.0.0" },
     { name = "databento", marker = "extra == 'schema-validation'", specifier = ">=0.32.0,<1.0.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28.1,<1.0.0" },
-    { name = "httpx", marker = "extra == 'testing'", specifier = ">=0.28.1,<1.0.0" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.0.0,<7.0.0" },
     { name = "ib-insync", marker = "extra == 'schema-validation'", specifier = ">=0.9.86,<1.0.0" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7.0,<3.0.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0,<4.0.0" },
     { name = "pydantic", specifier = ">=2.12.5,<3.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.1,<10.0.0" },
-    { name = "pytest", marker = "extra == 'testing'", specifier = ">=9.0.1,<10.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.25.0,<2.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.0.0,<8.0.0" },
     { name = "pytest-socket", marker = "extra == 'dev'", specifier = ">=0.7.0,<1.0.0" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0,<3.0.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.6.0,<4.0.0" },
-    { name = "pyyaml", marker = "extra == 'testing'", specifier = ">=6.0.0,<7.0.0" },
     { name = "requests", marker = "extra == 'dev'", specifier = ">=2.32.5,<3.0.0" },
     { name = "requests", marker = "extra == 'schema-validation'", specifier = ">=2.32.5,<3.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.0" },
     { name = "tardis-client", marker = "extra == 'schema-validation'", specifier = ">=1.3.7,<2.0.0" },
     { name = "vcrpy", marker = "extra == 'dev'", specifier = ">=8.0.0,<9.0.0" },
 ]
-provides-extras = ["testing", "schema-validation", "dev"]
+provides-extras = ["schema-validation", "dev"]
 
 [[package]]
 name = "unified-cloud-interface"
 version = "0.11.39"
 source = { editable = "../unified-cloud-interface" }
 dependencies = [
-    { name = "redis" },
-]
-
-[package.optional-dependencies]
-gcp = [
+    { name = "boto3" },
+    { name = "botocore" },
     { name = "gcsfs" },
     { name = "google-auth" },
     { name = "google-cloud-bigquery" },
@@ -2594,33 +2685,28 @@ gcp = [
     { name = "google-cloud-secret-manager" },
     { name = "google-cloud-storage" },
     { name = "pyjwt" },
+    { name = "redis" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.0,<2.0.0" },
     { name = "basedpyright", marker = "extra == 'dev'", specifier = "==1.38.2" },
-    { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.40.70,<2.0.0" },
-    { name = "boto3", marker = "extra == 'dev'", specifier = ">=1.40.70,<2.0.0" },
+    { name = "boto3", specifier = ">=1.40.70,<2.0.0" },
     { name = "boto3-stubs", extras = ["s3", "secretsmanager"], marker = "extra == 'dev'", specifier = ">=1.35.0,<2.0.0" },
-    { name = "botocore", marker = "extra == 'aws'", specifier = ">=1.34.0,<2.0.0" },
-    { name = "botocore", marker = "extra == 'dev'", specifier = ">=1.34.0,<2.0.0" },
-    { name = "gcsfs", marker = "extra == 'gcp'", specifier = ">=2025.5.0,<2026.0.0" },
-    { name = "google-auth", marker = "extra == 'gcp'", specifier = ">=2.40.0,<3.0.0" },
-    { name = "google-cloud-bigquery", marker = "extra == 'gcp'", specifier = ">=3.40.0,<4.0.0" },
+    { name = "botocore", specifier = ">=1.34.0,<2.0.0" },
+    { name = "gcsfs", specifier = ">=2025.5.0,<2026.0.0" },
+    { name = "google-auth", specifier = ">=2.40.0,<3.0.0" },
+    { name = "google-cloud-bigquery", specifier = ">=3.40.0,<4.0.0" },
     { name = "google-cloud-build", marker = "extra == 'dev'", specifier = ">=3.0.0,<4.0.0" },
-    { name = "google-cloud-logging", marker = "extra == 'dev'", specifier = ">=3.12.0,<4.0.0" },
-    { name = "google-cloud-logging", marker = "extra == 'gcp'", specifier = ">=3.12.0,<4.0.0" },
-    { name = "google-cloud-pubsub", marker = "extra == 'dev'", specifier = ">=2.28.0,<3.0.0" },
-    { name = "google-cloud-pubsub", marker = "extra == 'gcp'", specifier = ">=2.28.0,<3.0.0" },
-    { name = "google-cloud-secret-manager", marker = "extra == 'dev'", specifier = ">=2.25.0,<3.0.0" },
-    { name = "google-cloud-secret-manager", marker = "extra == 'gcp'", specifier = ">=2.25.0,<3.0.0" },
-    { name = "google-cloud-storage", marker = "extra == 'dev'", specifier = ">=3.8.0,<4.0.0" },
-    { name = "google-cloud-storage", marker = "extra == 'gcp'", specifier = ">=3.8.0,<4.0.0" },
+    { name = "google-cloud-logging", specifier = ">=3.12.0,<4.0.0" },
+    { name = "google-cloud-pubsub", specifier = ">=2.28.0,<3.0.0" },
+    { name = "google-cloud-secret-manager", specifier = ">=2.25.0,<3.0.0" },
+    { name = "google-cloud-storage", specifier = ">=3.8.0,<4.0.0" },
     { name = "moto", extras = ["s3", "secretsmanager", "sqs"], marker = "extra == 'dev'", specifier = ">=5.0.0,<6.0.0" },
     { name = "pandas", marker = "extra == 'dev'", specifier = ">=2.3.0,<3.0.0" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7.0,<3.0.0" },
-    { name = "pyjwt", marker = "extra == 'gcp'", specifier = ">=2.8.0,<3.0.0" },
+    { name = "pyjwt", specifier = ">=2.8.0,<3.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.1,<10.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.25.0,<2.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.0.0,<8.0.0" },
@@ -2628,11 +2714,10 @@ requires-dist = [
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0,<3.0.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.6.0,<4.0.0" },
     { name = "redis", specifier = ">=5.0.0,<6.0.0" },
-    { name = "redis", marker = "extra == 'cache'", specifier = ">=5.0.0,<6.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.0" },
     { name = "vcrpy", marker = "extra == 'dev'", specifier = ">=8.0.0,<9.0.0" },
 ]
-provides-extras = ["gcp", "aws", "cache", "dev"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "unified-config-interface"
@@ -2651,7 +2736,6 @@ dependencies = [
 requires-dist = [
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.0,<2.0.0" },
     { name = "basedpyright", marker = "extra == 'dev'", specifier = "==1.38.2" },
-    { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.40.70,<2.0.0" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7.0,<3.0.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0,<4.0.0" },
     { name = "pydantic", specifier = ">=2.12.5,<3.0.0" },
@@ -2668,7 +2752,7 @@ requires-dist = [
     { name = "unified-cloud-interface", editable = "../unified-cloud-interface" },
     { name = "unified-events-interface", editable = "../unified-events-interface" },
 ]
-provides-extras = ["aws", "dev"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "unified-domain-client"
@@ -2679,7 +2763,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pyyaml" },
     { name = "unified-api-contracts" },
-    { name = "unified-cloud-interface", extra = ["gcp"] },
+    { name = "unified-cloud-interface" },
     { name = "unified-config-interface" },
     { name = "unified-internal-contracts" },
     { name = "unified-ml-interface" },
@@ -2705,7 +2789,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.1,<7.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.0" },
     { name = "unified-api-contracts", editable = "../unified-api-contracts" },
-    { name = "unified-cloud-interface", extras = ["gcp"], editable = "../unified-cloud-interface" },
+    { name = "unified-cloud-interface", editable = "../unified-cloud-interface" },
     { name = "unified-config-interface", editable = "../unified-config-interface" },
     { name = "unified-internal-contracts", editable = "../unified-internal-contracts" },
     { name = "unified-ml-interface", editable = "../unified-ml-interface" },
@@ -2748,25 +2832,24 @@ dependencies = [
 requires-dist = [
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.0,<2.0.0" },
     { name = "basedpyright", marker = "extra == 'dev'", specifier = "==1.38.2" },
-    { name = "numpy", marker = "extra == 'testing'", specifier = ">=1.26.0,<3.0.0" },
+    { name = "numpy", marker = "extra == 'dev'", specifier = ">=2.3.0,<2.4.0" },
     { name = "pandas", specifier = ">=2.3.0,<3.0.0" },
     { name = "pandas-stubs", marker = "extra == 'dev'", specifier = ">=2.2.0,<3.0.0" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7.0,<3.0.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0,<4.0.0" },
-    { name = "pyarrow", marker = "extra == 'testing'", specifier = ">=19.0.0,<20.0.0" },
+    { name = "pyarrow", marker = "extra == 'dev'", specifier = ">=23.0.0,<24.0.0" },
     { name = "pydantic", specifier = ">=2.12.5,<3.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.1,<10.0.0" },
-    { name = "pytest", marker = "extra == 'testing'", specifier = ">=9.0.1,<10.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.25.0,<2.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=7.0.0,<8.0.0" },
     { name = "pytest-socket", marker = "extra == 'dev'", specifier = ">=0.7.0,<1.0.0" },
     { name = "pytest-timeout", marker = "extra == 'dev'", specifier = ">=2.4.0,<3.0.0" },
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.6.0,<4.0.0" },
-    { name = "pyyaml", marker = "extra == 'testing'", specifier = ">=6.0.0,<7.0.0" },
+    { name = "pyyaml", marker = "extra == 'dev'", specifier = ">=6.0.1,<7.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.0" },
     { name = "unified-api-contracts", editable = "../unified-api-contracts" },
 ]
-provides-extras = ["testing", "dev"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "unified-market-interface"
@@ -2785,7 +2868,7 @@ dependencies = [
     { name = "pyyaml" },
     { name = "requests" },
     { name = "unified-api-contracts" },
-    { name = "unified-cloud-interface", extra = ["gcp"] },
+    { name = "unified-cloud-interface" },
     { name = "unified-config-interface" },
     { name = "unified-events-interface" },
     { name = "unified-internal-contracts" },
@@ -2821,7 +2904,7 @@ requires-dist = [
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21.0,<1.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.0" },
     { name = "unified-api-contracts", editable = "../unified-api-contracts" },
-    { name = "unified-cloud-interface", extras = ["gcp"], editable = "../unified-cloud-interface" },
+    { name = "unified-cloud-interface", editable = "../unified-cloud-interface" },
     { name = "unified-config-interface", editable = "../unified-config-interface" },
     { name = "unified-events-interface", editable = "../unified-events-interface" },
     { name = "unified-internal-contracts", editable = "../unified-internal-contracts" },
@@ -2842,7 +2925,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-dateutil" },
-    { name = "unified-cloud-interface", extra = ["gcp"] },
+    { name = "unified-cloud-interface" },
     { name = "unified-config-interface" },
     { name = "unified-events-interface" },
     { name = "unified-internal-contracts" },
@@ -2852,7 +2935,6 @@ dependencies = [
 requires-dist = [
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.0,<2.0.0" },
     { name = "basedpyright", marker = "extra == 'dev'", specifier = "==1.38.2" },
-    { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.40.70,<2.0.0" },
     { name = "joblib", specifier = ">=1.3.0,<2.0.0" },
     { name = "numpy", marker = "extra == 'dev'", specifier = ">=2.3.0,<2.4.0" },
     { name = "pandas", specifier = ">=2.3.0,<3.0.0" },
@@ -2870,12 +2952,12 @@ requires-dist = [
     { name = "python-dateutil", specifier = ">=2.8.2,<3.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.0" },
     { name = "scikit-learn", marker = "extra == 'dev'", specifier = ">=1.5.0,<2.0.0" },
-    { name = "unified-cloud-interface", extras = ["gcp"], editable = "../unified-cloud-interface" },
+    { name = "unified-cloud-interface", editable = "../unified-cloud-interface" },
     { name = "unified-config-interface", editable = "../unified-config-interface" },
     { name = "unified-events-interface", editable = "../unified-events-interface" },
     { name = "unified-internal-contracts", editable = "../unified-internal-contracts" },
 ]
-provides-extras = ["aws", "dev"]
+provides-extras = ["dev"]
 
 [[package]]
 name = "unified-reference-data-interface"
@@ -2911,7 +2993,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.0" },
     { name = "unified-api-contracts", editable = "../unified-api-contracts" },
     { name = "unified-cloud-interface", editable = "../unified-cloud-interface" },
-    { name = "unified-cloud-interface", extras = ["gcp"], marker = "extra == 'dev'", editable = "../unified-cloud-interface" },
+    { name = "unified-cloud-interface", marker = "extra == 'dev'", editable = "../unified-cloud-interface" },
     { name = "unified-events-interface", editable = "../unified-events-interface" },
     { name = "unified-internal-contracts", editable = "../unified-internal-contracts" },
     { name = "vcrpy", marker = "extra == 'dev'", specifier = ">=8.0.0,<9.0.0" },
@@ -2927,6 +3009,11 @@ dependencies = [
     { name = "httpx" },
     { name = "joblib" },
     { name = "numpy" },
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc" },
+    { name = "opentelemetry-instrumentation-aiohttp-client" },
+    { name = "opentelemetry-instrumentation-requests" },
+    { name = "opentelemetry-sdk" },
     { name = "pandas" },
     { name = "polars" },
     { name = "psutil" },
@@ -2936,30 +3023,28 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "starlette" },
+    { name = "unified-cloud-interface" },
+    { name = "unified-config-interface" },
+    { name = "unified-events-interface" },
     { name = "unified-internal-contracts" },
     { name = "web3" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "aiobotocore", marker = "extra == 'aws'", specifier = ">=2.11.0,<3.0.0" },
     { name = "bandit", marker = "extra == 'dev'", specifier = ">=1.7.0,<2.0.0" },
     { name = "basedpyright", marker = "extra == 'dev'", specifier = "==1.38.2" },
-    { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.40.70,<2.0.0" },
-    { name = "botocore", marker = "extra == 'aws'", specifier = ">=1.34.0,<2.0.0" },
-    { name = "databento", marker = "extra == 'all'", specifier = ">=0.32.0,<1.0.0" },
     { name = "databento", marker = "extra == 'databento'", specifier = ">=0.32.0,<1.0.0" },
-    { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.110.0,<1.0.0" },
     { name = "fsspec", specifier = ">=2025.2.0,<2026.0.0" },
     { name = "httpx", specifier = ">=0.28.1,<1.0.0" },
     { name = "joblib", specifier = ">=1.3.0,<2.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13.0,<2.0.0" },
     { name = "numpy", specifier = ">=2.3.0,<2.4.0" },
-    { name = "opentelemetry-api", marker = "extra == 'observability'", specifier = ">=1.27.0,<2.0.0" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc", marker = "extra == 'observability'", specifier = ">=1.27.0,<2.0.0" },
-    { name = "opentelemetry-instrumentation-aiohttp-client", marker = "extra == 'observability'", specifier = ">=0.48b0,<1.0.0" },
-    { name = "opentelemetry-instrumentation-requests", marker = "extra == 'observability'", specifier = ">=0.48b0,<1.0.0" },
-    { name = "opentelemetry-sdk", marker = "extra == 'observability'", specifier = ">=1.27.0,<2.0.0" },
+    { name = "opentelemetry-api", specifier = ">=1.27.0,<2.0.0" },
+    { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.27.0,<2.0.0" },
+    { name = "opentelemetry-instrumentation-aiohttp-client", specifier = ">=0.48b0,<1.0.0" },
+    { name = "opentelemetry-instrumentation-requests", specifier = ">=0.48b0,<1.0.0" },
+    { name = "opentelemetry-sdk", specifier = ">=1.27.0,<2.0.0" },
     { name = "pandas", specifier = ">=2.3.0,<3.0.0" },
     { name = "pip-audit", marker = "extra == 'dev'", specifier = ">=2.7.0,<3.0.0" },
     { name = "polars", specifier = ">=1.37.0,<2.0.0" },
@@ -2978,16 +3063,13 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.1,<7.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.0" },
     { name = "starlette", specifier = ">=0.40.0,<1.0.0" },
-    { name = "unified-cloud-interface", extras = ["gcp"], marker = "extra == 'gcp'", editable = "../unified-cloud-interface" },
-    { name = "unified-cloud-interface", extras = ["gcp", "aws"], marker = "extra == 'all'", editable = "../unified-cloud-interface" },
-    { name = "unified-config-interface", marker = "extra == 'all'", editable = "../unified-config-interface" },
-    { name = "unified-config-interface", marker = "extra == 'split-libraries'", editable = "../unified-config-interface" },
-    { name = "unified-events-interface", marker = "extra == 'all'", editable = "../unified-events-interface" },
-    { name = "unified-events-interface", marker = "extra == 'split-libraries'", editable = "../unified-events-interface" },
+    { name = "unified-cloud-interface", editable = "../unified-cloud-interface" },
+    { name = "unified-config-interface", editable = "../unified-config-interface" },
+    { name = "unified-events-interface", editable = "../unified-events-interface" },
     { name = "unified-internal-contracts", editable = "../unified-internal-contracts" },
     { name = "web3", specifier = ">=6.0.0,<7.0.0" },
 ]
-provides-extras = ["aws", "gcp", "databento", "api", "observability", "split-libraries", "all", "dev"]
+provides-extras = ["databento", "dev"]
 
 [[package]]
 name = "urllib3"
@@ -3043,6 +3125,25 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/17/b1/1ffdb2680c64e9c3921d99db460546194c40d4acbef999a18c37aa4d58a3/websockets-14.2-cp313-cp313-win32.whl", hash = "sha256:a9e72fb63e5f3feacdcf5b4ff53199ec8c18d66e325c34ee4c551ca748623bbc", size = 163974, upload-time = "2025-01-19T21:00:08.698Z" },
     { url = "https://files.pythonhosted.org/packages/14/13/8b7fc4cb551b9cfd9890f0fd66e53c18a06240319915533b033a56a3d520/websockets-14.2-cp313-cp313-win_amd64.whl", hash = "sha256:b439ea828c4ba99bb3176dc8d9b933392a2413c0f6b149fdcba48393f573377f", size = 164420, upload-time = "2025-01-19T21:00:10.182Z" },
     { url = "https://files.pythonhosted.org/packages/7b/c8/d529f8a32ce40d98309f4470780631e971a5a842b60aec864833b3615786/websockets-14.2-py3-none-any.whl", hash = "sha256:7a6ceec4ea84469f15cf15807a747e9efe57e369c384fa86e022b3bea679b79b", size = 157416, upload-time = "2025-01-19T21:00:54.843Z" },
+]
+
+[[package]]
+name = "wrapt"
+version = "1.17.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/95/8f/aeb76c5b46e273670962298c23e7ddde79916cb74db802131d49a85e4b7d/wrapt-1.17.3.tar.gz", hash = "sha256:f66eb08feaa410fe4eebd17f2a2c8e2e46d3476e9f8c783daa8e09e0faa666d0", size = 55547, upload-time = "2025-08-12T05:53:21.714Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fc/f6/759ece88472157acb55fc195e5b116e06730f1b651b5b314c66291729193/wrapt-1.17.3-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:a47681378a0439215912ef542c45a783484d4dd82bac412b71e59cf9c0e1cea0", size = 54003, upload-time = "2025-08-12T05:51:48.627Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/a9/49940b9dc6d47027dc850c116d79b4155f15c08547d04db0f07121499347/wrapt-1.17.3-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:54a30837587c6ee3cd1a4d1c2ec5d24e77984d44e2f34547e2323ddb4e22eb77", size = 39025, upload-time = "2025-08-12T05:51:37.156Z" },
+    { url = "https://files.pythonhosted.org/packages/45/35/6a08de0f2c96dcdd7fe464d7420ddb9a7655a6561150e5fc4da9356aeaab/wrapt-1.17.3-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:16ecf15d6af39246fe33e507105d67e4b81d8f8d2c6598ff7e3ca1b8a37213f7", size = 39108, upload-time = "2025-08-12T05:51:58.425Z" },
+    { url = "https://files.pythonhosted.org/packages/0c/37/6faf15cfa41bf1f3dba80cd3f5ccc6622dfccb660ab26ed79f0178c7497f/wrapt-1.17.3-cp313-cp313-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:6fd1ad24dc235e4ab88cda009e19bf347aabb975e44fd5c2fb22a3f6e4141277", size = 88072, upload-time = "2025-08-12T05:52:37.53Z" },
+    { url = "https://files.pythonhosted.org/packages/78/f2/efe19ada4a38e4e15b6dff39c3e3f3f73f5decf901f66e6f72fe79623a06/wrapt-1.17.3-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:0ed61b7c2d49cee3c027372df5809a59d60cf1b6c2f81ee980a091f3afed6a2d", size = 88214, upload-time = "2025-08-12T05:52:15.886Z" },
+    { url = "https://files.pythonhosted.org/packages/40/90/ca86701e9de1622b16e09689fc24b76f69b06bb0150990f6f4e8b0eeb576/wrapt-1.17.3-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:423ed5420ad5f5529db9ce89eac09c8a2f97da18eb1c870237e84c5a5c2d60aa", size = 87105, upload-time = "2025-08-12T05:52:17.914Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/e0/d10bd257c9a3e15cbf5523025252cc14d77468e8ed644aafb2d6f54cb95d/wrapt-1.17.3-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:e01375f275f010fcbf7f643b4279896d04e571889b8a5b3f848423d91bf07050", size = 87766, upload-time = "2025-08-12T05:52:39.243Z" },
+    { url = "https://files.pythonhosted.org/packages/e8/cf/7d848740203c7b4b27eb55dbfede11aca974a51c3d894f6cc4b865f42f58/wrapt-1.17.3-cp313-cp313-win32.whl", hash = "sha256:53e5e39ff71b3fc484df8a522c933ea2b7cdd0d5d15ae82e5b23fde87d44cbd8", size = 36711, upload-time = "2025-08-12T05:53:10.074Z" },
+    { url = "https://files.pythonhosted.org/packages/57/54/35a84d0a4d23ea675994104e667ceff49227ce473ba6a59ba2c84f250b74/wrapt-1.17.3-cp313-cp313-win_amd64.whl", hash = "sha256:1f0b2f40cf341ee8cc1a97d51ff50dddb9fcc73241b9143ec74b30fc4f44f6cb", size = 38885, upload-time = "2025-08-12T05:53:08.695Z" },
+    { url = "https://files.pythonhosted.org/packages/01/77/66e54407c59d7b02a3c4e0af3783168fff8e5d61def52cda8728439d86bc/wrapt-1.17.3-cp313-cp313-win_arm64.whl", hash = "sha256:7425ac3c54430f5fc5e7b6f41d41e704db073309acfc09305816bc6a0b26bb16", size = 36896, upload-time = "2025-08-12T05:52:55.34Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/f6/a933bd70f98e9cf3e08167fc5cd7aaaca49147e48411c0bd5ae701bb2194/wrapt-1.17.3-py3-none-any.whl", hash = "sha256:7171ae35d2c33d326ac19dd8facb1e82e5fd04ef8c6c0e394d7af55a55051c22", size = 23591, upload-time = "2025-08-12T05:53:20.674Z" },
 ]
 
 [[package]]
