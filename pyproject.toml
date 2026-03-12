@@ -1,9 +1,6 @@
 [build-system]
-requires = [
-    "setuptools>=80.9.0,<82",
-    "wheel",
-]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "instruments-service"
@@ -117,12 +114,6 @@ editable = true
 [tool.uv.sources.unified-cloud-interface]
 path = "../unified-cloud-interface"
 editable = true
-
-[tool.setuptools]
-packages = [
-    "instruments_service",
-]
-include-package-data = true
 
 [tool.pytest.ini_options]
 testpaths = [
