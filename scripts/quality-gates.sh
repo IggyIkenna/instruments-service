@@ -14,13 +14,6 @@ RUN_INTEGRATION=false
 PYTEST_WORKERS=${PYTEST_WORKERS:-2}
 LOCAL_DEPS=()
 WORKSPACE_ROOT="$(cd "$(git rev-parse --show-toplevel)/.." && pwd)"
-# Exclude AI-generated coverage-boost test files from function/file size checks.
-# These files are intentionally long (>900L) to maximise line coverage; no production logic.
-# Documented in QUALITY_GATE_BYPASS_AUDIT.md § file-size exclusions.
-FUNCTION_SIZE_EXTRA_EXCLUDES=(
-    "! -path ./tests/unit/test_coverage_boost_*.py"
-    "! -path ./tests/unit/test_coverage_boost_instruments_*.py"
-)
 source "${WORKSPACE_ROOT}/unified-trading-pm/scripts/quality-gates-base/base-service.sh"
 
 # Codex enforcement: every entrypoint must emit STARTED, STOPPED, FAILED
