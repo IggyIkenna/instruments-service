@@ -15,11 +15,14 @@ PYTEST_WORKERS=${PYTEST_WORKERS:-2}
 LOCAL_DEPS=()
 # defi_processor.py uses asyncio.run() as top-level entrypoint; loops are in separate scope
 ASYNCIO_RUN_EXCLUDE_GLOBS=("!**/engine/processors/defi_processor.py" "!**/cli/handlers/instrument_handler.py" "!**/cli/handlers/live_mode_handler.py")
-# Lazy imports for circular dep avoidance and TYPE_CHECKING patterns
+# TYPE_CHECKING blocks (correct pattern — QG regex can't distinguish from runtime lazy imports)
+# Orchestrators: circular dep with InstrumentProcessingService — requires DI refactor (tech debt)
+# venue_adapter_loader: intentional plugin lazy loading — correct pattern for adapter systems
+# sports/team_aliases: optional pandas/cloud dep — intentional lazy optional loading
+# instruments_service.py, monitors/freshness: internal circular init — requires DI refactor
 IMPORT_INSIDE_EXCLUDE_GLOBS=(
     "!**/__init__.py"
     "!**/monitors/instruments_freshness.py"
-    "!**/config_reloaders.py"
     "!**/engine/venues/venue_adapter_loader.py"
     "!**/engine/processors/symbol_parser.py"
     "!**/engine/processors/derived_fields_populator.py"
@@ -40,10 +43,6 @@ IMPORT_INSIDE_EXCLUDE_GLOBS=(
     "!**/app/core/processors/symbol_parser.py"
     "!**/app/core/processors/canonical_key_generator.py"
     "!**/cli/parser.py"
-    "!**/cli/main.py"
-    "!**/cli/handlers/corporate_actions_backfill_handler.py"
-    "!**/cli/handlers/corporate_actions_production_handler.py"
-    "!**/cli/handlers/generate_date_views_handler.py"
     "!**/sports/team_aliases.py"
 )
 # Tests contain inherently large files (coverage boost suites); cli/engine dirs have large data/processor classes

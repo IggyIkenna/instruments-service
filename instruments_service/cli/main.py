@@ -17,20 +17,14 @@ import sys
 from pathlib import Path
 from typing import cast
 
+from dotenv import load_dotenv
 
-# CRITICAL: Load .env file explicitly before any other imports
-def _load_env_early():
-    from dotenv import load_dotenv
-
-    env_path = Path(".env")
-    if not env_path.exists():
-        env_path = Path(__file__).parent.parent.parent / ".env"
-
-    if env_path.exists():
-        load_dotenv(dotenv_path=env_path, override=True)
-
-
-_load_env_early()
+# CRITICAL: Load .env before library imports so env vars are available at import time
+_env_path = Path(".env")
+if not _env_path.exists():
+    _env_path = Path(__file__).parent.parent.parent / ".env"
+if _env_path.exists():
+    load_dotenv(dotenv_path=_env_path, override=True)
 
 # Setup structured JSON logging (split libraries - direct import per dependency matrix)
 from unified_events_interface import log_event

@@ -43,7 +43,7 @@ from typing import cast
 
 import pandas as pd
 import yaml
-from unified_cloud_interface import DataSource, get_data_source
+from unified_cloud_interface import DataSink, DataSource, get_data_sink, get_data_source
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.config import instruments_config
@@ -589,8 +589,6 @@ class CorporateActionsBackfillHandler(ModeHandler):
         ``{ticker}/{action_type}`` so downstream consumers can read via DataSource.
         Uses the ``tradfi`` routing key (PROTOCOL_DATA_SINK_BUCKET_TRADFI env var).
         """
-        from unified_cloud_interface import DataSink, get_data_sink
-
         try:
             data_sink: DataSink = get_data_sink(routing_key="tradfi")
             uploaded_count = 0

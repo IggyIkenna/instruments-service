@@ -40,6 +40,7 @@ from typing import TypedDict
 from uuid import uuid4
 
 import pandas as pd
+from unified_cloud_interface import DataSink, get_data_sink
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
@@ -255,8 +256,6 @@ class GenerateDateViewsHandler(ModeHandler):
         ``{day}/{action_type}`` so downstream consumers can read via DataSource.
         Uses the ``tradfi`` routing key (PROTOCOL_DATA_SINK_BUCKET_TRADFI env var).
         """
-        from unified_cloud_interface import DataSink, get_data_sink
-
         try:
             data_sink: DataSink = get_data_sink(routing_key="tradfi")
             uploaded_count = 0

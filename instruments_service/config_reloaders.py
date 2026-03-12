@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from unified_config_interface import InstrumentDomainConfig
-    from unified_trading_library import DomainConfigReloader
+from unified_config_interface import InstrumentDomainConfig
+from unified_events_interface import log_event
+from unified_trading_library import DomainConfigReloader
 
 logger = logging.getLogger(__name__)
 _instrument_reloader: DomainConfigReloader[InstrumentDomainConfig] | None = None
@@ -49,25 +48,17 @@ def _on_instruments_reload(config: InstrumentDomainConfig) -> None:
         _active_subscription_list[:10],  # log first 10 to avoid log spam
     )
 
-    try:
-        from unified_events_interface import log_event
-
-        log_event(
-            "CONFIG_RELOADED",
-            details={
-                "domain": "instruments",
-                "subscription_count": len(_active_subscription_list),
-                "venue_count": len(_active_enabled_venues),
-            },
-        )
-    except (RuntimeError, OSError, AttributeError, ValueError):
-        logger.warning("Could not emit CONFIG_RELOADED event (events not yet set up)")
+    log_event(
+        "CONFIG_RELOADED",
+        details={
+            "domain": "instruments",
+            "subscription_count": len(_active_subscription_list),
+            "venue_count": len(_active_enabled_venues),
+        },
+    )
 
 
 def start_domain_config_reloaders(service_config: object) -> None:
-    from unified_config_interface import InstrumentDomainConfig
-    from unified_trading_library import DomainConfigReloader
-
     global _instrument_reloader
 
     config_store_bucket: str = getattr(service_config, "config_store_bucket", "")
