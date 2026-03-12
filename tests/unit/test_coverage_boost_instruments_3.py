@@ -796,6 +796,7 @@ class TestCliHandlersInit:
         except Exception:
             pass
 
+    @pytest.mark.timeout(120)
     def test_populate_registry_is_called_lazily(self) -> None:
         """populate_registry called on first get_handler_for_mode call."""
         import instruments_service.cli.handlers as handlers_mod

@@ -72,6 +72,7 @@ dev = [
     "bandit>=1.7.0,<2.0.0",
     "prek>=0.3.0,<1.0.0",
     "pandas-stubs>=2.2.0,<3.0.0",
+    "ib_insync>=0.9.86,<1.0.0",
 ]
 
 [project.scripts]
