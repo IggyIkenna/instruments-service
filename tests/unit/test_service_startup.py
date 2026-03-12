@@ -94,10 +94,7 @@ class TestInstrumentsServiceHealth:
 
     def test_cli_main_imports_cleanly(self) -> None:
         """CLI main module must import without errors in test environment."""
-        with (
-            patch("instruments_service.cli.main._load_env_early"),
-            patch("instruments_service.config_reloaders.start_domain_config_reloaders"),
-        ):
+        with patch("instruments_service.config_reloaders.start_domain_config_reloaders"):
             # Importing the module should not raise
             import instruments_service.cli.main  # noqa: F401
 

@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import cast
 
 import pandas as pd
-from unified_cloud_interface import DataSource, get_data_source
+from unified_cloud_interface import DataSink, DataSource, get_data_sink, get_data_source
 
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.config import SP500_TICKERS, corporate_actions_start_date, instruments_config
@@ -403,8 +403,6 @@ class CorporateActionsProductionHandler(ModeHandler):
         Returns:
             True if upload successful, False otherwise
         """
-        from unified_cloud_interface import DataSink, get_data_sink
-
         try:
             logger.info("STEP 8: Uploading to storage (TRADFI routing)...")
             logger.info("Source: %s", self.base_dir)
