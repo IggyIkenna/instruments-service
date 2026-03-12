@@ -225,4 +225,3 @@ reportUnknownVariableType = "error"
 reportUnknownArgumentType = "error"
 reportUnknownParameterType = "error"
 reportUnknownMemberType = "error"
-useLibraryCodeForTypes = true
