@@ -45,6 +45,7 @@ dependencies = [
     "unified-domain-client>=0.1.0,<1.0.0",
     "unified-market-interface>=0.1.0,<1.0.0",
     "unified-reference-data-interface>=0.1.0,<1.0.0",
+    "ib-insync>=0.9.86,<1.0.0",
     "unified-api-contracts>=0.1.0,<1.0.0",
     "unified-internal-contracts>=0.1.0,<1.0.0",
     "unified-cloud-interface>=0.1.0,<1.0.0",
