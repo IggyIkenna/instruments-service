@@ -128,3 +128,7 @@ logs/
 !instruments_service/
 !instruments_service/data/
 !instruments_service/data/sp500_tickers.json
+# tickers.json: static config needed for module import at test time (ISS-049), 7KB
+!instruments_service/config/
+!instruments_service/config/data/
+!instruments_service/config/data/tickers.json
