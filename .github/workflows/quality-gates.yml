@@ -1,5 +1,10 @@
 name: Quality Gates
 
+# Standalone quality gates for instruments-service.
+# Cannot call unified-trading-pm reusable workflow directly (PM is a private repo,
+# cross-repo private reusable workflow calls require GitHub Enterprise).
+# Instead: clone PM via GH_PAT and run bash scripts/quality-gates.sh directly.
+
 on:
   push:
     branches: [main]
@@ -9,8 +14,103 @@ on:
 
 jobs:
   quality-gates:
-    uses: IggyIkenna/unified-trading-pm/.github/workflows/python-quality-gates.yml@live-defi-rollout
-    with:
-      dep_repos: "unified-api-contracts unified-trading-library unified-config-interface unified-events-interface unified-domain-client unified-market-interface unified-cloud-interface unified-reference-data-interface unified-internal-contracts"
-    secrets:
-      GH_PAT: ${{ secrets.GH_PAT }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUD_MOCK_MODE: "true"
+      CLOUD_PROVIDER: "local"
+      GCP_PROJECT_ID: "test-project"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13.9"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Cache tools (ripgrep, shellcheck, bats, actionlint)
+        id: tools-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/act-tools
+          key: act-tools-linux-rg14.1.1-sc0.10.0-bats-core-1.12-actionlint1.7.4
+
+      - name: Install ripgrep
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        run: |
+          RG_VER="14.1.1"
+          mkdir -p ~/.local/act-tools/bin
+          curl -fsSL "https://github.com/BurntSushi/ripgrep/releases/download/${RG_VER}/ripgrep-${RG_VER}-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz --strip-components=1 -C ~/.local/act-tools/bin "ripgrep-${RG_VER}-x86_64-unknown-linux-musl/rg"
+
+      - name: Install shellcheck
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        run: |
+          SC_VER="v0.10.0"
+          mkdir -p ~/.local/act-tools/bin
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${SC_VER}/shellcheck-${SC_VER}.linux.x86_64.tar.xz" \
+            | tar -xJ --strip-components=1 -C ~/.local/act-tools/bin "shellcheck-${SC_VER}/shellcheck"
+
+      - name: Install bats-core
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth=1 --branch v1.12.0 https://github.com/bats-core/bats-core.git /tmp/bats-core
+          /tmp/bats-core/install.sh ~/.local/act-tools
+
+      - name: Install actionlint
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        run: |
+          AL_VER="1.7.4"
+          mkdir -p ~/.local/act-tools/bin
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${AL_VER}/actionlint_${AL_VER}_linux_amd64.tar.gz" \
+            | tar -xz -C ~/.local/act-tools/bin actionlint
+
+      - name: Add tools to PATH
+        run: echo "$HOME/.local/act-tools/bin" >> "$GITHUB_PATH"
+
+      - name: Clone unified-trading-pm and dependencies
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+          DEP_BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          BRANCH="${DEP_BRANCH:-main}"
+          OWNER="${GITHUB_REPOSITORY_OWNER}"
+          clone_repo() {
+            local name="$1"
+            (git clone -b "$BRANCH" "https://x-access-token:${GH_PAT}@github.com/${OWNER}/${name}.git" "../${name}" 2>/dev/null \
+              || git clone -b main "https://x-access-token:${GH_PAT}@github.com/${OWNER}/${name}.git" "../${name}" 2>/dev/null) || true
+          }
+          # Always clone PM — base-service.sh lives here
+          clone_repo unified-trading-pm
+          # Clone dep repos (declared in quality-gates.sh LOCAL_DEPS or needed for typecheck)
+          for repo in unified-api-contracts unified-trading-library unified-config-interface unified-events-interface unified-domain-client unified-market-interface unified-cloud-interface unified-reference-data-interface unified-internal-contracts; do
+            clone_repo "$repo"
+          done
+
+      - name: Install dependencies
+        run: |
+          uv venv .venv
+          uv sync
+
+      - name: Run quality gates
+        run: |
+          export PATH="$(pwd)/.venv/bin:$PATH"
+          bash scripts/quality-gates.sh --no-fix
+
+      - name: Record CI status
+        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: |
+          [ -z "${GH_PAT}" ] && echo "GH_PAT not set — skipping ci-status-update" && exit 0
+          STATUS="${{ job.status == 'success' && 'PASSING' || 'FAILING' }}"
+          curl -s -X POST \
+            -H "Authorization: token ${GH_PAT}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY_OWNER}/unified-trading-pm/dispatches" \
+            -d "{\"event_type\": \"ci-status-update\", \"client_payload\": {\"repo\": \"${GITHUB_REPOSITORY#*/}\", \"status\": \"${STATUS}\", \"sha\": \"${GITHUB_SHA}\"}}"
