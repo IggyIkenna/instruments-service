@@ -4,26 +4,6 @@ tickers:
     exchange: UNKNOWN
     instrument_type: equity
     fetch_history:
-    - date: '2026-03-12T22:59:54.582009+00:00'
-      result: error
-      events_found: 0
-      error: not enough values to unpack (expected 3, got 0)
-    - date: '2026-03-12T23:00:44.569474+00:00'
-      result: error
-      events_found: 0
-      error: not enough values to unpack (expected 3, got 0)
-    - date: '2026-03-12T23:05:09.199731+00:00'
-      result: error
-      events_found: 0
-      error: not enough values to unpack (expected 3, got 0)
-    - date: '2026-03-12T23:55:23.989214+00:00'
-      result: error
-      events_found: 0
-      error: not enough values to unpack (expected 3, got 0)
-    - date: '2026-03-12T23:55:54.292924+00:00'
-      result: error
-      events_found: 0
-      error: not enough values to unpack (expected 3, got 0)
     - date: '2026-03-12T23:56:32.091863+00:00'
       result: error
       events_found: 0
@@ -44,6 +24,26 @@ tickers:
       result: error
       events_found: 0
       error: not enough values to unpack (expected 3, got 0)
+    - date: '2026-03-13T00:48:40.069181+00:00'
+      result: error
+      events_found: 0
+      error: not enough values to unpack (expected 3, got 0)
+    - date: '2026-03-13T00:50:11.028879+00:00'
+      result: error
+      events_found: 0
+      error: not enough values to unpack (expected 3, got 0)
+    - date: '2026-03-13T01:06:00.067863+00:00'
+      result: error
+      events_found: 0
+      error: not enough values to unpack (expected 3, got 0)
+    - date: '2026-03-13T01:11:02.180149+00:00'
+      result: error
+      events_found: 0
+      error: not enough values to unpack (expected 3, got 0)
+    - date: '2026-03-13T01:20:04.266365+00:00'
+      result: error
+      events_found: 0
+      error: not enough values to unpack (expected 3, got 0)
     last_download_date: '2026-03-13'
     status: error
     last_error: not enough values to unpack (expected 3, got 0)
@@ -51,5 +51,5 @@ config:
   update_frequency_days: 7
   parallel_workers: 10
   source: yfinance
-last_updated: '2026-03-13T00:46:43.060377+00:00'
+last_updated: '2026-03-13T01:20:04.266323+00:00'
 total_tickers: 1

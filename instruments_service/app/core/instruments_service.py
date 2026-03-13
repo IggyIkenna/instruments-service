@@ -21,6 +21,7 @@ from uuid import uuid4
 import pandas as pd
 from unified_config_interface import VenueMapping
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
+from unified_trading_library import determine_market_category  # noqa: domain-ucs — not yet in UDC
 
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
@@ -247,7 +248,7 @@ class InstrumentsService(
 
             # Process SPORTS fixtures
             if sports:
-                from instruments_service.engine.operations.instruments.orchestration.sports_orchestration import (
+                from instruments_service.engine.operations.instruments.orchestration.sports_orchestration import (  # noqa: lazy-load — avoids eager load of ~4MB sports registry data
                     SportsOrchestrator,
                 )
 
@@ -286,7 +287,6 @@ class InstrumentsService(
 
             # Ensure market_category populated for live mode
             if skip_storage and not instruments_df.empty:
-                from unified_trading_library import determine_market_category  # noqa: domain-ucs — not yet in UDC
 
                 def _row_to_market_category(row: pd.Series) -> str:  # pyright: ignore[reportMissingTypeArgument]
                     raw: dict[str, object] = cast(dict[str, object], row.to_dict())
