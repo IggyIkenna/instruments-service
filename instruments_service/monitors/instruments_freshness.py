@@ -11,9 +11,7 @@ it lives in FEATURE_FRESHNESS under the service name. A sensible default
 contract (hourly cadence, 2-hour max age) is used when no entry is found so
 the service can start without contract-registry changes.
 
-Typical usage in InstrumentRefreshScheduler::
-
-    from instruments_service.monitors import InstrumentsFreshnessChecker
+Typical usage in InstrumentRefreshScheduler:
 
     checker = InstrumentsFreshnessChecker()
     # ... refresh cycle ...

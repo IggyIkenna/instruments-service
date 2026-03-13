@@ -23,9 +23,12 @@ import logging
 from collections import defaultdict
 from typing import cast
 
+import pandas as pd
 from pydantic import BaseModel, ConfigDict
 from unified_api_contracts import TeamMapping
+from unified_cloud_interface import download_from_storage
 
+from instruments_service.sports.team_mapping_data import BUNDESLIGA_TEAM_MAPPINGS, EPL_TEAM_MAPPINGS
 from instruments_service.sports.team_normalizer import normalize_for_fuzzy as _normalize_for_fuzzy
 
 logger = logging.getLogger(__name__)
@@ -229,9 +232,6 @@ def load_team_mappings_from_gcs(
     list[TeamMapping]
         Validated TeamMapping instances loaded from the Parquet file.
     """
-    import pandas as pd
-    from unified_cloud_interface import download_from_storage
-
     raw_bytes = download_from_storage(bucket, path)
     df = pd.read_parquet(io.BytesIO(raw_bytes))
 
@@ -278,10 +278,6 @@ def load_default_mappings() -> TeamAliasResolver:
     TeamAliasResolver
         A resolver containing all EPL, Bundesliga, and historical team mappings.
     """
-    from instruments_service.sports.team_mapping_data import (
-        BUNDESLIGA_TEAM_MAPPINGS,
-        EPL_TEAM_MAPPINGS,
-    )
 
     all_data: list[dict[str, str | int | list[str] | frozenset[str] | None]] = []
     all_data.extend(cast(list[dict[str, str | int | list[str] | frozenset[str] | None]], EPL_TEAM_MAPPINGS))
