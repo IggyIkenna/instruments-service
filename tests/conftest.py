@@ -159,6 +159,10 @@ def get_config(key: str, default: str | None = None) -> str | None:
 @pytest.fixture(scope="session")
 def gcp_auth_info():
     """Resolve GCP credentials using SA key file or ADC."""
+    # In mock/CI mode, skip ADC network call entirely — google.auth.default()
+    # tries the GCP metadata service (169.254.169.254) which is blocked by --disable-socket.
+    if os.getenv("CLOUD_MOCK_MODE", "").lower() in ("true", "1") or os.getenv("CLOUD_PROVIDER", "").lower() == "local":
+        return None, os.getenv("GCP_PROJECT_ID", "test-project"), None
     creds_file = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
     if creds_file and Path(creds_file).exists():
         credentials = service_account.Credentials.from_service_account_file(creds_file)
