@@ -87,8 +87,8 @@ jobs:
           }
           # Always clone PM — base-service.sh lives here
           clone_repo unified-trading-pm
-          # Clone dep repos (declared in quality-gates.sh LOCAL_DEPS or needed for typecheck)
-          for repo in unified-api-contracts unified-trading-library unified-config-interface unified-events-interface unified-domain-client unified-market-interface unified-cloud-interface unified-reference-data-interface unified-internal-contracts; do
+          # Clone all editable path deps from uv.lock (required for uv sync to resolve)
+          for repo in unified-api-contracts unified-trading-library unified-config-interface unified-events-interface unified-domain-client unified-market-interface unified-cloud-interface unified-reference-data-interface unified-internal-contracts unified-ml-interface; do
             clone_repo "$repo"
           done
 
