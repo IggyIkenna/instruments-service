@@ -329,6 +329,11 @@ def main() -> dict[str, HandlerResultValue]:
         logging.getLogger().setLevel(log_level_int)
 
         logger.info("🚀 Starting %s operation", args.mode)
+        logger.info(
+            "☁️ Environment: cloud_provider=%s mock_mode=%s",
+            instruments_config.cloud_provider,
+            instruments_config.cloud_mock_mode,
+        )
         if args.start_date:
             logger.info("📅 Date range: %s to %s", args.start_date, args.end_date or args.start_date)
 
@@ -440,6 +445,9 @@ def main() -> dict[str, HandlerResultValue]:
 
         # Execute handler
         result = handler.run(**handler_kwargs)
+        # Inject cloud mode indicator into result for observability
+        result["cloud_provider"] = instruments_config.cloud_provider
+        result["mock_mode"] = instruments_config.cloud_mock_mode
         log_event("PROCESSING_COMPLETED", details={"mode": args.mode})
 
         # Cleanup
