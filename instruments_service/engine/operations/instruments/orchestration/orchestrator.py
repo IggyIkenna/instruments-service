@@ -19,6 +19,7 @@ from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContex
 from unified_market_interface import VenueMapping
 
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
+from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
 from instruments_service.config import (
     instruments_config,
 )
@@ -80,9 +81,6 @@ class InstrumentsOrchestrator:
                 - enable_metadata_caching: Enable metadata caching (default: True)
         """
         self.config = config
-
-        # Initialize processing service - lazy import to avoid circular dependency
-        from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
 
         processing_config: dict[str, object] = {
             "project_id": str(cast(str | None, config.get("project_id")) or instruments_config.gcp_project_id),

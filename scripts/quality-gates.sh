@@ -15,35 +15,28 @@ PYTEST_WORKERS=${PYTEST_WORKERS:-2}
 LOCAL_DEPS=()
 # defi_processor.py uses asyncio.run() as top-level entrypoint; loops are in separate scope
 ASYNCIO_RUN_EXCLUDE_GLOBS=("!**/engine/processors/defi_processor.py" "!**/cli/handlers/instrument_handler.py" "!**/cli/handlers/live_mode_handler.py")
-# TYPE_CHECKING blocks (correct pattern — QG regex can't distinguish from runtime lazy imports)
-# Orchestrators: circular dep with InstrumentProcessingService — requires DI refactor (tech debt)
+# TYPE_CHECKING blocks (correct pattern — QG regex matches indented imports including if TYPE_CHECKING blocks)
 # venue_adapter_loader: intentional plugin lazy loading — correct pattern for adapter systems
-# sports/team_aliases: optional pandas/cloud dep — intentional lazy optional loading
-# instruments_service.py, monitors/freshness: internal circular init — requires DI refactor
+# instrument_utils.py: determine_market_category deferred (noqa: domain-ucs — not yet in UDC)
 IMPORT_INSIDE_EXCLUDE_GLOBS=(
     "!**/__init__.py"
-    "!**/monitors/instruments_freshness.py"
     "!**/engine/venues/venue_adapter_loader.py"
     "!**/engine/processors/symbol_parser.py"
     "!**/engine/processors/derived_fields_populator.py"
     "!**/engine/processors/canonical_key_generator.py"
     "!**/engine/venues/ccxt_service.py"
-    "!**/engine/operations/instruments/orchestrator_base.py"
     "!**/engine/operations/instruments/orchestration/cefi_orchestration.py"
     "!**/engine/operations/instruments/orchestration/defi_orchestration.py"
     "!**/engine/operations/instruments/orchestration/instrument_utils.py"
-    "!**/engine/operations/instruments/orchestration/orchestrator.py"
     "!**/engine/operations/instruments/orchestration/tradfi_orchestration.py"
     "!**/engine/operations/instruments/processors/cefi_processor.py"
     "!**/utils/ccxt_service.py"
     "!**/app/core/instrument_crud.py"
     "!**/app/core/instrument_sync.py"
-    "!**/app/core/instruments_service.py"
     "!**/app/core/selective_validation.py"
     "!**/app/core/processors/symbol_parser.py"
     "!**/app/core/processors/canonical_key_generator.py"
     "!**/cli/parser.py"
-    "!**/sports/team_aliases.py"
 )
 # Tests contain inherently large files (coverage boost suites); cli/engine dirs have large data/processor classes
 FUNCTION_SIZE_EXTRA_EXCLUDES=("! -path ./tests/*")
