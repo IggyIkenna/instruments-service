@@ -3,6 +3,7 @@
 Verifies required events are present in service source code.
 """
 
+import os
 import re
 from pathlib import Path
 
@@ -44,9 +45,14 @@ def get_service_name() -> str:
 
 
 def find_python_files(service_dir: Path) -> list[Path]:
-    """Find Python files in service source (exclude tests, venv)."""
     exclude = {"tests", ".venv", "venv", "__pycache__", ".git", "examples"}
-    return [p for p in service_dir.rglob("*.py") if not any(x in p.relative_to(service_dir).parts for x in exclude)]
+    result = []
+    for root, dirs, files in os.walk(service_dir, followlinks=False):
+        dirs[:] = [d for d in dirs if d not in exclude]
+        for f in files:
+            if f.endswith(".py"):
+                result.append(Path(root) / f)
+    return result
 
 
 def find_event_markers(file_path: Path) -> set[str]:

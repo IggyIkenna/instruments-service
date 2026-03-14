@@ -675,3 +675,40 @@ class TestInstrumentDefinitionUtilityMethods:
         assert len(missing) > 0
         assert "base_asset" in missing
         assert "quote_asset" in missing
+
+
+@pytest.mark.unit
+class TestCorporateActionsModelsBoost5:
+    """Additional corporate actions model coverage from boost_5."""
+
+    def test_corporate_action_type_enum_values(self):
+        from instruments_service.corporate_actions.models import CorporateActionType
+
+        assert hasattr(CorporateActionType, "DIVIDEND")
+        assert hasattr(CorporateActionType, "SPLIT")
+
+    def test_dividend_record_creation(self):
+        from instruments_service.corporate_actions.models import DividendRecord
+
+        record = DividendRecord.model_construct()
+        assert record is not None
+
+    def test_stock_split_record_creation(self):
+        from instruments_service.corporate_actions.models import StockSplitRecord
+
+        record = StockSplitRecord.model_construct()
+        assert record is not None
+
+    def test_corporate_actions_bundle_creation(self):
+        from instruments_service.corporate_actions.models import CorporateActionsBundle
+
+        bundle = CorporateActionsBundle.model_construct()
+        assert bundle is not None
+
+    def test_models_import_all_classes(self):
+        import instruments_service.corporate_actions.models as m
+
+        assert hasattr(m, "CorporateActionsBundle")
+        assert hasattr(m, "DividendRecord")
+        assert hasattr(m, "StockSplitRecord")
+        assert hasattr(m, "CorporateActionType")

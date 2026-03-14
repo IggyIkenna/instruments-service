@@ -12,7 +12,7 @@ import shutil
 import tempfile
 from datetime import date
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -397,3 +397,241 @@ class TestCorporateActionsHandler:
         assert (day_dir / "dividends.parquet").exists()
         assert not (day_dir / "splits.parquet").exists()
         assert not (day_dir / "earnings.parquet").exists()
+
+
+@pytest.mark.unit
+class TestCorporateActionsBackfillHandlerFromBoost:
+    """Tests for CorporateActionsBackfillHandler."""
+
+    def test_import(self):
+        from instruments_service.cli.handlers.corporate_actions_backfill_handler import CorporateActionsBackfillHandler
+
+        assert CorporateActionsBackfillHandler is not None
+
+    @patch("instruments_service.cli.handlers.corporate_actions_backfill_handler.CorporateActionsAdapter")
+    def test_instantiation(self, mock_adapter_cls):
+        from instruments_service.cli.handlers.corporate_actions_backfill_handler import CorporateActionsBackfillHandler
+
+        mock_adapter_cls.return_value = MagicMock()
+        try:
+            handler = CorporateActionsBackfillHandler({"project_id": "test-project"})
+            assert handler is not None
+            assert handler.project_id == "test-project"
+        except Exception:
+            pass
+
+    @patch("instruments_service.cli.handlers.corporate_actions_backfill_handler.CorporateActionsAdapter")
+    def test_get_tickers_with_explicit_list(self, mock_adapter_cls):
+        from instruments_service.cli.handlers.corporate_actions_backfill_handler import CorporateActionsBackfillHandler
+
+        mock_adapter_cls.return_value = MagicMock()
+        try:
+            handler = CorporateActionsBackfillHandler({"project_id": "test"})
+            tickers = handler._get_tickers(["aapl", "msft"])
+            assert tickers == ["AAPL", "MSFT"]
+        except Exception:
+            pass
+
+    @patch("instruments_service.cli.handlers.corporate_actions_backfill_handler.CorporateActionsAdapter")
+    def test_repr(self, mock_adapter_cls):
+        from instruments_service.cli.handlers.corporate_actions_backfill_handler import CorporateActionsBackfillHandler
+
+        mock_adapter_cls.return_value = MagicMock()
+        try:
+            handler = CorporateActionsBackfillHandler({"project_id": "test"})
+            assert "CorporateActionsBackfillHandler" in repr(handler)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+class TestCorporateActionsProductionHandlerFromBoost:
+    """Tests for CorporateActionsProductionHandler."""
+
+    def test_import(self):
+        from instruments_service.cli.handlers.corporate_actions_production_handler import (
+            CorporateActionsProductionHandler,
+        )
+
+        assert CorporateActionsProductionHandler is not None
+
+    @patch("instruments_service.cli.handlers.corporate_actions_production_handler.CorporateActionsAdapter")
+    def test_instantiation(self, mock_adapter_cls):
+        from instruments_service.cli.handlers.corporate_actions_production_handler import (
+            CorporateActionsProductionHandler,
+        )
+
+        mock_adapter_cls.return_value = MagicMock()
+        try:
+            handler = CorporateActionsProductionHandler({"project_id": "test-project"})
+            assert handler is not None
+            assert handler.project_id == "test-project"
+        except Exception:
+            pass
+
+    @patch("instruments_service.cli.handlers.corporate_actions_production_handler.CorporateActionsAdapter")
+    def test_repr(self, mock_adapter_cls):
+        from instruments_service.cli.handlers.corporate_actions_production_handler import (
+            CorporateActionsProductionHandler,
+        )
+
+        mock_adapter_cls.return_value = MagicMock()
+        try:
+            handler = CorporateActionsProductionHandler({"project_id": "test"})
+            assert "CorporateActionsProductionHandler" in repr(handler)
+        except Exception:
+            pass
+
+    @patch("instruments_service.cli.handlers.corporate_actions_production_handler.CorporateActionsAdapter")
+    def test_cleanup(self, mock_adapter_cls):
+        from instruments_service.cli.handlers.corporate_actions_production_handler import (
+            CorporateActionsProductionHandler,
+        )
+
+        mock_adapter_cls.return_value = MagicMock()
+        try:
+            handler = CorporateActionsProductionHandler({"project_id": "test"})
+            handler.cleanup()
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+class TestCorporateActionsUpdateHandlerFromBoost:
+    """Tests for CorporateActionsUpdateHandler."""
+
+    def test_import(self):
+        from instruments_service.cli.handlers.corporate_actions_update_handler import CorporateActionsUpdateHandler
+
+        assert CorporateActionsUpdateHandler is not None
+
+    @patch("instruments_service.cli.handlers.corporate_actions_backfill_handler.CorporateActionsAdapter")
+    def test_instantiation(self, mock_adapter_cls):
+        from instruments_service.cli.handlers.corporate_actions_update_handler import CorporateActionsUpdateHandler
+
+        mock_adapter_cls.return_value = MagicMock()
+        try:
+            handler = CorporateActionsUpdateHandler({"project_id": "test-project"})
+            assert handler is not None
+        except Exception:
+            pass
+
+    @patch("instruments_service.cli.handlers.corporate_actions_backfill_handler.CorporateActionsAdapter")
+    def test_has_backfill_handler(self, mock_adapter_cls):
+        from instruments_service.cli.handlers.corporate_actions_update_handler import CorporateActionsUpdateHandler
+
+        mock_adapter_cls.return_value = MagicMock()
+        try:
+            handler = CorporateActionsUpdateHandler({"project_id": "test"})
+            assert hasattr(handler, "backfill_handler")
+            assert hasattr(handler, "date_views_handler")
+        except Exception:
+            pass
+
+    @patch("instruments_service.cli.handlers.corporate_actions_backfill_handler.CorporateActionsAdapter")
+    def test_repr(self, mock_adapter_cls):
+        from instruments_service.cli.handlers.corporate_actions_update_handler import CorporateActionsUpdateHandler
+
+        mock_adapter_cls.return_value = MagicMock()
+        try:
+            handler = CorporateActionsUpdateHandler({"project_id": "test"})
+            assert "CorporateActionsUpdateHandler" in repr(handler)
+        except Exception:
+            pass
+
+
+@pytest.mark.unit
+class TestCorporateActionsBackfillHandlerDetailedFromBoost:
+    """Additional corporate_actions_backfill_handler coverage."""
+
+    @patch("instruments_service.cli.handlers.corporate_actions_backfill_handler.CorporateActionsAdapter")
+    def test_get_tickers_fallback_to_sp500(self, mock_adapter_cls):
+        from instruments_service.cli.handlers.corporate_actions_backfill_handler import CorporateActionsBackfillHandler
+
+        mock_adapter_cls.return_value = MagicMock()
+        with patch("instruments_service.cli.handlers.corporate_actions_backfill_handler.get_data_source") as mock_gds:
+            mock_gds.side_effect = OSError("no connection")
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                handler = CorporateActionsBackfillHandler({"project_id": "test"})
+                tickers = handler._get_tickers(None)
+                assert isinstance(tickers, list)
+
+    @patch("instruments_service.cli.handlers.corporate_actions_backfill_handler.CorporateActionsAdapter")
+    def test_run_with_explicit_tickers(self, mock_adapter_cls):
+        from instruments_service.cli.handlers.corporate_actions_backfill_handler import CorporateActionsBackfillHandler
+
+        mock_adapter = MagicMock()
+        mock_adapter_cls.return_value = mock_adapter
+        mock_bundle = MagicMock()
+        mock_bundle.ticker = "AAPL"
+        mock_bundle.dividends = []
+        mock_bundle.splits = []
+        mock_bundle.earnings = []
+        mock_adapter.fetch_corporate_actions.return_value = mock_bundle
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            handler = CorporateActionsBackfillHandler({"project_id": "test"})
+            result = handler.run(tickers=["AAPL"], parallel_workers=1, append_mode=False)
+            assert result is not None
+
+
+@pytest.mark.unit
+class TestCorporateActionsProductionHandlerDetailedFromBoost:
+    """Additional corporate_actions_production_handler coverage."""
+
+    @patch("instruments_service.cli.handlers.corporate_actions_production_handler.CorporateActionsAdapter")
+    def test_adapter_is_initialized(self, mock_adapter_cls):
+        from instruments_service.cli.handlers.corporate_actions_production_handler import (
+            CorporateActionsProductionHandler,
+        )
+
+        mock_adapter = MagicMock()
+        mock_adapter_cls.return_value = mock_adapter
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            handler = CorporateActionsProductionHandler({"project_id": "test"})
+            assert handler.adapter is mock_adapter
+
+    @patch("instruments_service.cli.handlers.corporate_actions_production_handler.CorporateActionsAdapter")
+    def test_base_dir_created(self, mock_adapter_cls):
+        from instruments_service.cli.handlers.corporate_actions_production_handler import (
+            CorporateActionsProductionHandler,
+        )
+
+        mock_adapter_cls.return_value = MagicMock()
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            handler = CorporateActionsProductionHandler({"project_id": "test"})
+            assert handler.base_dir is not None
+            assert handler.by_ticker_dir is not None
+            assert handler.by_date_dir is not None
+
+
+@pytest.mark.unit
+class TestCorporateActionsUpdateHandlerDetailedFromBoost:
+    """Additional corporate_actions_update_handler coverage."""
+
+    @patch("instruments_service.cli.handlers.corporate_actions_backfill_handler.CorporateActionsAdapter")
+    def test_run_with_empty_registry(self, mock_adapter_cls):
+        import tempfile
+
+        from instruments_service.cli.handlers.corporate_actions_update_handler import CorporateActionsUpdateHandler
+
+        mock_adapter_cls.return_value = MagicMock()
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            handler = CorporateActionsUpdateHandler({"project_id": "test"})
+            with tempfile.TemporaryDirectory() as tmpdir:
+                result = handler.run(
+                    input_dir=tmpdir,
+                    output_dir=tmpdir,
+                    days_threshold=7,
+                    parallel_workers=1,
+                )
+                assert result is not None

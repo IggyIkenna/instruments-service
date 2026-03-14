@@ -257,3 +257,13 @@ class TestUnhandledType:
         info: SymbolInfo = {"base_asset": "BTC", "quote_asset": "USDT"}
         result = generate_canonical_key(svc, "binance", "index", "BTCINDEX", info)
         assert result is None
+
+
+@pytest.mark.unit
+class TestCanonicalKeyGeneratorFromBoost:
+    """Import coverage for canonical_key_generator."""
+
+    def test_import(self):
+        from instruments_service.app.core.processors.canonical_key_generator import generate_canonical_key
+
+        assert generate_canonical_key is not None
