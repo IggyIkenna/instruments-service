@@ -21,7 +21,7 @@ from uuid import uuid4
 
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 from unified_market_interface import TardisAdapter
-from unified_trading_library import (  # noqa: domain-ucs — determine_market_category not yet re-exported from unified_domain_client
+from unified_trading_library import (
     determine_market_category,
     get_secret_client,
 )

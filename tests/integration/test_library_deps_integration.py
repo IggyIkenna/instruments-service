@@ -32,7 +32,7 @@ def test_unified_events_interface_import() -> None:
 
 @pytest.mark.integration
 def test_unified_domain_client_import() -> None:
-    from unified_domain_client import build_path, get_writer
+    from unified_trading_library.domain_client import build_path, get_writer
     assert callable(build_path)
     assert callable(get_writer)
 
