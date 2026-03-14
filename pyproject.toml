@@ -42,7 +42,6 @@ dependencies = [
     "unified-trading-library>=0.1.0,<1.0.0",
     "unified-config-interface>=0.1.0,<1.0.0",
     "unified-events-interface>=0.1.0,<1.0.0",
-    "unified-domain-client>=0.1.0,<1.0.0",
     "unified-market-interface>=0.1.0,<1.0.0",
     "unified-reference-data-interface>=0.1.0,<1.0.0",
     "ib_insync>=0.9.86,<1.0.0",
@@ -77,7 +76,6 @@ Repository = "https://github.com/iggyikenna/instruments-service"
 
 [tool.uv.sources.unified-api-contracts]
 path = "../unified-api-contracts"
-editable = true
 
 [tool.uv.sources.unified-internal-contracts]
 path = "../unified-internal-contracts"
@@ -93,10 +91,6 @@ editable = true
 
 [tool.uv.sources.unified-events-interface]
 path = "../unified-events-interface"
-editable = true
-
-[tool.uv.sources.unified-domain-client]
-path = "../unified-domain-client"
 editable = true
 
 [tool.uv.sources.unified-market-interface]
