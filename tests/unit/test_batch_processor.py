@@ -4,6 +4,8 @@ Unit tests for InstrumentBatchProcessor.
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
 
 
@@ -95,3 +97,13 @@ class TestInstrumentBatchProcessor:
         assert len(batches) == 3  # 250 / 100 = 3 batches
         assert len(batches[0]) == 100
         assert len(batches[2]) == 50  # Last batch has remainder
+
+
+@pytest.mark.unit
+class TestInstrumentBatchProcessorFromBoost:
+    """Import coverage for batch_processor."""
+
+    def test_import(self):
+        from instruments_service.app.core.batch_processor import InstrumentBatchProcessor
+
+        assert InstrumentBatchProcessor is not None

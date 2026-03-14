@@ -514,3 +514,96 @@ class TestLeagueRegistryReExports:
         assert LeagueClassificationRegistry is not None
         assert LeagueClassificationType is not None
         assert DEFAULT_CLASSIFICATION_REGISTRY is not None
+
+
+# From test_coverage_boost_4
+
+
+class TestLeagueLookup:
+    """Tests for league lookup functions."""
+
+    def test_import(self) -> None:
+        import instruments_service.sports.league_lookup as m
+
+        assert m is not None
+
+    def test_get_league_known(self) -> None:
+        from instruments_service.sports.league_lookup import get_league
+
+        league = get_league("EPL")
+        assert league is not None
+        assert league.league_id == "EPL"
+
+    def test_get_league_case_insensitive(self) -> None:
+        from instruments_service.sports.league_lookup import get_league
+
+        league = get_league("epl")
+        assert league is not None
+
+    def test_get_league_unknown(self) -> None:
+        from instruments_service.sports.league_lookup import get_league
+
+        league = get_league("XXXXUNKNOWN")
+        assert league is None
+
+    def test_get_league_by_api_football_id(self) -> None:
+        from instruments_service.sports.league_lookup import (
+            LEAGUE_REGISTRY,
+            get_league_by_api_football_id,
+        )
+
+        # Find a league with an api_football_id
+        leagues_with_id = [lg for lg in LEAGUE_REGISTRY.values() if lg.api_football_id is not None]
+        if leagues_with_id:
+            test_league = leagues_with_id[0]
+            result = get_league_by_api_football_id(test_league.api_football_id)
+            assert result is not None
+            assert result.league_id == test_league.league_id
+
+    def test_get_league_by_api_football_id_unknown(self) -> None:
+        from instruments_service.sports.league_lookup import get_league_by_api_football_id
+
+        result = get_league_by_api_football_id(999999)
+        assert result is None
+
+    def test_get_leagues_for_sport(self) -> None:
+        from instruments_service.sports.league_lookup import get_leagues_for_sport
+
+        football_leagues = get_leagues_for_sport("FOOTBALL")
+        assert isinstance(football_leagues, list)
+        assert len(football_leagues) > 0
+
+    def test_get_leagues_for_sport_case_insensitive(self) -> None:
+        from instruments_service.sports.league_lookup import get_leagues_for_sport
+
+        result = get_leagues_for_sport("football")
+        assert isinstance(result, list)
+
+    def test_get_leagues_for_sport_unknown(self) -> None:
+        from instruments_service.sports.league_lookup import get_leagues_for_sport
+
+        result = get_leagues_for_sport("FRISBEE")
+        assert result == []
+
+    def test_get_leagues_by_classification(self) -> None:
+        from instruments_service.sports.league_lookup import get_leagues_by_classification
+
+        prediction = get_leagues_by_classification("Prediction")
+        assert isinstance(prediction, list)
+
+    def test_get_leagues_by_country(self) -> None:
+        from instruments_service.sports.league_lookup import get_leagues_by_country
+
+        uk_leagues = get_leagues_by_country("GB")
+        assert isinstance(uk_leagues, list)
+
+    def test_get_prediction_leagues(self) -> None:
+        from instruments_service.sports.league_lookup import get_prediction_leagues
+
+        result = get_prediction_leagues()
+        assert isinstance(result, list)
+
+    def test_league_registry_not_empty(self) -> None:
+        from instruments_service.sports.league_lookup import LEAGUE_REGISTRY
+
+        assert len(LEAGUE_REGISTRY) > 0

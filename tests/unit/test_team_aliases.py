@@ -434,3 +434,48 @@ class TestResolverIntegration:
         assert mapping is not None
         assert mapping.display_name == "Arsenal"
         assert mapping.odds_api_key == "arsenal"
+
+
+@pytest.mark.unit
+class TestTeamAliasesGCSPathFromBoost:
+    """Tests for team_aliases load_team_mappings_from_gcs."""
+
+    def test_load_default_mappings_returns_resolver(self):
+        from instruments_service.sports.team_aliases import TeamAliasResolver, load_default_mappings
+
+        resolver = load_default_mappings()
+        assert isinstance(resolver, TeamAliasResolver)
+
+    def test_team_alias_resolver_find_by_name_unknown_returns_none(self):
+        from instruments_service.sports.team_aliases import TeamAliasResolver
+
+        resolver = TeamAliasResolver(mappings=[])
+        result = resolver.find_by_name("Totally Unknown Team XYZ")
+        assert result is None
+
+    def test_team_alias_resolver_resolve_team_unknown_provider(self):
+        from instruments_service.sports.team_aliases import TeamAliasResolver
+
+        resolver = TeamAliasResolver(mappings=[])
+        result = resolver.resolve_team("api_football", "99999")
+        assert result is None
+
+    def test_team_alias_resolver_get_mapping_unknown(self):
+        from instruments_service.sports.team_aliases import TeamAliasResolver
+
+        resolver = TeamAliasResolver(mappings=[])
+        result = resolver.get_mapping("nonexistent-id")
+        assert result is None
+
+    def test_team_alias_resolver_get_aliases_unknown(self):
+        from instruments_service.sports.team_aliases import TeamAliasResolver
+
+        resolver = TeamAliasResolver(mappings=[])
+        result = resolver.get_aliases("nonexistent-id")
+        assert result == frozenset()
+
+    def test_team_alias_resolver_mapping_count_empty(self):
+        from instruments_service.sports.team_aliases import TeamAliasResolver
+
+        resolver = TeamAliasResolver(mappings=[])
+        assert resolver.mapping_count == 0

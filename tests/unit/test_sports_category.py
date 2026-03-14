@@ -861,3 +861,188 @@ class TestSportsPackageImports:
 
         normalizer = TeamNormalizer()
         assert normalizer is not None
+
+
+# From test_coverage_boost_4
+
+
+class TestTeamNormalizerFunctions:
+    """Tests for module-level functions in team_normalizer."""
+
+    def test_strip_accents(self) -> None:
+        from instruments_service.sports.team_normalizer import _strip_accents
+
+        assert _strip_accents("Alavés") == "alaves"
+        assert _strip_accents("München") == "munchen"
+        assert _strip_accents("Arsenal") == "arsenal"
+
+    def test_normalize_for_fuzzy(self) -> None:
+        from instruments_service.sports.team_normalizer import normalize_for_fuzzy
+
+        result = normalize_for_fuzzy("  Bayern München  ")
+        assert "munchen" in result
+        assert result == result.strip()
+
+    def test_extract_core_name_removes_suffix(self) -> None:
+        from instruments_service.sports.team_normalizer import _extract_core_name
+
+        assert _extract_core_name("Arsenal FC") == "arsenal"
+        assert _extract_core_name("Manchester United") == "manchester"
+        assert _extract_core_name("AC Milan") == "milan"
+
+
+class TestTeamNormalizerClass:
+    """Tests for the TeamNormalizer class."""
+
+    def test_instantiation(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        assert tn is not None
+
+    def test_normalize_exact_match(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        result = tn.normalize("Arsenal")
+        assert result is not None
+        assert result[0] == "ARS"
+        assert result[1] == "Arsenal"
+
+    def test_normalize_case_insensitive(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        result = tn.normalize("ARSENAL")
+        assert result is not None
+        assert result[0] == "ARS"
+
+    def test_normalize_accent_stripped(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        # Alavés -> alaves which should match "alaves"
+        result = tn.normalize("Alavés")
+        assert result is not None
+        assert result[0] == "ALA"
+
+    def test_normalize_with_accents_in_data(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        result = tn.normalize("Bayern München")
+        assert result is not None
+        assert result[0] == "BAY"
+
+    def test_normalize_unknown_returns_none(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        result = tn.normalize("Totally Unknown Club XYZ")
+        assert result is None
+
+    def test_normalize_empty_string_returns_none(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        result = tn.normalize("   ")
+        assert result is None
+
+    def test_normalize_whitespace_stripped(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        result = tn.normalize("  liverpool  ")
+        assert result is not None
+        assert result[0] == "LIV"
+
+    def test_normalize_chelsea_alias(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        result = tn.normalize("Chelsea FC")
+        assert result is not None
+        assert result[0] == "CHE"
+
+    def test_normalize_full_name(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        result = tn.normalize("Manchester City")
+        assert result is not None
+        assert result[0] == "MCI"
+
+    def test_normalize_abbreviation(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        result = tn.normalize("PSG")
+        assert result is not None
+        assert result[0] == "PSG"
+
+    def test_register_alias(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        tn.register_alias("Test FC", "TST", "Test Club")
+        result = tn.normalize("Test FC")
+        assert result is not None
+        assert result[0] == "TST"
+        assert result[1] == "Test Club"
+
+    def test_register_alias_overwrite(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        tn.register_alias("Arsenal", "ARS2", "Arsenal v2")
+        result = tn.normalize("Arsenal")
+        assert result is not None
+        assert result[0] == "ARS2"
+
+    def test_known_team_count(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        count = tn.known_team_count
+        assert count > 50  # We have many teams
+
+    def test_normalize_historical_name(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        # "vfl bochum" is in historical name changes
+        result = tn.normalize("vfl bochum")
+        assert result is not None
+
+    def test_normalize_core_name_match(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        # "liverpool fc" should match core "liverpool"
+        result = tn.normalize("Liverpool FC")
+        assert result is not None
+        assert result[0] == "LIV"
+
+    def test_normalize_juventus(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        result = tn.normalize("Juventus")
+        assert result is not None
+        assert result[0] == "JUV"
+
+    def test_normalize_nba_team(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        result = tn.normalize("Lakers")
+        assert result is not None
+        assert result[0] == "LAL"
+
+    def test_normalize_nfl_team(self) -> None:
+        from instruments_service.sports.team_normalizer import TeamNormalizer
+
+        tn = TeamNormalizer()
+        result = tn.normalize("Chiefs")
+        assert result is not None
+        assert result[0] == "KC"

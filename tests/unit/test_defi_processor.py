@@ -1,5 +1,5 @@
 """
-Unit tests for engine/processors/defi_processor.py
+Unit tests for engine/processors/defi_processor.py (merged from test_defi_processor_coverage)
 
 Covers:
 - fetch_defi_instruments with various protocols
@@ -11,6 +11,8 @@ Covers:
 
 from datetime import datetime
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 def _make_service(base_tokens: list[str] | None = None, hyperliquid_bases: list[str] | None = None) -> MagicMock:
@@ -313,3 +315,26 @@ class TestFetchDefiInstrumentsDateFilter:
             fetch_defi_instruments(service, "balancer")
 
         service.date_filter_service.filter_instruments_by_date.assert_not_called()
+
+
+@pytest.mark.unit
+class TestDefiProcessorFromBoost5:
+    """Additional defi_processor edge cases from boost_5."""
+
+    def _make_mock_service(self):
+        service = MagicMock()
+        service.venue_mapping.get_defi_mvp_tokens.return_value = ["ETH", "BTC", "USDT"]
+        service.venue_mapping.hyperliquid_aster_mvp_base_assets = ["BTC", "ETH"]
+        service.date_filter_service.filter_instruments_by_date.return_value = {}
+        service.ccxt_service.load_markets.return_value = None
+        service.ccxt_service.get_metadata.return_value = {}
+        service.ccxt_service.generate_default_ccxt_symbol.return_value = "BTC/USDT"
+        service.get_manual_ccxt_fallback.return_value = {}
+        return service
+
+    def test_unknown_protocol_returns_empty(self):
+        from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
+
+        service = self._make_mock_service()
+        result = fetch_defi_instruments(service, protocol="unknown_protocol_xyz")
+        assert result == {}

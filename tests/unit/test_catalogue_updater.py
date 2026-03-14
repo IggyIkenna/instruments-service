@@ -8,6 +8,7 @@ _patch_nested_entry, and update_catalogue_entry with mocked filesystem.
 from datetime import UTC, datetime
 from unittest.mock import patch
 
+import pytest
 import yaml
 
 from instruments_service.catalogue_updater import (
@@ -196,3 +197,23 @@ class TestUpdateCatalogueEntry:
             mock_resolve.return_value = catalogue_path
             result = update_catalogue_entry("instruments_cefi_binance", 500, last_updated=dt)
         assert result is True
+
+
+@pytest.mark.unit
+class TestDerivedFieldsPopulatorFromBoost:
+    """Import coverage for derived_fields_populator."""
+
+    def test_import(self):
+        import instruments_service.app.core.processors.derived_fields_populator as dfp
+
+        assert dfp is not None
+
+
+@pytest.mark.unit
+class TestCatalogueUpdaterFromBoost:
+    """Import coverage for cloud_instrument_storage."""
+
+    def test_import(self):
+        import instruments_service.app.core.cloud_instrument_storage as cu
+
+        assert cu is not None

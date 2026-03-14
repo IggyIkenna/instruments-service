@@ -127,3 +127,13 @@ def test_secret_fetch_failure_raises_error(mock_get_secret_client):
 
     with pytest.raises(ValueError, match="API key validation failed"):
         validate_required_api_keys(["BINANCE-FUTURES"])
+
+
+@pytest.mark.unit
+class TestSelectiveValidationFromBoost:
+    """Import coverage for selective_validation."""
+
+    def test_import(self):
+        import instruments_service.app.core.selective_validation as sv
+
+        assert sv is not None

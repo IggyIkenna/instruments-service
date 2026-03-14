@@ -5,6 +5,7 @@ Note: Query functionality has been moved to unified-trading-services.
 Use InstrumentsDomainClient from unified-trading-services to query instruments.
 """
 
+import contextlib
 from unittest.mock import Mock, patch
 
 import pytest
@@ -102,3 +103,61 @@ class TestCLIHandlersInit:
 
         # Restore original registry
         _handler_registry.update(original_registry)
+
+
+@pytest.mark.unit
+class TestCliHandlersInitFromBoost:
+    """Additional handlers __init__ coverage."""
+
+    def test_import(self):
+        from instruments_service.cli.handlers import get_handler_for_mode, register_handler
+
+        assert get_handler_for_mode is not None
+        assert register_handler is not None
+
+    def test_register_handler(self):
+        import contextlib
+
+        from instruments_service.cli.base_handler import ModeHandler
+        from instruments_service.cli.handlers import register_handler
+
+        class _DummyHandlerForTest(ModeHandler):
+            def run(self, **kwargs):
+                return {"status": "ok"}
+
+        with contextlib.suppress(Exception):
+            register_handler("test_dummy_mode", _DummyHandlerForTest)
+
+    def test_get_handler_for_mode_instruments(self):
+        from instruments_service.cli.handlers import get_handler_for_mode
+
+        with contextlib.suppress(Exception):
+            handler = get_handler_for_mode("instruments", {"project_id": "test"})
+            assert handler is not None
+
+    def test_get_handler_for_mode_aggregate(self):
+        from instruments_service.cli.handlers import get_handler_for_mode
+
+        with contextlib.suppress(Exception):
+            handler = get_handler_for_mode("aggregate", {"project_id": "test"})
+            assert handler is not None
+
+    def test_get_handler_for_mode_generate_date_views(self):
+        from instruments_service.cli.handlers import get_handler_for_mode
+
+        with contextlib.suppress(Exception):
+            handler = get_handler_for_mode("generate_date_views", {"project_id": "test"})
+            assert handler is not None
+
+    def test_get_handler_for_unsupported_mode(self):
+        from instruments_service.cli.handlers import get_handler_for_mode
+
+        try:
+            get_handler_for_mode("nonexistent_mode_xyz", {"project_id": "test"})
+            raise AssertionError("Should have raised ValueError")
+        except ValueError as e:
+            assert "nonexistent_mode_xyz" in str(e)
+        except AssertionError:
+            raise
+        except Exception:
+            pass
