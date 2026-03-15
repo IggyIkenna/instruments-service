@@ -11,12 +11,10 @@ import logging
 
 from unified_api_contracts import (
     HttpRateLimitHeaders,
+    InstrumentType,
     VenueRateLimitSpec,
 )
-
-# UAC contract type references — canonical types for cross-service contract alignment
-# G6 rate limits STRONG
-from unified_config_interface import InstrumentType, Venue
+from unified_config_interface import Venue
 from unified_internal_contracts import InstrumentDefinition, InstrumentKey
 
 logger = logging.getLogger(__name__)
