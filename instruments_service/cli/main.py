@@ -292,7 +292,7 @@ def main() -> dict[str, HandlerResultValue]:
     except ValueError:
         raise SystemExit(
             f"Invalid LOG_LEVEL={_raw_log_level!r}. Must be one of: {', '.join(v.value for v in LogLevel)}"
-        )
+        ) from None
     logging.basicConfig(level=getattr(logging, _log_level.value))
 
     global _shutdown_handler
