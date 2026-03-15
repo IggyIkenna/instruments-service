@@ -76,6 +76,7 @@ Repository = "https://github.com/iggyikenna/instruments-service"
 
 [tool.uv.sources.unified-api-contracts]
 path = "../unified-api-contracts"
+editable = true
 
 [tool.uv.sources.unified-internal-contracts]
 path = "../unified-internal-contracts"

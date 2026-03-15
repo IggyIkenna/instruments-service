@@ -19,7 +19,6 @@ from pathlib import Path
 from typing import cast
 
 from dotenv import load_dotenv
-from unified_api_contracts import LogLevel
 
 # CRITICAL: Load .env before library imports so env vars are available at import time
 _env_path = Path(".env")
@@ -34,6 +33,7 @@ from unified_trading_library import (
     BaseModeHandler,
     GCSEventSink,
     GracefulShutdownHandler,
+    LogLevel,
     ServiceCLI,
     setup_service_observability,
 )
