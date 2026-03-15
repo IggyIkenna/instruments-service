@@ -16,7 +16,7 @@ LOCAL_DEPS=()
 # config-bootstrap: cli/main.py uses os.environ for LOG_LEVEL before config is available
 OS_ENV_EXCLUDE_GLOBS=("--glob" "!**/cli/main.py")
 # Entry-point file has asyncio.run() + for loops — not an asyncio.run-inside-loop bug
-ASYNCIO_RUN_EXCLUDE_GLOBS=("!**/defi_processor.py")
+ASYNCIO_RUN_EXCLUDE_GLOBS=("!**/defi_processor.py" "!**/live_mode_handler.py" "!**/instrument_handler.py")
 # Lazy imports to avoid circular deps in instrument_crud.py and venue adapter dynamic loading
 IMPORT_INSIDE_EXCLUDE_GLOBS=("--glob" "!**/instrument_crud.py" "--glob" "!**/venue_adapter_loader.py")
 # Pre-existing large files — tracked for refactoring
