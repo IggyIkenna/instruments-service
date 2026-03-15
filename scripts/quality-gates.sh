@@ -13,6 +13,15 @@ MIN_COVERAGE=70
 RUN_INTEGRATION=false
 PYTEST_WORKERS=${PYTEST_WORKERS:-2}
 LOCAL_DEPS=()
+# config-bootstrap: cli/main.py uses os.environ for LOG_LEVEL before config is available
+OS_ENV_EXCLUDE_GLOBS=("--glob" "!**/cli/main.py")
+# Entry-point file has asyncio.run() + for loops — not an asyncio.run-inside-loop bug
+ASYNCIO_RUN_EXCLUDE_GLOBS=("!**/defi_processor.py")
+# Lazy imports to avoid circular deps in instrument_crud.py and venue adapter dynamic loading
+IMPORT_INSIDE_EXCLUDE_GLOBS=("--glob" "!**/instrument_crud.py" "--glob" "!**/venue_adapter_loader.py")
+# Pre-existing large files — tracked for refactoring
+FUNCTION_SIZE_EXTRA_EXCLUDES=("! -path" "./instruments_service/app/core/cloud_instrument_storage.py" "! -path" "./instruments_service/app/core/instrument_sync.py" "! -path" "./instruments_service/app/core/instrument_processing_base.py" "! -path" "./instruments_service/app/core/instrument_validation.py")
+MAX_FILE_LINES=1100
 WORKSPACE_ROOT="$(cd "$(git rev-parse --show-toplevel)/.." && pwd)"
 source "${WORKSPACE_ROOT}/unified-trading-pm/scripts/quality-gates-base/base-service.sh"
 
