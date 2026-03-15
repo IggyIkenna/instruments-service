@@ -3229,6 +3229,7 @@ dependencies = [
     { name = "python-dateutil" },
     { name = "pyyaml" },
     { name = "ruff" },
+    { name = "unified-api-contracts" },
     { name = "unified-cloud-interface" },
     { name = "unified-events-interface" },
 ]
@@ -3250,6 +3251,7 @@ requires-dist = [
     { name = "python-dateutil", specifier = ">=2.8.2,<3.0.0" },
     { name = "pyyaml", specifier = ">=6.0.1,<7.0.0" },
     { name = "ruff", specifier = "==0.15.0" },
+    { name = "unified-api-contracts", editable = "../unified-api-contracts" },
     { name = "unified-cloud-interface", editable = "../unified-cloud-interface" },
     { name = "unified-events-interface", editable = "../unified-events-interface" },
 ]
