@@ -62,3 +62,10 @@ def test_unified_internal_contracts_import() -> None:
     from unified_internal_contracts import LifecycleEventType
 
     assert LifecycleEventType is not None
+
+
+@pytest.mark.integration
+def test_unified_market_interface_import() -> None:
+    from unified_market_interface import VenueMapping
+
+    assert VenueMapping is not None
