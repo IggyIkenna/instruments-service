@@ -13,7 +13,7 @@ Tests cover:
 from __future__ import annotations
 
 import pytest
-from unified_api_contracts.external.sports.canonical.mappings import TeamMapping
+from unified_api_contracts import TeamMapping
 
 from instruments_service.sports.team_aliases import (
     TeamAliasResolver,
