@@ -77,6 +77,7 @@ These files are **excluded** from the import-inside-functions check:
 | `**/corporate_actions_backfill_handler.py`   | Circular import                                                                     |
 | `**/corporate_actions_production_handler.py` | Circular import                                                                     |
 | `**/corporate_actions_update_handler.py`     | Circular import                                                                     |
+| `**/engine/venues/venue_adapter_loader.py`   | Lazy imports of TardisAdapter, DatabentoAdapter, HyperliquidAdapter to avoid loading heavy venue adapter deps at import time. Only loads the adapter for the requested venue on demand. Excluded via `IMPORT_INSIDE_EXCLUDE_GLOBS` in `scripts/quality-gates.sh`. |
 
 ### 1.5 Deep Import Bypasses (cannot be fixed without modifying upstream library repos)
 
@@ -108,7 +109,7 @@ introducing additional abstractions. Tracked for Phase 3 refactoring.
 - `app/core/processors/canonical_key_generator.py` — `generate_canonical_key()` 217L
 - `app/core/processors/derived_fields_populator.py` — `populate_derived_fields()` 133L
 - `cli/parser.py` — `parse_arguments()` 227L (CLI with many subcommands)
-- `cli/main.py` — `main()` 185L
+- `cli/main.py` — `main()` 117L (refactored: extracted `_build_handler_kwargs()` and `_apply_market_type_filters()`)
 - `cli/handlers/live_mode_handler.py` — cycle/run methods 92–96L
 - `cli/handlers/instrument_handler.py` — `_execute_instrument_generation()` 316L
 - `cli/handlers/corporate_actions_*.py` — 4 handler files, run/fetch methods
