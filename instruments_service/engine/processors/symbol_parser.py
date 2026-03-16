@@ -17,6 +17,114 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Shared suffix/quote lists extracted for reuse across parser methods
+_ALL_QUOTE_SUFFIXES: list[str] = [
+    "USDT",
+    "USDC",
+    "BUSD",
+    "USD",
+    "DAI",
+    "GBP",
+    "TUSD",
+    "EUR",
+    "TRY",
+    "BRL",
+    "JPY",
+    "KRW",
+    "CNY",
+    "HKD",
+    "BRZ",
+    "USDE",
+    "AUD",
+    "RUB",
+    "UAH",
+    "PLN",
+    "RON",
+    "NGN",
+    "ZAR",
+    "IDRT",
+    "VAI",
+    "BIDR",
+    "GEL",
+    "CZK",
+    "MXN",
+    "ARS",
+    "COP",
+    "CLP",
+    "PEN",
+    "VES",
+    "BTC",
+    "ETH",
+    "BNB",
+    "XRP",
+    "TRX",
+    "ADA",
+    "SOL",
+    "LTC",
+    "DOT",
+    "LINK",
+    "UNI",
+    "AVAX",
+    "DOGE",
+    "SHIB",
+    "PEPE",
+    "FLOKI",
+    "WIF",
+    "BONK",
+    "MEME",
+    "BABYDOGE",
+]
+
+_CRYPTO_QUOTE_CURRENCIES: list[str] = [
+    "USDT",
+    "USDC",
+    "BUSD",
+    "BTC",
+    "ETH",
+    "BNB",
+    "USD",
+    "EUR",
+    "BRZ",
+    "USDE",
+    "XRP",
+    "TRX",
+    "ADA",
+    "SOL",
+    "LTC",
+    "DOT",
+    "LINK",
+    "UNI",
+    "AVAX",
+    "ATOM",
+    "DOGE",
+    "SHIB",
+    "PEPE",
+    "FLOKI",
+    "WIF",
+    "BONK",
+    "MEME",
+    "BABYDOGE",
+    "GBP",
+    "AUD",
+    "CAD",
+    "JPY",
+    "KRW",
+    "TRY",
+    "RUB",
+    "PLN",
+    "NGN",
+    "ZAR",
+    "MXN",
+    "ARS",
+    "COP",
+    "CLP",
+    "PEN",
+    "VES",
+    "CZK",
+    "RON",
+    "UAH",
+]
+
 
 class SymbolComponents(
     TypedDict
@@ -43,226 +151,127 @@ class SymbolParser:
     def __init__(self, exchange_config: "ExchangeInstrumentConfig") -> None:
         self.exchange_config = exchange_config
 
+    def _remove_suffix(self, s: str, exchange: str) -> tuple[str, str | None]:
+        """Remove known quote currency suffix from concatenated symbol string."""
+        if exchange in ["binance", "binance-futures"]:
+            if s.startswith("1000") and len(s) > 4:
+                pass
+            elif s and s[0].isdigit():
+                return "", ""
+            if s.upper().startswith("USDT") and len(s) > 4:
+                usdt_suffixes = ["TRY", "ARS", "BRL", "PLN", "UAH", "CZK", "RON", "NGN", "ZAR"]
+                if any(s.upper().endswith(f"USDT{suffix}") for suffix in usdt_suffixes):
+                    return "", ""
+
+        suffixes = sorted(_ALL_QUOTE_SUFFIXES, key=len, reverse=True)
+        for suffix in suffixes:
+            if s.upper().endswith(suffix):
+                base = s[: -len(suffix)]
+                if (
+                    exchange in ["binance", "binance-futures"]
+                    and base
+                    and ((base[0].isdigit() and base[0:3] != "1000") or base.upper() == "USDT")
+                ):
+                    return "", ""
+                return base, suffix
+        return s, None
+
+    def _parse_deribit(self, symbol_id: str, exchange: str) -> SymbolComponents:
+        """Parse Deribit symbol components."""
+        if symbol_id.endswith("-PERPETUAL"):
+            first_part = symbol_id.replace("-PERPETUAL", "")
+            if "_" in first_part:
+                parts = first_part.split("_")
+                return {"base_asset": parts[0], "quote_asset": parts[1]}
+            return {"base_asset": first_part, "quote_asset": "USD"}
+        elif "_" in symbol_id and not any(x in symbol_id for x in ["-", "PERPETUAL"]):
+            parts = symbol_id.split("_")
+            if len(parts) == 2:
+                return {"base_asset": parts[0], "quote_asset": parts[1]}
+        elif "-" in symbol_id:
+            parts = symbol_id.split("-")
+            first_part = parts[0]
+            base_currency, detected_quote = self._remove_suffix(first_part, exchange)
+            base_currency = base_currency.rstrip("_")
+            deribit_valid_quotes = self.exchange_config.valid_quote_currencies.get("DERIBIT", ["USD"])
+            if detected_quote in deribit_valid_quotes and detected_quote in first_part.upper():
+                return {"base_asset": base_currency, "quote_asset": detected_quote}
+            return {"base_asset": first_part, "quote_asset": "USD"}
+        base_currency, detected_quote = self._remove_suffix(symbol_id, exchange)
+        return {"base_asset": base_currency, "quote_asset": detected_quote or ""}
+
+    def _parse_binance_bybit(self, symbol_id: str, exchange: str) -> SymbolComponents:
+        """Parse Binance/Bybit symbol components."""
+        if exchange == "binance-futures" and "_" in symbol_id:
+            base_part = symbol_id.split("_")[0].upper()
+            for quote in ["USDT", "USDC", "BTC", "ETH", "BNB"]:
+                if base_part.endswith(quote):
+                    base = base_part[: -len(quote)]
+                    if base and len(base) >= 2:
+                        return {"base_asset": base, "quote_asset": quote}
+
+        clean_symbol = symbol_id.replace("PERP", "").upper()
+        crypto_quotes = sorted(_CRYPTO_QUOTE_CURRENCIES, key=len, reverse=True)
+        for quote in crypto_quotes:
+            if clean_symbol.endswith(quote):
+                base = clean_symbol[: -len(quote)]
+                if base and len(base) >= 2:
+                    if exchange in ["binance", "binance-futures"] and (base[0].isdigit() or base == "USDT"):
+                        return {"base_asset": "", "quote_asset": ""}
+                    return {"base_asset": base, "quote_asset": quote}
+
+        base_currency, detected_quote = self._remove_suffix(clean_symbol, exchange)
+        base_currency = base_currency.replace("PERP", "").strip()
+        if base_currency and detected_quote:
+            if exchange in ["binance", "binance-futures"] and (
+                (base_currency[0].isdigit() and "1000" not in base_currency)
+                or base_currency == "USDT"
+                or "USDT" in base_currency
+            ):
+                return {"base_asset": "", "quote_asset": ""}
+            return {"base_asset": base_currency, "quote_asset": detected_quote}
+        return {"base_asset": clean_symbol, "quote_asset": "USDT"}
+
+    def _parse_okx(self, symbol_id: str, exchange: str) -> SymbolComponents:
+        """Parse OKX/OKEx symbol components."""
+        if symbol_id.startswith("PERP-"):
+            quote_part = symbol_id[5:]
+            if quote_part in ["USDT", "USDC", "USD"]:
+                return {"base_asset": "PERP", "quote_asset": quote_part}
+        clean_id = symbol_id.replace("PERP", "").replace("SWAP", "").replace("-SWAP", "")
+        base_currency, detected_quote = self._remove_suffix(clean_id, exchange)
+        base_currency = base_currency.strip("-_")
+        if base_currency and detected_quote:
+            return {"base_asset": base_currency, "quote_asset": detected_quote}
+        if "-" in clean_id:
+            parts = clean_id.split("-")
+            if len(parts) >= 2 and parts[0] and parts[1]:
+                return {"base_asset": parts[0].strip("-"), "quote_asset": parts[1].strip("-")}
+        return {"base_asset": base_currency or clean_id, "quote_asset": detected_quote or "USD"}
+
     def parse_symbol_components(self, symbol_id: str, exchange: str) -> SymbolComponents:
         """Parse base/quote assets from Tardis symbol ID."""
         try:
-
-            def remove_suffix(s: str) -> tuple[str, str | None]:
-                if exchange in ["binance", "binance-futures"]:
-                    if s.startswith("1000") and len(s) > 4:
-                        pass
-                    elif s and s[0].isdigit():
-                        return "", ""
-                    if s.upper().startswith("USDT") and len(s) > 4:
-                        usdt_suffixes = ["TRY", "ARS", "BRL", "PLN", "UAH", "CZK", "RON", "NGN", "ZAR"]
-                        if any(s.upper().endswith(f"USDT{suffix}") for suffix in usdt_suffixes):
-                            return "", ""
-
-                suffixes = [
-                    "USDT",
-                    "USDC",
-                    "BUSD",
-                    "USD",
-                    "DAI",
-                    "GBP",
-                    "TUSD",
-                    "EUR",
-                    "TRY",
-                    "BRL",
-                    "JPY",
-                    "KRW",
-                    "CNY",
-                    "HKD",
-                    "BRZ",
-                    "USDE",
-                    "AUD",
-                    "RUB",
-                    "UAH",
-                    "PLN",
-                    "RON",
-                    "NGN",
-                    "ZAR",
-                    "IDRT",
-                    "VAI",
-                    "BIDR",
-                    "GEL",
-                    "CZK",
-                    "MXN",
-                    "ARS",
-                    "COP",
-                    "CLP",
-                    "PEN",
-                    "VES",
-                    "BTC",
-                    "ETH",
-                    "BNB",
-                    "XRP",
-                    "TRX",
-                    "ADA",
-                    "SOL",
-                    "LTC",
-                    "DOT",
-                    "LINK",
-                    "UNI",
-                    "AVAX",
-                    "DOGE",
-                    "SHIB",
-                    "PEPE",
-                    "FLOKI",
-                    "WIF",
-                    "BONK",
-                    "MEME",
-                    "BABYDOGE",
-                ]
-                suffixes.sort(key=len, reverse=True)
-                for suffix in suffixes:
-                    if s.upper().endswith(suffix):
-                        base = s[: -len(suffix)]
-                        if (
-                            exchange in ["binance", "binance-futures"]
-                            and base
-                            and ((base[0].isdigit() and base[0:3] != "1000") or base.upper() == "USDT")
-                        ):
-                            return "", ""
-                        return base, suffix
-                return s, None
-
             if exchange == "deribit":
-                if symbol_id.endswith("-PERPETUAL"):
-                    first_part = symbol_id.replace("-PERPETUAL", "")
-                    if "_" in first_part:
-                        parts = first_part.split("_")
-                        return {"base_asset": parts[0], "quote_asset": parts[1]}
-                    return {"base_asset": first_part, "quote_asset": "USD"}
-                elif "_" in symbol_id and not any(x in symbol_id for x in ["-", "PERPETUAL"]):
-                    parts = symbol_id.split("_")
-                    if len(parts) == 2:
-                        return {"base_asset": parts[0], "quote_asset": parts[1]}
-                elif "-" in symbol_id:
-                    parts = symbol_id.split("-")
-                    first_part = parts[0]
-                    base_currency, detected_quote = remove_suffix(first_part)
-                    base_currency = base_currency.rstrip("_")
-                    deribit_valid_quotes = self.exchange_config.valid_quote_currencies.get("DERIBIT", ["USD"])
-                    if detected_quote in deribit_valid_quotes and detected_quote in first_part.upper():
-                        return {"base_asset": base_currency, "quote_asset": detected_quote}
-                    return {"base_asset": first_part, "quote_asset": "USD"}
-
+                return self._parse_deribit(symbol_id, exchange)
             elif exchange in ["bybit", "bybit-spot", "binance", "binance-futures"]:
-                if exchange == "binance-futures" and "_" in symbol_id:
-                    base_part = symbol_id.split("_")[0].upper()
-                    for quote in ["USDT", "USDC", "BTC", "ETH", "BNB"]:
-                        if base_part.endswith(quote):
-                            base = base_part[: -len(quote)]
-                            if base and len(base) >= 2:
-                                return {"base_asset": base, "quote_asset": quote}
-                clean_symbol = symbol_id.replace("PERP", "").upper()
-                crypto_quotes = [
-                    "USDT",
-                    "USDC",
-                    "BUSD",
-                    "BTC",
-                    "ETH",
-                    "BNB",
-                    "USD",
-                    "EUR",
-                    "BRZ",
-                    "USDE",
-                    "XRP",
-                    "TRX",
-                    "ADA",
-                    "SOL",
-                    "LTC",
-                    "DOT",
-                    "LINK",
-                    "UNI",
-                    "AVAX",
-                    "ATOM",
-                    "DOGE",
-                    "SHIB",
-                    "PEPE",
-                    "FLOKI",
-                    "WIF",
-                    "BONK",
-                    "MEME",
-                    "BABYDOGE",
-                    "GBP",
-                    "AUD",
-                    "CAD",
-                    "JPY",
-                    "KRW",
-                    "TRY",
-                    "RUB",
-                    "PLN",
-                    "NGN",
-                    "ZAR",
-                    "MXN",
-                    "ARS",
-                    "COP",
-                    "CLP",
-                    "PEN",
-                    "VES",
-                    "CZK",
-                    "RON",
-                    "UAH",
-                ]
-                crypto_quotes.sort(key=len, reverse=True)
-                for quote in crypto_quotes:
-                    if clean_symbol.endswith(quote):
-                        base = clean_symbol[: -len(quote)]
-                        if base and len(base) >= 2:
-                            if exchange in ["binance", "binance-futures"] and (base[0].isdigit() or base == "USDT"):
-                                return {"base_asset": "", "quote_asset": ""}
-                            return {"base_asset": base, "quote_asset": quote}
-                base_currency, detected_quote = remove_suffix(clean_symbol)
-                base_currency = base_currency.replace("PERP", "").strip()
-                if base_currency and detected_quote:
-                    if exchange in ["binance", "binance-futures"] and (
-                        (base_currency[0].isdigit() and "1000" not in base_currency)
-                        or base_currency == "USDT"
-                        or "USDT" in base_currency
-                    ):
-                        return {"base_asset": "", "quote_asset": ""}
-                    return {"base_asset": base_currency, "quote_asset": detected_quote}
-                return {"base_asset": clean_symbol, "quote_asset": "USDT"}
-
+                return self._parse_binance_bybit(symbol_id, exchange)
             elif exchange == "upbit":
                 if "-" in symbol_id:
                     parts = symbol_id.upper().split("-")
                     if len(parts) == 2:
                         return {"base_asset": parts[1], "quote_asset": parts[0]}
                 return {"base_asset": symbol_id, "quote_asset": "KRW"}
-
             elif exchange == "coinbase":
                 if "-" in symbol_id:
                     parts = symbol_id.upper().split("-")
                     if len(parts) == 2:
                         return {"base_asset": parts[0], "quote_asset": parts[1]}
                 return {"base_asset": symbol_id, "quote_asset": "USD"}
-
             elif exchange in ["okx", "okex", "okex-futures", "okex-swap"]:
-                if symbol_id.startswith("PERP-"):
-                    quote_part = symbol_id[5:]
-                    if quote_part in ["USDT", "USDC", "USD"]:
-                        return {"base_asset": "PERP", "quote_asset": quote_part}
-                clean_id = symbol_id.replace("PERP", "").replace("SWAP", "").replace("-SWAP", "")
-                base_currency, detected_quote = remove_suffix(clean_id)
-                base_currency = base_currency.strip("-_")
-                if base_currency and detected_quote:
-                    return {"base_asset": base_currency, "quote_asset": detected_quote}
-                if "-" in clean_id:
-                    parts = clean_id.split("-")
-                    if len(parts) >= 2 and parts[0] and parts[1]:
-                        return {
-                            "base_asset": parts[0].strip("-"),
-                            "quote_asset": parts[1].strip("-"),
-                        }
-                return {
-                    "base_asset": base_currency or clean_id,
-                    "quote_asset": detected_quote or "USD",
-                }
+                return self._parse_okx(symbol_id, exchange)
 
-            base_currency, detected_quote = remove_suffix(symbol_id)
+            base_currency, detected_quote = self._remove_suffix(symbol_id, exchange)
             return {"base_asset": base_currency, "quote_asset": detected_quote or ""}
 
         except (OSError, ValueError, RuntimeError) as e:
@@ -275,7 +284,6 @@ class SymbolParser:
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
             logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
-            logger.debug("⚠️ Symbol parsing error for %s: %s", symbol_id, e)
             return {"base_asset": "", "quote_asset": ""}
 
     def parse_option_components(self, symbol_id: str, exchange: str) -> OptionComponents:
