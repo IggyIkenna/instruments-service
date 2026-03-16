@@ -492,6 +492,33 @@
       "code": null
     },
     {
+      "symbol": "LE.FUT",
+      "venue": "CME",
+      "type": "FUTURE",
+      "dataset": "GLBX.MDP3",
+      "stype": "parent",
+      "base": "LIVECATTLE",
+      "code": "LE"
+    },
+    {
+      "symbol": "HE.FUT",
+      "venue": "CME",
+      "type": "FUTURE",
+      "dataset": "GLBX.MDP3",
+      "stype": "parent",
+      "base": "LEANHOGS",
+      "code": "HE"
+    },
+    {
+      "symbol": "VX.FUT",
+      "venue": "CFE",
+      "type": "FUTURE",
+      "dataset": "XCBF.MDP3",
+      "stype": "parent",
+      "base": "VIX",
+      "code": "VX"
+    },
+    {
       "symbol": "BRN.FUT",
       "venue": "ICE",
       "type": "FUTURE",
@@ -546,6 +573,9 @@
     "ZW": "WHEAT",
     "ZL": "SOYBEAN_OIL",
     "ZM": "SOYBEAN_MEAL",
+    "LE": "LIVECATTLE",
+    "HE": "LEANHOGS",
+    "VX": "VIX",
     "BRN": "BRENT",
     "G": "GASOIL",
     "BTC": "BTC",
