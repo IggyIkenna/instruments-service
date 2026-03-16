@@ -320,6 +320,35 @@ TRADFI_VENUE_MAPPINGS: list[dict[str, str | None]] = [
         "base": "MXN",
         "code": "6M",
     },
+    # CME Livestock
+    {
+        "symbol": "LE.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "LIVECATTLE",
+        "code": "LE",
+    },
+    {
+        "symbol": "HE.FUT",
+        "venue": "CME",
+        "type": "FUTURE",
+        "dataset": "GLBX.MDP3",
+        "stype": "parent",
+        "base": "LEANHOGS",
+        "code": "HE",
+    },
+    # CFE (CBOE Futures Exchange) - Volatility
+    {
+        "symbol": "VX.FUT",
+        "venue": "CFE",
+        "type": "FUTURE",
+        "dataset": "XCBF.MDP3",
+        "stype": "parent",
+        "base": "VIX",
+        "code": "VX",
+    },
     {
         "symbol": "ES.OPT",
         "venue": "CME",
