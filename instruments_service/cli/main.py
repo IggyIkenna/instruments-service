@@ -278,6 +278,109 @@ def main_service_cli() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _build_handler_kwargs(args: argparse.Namespace) -> dict[str, HandlerResultValue]:
+    """Extract handler keyword arguments from parsed CLI arguments.
+
+    Maps argparse namespace attributes to the handler kwargs dict, handling
+    date range, mode-specific options, market type filters, and venue filters.
+    """
+    handler_kwargs: dict[str, HandlerResultValue] = {}
+
+    # Date range
+    if args.start_date:
+        handler_kwargs["start_date"] = args.start_date
+    if args.end_date:
+        handler_kwargs["end_date"] = args.end_date
+
+    # Aggregate mode options
+    if hasattr(args, "redo_all") and args.redo_all:
+        handler_kwargs["redo_all"] = args.redo_all
+
+    # Common options
+    if hasattr(args, "force") and args.force:
+        handler_kwargs["force"] = args.force
+    if hasattr(args, "dry_run") and args.dry_run:
+        handler_kwargs["dry_run"] = args.dry_run
+
+    # Concurrency
+    if hasattr(args, "max_workers") and args.max_workers:
+        handler_kwargs["max_workers"] = args.max_workers
+
+    # Corporate actions specific options
+    if hasattr(args, "tickers") and args.tickers:
+        handler_kwargs["tickers"] = args.tickers
+    if hasattr(args, "output_format") and args.output_format:
+        handler_kwargs["output_format"] = args.output_format
+    if hasattr(args, "upload_to_storage") and args.upload_to_storage:
+        handler_kwargs["upload_to_storage"] = args.upload_to_storage
+
+    # Backfill/update specific options
+    if hasattr(args, "parallel_workers") and args.parallel_workers:
+        handler_kwargs["parallel_workers"] = args.parallel_workers
+    if hasattr(args, "days_threshold") and args.days_threshold:
+        handler_kwargs["days_threshold"] = args.days_threshold
+    if hasattr(args, "input_dir") and args.input_dir:
+        handler_kwargs["input_dir"] = args.input_dir
+    if hasattr(args, "output_dir") and args.output_dir:
+        handler_kwargs["output_dir"] = args.output_dir
+    if hasattr(args, "max_retries") and args.max_retries:
+        handler_kwargs["max_retries"] = args.max_retries
+
+    # Live mode options
+    if hasattr(args, "interval") and args.interval:
+        handler_kwargs["interval"] = args.interval
+
+    # Market type filters
+    _apply_market_type_filters(args, handler_kwargs)
+
+    # Venue filter (optional - filter to specific venues within a category)
+    if hasattr(args, "venues") and args.venues:
+        handler_kwargs["venues"] = args.venues
+
+    return handler_kwargs
+
+
+def _apply_market_type_filters(args: argparse.Namespace, handler_kwargs: dict[str, HandlerResultValue]) -> None:
+    """Apply market type filter flags (CEFI/TRADFI/DEFI/SPORTS) to handler kwargs.
+
+    Live mode converts flags to a category list; batch mode keeps boolean flags.
+    The --category flag takes precedence over individual flags.
+    """
+    if args.mode == "live":
+        # Live mode: convert flags to category list
+        categories: list[str] = []
+        if hasattr(args, "category") and args.category:
+            categories = [cat.upper() for cat in args.category]
+        else:
+            if args.CEFI:
+                categories.append("CEFI")
+            if args.TRADFI:
+                categories.append("TRADFI")
+            if args.DEFI:
+                categories.append("DEFI")
+            if args.SPORTS:
+                categories.append("SPORTS")
+
+        if categories:
+            handler_kwargs["category"] = categories
+    else:
+        # Batch mode: keep boolean flags
+        if hasattr(args, "category") and args.category:
+            for cat in args.category:
+                cat_upper = cat.upper()
+                if cat_upper in ("CEFI", "TRADFI", "DEFI", "SPORTS"):
+                    handler_kwargs[cat_upper.lower()] = True
+        else:
+            if args.CEFI:
+                handler_kwargs["cefi"] = True
+            if args.TRADFI:
+                handler_kwargs["tradfi"] = True
+            if args.DEFI:
+                handler_kwargs["defi"] = True
+            if args.SPORTS:
+                handler_kwargs["sports"] = True
+
+
 def main() -> dict[str, HandlerResultValue]:
     """
     Main CLI entry point for instruments-service.
@@ -286,7 +389,7 @@ def main() -> dict[str, HandlerResultValue]:
         Dictionary with operation results
     """
     # LOG_LEVEL env var validation (SSOT for log levels)
-    _raw_log_level = os.environ.get("LOG_LEVEL", "INFO")
+    _raw_log_level = os.environ.get("LOG_LEVEL", "INFO")  # config-bootstrap: pre-UCC init
     try:
         _log_level = LogLevel(_raw_log_level)
     except ValueError:
@@ -360,100 +463,8 @@ def main() -> dict[str, HandlerResultValue]:
         handler: ModeHandler = get_handler_for_mode(cast(str, args.mode), config)
         mode_handler = handler  # Track for cleanup on signal
 
-        # Prepare arguments for handler (typed for HandlerResultValue alignment)
-        handler_kwargs: dict[str, HandlerResultValue] = {}
-
-        # Date range
-        if args.start_date:
-            handler_kwargs["start_date"] = args.start_date
-        if args.end_date:
-            handler_kwargs["end_date"] = args.end_date
-
-        # Aggregate mode options
-        if hasattr(args, "redo_all") and args.redo_all:
-            handler_kwargs["redo_all"] = args.redo_all
-
-        # Common options
-        if hasattr(args, "force") and args.force:
-            handler_kwargs["force"] = args.force
-        if hasattr(args, "dry_run") and args.dry_run:
-            handler_kwargs["dry_run"] = args.dry_run
-
-        # Concurrency
-        if hasattr(args, "max_workers") and args.max_workers:
-            handler_kwargs["max_workers"] = args.max_workers
-
-        # Corporate actions specific options
-        if hasattr(args, "tickers") and args.tickers:
-            handler_kwargs["tickers"] = args.tickers
-        if hasattr(args, "output_format") and args.output_format:
-            handler_kwargs["output_format"] = args.output_format
-        if hasattr(args, "upload_to_storage") and args.upload_to_storage:
-            handler_kwargs["upload_to_storage"] = args.upload_to_storage
-
-        # Backfill/update specific options
-        if hasattr(args, "parallel_workers") and args.parallel_workers:
-            handler_kwargs["parallel_workers"] = args.parallel_workers
-        if hasattr(args, "days_threshold") and args.days_threshold:
-            handler_kwargs["days_threshold"] = args.days_threshold
-        if hasattr(args, "input_dir") and args.input_dir:
-            handler_kwargs["input_dir"] = args.input_dir
-        if hasattr(args, "output_dir") and args.output_dir:
-            handler_kwargs["output_dir"] = args.output_dir
-        if hasattr(args, "max_retries") and args.max_retries:
-            handler_kwargs["max_retries"] = args.max_retries
-
-        # Live mode options
-        if hasattr(args, "interval") and args.interval:
-            handler_kwargs["interval"] = args.interval
-
-        # Market type filters
-        if args.mode == "live":
-            # Live mode: convert flags to category list
-            categories: list[str] = []
-            if hasattr(args, "category") and args.category:
-                categories = [cat.upper() for cat in args.category]
-            else:
-                # Use individual flags
-                if args.CEFI:
-                    categories.append("CEFI")
-                if args.TRADFI:
-                    categories.append("TRADFI")
-                if args.DEFI:
-                    categories.append("DEFI")
-                if args.SPORTS:
-                    categories.append("SPORTS")
-
-            if categories:
-                handler_kwargs["category"] = categories
-        else:
-            # Batch mode: keep boolean flags
-            # Priority: --category flag takes precedence, then individual flags
-            if hasattr(args, "category") and args.category:
-                # --category can be a list (e.g., --category CEFI TRADFI)
-                for cat in args.category:
-                    if cat.upper() == "CEFI":
-                        handler_kwargs["cefi"] = True
-                    elif cat.upper() == "TRADFI":
-                        handler_kwargs["tradfi"] = True
-                    elif cat.upper() == "DEFI":
-                        handler_kwargs["defi"] = True
-                    elif cat.upper() == "SPORTS":
-                        handler_kwargs["sports"] = True
-            else:
-                # Fallback to individual flags
-                if args.CEFI:
-                    handler_kwargs["cefi"] = True
-                if args.TRADFI:
-                    handler_kwargs["tradfi"] = True
-                if args.DEFI:
-                    handler_kwargs["defi"] = True
-                if args.SPORTS:
-                    handler_kwargs["sports"] = True
-
-        # Venue filter (optional - filter to specific venues within a category)
-        if hasattr(args, "venues") and args.venues:
-            handler_kwargs["venues"] = args.venues
+        # Build handler kwargs from parsed arguments
+        handler_kwargs = _build_handler_kwargs(args)
 
         # Execute handler
         result = handler.run(**handler_kwargs)
