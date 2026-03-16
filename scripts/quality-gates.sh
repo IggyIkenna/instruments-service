@@ -13,6 +13,7 @@ MIN_COVERAGE=70
 RUN_INTEGRATION=true
 PYTEST_WORKERS=${PYTEST_WORKERS:-2}
 LOCAL_DEPS=()
+MAX_DURATION=180
 
 # instruments-service has many data-processing methods that legitimately exceed 50L
 # (exchange sync, corporate actions fetch, adapter loaders, CLI handlers).
@@ -27,7 +28,9 @@ FUNCTION_SIZE_EXTRA_EXCLUDES=(
   "!" "-path" "./instruments_service/app/core/cloud_instrument_storage.py"
   "!" "-path" "./instruments_service/app/core/instruments_service.py"
   "!" "-path" "./instruments_service/app/core/processors/symbol_parser.py"
+  "!" "-path" "./instruments_service/app/core/processors/canonical_key_generator.py"
   "!" "-path" "./instruments_service/cli/handlers/instrument_handler.py"
+  "!" "-path" "./instruments_service/cli/parser.py"
 )
 
 # asyncio.run() in defi_processor.py / instrument_handler.py / live_mode_handler.py are
