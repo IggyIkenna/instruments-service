@@ -255,21 +255,31 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
     ) -> dict[str, dict[str, object]]:
         """Pre-filter by exchange config (types, quotes, exclusions)."""
         valid_types = self._get_required_list(
-            self.exchange_config.exchange_instrument_types, canonical_venue, "exchange_instrument_types"  # type: ignore[arg-type]
+            self.exchange_config.exchange_instrument_types,
+            canonical_venue,
+            "exchange_instrument_types",  # type: ignore[arg-type]
         )
         valid_quotes = self._get_required_list(
-            self.exchange_config.valid_quote_currencies, canonical_venue, "valid_quote_currencies"  # type: ignore[arg-type]
+            self.exchange_config.valid_quote_currencies,
+            canonical_venue,
+            "valid_quote_currencies",  # type: ignore[arg-type]
         )
         excluded_bases = self._get_optional_list(
-            self.exchange_config.excluded_base_currencies, canonical_venue, "excluded_base_currencies"  # type: ignore[arg-type]
+            self.exchange_config.excluded_base_currencies,
+            canonical_venue,
+            "excluded_base_currencies",  # type: ignore[arg-type]
         )
         excluded_patterns = self._get_optional_list(
-            self.exchange_config.excluded_symbol_patterns, canonical_venue, "excluded_symbol_patterns"  # type: ignore[arg-type]
+            self.exchange_config.excluded_symbol_patterns,
+            canonical_venue,
+            "excluded_symbol_patterns",  # type: ignore[arg-type]
         )
 
         logger.info(
             "Pre-filtering by exchange config: %s accepts types=%s, quotes=%s",
-            canonical_venue, valid_types, valid_quotes,
+            canonical_venue,
+            valid_types,
+            valid_quotes,
         )
 
         pre_filtered: dict[str, dict[str, object]] = {}
@@ -331,13 +341,18 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
         if available_to:
             try:
                 available_to_datetime = (
-                    available_to if available_to.endswith("Z")
+                    available_to
+                    if available_to.endswith("Z")
                     else (available_to.replace("Z", "+00:00") if "+" not in available_to else available_to)
                 )
             except (ValueError, TypeError) as e:
                 logger.debug("Could not parse availableTo '%s': %s", available_to, e)
 
-        if not available_to_datetime and normalized_instrument_type in ["FUTURE", "OPTION"] and "expiry" in enhanced_fields:
+        if (
+            not available_to_datetime
+            and normalized_instrument_type in ["FUTURE", "OPTION"]
+            and "expiry" in enhanced_fields
+        ):
             expiry_str: str = cast(str, enhanced_fields.get("expiry") or "")
             if expiry_str:
                 try:
@@ -368,9 +383,11 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
             available_to_dt = datetime.fromisoformat(available_to_datetime.replace("Z", "+00:00"))
             if available_to_dt.tzinfo is None:
                 available_to_dt = available_to_dt.replace(tzinfo=UTC)
-            comparison_date = (target_date or datetime.now(UTC)).replace(tzinfo=UTC) if (
-                target_date is None or target_date.tzinfo is None
-            ) else target_date
+            comparison_date = (
+                (target_date or datetime.now(UTC)).replace(tzinfo=UTC)
+                if (target_date is None or target_date.tzinfo is None)
+                else target_date
+            )
             return comparison_date.date() > available_to_dt.date()
         except (ValueError, TypeError) as e:
             logger.debug("Could not parse available_to '%s': %s", available_to_datetime, e)
@@ -428,12 +445,16 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
             logger.debug("Filtered same-asset pair: %s (%s-%s)", symbol_id, clean_base, clean_quote)
             return None
 
-        normalized_instrument_type = self.normalize_instrument_type(cast(str, symbol_info.get("type") or "")) or "SPOT_PAIR"
+        normalized_instrument_type = (
+            self.normalize_instrument_type(cast(str, symbol_info.get("type") or "")) or "SPOT_PAIR"
+        )
 
         settle_asset = "USDT"
         if canonical_venue == "DERIBIT":
             deribit_quotes = self._get_required_list(
-                self.exchange_config.valid_quote_currencies, "DERIBIT", "valid_quote_currencies"  # type: ignore[arg-type]
+                self.exchange_config.valid_quote_currencies,
+                "DERIBIT",
+                "valid_quote_currencies",  # type: ignore[arg-type]
             )
             if clean_quote == "USD":
                 settle_asset = "USDC" if "USDC" in deribit_quotes else "USDT"
@@ -451,16 +472,16 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
             exchange=exchange,
         )
 
-        available_to_datetime = self._resolve_cefi_available_to(symbol_info, normalized_instrument_type, enhanced_fields)
+        available_to_datetime = self._resolve_cefi_available_to(
+            symbol_info, normalized_instrument_type, enhanced_fields
+        )
 
         if self._cefi_is_expired(available_to_datetime, target_date):
             return None
         if self._cefi_is_past_expiry(target_date, normalized_instrument_type, enhanced_fields):
             return None
 
-        data_types_str = ",".join(
-            self.data_config.instrument_data_types.get(normalized_instrument_type, ["trades"])
-        )
+        data_types_str = ",".join(self.data_config.instrument_data_types.get(normalized_instrument_type, ["trades"]))
         tardis_exchange = exchange.lower()
         if hasattr(self.venue_mapping, "venue_to_data_provider"):
             tardis_exchange = self.venue_mapping.venue_to_data_provider.get(canonical_venue, exchange.lower())  # type: ignore[union-attr]
@@ -529,7 +550,9 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
         processed_instruments: dict[str, InstrumentDefinition] = {}
         for symbol_id, symbol_info in instruments_data.items():
             try:
-                metadata = await self._build_cefi_instrument(symbol_id, symbol_info, exchange, canonical_venue, target_date)
+                metadata = await self._build_cefi_instrument(
+                    symbol_id, symbol_info, exchange, canonical_venue, target_date
+                )
                 if metadata is None:
                     filter_stats["no_canonical_key"] += 1
                     continue

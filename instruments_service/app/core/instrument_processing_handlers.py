@@ -115,7 +115,9 @@ class InstrumentProcessingHandlers:
 
         logger.info(
             "Pre-filtering by exchange config: %s accepts types=%s, quotes=%s",
-            canonical_venue, valid_types, valid_quotes,
+            canonical_venue,
+            valid_types,
+            valid_quotes,
         )
 
         pre_filtered: dict[str, dict[str, object]] = {}
@@ -149,7 +151,9 @@ class InstrumentProcessingHandlers:
 
         logger.info(
             "Exchange config filter: %s/%s valid for %s",
-            len(pre_filtered), len(instruments_data), canonical_venue,
+            len(pre_filtered),
+            len(instruments_data),
+            canonical_venue,
         )
         return pre_filtered
 
@@ -317,7 +321,13 @@ class InstrumentProcessingHandlers:
         norm_inst_type: str = normalized_instrument_type or ""
 
         enhanced_fields: dict[str, object] = await self._populate_all_derived_fields(
-            canonical_key, canonical_venue, norm_inst_type, clean_base, clean_quote, symbol_id, exchange,
+            canonical_key,
+            canonical_venue,
+            norm_inst_type,
+            clean_base,
+            clean_quote,
+            symbol_id,
+            exchange,
         )
 
         available_to_datetime = self._resolve_available_to(symbol_info, normalized_instrument_type, enhanced_fields)
@@ -339,23 +349,25 @@ class InstrumentProcessingHandlers:
         market_category = determine_market_category({"databento_symbol": "", "chain": "off-chain"})
 
         inst_data: dict[str, object] = dict(enhanced_fields)
-        inst_data.update({
-            "instrument_key": canonical_key,
-            "venue": canonical_venue,
-            "instrument_type": inst_type_str,
-            "symbol": symbol,
-            "base_asset": clean_base,
-            "quote_asset": clean_quote,
-            "settle_asset": settle_asset,
-            "chain": "off-chain",
-            "market_category": market_category,
-            "exchange_raw_symbol": symbol_id,
-            "tardis_symbol": self._convert_to_tardis_symbol(symbol_id, exchange),
-            "tardis_exchange": tardis_exchange,
-            "available_from_datetime": cast(str, symbol_info.get("availableSince") or ""),
-            "available_to_datetime": available_to_datetime,
-            "data_types": ",".join(config_data_types),
-        })
+        inst_data.update(
+            {
+                "instrument_key": canonical_key,
+                "venue": canonical_venue,
+                "instrument_type": inst_type_str,
+                "symbol": symbol,
+                "base_asset": clean_base,
+                "quote_asset": clean_quote,
+                "settle_asset": settle_asset,
+                "chain": "off-chain",
+                "market_category": market_category,
+                "exchange_raw_symbol": symbol_id,
+                "tardis_symbol": self._convert_to_tardis_symbol(symbol_id, exchange),
+                "tardis_exchange": tardis_exchange,
+                "available_from_datetime": cast(str, symbol_info.get("availableSince") or ""),
+                "available_to_datetime": available_to_datetime,
+                "data_types": ",".join(config_data_types),
+            }
+        )
         return InstrumentDefinition.model_validate(inst_data)
 
     async def process_exchange_instruments(
