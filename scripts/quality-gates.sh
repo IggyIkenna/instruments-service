@@ -10,9 +10,20 @@
 SERVICE_NAME="instruments-service"
 SOURCE_DIR="instruments_service"
 MIN_COVERAGE=70
-RUN_INTEGRATION=false
+RUN_INTEGRATION=true
 PYTEST_WORKERS=${PYTEST_WORKERS:-2}
 LOCAL_DEPS=()
+
+# asyncio.run() in defi_processor.py / instrument_handler.py / live_mode_handler.py are
+# all synchronous-bridge entry-points (called from a non-async CLI dispatcher), not nested
+# in loops. The >=8-space heuristic fires because they are inside try/if blocks.
+# See QUALITY_GATE_BYPASS_AUDIT.md §2.2.
+ASYNCIO_RUN_EXCLUDE_GLOBS=(
+  "!**/engine/processors/defi_processor.py"
+  "!**/cli/handlers/live_mode_handler.py"
+  "!**/cli/handlers/instrument_handler.py"
+)
+
 WORKSPACE_ROOT="$(cd "$(git rev-parse --show-toplevel)/.." && pwd)"
 source "${WORKSPACE_ROOT}/unified-trading-pm/scripts/quality-gates-base/base-service.sh"
 
