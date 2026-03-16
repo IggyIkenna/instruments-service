@@ -25,6 +25,12 @@ TRADFI_VENUE_MAPPINGS: list[dict[str, str | None]] = [
         "dataset": "OPRA.PILLAR",
     },
     {
+        "venue": "CFE",
+        "description": "CBOE Futures Exchange",
+        "asset_class": "futures",
+        "dataset": "XCBF.MDP3",
+    },
+    {
         "venue": "NASDAQ",
         "description": "NASDAQ Stock Market",
         "asset_class": "equities",

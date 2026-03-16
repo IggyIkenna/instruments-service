@@ -79,6 +79,14 @@ DATABENTO_VALID_PARENT_SYMBOLS: dict[str, tuple[str, str]] = {
     "BRL": ("6L.FUT", "GLBX.MDP3"),
     "6Z": ("6Z.FUT", "GLBX.MDP3"),
     "ZAR": ("6Z.FUT", "GLBX.MDP3"),
+    # CME Livestock
+    "LE": ("LE.FUT", "GLBX.MDP3"),
+    "LIVECATTLE": ("LE.FUT", "GLBX.MDP3"),
+    "HE": ("HE.FUT", "GLBX.MDP3"),
+    "LEANHOGS": ("HE.FUT", "GLBX.MDP3"),
+    # CFE (CBOE Futures Exchange) - Volatility Futures
+    "VX": ("VX.FUT", "XCBF.MDP3"),
+    "VIX_FUT": ("VX.FUT", "XCBF.MDP3"),
     # ICE Futures US (IFUS.IMPACT) - Available from 2018-12-23
     "CT": ("CT.FUT", "IFUS.IMPACT"),
     "COTTON": ("CT.FUT", "IFUS.IMPACT"),
@@ -151,6 +159,11 @@ EXCHANGE_CODE_TO_NAME: dict[str, str] = {
     "6N": "NZD",
     "6Z": "ZAR",
     "6M": "MXN",
+    # CME Livestock
+    "LE": "LIVECATTLE",
+    "HE": "LEANHOGS",
+    # CFE Volatility
+    "VX": "VIX",
     # CME Options (weekly)
     "EW1": "SP500",
     "EW2": "SP500",

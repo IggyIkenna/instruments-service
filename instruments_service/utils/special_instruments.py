@@ -119,6 +119,93 @@ def create_vix_instrument_definition(target_date: datetime) -> InstrumentDefDict
     }
 
 
+def create_vx_futures_instrument_definition(target_date: datetime) -> InstrumentDefDict:
+    """
+    Create VX (VIX Futures) instrument definition.
+
+    VX futures trade on CFE (CBOE Futures Exchange) with monthly expiry cycles
+    and AM cash settlement against the VIX index. Unlike the VIX index itself,
+    VX futures are tradable instruments.
+
+    Args:
+        target_date: Target date for availability window
+
+    Returns:
+        VX futures instrument definition dictionary
+    """
+    venue = "CFE"
+    instrument_type = "FUTURE"
+    symbol_canonical = "VX"
+    instrument_key = f"{venue}:{instrument_type}:{symbol_canonical}"
+    available_from = datetime(2020, 1, 1, tzinfo=UTC).isoformat()
+
+    return {
+        "instrument_key": instrument_key,
+        "venue": venue,
+        "instrument_type": instrument_type,
+        "symbol": symbol_canonical,
+        "available_from_datetime": available_from,
+        "venue_type": "exchange",
+        "data_provider": "databento",
+        "asset_class": "traditional",
+        "available_to_datetime": None,
+        "data_types": "ohlcv_1m",
+        "base_asset": "VIX",
+        "quote_asset": "USD",
+        "settle_asset": "USD",
+        "exchange_raw_symbol": "VX",
+        "databento_symbol": "VX.FUT",
+        "tardis_exchange": "",
+        "tardis_symbol": "",
+        "inverse": False,
+        "tick_size": "0.05",
+        "min_size": "1",
+        "strike": "",
+        "option_type": "",
+        "expiry": None,
+        "contract_size": 1000,
+        "underlying": "VIX",
+        "ccxt_symbol": "",
+        "ccxt_exchange": "",
+        "base_asset_contract_address": None,
+        "quote_asset_contract_address": None,
+        "pool_address": None,
+        "pool_fee_tier": None,
+        "flash_loan_providers": None,
+        "instadapp_routing": None,
+        "ltv": None,
+        "liquidation_threshold": None,
+        "liquidation_bonus": None,
+        "reserve_factor": None,
+        "emode_category_id": None,
+        "emode_label": None,
+        "emode_underlying": None,
+        "emode_liquidation_threshold": None,
+        "emode_liquidation_bonus": None,
+        "optimal_utilization_rate": None,
+        "base_variable_borrow_rate": None,
+        "variable_rate_slope1": None,
+        "variable_rate_slope2": None,
+        "max_position_size": None,
+        "max_leverage": None,
+        "initial_margin_rate": None,
+        "maintenance_margin_rate": None,
+        "leverage_tiers_json": None,
+        "trading_hours_open": "14:30:00+00:00",
+        "trading_hours_close": "21:00:00+00:00",
+        "trading_session": "regular",
+        "is_trading_day": True,
+        "holiday_calendar": "NYSE",
+        "regular_open_utc": None,
+        "regular_close_utc": None,
+        "auction_open_utc": None,
+        "auction_close_utc": None,
+        "early_close_utc": None,
+        "chain": "off-chain",
+        "market_category": "TRADFI",
+    }
+
+
 def create_krwusd_instrument_definition(target_date: datetime) -> InstrumentDefDict:
     """
     Create KRW/USD currency pair instrument definition.
