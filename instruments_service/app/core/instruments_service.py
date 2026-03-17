@@ -19,7 +19,7 @@ from typing import cast
 from uuid import uuid4
 
 import pandas as pd
-from unified_config_interface import VenueMapping
+from unified_api_contracts import VenueMapping
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 from unified_trading_library import determine_market_category  # noqa: domain-ucs — not yet in UDC
 

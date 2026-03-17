@@ -16,7 +16,7 @@ from uuid import uuid4
 
 import unified_market_interface.clients.subgraph_service as sg_module
 import unified_market_interface.clients.thegraph_base_client as tgc_module
-from unified_config_interface import DataTypeConfig, ExchangeInstrumentConfig, VenueMapping
+from unified_api_contracts import DataTypeConfig, ExchangeInstrumentConfig, VenueMapping
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 from unified_market_interface import DatabentoAdapter, SubgraphService, TardisAdapter
 from unified_trading_library import DateFilterService, get_secret_client, handle_api_errors

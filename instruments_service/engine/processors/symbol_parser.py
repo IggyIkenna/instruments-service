@@ -13,7 +13,7 @@ from uuid import uuid4
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 
 if TYPE_CHECKING:
-    from unified_config_interface import ExchangeInstrumentConfig
+    from unified_api_contracts import ExchangeInstrumentConfig
 
 logger = logging.getLogger(__name__)
 

@@ -9,8 +9,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
+from unified_api_contracts import VenueMapping
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
-from unified_market_interface import VenueMapping
 
 from instruments_service.config import DEFI_PROTOCOLS, DEFI_VENUE_TO_PROTOCOL
 from instruments_service.models import InstrumentDefinition

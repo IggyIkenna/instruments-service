@@ -18,18 +18,14 @@ class TestPythonJsonConsistency:
     def test_livestock_vx_codes_in_both_sources(self) -> None:
         """LE, HE, VX must exist in both Python TRADFI_VENUE_MAPPINGS and JSON."""
         from instruments_service.config.futures_options_definitions import (
-            TRADFI_VENUE_MAPPINGS as py_mappings,
+            TRADFI_VENUE_MAPPINGS as TRADFI_PY_MAPPINGS,
         )
 
         with open(_DATA_DIR / "tradfi_instruments.json") as f:
             json_data = json.load(f)
 
-        py_codes = {e.get("code") for e in py_mappings if e.get("type") == "FUTURE"}
-        json_codes = {
-            e.get("code")
-            for e in json_data["instruments"]
-            if e.get("type") == "FUTURE"
-        }
+        py_codes = {e.get("code") for e in TRADFI_PY_MAPPINGS if e.get("type") == "FUTURE"}
+        json_codes = {e.get("code") for e in json_data["instruments"] if e.get("type") == "FUTURE"}
 
         for code in ("LE", "HE", "VX"):
             assert code in py_codes, f"{code} missing from Python TRADFI_VENUE_MAPPINGS"
@@ -38,14 +34,14 @@ class TestPythonJsonConsistency:
     def test_vx_dataset_consistent(self) -> None:
         """VX dataset must be XCBF.MDP3 in both Python and JSON."""
         from instruments_service.config.futures_options_definitions import (
-            TRADFI_VENUE_MAPPINGS as py_mappings,
+            TRADFI_VENUE_MAPPINGS as TRADFI_PY_MAPPINGS,
         )
 
         with open(_DATA_DIR / "tradfi_instruments.json") as f:
             json_data = json.load(f)
 
-        py_vx = [e for e in py_mappings if e.get("code") == "VX"][0]
-        json_vx = [e for e in json_data["instruments"] if e.get("code") == "VX"][0]
+        py_vx = next(e for e in TRADFI_PY_MAPPINGS if e.get("code") == "VX")
+        json_vx = next(e for e in json_data["instruments"] if e.get("code") == "VX")
 
         assert py_vx["dataset"] == "XCBF.MDP3"
         assert json_vx["dataset"] == "XCBF.MDP3"
@@ -53,17 +49,15 @@ class TestPythonJsonConsistency:
     def test_livestock_venues_consistent(self) -> None:
         """LE and HE must be on CME in both Python and JSON."""
         from instruments_service.config.futures_options_definitions import (
-            TRADFI_VENUE_MAPPINGS as py_mappings,
+            TRADFI_VENUE_MAPPINGS as TRADFI_PY_MAPPINGS,
         )
 
         with open(_DATA_DIR / "tradfi_instruments.json") as f:
             json_data = json.load(f)
 
         for code in ("LE", "HE"):
-            py_entry = [e for e in py_mappings if e.get("code") == code][0]
-            json_entry = [
-                e for e in json_data["instruments"] if e.get("code") == code
-            ][0]
+            py_entry = next(e for e in TRADFI_PY_MAPPINGS if e.get("code") == code)
+            json_entry = next(e for e in json_data["instruments"] if e.get("code") == code)
             assert py_entry["venue"] == "CME", f"{code} venue mismatch in Python"
             assert json_entry["venue"] == "CME", f"{code} venue mismatch in JSON"
 

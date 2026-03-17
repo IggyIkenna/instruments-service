@@ -12,9 +12,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import cast
 
-from unified_config_interface import DataTypeConfig, ExchangeInstrumentConfig, VenueMapping
+from unified_api_contracts import DataTypeConfig, ExchangeInstrumentConfig, VenueMapping
 from unified_market_interface import SubgraphService
-from unified_market_interface import VenueMapping as UMI_VenueMapping
 from unified_trading_library import DateFilterService
 
 from instruments_service.config import instruments_config
@@ -105,7 +104,7 @@ class BaseInstrumentProcessor:
         # Initialize CCXT service if enabled
         if self.processing_config.enable_ccxt_integration:
             self.ccxt_service = CCXTService(
-                venue_mapping=cast(UMI_VenueMapping, self.venue_mapping),
+                venue_mapping=self.venue_mapping,
                 cache_ttl_hours=int(cast(int | float, config.get("cache_ttl_hours", 4))),
             )
             if config.get("preload_ccxt_markets", True):

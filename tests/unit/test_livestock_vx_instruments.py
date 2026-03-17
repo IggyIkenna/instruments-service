@@ -178,7 +178,7 @@ class TestInstrumentIdPatterns:
         # Verify the venue mapping supports CBOE/CFE resolution
         from instruments_service.config.futures_options_definitions import TRADFI_VENUE_MAPPINGS
 
-        vx = [e for e in TRADFI_VENUE_MAPPINGS if e.get("code") == "VX"][0]
+        vx = next(e for e in TRADFI_VENUE_MAPPINGS if e.get("code") == "VX")
         assert vx["venue"] == "CFE", "VX venue must be CFE (CBOE Futures Exchange)"
         assert vx["type"] == "FUTURE"
 
@@ -186,7 +186,7 @@ class TestInstrumentIdPatterns:
         """LE futures should follow CME:FUTURE:LE-{EXPIRY} pattern."""
         from instruments_service.config.futures_options_definitions import TRADFI_VENUE_MAPPINGS
 
-        le = [e for e in TRADFI_VENUE_MAPPINGS if e.get("code") == "LE"][0]
+        le = next(e for e in TRADFI_VENUE_MAPPINGS if e.get("code") == "LE")
         assert le["venue"] == "CME"
         assert le["type"] == "FUTURE"
 
@@ -194,7 +194,7 @@ class TestInstrumentIdPatterns:
         """HE futures should follow CME:FUTURE:HE-{EXPIRY} pattern."""
         from instruments_service.config.futures_options_definitions import TRADFI_VENUE_MAPPINGS
 
-        he = [e for e in TRADFI_VENUE_MAPPINGS if e.get("code") == "HE"][0]
+        he = next(e for e in TRADFI_VENUE_MAPPINGS if e.get("code") == "HE")
         assert he["venue"] == "CME"
         assert he["type"] == "FUTURE"
 
@@ -207,15 +207,9 @@ class TestCrossRegistryConsistency:
         from instruments_service.config.futures_options_definitions import TRADFI_VENUE_MAPPINGS
         from instruments_service.config.tradfi_exchange_mappings import EXCHANGE_CODE_TO_NAME
 
-        future_codes = {
-            e["code"]
-            for e in TRADFI_VENUE_MAPPINGS
-            if e.get("type") == "FUTURE" and e.get("code")
-        }
+        future_codes = {e["code"] for e in TRADFI_VENUE_MAPPINGS if e.get("type") == "FUTURE" and e.get("code")}
         missing = future_codes - set(EXCHANGE_CODE_TO_NAME.keys())
-        assert not missing, (
-            f"Futures codes in definitions but not in exchange mappings: {missing}"
-        )
+        assert not missing, f"Futures codes in definitions but not in exchange mappings: {missing}"
 
     def test_livestock_vx_in_instrument_definitions(self) -> None:
         """LE, HE, VX must also be in instrument_definitions.py (the re-export)."""

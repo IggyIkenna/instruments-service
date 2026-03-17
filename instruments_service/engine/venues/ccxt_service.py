@@ -27,7 +27,7 @@ from instruments_service.engine.venues.ccxt_types import (
 )
 
 if TYPE_CHECKING:
-    from unified_market_interface import VenueMapping
+    from unified_api_contracts import VenueMapping
 
 logger = logging.getLogger(__name__)
 

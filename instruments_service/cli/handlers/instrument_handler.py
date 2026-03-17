@@ -10,8 +10,8 @@ import logging
 from datetime import UTC, datetime
 from typing import TypedDict, cast
 
+from unified_api_contracts import VenueMapping
 from unified_events_interface import log_event
-from unified_market_interface import VenueMapping
 from unified_trading_library import get_date_range, parse_date
 
 from instruments_service.app.core.cloud_data_provider import CloudDataProvider

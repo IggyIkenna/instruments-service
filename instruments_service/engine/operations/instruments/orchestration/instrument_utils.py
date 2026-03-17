@@ -11,8 +11,8 @@ from typing import cast
 from uuid import uuid4
 
 import pandas as pd
+from unified_api_contracts import VenueMapping
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
-from unified_market_interface import VenueMapping
 
 from instruments_service.models import InstrumentDefinition
 from instruments_service.utils import ErrorWarningCounter
