@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import cast
 from uuid import uuid4
 
-from unified_config_interface import DataTypeConfig, ExchangeInstrumentConfig, VenueMapping
+from unified_api_contracts import DataTypeConfig, ExchangeInstrumentConfig, VenueMapping
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 from unified_trading_library import get_secret_client
 

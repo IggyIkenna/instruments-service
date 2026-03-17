@@ -15,8 +15,8 @@ from typing import Protocol, cast
 from uuid import uuid4
 
 import pandas as pd
+from unified_api_contracts import VenueMapping
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
-from unified_market_interface import VenueMapping
 
 from instruments_service.app.core.cloud_instrument_storage import CloudInstrumentStorage
 from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService

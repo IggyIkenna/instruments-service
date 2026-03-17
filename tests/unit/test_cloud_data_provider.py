@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pandas as pd
 import pytest
-from unified_config_interface import VenueMapping
+from unified_api_contracts import VenueMapping
 
 from instruments_service.app.core.cloud_data_provider import CloudDataProvider
 from instruments_service.app.core.instrument_validation import InstrumentValidationMixin

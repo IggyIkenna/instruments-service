@@ -41,7 +41,7 @@ class TestDeribitInstrumentIngestion:
         data = cassette_to_dict("deribit", "get_instruments_multi.yaml")
 
         instruments: list[dict[str, object]] = []
-        for uri, body in data.items():
+        for _uri, body in data.items():
             if isinstance(body, dict) and "result" in body:
                 result = body["result"]
                 if isinstance(result, list):
@@ -164,9 +164,7 @@ class TestBinanceInstrumentIngestion:
 
         import requests
 
-        resp = requests.get(
-            "https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT"
-        )
+        resp = requests.get("https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=BTCUSDT")
         assert resp.status_code == 200
 
 
@@ -188,11 +186,13 @@ class TestCrossVenueInstrumentAggregation:
                 result = body["result"]
                 if isinstance(result, list):
                     for inst in result:
-                        deribit_instruments.append({
-                            "source": "deribit",
-                            "symbol": inst["instrument_name"],
-                            "base": inst["base_currency"],
-                        })
+                        deribit_instruments.append(
+                            {
+                                "source": "deribit",
+                                "symbol": inst["instrument_name"],
+                                "base": inst["base_currency"],
+                            }
+                        )
 
         # Hyperliquid instruments
         hl_body = load_cassette("hyperliquid", "meta_and_asset_ctxs.yaml")

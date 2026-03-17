@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from typing import cast
 
-from unified_market_interface import VenueMapping
+from unified_api_contracts import VenueMapping
 
 from instruments_service.adapters import StorageAdapter
 from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService

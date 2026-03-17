@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock, patch
 
 import pytest
-from unified_config_interface import VenueMapping
+from unified_api_contracts import VenueMapping
 
 from instruments_service.engine.venues.ccxt_service import CCXTService
 

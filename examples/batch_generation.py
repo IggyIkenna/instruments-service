@@ -22,9 +22,9 @@ import logging
 from datetime import datetime, timedelta
 from uuid import uuid4
 
+from unified_api_contracts import VenueMapping
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
 from unified_internal_contracts.schemas.errors import ErrorContext
-from unified_market_interface import VenueMapping
 
 from instruments_service import (
     CloudInstrumentStorage,

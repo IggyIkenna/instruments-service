@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Protocol, TypedDict
 
 if TYPE_CHECKING:
-    from unified_config_interface import DataTypeConfig, ExchangeInstrumentConfig
+    from unified_api_contracts import DataTypeConfig, ExchangeInstrumentConfig
 
 logger = logging.getLogger(__name__)
 

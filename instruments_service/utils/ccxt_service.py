@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, cast
 import ccxt
 
 if TYPE_CHECKING:
-    from unified_config_interface import VenueMapping
+    from unified_api_contracts import VenueMapping
 
 logger = logging.getLogger(__name__)
 

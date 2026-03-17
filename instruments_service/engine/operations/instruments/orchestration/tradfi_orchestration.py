@@ -9,7 +9,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
-from unified_market_interface import VenueMapping
+from unified_api_contracts import VenueMapping
 
 from instruments_service.config import UnifiedInstrumentConfig
 from instruments_service.models import InstrumentDefinition
