@@ -15,7 +15,7 @@ import asyncio
 import logging
 import re
 import warnings
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import cast
 from uuid import uuid4
 
@@ -236,7 +236,7 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
             raise ValueError(f"{label} must have entry for venue {key}. Add to config.")
         if not isinstance(raw, list):
             raise TypeError(f"{label}[{key}] must be list, got {type(raw).__name__}")
-        return raw  # type: ignore[return-value]
+        return cast(list[str], raw)
 
     def _get_optional_list(self, mapping: dict[str, object], key: str, label: str) -> list[str]:
         """Retrieve an optional list value from a config dict, defaulting to []."""
@@ -245,7 +245,7 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
             return []
         if not isinstance(raw, list):
             raise TypeError(f"{label}[{key}] must be list, got {type(raw).__name__}")
-        return raw  # type: ignore[return-value]
+        return cast(list[str], raw)
 
     def _cefi_pre_filter(
         self,
@@ -257,22 +257,22 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
         valid_types = self._get_required_list(
             self.exchange_config.exchange_instrument_types,
             canonical_venue,
-            "exchange_instrument_types",  # type: ignore[arg-type]
+            "exchange_instrument_types",  # pyright: ignore[reportArgumentType]  # config attr type widening
         )
         valid_quotes = self._get_required_list(
             self.exchange_config.valid_quote_currencies,
             canonical_venue,
-            "valid_quote_currencies",  # type: ignore[arg-type]
+            "valid_quote_currencies",  # pyright: ignore[reportArgumentType]  # config attr type widening
         )
         excluded_bases = self._get_optional_list(
             self.exchange_config.excluded_base_currencies,
             canonical_venue,
-            "excluded_base_currencies",  # type: ignore[arg-type]
+            "excluded_base_currencies",  # pyright: ignore[reportArgumentType]  # config attr type widening
         )
         excluded_patterns = self._get_optional_list(
             self.exchange_config.excluded_symbol_patterns,
             canonical_venue,
-            "excluded_symbol_patterns",  # type: ignore[arg-type]
+            "excluded_symbol_patterns",  # pyright: ignore[reportArgumentType]  # config attr type widening
         )
 
         logger.info(
@@ -407,8 +407,8 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
             return False
         try:
             expiry_dt = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
-            target_only = target_date.date() if hasattr(target_date, "date") else target_date
-            return target_only > expiry_dt.date()  # type: ignore[operator]
+            target_only: date = target_date.date() if hasattr(target_date, "date") else cast(date, target_date)
+            return target_only > expiry_dt.date()
         except (ValueError, TypeError) as e:
             logger.debug("Could not parse expiry '%s': %s", expiry_str, e)
             return False
@@ -454,7 +454,7 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
             deribit_quotes = self._get_required_list(
                 self.exchange_config.valid_quote_currencies,
                 "DERIBIT",
-                "valid_quote_currencies",  # type: ignore[arg-type]
+                "valid_quote_currencies",  # pyright: ignore[reportArgumentType]  # config attr type widening
             )
             if clean_quote == "USD":
                 settle_asset = "USDC" if "USDC" in deribit_quotes else "USDT"
@@ -483,8 +483,9 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
 
         data_types_str = ",".join(self.data_config.instrument_data_types.get(normalized_instrument_type, ["trades"]))
         tardis_exchange = exchange.lower()
-        if hasattr(self.venue_mapping, "venue_to_data_provider"):
-            tardis_exchange = self.venue_mapping.venue_to_data_provider.get(canonical_venue, exchange.lower())  # type: ignore[union-attr]
+        _v2dp: object = getattr(self.venue_mapping, "venue_to_data_provider", None)
+        if isinstance(_v2dp, dict):
+            tardis_exchange = _v2dp.get(canonical_venue, exchange.lower())
 
         market_category = determine_market_category({"databento_symbol": "", "chain": "off-chain"})
         base_fields: dict[str, object] = {
