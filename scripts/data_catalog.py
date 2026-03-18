@@ -196,7 +196,7 @@ class _BucketDownloader:
 
 def get_cloud_service(bucket_name: str) -> _BucketDownloader | None:
     """Get cloud-agnostic service for a bucket."""
-    mock_mode = (_cloud_config.cloud_mock_mode or "").lower() == "true"
+    mock_mode = _cloud_config.is_mock_mode()
 
     if mock_mode:
         logger.warning("Running in MOCK mode - no real storage checks")
@@ -342,7 +342,7 @@ def generate_catalog(
             )
         )
 
-        logger.info("%s: %s/%s dates (%..1f%)", category, existing_count, len(dates), completion_pct)
+        logger.info("%s: %s/%s dates (%.1f%%)", category, existing_count, len(dates), completion_pct)
 
     overall_completion = (total_existing / total_expected * 100) if total_expected > 0 else 0
 

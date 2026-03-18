@@ -15,6 +15,7 @@ import contextlib
 import logging
 import os
 import sys
+from datetime import date
 from pathlib import Path
 from typing import cast
 
@@ -34,7 +35,10 @@ from unified_trading_library import (
     GCSEventSink,
     GracefulShutdownHandler,
     LogLevel,
+    PubSubEventSink,
     ServiceCLI,
+    get_messaging_protocol,
+    parse_date,
     setup_service_observability,
 )
 
@@ -56,7 +60,11 @@ logger.info("✅ Patched unified_trading_library config with instruments_config"
 from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.cli.handlers import get_handler_for_mode
 from instruments_service.cli.parser import parse_arguments
-from instruments_service.config_reloaders import start_domain_config_reloaders, stop_domain_config_reloaders
+from instruments_service.config_reloaders import (
+    load_ticker_universe_from_cloud,
+    start_domain_config_reloaders,
+    stop_domain_config_reloaders,
+)
 
 # ---------------------------------------------------------------------------
 # Pre-parser helpers (used by main_service_cli)
@@ -76,6 +84,7 @@ def _build_pre_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tickers", nargs="+", default=None)
     parser.add_argument("--redo-all", dest="redo_all", action="store_true", default=False)
     parser.add_argument("--log-level", dest="log_level", default="INFO")
+    parser.add_argument("--interval", type=int, default=15)
     return parser
 
 
@@ -198,12 +207,26 @@ class CorporateActionsProductionServiceHandler(BaseModeHandler):
         return cast(dict[str, object], result)
 
 
+class InstrumentsLiveHandler(BaseModeHandler):
+    """Async wrapper for the ``live`` mode handler (instruments live processing)."""
+
+    async def run(self) -> dict[str, object]:
+        handler = get_handler_for_mode("live", self.config)
+        result = handler.run(
+            interval=cast(int, self.config.get("interval", 15)),
+            category=cast(list[str] | None, self.config.get("category")),
+            venues=cast(list[str] | None, self.config.get("venues")),
+        )
+        return cast(dict[str, object], result)
+
+
 # ---------------------------------------------------------------------------
 # ServiceCLI entry-point
 # ---------------------------------------------------------------------------
 
 _SERVICE_HANDLERS: dict[str, type[BaseModeHandler]] = {
     "instruments": InstrumentsBatchHandler,
+    "live": InstrumentsLiveHandler,
     "aggregate": AggregateServiceHandler,
     "corporate_actions": CorporateActionsServiceHandler,
     "corporate_actions_backfill": CorporateActionsBackfillServiceHandler,
@@ -219,15 +242,25 @@ def main_service_cli() -> None:
 
     Pre-parses instruments-specific flags, then delegates to ServiceCLI.
     """
-    _sink = GCSEventSink(
-        project_id=instruments_config.gcp_project_id,
-        bucket=getattr(instruments_config, "events_bucket", f"{instruments_config.gcp_project_id}-events"),
-        service_name="instruments-service",
-    )
+    # Select event sink based on topology: PubSub for live transport, GCS for batch
+    _svc_messaging = get_messaging_protocol(mode="batch", service="instruments-service")
+    _svc_sink: GCSEventSink | PubSubEventSink
+    if _svc_messaging == "pubsub":
+        _svc_sink = PubSubEventSink(
+            project_id=instruments_config.gcp_project_id,
+            topic="instruments-service-events",
+            service_name="instruments-service",
+        )
+    else:
+        _svc_sink = GCSEventSink(
+            project_id=instruments_config.gcp_project_id,
+            bucket=getattr(instruments_config, "events_bucket", f"{instruments_config.gcp_project_id}-events"),
+            service_name="instruments-service",
+        )
     setup_service_observability(
         "instruments-service",
         mode="batch",
-        sink=_sink,
+        sink=_svc_sink,
         enable_tracing=True,
         memory_threshold_pct=85.0,
     )
@@ -245,6 +278,7 @@ def main_service_cli() -> None:
         redo_all: bool = cast(bool, pre_args.redo_all)
         category: list[str] | None = cast(list[str] | None, pre_args.category)
         tickers: list[str] | None = cast(list[str] | None, pre_args.tickers)
+        interval: int = cast(int, pre_args.interval)
 
         config: dict[str, object] = {
             "project_id": instruments_config.gcp_project_id,
@@ -255,6 +289,7 @@ def main_service_cli() -> None:
             "defi": defi,
             "sports": sports,
             "redo_all": redo_all,
+            "interval": interval,
         }
         if category:
             config = _resolve_categories({**config, "category": category})
@@ -423,21 +458,39 @@ def main() -> dict[str, HandlerResultValue]:
         # Parse arguments
         args = parse_arguments()
 
-        # Setup events with GCSEventSink now that we have config
-        _sink = GCSEventSink(
-            project_id=instruments_config.gcp_project_id,
-            bucket=getattr(instruments_config, "events_bucket", f"{instruments_config.gcp_project_id}-events"),
-            service_name="instruments-service",
-        )
+        # Setup events with topology-driven sink: PubSub for live, GCS for batch
+        _run_messaging = get_messaging_protocol(mode=args.run_mode, service="instruments-service")
+        _run_sink: GCSEventSink | PubSubEventSink
+        if _run_messaging == "pubsub":
+            _run_sink = PubSubEventSink(
+                project_id=instruments_config.gcp_project_id,
+                topic="instruments-service-events",
+                service_name="instruments-service",
+            )
+        else:
+            _run_sink = GCSEventSink(
+                project_id=instruments_config.gcp_project_id,
+                bucket=getattr(instruments_config, "events_bucket", f"{instruments_config.gcp_project_id}-events"),
+                service_name="instruments-service",
+            )
         setup_service_observability(
             "instruments-service",
             mode=args.run_mode,
-            sink=_sink,
+            sink=_run_sink,
             enable_tracing=True,
             memory_threshold_pct=85.0,
         )
 
         start_domain_config_reloaders(instruments_config)
+
+        # Load ticker universe from cloud storage (cloud-agnostic via UCI ConfigStore).
+        # Batch mode: replay config effective at start_date for historical consistency.
+        # Live mode / no date: load latest active config.
+        # Falls back to embedded tickers.json if cloud storage unavailable.
+        _batch_date: date | None = None
+        if args.start_date:
+            _batch_date = parse_date(args.start_date).date()
+        load_ticker_universe_from_cloud(instruments_config, target_date=_batch_date)
 
         # Setup logging level (getattr returns Any; cast to int for setLevel)
         log_level_int = cast(int, getattr(logging, args.log_level.upper()))
@@ -447,7 +500,7 @@ def main() -> dict[str, HandlerResultValue]:
         logger.info(
             "☁️ Environment: cloud_provider=%s mock_mode=%s",
             instruments_config.cloud_provider,
-            instruments_config.cloud_mock_mode,
+            instruments_config.is_mock_mode(),
         )
         if args.start_date:
             logger.info("📅 Date range: %s to %s", args.start_date, args.end_date or args.start_date)
@@ -459,8 +512,9 @@ def main() -> dict[str, HandlerResultValue]:
             "analytics_dataset": cast(str, args.analytics_dataset),
         }
 
-        # Get handler for mode
-        handler: ModeHandler = get_handler_for_mode(cast(str, args.mode), config)
+        # Get handler for mode — dispatch to live handler when run_mode is "live"
+        handler_mode = "live" if args.run_mode == "live" else cast(str, args.mode)
+        handler: ModeHandler = get_handler_for_mode(handler_mode, config)
         mode_handler = handler  # Track for cleanup on signal
 
         # Build handler kwargs from parsed arguments
@@ -470,7 +524,7 @@ def main() -> dict[str, HandlerResultValue]:
         result = handler.run(**handler_kwargs)
         # Inject cloud mode indicator into result for observability
         result["cloud_provider"] = instruments_config.cloud_provider
-        result["mock_mode"] = instruments_config.cloud_mock_mode
+        result["mock_mode"] = instruments_config.is_mock_mode()
         log_event("PROCESSING_COMPLETED", details={"mode": args.mode})
 
         # Cleanup
