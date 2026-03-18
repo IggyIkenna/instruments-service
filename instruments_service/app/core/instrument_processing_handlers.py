@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import warnings
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Protocol, cast
 from uuid import uuid4
 
@@ -68,7 +68,7 @@ class InstrumentProcessingHandlers:
         exchange: str,
         target_date: datetime | None = None,
         force: bool = False,
-    ) -> tuple[dict[str, dict[str, object]], int] | None: ...  # type: ignore[override]  # UTL-DEC-02: decorated mixin returns Coroutine|None; stub must match callers
+    ) -> tuple[dict[str, dict[str, object]], int] | None: ...  # pyright: ignore[reportReturnType]  # UTL-DEC-02: decorated mixin Coroutine|None vs callers
 
     def normalize_venue(self, exchange: str) -> str | None: ...
 
@@ -112,50 +112,58 @@ class InstrumentProcessingHandlers:
         valid_quotes: list[str] = self.exchange_config.valid_quote_currencies.get(canonical_venue) or ["USDT"]
         excluded_bases: list[str] = self.exchange_config.excluded_base_currencies.get(canonical_venue) or []
         excluded_patterns: list[str] = self.exchange_config.excluded_symbol_patterns.get(canonical_venue) or []
-
         logger.info(
             "Pre-filtering by exchange config: %s accepts types=%s, quotes=%s",
             canonical_venue,
             valid_types,
             valid_quotes,
         )
-
         pre_filtered: dict[str, dict[str, object]] = {}
         for symbol_id, symbol_info in instruments_data.items():
-            symbol_type: str = (cast(str | None, symbol_info.get("type")) or "").lower()
-            if self.normalize_instrument_type(symbol_type) not in valid_types:
-                continue
-
-            if excluded_patterns:
-                symbol_upper: str = symbol_id.upper()
-                if any(p.upper() in symbol_upper for p in excluded_patterns):
-                    logger.debug("Pre-filtered out %s: excluded pattern match", symbol_id)
-                    continue
-
-            parsed = self.parse_symbol_components(symbol_id, exchange)
-            if isinstance(parsed, dict):
-                base_asset = (str(parsed.get("base_asset") or "")).upper()
-                quote_asset = (str(parsed.get("quote_asset") or "")).upper()
-            else:
-                b, q = parsed if parsed else ("", "")
-                base_asset = (b or "").upper()
-                quote_asset = (q or "").upper()
-
-            if base_asset and base_asset in excluded_bases:
-                logger.debug("Pre-filtered out %s: base '%s' excluded", symbol_id, base_asset)
-                continue
-            if quote_asset and quote_asset not in valid_quotes:
-                continue
-
-            pre_filtered[symbol_id] = symbol_info
-
+            if self._passes_exchange_filter(
+                symbol_id,
+                symbol_info,
+                exchange,
+                valid_types,
+                valid_quotes,
+                excluded_bases,
+                excluded_patterns,
+            ):
+                pre_filtered[symbol_id] = symbol_info
         logger.info(
-            "Exchange config filter: %s/%s valid for %s",
-            len(pre_filtered),
-            len(instruments_data),
-            canonical_venue,
+            "Exchange config filter: %s/%s valid for %s", len(pre_filtered), len(instruments_data), canonical_venue
         )
         return pre_filtered
+
+    def _passes_exchange_filter(
+        self,
+        symbol_id: str,
+        symbol_info: dict[str, object],
+        exchange: str,
+        valid_types: list[str],
+        valid_quotes: list[str],
+        excluded_bases: list[str],
+        excluded_patterns: list[str],
+    ) -> bool:
+        """Return True if a single symbol passes the exchange config filter."""
+        symbol_type: str = (cast(str | None, symbol_info.get("type")) or "").lower()
+        if self.normalize_instrument_type(symbol_type) not in valid_types:
+            return False
+        if excluded_patterns:
+            symbol_upper: str = symbol_id.upper()
+            if any(p.upper() in symbol_upper for p in excluded_patterns):
+                return False
+        parsed = self.parse_symbol_components(symbol_id, exchange)
+        if isinstance(parsed, dict):
+            base_asset = (str(parsed.get("base_asset") or "")).upper()
+            quote_asset = (str(parsed.get("quote_asset") or "")).upper()
+        else:
+            b, q = parsed if parsed else ("", "")
+            base_asset = (b or "").upper()
+            quote_asset = (q or "").upper()
+        if base_asset and base_asset in excluded_bases:
+            return False
+        return not (quote_asset and quote_asset not in valid_quotes)
 
     def _apply_mvp_filter(
         self,
@@ -278,8 +286,8 @@ class InstrumentProcessingHandlers:
             return False
         try:
             expiry_dt = datetime.fromisoformat(expiry_str.replace("Z", "+00:00"))
-            target_date_only = target_date.date() if hasattr(target_date, "date") else target_date
-            return target_date_only > expiry_dt.date()  # type: ignore[operator]
+            target_date_only: date = target_date.date() if hasattr(target_date, "date") else cast(date, target_date)
+            return target_date_only > expiry_dt.date()
         except (ValueError, TypeError) as e:
             logger.debug("Could not parse expiry '%s': %s", expiry_str, e)
             return False
@@ -301,25 +309,10 @@ class InstrumentProcessingHandlers:
         )
         if not canonical_key:
             return None
-
-        parsed: dict[str, object] = self.parse_symbol_components(symbol_id, exchange)
-        if isinstance(parsed, dict):
-            base_asset = cast(str, parsed.get("base_asset") or "")
-            quote_asset = cast(str, parsed.get("quote_asset") or "")
-        else:
-            base_asset, quote_asset = parsed if parsed else ("", "")
-
-        clean_base = str(base_asset or "").upper() if base_asset is not None else ""
-        clean_quote = str(quote_asset or "").upper() if quote_asset is not None else ""
-
+        clean_base, clean_quote = self._resolve_base_quote(symbol_id, exchange)
         if clean_base == clean_quote and clean_base:
-            return None  # nonsensical pair
-
-        _raw_type: object = symbol_info.get("type")
-        _type_str: str = str(_raw_type) if _raw_type else ""
-        normalized_instrument_type = self.normalize_instrument_type(_type_str)
-        norm_inst_type: str = normalized_instrument_type or ""
-
+            return None
+        norm_inst_type = self._resolve_instrument_type(symbol_info)
         enhanced_fields: dict[str, object] = await self._populate_all_derived_fields(
             canonical_key,
             canonical_venue,
@@ -329,25 +322,66 @@ class InstrumentProcessingHandlers:
             symbol_id,
             exchange,
         )
-
-        available_to_datetime = self._resolve_available_to(symbol_info, normalized_instrument_type, enhanced_fields)
-
+        available_to_datetime = self._resolve_available_to(symbol_info, norm_inst_type or None, enhanced_fields)
         if self._is_expired(available_to_datetime, target_date):
             return None
-        if self._is_past_expiry(target_date, normalized_instrument_type, enhanced_fields):
+        if self._is_past_expiry(target_date, norm_inst_type or None, enhanced_fields):
             return None
+        inst_data = self._assemble_instrument_data(
+            enhanced_fields,
+            canonical_key,
+            canonical_venue,
+            norm_inst_type,
+            clean_base,
+            clean_quote,
+            symbol_id,
+            exchange,
+            symbol_info,
+            available_to_datetime,
+        )
+        return InstrumentDefinition.model_validate(inst_data)
 
+    def _resolve_base_quote(self, symbol_id: str, exchange: str) -> tuple[str, str]:
+        """Parse and normalize base/quote assets from a symbol."""
+        parsed: dict[str, object] = self.parse_symbol_components(symbol_id, exchange)
+        if isinstance(parsed, dict):
+            base_asset = cast(str, parsed.get("base_asset") or "")
+            quote_asset = cast(str, parsed.get("quote_asset") or "")
+        else:
+            base_asset, quote_asset = parsed if parsed else ("", "")
+        clean_base = str(base_asset or "").upper() if base_asset is not None else ""
+        clean_quote = str(quote_asset or "").upper() if quote_asset is not None else ""
+        return clean_base, clean_quote
+
+    def _resolve_instrument_type(self, symbol_info: dict[str, object]) -> str:
+        """Normalize the instrument type from raw symbol info."""
+        _raw_type: object = symbol_info.get("type")
+        _type_str: str = str(_raw_type) if _raw_type else ""
+        return self.normalize_instrument_type(_type_str) or ""
+
+    def _assemble_instrument_data(
+        self,
+        enhanced_fields: dict[str, object],
+        canonical_key: str,
+        canonical_venue: str,
+        norm_inst_type: str,
+        clean_base: str,
+        clean_quote: str,
+        symbol_id: str,
+        exchange: str,
+        symbol_info: dict[str, object],
+        available_to_datetime: str | None,
+    ) -> dict[str, object]:
+        """Assemble the full instrument data dict from enhanced fields and metadata."""
         settle_asset = self._infer_settle_asset(clean_base, clean_quote, canonical_venue)
         symbol: str = canonical_key.split(":", 2)[2] if len(canonical_key.split(":")) >= 3 else symbol_id
-
-        inst_type_str: str = normalized_instrument_type or "SPOT_PAIR"
+        inst_type_str: str = norm_inst_type or "SPOT_PAIR"
         config_data_types = self.data_config.instrument_data_types.get(inst_type_str, ["trades", "book_snapshot_5"])
         tardis_exchange: str = self.venue_mapping.venue_instrument_type_to_tardis.get(
-            (canonical_venue, inst_type_str), exchange.lower()
+            (canonical_venue, inst_type_str),
+            exchange.lower(),
         )
-
         market_category = determine_market_category({"databento_symbol": "", "chain": "off-chain"})
-
         inst_data: dict[str, object] = dict(enhanced_fields)
         inst_data.update(
             {
@@ -368,7 +402,7 @@ class InstrumentProcessingHandlers:
                 "data_types": ",".join(config_data_types),
             }
         )
-        return InstrumentDefinition.model_validate(inst_data)
+        return inst_data
 
     async def process_exchange_instruments(
         self,
@@ -376,35 +410,18 @@ class InstrumentProcessingHandlers:
         target_date: datetime | None = None,
         force: bool = False,
     ) -> dict[str, InstrumentDefinition]:
-        """
-        Process all instruments for an exchange and generate canonical keys.
-
-        .. deprecated::
-            CeFi path now uses UMI. This method will be removed in a future release.
-
-        Args:
-            exchange: Exchange name
-            target_date: Target date for processing
-            force: If True, force regeneration
-
-        Returns:
-            Dictionary of processed instrument metadata
-        """
+        """Process all instruments for an exchange and generate canonical keys (deprecated)."""
         warnings.warn(
             "process_exchange_instruments is deprecated. CeFi path uses UMI get_adapter('tardis').fetch_instruments.",
             DeprecationWarning,
             stacklevel=2,
         )
-
         fetch_result = await self.fetch_exchange_instruments(exchange, target_date, force)
         instruments_data, date_filtered_count = cast(tuple[dict[str, dict[str, object]], int], fetch_result)
-
         canonical_venue = self.normalize_venue(exchange) or exchange
         instruments_data = self._pre_filter_by_exchange_config(instruments_data, exchange, canonical_venue)
-
         if canonical_venue in self.venue_mapping.spot_mvp_filtered_venues:
             instruments_data = self._apply_mvp_filter(instruments_data, exchange, canonical_venue)
-
         filter_stats: dict[str, int] = {
             "no_canonical_key": 0,
             "same_base_quote": 0,
@@ -414,17 +431,39 @@ class InstrumentProcessingHandlers:
             "processing_error": 0,
             "success": 0,
         }
+        processed_instruments = await self._classify_instruments(
+            instruments_data,
+            exchange,
+            canonical_venue,
+            target_date,
+            filter_stats,
+        )
+        self._log_filter_stats(filter_stats, len(processed_instruments), exchange)
+        return processed_instruments
 
-        processed_instruments: dict[str, InstrumentDefinition] = {}
+    async def _classify_instruments(
+        self,
+        instruments_data: dict[str, dict[str, object]],
+        exchange: str,
+        canonical_venue: str,
+        target_date: datetime | None,
+        filter_stats: dict[str, int],
+    ) -> dict[str, InstrumentDefinition]:
+        """Build and classify each instrument, updating filter_stats."""
+        processed: dict[str, InstrumentDefinition] = {}
         for symbol_id, symbol_info in instruments_data.items():
             try:
                 metadata = await self._build_instrument_definition(
-                    symbol_id, symbol_info, exchange, canonical_venue, target_date
+                    symbol_id,
+                    symbol_info,
+                    exchange,
+                    canonical_venue,
+                    target_date,
                 )
                 if metadata is None:
                     filter_stats["no_canonical_key"] += 1
                     continue
-                processed_instruments[metadata.instrument_key] = metadata
+                processed[metadata.instrument_key] = metadata
                 filter_stats["success"] += 1
                 self.cache_metadata(metadata.instrument_key, metadata)
             except (OSError, ValueError, RuntimeError) as e:
@@ -439,9 +478,13 @@ class InstrumentProcessingHandlers:
                 logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
                 filter_stats["processing_error"] += 1
                 logger.warning("Failed to process instrument %s: %s", symbol_id, e)
+        return processed
 
+    @staticmethod
+    def _log_filter_stats(filter_stats: dict[str, int], processed_count: int, exchange: str) -> None:
+        """Log the instrument processing filter breakdown."""
         total_filtered = sum(v for k, v in filter_stats.items() if k != "success")
-        logger.info("Processed %s instruments from %s", len(processed_instruments), exchange)
+        logger.info("Processed %s instruments from %s", processed_count, exchange)
         if total_filtered > 0:
             logger.info(
                 "Filtering breakdown: no_key=%s, same_base_quote=%s, expired=%s, errors=%s",
@@ -450,7 +493,6 @@ class InstrumentProcessingHandlers:
                 filter_stats.get("expired_filtered", 0),
                 filter_stats["processing_error"],
             )
-        return processed_instruments
 
     async def generate_instruments_for_exchanges(
         self,
@@ -504,67 +546,30 @@ class InstrumentProcessingHandlers:
         return all_instruments
 
     def filter_instruments_by_exchange_config(
-        self, instruments: dict[str, dict[str, object]], exchange: str
+        self,
+        instruments: dict[str, dict[str, object]],
+        exchange: str,
     ) -> dict[str, dict[str, object]]:
         """Filter instruments by exchange-specific capabilities."""
         canonical_venue: str = self.normalize_venue(exchange) or exchange
-
-        valid_types_value = self.exchange_config.exchange_instrument_types.get(canonical_venue)
-        if valid_types_value is None:
-            valid_types_value = ["SPOT_PAIR"]
-        valid_types: list[str] = valid_types_value
-
-        valid_quotes_value = self.exchange_config.valid_quote_currencies.get(canonical_venue)
-        if valid_quotes_value is None:
-            valid_quotes_value = ["USDT"]
-        valid_quotes: list[str] = valid_quotes_value
-
+        valid_types: list[str] = self.exchange_config.exchange_instrument_types.get(canonical_venue) or ["SPOT_PAIR"]
+        valid_quotes: list[str] = self.exchange_config.valid_quote_currencies.get(canonical_venue) or ["USDT"]
         is_derivative = canonical_venue in self.exchange_config.derivative_exchanges
-
-        excluded_bases_value = self.exchange_config.excluded_base_currencies.get(canonical_venue)
-        if excluded_bases_value is None:
-            excluded_bases_value = []
-        excluded_bases: list[str] = excluded_bases_value
-
-        excluded_patterns_value = self.exchange_config.excluded_symbol_patterns.get(canonical_venue)
-        if excluded_patterns_value is None:
-            excluded_patterns_value = []
-        excluded_patterns: list[str] = excluded_patterns_value
-
+        excluded_bases: list[str] = self.exchange_config.excluded_base_currencies.get(canonical_venue) or []
+        excluded_patterns: list[str] = self.exchange_config.excluded_symbol_patterns.get(canonical_venue) or []
         filtered: dict[str, dict[str, object]] = {}
-
         for inst_key, inst_data in instruments.items():
             try:
-                # Check instrument type
-                inst_type: str = cast(str, inst_data.get("instrument_type") or "")
-                if inst_type not in valid_types:
-                    continue
-
-                # Check quote currency
-                quote_asset: str = (cast(str | None, inst_data.get("quote_asset")) or "").upper()
-                if quote_asset not in valid_quotes:
-                    continue
-
-                # Check excluded base currencies
-                base_asset: str = (cast(str | None, inst_data.get("base_asset")) or "").upper()
-                if base_asset in excluded_bases:
-                    continue
-
-                # Check excluded symbol patterns
-                symbol: str = (cast(str | None, inst_data.get("symbol")) or "").upper()
-                if excluded_patterns:
-                    excluded_by_pattern = False
-                    for pattern in excluded_patterns:
-                        if pattern.upper() in symbol:
-                            excluded_by_pattern = True
-                            break
-                    if excluded_by_pattern:
-                        continue
-
-                # Populate complete fields
-                inst_data = self._populate_complete_instrument_data(inst_data, exchange, is_derivative)
-                filtered[inst_key] = inst_data
-
+                accepted = self._apply_venue_filter(
+                    inst_data,
+                    valid_types,
+                    valid_quotes,
+                    excluded_bases,
+                    excluded_patterns,
+                )
+                if accepted:
+                    inst_data = self._populate_complete_instrument_data(inst_data, exchange, is_derivative)
+                    filtered[inst_key] = inst_data
             except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
                 _err = EnhancedError(
                     message=str(e),
@@ -577,6 +582,27 @@ class InstrumentProcessingHandlers:
                 logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
                 raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
         return filtered
+
+    @staticmethod
+    def _apply_venue_filter(
+        inst_data: dict[str, object],
+        valid_types: list[str],
+        valid_quotes: list[str],
+        excluded_bases: list[str],
+        excluded_patterns: list[str],
+    ) -> bool:
+        """Return True if an instrument passes type/quote/base/pattern filters."""
+        inst_type: str = cast(str, inst_data.get("instrument_type") or "")
+        if inst_type not in valid_types:
+            return False
+        quote_asset: str = (cast(str | None, inst_data.get("quote_asset")) or "").upper()
+        if quote_asset not in valid_quotes:
+            return False
+        base_asset: str = (cast(str | None, inst_data.get("base_asset")) or "").upper()
+        if base_asset in excluded_bases:
+            return False
+        symbol: str = (cast(str | None, inst_data.get("symbol")) or "").upper()
+        return not (excluded_patterns and any(p.upper() in symbol for p in excluded_patterns))
 
     def _populate_complete_instrument_data(
         self, inst_data: dict[str, object], exchange: str, is_derivative: bool
