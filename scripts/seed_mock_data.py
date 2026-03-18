@@ -21,11 +21,10 @@ from typing import Final
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 from unified_internal_contracts import InstrumentDefinition
 from unified_internal_contracts.modes import MockScenario
 from unified_internal_contracts.testing.scenario_config import ScenarioConfig
+from unified_trading_library.core.seed_writer import SeedWriter, get_seed_writer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -820,9 +819,9 @@ def generate_instruments(
 
 def write_parquet_by_venue(
     instruments: list[InstrumentDefinition],
-    output_root: Path,
+    writer: SeedWriter,
     date_str: str,
-) -> list[Path]:
+) -> list[str]:
     """Write instrument parquet files partitioned by venue (matching GCS layout).
 
     Path template: instrument_availability/by_date/day={date}/venue={venue}/instruments.parquet
@@ -839,28 +838,25 @@ def write_parquet_by_venue(
             by_venue[venue] = []
         by_venue[venue].append(row)
 
-    written_paths: list[Path] = []
+    written_paths: list[str] = []
 
     for venue, rows in sorted(by_venue.items()):
         venue_folder = venue.replace("/", "-").replace("\\", "-")
-        out_dir = output_root / PATH_PREFIX / f"day={date_str}" / f"venue={venue_folder}"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / "instruments.parquet"
+        relative_path = f"{PATH_PREFIX}/day={date_str}/venue={venue_folder}/instruments.parquet"
 
         df = pd.DataFrame(rows)
-        table = pa.Table.from_pandas(df, preserve_index=False)
-        pq.write_table(table, str(out_path), compression="snappy")
-        written_paths.append(out_path)
-        log.info("  %s: %d instruments -> %s", venue, len(rows), out_path)
+        out = writer.write_parquet(df, relative_path)
+        written_paths.append(out)
+        log.info("  %s: %d instruments", venue, len(rows))
 
     return written_paths
 
 
 def write_combined_parquet(
     instruments: list[InstrumentDefinition],
-    output_root: Path,
+    writer: SeedWriter,
     date_str: str,
-) -> Path:
+) -> str:
     """Write a single combined parquet file with all instruments (for downstream convenience)."""
     timestamp = datetime.now(UTC)
     rows: list[dict[str, object]] = []
@@ -869,25 +865,21 @@ def write_combined_parquet(
         row["timestamp"] = timestamp
         rows.append(row)
 
-    out_dir = output_root / PATH_PREFIX / f"day={date_str}"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "all_instruments.parquet"
-
+    relative_path = f"{PATH_PREFIX}/day={date_str}/all_instruments.parquet"
     df = pd.DataFrame(rows)
-    table = pa.Table.from_pandas(df, preserve_index=False)
-    pq.write_table(table, str(out_path), compression="snappy")
-    log.info("Combined: %d instruments -> %s", len(instruments), out_path)
-    return out_path
+    out = writer.write_parquet(df, relative_path)
+    log.info("Combined: %d instruments", len(instruments))
+    return out
 
 
 def write_seed_manifest(
-    output_root: Path,
+    writer: SeedWriter,
     counts: dict[str, int],
-    written_paths: list[Path],
+    written_paths: list[str],
     scenario_name: str,
     seed: int,
     date_str: str,
-) -> Path:
+) -> str:
     """Write a JSON manifest summarising the seed run."""
     manifest: dict[str, object] = {
         "service": "instruments-service",
@@ -898,29 +890,22 @@ def write_seed_manifest(
         "generated_at": datetime.now(UTC).isoformat(),
         "instrument_counts": counts,
         "total_instruments": sum(counts.values()),
-        "files": [str(p) for p in written_paths],
+        "files": written_paths,
     }
 
-    manifest_path = output_root / "seed_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2, default=str))
-    log.info("Manifest: %s", manifest_path)
-    return manifest_path
+    return writer.write_json(manifest, "seed_manifest.json")
 
 
-def write_seed_complete_marker(output_root: Path) -> Path:
+def write_seed_complete_marker(writer: SeedWriter) -> str:
     """Write .seed-complete marker file (used by validate-mock-upstream.sh)."""
-    marker_path = output_root / ".seed-complete"
-    marker_path.write_text(
-        json.dumps(
-            {
-                "service": "instruments-service",
-                "completed_at": datetime.now(UTC).isoformat(),
-                "layer": 1,
-            }
-        )
+    marker_data = json.dumps(
+        {
+            "service": "instruments-service",
+            "completed_at": datetime.now(UTC).isoformat(),
+            "layer": 1,
+        }
     )
-    log.info("Marker: %s", marker_path)
-    return marker_path
+    return writer.write_text(marker_data, ".seed-complete")
 
 
 # ---------------------------------------------------------------------------
@@ -981,34 +966,25 @@ def main(argv: list[str] | None = None) -> int:
     log.info("Scenario: %s (seed=%d)", scenario_enum.value, effective_seed)
     log.info("Env: %s, Date: %s", args.env, args.date)
 
-    # Determine output root
-    if args.output_dir:
-        output_root = Path(args.output_dir)
-    else:
-        # Look for workspace root: script is at instruments-service/scripts/seed_mock_data.py
-        script_dir = Path(__file__).resolve().parent
-        repo_root = script_dir.parent
-        workspace_root = repo_root.parent
-        output_root = workspace_root / ".local-dev-cache" / "mock-seed" / "instruments-service"
-
-    output_root.mkdir(parents=True, exist_ok=True)
-    log.info("Output: %s", output_root)
+    # Create seed writer (local filesystem or cloud storage)
+    writer = get_seed_writer(args.env, "instruments-service", args.output_dir)
+    log.info("Writer: %s", type(writer).__name__)
 
     # Generate instruments
     instruments, counts = generate_instruments(scenario_cfg, effective_seed)
 
     # Write partitioned parquet files (by venue)
-    written = write_parquet_by_venue(instruments, output_root, args.date)
+    written = write_parquet_by_venue(instruments, writer, args.date)
 
     # Write combined parquet (all instruments in one file)
-    combined_path = write_combined_parquet(instruments, output_root, args.date)
+    combined_path = write_combined_parquet(instruments, writer, args.date)
     written.append(combined_path)
 
     # Write manifest
-    write_seed_manifest(output_root, counts, written, scenario_enum.value, effective_seed, args.date)
+    write_seed_manifest(writer, counts, written, scenario_enum.value, effective_seed, args.date)
 
     # Write .seed-complete marker
-    write_seed_complete_marker(output_root)
+    write_seed_complete_marker(writer)
 
     # Print summary
     total = sum(counts.values())
@@ -1017,7 +993,6 @@ def main(argv: list[str] | None = None) -> int:
     for cat, count in sorted(counts.items()):
         log.info("  %-8s %d", cat, count)
     log.info("Files written: %d parquet files", len(written))
-    log.info("Marker: %s/.seed-complete", output_root)
 
     return 0
 
