@@ -61,8 +61,8 @@ class InstrumentProcessingService(
         # Store project ID for mixins
         self._tardis_project_id = str(config.get("project_id") or instruments_config.gcp_project_id)
 
-        # Initialize all mixin components
-        if self.processing_config.enable_defi_integration:
+        # Initialize DeFi integration (lazy in mock mode — no Secret Manager calls)
+        if self.processing_config.enable_defi_integration and not instruments_config.is_mock_mode():
             self._init_defi_integration()
         self._init_ccxt_integration(config)
         self._init_symbol_processing()
