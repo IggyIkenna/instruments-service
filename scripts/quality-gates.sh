@@ -43,6 +43,7 @@ IMPORT_INSIDE_EXCLUDE_GLOBS=(
     "!**/engine/operations/instruments/orchestration/defi_orchestration.py"   # Circular dep avoidance (InstrumentProcessingService)
     "!**/engine/operations/instruments/orchestration/tradfi_orchestration.py" # Circular dep avoidance (InstrumentProcessingService)
     "!**/engine/operations/instruments/processors/cefi_processor.py"          # Circular dep avoidance (DerivedFieldsPopulator)
+    "!**/sports/player_aliases.py"               # Lazy load download_from_storage + pandas (pattern matches team_aliases.py)
 )
 
 # Deep unified lib imports: UAC sports facade and URDI adapters are exempt.
