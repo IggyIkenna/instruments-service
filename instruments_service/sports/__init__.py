@@ -7,6 +7,7 @@ Provides sports-specific parsers and registries for the SPORTS market category:
 - Team normalizer: maps team name variants to canonical identifiers
 - Team aliases: cross-provider team identity resolution (API-Football, FootyStats, etc.)
 - Round names: canonical tournament round identifiers and prefix-based lookup
+- Prediction market resolver: cross-venue event resolution (Polymarket, Kalshi, Odds API)
 
 Sports augments instruments-service as a category alongside CEFI, TRADFI, DEFI.
 Implementation follows the same pattern as other categories.
@@ -27,6 +28,10 @@ from instruments_service.sports.league_registry import (
     get_leagues_by_country,
     get_leagues_for_sport,
     get_prediction_leagues,
+)
+from instruments_service.sports.prediction_market_resolver import (
+    PredictionMarketResolver,
+    load_cross_venue_mappings_from_dict,
 )
 from instruments_service.sports.round_names import (
     ROUND_NAMES,
@@ -54,6 +59,7 @@ __all__ = [
     "LeagueClassificationRegistry",
     "LeagueClassificationType",
     "LeagueDefinition",
+    "PredictionMarketResolver",
     "RoundMatch",
     "TeamAliasResolver",
     "TeamNameHistory",
@@ -65,6 +71,7 @@ __all__ = [
     "get_leagues_for_sport",
     "get_prediction_leagues",
     "is_known_round",
+    "load_cross_venue_mappings_from_dict",
     "load_team_mappings_from_dict",
     "load_team_mappings_from_gcs",
     "resolve_round_name",
