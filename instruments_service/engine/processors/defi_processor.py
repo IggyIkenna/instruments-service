@@ -7,15 +7,16 @@ Extracted from InstrumentProcessingService.fetch_defi_instruments.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Protocol, cast
 from uuid import uuid4
 
+from unified_events_interface import VENUE_ZERO_INSTRUMENTS, log_event
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 from unified_market_interface import (
+    AavePlasmaAdapter,
     AaveV3Adapter,
     BalancerAdapter,
     CurveAdapter,
@@ -55,10 +56,10 @@ class _DateFilterProtocol(Protocol):
 
     def filter_instruments_by_date(
         self,
-        instruments: dict[str, object],
+        instruments: dict[str, dict[str, str | None | object]],
         target_date: datetime,
         protocol: str | None = None,
-    ) -> dict[str, object]: ...
+    ) -> dict[str, dict[str, str | None | object]]: ...
 
 
 class _CCXTServiceProtocol(Protocol):
@@ -96,7 +97,21 @@ class DefiServiceProtocol(Protocol):
     def get_manual_ccxt_fallback(self, venue: str, base_asset: str) -> dict[str, object]: ...
 
 
-def _fetch_raw_from_protocol(
+def _list_to_dict(items: list[dict[str, object]]) -> dict[str, object]:
+    """Convert a list of instrument dicts to a keyed dict.
+
+    Some adapters (Ethena, Morpho) return ``list[dict]`` instead of
+    ``dict[str, dict]``.  We key by ``instrument_key`` or ``instrument_id``
+    when available, falling back to the list index.
+    """
+    result: dict[str, object] = {}
+    for idx, item in enumerate(items):
+        key = str(item.get("instrument_key") or item.get("instrument_id") or item.get("id") or f"__idx_{idx}")
+        result[key] = item
+    return result
+
+
+async def _fetch_raw_from_protocol(
     service: DefiServiceProtocol,
     protocol: str,
     chain: str,
@@ -118,21 +133,21 @@ def _fetch_raw_from_protocol(
 
     proto = protocol.lower()
 
+    raw: dict[str, object] | list[dict[str, object]] | None = None
+
     if proto == "uniswap_v3":
         adapter = UniswapV3Adapter(chain=chain, api_key=graph_api_key)
-        return cast(
+        raw = cast(
             dict[str, object],
-            asyncio.run(
-                adapter.fetch_pools(
-                    base_currency_list=base_currency_list,
-                    quote_currency_list=quote_currency_list,
-                    base_currency=base_currency_kw,
-                    min_liquidity=min_liquidity_kw,
-                )
+            await adapter.fetch_pools(
+                base_currency_list=base_currency_list,
+                quote_currency_list=quote_currency_list,
+                base_currency=base_currency_kw,
+                min_liquidity=min_liquidity_kw,
             ),
         )
     elif proto == "balancer":
-        return cast(
+        raw = cast(
             dict[str, object],
             BalancerAdapter(chain=chain).fetch_markets(
                 base_currency_list=base_currency_list,
@@ -142,29 +157,64 @@ def _fetch_raw_from_protocol(
             ),
         )
     elif proto == "aave_v3":
-        return cast(
+        raw = cast(
             dict[str, object],
-            AaveV3Adapter(chain=chain, graph_api_key=graph_api_key).fetch_markets(target_date=target_date),
+            await AaveV3Adapter(chain=chain, graph_api_key=graph_api_key).fetch_markets(target_date=target_date),
         )
     elif proto == "etherfi":
-        return cast(dict[str, object], EtherFiAdapter(chain=chain).fetch_lst_instruments())
+        raw = cast(dict[str, object], EtherFiAdapter(chain=chain).fetch_lst_instruments())
     elif proto == "lido":
-        return cast(dict[str, object], LidoAdapter(chain=chain).fetch_lst_instruments())
+        raw = cast(dict[str, object], LidoAdapter(chain=chain).fetch_lst_instruments())
     elif proto == "morpho":
-        return cast(dict[str, object], MorphoAdapter(chain=chain).fetch_markets())
+        # MorphoAdapter.fetch_markets() returns list[dict], not dict
+        raw = await MorphoAdapter(chain=chain).fetch_markets()
     elif proto == "hyperliquid":
         hl_bases: list[str] = service.venue_mapping.hyperliquid_aster_mvp_base_assets
         adapter = HyperliquidAdapter(base_currency_list=hl_bases)
         perpetuals = cast(dict[str, object], adapter.fetch_perpetuals(test_data_availability=False))
         spot_pairs = cast(dict[str, object], adapter.fetch_spot_pairs(test_data_availability=False))
-        return {**perpetuals, **spot_pairs}
+        raw = {**perpetuals, **spot_pairs}
     elif proto == "aster":
-        raise NotImplementedError(
-            "Aster adapter not available (AsterBaseClient removed from UCS). "
-            "Use Hyperliquid or other on-chain perpetual venues."
-        )
+        from unified_reference_data_interface import create_reference_data_adapter
+
+        aster_adapter = create_reference_data_adapter("aster")
+        records = await aster_adapter.get_instruments()
+        raw = {}
+        for record in records:
+            # Convert InstrumentRecord → InstrumentDefinition-compatible dict
+            # None → empty string, Decimal → str, datetime → isoformat
+            from datetime import datetime as _dt
+            from decimal import Decimal as _Decimal
+
+            d: dict[str, object] = {}
+            for k, v in record.model_dump().items():
+                if v is None:
+                    d[k] = ""
+                elif isinstance(v, _Decimal):
+                    d[k] = str(v) if v.is_finite() else ""
+                elif isinstance(v, _dt):
+                    d[k] = v.isoformat()
+                else:
+                    d[k] = v
+            d["instrument_key"] = record.instrument_key
+            d["venue"] = "ASTER"
+            d["instrument_type"] = "PERPETUAL"
+            d["symbol"] = record.symbol or record.raw_symbol or ""
+            d["available_from_datetime"] = (
+                record.available_since.isoformat() if record.available_since else "2024-10-01T00:00:00Z"
+            )
+            d["base_asset"] = record.base_asset or ""
+            d["quote_asset"] = record.quote_asset or ""
+            d["exchange_raw_symbol"] = record.raw_symbol or ""
+            d["tardis_exchange"] = ""
+            d["tardis_symbol"] = ""
+            d["data_provider"] = "aster"
+            d["market_category"] = "cefi"
+            d["data_types"] = "trades,book_snapshot_5,derivative_ticker"
+            raw[record.instrument_key] = d
+        return raw
     elif proto == "uniswap_v2":
-        return cast(
+        raw = cast(
             dict[str, object],
             UniswapV2Adapter(chain=chain, api_key=graph_api_key).fetch_markets(
                 base_currency_list=base_currency_list,
@@ -174,7 +224,7 @@ def _fetch_raw_from_protocol(
             ),
         )
     elif proto == "uniswap_v4":
-        return cast(
+        raw = cast(
             dict[str, object],
             UniswapV4Adapter(chain=chain, api_key=graph_api_key).fetch_markets(
                 base_currency_list=base_currency_list,
@@ -183,21 +233,35 @@ def _fetch_raw_from_protocol(
             ),
         )
     elif proto == "curve":
-        return cast(
+        raw = cast(
             dict[str, object], CurveAdapter(chain=chain if chain else "ETHEREUM").fetch_markets(target_date=target_date)
         )
     elif proto == "ethena":
-        return cast(dict[str, object], EthenaAdapter(chain=chain).fetch_yield_bearing_instruments())
+        # EthenaAdapter.fetch_yield_bearing_instruments() returns list[dict], not dict
+        raw = await EthenaAdapter(chain=chain).fetch_yield_bearing_instruments()
     elif proto == "euler_plasma":
-        return cast(
+        raw = cast(
             dict[str, object], EulerAdapter(chain=chain if chain else "ETHEREUM").fetch_markets(target_date=target_date)
         )
     elif proto == "fluid_plasma":
-        return cast(
+        raw = cast(
             dict[str, object], FluidAdapter(chain=chain if chain else "ETHEREUM").fetch_markets(target_date=target_date)
+        )
+    elif proto == "aave_plasma":
+        raw = cast(
+            dict[str, object],
+            AavePlasmaAdapter(chain=chain if chain else "ETHEREUM", graph_api_key=graph_api_key).fetch_markets(
+                target_date=target_date
+            ),
         )
     else:
         return None
+
+    # Normalize: some adapters return list[dict] instead of dict[str, dict].
+    # Convert lists to keyed dicts so downstream code can call .items() safely.
+    if isinstance(raw, list):
+        return _list_to_dict(raw)
+    return raw
 
 
 def _enrich_hyperliquid_instrument(
@@ -274,7 +338,7 @@ def _passes_mvp_filter(
     return unwrapped is not None and unwrapped in mvp_set
 
 
-def fetch_defi_instruments(
+async def fetch_defi_instruments(
     service: DefiServiceProtocol,
     protocol: str,
     chain: str = "ETHEREUM",
@@ -295,16 +359,30 @@ def fetch_defi_instruments(
         Dictionary mapping instrument_key to InstrumentDefinition
     """
     try:
-        raw_instruments = _fetch_raw_from_protocol(service, protocol, chain, target_date, **kwargs)
+        raw_instruments = await _fetch_raw_from_protocol(service, protocol, chain, target_date, **kwargs)
         if raw_instruments is None:
             logger.debug("DeFi protocol '%s' not yet implemented, skipping", protocol)
             return {}
 
-        if target_date:
+        # Skip date filtering for on-chain CLOB perpetuals — they're always available
+        if target_date and protocol.lower() not in ("aster", "hyperliquid"):
+            # DateFilterService.filter_instruments_by_date expects dict values (it calls .get()
+            # on each value). DeFi adapters return dict[str, dict[str, object]], but the cast
+            # to dict[str, object] erases the inner dict type. Filter out non-dict values and
+            # convert Pydantic models to dicts to prevent AttributeError on .get().
+            filterable: dict[str, dict[str, str | None | object]] = {}
+            for k, v in raw_instruments.items():
+                if isinstance(v, dict):
+                    filterable[k] = cast(dict[str, str | None | object], v)
+                elif hasattr(v, "model_dump"):
+                    filterable[k] = cast(dict[str, str | None | object], v.model_dump())  # pyright: ignore[reportUnknownMemberType,reportAttributeAccessIssue]
+                else:
+                    # Skip non-dict, non-model entries — they can't be date-filtered
+                    continue
             raw_instruments = cast(
                 dict[str, object],
                 service.date_filter_service.filter_instruments_by_date(
-                    instruments=raw_instruments,
+                    instruments=filterable,
                     target_date=target_date,
                     protocol=protocol,
                 ),
@@ -325,7 +403,7 @@ def fetch_defi_instruments(
         base_currency_list = service.venue_mapping.get_defi_mvp_tokens()
         if protocol.lower() in ["hyperliquid", "aster"]:
             mvp_bases = {str(b).upper() for b in service.venue_mapping.hyperliquid_aster_mvp_base_assets}
-            mvp_quotes: set[str] = {"USDC"}
+            mvp_quotes: set[str] = {"USDC", "USDT", "USD1"}
         elif protocol.lower() == "ethena":
             mvp_bases = {"USDE", "SUSDE"}
             mvp_quotes = {"USDE", "SUSDE", ""}
@@ -359,10 +437,20 @@ def fetch_defi_instruments(
                     correlation_id=str(uuid4()),
                     context=ErrorContext(extra={"exc_type": type(e).__name__}),
                 )
-                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
                 continue
 
         logger.info("Fetched %s %s instruments for %s", len(instruments), protocol, chain)
+        if not instruments:
+            log_event(
+                VENUE_ZERO_INSTRUMENTS,
+                details={
+                    "venue": protocol,
+                    "chain": chain,
+                    "reason": "adapter returned 0 instruments after filtering",
+                    "raw_count": len(raw_instruments) if raw_instruments else 0,
+                },
+            )
         return instruments
 
     except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
@@ -374,6 +462,6 @@ def fetch_defi_instruments(
             correlation_id=str(uuid4()),
             context=ErrorContext(extra={"exc_type": type(e).__name__}),
         )
-        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+        logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
         logger.error("Failed to fetch %s instruments: %s", protocol, e)
         return {}

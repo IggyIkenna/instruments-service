@@ -328,7 +328,7 @@ class CorporateActionsAdapter:
                     correlation_id=str(uuid4()),
                     context=ErrorContext(extra={"exc_type": type(e).__name__}),
                 )
-                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
                 logger.debug("Failed to process earnings date from calendar: %s", e)
                 # Error handled, continue processing next calendar entry
                 pass
@@ -482,7 +482,7 @@ class CorporateActionsAdapter:
                     correlation_id=str(uuid4()),
                     context=ErrorContext(extra={"exc_type": type(e).__name__}),
                 )
-                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
                 logger.error("Failed to fetch corporate actions for %s: %s", ticker, e)
                 # Continue with next ticker
         logger.info("Completed: %s/%s tickers fetched successfully", len(results), total)

@@ -74,7 +74,7 @@ class AggregateHandler(ModeHandler):
                     correlation_id=str(uuid4()),
                     context=ErrorContext(extra={"exc_type": type(e).__name__}),
                 )
-                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
                 logger.exception("Aggregation failed for %s: %s", category, e)
                 log_event("CATEGORY_AGGREGATION_FAILED", details={"message": f"{category}: {e}"})
         log_event(
@@ -239,7 +239,7 @@ class AggregateHandler(ModeHandler):
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             logger.warning("Could not load existing aggregated %s: %s", blob.name, e)
             return pd.DataFrame()
 

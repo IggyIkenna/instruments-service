@@ -21,6 +21,47 @@ class InstrumentValidationMixin:
         - self.venue_mapping: VenueMapping
     """
 
+    def _resolve_allowed_venues(self) -> dict[str, set[str]]:
+        """Return allowed venue sets keyed by market type."""
+        return {
+            "CEFI": set(cast(list[str], self.venue_mapping.all_cefi_venues)),
+            "TRADFI": set(cast(list[str], self.venue_mapping.all_databento_venues)),
+            "DEFI": set(cast(list[str], self.venue_mapping.all_defi_venues)),
+        }
+
+    @staticmethod
+    def _determine_active_market_types(cefi: bool, tradfi: bool, defi: bool) -> list[str]:
+        """Determine which market types are being processed."""
+        market_types: list[str] = []
+        if cefi:
+            market_types.append("CEFI")
+        if tradfi:
+            market_types.append("TRADFI")
+        if defi:
+            market_types.append("DEFI")
+        return market_types if market_types else ["CEFI", "TRADFI", "DEFI"]  # CORRECT-LOCAL
+
+    @staticmethod
+    def _classify_venues(
+        venues_filter: list[str],
+        allowed_by_type: dict[str, set[str]],
+        active_market_types: list[str],
+    ) -> tuple[dict[str, list[str]], list[str]]:
+        """Classify venues into valid-by-type and invalid lists."""
+        valid_venues_by_type: dict[str, list[str]] = {"CEFI": [], "TRADFI": [], "DEFI": []}  # CORRECT-LOCAL
+        invalid_venues: list[str] = []
+
+        for venue in venues_filter:
+            venue_valid = False
+            for mtype in active_market_types:
+                if venue in allowed_by_type[mtype]:
+                    valid_venues_by_type[mtype].append(venue)
+                    venue_valid = True
+            if not venue_valid:
+                invalid_venues.append(venue)
+
+        return valid_venues_by_type, invalid_venues
+
     def _validate_venues_filter(
         self,
         venues_filter: list[str],
@@ -44,66 +85,26 @@ class InstrumentValidationMixin:
         if not venues_filter:
             return None
 
-        allowed_cefi_venues: set[str] = set(cast(list[str], self.venue_mapping.all_cefi_venues))
-        allowed_tradfi_venues: set[str] = set(cast(list[str], self.venue_mapping.all_databento_venues))
-        allowed_defi_venues: set[str] = set(cast(list[str], self.venue_mapping.all_defi_venues))
+        allowed_by_type = self._resolve_allowed_venues()
+        active_market_types = self._determine_active_market_types(cefi, tradfi, defi)
 
-        # Determine which market types are being processed
-        market_types_being_processed: list[str] = []
-        if cefi:
-            market_types_being_processed.append("CEFI")
-        if tradfi:
-            market_types_being_processed.append("TRADFI")
-        if defi:
-            market_types_being_processed.append("DEFI")
+        valid_venues_by_type, invalid_venues = self._classify_venues(
+            venues_filter, allowed_by_type, active_market_types
+        )
 
-        # If no market types specified, all are processed
-        if not market_types_being_processed:
-            market_types_being_processed = ["CEFI", "TRADFI", "DEFI"]
-
-        # Collect all allowed venues for the market types being processed
-        allowed_venues_for_processing: set[str] = set()
-        if "CEFI" in market_types_being_processed:
-            allowed_venues_for_processing.update(allowed_cefi_venues)
-        if "TRADFI" in market_types_being_processed:
-            allowed_venues_for_processing.update(allowed_tradfi_venues)
-        if "DEFI" in market_types_being_processed:
-            allowed_venues_for_processing.update(allowed_defi_venues)
-
-        # Validate each venue against allowed venues
-        invalid_venues: list[str] = []
-        valid_venues_by_type: dict[str, list[str]] = {"CEFI": [], "TRADFI": [], "DEFI": []}
-
-        for venue in venues_filter:
-            venue_valid = False
-            if venue in allowed_cefi_venues and "CEFI" in market_types_being_processed:
-                valid_venues_by_type["CEFI"].append(venue)
-                venue_valid = True
-            if venue in allowed_tradfi_venues and "TRADFI" in market_types_being_processed:
-                valid_venues_by_type["TRADFI"].append(venue)
-                venue_valid = True
-            if venue in allowed_defi_venues and "DEFI" in market_types_being_processed:
-                valid_venues_by_type["DEFI"].append(venue)
-                venue_valid = True
-
-            if not venue_valid:
-                invalid_venues.append(venue)
-
-        # Reject invalid venues with clear error message
         if invalid_venues:
             error_msg = (
-                f"❌ Invalid venues for market types {market_types_being_processed}: {invalid_venues}\n"
-                f"   Allowed CEFI venues: {sorted(allowed_cefi_venues)}\n"
-                f"   Allowed TRADFI venues: {sorted(allowed_tradfi_venues)}\n"
-                f"   Allowed DEFI venues: {sorted(allowed_defi_venues)}"
+                f"Invalid venues for market types {active_market_types}: {invalid_venues}\n"
+                f"   Allowed CEFI venues: {sorted(allowed_by_type['CEFI'])}\n"
+                f"   Allowed TRADFI venues: {sorted(allowed_by_type['TRADFI'])}\n"
+                f"   Allowed DEFI venues: {sorted(allowed_by_type['DEFI'])}"
             )
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-        # Log valid venues by market type
         for market_type, valid_venues in valid_venues_by_type.items():
             if valid_venues:
-                logger.info("✅ Valid %s venues: %s", market_type, valid_venues)
+                logger.info("Valid %s venues: %s", market_type, valid_venues)
 
         return valid_venues_by_type
 
@@ -136,18 +137,18 @@ class InstrumentValidationMixin:
                 logger.debug("  Extracted venue '%s' from instrument_id: %s", venue_from_id, inst_id)
 
         if venues_from_instrument_ids:
-            logger.info("🔍 Extracted venues from instrument_ids: %s", sorted(venues_from_instrument_ids))
+            logger.info("Extracted venues from instrument_ids: %s", sorted(venues_from_instrument_ids))
 
             if venues_filter:
                 venues_filter = [v for v in venues_filter if v in venues_from_instrument_ids]
                 if not venues_filter:
                     logger.warning(
-                        "⚠️ No matching venues between --venues and instrument_ids %s. Processing will be skipped.",
+                        "No matching venues between --venues and instrument_ids %s. Processing will be skipped.",
                         venues_from_instrument_ids,
                     )
             else:
                 venues_filter = list(venues_from_instrument_ids)
-                logger.info("🔍 Using venues from instrument_ids as venue filter: %s", venues_filter)
+                logger.info("Using venues from instrument_ids as venue filter: %s", venues_filter)
 
         return venues_filter
 
@@ -180,16 +181,16 @@ class InstrumentValidationMixin:
         filtered_count = len(all_instruments) - len(filtered_instruments)
         if filtered_count > 0:
             logger.info(
-                "🔍 Filtered %s instruments by instrument_ids, %s matching instruments remaining",
+                "Filtered %s instruments by instrument_ids, %s matching instruments remaining",
                 filtered_count,
                 len(filtered_instruments),
             )
 
         if filtered_instruments:
-            logger.info("✅ Matching instrument_ids: %s", list(filtered_instruments.keys()))
+            logger.info("Matching instrument_ids: %s", list(filtered_instruments.keys()))
         else:
             logger.warning(
-                "⚠️ No instruments matched the specified instrument_ids: %s. Processed %s instruments but none matched.",
+                "No instruments matched the specified instrument_ids: %s. Processed %s instruments but none matched.",
                 instrument_ids_list,
                 len(all_instruments),
             )

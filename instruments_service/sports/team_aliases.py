@@ -268,7 +268,7 @@ def load_default_mappings() -> TeamAliasResolver:
     """Build a :class:`TeamAliasResolver` populated with all known team data.
 
     Imports the hardcoded mapping data from
-    :mod:`instruments_service.sports.team_mapping_data` (EPL + Bundesliga),
+    :mod:`unified_api_contracts.sports` (EPL + Bundesliga),
     converts each entry to a :class:`TeamMapping`, and returns a fully
     populated resolver ready for use.
 
@@ -278,7 +278,7 @@ def load_default_mappings() -> TeamAliasResolver:
         A resolver containing all EPL, Bundesliga, and historical team mappings.
     """
 
-    from instruments_service.sports.team_mapping_data import (  # noqa: lazy-load — avoids eager load of ~2MB sports mapping data
+    from unified_api_contracts.sports import (  # noqa: lazy-load -- avoids eager load of ~2MB sports mapping data
         BUNDESLIGA_TEAM_MAPPINGS,
         EPL_TEAM_MAPPINGS,
     )

@@ -97,7 +97,7 @@ class InstrumentRefreshScheduler:
                             correlation_id=str(uuid4()),
                             context=ErrorContext(extra={"exc_type": type(e).__name__}),
                         )
-                        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                        logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
                         log_event(
                             "INSTRUMENT_SCHEMA_VIOLATION",
                             details={

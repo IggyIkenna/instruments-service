@@ -125,7 +125,7 @@ class TestInstrumentsServiceInitialization:
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage"),
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
-            patch("instruments_service.config.instruments_config", mock_config),
+            patch("instruments_service.app.core.instruments_service.instruments_config", mock_config),
         ):
             config = {}  # No project_id
             InstrumentsService(config)
@@ -135,6 +135,80 @@ class TestInstrumentsServiceInitialization:
             assert proc_config["project_id"] == "test-project"
 
 
+def _build_all_mode_mocks() -> dict[str, Mock]:
+    """Build mock objects for processing service, tardis adapter, and storage.
+
+    Returns a dict with keys: proc, tardis_adapter, storage.
+    """
+    mock_proc = Mock()
+    mock_proc.api_key = "test-key"
+    mock_proc._tardis_project_id = "test-project"
+    mock_proc.fetch_databento_instruments = AsyncMock(return_value={})
+    mock_proc.fetch_defi_instruments = AsyncMock(return_value={})
+
+    mock_tardis_adapter = Mock()
+    mock_tardis_adapter.fetch_instruments = AsyncMock(return_value=[])
+    mock_base_client = Mock()
+    mock_base_client.check_venues_access = Mock(side_effect=lambda exchanges: dict.fromkeys(exchanges, (True, "")))
+    mock_tardis_adapter.base_client = mock_base_client
+
+    mock_storage = Mock()
+    mock_storage.store_instruments = Mock(return_value=True)
+
+    return {"proc": mock_proc, "tardis_adapter": mock_tardis_adapter, "storage": mock_storage}
+
+
+def _make_tradfi_record(
+    raw_symbol: str = "ES.FUT",
+    instrument_type: str = "FUTURE",
+    base: str = "",
+    quote: str = "USD",
+) -> Mock:
+    """Mock InstrumentRecord with all attributes consumed by _map_instrument_record_to_tradfi_definition."""
+    rec = Mock()
+    rec.raw_symbol = raw_symbol
+    rec.symbol = raw_symbol
+    rec.instrument_type = instrument_type
+    rec.available_since = datetime(2024, 1, 1, tzinfo=UTC)
+    rec.updated_at = None
+    rec.base_asset = base
+    rec.base = base
+    rec.quote_asset = quote
+    rec.quote = quote
+    rec.expiry = None
+    rec.option_type = None
+    rec.strike = None
+    rec.tick_size = None
+    rec.contract_size = None
+    return rec
+
+
+def _make_cefi_record(
+    instrument_key: str = "BINANCE:SPOT_PAIR:BTC-USDT",
+    venue: str = "BINANCE",
+    base: str = "BTC",
+    quote: str = "USDT",
+) -> Mock:
+    """Mock InstrumentRecord with all attributes consumed by _fetch_tardis_instruments."""
+    rec = Mock()
+    rec.instrument_key = instrument_key
+    rec.venue = venue
+    rec.instrument_type = "SPOT_PAIR"
+    rec.symbol = instrument_key.split(":", 2)[2] if instrument_key.count(":") >= 2 else instrument_key
+    rec.raw_symbol = rec.symbol.replace("-", "").replace("/", "")
+    rec.available_since = datetime(2024, 1, 1, tzinfo=UTC)
+    rec.base_asset = base
+    rec.base = base
+    rec.quote_asset = quote
+    rec.quote = quote
+    rec.expiry = None
+    rec.option_type = None
+    rec.strike = None
+    rec.tick_size = None
+    rec.contract_size = None
+    return rec
+
+
 class TestGenerateInstrumentsSingleDate:
     """Tests for generate_instruments_for_date method."""
 
@@ -142,37 +216,33 @@ class TestGenerateInstrumentsSingleDate:
     async def test_generate_cefi_mode_with_exchanges(self):
         """Test generating instruments in CeFi mode with specific exchanges.
 
-        CeFi path uses UMI get_adapter + adapter.fetch_instruments (thin consumer).
+        CeFi fetch uses URDI TardisReferenceDataAdapter.get_instruments().
+        UMI get_adapter is used only for the pre-flight venue access check.
         """
         with (
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
             patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.TardisReferenceDataAdapter") as mock_urdi_cls,
         ):
-            # Setup mocks - CeFi uses UMI get_adapter + fetch_instruments
             mock_proc = Mock()
             mock_proc.api_key = "test-key"
             mock_proc._tardis_project_id = "test-project"
-            mock_proc.fetch_defi_instruments = Mock(return_value={})
+            mock_proc.fetch_defi_instruments = AsyncMock(return_value={})
 
+            # get_adapter: covers _check_venue_access pre-flight only
             mock_tardis_adapter = Mock()
-            mock_tardis_adapter.fetch_instruments = AsyncMock(
-                return_value=[
-                    {
-                        "instrument_key": "BINANCE-SPOT:SPOT_PAIR:BTC-USDT",
-                        "venue": "BINANCE-SPOT",
-                        "instrument_type": "SPOT_PAIR",
-                        "symbol": "BTC-USDT",
-                        "available_from_datetime": "2024-01-01T00:00:00Z",
-                    }
-                ]
-            )
             mock_base_client = Mock()
             mock_base_client.check_venues_access = Mock(return_value={"binance": (True, "")})
             mock_tardis_adapter.base_client = mock_base_client
             mock_get_adapter.return_value = mock_tardis_adapter
             mock_proc_class.return_value = mock_proc
+
+            # TardisReferenceDataAdapter: actual data boundary for _fetch_tardis_instruments
+            mock_urdi_cls.return_value.get_instruments = AsyncMock(
+                return_value=[_make_cefi_record("BINANCE:SPOT_PAIR:BTC-USDT", "BINANCE")]
+            )
 
             mock_storage = Mock()
             mock_storage.store_instruments = Mock(return_value=True)
@@ -188,27 +258,27 @@ class TestGenerateInstrumentsSingleDate:
             assert result["instruments_generated"] == 1
             assert result["date"] == "2024-01-01"
             mock_get_adapter.assert_called()
-            mock_tardis_adapter.fetch_instruments.assert_called()
+            mock_urdi_cls.return_value.get_instruments.assert_called()
 
     @pytest.mark.asyncio
     async def test_generate_cefi_mode_all_exchanges(self):
         """Test CeFi mode processes all Tardis exchanges when none specified.
 
-        CeFi path uses UMI get_adapter + adapter.fetch_instruments.
+        CeFi fetch uses URDI TardisReferenceDataAdapter — one instance per exchange.
         """
         with (
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
             patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.TardisReferenceDataAdapter") as mock_urdi_cls,
         ):
             mock_proc = Mock()
             mock_proc.api_key = "test-key"
             mock_proc._tardis_project_id = "test-project"
-            mock_proc.fetch_defi_instruments = Mock(return_value={})
+            mock_proc.fetch_defi_instruments = AsyncMock(return_value={})
 
             mock_tardis_adapter = Mock()
-            mock_tardis_adapter.fetch_instruments = AsyncMock(return_value=[])
             mock_base_client = Mock()
             mock_base_client.check_venues_access = Mock(
                 side_effect=lambda exchanges: dict.fromkeys(exchanges, (True, ""))
@@ -216,6 +286,8 @@ class TestGenerateInstrumentsSingleDate:
             mock_tardis_adapter.base_client = mock_base_client
             mock_get_adapter.return_value = mock_tardis_adapter
             mock_proc_class.return_value = mock_proc
+
+            mock_urdi_cls.return_value.get_instruments = AsyncMock(return_value=[])
 
             mock_storage = Mock()
             mock_storage.store_instruments = Mock(return_value=True)
@@ -230,38 +302,37 @@ class TestGenerateInstrumentsSingleDate:
                 cefi=True,  # No exchanges specified
             )
 
-            # Should call fetch_instruments for all Tardis exchanges
-            assert mock_tardis_adapter.fetch_instruments.call_count == len(service.venue_mapping.all_tardis_exchanges)
+            # One TardisReferenceDataAdapter instantiation per exchange
+            assert mock_urdi_cls.call_count == len(service.venue_mapping.all_tardis_exchanges)
 
     @pytest.mark.asyncio
     async def test_generate_tradfi_mode(self):
-        """Test generating instruments in TradFi (Databento) mode."""
+        """Test generating instruments in TradFi (Databento) mode.
+
+        TradFi fetch uses URDI DatabentoReferenceDataAdapter.get_instruments().
+        """
         with (
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
             patch("instruments_service.app.core.instrument_sync.UnifiedInstrumentConfig") as mock_config,
+            patch("instruments_service.app.core.instrument_sync.DatabentoReferenceDataAdapter") as mock_tradfi_urdi_cls,
         ):
-            # Setup mocks
             mock_proc = Mock()
-            mock_proc.fetch_databento_instruments = Mock(
-                return_value={
-                    "CME:FUTURE:ES.FUT": Mock(
-                        model_dump=lambda: {"instrument_key": "CME:FUTURE:ES.FUT", "venue": "CME"}
-                    )
-                }
-            )
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
             mock_storage.store_instruments = Mock(return_value=True)
             mock_storage_class.return_value = mock_storage
 
-            # Mock UnifiedInstrumentConfig
             mock_config_inst = Mock()
-            mock_config_inst.get_symbols_for_dataset = Mock(return_value=["ES.FUT", "NQ.FUT"])
-            mock_config_inst.get_symbols_for_venue = Mock(return_value=["ES.FUT", "GC.FUT"])
+            mock_config_inst.get_symbols_for_venue = Mock(return_value=["ES.FUT"])
             mock_config.return_value = mock_config_inst
+
+            # DatabentoReferenceDataAdapter: actual data boundary for _fetch_databento_instruments_via_urdi
+            mock_tradfi_urdi_cls.return_value.get_instruments = AsyncMock(
+                return_value=[_make_tradfi_record("ES.FUT", "FUTURE")]
+            )
 
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
@@ -270,9 +341,8 @@ class TestGenerateInstrumentsSingleDate:
             result = await service.generate_instruments_for_date(date=date, tradfi=True)
 
             assert result["status"] == "success"
-            # Should process CME, NASDAQ, NYSE, ICE, CBOE, FX
-            # But NASDAQ/NYSE share DBEQ.BASIC, so NYSE is skipped
-            assert mock_proc.fetch_databento_instruments.call_count >= 1
+            # One DatabentoReferenceDataAdapter instantiation per dataset-mapped exchange
+            assert mock_tradfi_urdi_cls.call_count >= 1
 
     @pytest.mark.asyncio
     async def test_generate_defi_mode(self):
@@ -283,7 +353,7 @@ class TestGenerateInstrumentsSingleDate:
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
             mock_proc = Mock()
-            mock_proc.fetch_defi_instruments = Mock(
+            mock_proc.fetch_defi_instruments = AsyncMock(
                 return_value={
                     "UNISWAPV3-ETH:SPOT_PAIR:ETH-USDC": Mock(
                         model_dump=lambda: {
@@ -318,7 +388,7 @@ class TestGenerateInstrumentsSingleDate:
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
         ):
             mock_proc = Mock()
-            mock_proc.fetch_defi_instruments = Mock(return_value={})
+            mock_proc.fetch_defi_instruments = AsyncMock(return_value={})
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -373,7 +443,7 @@ class TestGenerateInstrumentsSingleDate:
                 return {}
 
             mock_proc.fetch_databento_instruments = AsyncMock(side_effect=databento_side_effect)
-            mock_proc.fetch_defi_instruments = Mock(return_value={})
+            mock_proc.fetch_defi_instruments = AsyncMock(return_value={})
             mock_proc_class.return_value = mock_proc
 
             mock_storage = Mock()
@@ -401,7 +471,7 @@ class TestGenerateInstrumentsSingleDate:
             nyse_rows = df[df["venue"] == "NYSE"]
             assert len(nyse_rows) == 1
             assert nyse_rows.iloc[0]["instrument_type"] == "MARKET_CLOSED"
-            assert nyse_rows.iloc[0]["is_trading_day"] is False
+            assert not nyse_rows.iloc[0]["is_trading_day"]
             assert nyse_rows.iloc[0].get("trading_hours_open") == "holiday"
 
     @pytest.mark.asyncio
@@ -410,12 +480,14 @@ class TestGenerateInstrumentsSingleDate:
         import sys
         import types
 
-        mock_sports_orchestrator = Mock()
-        mock_sports_orchestrator.process_sports = AsyncMock(return_value={})
         mock_sports_module = types.ModuleType(
             "instruments_service.engine.operations.instruments.orchestration.sports_orchestration"
         )
+        mock_sports_orchestrator = Mock()
+        mock_sports_orchestrator.process_sports = AsyncMock(return_value={})
         mock_sports_module.SportsOrchestrator = Mock(return_value=mock_sports_orchestrator)  # type: ignore[attr-defined]
+
+        mocks = _build_all_mode_mocks()
 
         with (
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
@@ -423,6 +495,8 @@ class TestGenerateInstrumentsSingleDate:
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
             patch("instruments_service.app.core.instrument_sync.UnifiedInstrumentConfig"),
             patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.TardisReferenceDataAdapter") as mock_urdi_cls,
+            patch("instruments_service.app.core.instrument_sync.DatabentoReferenceDataAdapter") as mock_tradfi_urdi_cls,
             patch.dict(
                 sys.modules,
                 {
@@ -430,36 +504,21 @@ class TestGenerateInstrumentsSingleDate:
                 },
             ),
         ):
-            mock_proc = Mock()
-            mock_proc.api_key = "test-key"
-            mock_proc._tardis_project_id = "test-project"
-            mock_proc.fetch_databento_instruments = AsyncMock(return_value={})
-            mock_proc.fetch_defi_instruments = Mock(return_value={})
+            mock_get_adapter.return_value = mocks["tardis_adapter"]
+            mock_proc_class.return_value = mocks["proc"]
+            mock_storage_class.return_value = mocks["storage"]
+            mock_urdi_cls.return_value.get_instruments = AsyncMock(return_value=[])
+            mock_tradfi_urdi_cls.return_value.get_instruments = AsyncMock(return_value=[])
 
-            mock_tardis_adapter = Mock()
-            mock_tardis_adapter.fetch_instruments = AsyncMock(return_value=[])
-            mock_base_client = Mock()
-            mock_base_client.check_venues_access = Mock(
-                side_effect=lambda exchanges: dict.fromkeys(exchanges, (True, ""))
-            )
-            mock_tardis_adapter.base_client = mock_base_client
-            mock_get_adapter.return_value = mock_tardis_adapter
-            mock_proc_class.return_value = mock_proc
+            service = InstrumentsService({"project_id": "test-project"})
+            await service.generate_instruments_for_date(date=datetime(2024, 1, 1, tzinfo=UTC))
 
-            mock_storage = Mock()
-            mock_storage.store_instruments = Mock(return_value=True)
-            mock_storage_class.return_value = mock_storage
-
-            config = {"project_id": "test-project"}
-            service = InstrumentsService(config)
-
-            date = datetime(2024, 1, 1, tzinfo=UTC)
-            await service.generate_instruments_for_date(date=date)
-
-            # CeFi uses UMI get_adapter + fetch_instruments; TradFi and DeFi use processing_service
-            assert mock_tardis_adapter.fetch_instruments.call_count > 0
-            assert mock_proc.fetch_databento_instruments.call_count > 0
-            assert mock_proc.fetch_defi_instruments.call_count > 0
+            # CeFi: one TardisReferenceDataAdapter per exchange
+            assert mock_urdi_cls.call_count > 0
+            # TradFi: one DatabentoReferenceDataAdapter per dataset-mapped exchange
+            assert mock_tradfi_urdi_cls.call_count > 0
+            # DeFi: processing_service.fetch_defi_instruments
+            assert mocks["proc"].fetch_defi_instruments.call_count > 0
 
     @pytest.mark.asyncio
     async def test_generate_no_instruments_warning(self):
@@ -469,19 +528,21 @@ class TestGenerateInstrumentsSingleDate:
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage"),
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
             patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.TardisReferenceDataAdapter") as mock_urdi_cls,
         ):
             mock_proc = Mock()
             mock_proc.api_key = "test-key"
             mock_proc._tardis_project_id = "test-project"
-            mock_proc.fetch_defi_instruments = Mock(return_value={})
+            mock_proc.fetch_defi_instruments = AsyncMock(return_value={})
 
             mock_tardis_adapter = Mock()
-            mock_tardis_adapter.fetch_instruments = AsyncMock(return_value=[])  # No instruments
             mock_base_client = Mock()
             mock_base_client.check_venues_access = Mock(return_value={"binance": (True, "")})
             mock_tardis_adapter.base_client = mock_base_client
             mock_get_adapter.return_value = mock_tardis_adapter
             mock_proc_class.return_value = mock_proc
+
+            mock_urdi_cls.return_value.get_instruments = AsyncMock(return_value=[])  # No instruments
 
             config = {"project_id": "test-project"}
             service = InstrumentsService(config)
@@ -502,29 +563,23 @@ class TestGenerateInstrumentsSingleDate:
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
             patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.TardisReferenceDataAdapter") as mock_urdi_cls,
         ):
             mock_proc = Mock()
             mock_proc.api_key = "test-key"
             mock_proc._tardis_project_id = "test-project"
-            mock_proc.fetch_defi_instruments = Mock(return_value={})
+            mock_proc.fetch_defi_instruments = AsyncMock(return_value={})
 
             mock_tardis_adapter = Mock()
-            mock_tardis_adapter.fetch_instruments = AsyncMock(
-                return_value=[
-                    {
-                        "instrument_key": "TEST:SPOT:BTC-USDT",
-                        "venue": "TEST",
-                        "instrument_type": "SPOT_PAIR",
-                        "symbol": "BTC-USDT",
-                        "available_from_datetime": "2024-01-01T00:00:00Z",
-                    }
-                ]
-            )
             mock_base_client = Mock()
             mock_base_client.check_venues_access = Mock(return_value={"binance": (True, "")})
             mock_tardis_adapter.base_client = mock_base_client
             mock_get_adapter.return_value = mock_tardis_adapter
             mock_proc_class.return_value = mock_proc
+
+            mock_urdi_cls.return_value.get_instruments = AsyncMock(
+                return_value=[_make_cefi_record("TEST:SPOT:BTC-USDT", "TEST", "BTC", "USDT")]
+            )
 
             mock_storage = Mock()
             mock_storage.store_instruments = Mock(return_value=False)  # Storage fails
@@ -542,39 +597,44 @@ class TestGenerateInstrumentsSingleDate:
 
     @pytest.mark.asyncio
     async def test_generate_exchange_processing_error(self):
-        """Test error handling when exchange processing fails."""
+        """Test error handling when exchange processing fails.
+
+        binance URDI get_instruments raises ValueError — caught per-venue.
+        deribit URDI get_instruments succeeds — result carries through.
+        """
         with (
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
             patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.TardisReferenceDataAdapter") as mock_urdi_cls,
         ):
             mock_proc = Mock()
             mock_proc.api_key = "test-key"
             mock_proc._tardis_project_id = "test-project"
-            mock_proc.fetch_defi_instruments = Mock(return_value={})
-
-            # First exchange (binance) fails, second (deribit) succeeds
-            async def fetch_side_effect(exchange, **kwargs):
-                if exchange == "binance":
-                    raise ValueError("API error")
-                return [
-                    {
-                        "instrument_key": "TEST:SPOT:BTC-USDT",
-                        "venue": "TEST",
-                        "instrument_type": "SPOT_PAIR",
-                        "symbol": "BTC-USDT",
-                        "available_from_datetime": "2024-01-01T00:00:00Z",
-                    }
-                ]
+            mock_proc.fetch_defi_instruments = AsyncMock(return_value={})
 
             mock_tardis_adapter = Mock()
-            mock_tardis_adapter.fetch_instruments = AsyncMock(side_effect=fetch_side_effect)
             mock_base_client = Mock()
             mock_base_client.check_venues_access = Mock(return_value={"binance": (True, ""), "deribit": (True, "")})
             mock_tardis_adapter.base_client = mock_base_client
             mock_get_adapter.return_value = mock_tardis_adapter
             mock_proc_class.return_value = mock_proc
+
+            # Per-exchange side_effect: binance fails, deribit succeeds
+            deribit_record = _make_cefi_record("DERIBIT:PERPETUAL:BTC-USDT", "DERIBIT")
+
+            def urdi_constructor_side_effect(*args: object, **kwargs: object) -> Mock:
+                exchange_list = kwargs.get("exchanges", [])
+                exchange = exchange_list[0] if exchange_list else None
+                mock_inst = Mock()
+                if exchange == "binance":
+                    mock_inst.get_instruments = AsyncMock(side_effect=ValueError("API error"))
+                else:
+                    mock_inst.get_instruments = AsyncMock(return_value=[deribit_record])
+                return mock_inst
+
+            mock_urdi_cls.side_effect = urdi_constructor_side_effect
 
             mock_storage = Mock()
             mock_storage.store_instruments = Mock(return_value=True)
@@ -592,25 +652,32 @@ class TestGenerateInstrumentsSingleDate:
 
     @pytest.mark.asyncio
     async def test_generate_force_mode(self):
-        """Test force regeneration flag is passed through to UMI adapter.fetch_instruments."""
+        """Test force=True triggers URDI TardisReferenceDataAdapter fetch.
+
+        The force flag is accepted by generate_instruments_for_date and propagated to
+        _fetch_tardis_instruments. URDI get_instruments() does not expose a force_refresh
+        kwarg — the adapter manages caching internally.
+        """
         with (
             patch("instruments_service.app.core.instruments_service.InstrumentProcessingService") as mock_proc_class,
             patch("instruments_service.app.core.instruments_service.CloudInstrumentStorage") as mock_storage_class,
             patch("instruments_service.app.core.instruments_service.InstrumentBatchProcessor"),
             patch("instruments_service.app.core.instrument_sync.get_adapter") as mock_get_adapter,
+            patch("instruments_service.app.core.instrument_sync.TardisReferenceDataAdapter") as mock_urdi_cls,
         ):
             mock_proc = Mock()
             mock_proc.api_key = "test-key"
             mock_proc._tardis_project_id = "test-project"
-            mock_proc.fetch_defi_instruments = Mock(return_value={})
+            mock_proc.fetch_defi_instruments = AsyncMock(return_value={})
 
             mock_tardis_adapter = Mock()
-            mock_tardis_adapter.fetch_instruments = AsyncMock(return_value=[])
             mock_base_client = Mock()
             mock_base_client.check_venues_access = Mock(return_value={"binance": (True, "")})
             mock_tardis_adapter.base_client = mock_base_client
             mock_get_adapter.return_value = mock_tardis_adapter
             mock_proc_class.return_value = mock_proc
+
+            mock_urdi_cls.return_value.get_instruments = AsyncMock(return_value=[])
 
             mock_storage = Mock()
             mock_storage.store_instruments = Mock(return_value=True)
@@ -622,7 +689,6 @@ class TestGenerateInstrumentsSingleDate:
             date = datetime(2024, 1, 1, tzinfo=UTC)
             await service.generate_instruments_for_date(date=date, exchanges=["binance"], cefi=True, force=True)
 
-            # Verify force_refresh=True was passed to adapter.fetch_instruments
-            mock_tardis_adapter.fetch_instruments.assert_called()
-            call_kwargs = mock_tardis_adapter.fetch_instruments.call_args[1]
-            assert call_kwargs.get("force_refresh") is True
+            # URDI adapter was instantiated (force path still calls URDI)
+            mock_urdi_cls.assert_called()
+            mock_urdi_cls.return_value.get_instruments.assert_called()

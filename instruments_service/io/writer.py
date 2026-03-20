@@ -31,7 +31,7 @@ class InstrumentWriter(BaseGCSWriter):
             dry_run: If True, write to local data/sample/ instead of GCS
         """
         config: InstrumentsServiceConfig = get_config()
-        bucket = f"instruments-store-{category.lower()}-{config.gcp_project_id}"
+        bucket = f"instruments-store-{category.lower()}-{config.gcp_project_id}"  # CORRECT-LOCAL
 
         super().__init__(  # pyright: ignore[reportUnknownMemberType]
             bucket_name=bucket,

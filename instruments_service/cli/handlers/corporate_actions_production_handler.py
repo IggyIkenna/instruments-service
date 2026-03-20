@@ -498,7 +498,7 @@ class CorporateActionsProductionHandler(ModeHandler):
                         logger.info("💾 Saved %s to by_ticker/", ticker)
 
                     pct = (i / len(ticker_list)) * 100
-                    logger.info("📊 [%s/%s] (%..1f%) Processed %s", i, len(ticker_list), pct, ticker)
+                    logger.info("📊 [%s/%s] (%.1f%%) Processed %s", i, len(ticker_list), pct, ticker)
 
                 except (OSError, ValueError, TypeError, KeyError, ConnectionError, TimeoutError) as e:
                     logger.error("❌ Unexpected error processing %s: %s", ticker, e)

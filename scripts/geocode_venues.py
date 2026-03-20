@@ -31,18 +31,9 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="List venues without calling API")
     args = parser.parse_args()
 
-    import importlib.util
+    from unified_api_contracts.external.api_football import API_FOOTBALL_TO_CANONICAL_STADIUMS
 
-    path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "instruments_service",
-        "sports",
-        "team_mapping_data.py",
-    )
-    spec = importlib.util.spec_from_file_location("team_mapping_data", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    stadium_mappings = mod.STADIUM_MAPPINGS
+    stadium_mappings = API_FOOTBALL_TO_CANONICAL_STADIUMS
 
     venues = list(stadium_mappings.values())
     logger.info("Venues to geocode: %d", len(venues))

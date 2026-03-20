@@ -11,16 +11,15 @@ Tests verify:
 from __future__ import annotations
 
 import pytest
-
-from instruments_service.sports.team_aliases import load_default_mappings
-from instruments_service.sports.team_mapping_data import (
-    BUNDESLIGA_TEAM_MAPPINGS,
-    EPL_TEAM_MAPPINGS,
+from unified_api_contracts.external.api_football import (
+    API_FOOTBALL_TO_CANONICAL_STADIUMS as STADIUM_MAPPINGS,
 )
-from instruments_service.sports.team_mapping_data_bundesliga import (
-    STADIUM_MAPPINGS,
+from unified_api_contracts.external.api_football import (
     TEAM_NAME_CORRECTIONS,
 )
+from unified_api_contracts.sports import BUNDESLIGA_TEAM_MAPPINGS, EPL_TEAM_MAPPINGS
+
+from instruments_service.sports.team_aliases import load_default_mappings
 
 # ---------------------------------------------------------------------------
 # Fixtures

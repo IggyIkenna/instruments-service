@@ -13,12 +13,11 @@ from datetime import UTC, datetime
 from typing import Protocol, cast, runtime_checkable
 from uuid import uuid4
 
+from unified_api_contracts import DEFI_PROTOCOLS, DEFI_VENUE_TO_PROTOCOL
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 from unified_market_interface import get_adapter
 
 from instruments_service.config import (
-    DEFI_PROTOCOLS,
-    DEFI_VENUE_TO_PROTOCOL,
     UnifiedInstrumentConfig,
 )
 from instruments_service.engine.venues.special_instruments import (
@@ -140,7 +139,7 @@ class MarketProcessors:
                                 correlation_id=str(uuid4()),
                                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
                             )
-                            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
                             logger.warning(
                                 "Failed to create InstrumentDefinition for %s: %s",
                                 d.get("instrument_key", "unknown"),
@@ -158,7 +157,7 @@ class MarketProcessors:
                         correlation_id=str(uuid4()),
                         context=ErrorContext(extra={"exc_type": type(e).__name__}),
                     )
-                    logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                    logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
                     logger.exception("Failed to process %s: %s", exchange, e)
                     return {}
 
@@ -292,13 +291,13 @@ class MarketProcessors:
                 for protocol, chain in defi_protocols:
                     try:
                         if chain:
-                            defi_instruments = self.processing_service.fetch_defi_instruments(
+                            defi_instruments = await self.processing_service.fetch_defi_instruments(
                                 protocol=protocol,
                                 chain=chain,
                                 target_date=date,
                             )
                         else:
-                            defi_instruments = self.processing_service.fetch_defi_instruments(
+                            defi_instruments = await self.processing_service.fetch_defi_instruments(
                                 protocol=protocol,
                                 target_date=date,
                             )
@@ -391,7 +390,7 @@ class MarketProcessors:
             logger.info("🚀 Processing %s on-chain CLOB venues (CEFI): %s", len(cefi_clob_protocols), protocol_names)
             for protocol, _chain in cefi_clob_protocols:
                 try:
-                    clob_instruments = self.processing_service.fetch_defi_instruments(
+                    clob_instruments = await self.processing_service.fetch_defi_instruments(
                         protocol=protocol,
                         target_date=date,
                     )
@@ -499,7 +498,7 @@ class MarketProcessors:
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             logger.exception("Failed to process %s: %s", exchange, e)
             return {}
 

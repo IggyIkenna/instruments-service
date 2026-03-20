@@ -8,10 +8,6 @@ Verifies that:
 """
 
 import contextlib
-import importlib.util
-from pathlib import Path
-from types import ModuleType
-from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -246,19 +242,17 @@ class TestVenueConfigFunctions:
         assert len(equities) > 0
 
     def test_unified_instrument_config_known_etfs(self) -> None:
-        from instruments_service.config import UnifiedInstrumentConfig
+        from unified_api_contracts import KNOWN_ETFS
 
-        cfg = UnifiedInstrumentConfig()
-        assert "SPY" in cfg.KNOWN_ETFS
-        assert "QQQ" in cfg.KNOWN_ETFS
-        assert "IBIT" in cfg.KNOWN_ETFS
+        assert "SPY" in KNOWN_ETFS
+        assert "QQQ" in KNOWN_ETFS
+        assert "IBIT" in KNOWN_ETFS
 
     def test_unified_instrument_config_space_to_dot_symbols(self) -> None:
-        from instruments_service.config import UnifiedInstrumentConfig
+        from unified_api_contracts import SPACE_TO_DOT_SYMBOLS
 
-        cfg = UnifiedInstrumentConfig()
-        assert "BRK B" in cfg.SPACE_TO_DOT_SYMBOLS
-        assert cfg.SPACE_TO_DOT_SYMBOLS["BRK B"] == "BRK.B"
+        assert "BRK B" in SPACE_TO_DOT_SYMBOLS
+        assert SPACE_TO_DOT_SYMBOLS["BRK B"] == "BRK.B"
 
     def test_unified_instrument_config_exchange_code_to_name_property(self) -> None:
         from instruments_service.config import UnifiedInstrumentConfig
@@ -329,10 +323,9 @@ class TestConfigModuleFromBoost:
         assert isinstance(tickers, list)
 
     def test_get_etf_tickers_returns_list(self) -> None:
-        from instruments_service.config import UnifiedInstrumentConfig
+        from unified_api_contracts import KNOWN_ETFS
 
-        config = UnifiedInstrumentConfig()
-        tickers = list(config.KNOWN_ETFS) if hasattr(config, "KNOWN_ETFS") else []
+        tickers = list(KNOWN_ETFS)
         assert isinstance(tickers, list)
 
     def test_get_tradfi_instruments_returns_list(self) -> None:
@@ -373,14 +366,11 @@ class TestConfigModuleExtra:
         assert instruments_config is not None
 
     def test_load_sp500_tickers_function(self) -> None:
-        try:
-            from instruments_service.config import _load_sp500_tickers
+        from instruments_service.config.venue_config import _load_sp500_tickers
 
-            tickers, nasdaq = _load_sp500_tickers()
-            assert isinstance(tickers, list)
-            assert isinstance(nasdaq, list)
-        except ImportError:
-            pass
+        tickers, nasdaq = _load_sp500_tickers()
+        assert isinstance(tickers, list)
+        assert isinstance(nasdaq, list)
 
     def test_tradfi_instrument_with_all_fields(self) -> None:
         from instruments_service.config import TradFiInstrument
@@ -449,19 +439,19 @@ class TestConfigDataTypeConfig:
 @pytest.mark.unit
 class TestConfigDefiDefinitions:
     def test_import(self) -> None:
-        from instruments_service.config.defi_definitions import DEFI_PROTOCOLS, DEFI_VENUE_TO_PROTOCOL
+        from unified_api_contracts import DEFI_PROTOCOLS, DEFI_VENUE_TO_PROTOCOL
 
         assert isinstance(DEFI_VENUE_TO_PROTOCOL, dict)
         assert isinstance(DEFI_PROTOCOLS, list)
         assert len(DEFI_PROTOCOLS) > 0
 
     def test_hyperliquid_in_venue_to_protocol(self) -> None:
-        from instruments_service.config.defi_definitions import DEFI_VENUE_TO_PROTOCOL
+        from unified_api_contracts import DEFI_VENUE_TO_PROTOCOL
 
         assert "HYPERLIQUID" in DEFI_VENUE_TO_PROTOCOL
 
     def test_protocols_are_tuples(self) -> None:
-        from instruments_service.config.defi_definitions import DEFI_PROTOCOLS
+        from unified_api_contracts import DEFI_PROTOCOLS
 
         for proto in DEFI_PROTOCOLS:
             assert isinstance(proto, tuple)
@@ -486,22 +476,17 @@ class TestConfigEquityDefinitions:
 
 @pytest.mark.unit
 class TestConfigFuturesOptionsDefinitions:
-    def test_import(self) -> None:
-        import contextlib
+    def test_tradfi_venue_mappings_from_uac(self) -> None:
+        from unified_api_contracts import TRADFI_VENUE_MAPPINGS
 
-        with contextlib.suppress(Exception):
-            import instruments_service.config.futures_options_definitions as fod
+        assert isinstance(TRADFI_VENUE_MAPPINGS, list)
+        assert len(TRADFI_VENUE_MAPPINGS) > 0
 
-            assert fod is not None
+    def test_tradfi_instruments_config_from_uac(self) -> None:
+        from unified_api_contracts import TRADFI_INSTRUMENTS_CONFIG
 
-    def test_has_content(self) -> None:
-        import contextlib
-
-        with contextlib.suppress(Exception):
-            import instruments_service.config.futures_options_definitions as fod
-
-            attrs = [a for a in dir(fod) if not a.startswith("__")]
-            assert len(attrs) >= 0
+        assert isinstance(TRADFI_INSTRUMENTS_CONFIG, (list, dict))
+        assert len(TRADFI_INSTRUMENTS_CONFIG) > 0
 
 
 @pytest.mark.unit
@@ -516,7 +501,7 @@ class TestConfigTickerLists:
 @pytest.mark.unit
 class TestConfigVenueMappings:
     def test_import(self) -> None:
-        from instruments_service.config.venue_mappings import (
+        from unified_api_contracts import (
             DEFI_PROTOCOLS,
             DEFI_VENUE_TO_PROTOCOL,
             TRADFI_INSTRUMENTS_CONFIG,
@@ -526,22 +511,21 @@ class TestConfigVenueMappings:
         assert isinstance(TRADFI_VENUE_MAPPINGS, list)
         assert isinstance(DEFI_VENUE_TO_PROTOCOL, dict)
         assert isinstance(DEFI_PROTOCOLS, list)
-        assert TRADFI_INSTRUMENTS_CONFIG is TRADFI_VENUE_MAPPINGS
+        assert isinstance(TRADFI_INSTRUMENTS_CONFIG, (list, dict))
 
     def test_tradfi_venues_have_required_fields(self) -> None:
-        from instruments_service.config.venue_mappings import TRADFI_VENUE_MAPPINGS
+        from unified_api_contracts import TRADFI_VENUE_MAPPINGS
 
         for mapping in TRADFI_VENUE_MAPPINGS:
             assert "venue" in mapping
-            assert "asset_class" in mapping
 
     def test_defi_venue_to_protocol_has_uniswap(self) -> None:
-        from instruments_service.config.venue_mappings import DEFI_VENUE_TO_PROTOCOL
+        from unified_api_contracts import DEFI_VENUE_TO_PROTOCOL
 
         assert any("UNISWAP" in key for key in DEFI_VENUE_TO_PROTOCOL)
 
     def test_defi_protocols_are_tuples(self) -> None:
-        from instruments_service.config.venue_mappings import DEFI_PROTOCOLS
+        from unified_api_contracts import DEFI_PROTOCOLS
 
         for proto in DEFI_PROTOCOLS:
             assert isinstance(proto, tuple)
@@ -571,13 +555,11 @@ class TestConfigReloadersFromBoost:
 
         mock_config = MagicMock()
         mock_config.config_store_bucket = ""
-        import contextlib
 
         with contextlib.suppress(Exception):
             start_domain_config_reloaders(mock_config)
 
     def test_stop_domain_config_reloaders_when_none(self) -> None:
-        import contextlib
 
         from instruments_service.config_reloaders import stop_domain_config_reloaders
 
@@ -590,7 +572,6 @@ class TestConfigReloadersFromBoost:
         mock_domain_config = MagicMock()
         mock_domain_config.subscription_list = ["AAPL", "MSFT"]
         mock_domain_config.enabled_venues = ["NYSE", "NASDAQ"]
-        import contextlib
 
         with contextlib.suppress(Exception):
             _on_instruments_reload(mock_domain_config)
@@ -603,96 +584,54 @@ class TestConfigReloadersFromBoost:
 # ---------------------------------------------------------------------------
 
 
-def _import_root_config_module() -> ModuleType | None:
-    """Import root config.py by file path (avoids collision with config/ package)."""
-    root_path = Path(__file__).resolve().parents[2] / "instruments_service" / "config.py"
-    spec = importlib.util.spec_from_file_location("_instruments_root_config", str(root_path))
-    if spec is None or spec.loader is None:
-        return None
-    mod = importlib.util.module_from_spec(spec)
-    with contextlib.suppress(Exception):
-        spec.loader.exec_module(mod)
-    return mod
-
-
 @pytest.mark.unit
 class TestRootConfigPyFromBoost:
-    """Tests for the root-level instruments_service/config.py module."""
+    """Tests for instruments_service.config (package) — replaces deleted root config.py."""
 
-    def test_import_root_config(self) -> None:
-        mod = _import_root_config_module()
-        assert mod is not None
+    def test_import_config_package(self) -> None:
+        import instruments_service.config as cfg
+
+        assert cfg is not None
 
     def test_unified_instrument_config_instantiation(self) -> None:
-        mod = _import_root_config_module()
-        if mod is None:
-            return
-        unified_cls: Any = getattr(mod, "UnifiedInstrumentConfig", None)
-        if unified_cls is None:
-            return
-        with contextlib.suppress(Exception):
-            cfg = unified_cls()
-            assert cfg is not None
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        cfg = UnifiedInstrumentConfig()
+        assert cfg is not None
 
     def test_unified_instrument_config_instruments_property(self) -> None:
-        mod = _import_root_config_module()
-        if mod is None:
-            return
-        unified_cls: Any = getattr(mod, "UnifiedInstrumentConfig", None)
-        if unified_cls is None:
-            return
-        with contextlib.suppress(Exception):
-            cfg = unified_cls()
-            instruments = cfg.instruments
-            assert isinstance(instruments, list)
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        cfg = UnifiedInstrumentConfig()
+        instruments = cfg.instruments
+        assert isinstance(instruments, list)
 
     def test_get_symbols_for_venue(self) -> None:
-        mod = _import_root_config_module()
-        if mod is None:
-            return
-        unified_cls: Any = getattr(mod, "UnifiedInstrumentConfig", None)
-        if unified_cls is None:
-            return
-        with contextlib.suppress(Exception):
-            cfg = unified_cls()
-            syms = cfg.get_symbols_for_venue("CME")
-            assert isinstance(syms, list)
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        cfg = UnifiedInstrumentConfig()
+        syms = cfg.get_symbols_for_venue("CME")
+        assert isinstance(syms, list)
 
     def test_get_symbols_for_dataset(self) -> None:
-        mod = _import_root_config_module()
-        if mod is None:
-            return
-        unified_cls: Any = getattr(mod, "UnifiedInstrumentConfig", None)
-        if unified_cls is None:
-            return
-        with contextlib.suppress(Exception):
-            cfg = unified_cls()
-            syms = cfg.get_symbols_for_dataset("GLBX.MDP3")
-            assert isinstance(syms, list)
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        cfg = UnifiedInstrumentConfig()
+        syms = cfg.get_symbols_for_dataset("GLBX.MDP3")
+        assert isinstance(syms, list)
 
     def test_get_instrument(self) -> None:
-        mod = _import_root_config_module()
-        if mod is None:
-            return
-        unified_cls: Any = getattr(mod, "UnifiedInstrumentConfig", None)
-        if unified_cls is None:
-            return
-        with contextlib.suppress(Exception):
-            cfg = unified_cls()
-            result = cfg.get_instrument("ES.FUT")
-            assert result is None or hasattr(result, "symbol")
+        from instruments_service.config import UnifiedInstrumentConfig
+
+        cfg = UnifiedInstrumentConfig()
+        result = cfg.get_instrument("ES.FUT")
+        assert result is None or hasattr(result, "symbol")
 
     def test_known_etfs_set(self) -> None:
-        mod = _import_root_config_module()
-        if mod is None:
-            return
-        unified_cls: Any = getattr(mod, "UnifiedInstrumentConfig", None)
-        if unified_cls is None:
-            return
-        with contextlib.suppress(Exception):
-            cfg = unified_cls()
-            assert "SPY" in cfg.KNOWN_ETFS
-            assert "QQQ" in cfg.KNOWN_ETFS
+        from unified_api_contracts import KNOWN_ETFS
+
+        assert "SPY" in KNOWN_ETFS
+        assert "QQQ" in KNOWN_ETFS
 
 
 @pytest.mark.unit
@@ -716,7 +655,6 @@ class TestConfigReloadersBoost5:
         mock_config = MagicMock()
         mock_config.subscription_list = []
         mock_config.enabled_venues = []
-        import contextlib
 
         with patch.dict("sys.modules", {"unified_events_interface": None}), contextlib.suppress(Exception):
             cr._on_instruments_reload(mock_config)

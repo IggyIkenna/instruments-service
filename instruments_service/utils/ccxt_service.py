@@ -12,13 +12,12 @@ Used by:
 """
 
 import logging
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import ccxt
-
-if TYPE_CHECKING:
-    from unified_api_contracts import VenueMapping
+from unified_api_contracts import VenueMapping
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +37,7 @@ class CCXTService:
     - Metadata extraction (tick_size, min_size, contract_size)
     """
 
-    def __init__(self, venue_mapping: "VenueMapping", cache_ttl_hours: int = 4):
+    def __init__(self, venue_mapping: VenueMapping, cache_ttl_hours: int = 4):
         """
         Initialize CCXT service.
 
@@ -59,62 +58,43 @@ class CCXTService:
         logger.info("✅ CCXTService initialized (cache TTL: %sh)", cache_ttl_hours)
 
     def preload_markets_parallel(self, venues: list[str], max_workers: int = 4) -> dict[str, bool]:
-        """
-        Pre-load CCXT markets for multiple venues in parallel.
-
-        PERFORMANCE: Loads markets from different CCXT exchanges concurrently,
-        reducing total load time from O(n*latency) to O(latency).
-
-        Args:
-            venues: List of venue identifiers to pre-load
-            max_workers: Maximum parallel threads (default: 4)
-
-        Returns:
-            Dictionary mapping ccxt_exchange_id to success status
-        """
-        from concurrent.futures import Future, ThreadPoolExecutor, as_completed
-
-        # Get unique CCXT exchange IDs (avoid loading same exchange multiple times)
-        venue_to_ccxt: dict[str, str] = self.venue_mapping.venue_to_ccxt
-        ccxt_exchange_ids: set[tuple[str, str]] = set()
-        for venue in venues:
-            ccxt_id = venue_to_ccxt.get(venue)
-            if ccxt_id:
-                ccxt_exchange_ids.add((venue, ccxt_id))
-
-        # Filter out already-cached exchanges and spot-only exchanges
-        spot_only_exchanges = {"upbit", "coinbase"}
-        to_load: list[tuple[str, str]] = [
-            (v, cid)
-            for v, cid in ccxt_exchange_ids
-            if cid not in self._markets_cache and cid.lower() not in spot_only_exchanges
-        ]
-
+        """Pre-load CCXT markets for multiple venues in parallel."""
+        to_load = self._resolve_venues_to_load(venues)
         if not to_load:
-            logger.info("📋 All CCXT markets already cached or skipped (spot-only)")
+            logger.info("All CCXT markets already cached or skipped (spot-only)")
             return {}
-
-        logger.info("⚡ Pre-loading %s CCXT exchanges in parallel (max_workers=%s)...", len(to_load), max_workers)
-
+        logger.info("Pre-loading %s CCXT exchanges in parallel (max_workers=%s)...", len(to_load), max_workers)
         results: dict[str, bool] = {}
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures_map: dict[Future[CCXTMarketData | None], tuple[str, str]] = {
                 executor.submit(self.load_markets, venue): (venue, ccxt_id) for venue, ccxt_id in to_load
             }
             for future in as_completed(futures_map):
-                venue, ccxt_id = futures_map[future]
+                _venue, ccxt_id = futures_map[future]
                 try:
                     result: CCXTMarketData | None = future.result()
                     results[ccxt_id] = result is not None
-                    if result:
-                        logger.debug("✅ Pre-loaded %s markets", ccxt_id)
                 except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
-                    logger.warning("⚠️ Failed to pre-load %s: %s", ccxt_id, e)
+                    logger.warning("Failed to pre-load %s: %s", ccxt_id, e)
                     results[ccxt_id] = False
-
         success_count = sum(1 for v in results.values() if v)
-        logger.info("✅ Pre-loaded %s/%s CCXT exchanges", success_count, len(to_load))
+        logger.info("Pre-loaded %s/%s CCXT exchanges", success_count, len(to_load))
         return results
+
+    def _resolve_venues_to_load(self, venues: list[str]) -> list[tuple[str, str]]:
+        """Resolve which venues need CCXT market loading (not cached, not spot-only)."""
+        venue_to_ccxt: dict[str, str] = self.venue_mapping.venue_to_ccxt
+        spot_only_exchanges = {"upbit", "coinbase"}
+        ccxt_exchange_ids: set[tuple[str, str]] = set()
+        for venue in venues:
+            ccxt_id = venue_to_ccxt.get(venue)
+            if ccxt_id:
+                ccxt_exchange_ids.add((venue, ccxt_id))
+        return [
+            (v, cid)
+            for v, cid in ccxt_exchange_ids
+            if cid not in self._markets_cache and cid.lower() not in spot_only_exchanges
+        ]
 
     def get_ccxt_exchange(self, venue: str) -> object | None:
         """
@@ -147,68 +127,33 @@ class CCXTService:
         )
 
     def load_markets(self, venue: str, force_refresh: bool = False) -> CCXTMarketData | None:
-        """
-        Load markets for a venue with caching.
-
-        PERFORMANCE: Uses ccxt_exchange_id as cache key so that venues sharing
-        the same CCXT exchange (e.g., BINANCE-SPOT and BINANCE-FUTURES both use
-        'binance') share the same cached markets data.
-
-         Args:
-            venue: Venue identifier
-            force_refresh: If True, bypass cache and reload
-
-        Returns:
-            Dictionary with 'exchange', 'markets', 'exchange_id' or None
-        """
+        """Load markets for a venue with caching (uses ccxt_exchange_id as cache key)."""
         ccxt_exchange_id = self.venue_mapping.venue_to_ccxt.get(venue)
         if not ccxt_exchange_id:
             logger.debug("No CCXT mapping for venue: %s", venue)
             return None
-
-        # PERFORMANCE FIX: Use ccxt_exchange_id as cache key (not venue)
-        # This allows BINANCE-SPOT and BINANCE-FUTURES to share cached markets
         cache_key = ccxt_exchange_id
         if not force_refresh and self._is_cache_valid(cache_key):
-            logger.debug(
-                "📋 Using cached CCXT markets for %s via %s (%s markets)",
-                venue,
-                ccxt_exchange_id,
-                len(
-                    cast(dict[str, object], self._markets_cache[cache_key]["markets"])
-                    if "markets" in self._markets_cache[cache_key]
-                    else {}
-                ),
-            )
             return self._markets_cache[cache_key]
+        return self._fetch_and_cache_markets(venue, ccxt_exchange_id, cache_key)
 
-        # Initialize exchange
+    def _fetch_and_cache_markets(
+        self,
+        venue: str,
+        ccxt_exchange_id: str,
+        cache_key: str,
+    ) -> CCXTMarketData | None:
+        """Initialize CCXT exchange, load markets, and cache the result."""
         exchange = self.get_ccxt_exchange(venue)
         if not exchange:
             return None
-
         try:
-            # Load markets ONCE per CCXT exchange (major performance optimization)
-            # CCXT has no stubs - cast to dict[str, object] for type safety
             markets = cast(dict[str, object], exchange.load_markets())  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
-            logger.info(
-                "⚡ Loaded %s CCXT markets for %s - CACHED for all venues using this exchange",
-                len(markets),
-                ccxt_exchange_id,
-            )
-
-            # Cache the results by ccxt_exchange_id
-            ccxt_data: CCXTMarketData = {
-                "exchange": exchange,
-                "markets": markets,
-                "exchange_id": ccxt_exchange_id,
-            }
-
+            logger.info("Loaded %s CCXT markets for %s", len(markets), ccxt_exchange_id)
+            ccxt_data: CCXTMarketData = {"exchange": exchange, "markets": markets, "exchange_id": ccxt_exchange_id}
             self._markets_cache[cache_key] = ccxt_data
             self._cache_timestamps[cache_key] = datetime.now(UTC)
-
             return ccxt_data
-
         except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
             logger.debug("CCXT data unavailable for %s: %s", venue, e)
             return None
@@ -222,183 +167,85 @@ class CCXTService:
         tardis_symbol: str | None = None,
         instrument_type: str | None = None,
     ) -> list[str]:
-        """
-        Build possible CCXT symbol formats for a venue.
-
-        Args:
-            venue: Venue identifier
-            base_asset: Base asset symbol
-            quote_asset: Quote asset symbol
-            symbol_id: Symbol identifier (Deribit uses this directly: BTC-PERPETUAL, BTC-25DEC25-50000-C)
-            tardis_symbol: Optional Tardis symbol format for better matching
-            instrument_type: Optional instrument type (PERPETUAL, FUTURE, OPTION, SPOT_PAIR)
-
-        Returns:
-            List of possible symbol formats to try
-        """
+        """Build possible CCXT symbol formats for a venue."""
         possible_symbols: list[str] = []
         tardis_symbol = tardis_symbol or symbol_id
         instrument_type = instrument_type or ""
-
         if venue == "BYBIT" and base_asset and quote_asset:
-            # Bybit perpetuals use BASE/QUOTE:QUOTE format
-            possible_symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}")
-
-            # Handle compound symbols that likely don't exist as perpetuals in CCXT
-            if len(base_asset) > 5:  # Compound symbols like ETHBTC, SHIB1000
-                logger.debug("🔍 Bybit compound symbol (likely unavailable in CCXT): %s", base_asset)
-
-                # Special mappings for known variations
-                special_mappings = {
-                    "SHIB1000": "1000SHIB",  # SHIB1000 → 1000SHIB
-                    "LUNA2": "LUNC",  # LUNA2 → LUNC
-                    "PEPE1000": "1000PEPE",  # 1000x pattern
-                }
-
-                if base_asset in special_mappings:
-                    alt_base = special_mappings[base_asset]
-                    possible_symbols.extend(
-                        [
-                            f"{alt_base}/{quote_asset}:{quote_asset}",
-                            f"{alt_base}/{quote_asset}",
-                        ]
-                    )
-
-            # Standard Bybit formats
-            possible_symbols.extend(
-                [
-                    f"{base_asset}/{quote_asset}",  # Spot format: BTC/USDT
-                    f"{base_asset}{quote_asset}",  # Compressed: BTCUSDT
-                ]
-            )
-
-        elif venue == "HYPERLIQUID":
-            # Hyperliquid CCXT formats: BTC/USDC:USDC for perpetuals
-            if base_asset and quote_asset:
-                possible_symbols.extend(
-                    [
-                        f"{base_asset}/{quote_asset}:{quote_asset}",  # BTC/USDC:USDC (perpetual)
-                        f"{base_asset}/{quote_asset}",  # BTC/USDC (spot, if exists)
-                    ]
-                )
-
+            self._format_bybit_symbols(possible_symbols, base_asset, quote_asset)
+        elif venue == "HYPERLIQUID" and base_asset and quote_asset:
+            possible_symbols.extend([f"{base_asset}/{quote_asset}:{quote_asset}", f"{base_asset}/{quote_asset}"])
         elif venue == "ASTER":
-            # Aster doesn't have CCXT support, return empty
             pass
-
-        elif venue in ["BINANCE-SPOT", "BINANCE-FUTURES"]:
-            # Binance CCXT formats:
-            # Spot: BTC/USDT
-            # Perpetuals: BTC/USDT:USDT (linear) or BTC/USDT:BTC (inverse)
-            # Futures: BTC/USDT:USDT-211225 (with expiry date YYMMDD)
-            if base_asset and quote_asset:
-                if instrument_type == "SPOT_PAIR":
-                    possible_symbols.append(f"{base_asset}/{quote_asset}")
-                elif instrument_type in ["PERPETUAL", "FUTURE"]:
-                    # Linear perpetuals/futures: BASE/QUOTE:QUOTE
-                    possible_symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}")
-                    # Also try with expiry for futures (if symbol_id contains date)
-                    if instrument_type == "FUTURE" and any(char.isdigit() for char in symbol_id):
-                        # Try to extract date from symbol_id (e.g., BTCUSDT241225)
-                        possible_symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}-{symbol_id}")
-                # Standard formats
-                possible_symbols.extend(
-                    [
-                        f"{base_asset}/{quote_asset}",  # Spot format
-                        f"{base_asset}{quote_asset}",  # Compressed: BTCUSDT
-                    ]
-                )
-
-        elif venue == "OKX":
-            # OKX CCXT formats (similar to Binance):
-            # Spot: BTC/USDT
-            # Perpetuals: BTC/USDT:USDT
-            # Futures: BTC/USDT:USDT-211225 (with expiry date YYMMDD)
-            if base_asset and quote_asset:
-                if instrument_type == "SPOT_PAIR":
-                    possible_symbols.append(f"{base_asset}/{quote_asset}")
-                elif instrument_type in ["PERPETUAL", "FUTURE"]:
-                    # Linear perpetuals/futures: BASE/QUOTE:QUOTE
-                    possible_symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}")
-                    # Also try with expiry for futures
-                    if instrument_type == "FUTURE" and any(char.isdigit() for char in symbol_id):
-                        possible_symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}-{symbol_id}")
-                # Standard formats
-                possible_symbols.extend(
-                    [
-                        f"{base_asset}/{quote_asset}",  # Spot format
-                        f"{base_asset}{quote_asset}",  # Compressed: BTCUSDT
-                    ]
-                )
-
+        elif venue in ["BINANCE-SPOT", "BINANCE-FUTURES"] or venue == "OKX":
+            self._format_binance_okx_symbols(possible_symbols, base_asset, quote_asset, symbol_id, instrument_type)
         elif venue == "DERIBIT":
-            # CRITICAL FIX: Deribit uses symbol_id directly in CCXT format
-            # symbol_id is already in CCXT format: BTC-PERPETUAL, BTC-25DEC25-50000-C, BTC-25DEC25
-            # CCXT Deribit format: BASE/QUOTE:SYMBOL_ID
-            # For perpetuals: BTC/USD:BTC-PERPETUAL
-            # For options: BTC/USD:BTC-25DEC25-50000-C
-            # For futures: BTC/USD:BTC-25DEC25
-
-            # Use instrument_type if available, otherwise check symbol_id patterns
-            if instrument_type == "PERPETUAL" or "PERPETUAL" in symbol_id.upper():
-                if quote_asset == "USD":
-                    # Inverse perpetual: BTC/USD:BTC-PERPETUAL
-                    possible_symbols.append(f"{base_asset}/USD:{symbol_id}")
-                elif quote_asset in ["USDC", "USDT"]:
-                    # Linear perpetual: BTC/USDC:BTC-PERPETUAL
-                    possible_symbols.append(f"{base_asset}/{quote_asset}:{symbol_id}")
-            elif (
-                instrument_type == "OPTION"
-                or "-C" in symbol_id.upper()
-                or "-P" in symbol_id.upper()
-                or "CALL" in symbol_id.upper()
-                or "PUT" in symbol_id.upper()
-            ):
-                # Options: BTC/USD:BTC-25DEC25-50000-C
-                possible_symbols.append(f"{base_asset}/{quote_asset}:{symbol_id}")
-            elif instrument_type == "FUTURE" or any(
-                month in symbol_id.upper()
-                for month in [
-                    "JAN",
-                    "FEB",
-                    "MAR",
-                    "APR",
-                    "MAY",
-                    "JUN",
-                    "JUL",
-                    "AUG",
-                    "SEP",
-                    "OCT",
-                    "NOV",
-                    "DEC",
-                ]
-            ):
-                # Futures: BTC/USD:BTC-25DEC25
-                possible_symbols.append(f"{base_asset}/{quote_asset}:{symbol_id}")
-
-            # Also try symbol_id directly (Deribit symbols are often already in CCXT format)
-            possible_symbols.append(symbol_id)
-
-        # Standard formats for all venues
+            self._format_deribit_symbols(possible_symbols, base_asset, quote_asset, symbol_id, instrument_type)
         if base_asset and quote_asset:
             possible_symbols.extend(
-                [
-                    f"{base_asset}/{quote_asset}",  # Standard: BTC/USDT
-                    f"{base_asset}{quote_asset}",  # Binance: BTCUSDT
-                    f"{base_asset}-{quote_asset}",  # Alternative dash format
-                ]
+                [f"{base_asset}/{quote_asset}", f"{base_asset}{quote_asset}", f"{base_asset}-{quote_asset}"]
             )
-
-        # Add original symbols
-        possible_symbols.extend(
-            [
-                tardis_symbol,
-                symbol_id.upper(),
-                symbol_id.lower(),
-            ]
-        )
-
+        possible_symbols.extend([tardis_symbol, symbol_id.upper(), symbol_id.lower()])
         return possible_symbols
+
+    @staticmethod
+    def _format_bybit_symbols(
+        symbols: list[str],
+        base_asset: str,
+        quote_asset: str,
+    ) -> None:
+        """Append Bybit-specific CCXT symbol formats."""
+        symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}")
+        if len(base_asset) > 5:
+            special_mappings = {"SHIB1000": "1000SHIB", "LUNA2": "LUNC", "PEPE1000": "1000PEPE"}
+            if base_asset in special_mappings:
+                alt_base = special_mappings[base_asset]
+                symbols.extend([f"{alt_base}/{quote_asset}:{quote_asset}", f"{alt_base}/{quote_asset}"])
+        symbols.extend([f"{base_asset}/{quote_asset}", f"{base_asset}{quote_asset}"])
+
+    @staticmethod
+    def _format_binance_okx_symbols(
+        symbols: list[str],
+        base_asset: str,
+        quote_asset: str,
+        symbol_id: str,
+        instrument_type: str,
+    ) -> None:
+        """Append Binance/OKX-specific CCXT symbol formats."""
+        if not (base_asset and quote_asset):
+            return
+        if instrument_type == "SPOT_PAIR":
+            symbols.append(f"{base_asset}/{quote_asset}")
+        elif instrument_type in ["PERPETUAL", "FUTURE"]:
+            symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}")
+            if instrument_type == "FUTURE" and any(c.isdigit() for c in symbol_id):
+                symbols.append(f"{base_asset}/{quote_asset}:{quote_asset}-{symbol_id}")
+        symbols.extend([f"{base_asset}/{quote_asset}", f"{base_asset}{quote_asset}"])
+
+    @staticmethod
+    def _format_deribit_symbols(
+        symbols: list[str],
+        base_asset: str,
+        quote_asset: str,
+        symbol_id: str,
+        instrument_type: str,
+    ) -> None:
+        """Append Deribit-specific CCXT symbol formats."""
+        months = {"JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"}
+        sid_upper = symbol_id.upper()
+        if instrument_type == "PERPETUAL" or "PERPETUAL" in sid_upper:
+            if quote_asset == "USD":
+                symbols.append(f"{base_asset}/USD:{symbol_id}")
+            elif quote_asset in ["USDC", "USDT"]:
+                symbols.append(f"{base_asset}/{quote_asset}:{symbol_id}")
+        elif (
+            instrument_type == "OPTION"
+            or any(t in sid_upper for t in ["-C", "-P", "CALL", "PUT"])
+            or instrument_type == "FUTURE"
+            or any(m in sid_upper for m in months)
+        ):
+            symbols.append(f"{base_asset}/{quote_asset}:{symbol_id}")
+        symbols.append(symbol_id)
 
     def generate_default_ccxt_symbol(
         self,

@@ -8,13 +8,26 @@ Submodules:
 - api_keys: API key and secret defaults (see docs/API_KEYS_STANDARDIZED_PROCESS.md)
 - data_type_config: Processing defaults
 - service_config: InstrumentsServiceConfig (Pydantic), get_config, instruments_config
-- instrument_definitions: DEFI_PROTOCOLS, ETF_TICKERS, SP500_TICKERS, etc.
-- tradfi_exchange_mappings: Databento symbol mappings
+- instrument_definitions: ETF_TICKERS, SP500_TICKERS, etc.
+
+Static reference data (TRADFI_INSTRUMENTS_CONFIG, DEFI_VENUE_TO_PROTOCOL, DEFI_PROTOCOLS,
+DATABENTO_VALID_PARENT_SYMBOLS, DATABENTO_VALID_OPTIONS_SYMBOLS, EXCHANGE_CODE_TO_NAME,
+KNOWN_ETFS, SPACE_TO_DOT_SYMBOLS) is imported from UAC (SSOT).
 """
 
 import logging
 
-from unified_api_contracts import INSTRUMENT_TYPES_BY_VENUE
+from unified_api_contracts import (
+    DATABENTO_VALID_OPTIONS_SYMBOLS,
+    DATABENTO_VALID_PARENT_SYMBOLS,
+    DEFI_PROTOCOLS,
+    DEFI_VENUE_TO_PROTOCOL,
+    EXCHANGE_CODE_TO_NAME,
+    INSTRUMENT_TYPES_BY_VENUE,
+    KNOWN_ETFS,
+    SPACE_TO_DOT_SYMBOLS,
+    TRADFI_INSTRUMENTS_CONFIG,
+)
 from unified_config_interface import (
     DataTypeConfig,
     ExchangeInstrumentConfig,
@@ -22,23 +35,15 @@ from unified_config_interface import (
 )
 
 from instruments_service.config.instrument_definitions import (
-    DEFI_PROTOCOLS,
-    DEFI_VENUE_TO_PROTOCOL,
     ETF_TICKERS,
     NASDAQ_TICKERS,
     SP500_TICKERS,
-    TRADFI_INSTRUMENTS_CONFIG,
     corporate_actions_start_date,
 )
 from instruments_service.config.service_config import (
     InstrumentsServiceConfig,
     get_config,
     instruments_config,
-)
-from instruments_service.config.tradfi_exchange_mappings import (
-    DATABENTO_VALID_OPTIONS_SYMBOLS,
-    DATABENTO_VALID_PARENT_SYMBOLS,
-    EXCHANGE_CODE_TO_NAME,
 )
 from instruments_service.config.venue_config import (
     InstrumentDefinition,
@@ -51,11 +56,7 @@ _logger = logging.getLogger(__name__)
 
 def _validate_venues_against_uac() -> None:
     """Log warnings for venues handled by instruments-service but absent from UAC INSTRUMENT_TYPES_BY_VENUE."""
-    from instruments_service.config.defi_definitions import (
-        DEFI_VENUE_TO_PROTOCOL as _DEFI_VENUES,
-    )
-
-    service_venues: set[str] = set(_DEFI_VENUES.keys())
+    service_venues: set[str] = set(DEFI_VENUE_TO_PROTOCOL.keys())
     # Add TradFi venues from instrument definitions
     for inst in TRADFI_INSTRUMENTS_CONFIG:
         venue = inst.get("venue")
@@ -82,8 +83,10 @@ __all__ = [
     "ETF_TICKERS",
     "EXCHANGE_CODE_TO_NAME",
     "INSTRUMENT_TYPES_BY_VENUE",
+    "KNOWN_ETFS",
     "NASDAQ_TICKERS",
     "SP500_TICKERS",
+    "SPACE_TO_DOT_SYMBOLS",
     "TRADFI_INSTRUMENTS_CONFIG",
     "DataTypeConfig",
     "ExchangeInstrumentConfig",

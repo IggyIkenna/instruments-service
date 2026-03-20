@@ -5,12 +5,31 @@ Task 1.4.4: DatabentoCategoryAdapter - instruments-service uses UnifiedInstrumen
 for TradFi/Databento symbol and dataset configuration.
 """
 
-import importlib.util as _ilu
-import pathlib as _pl
+from pathlib import Path
 
 import pytest
+from unified_api_contracts import (
+    DATABENTO_VALID_OPTIONS_SYMBOLS,
+    DATABENTO_VALID_PARENT_SYMBOLS,
+    EXCHANGE_CODE_TO_NAME,
+)
 
-from instruments_service.config.venue_config import UnifiedInstrumentConfig
+from instruments_service.config.instrument_definitions import _DATA_DIR
+from instruments_service.config.venue_config import (
+    InstrumentDefinition,
+    TradFiInstrument,
+    UnifiedInstrumentConfig,
+    _load_sp500_tickers,
+    _load_tradfi_instruments,
+)
+
+# Alias for tests below
+_UIC_config = UnifiedInstrumentConfig
+
+
+def _get_data_dir() -> Path:
+    """Get the data directory path."""
+    return _DATA_DIR
 
 
 class TestUnifiedInstrumentConfig:
@@ -77,27 +96,6 @@ class TestUnifiedInstrumentConfig:
         # Unknown code returns as-is
         unknown = config.get_human_readable_name("XX")
         assert unknown == "XX"
-
-
-# ---------------------------------------------------------------------------
-# Config module (from test_config_module_coverage)
-# ---------------------------------------------------------------------------
-
-_cfg_path = _pl.Path(__file__).parents[2] / "instruments_service" / "config.py"
-_cfg_spec = _ilu.spec_from_file_location("instruments_service._config_module", _cfg_path)
-assert _cfg_spec is not None and _cfg_spec.loader is not None
-_cfg = _ilu.module_from_spec(_cfg_spec)
-_cfg_spec.loader.exec_module(_cfg)  # type: ignore[union-attr]
-
-DATABENTO_VALID_OPTIONS_SYMBOLS = _cfg.DATABENTO_VALID_OPTIONS_SYMBOLS
-DATABENTO_VALID_PARENT_SYMBOLS = _cfg.DATABENTO_VALID_PARENT_SYMBOLS
-EXCHANGE_CODE_TO_NAME = _cfg.EXCHANGE_CODE_TO_NAME
-InstrumentDefinition = _cfg.InstrumentDefinition
-TradFiInstrument = _cfg.TradFiInstrument
-_UIC_config = _cfg.UnifiedInstrumentConfig
-_get_data_dir = _cfg._get_data_dir
-_load_sp500_tickers = _cfg._load_sp500_tickers
-_load_tradfi_instruments = _cfg._load_tradfi_instruments
 
 
 class TestDatabentoDicts:
@@ -312,13 +310,17 @@ class TestUnifiedInstrumentConfigConfigModule:
         assert len(all_insts) > 500  # SP500 equities + base instruments
 
     def test_known_etfs_set(self) -> None:
-        assert "SPY" in _UIC_config.KNOWN_ETFS
-        assert "QQQ" in _UIC_config.KNOWN_ETFS
-        assert "IBIT" in _UIC_config.KNOWN_ETFS  # Bitcoin ETF
+        from unified_api_contracts import KNOWN_ETFS
+
+        assert "SPY" in KNOWN_ETFS
+        assert "QQQ" in KNOWN_ETFS
+        assert "IBIT" in KNOWN_ETFS  # Bitcoin ETF
 
     def test_space_to_dot_symbols(self) -> None:
-        assert "BRK B" in _UIC_config.SPACE_TO_DOT_SYMBOLS
-        assert _UIC_config.SPACE_TO_DOT_SYMBOLS["BRK B"] == "BRK.B"
+        from unified_api_contracts import SPACE_TO_DOT_SYMBOLS
+
+        assert "BRK B" in SPACE_TO_DOT_SYMBOLS
+        assert SPACE_TO_DOT_SYMBOLS["BRK B"] == "BRK.B"
 
     def test_sp500_equities_use_correct_dataset(self) -> None:
         all_insts = self.config.get_all_instruments()

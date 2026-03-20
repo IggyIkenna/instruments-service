@@ -261,7 +261,7 @@ class InstrumentsOrchestrator:
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             logger.error("❌ Error in generate_instruments_for_date: %s", e)
             RECORDS_PROCESSED.labels(status="error").inc()
             return {

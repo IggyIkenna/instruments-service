@@ -66,66 +66,86 @@ class InstrumentProcessingBase:
         self.config = config
         project_id: str = str(config.get("project_id") or instruments_config.gcp_project_id)
 
-        # Try to get API key from config first
-        self.api_key: str | None = cast(str | None, config.get("tardis_api_key") or config.get("api_key"))
+        self.api_key: str | None = self._resolve_api_key(config, project_id)
 
-        # If not in config, try Secret Manager
-        if not self.api_key:
-            try:
-                secret_name = instruments_config.tardis_secret_name
-                logger.debug(
-                    "Attempting to retrieve Tardis API key from Secret Manager (secret: %s, project: %s)",
-                    secret_name,
-                    project_id,
-                )
-                self.api_key = get_secret_client(
-                    project_id=project_id,
-                ).get_secret(secret_name)
-                if self.api_key:
-                    self.api_key = self.api_key.strip()
-                    logger.info("✅ Retrieved Tardis API key from Secret Manager")
-                else:
-                    logger.warning("⚠️ Tardis API key retrieval returned None (only needed for CeFi)")
-            except (ConnectionError, TimeoutError, OSError, ValueError) as e:
-                _err = EnhancedError(
-                    message=str(e),
-                    category=ErrorCategory.SERVER_ERROR,
-                    severity=ErrorSeverity.MEDIUM,
-                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
-                    correlation_id=str(uuid4()),
-                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
-                )
-                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
-                logger.warning("⚠️ Tardis API key not available (only needed for CeFi): %s", e)
-                self.api_key = None
         # Use centralized configs from config.py (DRY principle)
         self.venue_mapping = VenueMapping()
         self.exchange_config = ExchangeInstrumentConfig()
         self.data_config = DataTypeConfig()
 
-        retry_attempts: int = int(cast(int | float, config.get("retry_max_attempts", 3)))
-        retry_backoff: float = float(cast(int | float, config.get("retry_backoff_factor", 1.0)))
-        cache_ttl: int = int(cast(int | float, config.get("cache_ttl_hours", 24)))
-        self.processing_config = InstrumentProcessingConfig(
-            api_key=self.api_key or "",
-            retry_max_attempts=retry_attempts,
-            retry_backoff_factor=retry_backoff,
-            enable_ccxt_integration=cast(bool, config.get("enable_ccxt_integration", True)),
-            enable_defi_integration=cast(bool, config.get("enable_defi_integration", True)),
-            enable_metadata_caching=cast(bool, config.get("enable_metadata_caching", True)),
-            cache_ttl_hours=cache_ttl,
-            supported_exchanges=self.venue_mapping.all_tardis_exchanges,
-        )
+        self.processing_config = self._create_processing_config(config)
 
         # Initialize metadata cache
         self._metadata_cache: dict[str, InstrumentDefinition] = {}
         self._cache_timestamps: dict[str, datetime] = {}
 
         logger.info(
-            "✅ InstrumentProcessingBase initialized: api_key=%s, ccxt_integration=%s, caching=%s",
+            "InstrumentProcessingBase initialized: api_key=%s, ccxt_integration=%s, caching=%s",
             "*" * (len(self.api_key) - 4) + self.api_key[-4:] if self.api_key else "None",
             self.processing_config.enable_ccxt_integration,
             self.processing_config.enable_metadata_caching,
+        )
+
+    def _resolve_api_key(self, config: dict[str, object], project_id: str) -> str | None:
+        """Resolve API key from config dict, falling back to Secret Manager.
+
+        Args:
+            config: Configuration with processing settings
+            project_id: GCP project ID for Secret Manager lookup
+
+        Returns:
+            API key string or None if unavailable
+        """
+        api_key = cast(str | None, config.get("tardis_api_key") or config.get("api_key"))
+        if api_key:
+            return api_key
+
+        try:
+            secret_name = instruments_config.tardis_secret_name
+            logger.debug(
+                "Attempting to retrieve Tardis API key from Secret Manager (secret: %s, project: %s)",
+                secret_name,
+                project_id,
+            )
+            api_key = get_secret_client(project_id=project_id).get_secret(secret_name)
+            if api_key:
+                api_key = api_key.strip()
+                logger.info("Retrieved Tardis API key from Secret Manager")
+            else:
+                logger.warning("Tardis API key retrieval returned None (only needed for CeFi)")
+        except (ConnectionError, TimeoutError, OSError, ValueError) as e:
+            _err = EnhancedError(
+                message=str(e),
+                category=ErrorCategory.SERVER_ERROR,
+                severity=ErrorSeverity.MEDIUM,
+                recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                correlation_id=str(uuid4()),
+                context=ErrorContext(extra={"exc_type": type(e).__name__}),
+            )
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("Tardis API key not available (only needed for CeFi): %s", e)
+            api_key = None
+
+        return api_key
+
+    def _create_processing_config(self, config: dict[str, object]) -> InstrumentProcessingConfig:
+        """Build InstrumentProcessingConfig from the raw config dict.
+
+        Args:
+            config: Configuration with processing settings
+
+        Returns:
+            Populated InstrumentProcessingConfig dataclass
+        """
+        return InstrumentProcessingConfig(
+            api_key=self.api_key or "",
+            retry_max_attempts=int(cast(int | float, config.get("retry_max_attempts", 3))),
+            retry_backoff_factor=float(cast(int | float, config.get("retry_backoff_factor", 1.0))),
+            enable_ccxt_integration=cast(bool, config.get("enable_ccxt_integration", True)),
+            enable_defi_integration=cast(bool, config.get("enable_defi_integration", True)),
+            enable_metadata_caching=cast(bool, config.get("enable_metadata_caching", True)),
+            cache_ttl_hours=int(cast(int | float, config.get("cache_ttl_hours", 24))),
+            supported_exchanges=self.venue_mapping.all_tardis_exchanges,
         )
 
     def get_venue_mapping(self) -> dict[str, str]:

@@ -92,7 +92,7 @@ def validate_required_api_keys(venues: list[str], project_id: str | None = None)
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             error_msg = f"Failed to fetch API key for {data_source}: {e}"
             errors.append(error_msg)
             logger.error(error_msg)

@@ -10,7 +10,7 @@ Covers:
 """
 
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -29,28 +29,29 @@ def _make_service(base_tokens: list[str] | None = None, hyperliquid_bases: list[
 
 
 class TestFetchDefiInstrumentsUnknownProtocol:
-    def test_unknown_protocol_returns_empty(self) -> None:
+    @pytest.mark.asyncio
+    async def test_unknown_protocol_returns_empty(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service()
-        result = fetch_defi_instruments(service, "unknown_protocol_xyz")
+        result = await fetch_defi_instruments(service, "unknown_protocol_xyz")
         assert result == {}
 
 
 class TestFetchDefiInstrumentsAster:
-    def test_aster_raises_not_implemented(self) -> None:
-        import pytest
-
+    @pytest.mark.asyncio
+    async def test_aster_raises_not_implemented(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service()
         # aster protocol raises NotImplementedError (adapter removed from UCS)
         with pytest.raises(NotImplementedError, match="Aster adapter not available"):
-            fetch_defi_instruments(service, "aster")
+            await fetch_defi_instruments(service, "aster")
 
 
 class TestFetchDefiInstrumentsBalancer:
-    def test_balancer_with_mock(self) -> None:
+    @pytest.mark.asyncio
+    async def test_balancer_with_mock(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service()
@@ -70,12 +71,13 @@ class TestFetchDefiInstrumentsBalancer:
         mock_adapter.fetch_markets.return_value = {"key1": mock_instrument}
 
         with patch("instruments_service.engine.processors.defi_processor.BalancerAdapter", return_value=mock_adapter):
-            result = fetch_defi_instruments(service, "balancer")
+            result = await fetch_defi_instruments(service, "balancer")
 
         # ETH is in MVP list, USDC is in MVP list -> should be included
         assert isinstance(result, dict)
 
-    def test_balancer_filters_non_mvp(self) -> None:
+    @pytest.mark.asyncio
+    async def test_balancer_filters_non_mvp(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service(base_tokens=["ETH", "USDC"])
@@ -95,30 +97,32 @@ class TestFetchDefiInstrumentsBalancer:
         mock_adapter.fetch_markets.return_value = {"key1": non_mvp_instrument}
 
         with patch("instruments_service.engine.processors.defi_processor.BalancerAdapter", return_value=mock_adapter):
-            result = fetch_defi_instruments(service, "balancer")
+            result = await fetch_defi_instruments(service, "balancer")
 
         assert result == {}
 
 
 class TestFetchDefiInstrumentsAaveV3:
-    def test_aave_with_target_date(self) -> None:
+    @pytest.mark.asyncio
+    async def test_aave_with_target_date(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service()
         target_date = datetime(2024, 1, 1)
 
         mock_adapter = MagicMock()
-        mock_adapter.fetch_markets.return_value = {}
+        mock_adapter.fetch_markets = AsyncMock(return_value={})
 
         with patch("instruments_service.engine.processors.defi_processor.AaveV3Adapter", return_value=mock_adapter):
-            result = fetch_defi_instruments(service, "aave_v3", target_date=target_date)
+            result = await fetch_defi_instruments(service, "aave_v3", target_date=target_date)
 
         assert result == {}
         mock_adapter.fetch_markets.assert_called_once_with(target_date=target_date)
 
 
 class TestFetchDefiInstrumentsEtherFi:
-    def test_etherfi_protocol(self) -> None:
+    @pytest.mark.asyncio
+    async def test_etherfi_protocol(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service()
@@ -127,13 +131,14 @@ class TestFetchDefiInstrumentsEtherFi:
         mock_adapter.fetch_lst_instruments.return_value = {}
 
         with patch("instruments_service.engine.processors.defi_processor.EtherFiAdapter", return_value=mock_adapter):
-            result = fetch_defi_instruments(service, "etherfi")
+            result = await fetch_defi_instruments(service, "etherfi")
 
         assert result == {}
 
 
 class TestFetchDefiInstrumentsLido:
-    def test_lido_protocol(self) -> None:
+    @pytest.mark.asyncio
+    async def test_lido_protocol(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service()
@@ -142,43 +147,46 @@ class TestFetchDefiInstrumentsLido:
         mock_adapter.fetch_lst_instruments.return_value = {}
 
         with patch("instruments_service.engine.processors.defi_processor.LidoAdapter", return_value=mock_adapter):
-            result = fetch_defi_instruments(service, "lido")
+            result = await fetch_defi_instruments(service, "lido")
 
         assert result == {}
 
 
 class TestFetchDefiInstrumentsMorpho:
-    def test_morpho_protocol(self) -> None:
+    @pytest.mark.asyncio
+    async def test_morpho_protocol(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service()
 
         mock_adapter = MagicMock()
-        mock_adapter.fetch_markets.return_value = {}
+        mock_adapter.fetch_markets = AsyncMock(return_value={})
 
         with patch("instruments_service.engine.processors.defi_processor.MorphoAdapter", return_value=mock_adapter):
-            result = fetch_defi_instruments(service, "morpho")
+            result = await fetch_defi_instruments(service, "morpho")
 
         assert result == {}
 
 
 class TestFetchDefiInstrumentsEthena:
-    def test_ethena_protocol(self) -> None:
+    @pytest.mark.asyncio
+    async def test_ethena_protocol(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service()
 
         mock_adapter = MagicMock()
-        mock_adapter.fetch_yield_bearing_instruments.return_value = {}
+        mock_adapter.fetch_yield_bearing_instruments = AsyncMock(return_value={})
 
         with patch("instruments_service.engine.processors.defi_processor.EthenaAdapter", return_value=mock_adapter):
-            result = fetch_defi_instruments(service, "ethena")
+            result = await fetch_defi_instruments(service, "ethena")
 
         assert result == {}
 
 
 class TestFetchDefiInstrumentsUniswapV2:
-    def test_uniswap_v2(self) -> None:
+    @pytest.mark.asyncio
+    async def test_uniswap_v2(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service()
@@ -187,13 +195,14 @@ class TestFetchDefiInstrumentsUniswapV2:
         mock_adapter.fetch_markets.return_value = {}
 
         with patch("instruments_service.engine.processors.defi_processor.UniswapV2Adapter", return_value=mock_adapter):
-            result = fetch_defi_instruments(service, "uniswap_v2")
+            result = await fetch_defi_instruments(service, "uniswap_v2")
 
         assert result == {}
 
 
 class TestFetchDefiInstrumentsUniswapV4:
-    def test_uniswap_v4(self) -> None:
+    @pytest.mark.asyncio
+    async def test_uniswap_v4(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service()
@@ -202,13 +211,14 @@ class TestFetchDefiInstrumentsUniswapV4:
         mock_adapter.fetch_markets.return_value = {}
 
         with patch("instruments_service.engine.processors.defi_processor.UniswapV4Adapter", return_value=mock_adapter):
-            result = fetch_defi_instruments(service, "uniswap_v4")
+            result = await fetch_defi_instruments(service, "uniswap_v4")
 
         assert result == {}
 
 
 class TestFetchDefiInstrumentsCurve:
-    def test_curve_protocol(self) -> None:
+    @pytest.mark.asyncio
+    async def test_curve_protocol(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service()
@@ -217,28 +227,30 @@ class TestFetchDefiInstrumentsCurve:
         mock_adapter.fetch_markets.return_value = {}
 
         with patch("instruments_service.engine.processors.defi_processor.CurveAdapter", return_value=mock_adapter):
-            result = fetch_defi_instruments(service, "curve")
+            result = await fetch_defi_instruments(service, "curve")
 
         assert result == {}
 
 
 class TestFetchDefiInstrumentsUniswapV3:
-    def test_uniswap_v3(self) -> None:
+    @pytest.mark.asyncio
+    async def test_uniswap_v3(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service()
 
         mock_adapter = MagicMock()
-        mock_adapter.fetch_pools.return_value = {}
+        mock_adapter.fetch_pools = AsyncMock(return_value={})
 
         with patch("instruments_service.engine.processors.defi_processor.UniswapV3Adapter", return_value=mock_adapter):
-            result = fetch_defi_instruments(service, "uniswap_v3")
+            result = await fetch_defi_instruments(service, "uniswap_v3")
 
         assert result == {}
 
 
 class TestFetchDefiInstrumentsHyperliquid:
-    def test_hyperliquid_basic(self) -> None:
+    @pytest.mark.asyncio
+    async def test_hyperliquid_basic(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service(hyperliquid_bases=["BTC", "ETH"])
@@ -250,7 +262,7 @@ class TestFetchDefiInstrumentsHyperliquid:
         with patch(
             "instruments_service.engine.processors.defi_processor.HyperliquidAdapter", return_value=mock_adapter
         ):
-            result = fetch_defi_instruments(service, "hyperliquid")
+            result = await fetch_defi_instruments(service, "hyperliquid")
 
         assert result == {}
 
@@ -258,7 +270,8 @@ class TestFetchDefiInstrumentsHyperliquid:
 class TestFetchDefiInstrumentsBaseVersions:
     """Test WETH -> ETH base_version mapping logic."""
 
-    def test_weth_maps_to_eth_base(self) -> None:
+    @pytest.mark.asyncio
+    async def test_weth_maps_to_eth_base(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         # ETH is in MVP list, WETH should map to ETH via base_versions
@@ -279,7 +292,7 @@ class TestFetchDefiInstrumentsBaseVersions:
         mock_adapter.fetch_markets.return_value = {"key1": instrument_with_weth}
 
         with patch("instruments_service.engine.processors.defi_processor.BalancerAdapter", return_value=mock_adapter):
-            result = fetch_defi_instruments(service, "balancer")
+            result = await fetch_defi_instruments(service, "balancer")
 
         # WETH should be accepted since ETH is in MVP list
         assert isinstance(result, dict)
@@ -288,7 +301,8 @@ class TestFetchDefiInstrumentsBaseVersions:
 class TestFetchDefiInstrumentsDateFilter:
     """Test that date filtering is applied when target_date is provided."""
 
-    def test_date_filter_called_when_target_date_provided(self) -> None:
+    @pytest.mark.asyncio
+    async def test_date_filter_called_when_target_date_provided(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service()
@@ -299,11 +313,12 @@ class TestFetchDefiInstrumentsDateFilter:
         mock_adapter.fetch_markets.return_value = {"key1": {"base_asset": "ETH", "quote_asset": "USDC"}}
 
         with patch("instruments_service.engine.processors.defi_processor.BalancerAdapter", return_value=mock_adapter):
-            fetch_defi_instruments(service, "balancer", target_date=target_date)
+            await fetch_defi_instruments(service, "balancer", target_date=target_date)
 
         service.date_filter_service.filter_instruments_by_date.assert_called_once()
 
-    def test_date_filter_not_called_without_target_date(self) -> None:
+    @pytest.mark.asyncio
+    async def test_date_filter_not_called_without_target_date(self) -> None:
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = _make_service()
@@ -312,7 +327,7 @@ class TestFetchDefiInstrumentsDateFilter:
         mock_adapter.fetch_markets.return_value = {}
 
         with patch("instruments_service.engine.processors.defi_processor.BalancerAdapter", return_value=mock_adapter):
-            fetch_defi_instruments(service, "balancer")
+            await fetch_defi_instruments(service, "balancer")
 
         service.date_filter_service.filter_instruments_by_date.assert_not_called()
 
@@ -332,9 +347,10 @@ class TestDefiProcessorFromBoost5:
         service.get_manual_ccxt_fallback.return_value = {}
         return service
 
-    def test_unknown_protocol_returns_empty(self):
+    @pytest.mark.asyncio
+    async def test_unknown_protocol_returns_empty(self):
         from instruments_service.engine.processors.defi_processor import fetch_defi_instruments
 
         service = self._make_mock_service()
-        result = fetch_defi_instruments(service, protocol="unknown_protocol_xyz")
+        result = await fetch_defi_instruments(service, protocol="unknown_protocol_xyz")
         assert result == {}

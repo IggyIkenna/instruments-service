@@ -134,7 +134,7 @@ class CeFiOrchestrator:
                             correlation_id=str(uuid4()),
                             context=ErrorContext(extra={"exc_type": type(e).__name__}),
                         )
-                        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                        logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
                         logger.warning(
                             "Failed to create InstrumentDefinition for %s: %s", d.get("instrument_key", "unknown"), e
                         )
@@ -150,7 +150,7 @@ class CeFiOrchestrator:
                     correlation_id=str(uuid4()),
                     context=ErrorContext(extra={"exc_type": type(e).__name__}),
                 )
-                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
                 logger.exception("Failed to process %s: %s", exchange, e)
                 return {}
 
@@ -190,7 +190,7 @@ class CeFiOrchestrator:
 
             for protocol, _ in cefi_clob_protocols:
                 try:
-                    clob_instruments = self.processing_service.fetch_defi_instruments(
+                    clob_instruments = await self.processing_service.fetch_defi_instruments(
                         protocol=protocol,
                         target_date=date,
                     )

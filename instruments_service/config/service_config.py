@@ -7,7 +7,7 @@ InstrumentsServiceConfig (Pydantic BaseSettings) and singleton access.
 import logging
 from typing import cast
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import SettingsConfigDict
 from unified_config_interface import UnifiedCloudConfig
 
@@ -115,14 +115,14 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         description="Uniswap V3 Graph URL",
     )
     uniswap_v3_graph_arb_url: str = Field(
-        default="https://api.studio.thegraph.com/query/50688/uniswap-v3-arbitrum/version/latest",
+        default="",
         validation_alias=AliasChoices("UNISWAP_V3_GRAPH_ARB_URL"),
-        description="The Graph Uniswap V3 URL for Arbitrum",
+        description="The Graph Uniswap V3 URL for Arbitrum (adapter auto-constructs from API key + subgraph ID)",
     )
     uniswap_v3_graph_base_url: str = Field(
-        default="https://api.studio.thegraph.com/query/50688/uniswap-v3-base/version/latest",
+        default="",
         validation_alias=AliasChoices("UNISWAP_V3_GRAPH_BASE_URL"),
-        description="The Graph Uniswap V3 URL for Base",
+        description="The Graph Uniswap V3 URL for Base (adapter auto-constructs from API key + subgraph ID)",
     )
     envio_api_url: str = Field(
         default="",
@@ -184,6 +184,68 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         description="Shard launch timestamp for race condition detection",
     )
 
+    # =========================================================================
+    # VALIDATORS
+    # =========================================================================
+
+    @model_validator(mode="after")
+    def _compute_bucket_defaults(self) -> "InstrumentsServiceConfig":
+        """Compute bucket names from gcp_project_id when not explicitly set via env vars.
+
+        Convention:
+          - Real:  instruments-store-{category}-{gcp_project_id}
+          - Test:  instruments-store-{category}-test-{gcp_project_id}
+          - Generic real:  instruments-store-{gcp_project_id}
+          - Generic test:  instruments-store-test-{gcp_project_id}
+        """
+        pid = self.gcp_project_id
+        if not pid:
+            # In mock/test mode gcp_project_id may be empty — buckets stay as-is
+            # (tests set explicit env vars). In production this is a hard error
+            # caught by callers that need a bucket.
+            return self
+
+        _updates: dict[str, str] = {}
+
+        if not self.sink_bucket:
+            _updates["sink_bucket"] = f"instruments-store-{pid}"  # CORRECT-LOCAL
+        if not self.sink_bucket_test:
+            _updates["sink_bucket_test"] = f"instruments-store-test-{pid}"  # CORRECT-LOCAL
+
+        _categories = ["cefi", "tradfi", "defi", "sports"]
+        for cat in _categories:
+            field_real = f"sink_bucket_{cat}"
+            field_test = f"sink_bucket_{cat}_test"
+            if not getattr(self, field_real):
+                _updates[field_real] = f"instruments-store-{cat}-{pid}"  # CORRECT-LOCAL
+            if not getattr(self, field_test):
+                _updates[field_test] = f"instruments-store-{cat}-test-{pid}"  # CORRECT-LOCAL
+
+        if _updates:
+            return self.model_copy(update=_updates)
+        return self
+
+    # =========================================================================
+    # DEFI CONFIG VALIDATION
+    # =========================================================================
+
+    def validate_defi_config(self) -> None:
+        """Validate that DeFi-specific configuration fields are set.
+
+        Call this before any operation that requires DeFi RPC/Graph access.
+        Raises ValueError if ethereum_rpc_url or uniswap_v3_graph_url is empty.
+        """
+        missing: list[str] = []
+        if not self.ethereum_rpc_url:
+            missing.append("ETHEREUM_RPC_URL")
+        if not self.uniswap_v3_graph_url:
+            missing.append("UNISWAP_V3_GRAPH_URL")
+        if missing:
+            raise ValueError(
+                f"DeFi configuration incomplete — missing env vars: {', '.join(missing)}. "
+                "These are required for DeFi instrument generation."
+            )
+
     def is_test_environment(self) -> bool:
         """Check if the current environment is a test environment."""
         return self.environment.lower() in ["test", "testing"]
@@ -206,19 +268,19 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
 
     @property
     def INSTRUMENTS_GCS_BUCKET_CEFI_TEST(self) -> str:
-        return self.sink_bucket_cefi_test or f"{self.sink_bucket_cefi}-test"
+        return self.sink_bucket_cefi_test
 
     @property
     def INSTRUMENTS_GCS_BUCKET_TRADFI_TEST(self) -> str:
-        return self.sink_bucket_tradfi_test or f"{self.sink_bucket_tradfi}-test"
+        return self.sink_bucket_tradfi_test
 
     @property
     def INSTRUMENTS_GCS_BUCKET_DEFI_TEST(self) -> str:
-        return self.sink_bucket_defi_test or f"{self.sink_bucket_defi}-test"
+        return self.sink_bucket_defi_test
 
     @property
     def INSTRUMENTS_GCS_BUCKET_SPORTS_TEST(self) -> str:
-        return self.sink_bucket_sports_test or f"{self.sink_bucket_sports}-test"
+        return self.sink_bucket_sports_test
 
     @property
     def INSTRUMENTS_GCS_BUCKET(self) -> str:
@@ -229,20 +291,26 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         return self.sink_bucket_test
 
     def get_bucket_for_category(self, category: str, test_mode: bool = False) -> str:
-        """Get the sink bucket name for a specific market category."""
+        """Get the sink bucket name for a specific market category.
+
+        After model_validator, all category buckets are computed from gcp_project_id.
+        If a bucket is still empty, gcp_project_id was never set — raise immediately.
+        """
         category_upper = category.upper()
-        if category_upper not in ["CEFI", "TRADFI", "DEFI", "SPORTS"]:
+        if category_upper not in ["CEFI", "TRADFI", "DEFI", "SPORTS"]:  # CORRECT-LOCAL
             raise ValueError(f"Invalid category: {category}. Must be one of: CEFI, TRADFI, DEFI, SPORTS")
-        bucket_name = (
+        field_name = (
             f"sink_bucket_{category_upper.lower()}_test" if test_mode else f"sink_bucket_{category_upper.lower()}"
         )
-        bucket_raw: object = getattr(self, bucket_name, None)
-        if bucket_raw:
-            bucket: str = cast(str, bucket_raw)
-            logger.debug("📦 Using bucket for %s: %s", category_upper, bucket)
-            return bucket
-        logger.warning("⚠️ Category-specific bucket not configured for %s. Using default bucket.", category_upper)
-        return self.sink_bucket_test if test_mode else self.sink_bucket
+        bucket: str = cast(str, getattr(self, field_name, ""))
+        if not bucket:
+            raise ValueError(
+                f"Bucket for category {category_upper} (test_mode={test_mode}) is not configured. "
+                "Set GCP_PROJECT_ID or the category-specific env var "
+                f"(INSTRUMENTS_GCS_BUCKET_{category_upper}{'_TEST' if test_mode else ''})."
+            )
+        logger.debug("Using bucket for %s: %s", category_upper, bucket)
+        return bucket
 
     # =========================================================================
     # DOMAIN CONFIG PROTOCOL IMPLEMENTATION

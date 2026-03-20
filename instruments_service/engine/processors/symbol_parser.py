@@ -283,7 +283,7 @@ class SymbolParser:
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             return {"base_asset": "", "quote_asset": ""}
 
     def parse_option_components(self, symbol_id: str, exchange: str) -> OptionComponents:
@@ -340,7 +340,7 @@ class SymbolParser:
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             logger.debug("⚠️ Option parsing error for %s: %s", symbol_id, e)
             return {"expiry_date": "", "strike_price": "", "option_type": ""}
 
@@ -430,6 +430,6 @@ class SymbolParser:
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             logger.debug("⚠️ Expiry parsing error for %s: %s", symbol_id, e)
             return None

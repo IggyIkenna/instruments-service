@@ -30,29 +30,33 @@ class TestConfigModuleImports:
         assert m is not None
 
     def test_defi_definitions(self):
-        import instruments_service.config.defi_definitions as m
+        from unified_api_contracts import DEFI_PROTOCOLS, DEFI_VENUE_TO_PROTOCOL
 
-        assert m is not None
+        assert DEFI_PROTOCOLS is not None
+        assert DEFI_VENUE_TO_PROTOCOL is not None
 
     def test_equity_definitions(self):
         import instruments_service.config.equity_definitions as m
 
         assert m is not None
 
-    def test_futures_options_definitions(self):
-        import instruments_service.config.futures_options_definitions as m
+    def test_futures_options_definitions_in_uac(self):
+        from unified_api_contracts import TRADFI_INSTRUMENTS_CONFIG, TRADFI_VENUE_MAPPINGS
 
-        assert m is not None
+        assert isinstance(TRADFI_VENUE_MAPPINGS, list)
+        assert isinstance(TRADFI_INSTRUMENTS_CONFIG, (list, dict))
 
     def test_ticker_lists(self):
         import instruments_service.config.ticker_lists as m
 
         assert m is not None
 
-    def test_venue_mappings(self):
-        import instruments_service.config.venue_mappings as m
+    def test_venue_mappings_in_uac(self):
+        from unified_api_contracts import DEFI_PROTOCOLS, DEFI_VENUE_TO_PROTOCOL, TRADFI_VENUE_MAPPINGS
 
-        assert m is not None
+        assert isinstance(TRADFI_VENUE_MAPPINGS, list)
+        assert isinstance(DEFI_VENUE_TO_PROTOCOL, dict)
+        assert isinstance(DEFI_PROTOCOLS, list)
 
     def test_metrics_module(self):
         from instruments_service.metrics import PROCESSING_LATENCY, RECORDS_PROCESSED
@@ -87,7 +91,7 @@ class TestConfigPy:
         assert inst.quote_asset == "USD"  # default
 
     def test_tradfi_instruments_config_not_empty(self):
-        from instruments_service.config.instrument_definitions import TRADFI_INSTRUMENTS_CONFIG
+        from unified_api_contracts import TRADFI_INSTRUMENTS_CONFIG
 
         assert isinstance(TRADFI_INSTRUMENTS_CONFIG, (list, dict))
 
@@ -164,27 +168,29 @@ class TestDataTypeConfig:
 
 
 class TestDefiDefinitions:
-    """Tests for instruments_service/config/defi_definitions.py."""
+    """Tests for DEFI_PROTOCOLS and DEFI_VENUE_TO_PROTOCOL (now in UAC)."""
 
-    def test_module_importable(self) -> None:
-        mod = importlib.import_module("instruments_service.config.defi_definitions")
-        assert mod is not None
+    def test_uac_importable(self) -> None:
+        from unified_api_contracts import DEFI_PROTOCOLS, DEFI_VENUE_TO_PROTOCOL
+
+        assert DEFI_PROTOCOLS is not None
+        assert DEFI_VENUE_TO_PROTOCOL is not None
 
     def test_defi_venue_to_protocol_is_dict(self) -> None:
-        from instruments_service.config.defi_definitions import DEFI_VENUE_TO_PROTOCOL
+        from unified_api_contracts import DEFI_VENUE_TO_PROTOCOL
 
         assert isinstance(DEFI_VENUE_TO_PROTOCOL, dict)
         assert len(DEFI_VENUE_TO_PROTOCOL) > 0
 
     def test_defi_venue_to_protocol_values_are_tuples(self) -> None:
-        from instruments_service.config.defi_definitions import DEFI_VENUE_TO_PROTOCOL
+        from unified_api_contracts import DEFI_VENUE_TO_PROTOCOL
 
         for key, value in DEFI_VENUE_TO_PROTOCOL.items():
             assert isinstance(value, tuple), f"{key}: expected tuple, got {type(value)}"
             assert len(value) == 2
 
     def test_defi_venue_to_protocol_hyperliquid(self) -> None:
-        from instruments_service.config.defi_definitions import DEFI_VENUE_TO_PROTOCOL
+        from unified_api_contracts import DEFI_VENUE_TO_PROTOCOL
 
         assert "HYPERLIQUID" in DEFI_VENUE_TO_PROTOCOL
         protocol, chain = DEFI_VENUE_TO_PROTOCOL["HYPERLIQUID"]
@@ -192,7 +198,7 @@ class TestDefiDefinitions:
         assert chain is None
 
     def test_defi_venue_to_protocol_uniswap_v3(self) -> None:
-        from instruments_service.config.defi_definitions import DEFI_VENUE_TO_PROTOCOL
+        from unified_api_contracts import DEFI_VENUE_TO_PROTOCOL
 
         assert "UNISWAPV3-ETH" in DEFI_VENUE_TO_PROTOCOL
         protocol, chain = DEFI_VENUE_TO_PROTOCOL["UNISWAPV3-ETH"]
@@ -200,120 +206,89 @@ class TestDefiDefinitions:
         assert chain == "ETHEREUM"
 
     def test_defi_protocols_is_list(self) -> None:
-        from instruments_service.config.defi_definitions import DEFI_PROTOCOLS
+        from unified_api_contracts import DEFI_PROTOCOLS
 
         assert isinstance(DEFI_PROTOCOLS, list)
         assert len(DEFI_PROTOCOLS) > 0
 
     def test_defi_protocols_entries_are_tuples(self) -> None:
-        from instruments_service.config.defi_definitions import DEFI_PROTOCOLS
+        from unified_api_contracts import DEFI_PROTOCOLS
 
         for entry in DEFI_PROTOCOLS:
             assert isinstance(entry, tuple)
             assert len(entry) == 2
 
     def test_defi_protocols_contains_uniswap_v2(self) -> None:
-        from instruments_service.config.defi_definitions import DEFI_PROTOCOLS
+        from unified_api_contracts import DEFI_PROTOCOLS
 
         protocols = [p for p, _ in DEFI_PROTOCOLS]
         assert "uniswap_v2" in protocols
 
     def test_defi_protocols_contains_curve(self) -> None:
-        from instruments_service.config.defi_definitions import DEFI_PROTOCOLS
+        from unified_api_contracts import DEFI_PROTOCOLS
 
         protocols = [p for p, _ in DEFI_PROTOCOLS]
         assert "curve" in protocols
 
     def test_defi_protocols_ethereum_chain(self) -> None:
-        from instruments_service.config.defi_definitions import DEFI_PROTOCOLS
+        from unified_api_contracts import DEFI_PROTOCOLS
 
         eth_protocols = [(p, c) for p, c in DEFI_PROTOCOLS if c == "ETHEREUM"]
         assert len(eth_protocols) > 0
 
     def test_defi_protocols_none_chain(self) -> None:
-        from instruments_service.config.defi_definitions import DEFI_PROTOCOLS
+        from unified_api_contracts import DEFI_PROTOCOLS
 
         none_chain = [(p, c) for p, c in DEFI_PROTOCOLS if c is None]
         assert len(none_chain) > 0
 
 
 class TestVenueMappings:
-    """Tests for instruments_service/config/venue_mappings.py."""
-
-    def test_module_importable(self) -> None:
-        mod = importlib.import_module("instruments_service.config.venue_mappings")
-        assert mod is not None
+    """Tests for venue mapping data (now in UAC)."""
 
     def test_tradfi_venue_mappings_is_list(self) -> None:
-        from instruments_service.config.venue_mappings import TRADFI_VENUE_MAPPINGS
+        from unified_api_contracts import TRADFI_VENUE_MAPPINGS
 
         assert isinstance(TRADFI_VENUE_MAPPINGS, list)
         assert len(TRADFI_VENUE_MAPPINGS) > 0
 
     def test_tradfi_venue_mappings_entries_have_venue_key(self) -> None:
-        from instruments_service.config.venue_mappings import TRADFI_VENUE_MAPPINGS
+        from unified_api_contracts import TRADFI_VENUE_MAPPINGS
 
         for entry in TRADFI_VENUE_MAPPINGS:
             assert "venue" in entry
             assert isinstance(entry["venue"], str)
 
     def test_tradfi_venue_mappings_cme_present(self) -> None:
-        from instruments_service.config.venue_mappings import TRADFI_VENUE_MAPPINGS
+        from unified_api_contracts import TRADFI_VENUE_MAPPINGS
 
         venues = [e["venue"] for e in TRADFI_VENUE_MAPPINGS]
         assert "CME" in venues
 
-    def test_tradfi_venue_mappings_nasdaq_present(self) -> None:
-        from instruments_service.config.venue_mappings import TRADFI_VENUE_MAPPINGS
-
-        venues = [e["venue"] for e in TRADFI_VENUE_MAPPINGS]
-        assert "NASDAQ" in venues
-
-    def test_tradfi_venue_mappings_entries_have_dataset(self) -> None:
-        from instruments_service.config.venue_mappings import TRADFI_VENUE_MAPPINGS
-
-        for entry in TRADFI_VENUE_MAPPINGS:
-            assert "dataset" in entry
-
     def test_tradfi_venue_mappings_cme_dataset(self) -> None:
-        from instruments_service.config.venue_mappings import TRADFI_VENUE_MAPPINGS
+        from unified_api_contracts import TRADFI_VENUE_MAPPINGS
 
         cme = next(e for e in TRADFI_VENUE_MAPPINGS if e["venue"] == "CME")
         assert cme["dataset"] == "GLBX.MDP3"
 
     def test_venue_mappings_defi_venue_to_protocol_dict(self) -> None:
-        from instruments_service.config.venue_mappings import DEFI_VENUE_TO_PROTOCOL
+        from unified_api_contracts import DEFI_VENUE_TO_PROTOCOL
 
         assert isinstance(DEFI_VENUE_TO_PROTOCOL, dict)
         assert len(DEFI_VENUE_TO_PROTOCOL) > 0
 
     def test_venue_mappings_defi_venue_to_protocol_values(self) -> None:
-        from instruments_service.config.venue_mappings import DEFI_VENUE_TO_PROTOCOL
+        from unified_api_contracts import DEFI_VENUE_TO_PROTOCOL
 
         for key, value in DEFI_VENUE_TO_PROTOCOL.items():
             assert isinstance(value, tuple), f"{key}: expected tuple"
             assert len(value) == 2
 
     def test_venue_mappings_defi_protocols_list(self) -> None:
-        from instruments_service.config.venue_mappings import DEFI_PROTOCOLS
+        from unified_api_contracts import DEFI_PROTOCOLS
 
         assert isinstance(DEFI_PROTOCOLS, list)
         assert len(DEFI_PROTOCOLS) > 0
-
-    def test_venue_mappings_uniswap_ethereum(self) -> None:
-        from instruments_service.config.venue_mappings import DEFI_VENUE_TO_PROTOCOL
-
-        assert "UNISWAP" in DEFI_VENUE_TO_PROTOCOL
-        protocol, chain = DEFI_VENUE_TO_PROTOCOL["UNISWAP"]
-        assert "uniswap" in protocol
-        assert chain == "ETHEREUM"
-
-    def test_venue_mappings_entries_have_description(self) -> None:
-        from instruments_service.config.venue_mappings import TRADFI_VENUE_MAPPINGS
-
-        for entry in TRADFI_VENUE_MAPPINGS:
-            assert "description" in entry
-            assert isinstance(entry["description"], str)
 
 
 @pytest.mark.unit

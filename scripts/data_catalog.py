@@ -213,7 +213,7 @@ def get_cloud_service(bucket_name: str) -> _BucketDownloader | None:
             correlation_id=str(uuid4()),
             context=ErrorContext(extra={"exc_type": type(e).__name__}),
         )
-        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+        logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
         logger.warning("Could not initialize cloud service: %s", e)
         return None
 
@@ -245,7 +245,7 @@ def check_file_exists(service, bucket_name: str, blob_path: str) -> tuple:
             correlation_id=str(uuid4()),
             context=ErrorContext(extra={"exc_type": type(e).__name__}),
         )
-        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+        logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
         logger.debug("Error checking %s/%s: %s", bucket_name, blob_path, e)
         return False, None
 

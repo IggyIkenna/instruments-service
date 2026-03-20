@@ -46,6 +46,56 @@ from instruments_service.utils.ccxt_service import CCXTService
 
 logger = logging.getLogger(__name__)
 
+# Multiplier token prefixes for Binance filtering
+_BINANCE_MULTIPLIER_PREFIXES: list[str] = [
+    "1000x",
+    "1000sats",
+    "1000cat",
+    "1000cheems",
+    "1mbabydoge",
+    "1000pepe",
+    "1000shib",
+    "1000bonk",
+    "1000floki",
+    "1000rats",
+    "1000btt",
+    "1000lunc",
+    "1000000mog",
+    "1000why",
+    "1000000bob",
+    "1000000neiro",
+    "1000wen",
+    "1000usual",
+    "1000turbo",
+    "1000xec",
+    "1000000babydoge",
+]
+
+# USDT fiat pair symbols to filter out
+_BINANCE_USDT_FIAT_SYMBOLS: set[str] = {
+    "usdttry",
+    "usdtzar",
+    "usdtuah",
+    "usdtpln",
+    "usdtars",
+    "usdtmxn",
+    "usdtcop",
+    "usdtclp",
+    "usdtpen",
+    "usdtves",
+    "usdtngn",
+    "usdtbrl",
+    "usdtgel",
+    "usdtczk",
+    "usdtron",
+}
+
+# Other problematic symbol patterns
+_BINANCE_PROBLEMATIC_SYMBOLS: set[str] = {"nftusdt", "defiusdt", "bullusdt", "bearusdt"}
+
+# General multiplier regex
+_BINANCE_MULTIPLIER_RE = re.compile(r"^(1000|1000000|1m)")
+
 
 class TardisIntegrationMixin:
     """
@@ -61,15 +111,7 @@ class TardisIntegrationMixin:
     data_config: DataTypeConfig = cast(DataTypeConfig, cast(object, None))
 
     def _get_tardis_adapter(self) -> TardisAdapter:
-        """
-        Lazy-load Tardis adapter only when needed for CeFi instruments.
-
-        Returns:
-            TardisAdapter instance
-
-        Raises:
-            ValueError: If API key is not available when trying to fetch CeFi instruments
-        """
+        """Lazy-load Tardis adapter only when needed for CeFi instruments."""
         if not hasattr(self, "tardis_adapter") or self.tardis_adapter is None:
             if not self.api_key:
                 raise ValueError(
@@ -77,10 +119,8 @@ class TardisIntegrationMixin:
                     "Provide 'tardis_api_key' in config, or ensure Secret Manager access "
                     "to 'tardis-api-key' secret."
                 )
-
             project_id = getattr(self, "_tardis_project_id", instruments_config.gcp_project_id)
             self.tardis_adapter = TardisAdapter(api_key=self.api_key, project_id=project_id)
-
         return self.tardis_adapter
 
     @handle_api_errors(max_retries=3)
@@ -90,143 +130,62 @@ class TardisIntegrationMixin:
         target_date: datetime | None = None,
         force: bool = False,
     ) -> tuple[dict[str, dict[str, object]], int]:
-        """
-        Fetch instrument data from Tardis API for specific exchange.
-
-        Args:
-            exchange: Exchange name
-            target_date: Target date for instrument availability
-            force: If True, bypass date availability filtering
-
-        Returns:
-            Tuple of (instruments_data dict, date_filtered_count)
-        """
+        """Fetch instrument data from Tardis API for specific exchange."""
         target_date = target_date or datetime.now(UTC)
-
-        # Wrap synchronous Tardis API call in asyncio.to_thread
         available_symbols_list, date_filtered_count = await asyncio.to_thread(
             self._get_tardis_adapter().fetch_exchange_instruments,
             exchange=exchange,
             target_date=target_date,
             force_refresh=force,
         )
-
-        # Convert list to dict keyed by symbol_id
         available_symbols: dict[str, dict[str, object]] = {
             (str(cast(str | None, symbol.get("id"))) or ""): symbol
             for symbol in available_symbols_list
             if symbol.get("id")
         }
+        instruments_data = self._filter_exchange_instruments(available_symbols, exchange)
+        logger.info("✅ Retrieved %s instruments for %s", len(instruments_data), exchange)
+        return instruments_data, date_filtered_count
 
-        # Filter instruments available at target date AND exclude unwanted types
+    def _filter_exchange_instruments(
+        self,
+        available_symbols: dict[str, dict[str, object]],
+        exchange: str,
+    ) -> dict[str, dict[str, object]]:
+        """Filter instruments by type exclusions and problematic patterns."""
         instruments_data: dict[str, dict[str, object]] = {}
         for symbol_id, symbol in available_symbols.items():
             if not symbol_id:
                 continue
             symbol_type = symbol.get("type") or ""
-
-            # Filter excluded instrument types
             if symbol_type in self.data_config.excluded_instrument_types:
-                logger.debug("Filtered excluded instrument type: %s (%s)", symbol_id, symbol_type)
                 continue
-
-            # Filter problematic Binance instruments
             if exchange in ["binance", "binance-futures"] and self._is_problematic_binance_instrument(symbol_id):
-                logger.debug("Filtered problematic Binance instrument: %s", symbol_id)
                 continue
-
             instruments_data[symbol_id] = symbol
-
-        logger.info("✅ Retrieved %s instruments for %s", len(instruments_data), exchange)
-        return instruments_data, date_filtered_count
+        return instruments_data
 
     def _is_problematic_binance_instrument(self, symbol_id: str) -> bool:
-        """
-        Check if this is a problematic Binance instrument that should be filtered out.
-
-        Args:
-            symbol_id: Symbol identifier from Tardis
-
-        Returns:
-            bool: True if instrument should be filtered out
-        """
+        """Check if this is a problematic Binance instrument that should be filtered out."""
         symbol_lower = symbol_id.lower()
-
-        # Filter multiplier tokens
-        multiplier_patterns = [
-            "1000x",
-            "1000sats",
-            "1000cat",
-            "1000cheems",
-            "1mbabydoge",
-            "1000pepe",
-            "1000shib",
-            "1000bonk",
-            "1000floki",
-            "1000rats",
-            "1000btt",
-            "1000lunc",
-            "1000000mog",
-            "1000why",
-            "1000000bob",
-            "1000000neiro",
-            "1000wen",
-            "1000usual",
-            "1000turbo",
-            "1000xec",
-            "1000000babydoge",
-        ]
-
-        for pattern in multiplier_patterns:
-            if symbol_lower.startswith(pattern):
-                return True
-
-        # General pattern for multiplier tokens
-        if re.match(r"^(1000|1000000|1m)", symbol_lower):
+        if self._is_multiplier_token(symbol_lower):
             return True
-
-        # Filter USDT as base asset (fiat pairs)
-        usdt_base_patterns = [
-            "usdttry",
-            "usdtzar",
-            "usdtuah",
-            "usdtpln",
-            "usdtars",
-            "usdtmxn",
-            "usdtcop",
-            "usdtclp",
-            "usdtpen",
-            "usdtves",
-            "usdtngn",
-            "usdtbrl",
-            "usdtgel",
-            "usdtczk",
-            "usdtron",
-        ]
-
-        if symbol_lower in usdt_base_patterns:
+        if symbol_lower in _BINANCE_USDT_FIAT_SYMBOLS:
             return True
-
-        # Filter tokens starting with numbers
         if symbol_lower.startswith(("1inch", "0g", "2z", "3p", "4p", "5p")):
             return True
+        return symbol_lower in _BINANCE_PROBLEMATIC_SYMBOLS
 
-        # Filter other problematic patterns
-        problematic_patterns = ["nftusdt", "defiusdt", "bullusdt", "bearusdt"]
-
-        return symbol_lower in problematic_patterns
+    @staticmethod
+    def _is_multiplier_token(symbol_lower: str) -> bool:
+        """Check if the symbol is a multiplier token (1000x, 1000000x, etc.)."""
+        for prefix in _BINANCE_MULTIPLIER_PREFIXES:
+            if symbol_lower.startswith(prefix):
+                return True
+        return bool(_BINANCE_MULTIPLIER_RE.match(symbol_lower))
 
     def _convert_to_tardis_symbol(self, symbol_id: str, exchange: str) -> str:
-        """
-        Convert symbol_id to proper Tardis API format.
-
-        Args:
-            symbol_id: Raw symbol from Tardis API
-            exchange: Exchange name
-
-        Returns:
-            str: Tardis-formatted symbol
-        """
+        """Convert symbol_id to proper Tardis API format."""
         try:
             if exchange in ["binance", "binance-futures"]:
                 return symbol_id.replace("-", "").lower()
@@ -245,7 +204,7 @@ class TardisIntegrationMixin:
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             logger.debug("Failed to convert symbol %s for %s: %s", symbol_id, exchange, e)
             return symbol_id.lower()
 
@@ -261,47 +220,16 @@ class DatabentoIntegrationMixin:
     async def fetch_databento_instruments(
         self, exchange: str, symbols: list[str], target_date: datetime | None = None
     ) -> dict[str, InstrumentDefinition]:
-        """
-        Fetch TradFi instruments from Databento.
-
-        Args:
-            exchange: Exchange name (e.g., 'CME', 'NASDAQ')
-            symbols: List of symbols to fetch
-            target_date: Target date for instrument definitions
-
-        Returns:
-            Dictionary mapping instrument_key to InstrumentDefinition
-        """
+        """Fetch TradFi instruments from Databento."""
         try:
             adapter = DatabentoAdapter()
             date = target_date or datetime.now(UTC)
-
-            # Wrap synchronous Databento API call
             raw_instruments = await asyncio.to_thread(
                 adapter.fetch_instrument_definitions, exchange=exchange, symbols=symbols, date=date
             )
-
-            # Convert to InstrumentDefinition objects
-            instruments: dict[str, InstrumentDefinition] = {}
-            for inst_key, inst_data in raw_instruments.items():
-                try:
-                    inst_def = InstrumentDefinition.model_validate(inst_data)
-                    instruments[inst_key] = inst_def
-                except (ValueError, KeyError, TypeError, IndexError) as e:
-                    _err = EnhancedError(
-                        message=str(e),
-                        category=ErrorCategory.SERVER_ERROR,
-                        severity=ErrorSeverity.MEDIUM,
-                        recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
-                        correlation_id=str(uuid4()),
-                        context=ErrorContext(extra={"exc_type": type(e).__name__}),
-                    )
-                    logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
-                    logger.warning("Failed to create InstrumentDefinition for %s: %s", inst_key, e)
-                    continue
+            instruments = self._parse_databento_results(raw_instruments, exchange)
             logger.info("✅ Fetched %s Databento instruments for %s", len(instruments), exchange)
             return instruments
-
         except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
             _err = EnhancedError(
                 message=str(e),
@@ -311,9 +239,34 @@ class DatabentoIntegrationMixin:
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             logger.error("Failed to fetch Databento instruments: %s", e)
             return {}
+
+    @staticmethod
+    def _parse_databento_results(
+        raw_instruments: dict[str, dict[str, object]],
+        exchange: str,
+    ) -> dict[str, InstrumentDefinition]:
+        """Parse raw Databento results into InstrumentDefinition objects."""
+        instruments: dict[str, InstrumentDefinition] = {}
+        for inst_key, inst_data in raw_instruments.items():
+            try:
+                inst_def = InstrumentDefinition.model_validate(inst_data)
+                instruments[inst_key] = inst_def
+            except (ValueError, KeyError, TypeError, IndexError) as e:
+                _err = EnhancedError(
+                    message=str(e),
+                    category=ErrorCategory.SERVER_ERROR,
+                    severity=ErrorSeverity.MEDIUM,
+                    recovery_strategy=ErrorRecoveryStrategy.FALLBACK,
+                    correlation_id=str(uuid4()),
+                    context=ErrorContext(extra={"exc_type": type(e).__name__}),
+                )
+                logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
+                logger.warning("Failed to create InstrumentDefinition for %s: %s", inst_key, e)
+        _ = exchange  # used only for logging context
+        return instruments
 
 
 class DefiIntegrationMixin:
@@ -354,18 +307,11 @@ class DefiIntegrationMixin:
                 sg_module._GRAPH_API_KEY_PROJECT_ID = project_id_for_graph
                 logger.info("✅ Retrieved and cached Graph API key")
         except (ConnectionError, TimeoutError, OSError, ValueError) as e:
-            _err = EnhancedError(
-                message=str(e),
-                category=ErrorCategory.SERVER_ERROR,
-                severity=ErrorSeverity.HIGH,
-                recovery_strategy=ErrorRecoveryStrategy.RETRY,
-                correlation_id=str(uuid4()),
-                context=ErrorContext(extra={"exc_type": type(e).__name__}),
-            )
-            logger.error(_err.message, extra={"correlation_id": _err.correlation_id})
-            raise RuntimeError(f"[{_err.correlation_id}] {_err.message}") from e
+            # Graph API key is optional at init — only needed when processing DeFi instruments.
+            # Don't crash the entire service if Secret Manager is unavailable (e.g. local dev).
+            logger.warning("Graph API key unavailable (DeFi processing will fail if attempted): %s", e)
 
-    def fetch_defi_instruments(
+    async def fetch_defi_instruments(
         self,
         protocol: str,
         chain: str = "ETHEREUM",
@@ -373,7 +319,7 @@ class DefiIntegrationMixin:
         **kwargs: str | int | bool | None | datetime,
     ) -> dict[str, InstrumentDefinition]:
         """Fetch DeFi instruments from various protocols."""
-        return _fetch_defi_instruments(
+        return await _fetch_defi_instruments(
             cast(DefiServiceProtocol, cast(object, self)),
             protocol,
             chain,
@@ -505,6 +451,6 @@ class SymbolProcessingMixin:
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             logger.debug("Error parsing symbol %s: %s", symbol_id, e)
             return {}
