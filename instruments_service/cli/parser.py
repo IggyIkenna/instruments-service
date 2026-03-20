@@ -152,7 +152,7 @@ def parse_arguments() -> ParsedArgs:
     parser.add_argument(
         "--category",
         nargs="+",
-        choices=["CEFI", "TRADFI", "DEFI", "SPORTS"],
+        choices=["CEFI", "TRADFI", "DEFI", "SPORTS"],  # CORRECT-LOCAL
         type=str.upper,  # Accept any case (tradfi -> TRADFI)
         help=(
             "Market categories to process (can specify multiple: --category CEFI TRADFI). "
@@ -259,6 +259,14 @@ def parse_arguments() -> ParsedArgs:
         help="Maximum retry attempts per ticker (default: 3)",
     )
 
+    # Live mode options
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=15,
+        help="Live mode: minutes between runs, wall-clock aligned (default: 15)",
+    )
+
     # Logging
     parser.add_argument(
         "--log-level",
@@ -290,10 +298,13 @@ def validate_arguments(args: argparse.Namespace) -> None:
     start_date = cast(str | None, args.start_date)
     end_date = cast(str | None, args.end_date)
 
+    run_mode = cast(str | None, getattr(args, "run_mode", None))
+
     # Validate date range for instruments mode
     if mode == "instruments":
-        if not start_date:
-            raise ValueError("--start-date is required for instruments mode")
+        # start-date is only required for batch mode; live mode uses wall clock
+        if run_mode != "live" and not start_date:
+            raise ValueError("--start-date is required for instruments batch mode")
         if not end_date:
             args.end_date = start_date
 

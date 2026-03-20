@@ -93,7 +93,7 @@ class TradFiInstrumentProcessor(BaseInstrumentProcessor):
                             correlation_id=str(uuid4()),
                             context=ErrorContext(extra={"exc_type": type(e).__name__}),
                         )
-                        logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                        logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
                         logger.warning("Failed to create InstrumentDefinition for %s: %s", inst_key, e)
                         continue
                 logger.info("✅ Fetched %s Databento instruments for %s", len(instruments), exchange)

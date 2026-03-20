@@ -13,7 +13,26 @@ Complies with:
 import logging
 from typing import Protocol
 
-from unified_market_interface import DataSourceMapping, YahooFinanceAdapter
+from unified_market_interface import (
+    AaveV3Adapter,
+    BalancerAdapter,
+    CurveAdapter,
+    DatabentoAdapter,
+    DataSourceMapping,
+    EthenaAdapter,
+    EtherFiAdapter,
+    EulerAdapter,
+    FluidAdapter,
+    HyperliquidAdapter,
+    HyperliquidBaseClient,
+    LidoAdapter,
+    MorphoAdapter,
+    TardisAdapter,
+    UniswapV2Adapter,
+    UniswapV3Adapter,
+    UniswapV4Adapter,
+    YahooFinanceAdapter,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +46,26 @@ class DataSourceAdapter(Protocol):
 # Singleton adapter cache (one instance per data source)
 _ADAPTER_CACHE: dict[str, DataSourceAdapter] = {}
 
+# Venue-to-adapter constructor mapping for DeFi venues
+_DEFI_VENUE_ADAPTERS: dict[str, type] = {
+    "UNISWAP-V2": UniswapV2Adapter,
+    "UNISWAP-V3": UniswapV3Adapter,
+    "UNISWAP-V4": UniswapV4Adapter,
+    "AAVE-V3": AaveV3Adapter,
+    "CURVE": CurveAdapter,
+    "BALANCER": BalancerAdapter,
+    "MORPHO": MorphoAdapter,
+    "EULER": EulerAdapter,
+    "FLUID": FluidAdapter,
+    "LIDO": LidoAdapter,
+    "ETHERFI": EtherFiAdapter,
+    "ETHENA": EthenaAdapter,
+}
+
 
 def get_adapter_for_venue(venue: str, api_keys: dict[str, str] | None = None) -> DataSourceAdapter:
     """
-    Lazy-load adapter for a venue.
+    Load adapter for a venue, returning cached instance if available.
 
     Args:
         venue: Venue name (e.g., "BINANCE-FUTURES", "ASTER")
@@ -55,19 +90,14 @@ def get_adapter_for_venue(venue: str, api_keys: dict[str, str] | None = None) ->
         logger.debug("Reusing cached adapter for %s", data_source)
         return _ADAPTER_CACHE[cache_key]
 
-    # Lazy import and instantiate adapter
-    logger.info("Lazy-loading adapter for %s (venue: %s)", data_source, venue)
+    logger.info("Loading adapter for %s (venue: %s)", data_source, venue)
 
     try:
         if data_source == "tardis":
-            from unified_market_interface import TardisAdapter
-
             api_key = api_keys.get("tardis") if api_keys else None
             adapter = TardisAdapter(api_key=api_key)
 
         elif data_source == "databento":
-            from unified_market_interface import DatabentoAdapter
-
             api_key = api_keys.get("databento") if api_keys else None
             adapter = DatabentoAdapter(api_key=api_key)
 
@@ -78,22 +108,17 @@ def get_adapter_for_venue(venue: str, api_keys: dict[str, str] | None = None) ->
             )
 
         elif data_source == "hyperliquid":
-            from unified_market_interface import HyperliquidAdapter, HyperliquidBaseClient
-
             adapter = HyperliquidAdapter(base_client=HyperliquidBaseClient())
 
         elif data_source == "thegraph":
-            # DeFi adapters - load specific adapter based on venue
             adapter = _load_defi_adapter(venue, api_keys)
 
         elif data_source == "yfinance":
             # FX adapter (KRW/USD, corporate actions) - no API key required
-
             adapter = YahooFinanceAdapter()
 
         elif data_source == "barchart":
-            # VIX adapter
-            # Import will be added when Barchart adapter is implemented
+            # VIX adapter not yet implemented
             raise NotImplementedError("barchart adapter not yet implemented")
 
         else:
@@ -101,7 +126,7 @@ def get_adapter_for_venue(venue: str, api_keys: dict[str, str] | None = None) ->
 
         # Cache and return
         _ADAPTER_CACHE[cache_key] = adapter
-        logger.info("✅ Loaded adapter for %s", data_source)
+        logger.info("Loaded adapter for %s", data_source)
         return adapter
 
     except (ConnectionError, TimeoutError, ValueError, KeyError, TypeError) as e:
@@ -113,56 +138,11 @@ def _load_defi_adapter(venue: str, api_keys: dict[str, str] | None) -> DataSourc
     """Load DeFi adapter based on venue."""
     venue_upper = venue.upper()
 
-    if venue_upper == "UNISWAP-V2":
-        from unified_market_interface import UniswapV2Adapter
-
-        return UniswapV2Adapter()
-    elif venue_upper == "UNISWAP-V3":
-        from unified_market_interface import UniswapV3Adapter
-
-        return UniswapV3Adapter()
-    elif venue_upper == "UNISWAP-V4":
-        from unified_market_interface import UniswapV4Adapter
-
-        return UniswapV4Adapter()
-    elif venue_upper == "AAVE-V3":
-        from unified_market_interface import AaveV3Adapter
-
-        return AaveV3Adapter()
-    elif venue_upper == "CURVE":
-        from unified_market_interface import CurveAdapter
-
-        return CurveAdapter()
-    elif venue_upper == "BALANCER":
-        from unified_market_interface import BalancerAdapter
-
-        return BalancerAdapter()
-    elif venue_upper == "MORPHO":
-        from unified_market_interface import MorphoAdapter
-
-        return MorphoAdapter()
-    elif venue_upper == "EULER":
-        from unified_market_interface import EulerAdapter
-
-        return EulerAdapter()
-    elif venue_upper == "FLUID":
-        from unified_market_interface import FluidAdapter
-
-        return FluidAdapter()
-    elif venue_upper == "LIDO":
-        from unified_market_interface import LidoAdapter
-
-        return LidoAdapter()
-    elif venue_upper == "ETHERFI":
-        from unified_market_interface import EtherFiAdapter
-
-        return EtherFiAdapter()
-    elif venue_upper == "ETHENA":
-        from unified_market_interface import EthenaAdapter
-
-        return EthenaAdapter()
-    else:
+    adapter_cls = _DEFI_VENUE_ADAPTERS.get(venue_upper)
+    if adapter_cls is None:
         raise ValueError(f"Unknown DeFi venue: {venue}")
+
+    return adapter_cls()
 
 
 def clear_adapter_cache():

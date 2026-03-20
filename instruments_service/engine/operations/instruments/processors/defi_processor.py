@@ -42,7 +42,7 @@ class DeFiInstrumentProcessor(BaseInstrumentProcessor):
 
         logger.info("✅ DeFiInstrumentProcessor initialized")
 
-    def fetch_defi_instruments(
+    async def fetch_defi_instruments(
         self,
         protocol: str,
         chain: str = "ETHEREUM",
@@ -61,7 +61,7 @@ class DeFiInstrumentProcessor(BaseInstrumentProcessor):
         Returns:
             Dictionary mapping instrument_key to InstrumentDefinition
         """
-        return _fetch_defi_instruments(
+        return await _fetch_defi_instruments(
             cast(DefiServiceProtocol, cast(object, self)),
             protocol,
             chain,
@@ -88,7 +88,7 @@ class DeFiInstrumentProcessor(BaseInstrumentProcessor):
         Returns:
             Dictionary of processed instrument metadata keyed by canonical key
         """
-        instruments = self.fetch_defi_instruments(protocol, chain, target_date, **kwargs)
+        instruments = await self.fetch_defi_instruments(protocol, chain, target_date, **kwargs)
 
         for inst_key, inst_def in instruments.items():
             self.cache_metadata(inst_key, inst_def)

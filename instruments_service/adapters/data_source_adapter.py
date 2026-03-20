@@ -135,7 +135,7 @@ class DataSourceAdapter:
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             error_msg = str(e)
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
                 logger.debug("File not found (404): %s", gcs_path)
@@ -182,7 +182,7 @@ class DataSourceAdapter:
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             error_msg = str(e)
             if "404" in error_msg or "Not Found" in error_msg or "No such object" in error_msg:
                 logger.debug("File not found (404) in %s: %s", category, gcs_path)

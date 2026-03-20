@@ -107,7 +107,7 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
                         correlation_id=str(uuid4()),
                         context=ErrorContext(extra={"exc_type": type(e).__name__}),
                     )
-                    logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                    logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
                     raise ValueError(
                         f"Tardis API key required for CeFi instruments. Error: {e}. "
                         "Provide 'tardis_api_key' in config or ensure Secret Manager access."
@@ -181,7 +181,7 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
                     correlation_id=str(uuid4()),
                     context=ErrorContext(extra={"exc_type": type(e).__name__}),
                 )
-                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
                 last_error = e
                 if attempt < max_retries - 1:
                     backoff_multiplier: int = cast(int, 2**attempt)
@@ -569,7 +569,7 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
                     correlation_id=str(uuid4()),
                     context=ErrorContext(extra={"exc_type": type(e).__name__}),
                 )
-                logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
                 filter_stats["processing_error"] += 1
                 logger.warning("Failed to process %s: %s", symbol_id, e)
 
@@ -744,7 +744,7 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             logger.debug("Failed to convert symbol %s for %s: %s", symbol_id, exchange, e)
             return symbol_id.lower()
 

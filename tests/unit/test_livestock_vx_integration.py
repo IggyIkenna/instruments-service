@@ -17,7 +17,7 @@ class TestPythonJsonConsistency:
 
     def test_livestock_vx_codes_in_both_sources(self) -> None:
         """LE, HE, VX must exist in both Python TRADFI_VENUE_MAPPINGS and JSON."""
-        from instruments_service.config.futures_options_definitions import (
+        from unified_api_contracts import (
             TRADFI_VENUE_MAPPINGS as TRADFI_PY_MAPPINGS,
         )
 
@@ -33,7 +33,7 @@ class TestPythonJsonConsistency:
 
     def test_vx_dataset_consistent(self) -> None:
         """VX dataset must be XCBF.MDP3 in both Python and JSON."""
-        from instruments_service.config.futures_options_definitions import (
+        from unified_api_contracts import (
             TRADFI_VENUE_MAPPINGS as TRADFI_PY_MAPPINGS,
         )
 
@@ -48,7 +48,7 @@ class TestPythonJsonConsistency:
 
     def test_livestock_venues_consistent(self) -> None:
         """LE and HE must be on CME in both Python and JSON."""
-        from instruments_service.config.futures_options_definitions import (
+        from unified_api_contracts import (
             TRADFI_VENUE_MAPPINGS as TRADFI_PY_MAPPINGS,
         )
 
@@ -67,7 +67,7 @@ class TestExchangeMappingIntegration:
 
     def test_databento_parent_roundtrip_le(self) -> None:
         """LE code -> Databento symbol -> back to LIVECATTLE."""
-        from instruments_service.config.tradfi_exchange_mappings import (
+        from unified_api_contracts import (
             DATABENTO_VALID_PARENT_SYMBOLS,
             EXCHANGE_CODE_TO_NAME,
         )
@@ -79,7 +79,7 @@ class TestExchangeMappingIntegration:
 
     def test_databento_parent_roundtrip_he(self) -> None:
         """HE code -> Databento symbol -> back to LEANHOGS."""
-        from instruments_service.config.tradfi_exchange_mappings import (
+        from unified_api_contracts import (
             DATABENTO_VALID_PARENT_SYMBOLS,
             EXCHANGE_CODE_TO_NAME,
         )
@@ -91,7 +91,7 @@ class TestExchangeMappingIntegration:
 
     def test_databento_parent_roundtrip_vx(self) -> None:
         """VX code -> Databento symbol -> back to VIX."""
-        from instruments_service.config.tradfi_exchange_mappings import (
+        from unified_api_contracts import (
             DATABENTO_VALID_PARENT_SYMBOLS,
             EXCHANGE_CODE_TO_NAME,
         )

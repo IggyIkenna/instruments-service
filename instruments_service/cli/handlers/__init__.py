@@ -35,9 +35,11 @@ def _populate_registry() -> None:
     from .corporate_actions_update_handler import CorporateActionsUpdateHandler
     from .generate_date_views_handler import GenerateDateViewsHandler
     from .instrument_handler import InstrumentHandler
+    from .live_mode_handler import LiveModeHandler
 
     register_handler("aggregate", AggregateHandler)
     register_handler("instruments", InstrumentHandler)
+    register_handler("live", LiveModeHandler)
     register_handler("corporate_actions", CorporateActionsHandler)
     register_handler("corporate_actions_backfill", CorporateActionsBackfillHandler)
     register_handler("generate_date_views", GenerateDateViewsHandler)

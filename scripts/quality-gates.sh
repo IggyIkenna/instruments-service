@@ -32,10 +32,31 @@ IMPORT_INSIDE_EXCLUDE_GLOBS=(
     "!**/engine/processors/derived_fields_populator.py"  # TYPE_CHECKING ExchangeInstrumentConfig
     "!**/engine/processors/canonical_key_generator.py"   # TYPE_CHECKING DataTypeConfig, ExchangeInstrumentConfig
     "!**/engine/processors/symbol_parser.py"             # TYPE_CHECKING ExchangeInstrumentConfig
+    "!**/app/core/processors/symbol_parser.py"           # TYPE_CHECKING ExchangeInstrumentConfig (app/core path)
+    "!**/app/core/processors/canonical_key_generator.py" # TYPE_CHECKING DataTypeConfig, ExchangeInstrumentConfig (app/core path)
     "!**/app/core/instrument_sync.py"                    # Circular dep avoidance (InstrumentProcessingService)
+    "!**/app/core/selective_validation.py"               # Lazy load LEAGUE_REGISTRY (~4MB sports data)
+    "!**/app/core/instruments_service.py"                # Lazy load sports_orchestration (~4MB sports data)
     "!**/sports/team_aliases.py"                         # Lazy load ~2MB sports mapping data
     "!**/orchestration/cefi_orchestration.py"             # Circular dep avoidance (InstrumentProcessingService)
     "!**/orchestration/instrument_utils.py"               # noqa: domain-ucs migration pending
+    "!**/engine/operations/instruments/orchestration/defi_orchestration.py"   # Circular dep avoidance (InstrumentProcessingService)
+    "!**/engine/operations/instruments/orchestration/tradfi_orchestration.py" # Circular dep avoidance (InstrumentProcessingService)
+    "!**/engine/operations/instruments/processors/cefi_processor.py"          # Circular dep avoidance (DerivedFieldsPopulator)
+)
+
+# Deep unified lib imports: UAC sports facade and URDI adapters are exempt.
+# unified_api_contracts.sports is the published domain surface (not internal).
+# URDI adapters are not exported at URDI __init__.py level; follow-up: promote to URDI top-level.
+DEEP_IMPORT_EXCLUDE_GLOBS=(
+    "!**/sports/league_registry.py"       # Re-exports from UAC sports facade — correct per architecture rules
+    "!**/app/core/instrument_sync.py"     # URDI adapters not in URDI __init__.py; follow-up: promote to URDI top-level
+)
+
+# GCP_PROJECT_ID in error message string (legitimate): service_config.py error message tells
+# operators which env var to set. Not a variable usage violation.
+GCP_PROJECT_ID_EXCLUDE_GLOBS=(
+    "!**/config/service_config.py"   # Error message string: "Set GCP_PROJECT_ID or..."
 )
 
 WORKSPACE_ROOT="$(cd "$(git rev-parse --show-toplevel)/.." && pwd)"

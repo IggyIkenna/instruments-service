@@ -9,10 +9,9 @@ from datetime import datetime
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
-from unified_api_contracts import VenueMapping
+from unified_api_contracts import DEFI_PROTOCOLS, DEFI_VENUE_TO_PROTOCOL, VenueMapping
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 
-from instruments_service.config import DEFI_PROTOCOLS, DEFI_VENUE_TO_PROTOCOL
 from instruments_service.models import InstrumentDefinition
 
 if TYPE_CHECKING:
@@ -107,13 +106,13 @@ class DeFiOrchestrator:
     ) -> dict[str, InstrumentDefinition]:
         """Process a single DeFi protocol."""
         if chain:
-            return self.processing_service.fetch_defi_instruments(
+            return await self.processing_service.fetch_defi_instruments(
                 protocol=protocol,
                 chain=chain,
                 target_date=date,
             )
         else:
-            return self.processing_service.fetch_defi_instruments(
+            return await self.processing_service.fetch_defi_instruments(
                 protocol=protocol,
                 target_date=date,
             )

@@ -1,51 +1,26 @@
-"""Test that all CloudTarget instantiations are correct.
+"""Test that cloud configuration attributes are present and valid.
 
-IMPORTANT: These are UNIT TESTS ONLY (no real cloud APIs).
-unified-trading-services validates real API usage via its own integration tests.
+CloudTarget has been removed (deprecated). These tests verify the config
+provides all required cloud parameters for UCI data sink usage.
 """
-
-import pytest
-from unified_trading_library import CloudTarget
 
 from instruments_service.config import instruments_config
 
 
-class TestCloudTargetInstantiations:
-    """Verify CloudTarget usage across the codebase (unit tests with mocks)."""
+class TestCloudConfigParams:
+    """Verify config has all required cloud parameters."""
 
-    def test_all_cloudtarget_calls_have_required_params(self):
-        """All CloudTarget instantiations must include analytics_dataset."""
-        config = instruments_config
-
-        # Pattern that all code should follow
-        target = CloudTarget(
-            project_id=config.gcp_project_id,
-            storage_bucket=config.get_bucket_for_category("cefi"),
-            analytics_dataset=config.bigquery_dataset,  # REQUIRED
-        )
-
-        # Verify it works
-        assert target.project_id
-        assert target.storage_bucket
-        assert target.analytics_dataset
-
-    def test_cloudtarget_fails_without_analytics_dataset(self):
-        """CloudTarget should fail if analytics_dataset is missing."""
-        config = instruments_config
-
-        with pytest.raises((TypeError, ValueError), match=r"analytics_dataset|required"):
-            CloudTarget(
-                project_id=config.gcp_project_id,
-                storage_bucket=config.get_bucket_for_category("cefi"),
-                # analytics_dataset missing - should fail!
-            )
-
-    def test_config_provides_all_cloudtarget_params(self):
-        """Config should provide all required CloudTarget parameters."""
+    def test_config_provides_all_required_cloud_params(self):
+        """Config should expose all attributes needed for UCI data sink."""
         config = instruments_config
 
         # Verify config has all required attributes
         assert hasattr(config, "gcp_project_id")
         assert hasattr(config, "bigquery_dataset")
+
+    def test_config_cloud_params_are_non_empty(self):
+        """Config attributes used for cloud access must be non-empty."""
+        config = instruments_config
+
         assert config.gcp_project_id
         assert config.bigquery_dataset

@@ -390,8 +390,18 @@ class InstrumentHandler(ModeHandler):
                         )
 
             except (OSError, ValueError, TypeError, RuntimeError, Exception) as e:
-                # In-flight validation: catch any exception from service, log, continue with other dates
-                logger.exception("Failed to process %s: %s", date.strftime("%Y-%m-%d"), e)
+                # Shard-level failure: log with full details for event stream, continue with other dates
+                date_str = date.strftime("%Y-%m-%d")
+                logger.exception("Failed to process %s: %s", date_str, e)
+                log_event(
+                    "DATE_PROCESSING_FAILED",
+                    details={
+                        "date": date_str,
+                        "error": str(e),
+                        "error_type": type(e).__name__,
+                        "venues_requested": len(venues_to_process),
+                    },
+                )
                 total_errors += 1
 
         # Calculate success rate and provide comprehensive summary
@@ -401,20 +411,30 @@ class InstrumentHandler(ModeHandler):
         logger.info("📊 Instrument generation pipeline complete:")
         logger.info("   Generated: %s instruments", total_generated)
         logger.info(
-            "   Dates processed: %s/%s successful (%..1f%)", total_dates_processed, total_attempted, success_rate
+            "   Dates processed: %s/%s successful (%.1f%%)", total_dates_processed, total_attempted, success_rate
         )
         logger.info("   Skipped: %s (already existed)", total_skipped)
         logger.info("   Date-level errors: %s", total_errors)
         logger.info("   Processing errors: %s", total_processing_errors)
         logger.info("   Processing warnings: %s", total_processing_warnings)
 
-        # Log completion status
+        # Log completion status with full error details for event stream diagnosis
         if total_errors == 0:
             log_event("STOPPED")
         else:
             log_event(
                 "FAILED",
-                details={"message": f"{total_errors} date-level errors, {total_processing_errors} processing errors"},
+                details={
+                    "message": f"{total_errors} date-level errors, {total_processing_errors} processing errors",
+                    "date_level_errors": total_errors,
+                    "processing_errors": total_processing_errors,
+                    "processing_warnings": total_processing_warnings,
+                    "dates_processed": total_dates_processed,
+                    "dates_attempted": total_attempted,
+                    "instruments_generated": total_generated,
+                    "venues_requested": len(venues_to_process),
+                    "shard_dimensions": f"category={'|'.join(market_types if 'market_types' in dir() else [])},venues={len(venues_to_process)}",
+                },
             )
 
         handler_result: dict[str, HandlerResultValue] = {

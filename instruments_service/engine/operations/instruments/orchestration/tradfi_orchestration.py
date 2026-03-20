@@ -137,7 +137,7 @@ class TradFiOrchestrator:
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             logger.exception("Failed to process %s: %s", exchange, e)
             return {}
 

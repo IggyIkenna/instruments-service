@@ -2,19 +2,24 @@
 Venue configuration for instruments-service.
 
 TradFi UnifiedInstrumentConfig, TradFiInstrument, and loaders.
-Ticker/instrument data lives in instrument_definitions; exchange mappings in tradfi_exchange_mappings.
+Ticker/instrument data lives in instrument_definitions; exchange mappings in UAC.
 """
 
 import logging
 from dataclasses import dataclass, field
 
+from unified_api_contracts import (
+    EXCHANGE_CODE_TO_NAME,
+    KNOWN_ETFS,
+    SPACE_TO_DOT_SYMBOLS,
+    TRADFI_INSTRUMENTS_CONFIG,
+)
+
 from instruments_service.config.instrument_definitions import (
     ETF_TICKERS,
     NASDAQ_TICKERS,
     SP500_TICKERS,
-    TRADFI_INSTRUMENTS_CONFIG,
 )
-from instruments_service.config.tradfi_exchange_mappings import EXCHANGE_CODE_TO_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +67,7 @@ def _load_sp500_tickers() -> tuple[list[str], list[str]]:
 
 
 def _load_tradfi_instruments() -> tuple[list[dict[str, str | None]], dict[str, str]]:
-    """Load TradFi instruments and exchange code mappings from inline config."""
+    """Load TradFi instruments and exchange code mappings from UAC."""
     global _tradfi_instruments_cache, _exchange_code_to_name_cache
 
     if _tradfi_instruments_cache is not None:
@@ -70,7 +75,7 @@ def _load_tradfi_instruments() -> tuple[list[dict[str, str | None]], dict[str, s
 
     _tradfi_instruments_cache = TRADFI_INSTRUMENTS_CONFIG
     _exchange_code_to_name_cache = EXCHANGE_CODE_TO_NAME
-    logger.debug("Loaded %s TradFi instruments from inline config", len(_tradfi_instruments_cache))
+    logger.debug("Loaded %s TradFi instruments from UAC", len(_tradfi_instruments_cache))
 
     return _tradfi_instruments_cache, _exchange_code_to_name_cache
 
@@ -104,26 +109,25 @@ class UnifiedInstrumentConfig:
     """
     Unified instrument configuration - single source of truth for all TradFi instruments.
 
-    Loads instruments and exchange code mappings from external JSON files.
-    All TradFi instruments are loaded from data/tradfi_instruments.json.
+    Loads instruments and exchange code mappings from UAC.
     """
 
-    # Cached instruments loaded from JSON (initialized lazily)
+    # Cached instruments loaded from UAC (initialized lazily)
     _instruments: list[TradFiInstrument] | None = field(default=None, repr=False)
     _exchange_code_to_name: dict[str, str] | None = field(default=None, repr=False)
 
     def __post_init__(self):
-        """Load instruments from JSON on first access."""
+        """Load instruments on first access."""
         self._load_data()
 
     def _load_data(self) -> None:
-        """Load TradFi instruments and exchange mappings from JSON file."""
+        """Load TradFi instruments and exchange mappings from UAC."""
         if self._instruments is not None:
             return
 
         raw_instruments, exchange_mappings = _load_tradfi_instruments()
 
-        # Convert raw JSON to TradFiInstrument objects
+        # Convert raw dicts to TradFiInstrument objects
         self._instruments = []
         for inst in raw_instruments:
             self._instruments.append(
@@ -198,62 +202,6 @@ class UnifiedInstrumentConfig:
                 return self.exchange_code_to_name[base_code]
         return exchange_code
 
-    # ETFs that are in the S&P 500 or commonly traded (should NOT be classified as EQUITY)
-    KNOWN_ETFS = {
-        "SPY",
-        "QQQ",
-        "IVV",
-        "VOO",
-        "VTI",
-        "DIA",
-        "IWM",
-        "EEM",
-        "VEA",
-        "VWO",
-        "GLD",
-        "SLV",
-        "USO",
-        "UNG",
-        "TLT",
-        "IEF",
-        "SHY",
-        "LQD",
-        "HYG",
-        "JNK",
-        "XLF",
-        "XLE",
-        "XLK",
-        "XLV",
-        "XLI",
-        "XLY",
-        "XLP",
-        "XLB",
-        "XLU",
-        "XLRE",
-        "VNQ",
-        "IBB",
-        "SMH",
-        "ARKK",
-        "ARKG",
-        "ARKW",
-        "ARKF",
-        "ARKQ",
-        "IBIT",
-        "FBTC",
-        "ARKB",
-        "GBTC",
-        "BITO",  # Bitcoin ETFs
-    }
-
-    # Symbols with spaces that need dot format for Databento API
-    # Databento uses "BRK.B" not "BRK B"
-    SPACE_TO_DOT_SYMBOLS = {
-        "BRK B": "BRK.B",  # Berkshire Hathaway Class B
-        "BF B": "BF.B",  # Brown-Forman Class B
-        "BRK A": "BRK.A",  # Berkshire Hathaway Class A
-        "BF A": "BF.A",  # Brown-Forman Class A
-    }
-
     def _get_sp500_equities(self) -> list[TradFiInstrument]:
         """Generate S&P 500 equity/ETF instrument definitions from external data file."""
         sp500_tickers, nasdaq_tickers = _load_sp500_tickers()
@@ -265,13 +213,13 @@ class UnifiedInstrumentConfig:
         instruments: list[TradFiInstrument] = []
         for ticker in sp500_tickers:
             # Convert space symbols to dot format for Databento
-            databento_symbol = self.SPACE_TO_DOT_SYMBOLS.get(ticker, ticker)
+            databento_symbol = SPACE_TO_DOT_SYMBOLS.get(ticker, ticker)
 
             # Determine venue (NASDAQ for known tech stocks, NYSE for others)
             venue = "NASDAQ" if ticker in nasdaq_tickers else "NYSE"
 
             # Determine instrument type (ETF vs EQUITY)
-            instrument_type = "ETF" if ticker in self.KNOWN_ETFS else "EQUITY"
+            instrument_type = "ETF" if ticker in KNOWN_ETFS else "EQUITY"
 
             instruments.append(
                 TradFiInstrument(

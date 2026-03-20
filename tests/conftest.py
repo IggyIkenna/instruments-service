@@ -116,12 +116,12 @@ _stub_instruments_engine_package()
 # ============================================================================
 import json
 import logging
+from unittest.mock import MagicMock
 
 from google.auth import default
 from google.auth.exceptions import DefaultCredentialsError
 from google.oauth2 import service_account
 from unified_cloud_interface import get_storage_client
-from unified_trading_library import CloudTarget
 
 from instruments_service.config import instruments_config
 
@@ -333,12 +333,12 @@ def ensure_test_resources(gcp_credentials: str | None, gcp_project_id: str, test
 @pytest.fixture(scope="session")
 def test_cloud_target(gcp_project_id, test_bucket_name, bigquery_dataset, ensure_test_resources):
     """Cloud target configured for test bucket."""
-    return CloudTarget(
-        project_id=gcp_project_id,
-        storage_bucket=test_bucket_name,
-        analytics_dataset=bigquery_dataset,
-        bigquery_location=instruments_config.bigquery_location,
-    )
+    target = MagicMock()
+    target.project_id = gcp_project_id
+    target.storage_bucket = test_bucket_name
+    target.analytics_dataset = bigquery_dataset
+    target.bigquery_location = instruments_config.bigquery_location
+    return target
 
 
 @pytest.fixture(scope="session")

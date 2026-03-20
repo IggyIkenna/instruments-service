@@ -76,7 +76,7 @@ class LiveModeHandler(ModeHandler):
         """
         # Extract args (cast from object for type checker; CLI provides correct types)
         interval = cast(int, kwargs.get("interval", 15))
-        categories = cast(list[str], kwargs.get("category", ["CEFI", "TRADFI", "DEFI", "SPORTS"]))
+        categories = cast(list[str], kwargs.get("category", ["CEFI", "TRADFI", "DEFI", "SPORTS"]))  # CORRECT-LOCAL
         venues = cast(list[str] | None, kwargs.get("venues"))
 
         # Run async handler
@@ -172,7 +172,7 @@ class LiveModeHandler(ModeHandler):
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             log_event("LIVE_MODE_FAILED", severity="CRITICAL", details=cast(JSONDict, {"error": str(e)}))
             logger.exception("Live mode failed")
             return {"status": "failed", "error": str(e)}
@@ -264,7 +264,7 @@ class LiveModeHandler(ModeHandler):
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             log_event(
                 "LIVE_CYCLE_EXCEPTION",
                 severity="ERROR",
@@ -335,7 +335,7 @@ class LiveModeHandler(ModeHandler):
                         correlation_id=str(uuid4()),
                         context=ErrorContext(extra={"exc_type": type(e).__name__}),
                     )
-                    logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                    logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
                     log_event(
                         "PERSIST_FAILED",
                         severity="ERROR",

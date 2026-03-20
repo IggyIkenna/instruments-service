@@ -216,7 +216,7 @@ class CorporateActionsHandler(ModeHandler):
     def _progress_callback(self, ticker: str, current: int, total: int):
         """Progress callback for batch processing."""
         pct = (current / total) * 100
-        logger.info("📊 [%s/%s] (%..1f%) Processing %s", current, total, pct, ticker)
+        logger.info("📊 [%s/%s] (%.1f%%) Processing %s", current, total, pct, ticker)
 
     def run(self, **kwargs: object) -> dict[str, HandlerResultValue]:
         """
