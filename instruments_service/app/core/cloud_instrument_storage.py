@@ -238,7 +238,36 @@ class CloudInstrumentStorage:
     ) -> tuple[bool, int]:
         """Upload a single venue DataFrame via UCI DataSink. Returns (success, count)."""
         try:
-            data_sink: DataSink = get_data_sink(routing_key=category_str)
+            from unified_cloud_interface.constants import get_bucket_name, get_project_id_optional
+
+            # Resolve bucket from UCI convention — no PROTOCOL_DATA_SINK_BUCKET_* env vars needed
+            project_id = get_project_id_optional()
+            if project_id:
+                bucket = get_bucket_name("instruments", category_str.upper())
+                logger.debug("Resolved bucket: %s (project=%s, category=%s)", bucket, project_id, category_str)
+            else:
+                # No project ID → cannot resolve GCS bucket.
+                # In mock mode, LocalDataSink is expected. Outside mock mode, this is a
+                # configuration error that silently writes to local filesystem instead of GCS.
+                from unified_config_interface import UnifiedCloudConfig
+
+                _cfg = UnifiedCloudConfig()
+                if not _cfg.is_mock_mode():
+                    logger.error(
+                        "GCP_PROJECT_ID not set — cannot resolve GCS bucket for %s. "
+                        "Writes will go to LocalDataSink (local filesystem), NOT GCS. "
+                        "Set GCP_PROJECT_ID in env or .env to enable cloud writes.",
+                        category_venue,
+                    )
+                bucket = None
+            data_sink: DataSink = get_data_sink(bucket=bucket)
+            logger.info(
+                "Writing %s %s instruments via %s (bucket=%s)",
+                len(venue_df),
+                category_venue,
+                type(data_sink).__name__,
+                bucket,
+            )
             result_uri: str = data_sink.write(
                 venue_df,
                 partition={"day": date_str, "venue": venue_folder},
@@ -252,7 +281,7 @@ class CloudInstrumentStorage:
                     result_uri,
                 )
                 return True, len(venue_df)
-            logger.error("DataSink write failed for %s", category_venue)
+            logger.error("DataSink write failed for %s (result_uri empty)", category_venue)
             return False, 0
         except (ValueError, KeyError, TypeError, IndexError) as sink_error:
             _err = EnhancedError(
@@ -362,6 +391,18 @@ class CloudInstrumentStorage:
             True if all venue uploads succeeded.
         """
         try:
+            # Pre-flight: validate we can resolve a GCS bucket before doing any work
+            from unified_cloud_interface.constants import get_project_id_optional
+            from unified_config_interface import UnifiedCloudConfig
+
+            _pre_cfg = UnifiedCloudConfig()
+            if not _pre_cfg.is_mock_mode() and not get_project_id_optional():
+                logger.error(
+                    "STORAGE PRE-FLIGHT FAILED: GCP_PROJECT_ID not set. "
+                    "Cannot write to GCS. Set GCP_PROJECT_ID or use CLOUD_MOCK_MODE=true."
+                )
+                return False
+
             instruments_df, date_str = self._prepare_dataframe(instruments_df, date)
 
             schema_enforcer = ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA)
