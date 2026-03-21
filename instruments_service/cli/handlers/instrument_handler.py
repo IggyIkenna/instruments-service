@@ -79,7 +79,7 @@ class InstrumentHandler(ModeHandler):
         logger.debug("✅ InstrumentHandler initialized")
 
     def _get_venues_to_process(
-        self, requested_venues: list[str] | None, cefi: bool, tradfi: bool, defi: bool
+        self, requested_venues: list[str] | None, cefi: bool, tradfi: bool, defi: bool, sports: bool = False
     ) -> list[str]:
         """
         Get list of venues to process based on CLI args.
@@ -89,6 +89,7 @@ class InstrumentHandler(ModeHandler):
             cefi: Whether to process CEFI venues
             tradfi: Whether to process TRADFI venues
             defi: Whether to process DEFI venues
+            sports: Whether to process SPORTS venues
 
         Returns:
             List of venue names to process
@@ -106,6 +107,10 @@ class InstrumentHandler(ModeHandler):
             venues.extend(cast(list[str], self.venue_mapping.all_databento_venues))
         if defi:
             venues.extend(cast(list[str], self.venue_mapping.all_defi_venues))
+        if sports:
+            # Sports venues are resolved by SportsOrchestrator via USRI,
+            # but we add a placeholder for venue counting and logging.
+            venues.append("SPORTS_ORCHESTRATOR")
 
         return venues
 
@@ -155,9 +160,22 @@ class InstrumentHandler(ModeHandler):
             tradfi: bool = bool(kwargs.get("tradfi", False))
             defi: bool = bool(kwargs.get("defi", False))
             sports: bool = bool(kwargs.get("sports", False))
+            prediction: bool = bool(kwargs.get("prediction", False))
+
+            # PREDICTION: not yet supported — log clearly and skip
+            if prediction:
+                logger.warning(
+                    "PREDICTION category requested but not yet supported by instruments-service. "
+                    "Prediction market adapters (Kalshi, Polymarket) are not yet wired. "
+                    "Skipping PREDICTION — no instruments generated for this category."
+                )
 
             # Default: process ALL if no flags specified
             if not cefi and not tradfi and not defi and not sports:
+                if prediction:
+                    # PREDICTION was the only category — don't fall through to all
+                    logger.info("Only PREDICTION requested (not supported). No categories to process.")
+                    return {"status": "success", "total_generated": 0, "message": "PREDICTION not yet supported"}
                 cefi = tradfi = defi = sports = True
                 logger.info("🌍 Processing ALL market types: CEFI, TRADFI, DEFI, and SPORTS")
             else:
@@ -173,16 +191,21 @@ class InstrumentHandler(ModeHandler):
                 logger.info("🔍 Processing market types: %s", ", ".join(market_types))
 
             # Build venue list based on categories + explicit venues
-            venues_to_process = self._get_venues_to_process(requested_venues, cefi, tradfi, defi)
+            venues_to_process = self._get_venues_to_process(requested_venues, cefi, tradfi, defi, sports)
 
             # Selective API key validation (only for requested venues)
-            try:
-                # Validate API keys (result not used yet, but validation ensures keys exist)
-                _ = validate_required_api_keys(venues_to_process)
-                logger.info("✅ Validated API keys for %s venues", len(venues_to_process))
-            except ValueError as e:
-                log_event("VALIDATION_FAILED", details={"message": f"API key validation: {e!s}"})
-                raise
+            # Skip in mock mode — no real API keys needed
+            config = get_config()
+            if config.is_mock_mode():
+                logger.info("MOCK MODE: Skipping API key validation for %s venues", len(venues_to_process))
+            else:
+                try:
+                    # Validate API keys (result not used yet, but validation ensures keys exist)
+                    _ = validate_required_api_keys(venues_to_process)
+                    logger.info("✅ Validated API keys for %s venues", len(venues_to_process))
+                except ValueError as e:
+                    log_event("VALIDATION_FAILED", details={"message": f"API key validation: {e!s}"})
+                    raise
 
             log_event("VALIDATION_COMPLETED")
         except (ValueError, TypeError, KeyError) as e:
@@ -225,6 +248,8 @@ class InstrumentHandler(ModeHandler):
                             categories_to_check.append("TRADFI")
                         if defi:
                             categories_to_check.append("DEFI")
+                        if sports:
+                            categories_to_check.append("SPORTS")
 
                         # Get venues from kwargs (from --venues CLI arg)
                         venues_to_check_raw = kwargs.get("venues")
@@ -325,6 +350,7 @@ class InstrumentHandler(ModeHandler):
                         cefi=cefi,
                         tradfi=tradfi,
                         defi=defi,
+                        sports=sports,
                         venues=venues_list,
                         instrument_ids=instrument_ids_list,
                         tradfi_venues=None,  # No longer filtered - always use all TradFi venues
