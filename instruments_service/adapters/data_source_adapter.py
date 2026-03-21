@@ -36,6 +36,7 @@ from unified_api_contracts import (
     TardisInstrumentDetail,
 )
 from unified_cloud_interface import DataSource, get_data_source
+from unified_cloud_interface.constants import get_bucket_name, get_project_id_optional
 from unified_internal_contracts import (
     DataSourceConstraint,
     EnhancedError,
@@ -116,8 +117,9 @@ class DataSourceAdapter:
                 partition[k] = v
 
         try:
+            bucket = get_bucket_name("instruments", self._routing_key.upper()) if get_project_id_optional() else None
             data_source: DataSource = get_data_source(
-                routing_key=self._routing_key, prefix="instrument_availability/by_date"
+                bucket=bucket, prefix="instrument_availability/by_date"
             )
             raw: object = data_source.read(partition=partition, format="parquet")
             if not isinstance(raw, pd.DataFrame):
@@ -163,8 +165,9 @@ class DataSourceAdapter:
                 partition[k] = v
 
         try:
+            bucket = get_bucket_name("instruments", category.upper()) if get_project_id_optional() else None
             data_source: DataSource = get_data_source(
-                routing_key=category.lower(), prefix="instrument_availability/by_date"
+                bucket=bucket, prefix="instrument_availability/by_date"
             )
             raw: object = data_source.read(partition=partition, format="parquet")
             if not isinstance(raw, pd.DataFrame):

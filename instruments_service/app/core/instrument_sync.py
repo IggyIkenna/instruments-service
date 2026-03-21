@@ -258,9 +258,19 @@ class InstrumentSyncMixin:
             instrument_records = await urdi_adapter.get_instruments()
             # Map InstrumentRecord (URDI output) → InstrumentDefinition (service model)
             # URDI handles normalization; instruments-service enriches with service-specific metadata
+            target_date_only = date.date() if hasattr(date, "date") else date
             result: dict[str, InstrumentDefinition] = {}
+            expired_count = 0
             for record in instrument_records:
                 try:
+                    # Filter expired instruments (options/futures/spreads past expiry date)
+                    inst_type_lower = str(record.instrument_type).lower()
+                    if record.expiry and inst_type_lower in ("future", "option", "spread"):
+                        expiry_date = record.expiry.date() if hasattr(record.expiry, "date") else record.expiry
+                        if target_date_only and expiry_date < target_date_only:
+                            expired_count += 1
+                            continue
+
                     available_from = record.available_since.isoformat() if record.available_since else ""
                     inst = InstrumentDefinition(
                         instrument_key=record.instrument_key,
@@ -284,8 +294,11 @@ class InstrumentSyncMixin:
                     result[inst.instrument_key] = inst
                 except (ValueError, KeyError, TypeError) as e:
                     logger.warning("Failed to map InstrumentRecord %s: %s", record.instrument_key, e)
-            if result:
-                logger.info("Processed %s instruments from %s via URDI", len(result), exchange)
+            if result or expired_count:
+                logger.info(
+                    "Processed %s instruments from %s via URDI (%s expired filtered out)",
+                    len(result), exchange, expired_count,
+                )
             return result
         except (ValueError, KeyError, TypeError, IndexError) as e:
             _err = EnhancedError(

@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 class ParsedArgs(Protocol):
     """Typed protocol for parsed CLI arguments (argparse.Namespace attributes)."""
 
+    operation: str
     mode: str
-    run_mode: str
     log_level: str
     start_date: str | None
     end_date: str | None
@@ -56,7 +56,8 @@ def parse_arguments() -> ParsedArgs:
 
     Example:
         >>> args = parse_arguments()
-        >>> args.mode  # Returns the selected mode
+        >>> args.operation  # Returns the selected operation
+        >>> args.mode  # Returns the execution mode (batch/live)
         >>> args.start_date  # Returns the start date
     """
     parser = argparse.ArgumentParser(
@@ -65,9 +66,9 @@ def parse_arguments() -> ParsedArgs:
         epilog=_get_examples_text(),
     )
 
-    # Mode selection (operation type)
+    # Operation selection (what to do)
     parser.add_argument(
-        "--mode",
+        "--operation",
         choices=[
             "instruments",
             "aggregate",
@@ -79,7 +80,7 @@ def parse_arguments() -> ParsedArgs:
         ],
         required=True,
         help=(
-            "Operation mode: instruments (generate instrument definitions), aggregate "
+            "Operation to perform: instruments (generate instrument definitions), aggregate "
             "(deduplicate instruments to aggregated/ per category bucket), corporate_actions "
             "(TRADFI only: fetch dividends, splits, earnings), corporate_actions_backfill "
             "(fetch full history per ticker), generate_date_views (transform by_ticker to by_date), "
@@ -87,9 +88,9 @@ def parse_arguments() -> ParsedArgs:
         ),
     )
 
+    # Mode selection (batch vs live)
     parser.add_argument(
-        "--run-mode",
-        dest="run_mode",
+        "--mode",
         choices=["batch", "live"],
         required=True,
         help="Execution mode: batch for historical date range, live for continuous",
@@ -294,22 +295,22 @@ def validate_arguments(args: argparse.Namespace) -> None:
     Raises:
         ValueError: If arguments are invalid or inconsistent
     """
-    mode = cast(str, args.mode)
+    operation = cast(str, args.operation)
     start_date = cast(str | None, args.start_date)
     end_date = cast(str | None, args.end_date)
 
-    run_mode = cast(str | None, getattr(args, "run_mode", None))
+    mode = cast(str | None, getattr(args, "mode", None))
 
-    # Validate date range for instruments mode
-    if mode == "instruments":
+    # Validate date range for instruments operation
+    if operation == "instruments":
         # start-date is only required for batch mode; live mode uses wall clock
-        if run_mode != "live" and not start_date:
+        if mode != "live" and not start_date:
             raise ValueError("--start-date is required for instruments batch mode")
         if not end_date:
             args.end_date = start_date
 
-    # Validate date range for corporate_actions mode
-    if mode == "corporate_actions":
+    # Validate date range for corporate_actions operation
+    if operation == "corporate_actions":
         if not start_date:
             raise ValueError("--start-date is required for corporate_actions mode")
         if not end_date:
@@ -326,54 +327,54 @@ def _get_examples_text() -> str:
 Examples:
 
   # Generate instruments for a date range (default: ALL market types - CEFI, TRADFI, DEFI)
-  python -m instruments_service --mode instruments --run-mode batch --start-date 2023-05-23 --end-date 2023-05-24
+  python -m instruments_service --operation instruments --mode batch --start-date 2023-05-23 --end-date 2023-05-24
 
   # Generate CEFI instruments only (Tardis: binance, deribit, bybit, okx, etc.)
-  python -m instruments_service --mode instruments --run-mode batch --start-date 2023-05-23 --end-date 2023-05-23 --CEFI --force
+  python -m instruments_service --operation instruments --mode batch --start-date 2023-05-23 --end-date 2023-05-23 --CEFI --force
 
   # Generate TRADFI instruments only (Databento: CME, NASDAQ, NYSE, etc.)
-  python -m instruments_service --mode instruments --run-mode batch --start-date 2023-05-23 --end-date 2023-05-23 --TRADFI --force
+  python -m instruments_service --operation instruments --mode batch --start-date 2023-05-23 --end-date 2023-05-23 --TRADFI --force
 
   # Generate DEFI instruments only (The Graph: uniswap_v3, curve, aave_v3, etc.)
-  python -m instruments_service --mode instruments --run-mode batch --start-date 2023-05-23 --end-date 2023-05-23 --DEFI --force
+  python -m instruments_service --operation instruments --mode batch --start-date 2023-05-23 --end-date 2023-05-23 --DEFI --force
 
   # Generate instruments for specific venues only (filter within a category)
-  python -m instruments_service --mode instruments --run-mode batch --start-date 2023-05-23 --end-date 2023-05-23 --DEFI \\
+  python -m instruments_service --operation instruments --mode batch --start-date 2023-05-23 --end-date 2023-05-23 --DEFI \\
     --venues AAVE_V3_ETH LIDO --force
-  python -m instruments_service --mode instruments --run-mode batch --start-date 2023-05-23 --end-date 2023-05-23 --CEFI \\
+  python -m instruments_service --operation instruments --mode batch --start-date 2023-05-23 --end-date 2023-05-23 --CEFI \\
     --venues BINANCE-SPOT BYBIT --force
 
   # Generate CEFI and TRADFI (combine flags OR use --category)
-  python -m instruments_service --mode instruments --run-mode batch --start-date 2023-05-23 --end-date 2023-05-23 \\
+  python -m instruments_service --operation instruments --mode batch --start-date 2023-05-23 --end-date 2023-05-23 \\
     --CEFI --TRADFI --force
-  python -m instruments_service --mode instruments --run-mode batch --start-date 2023-05-23 --end-date 2023-05-23 \\
+  python -m instruments_service --operation instruments --mode batch --start-date 2023-05-23 --end-date 2023-05-23 \\
     --category CEFI TRADFI --force
 
   # Generate instruments with force flag
-  python -m instruments_service --mode instruments --run-mode batch --start-date 2023-05-23 --end-date 2023-05-23 --force
+  python -m instruments_service --operation instruments --mode batch --start-date 2023-05-23 --end-date 2023-05-23 --force
 
   # Dry run (don't upload to GCS, save to local data/sample/)
-  python -m instruments_service --mode instruments --run-mode batch --start-date 2023-05-23 --end-date 2023-05-23 --CEFI --dry-run
+  python -m instruments_service --operation instruments --mode batch --start-date 2023-05-23 --end-date 2023-05-23 --CEFI --dry-run
 
 Aggregate (deduplicate instruments to aggregated/ per category bucket):
 
   # Delta-only: merge previous day with existing aggregated file (default, daily batch)
-  python -m instruments_service --mode aggregate --run-mode batch
+  python -m instruments_service --operation aggregate --mode batch
 
   # Full rebuild from all by-date/venue files (schema changes)
-  python -m instruments_service --mode aggregate --run-mode batch --redo-all
+  python -m instruments_service --operation aggregate --mode batch --redo-all
 
 Corporate Actions (dividends, splits, earnings):
 
   # Fetch corporate actions for S&P 500 (last 6 years)
-  python -m instruments_service --mode corporate_actions --run-mode batch --start-date 2020-01-01 --end-date 2026-01-25
+  python -m instruments_service --operation corporate_actions --mode batch --start-date 2020-01-01 --end-date 2026-01-25
 
   # Fetch corporate actions for specific tickers
-  python -m instruments_service --mode corporate_actions --run-mode batch --start-date 2020-01-01 --end-date 2026-01-25 \\
+  python -m instruments_service --operation corporate_actions --mode batch --start-date 2020-01-01 --end-date 2026-01-25 \\
     --tickers AAPL MSFT GOOGL
 
   # Save as CSV instead of Parquet
-  python -m instruments_service --mode corporate_actions --run-mode batch --start-date 2020-01-01 --end-date 2026-01-25 \\
+  python -m instruments_service --operation corporate_actions --mode batch --start-date 2020-01-01 --end-date 2026-01-25 \\
     --output-format csv
 
 Query Instruments (use unified-trading-library):

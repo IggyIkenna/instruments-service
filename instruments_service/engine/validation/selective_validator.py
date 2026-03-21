@@ -131,5 +131,9 @@ def get_venues_for_category(category: str, venue_mapping: VenueMappingProtocol) 
         return venue_mapping.all_databento_venues
     elif category == "DEFI":
         return venue_mapping.all_defi_venues
+    elif category == "SPORTS":
+        return []  # Sports venues resolved by SportsOrchestrator
+    elif category == "PREDICTION":
+        return []  # Prediction venues not yet implemented
     else:
         raise ValueError(f"Unknown category: {category}")

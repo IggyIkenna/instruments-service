@@ -558,7 +558,7 @@ AAVESCAN_SECRET_NAME=aavescan-api-key
 
 **Cons**:
 
-- ⚠️ Requires RPC access (Alchemy, Infura, or local node)
+- ⚠️ Requires RPC access (Alchemy, Tenderly, or local node)
 - ⚠️ Can be slow for large state snapshots
 
 **Example with Tenderly**:

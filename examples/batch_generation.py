@@ -105,7 +105,7 @@ async def generate_instruments_batch(start_date: str, end_date: str, force: bool
                         correlation_id=str(uuid4()),
                         context=ErrorContext(extra={"exc_type": type(e).__name__}),
                     )
-                    logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+                    logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
                     logger.error("  ❌ Failed to process %s: %s", exchange, e)
                     errors.append(f"{date_str}/{exchange}: {e}")
             if all_instruments:
@@ -149,7 +149,7 @@ async def generate_instruments_batch(start_date: str, end_date: str, force: bool
                 correlation_id=str(uuid4()),
                 context=ErrorContext(extra={"exc_type": type(e).__name__}),
             )
-            logger.warning(_err.message, extra={"correlation_id": _err.correlation_id})
+            logger.warning("%s", _err.message, extra={"correlation_id": _err.correlation_id})
             logger.exception("  ❌ Error processing %s: %s", date_str, e)
             errors.append(f"{date_str}: {e}")
         # Move to next date

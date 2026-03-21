@@ -774,16 +774,6 @@
         }
       }
     ],
-    "./instruments_service/config.py": [
-      {
-        "code": "reportUnusedFunction",
-        "range": {
-          "startColumn": 4,
-          "endColumn": 17,
-          "lineCount": 1
-        }
-      }
-    ],
     "./instruments_service/corporate_actions/adapter.py": [
       {
         "code": "reportUnnecessaryComparison",

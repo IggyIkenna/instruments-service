@@ -48,9 +48,9 @@ class TestCLIParserExtended:
     def test_parser_instruments_mode(self):
         sys.argv = [
             "test",
-            "--mode",
+            "--operation",
             "instruments",
-            "--run-mode",
+            "--mode",
             "batch",
             "--start-date",
             "2023-01-01",
@@ -58,27 +58,27 @@ class TestCLIParserExtended:
             "2023-01-02",
         ]
         args = parse_arguments()
-        assert args.mode == "instruments"
-        assert args.run_mode == "batch"
+        assert args.operation == "instruments"
+        assert args.mode == "batch"
         assert args.start_date == "2023-01-01"
         assert args.end_date == "2023-01-02"
 
-    def test_parser_run_mode_is_required(self):
-        sys.argv = ["test", "--mode", "instruments", "--start-date", "2023-01-01"]
+    def test_parser_mode_is_required(self):
+        sys.argv = ["test", "--operation", "instruments", "--start-date", "2023-01-01"]
         with pytest.raises(SystemExit):
             parse_arguments()
 
-    def test_parser_run_mode_live(self):
-        sys.argv = ["test", "--mode", "instruments", "--run-mode", "live", "--start-date", "2023-01-01"]
+    def test_parser_mode_live(self):
+        sys.argv = ["test", "--operation", "instruments", "--mode", "live", "--start-date", "2023-01-01"]
         args = parse_arguments()
-        assert args.run_mode == "live"
+        assert args.mode == "live"
 
     def test_parser_with_all_categories(self):
         sys.argv = [
             "test",
-            "--mode",
+            "--operation",
             "instruments",
-            "--run-mode",
+            "--mode",
             "batch",
             "--start-date",
             "2023-01-01",
@@ -87,7 +87,7 @@ class TestCLIParserExtended:
             "--DEFI",
         ]
         args = parse_arguments()
-        assert args.mode == "instruments"
+        assert args.operation == "instruments"
         assert args.CEFI is True
         assert args.TRADFI is True
         assert args.DEFI is True
@@ -95,21 +95,21 @@ class TestCLIParserExtended:
     def test_validate_arguments_instruments_mode(self):
         import argparse
 
-        args = argparse.Namespace(mode="instruments", start_date="2023-01-01", end_date="2023-01-02")
+        args = argparse.Namespace(operation="instruments", start_date="2023-01-01", end_date="2023-01-02")
         validate_arguments(args)
         assert True
 
     def test_validate_arguments_missing_start_date(self):
         import argparse
 
-        args = argparse.Namespace(mode="instruments", start_date=None, end_date="2023-01-02")
+        args = argparse.Namespace(operation="instruments", start_date=None, end_date="2023-01-02")
         with pytest.raises(ValueError, match="--start-date is required"):
             validate_arguments(args)
 
     def test_validate_arguments_end_date_defaults(self):
         import argparse
 
-        args = argparse.Namespace(mode="instruments", start_date="2023-01-01", end_date=None)
+        args = argparse.Namespace(operation="instruments", start_date="2023-01-01", end_date=None)
         validate_arguments(args)
         assert args.end_date == "2023-01-01"
 
