@@ -157,7 +157,21 @@ class InstrumentsService(
         error_warning_counter: ErrorWarningCounter,
         root_logger: logging.Logger,
     ) -> dict[str, object]:
-        """Core instrument generation logic, delegating to per-mode helpers."""
+        """Core instrument generation logic, delegating to per-mode helpers.
+
+        In mock mode (CLOUD_MOCK_MODE=true), uses InstrumentGenerator from
+        unified-internal-contracts instead of hitting real exchange APIs.
+        """
+        # --- MOCK MODE: generate instruments locally ---
+        if instruments_config.is_mock_mode():
+            return self._generate_instruments_mock(
+                date,
+                date_str,
+                skip_storage,
+                error_warning_counter,
+                root_logger,
+            )
+
         logger.info(
             "📅 Generating instruments for %s (CeFi=%s, TradFi=%s, DeFi=%s, Sports=%s)",
             date_str,
@@ -205,6 +219,88 @@ class InstrumentsService(
             error_warning_counter=error_warning_counter,
             root_logger=root_logger,
         )
+
+    def _generate_instruments_mock(
+        self,
+        date: datetime,
+        date_str: str,
+        skip_storage: bool,
+        error_warning_counter: ErrorWarningCounter,
+        root_logger: logging.Logger,
+    ) -> dict[str, object]:
+        """Generate instruments using InstrumentGenerator in mock mode.
+
+        Reads from seed data if available, otherwise generates inline.
+        Writes output to the local seed path for downstream services.
+        """
+        from instruments_service.engine.mock_data_provider import (
+            _seed_exists_for_date,
+            generate_mock_instruments,
+            load_seed_instruments,
+            write_mock_output,
+        )
+
+        logger.info(
+            "MOCK MODE: Generating instruments for %s using InstrumentGenerator",
+            date_str,
+        )
+
+        # Try to load existing seed data first
+        if _seed_exists_for_date(date_str):
+            logger.info("MOCK MODE: Loading existing seed data for %s", date_str)
+            all_instruments = load_seed_instruments(date_str)
+        else:
+            logger.info("MOCK MODE: No seed data found, generating inline for %s", date_str)
+            all_instruments = generate_mock_instruments(date)
+
+        if not all_instruments:
+            root_logger.removeHandler(error_warning_counter)
+            return {
+                "status": "warning",
+                "date": date_str,
+                "instruments_generated": 0,
+                "message": "Mock mode: no instruments generated",
+                "error_count": error_warning_counter.error_count,
+                "warning_count": error_warning_counter.warning_count,
+            }
+
+        # Convert to DataFrame for standard processing path
+        instruments_df = self._instruments_to_dataframe(all_instruments)
+        self._populate_market_category(instruments_df)
+
+        # Write to local seed path (for downstream services)
+        write_mock_output(all_instruments, date)
+
+        # Optionally store via cloud storage (skip_storage=True in live mode)
+        if not skip_storage:
+            try:
+                self._store_instruments(instruments_df, date, skip_storage=False)
+            except (OSError, ValueError, RuntimeError) as e:
+                logger.warning(
+                    "MOCK MODE: Cloud storage failed (expected in local mock): %s",
+                    e,
+                )
+
+        error_count = error_warning_counter.error_count
+        warning_count = error_warning_counter.warning_count
+        root_logger.removeHandler(error_warning_counter)
+
+        logger.info(
+            "MOCK MODE: Generated %d instruments for %s",
+            len(all_instruments),
+            date_str,
+        )
+
+        return {
+            "status": "success",
+            "date": date_str,
+            "instruments_generated": len(all_instruments),
+            "exchanges_processed": 0,
+            "venues": list(instruments_df["venue"].unique()) if "venue" in instruments_df.columns else [],
+            "mock_mode": True,
+            "error_count": error_count,
+            "warning_count": warning_count,
+        }
 
     async def _generate_all_modes(
         self,
