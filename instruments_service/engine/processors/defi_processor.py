@@ -166,7 +166,7 @@ async def _fetch_raw_from_protocol(
                 inst_data["tardis_exchange"] = ""
                 inst_data["tardis_symbol"] = ""
                 inst_data["data_provider"] = "aster"
-                inst_data["market_category"] = "cefi"
+                inst_data["market_category"] = "defi"
                 inst_data["data_types"] = "trades,book_snapshot_5,derivative_ticker"
         return raw
 

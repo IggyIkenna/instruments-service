@@ -10,7 +10,7 @@
 #   docker run -v /path/to/credentials.json:/app/credentials.json \
 #     -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json \
 #     -e GCP_PROJECT_ID=your-gcp-project-id \
-#     instruments-service --mode instruments --run-mode batch --start-date 2024-01-01 --CEFI
+#     instruments-service --operation instruments --mode batch --start-date 2024-01-01 --CEFI
 
 ARG PROJECT_ID
 FROM --platform=linux/amd64 asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-trading-services/unified-trading-services:latest

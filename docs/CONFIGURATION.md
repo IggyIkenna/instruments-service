@@ -162,8 +162,8 @@ TARDIS_SECRET_NAME=tardis-api-key
 DATABENTO_SECRET_NAME=databento-api-key
 GRAPH_SECRET_NAME=graph-api-key
 
-# DeFi URLs
-UNISWAP_V3_GRAPH_URL=https://api.thegraph.com/subgraphs/name/uniswap/uniswap-v3
+# DeFi URLs (adapter auto-constructs gateway URLs from API key + subgraph ID)
+UNISWAP_V3_GRAPH_URL=https://gateway.thegraph.com/api/${GRAPH_API_KEY}/subgraphs/id/5zvR82QoaXYFyDEKLZ9t6v9adgnptxYpKpSbxtgVENFV
 ```
 
 ## Related Documentation

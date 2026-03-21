@@ -11,9 +11,11 @@ from unified_trading_library import DateFilterService
 
 # Local implementations (instruments-service specific)
 from instruments_service.utils.ccxt_service import CCXTService
+from instruments_service.utils.error_warning_counter import ErrorWarningCounter
 
 __all__ = [
     "CCXTService",
     "DateFilterService",
+    "ErrorWarningCounter",
     "SubgraphService",
 ]

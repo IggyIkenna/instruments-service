@@ -350,7 +350,7 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
 
         if (
             not available_to_datetime
-            and normalized_instrument_type in ["FUTURE", "OPTION"]
+            and (normalized_instrument_type or "").upper() in ("FUTURE", "OPTION", "SPREAD")
             and "expiry" in enhanced_fields
         ):
             expiry_str: str = cast(str, enhanced_fields.get("expiry") or "")
@@ -400,7 +400,8 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
         enhanced_fields: dict[str, object],
     ) -> bool:
         """Return True if the instrument expiry date is before target_date."""
-        if not (target_date and normalized_instrument_type in ["FUTURE", "OPTION"] and "expiry" in enhanced_fields):
+        norm_upper = (normalized_instrument_type or "").upper()
+        if not (target_date and norm_upper in ("FUTURE", "OPTION", "SPREAD") and "expiry" in enhanced_fields):
             return False
         expiry_str: str = cast(str, enhanced_fields.get("expiry") or "")
         if not expiry_str:

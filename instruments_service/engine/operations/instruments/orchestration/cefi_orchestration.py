@@ -6,7 +6,7 @@ Handles processing of CeFi (Tardis) exchanges and on-chain CLOB venues.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
@@ -20,6 +20,37 @@ if TYPE_CHECKING:
     from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
 
 logger = logging.getLogger(__name__)
+
+
+def _filter_expired_instruments(
+    instruments: dict[str, "InstrumentDefinition"],
+    target_date: datetime,
+) -> dict[str, "InstrumentDefinition"]:
+    """Remove instruments whose expiry is before the target date.
+
+    Instruments without expiry (perpetuals, spot) are kept.
+    Only filters futures, options, and spreads that have a past expiry.
+    """
+    target = target_date.date() if hasattr(target_date, "date") else target_date
+    result: dict[str, InstrumentDefinition] = {}
+    for key, inst in instruments.items():
+        expiry = getattr(inst, "expiry", None)
+        inst_type = (getattr(inst, "instrument_type", "") or "").lower()
+        if expiry and inst_type in ("future", "option", "spread"):
+            try:
+                if isinstance(expiry, str):
+                    expiry_dt = datetime.fromisoformat(expiry.replace("Z", "+00:00"))
+                elif isinstance(expiry, datetime):
+                    expiry_dt = expiry
+                else:
+                    result[key] = inst
+                    continue
+                if expiry_dt.date() < target:
+                    continue  # Expired — skip
+            except (ValueError, TypeError):
+                pass  # Can't parse — keep the instrument
+        result[key] = inst
+    return result
 
 
 class CeFiOrchestrator:
@@ -138,8 +169,15 @@ class CeFiOrchestrator:
                         logger.warning(
                             "Failed to create InstrumentDefinition for %s: %s", d.get("instrument_key", "unknown"), e
                         )
+                # Filter expired instruments — only keep active instruments for the target date
                 if result:
-                    logger.info("✅ Processed %s instruments from %s", len(result), exchange)
+                    before = len(result)
+                    result = _filter_expired_instruments(result, date)
+                    filtered = before - len(result)
+                    logger.info(
+                        "✅ Processed %s instruments from %s (%s expired filtered out)",
+                        len(result), exchange, filtered,
+                    )
                 return result
             except (ValueError, KeyError, TypeError, IndexError) as e:
                 _err = EnhancedError(

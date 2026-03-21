@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pandas as pd
 from unified_cloud_interface import DataSource, get_analytics_client, get_data_source
+from unified_cloud_interface.constants import get_bucket_name, get_project_id_optional
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 
 from instruments_service.config import instruments_config
@@ -47,7 +48,8 @@ class CloudDataProvider:
         routing_key = "cefi"
         try:
             logger.info("Loading instruments for %s (routing_key=%s)", date_str, routing_key)
-            data_source: DataSource = get_data_source(routing_key=routing_key, prefix="instrument_availability/by_date")
+            bucket = get_bucket_name("instruments", "CEFI") if get_project_id_optional() else None
+            data_source: DataSource = get_data_source(bucket=bucket, prefix="instrument_availability/by_date")
             raw: object = data_source.read(partition={"day": date_str}, format="parquet")
             if not isinstance(raw, pd.DataFrame):
                 return pd.DataFrame()
@@ -70,11 +72,11 @@ class CloudDataProvider:
     def get_instruments_from_category(self, date: datetime, category: str, gcs_path: str | None = None) -> pd.DataFrame:
         """Get instruments from category-specific routing key for a specific date."""
         date_str = date.strftime("%Y-%m-%d")
-        routing_key = category.lower()
         partition = self._build_partition(date_str, gcs_path)
         try:
             logger.info("Loading %s instruments for %s", category, date_str)
-            data_source: DataSource = get_data_source(routing_key=routing_key, prefix="instrument_availability/by_date")
+            bucket = get_bucket_name("instruments", category.upper()) if get_project_id_optional() else None
+            data_source: DataSource = get_data_source(bucket=bucket, prefix="instrument_availability/by_date")
             raw: object = data_source.read(partition=partition, format="parquet")
             if not isinstance(raw, pd.DataFrame):
                 return pd.DataFrame()

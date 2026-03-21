@@ -122,12 +122,38 @@ def generate_mock_instruments(
     # Get the set of fields that InstrumentDefinition accepts
     valid_fields = set(InstrumentDefinition.model_fields.keys())
 
+    # Fields that must be str (not None) in InstrumentDefinition
+    str_fields = {
+        name
+        for name, field in InstrumentDefinition.model_fields.items()
+        if field.annotation is str
+        or (hasattr(field.annotation, "__args__") and str in getattr(field.annotation, "__args__", ()))
+    }
+
     result: dict[str, InstrumentDefinition] = {}
     for inst in instruments:
         inst_dict = cast(dict[str, object], inst.model_dump())
-        # Filter to only fields InstrumentDefinition accepts
-        filtered_dict: dict[str, object] = {k: v for k, v in inst_dict.items() if k in valid_fields}
-        result[inst.instrument_key] = InstrumentDefinition(**filtered_dict)
+        filtered_dict: dict[str, object] = {}
+        for k, v in inst_dict.items():
+            if k not in valid_fields:
+                continue
+            # datetime → ISO string
+            if isinstance(v, datetime):
+                filtered_dict[k] = v.isoformat()
+            # None → "" for str fields, False for bool
+            elif v is None and k in str_fields:
+                filtered_dict[k] = ""
+            elif v is None and k == "inverse":
+                filtered_dict[k] = False
+            # float/Decimal → str for tick_size, min_size, multiplier
+            elif k in ("tick_size", "min_size", "multiplier") and not isinstance(v, str):
+                filtered_dict[k] = str(v) if v is not None else ""
+            else:
+                filtered_dict[k] = v
+        try:
+            result[inst.instrument_key] = InstrumentDefinition(**filtered_dict)
+        except Exception as exc:
+            logger.warning("Skipping %s: %s", inst.instrument_key, exc)
 
     return result
 
