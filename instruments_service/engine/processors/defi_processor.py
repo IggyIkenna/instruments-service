@@ -10,27 +10,14 @@ from __future__ import annotations
 import contextlib
 import logging
 from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Protocol, cast
 from uuid import uuid4
 
 from unified_events_interface import VENUE_ZERO_INSTRUMENTS, log_event
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
-from unified_market_interface import (
-    AavePlasmaAdapter,
-    AaveV3Adapter,
-    BalancerAdapter,
-    CurveAdapter,
-    EthenaAdapter,
-    EtherFiAdapter,
-    EulerAdapter,
-    FluidAdapter,
-    HyperliquidAdapter,
-    LidoAdapter,
-    MorphoAdapter,
-    UniswapV2Adapter,
-    UniswapV3Adapter,
-    UniswapV4Adapter,
-)
+from unified_internal_contracts.reference.instrument import InstrumentRecord
+from unified_reference_data_interface import create_reference_data_adapter
 
 from instruments_service.models import InstrumentDefinition
 
@@ -97,17 +84,36 @@ class DefiServiceProtocol(Protocol):
     def get_manual_ccxt_fallback(self, venue: str, base_asset: str) -> dict[str, object]: ...
 
 
-def _list_to_dict(items: list[dict[str, object]]) -> dict[str, object]:
-    """Convert a list of instrument dicts to a keyed dict.
+def _records_to_raw_dict(records: list[InstrumentRecord]) -> dict[str, object]:
+    """Convert a list of InstrumentRecord to a keyed dict of plain dicts.
 
-    Some adapters (Ethena, Morpho) return ``list[dict]`` instead of
-    ``dict[str, dict]``.  We key by ``instrument_key`` or ``instrument_id``
-    when available, falling back to the list index.
+    Applies the same None->empty, Decimal->str, datetime->isoformat conversion
+    pattern used by the aster handler so downstream code receives uniform dicts.
     """
     result: dict[str, object] = {}
-    for idx, item in enumerate(items):
-        key = str(item.get("instrument_key") or item.get("instrument_id") or item.get("id") or f"__idx_{idx}")
-        result[key] = item
+    for record in records:
+        d: dict[str, object] = {}
+        for k, v in record.model_dump().items():
+            if v is None:
+                d[k] = ""
+            elif isinstance(v, Decimal):
+                d[k] = str(v) if v.is_finite() else ""
+            elif isinstance(v, datetime):
+                d[k] = v.isoformat()
+            else:
+                d[k] = v
+        # Ensure downstream-required keys are present
+        d["instrument_key"] = record.instrument_key
+        d["venue"] = record.venue
+        d["instrument_type"] = str(record.instrument_type)
+        d["symbol"] = record.symbol or record.raw_symbol or ""
+        d["base_asset"] = record.base_asset or ""
+        d["quote_asset"] = record.quote_asset or ""
+        d["exchange_raw_symbol"] = record.raw_symbol or ""
+        d["available_from_datetime"] = (
+            record.available_since.isoformat() if record.available_since else "2020-01-01T00:00:00Z"
+        )
+        result[record.instrument_key] = d
     return result
 
 
@@ -122,146 +128,55 @@ async def _fetch_raw_from_protocol(
 
     Returns None if protocol is unrecognized.
     """
-    base_currency_list: list[str] = service.venue_mapping.get_defi_mvp_tokens()
-    quote_currency_list: list[str] = service.venue_mapping.get_defi_mvp_tokens()
     graph_api_key: str | None = getattr(service, "_graph_api_key", None)
-
-    bc = kwargs.get("base_currency")
-    base_currency_kw: str | None = bc if isinstance(bc, str) else None
-    ml = kwargs.get("min_liquidity")
-    min_liquidity_kw: float | None = float(ml) if isinstance(ml, (int, float)) else None
 
     proto = protocol.lower()
 
-    raw: dict[str, object] | list[dict[str, object]] | None = None
+    # --- Protocols that use URDI's create_reference_data_adapter ---
+    # Map protocol names used by instruments-service to URDI factory keys.
+    _proto_to_urdi_key: dict[str, str] = {
+        "uniswap_v3": "uniswap_v3",
+        "uniswap_v2": "uniswap_v2",
+        "uniswap_v4": "uniswap_v4",
+        "curve": "curve",
+        "aave_v3": "aave_v3",
+        "morpho": "morpho",
+        "euler_plasma": "euler",
+        "fluid_plasma": "fluid",
+        "ethena": "ethena",
+        "balancer": "balancer",
+        "lido": "lido",
+        "etherfi": "etherfi",
+        "aave_plasma": "aave_v3",
+        "hyperliquid": "hyperliquid",
+    }
 
-    if proto == "uniswap_v3":
-        adapter = UniswapV3Adapter(chain=chain, api_key=graph_api_key)
-        raw = cast(
-            dict[str, object],
-            await adapter.fetch_pools(
-                base_currency_list=base_currency_list,
-                quote_currency_list=quote_currency_list,
-                base_currency=base_currency_kw,
-                min_liquidity=min_liquidity_kw,
-            ),
-        )
-    elif proto == "balancer":
-        raw = cast(
-            dict[str, object],
-            BalancerAdapter(chain=chain).fetch_markets(
-                base_currency_list=base_currency_list,
-                quote_currency_list=quote_currency_list,
-                base_currency=base_currency_kw,
-                min_liquidity=min_liquidity_kw,
-            ),
-        )
-    elif proto == "aave_v3":
-        raw = cast(
-            dict[str, object],
-            await AaveV3Adapter(chain=chain, graph_api_key=graph_api_key).fetch_markets(target_date=target_date),
-        )
-    elif proto == "etherfi":
-        raw = cast(dict[str, object], EtherFiAdapter(chain=chain).fetch_lst_instruments())
-    elif proto == "lido":
-        raw = cast(dict[str, object], LidoAdapter(chain=chain).fetch_lst_instruments())
-    elif proto == "morpho":
-        # MorphoAdapter.fetch_markets() returns list[dict], not dict
-        raw = await MorphoAdapter(chain=chain).fetch_markets()
-    elif proto == "hyperliquid":
-        hl_bases: list[str] = service.venue_mapping.hyperliquid_aster_mvp_base_assets
-        adapter = HyperliquidAdapter(base_currency_list=hl_bases)
-        perpetuals = cast(dict[str, object], adapter.fetch_perpetuals(test_data_availability=False))
-        spot_pairs = cast(dict[str, object], adapter.fetch_spot_pairs(test_data_availability=False))
-        raw = {**perpetuals, **spot_pairs}
-    elif proto == "aster":
-        from unified_reference_data_interface import create_reference_data_adapter
-
+    if proto == "aster":
+        # Aster: URDI with additional field overrides for CLOB perpetuals
         aster_adapter = create_reference_data_adapter("aster")
         records = await aster_adapter.get_instruments()
-        raw = {}
-        for record in records:
-            # Convert InstrumentRecord → InstrumentDefinition-compatible dict
-            # None → empty string, Decimal → str, datetime → isoformat
-            from datetime import datetime as _dt
-            from decimal import Decimal as _Decimal
-
-            d: dict[str, object] = {}
-            for k, v in record.model_dump().items():
-                if v is None:
-                    d[k] = ""
-                elif isinstance(v, _Decimal):
-                    d[k] = str(v) if v.is_finite() else ""
-                elif isinstance(v, _dt):
-                    d[k] = v.isoformat()
-                else:
-                    d[k] = v
-            d["instrument_key"] = record.instrument_key
-            d["venue"] = "ASTER"
-            d["instrument_type"] = "PERPETUAL"
-            d["symbol"] = record.symbol or record.raw_symbol or ""
-            d["available_from_datetime"] = (
-                record.available_since.isoformat() if record.available_since else "2024-10-01T00:00:00Z"
-            )
-            d["base_asset"] = record.base_asset or ""
-            d["quote_asset"] = record.quote_asset or ""
-            d["exchange_raw_symbol"] = record.raw_symbol or ""
-            d["tardis_exchange"] = ""
-            d["tardis_symbol"] = ""
-            d["data_provider"] = "aster"
-            d["market_category"] = "cefi"
-            d["data_types"] = "trades,book_snapshot_5,derivative_ticker"
-            raw[record.instrument_key] = d
+        raw: dict[str, object] = _records_to_raw_dict(records)
+        # Apply aster-specific overrides on top of the generic conversion
+        for _inst_key, inst_data in raw.items():
+            if isinstance(inst_data, dict):
+                inst_data["venue"] = "ASTER"
+                inst_data["instrument_type"] = "PERPETUAL"
+                if not inst_data.get("available_from_datetime"):
+                    inst_data["available_from_datetime"] = "2024-10-01T00:00:00Z"
+                inst_data["tardis_exchange"] = ""
+                inst_data["tardis_symbol"] = ""
+                inst_data["data_provider"] = "aster"
+                inst_data["market_category"] = "cefi"
+                inst_data["data_types"] = "trades,book_snapshot_5,derivative_ticker"
         return raw
-    elif proto == "uniswap_v2":
-        raw = cast(
-            dict[str, object],
-            UniswapV2Adapter(chain=chain, api_key=graph_api_key).fetch_markets(
-                base_currency_list=base_currency_list,
-                quote_currency_list=quote_currency_list,
-                base_currency=base_currency_kw,
-                min_liquidity=min_liquidity_kw,
-            ),
-        )
-    elif proto == "uniswap_v4":
-        raw = cast(
-            dict[str, object],
-            UniswapV4Adapter(chain=chain, api_key=graph_api_key).fetch_markets(
-                base_currency_list=base_currency_list,
-                quote_currency_list=quote_currency_list,
-                base_currency=base_currency_kw,
-            ),
-        )
-    elif proto == "curve":
-        raw = cast(
-            dict[str, object], CurveAdapter(chain=chain if chain else "ETHEREUM").fetch_markets(target_date=target_date)
-        )
-    elif proto == "ethena":
-        # EthenaAdapter.fetch_yield_bearing_instruments() returns list[dict], not dict
-        raw = await EthenaAdapter(chain=chain).fetch_yield_bearing_instruments()
-    elif proto == "euler_plasma":
-        raw = cast(
-            dict[str, object], EulerAdapter(chain=chain if chain else "ETHEREUM").fetch_markets(target_date=target_date)
-        )
-    elif proto == "fluid_plasma":
-        raw = cast(
-            dict[str, object], FluidAdapter(chain=chain if chain else "ETHEREUM").fetch_markets(target_date=target_date)
-        )
-    elif proto == "aave_plasma":
-        raw = cast(
-            dict[str, object],
-            AavePlasmaAdapter(chain=chain if chain else "ETHEREUM", graph_api_key=graph_api_key).fetch_markets(
-                target_date=target_date
-            ),
-        )
-    else:
+
+    urdi_key = _proto_to_urdi_key.get(proto)
+    if urdi_key is None:
         return None
 
-    # Normalize: some adapters return list[dict] instead of dict[str, dict].
-    # Convert lists to keyed dicts so downstream code can call .items() safely.
-    if isinstance(raw, list):
-        return _list_to_dict(raw)
-    return raw
+    adapter = create_reference_data_adapter(urdi_key, api_key=graph_api_key)
+    records = await adapter.get_instruments()
+    return _records_to_raw_dict(records)
 
 
 def _enrich_hyperliquid_instrument(
