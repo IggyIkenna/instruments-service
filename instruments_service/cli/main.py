@@ -26,7 +26,7 @@ _env_path = Path(".env")
 if not _env_path.exists():
     _env_path = Path(__file__).parent.parent.parent / ".env"
 if _env_path.exists():
-    load_dotenv(dotenv_path=_env_path, override=True)
+    load_dotenv(dotenv_path=_env_path, override=False)  # Shell env vars win over .env defaults
 
 # Setup structured JSON logging (split libraries - direct import per dependency matrix)
 from unified_events_interface import log_event
@@ -88,19 +88,49 @@ def _build_pre_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_VALID_CATEGORIES = frozenset({"CEFI", "TRADFI", "DEFI", "SPORTS", "PREDICTION", "ONCHAIN_PERPS"})
+
+
 def _resolve_categories(config: dict[str, object]) -> dict[str, object]:
-    """Expand a ``category`` list into boolean ``cefi``/``tradfi``/``defi`` keys."""
+    """Expand a ``category`` list into boolean ``cefi``/``tradfi``/``defi`` keys.
+
+    Validates that all category values are known. Raises ValueError for unknown
+    categories to prevent silent fallthrough (Issue #8).
+    """
     result = dict(config)
     categories: list[str] | None = cast(list[str] | None, result.pop("category", None))
     if categories:
         for cat in categories:
-            result[cat.lower()] = True
+            upper = cat.upper()
+            if upper not in _VALID_CATEGORIES:
+                msg = f"Unknown category '{cat}'. Valid: {sorted(_VALID_CATEGORIES)}"
+                raise ValueError(msg)
+            result[upper.lower()] = True
+    else:
+        # No category specified = process all known categories (explicit)
+        for cat in ("cefi", "tradfi", "defi"):
+            result[cat] = True
     return result
 
 
 # ---------------------------------------------------------------------------
 # ServiceCLI-style async handler wrappers
 # ---------------------------------------------------------------------------
+
+
+async def _run_sync_handler_in_thread(fn: object, **kwargs: object) -> dict[str, object]:
+    """Run a sync handler.run() in a thread so it can use asyncio.run() internally.
+
+    The inner handlers (instrument_handler, live_mode_handler) call asyncio.run()
+    for async operations. When ServiceCLI already wraps us in asyncio.run(),
+    nesting fails. Running in a thread gives the inner code its own event loop.
+    """
+    import asyncio
+    import functools
+
+    loop = asyncio.get_running_loop()
+    result = await loop.run_in_executor(None, functools.partial(fn, **kwargs))
+    return cast(dict[str, object], result)
 
 
 class InstrumentsBatchHandler(BaseModeHandler):
@@ -117,13 +147,15 @@ class InstrumentsBatchHandler(BaseModeHandler):
         end_date = cast(str, self.config.get("end_date") or start_date)
         cfg: dict[str, object] = {k: v for k, v in self.config.items() if k not in ("start_date", "end_date")}
         handler = get_handler_for_mode("instruments", cfg)
-        result = handler.run(
+        result = await _run_sync_handler_in_thread(
+            handler.run,
             start_date=start_date,
             end_date=end_date,
             cefi=bool(self.config.get("cefi", False)),
             tradfi=bool(self.config.get("tradfi", False)),
             defi=bool(self.config.get("defi", False)),
             sports=bool(self.config.get("sports", False)),
+            prediction=bool(self.config.get("prediction", False)),
         )
         return cast(dict[str, object], result)
 
@@ -134,7 +166,7 @@ class AggregateServiceHandler(BaseModeHandler):
     async def run(self) -> dict[str, object]:
         redo_all = bool(self.config.get("redo_all", False))
         handler = get_handler_for_mode("aggregate", self.config)
-        result = handler.run(redo_all=redo_all)
+        result = await _run_sync_handler_in_thread(handler.run, redo_all=redo_all)
         return cast(dict[str, object], result)
 
 
@@ -147,7 +179,8 @@ class CorporateActionsServiceHandler(BaseModeHandler):
             raise ValueError("--start-date is required for corporate_actions mode")
 
         handler = get_handler_for_mode("corporate_actions", self.config)
-        result = handler.run(
+        result = await _run_sync_handler_in_thread(
+            handler.run,
             start_date=start_date,
             end_date=cast(str | None, self.config.get("end_date")),
             tickers=cast(list[str] | None, self.config.get("tickers")),
@@ -162,7 +195,8 @@ class CorporateActionsBackfillServiceHandler(BaseModeHandler):
 
     async def run(self) -> dict[str, object]:
         handler = get_handler_for_mode("corporate_actions_backfill", self.config)
-        result = handler.run(
+        result = await _run_sync_handler_in_thread(
+            handler.run,
             tickers=cast(list[str] | None, self.config.get("tickers")),
             parallel_workers=cast(int | None, self.config.get("parallel_workers")),
             max_retries=cast(int | None, self.config.get("max_retries")),
@@ -175,7 +209,8 @@ class GenerateDateViewsServiceHandler(BaseModeHandler):
 
     async def run(self) -> dict[str, object]:
         handler = get_handler_for_mode("generate_date_views", self.config)
-        result = handler.run(
+        result = await _run_sync_handler_in_thread(
+            handler.run,
             input_dir=cast(str | None, self.config.get("input_dir")),
             output_dir=cast(str | None, self.config.get("output_dir")),
         )
@@ -187,7 +222,8 @@ class CorporateActionsUpdateServiceHandler(BaseModeHandler):
 
     async def run(self) -> dict[str, object]:
         handler = get_handler_for_mode("corporate_actions_update", self.config)
-        result = handler.run(
+        result = await _run_sync_handler_in_thread(
+            handler.run,
             days_threshold=cast(int | None, self.config.get("days_threshold")),
             parallel_workers=cast(int | None, self.config.get("parallel_workers")),
         )
@@ -199,7 +235,8 @@ class CorporateActionsProductionServiceHandler(BaseModeHandler):
 
     async def run(self) -> dict[str, object]:
         handler = get_handler_for_mode("corporate_actions_production", self.config)
-        result = handler.run(
+        result = await _run_sync_handler_in_thread(
+            handler.run,
             tickers=cast(list[str] | None, self.config.get("tickers")),
             parallel_workers=cast(int | None, self.config.get("parallel_workers")),
             upload_to_storage=bool(self.config.get("upload_to_storage", True)),
@@ -212,7 +249,8 @@ class InstrumentsLiveHandler(BaseModeHandler):
 
     async def run(self) -> dict[str, object]:
         handler = get_handler_for_mode("live", self.config)
-        result = handler.run(
+        result = await _run_sync_handler_in_thread(
+            handler.run,
             interval=cast(int, self.config.get("interval", 15)),
             category=cast(list[str] | None, self.config.get("category")),
             venues=cast(list[str] | None, self.config.get("venues")),
@@ -300,7 +338,7 @@ def main_service_cli() -> None:
 
         cli = ServiceCLI(
             service_name="instruments-service",
-            handlers=_SERVICE_HANDLERS,
+            operations=_SERVICE_HANDLERS,
             config=config,
         )
         cli.run()
@@ -381,7 +419,7 @@ def _apply_market_type_filters(args: argparse.Namespace, handler_kwargs: dict[st
     Live mode converts flags to a category list; batch mode keeps boolean flags.
     The --category flag takes precedence over individual flags.
     """
-    if args.mode == "live":
+    if args.operation == "live":
         # Live mode: convert flags to category list
         categories: list[str] = []
         if hasattr(args, "category") and args.category:
@@ -459,7 +497,7 @@ def main() -> dict[str, HandlerResultValue]:
         args = parse_arguments()
 
         # Setup events with topology-driven sink: PubSub for live, GCS for batch
-        _run_messaging = get_messaging_protocol(mode=args.run_mode, service="instruments-service")
+        _run_messaging = get_messaging_protocol(mode=args.mode, service="instruments-service")
         _run_sink: GCSEventSink | PubSubEventSink
         if _run_messaging == "pubsub":
             _run_sink = PubSubEventSink(
@@ -475,7 +513,7 @@ def main() -> dict[str, HandlerResultValue]:
             )
         setup_service_observability(
             "instruments-service",
-            mode=args.run_mode,
+            mode=args.mode,
             sink=_run_sink,
             enable_tracing=True,
             memory_threshold_pct=85.0,
@@ -496,7 +534,7 @@ def main() -> dict[str, HandlerResultValue]:
         log_level_int = cast(int, getattr(logging, args.log_level.upper()))
         logging.getLogger().setLevel(log_level_int)
 
-        logger.info("🚀 Starting %s operation", args.mode)
+        logger.info("🚀 Starting %s operation", args.operation)
         logger.info(
             "☁️ Environment: cloud_provider=%s mock_mode=%s",
             instruments_config.cloud_provider,
@@ -512,8 +550,8 @@ def main() -> dict[str, HandlerResultValue]:
             "analytics_dataset": cast(str, args.analytics_dataset),
         }
 
-        # Get handler for mode — dispatch to live handler when run_mode is "live"
-        handler_mode = "live" if args.run_mode == "live" else cast(str, args.mode)
+        # Get handler for operation — dispatch to live handler when mode is "live"
+        handler_mode = "live" if args.mode == "live" else cast(str, args.operation)
         handler: ModeHandler = get_handler_for_mode(handler_mode, config)
         mode_handler = handler  # Track for cleanup on signal
 
@@ -525,7 +563,7 @@ def main() -> dict[str, HandlerResultValue]:
         # Inject cloud mode indicator into result for observability
         result["cloud_provider"] = instruments_config.cloud_provider
         result["mock_mode"] = instruments_config.is_mock_mode()
-        log_event("PROCESSING_COMPLETED", details={"mode": args.mode})
+        log_event("PROCESSING_COMPLETED", details={"operation": args.operation})
 
         # Cleanup
         handler.cleanup()
@@ -535,12 +573,12 @@ def main() -> dict[str, HandlerResultValue]:
         is_success = result.get("status") == "success"
 
         if is_success:
-            logger.info("✅ %s operation completed successfully", args.mode)
+            logger.info("✅ %s operation completed successfully", args.operation)
         else:
             status = result.get("status", "unknown")
             logger.error(
                 "%s operation failed (status=%s). Details: %s",
-                args.mode,
+                args.operation,
                 status,
                 result.get("error", result.get("message", "no details")),
             )
