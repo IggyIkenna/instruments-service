@@ -466,7 +466,10 @@ class InstrumentsService(
         if defi:
             all_instruments.update(await self._process_defi_results(venues_filter, date))
         if sports:
-            all_instruments.update(await self._process_sports_results(date, venues_filter))
+            # Filter out the SPORTS_ORCHESTRATOR placeholder — the orchestrator
+            # uses LEAGUE_REGISTRY keys, not venue names. Empty filter = all leagues.
+            sports_filter = [v for v in venues_filter if v != "SPORTS_ORCHESTRATOR"]
+            all_instruments.update(await self._process_sports_results(date, sports_filter))
 
         return all_instruments, cefi_exchanges
 
