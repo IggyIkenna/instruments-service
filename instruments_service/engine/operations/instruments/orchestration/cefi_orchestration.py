@@ -6,7 +6,7 @@ Handles processing of CeFi (Tardis) exchanges and on-chain CLOB venues.
 
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
@@ -176,7 +176,9 @@ class CeFiOrchestrator:
                     filtered = before - len(result)
                     logger.info(
                         "✅ Processed %s instruments from %s (%s expired filtered out)",
-                        len(result), exchange, filtered,
+                        len(result),
+                        exchange,
+                        filtered,
                     )
                 return result
             except (ValueError, KeyError, TypeError, IndexError) as e:

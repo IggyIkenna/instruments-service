@@ -118,9 +118,7 @@ class DataSourceAdapter:
 
         try:
             bucket = get_bucket_name("instruments", self._routing_key.upper()) if get_project_id_optional() else None
-            data_source: DataSource = get_data_source(
-                bucket=bucket, prefix="instrument_availability/by_date"
-            )
+            data_source: DataSource = get_data_source(bucket=bucket, prefix="instrument_availability/by_date")
             raw: object = data_source.read(partition=partition, format="parquet")
             if not isinstance(raw, pd.DataFrame):
                 return pd.DataFrame()
@@ -166,9 +164,7 @@ class DataSourceAdapter:
 
         try:
             bucket = get_bucket_name("instruments", category.upper()) if get_project_id_optional() else None
-            data_source: DataSource = get_data_source(
-                bucket=bucket, prefix="instrument_availability/by_date"
-            )
+            data_source: DataSource = get_data_source(bucket=bucket, prefix="instrument_availability/by_date")
             raw: object = data_source.read(partition=partition, format="parquet")
             if not isinstance(raw, pd.DataFrame):
                 return pd.DataFrame()

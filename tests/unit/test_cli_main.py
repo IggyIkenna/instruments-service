@@ -439,28 +439,24 @@ class TestCorporateActionsProductionServiceHandler:
 class TestMainServiceCli:
     def test_main_service_cli_dispatches_aggregate(self) -> None:
         """main_service_cli() should dispatch 'aggregate' mode without error."""
-        mock_cli = MagicMock()
+        mock_bootstrap = MagicMock()
 
         with (
-            patch("instruments_service.cli.main.ServiceCLI", return_value=mock_cli),
-            patch("instruments_service.cli.main.GCSEventSink", return_value=MagicMock()),
-            patch("instruments_service.cli.main.setup_service_observability"),
+            patch("instruments_service.cli.main.ServiceBootstrap", return_value=mock_bootstrap),
             patch.object(sys, "argv", ["instruments-service", "aggregate", "--redo-all"]),
         ):
             main_service_cli()
 
-        mock_cli.run.assert_called_once()
+        mock_bootstrap.run.assert_called_once()
 
     def test_main_service_cli_restores_argv_on_error(self) -> None:
-        """sys.argv is restored even if ServiceCLI.run() raises."""
+        """sys.argv is restored even if ServiceBootstrap.run() raises."""
         original_argv = sys.argv[:]
-        mock_cli = MagicMock()
-        mock_cli.run.side_effect = RuntimeError("boom")
+        mock_bootstrap = MagicMock()
+        mock_bootstrap.run.side_effect = RuntimeError("boom")
 
         with (
-            patch("instruments_service.cli.main.ServiceCLI", return_value=mock_cli),
-            patch("instruments_service.cli.main.GCSEventSink", return_value=MagicMock()),
-            patch("instruments_service.cli.main.setup_service_observability"),
+            patch("instruments_service.cli.main.ServiceBootstrap", return_value=mock_bootstrap),
             patch.object(sys, "argv", ["instruments-service", "aggregate"]),
             pytest.raises(RuntimeError, match="boom"),
         ):
@@ -470,22 +466,15 @@ class TestMainServiceCli:
         assert sys.argv == original_argv or sys.argv[0] == original_argv[0]
 
     def test_main_service_cli_pre_parses_extra_flags(self) -> None:
-        """Instruments-specific flags should not reach ServiceCLI's parser."""
-        captured_handlers: dict[str, object] = {}
+        """Instruments-specific flags should not reach ServiceBootstrap's parser."""
+        captured_kwargs: dict[str, object] = {}
 
-        def fake_service_cli(
-            service_name: str,
-            handlers: dict[str, object],
-            config: object,
-        ) -> MagicMock:
-            captured_handlers.update(handlers)
-            m = MagicMock()
-            return m
+        def fake_bootstrap(**kwargs: object) -> MagicMock:
+            captured_kwargs.update(kwargs)
+            return MagicMock()
 
         with (
-            patch("instruments_service.cli.main.ServiceCLI", side_effect=fake_service_cli),
-            patch("instruments_service.cli.main.GCSEventSink", return_value=MagicMock()),
-            patch("instruments_service.cli.main.setup_service_observability"),
+            patch("instruments_service.cli.main.ServiceBootstrap", side_effect=fake_bootstrap),
             patch.object(
                 sys,
                 "argv",
@@ -494,13 +483,14 @@ class TestMainServiceCli:
         ):
             main_service_cli()
 
-        assert "instruments" in captured_handlers
-        assert "aggregate" in captured_handlers
-        assert "corporate_actions" in captured_handlers
-        assert "corporate_actions_backfill" in captured_handlers
-        assert "generate_date_views" in captured_handlers
-        assert "corporate_actions_update" in captured_handlers
-        assert "corporate_actions_production" in captured_handlers
+        operations = captured_kwargs.get("operations", {})
+        assert "instruments" in operations
+        assert "aggregate" in operations
+        assert "corporate_actions" in operations
+        assert "corporate_actions_backfill" in operations
+        assert "generate_date_views" in operations
+        assert "corporate_actions_update" in operations
+        assert "corporate_actions_production" in operations
 
     def test_exit_code_logic_success(self) -> None:
         """exit(0) only when status == 'success'."""
@@ -664,10 +654,11 @@ class TestCliMainFromBoost:
         except Exception:
             pass
 
-    def test_shutdown_handler_global(self):
+    def test_service_name_constant(self):
         try:
             import instruments_service.cli.main as main_mod
 
-            assert hasattr(main_mod, "_shutdown_handler")
+            assert hasattr(main_mod, "_SERVICE_NAME")
+            assert main_mod._SERVICE_NAME == "instruments-service"
         except Exception:
             pass
