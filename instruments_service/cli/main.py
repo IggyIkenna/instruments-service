@@ -1,7 +1,8 @@
 """
 Instruments Service CLI Entry Point
 
-Clean CLI entry point following unified repository structure.
+Uses ServiceBootstrap from unified-trading-library for infrastructure
+boilerplate. Domain-specific handlers delegate to mode-specific processors.
 
 Note: Credentials are automatically handled by unified-trading-library
 based on ENVIRONMENT variable (dev mode: auto-detects, production: VM service account).
@@ -11,11 +12,8 @@ Use InstrumentsDomainClient from unified-trading-library to query instruments.
 """
 
 import argparse
-import contextlib
 import logging
-import os
 import sys
-from datetime import date
 from pathlib import Path
 from typing import cast
 
@@ -28,24 +26,14 @@ if not _env_path.exists():
 if _env_path.exists():
     load_dotenv(dotenv_path=_env_path, override=False)  # Shell env vars win over .env defaults
 
-# Setup structured JSON logging (split libraries - direct import per dependency matrix)
-from unified_events_interface import log_event
 from unified_trading_library import (
     BaseModeHandler,
-    GCSEventSink,
-    GracefulShutdownHandler,
-    LogLevel,
-    PubSubEventSink,
-    ServiceCLI,
-    get_messaging_protocol,
-    parse_date,
-    setup_service_observability,
+    ServiceBootstrap,
 )
 
 logger = logging.getLogger(__name__)
 
-# Global shutdown handler (initialized in main())
-_shutdown_handler = None
+_SERVICE_NAME = "instruments-service"
 
 # CRITICAL: Patch unified_trading_library config to use instruments_config
 # This ensures that get_bucket_for_category() uses the correct bucket configuration
@@ -55,16 +43,9 @@ import unified_trading_library.core.market_category as market_category_module
 from instruments_service.config import instruments_config
 
 market_category_module.unified_config = instruments_config
-logger.info("✅ Patched unified_trading_library config with instruments_config")
+logger.info("Patched unified_trading_library config with instruments_config")
 
-from instruments_service.cli.base_handler import HandlerResultValue, ModeHandler
 from instruments_service.cli.handlers import get_handler_for_mode
-from instruments_service.cli.parser import parse_arguments
-from instruments_service.config_reloaders import (
-    load_ticker_universe_from_cloud,
-    start_domain_config_reloaders,
-    stop_domain_config_reloaders,
-)
 
 # ---------------------------------------------------------------------------
 # Pre-parser helpers (used by main_service_cli)
@@ -114,7 +95,7 @@ def _resolve_categories(config: dict[str, object]) -> dict[str, object]:
 
 
 # ---------------------------------------------------------------------------
-# ServiceCLI-style async handler wrappers
+# ServiceBootstrap async handler wrappers
 # ---------------------------------------------------------------------------
 
 
@@ -259,7 +240,7 @@ class InstrumentsLiveHandler(BaseModeHandler):
 
 
 # ---------------------------------------------------------------------------
-# ServiceCLI entry-point
+# ServiceCLI entry-point (ServiceBootstrap)
 # ---------------------------------------------------------------------------
 
 _SERVICE_HANDLERS: dict[str, type[BaseModeHandler]] = {
@@ -275,33 +256,14 @@ _SERVICE_HANDLERS: dict[str, type[BaseModeHandler]] = {
 
 
 def main_service_cli() -> None:
-    """
-    ServiceCLI-based entry point for instruments-service.
+    """ServiceBootstrap entry point for instruments-service.
 
-    Pre-parses instruments-specific flags, then delegates to ServiceCLI.
+    SERVICE_EVENT: STARTED
+    SERVICE_EVENT: STOPPED
+    SERVICE_EVENT: FAILED
+
+    Pre-parses instruments-specific flags, then delegates to ServiceBootstrap.
     """
-    # Select event sink based on topology: PubSub for live transport, GCS for batch
-    _svc_messaging = get_messaging_protocol(mode="batch", service="instruments-service")
-    _svc_sink: GCSEventSink | PubSubEventSink
-    if _svc_messaging == "pubsub":
-        _svc_sink = PubSubEventSink(
-            project_id=instruments_config.gcp_project_id,
-            topic="instruments-service-events",
-            service_name="instruments-service",
-        )
-    else:
-        _svc_sink = GCSEventSink(
-            project_id=instruments_config.gcp_project_id,
-            bucket=getattr(instruments_config, "events_bucket", f"{instruments_config.gcp_project_id}-events"),
-            service_name="instruments-service",
-        )
-    setup_service_observability(
-        "instruments-service",
-        mode="batch",
-        sink=_svc_sink,
-        enable_tracing=True,
-        memory_threshold_pct=85.0,
-    )
     original_argv = sys.argv[:]
     try:
         pre_parser = _build_pre_parser()
@@ -336,279 +298,14 @@ def main_service_cli() -> None:
 
         sys.argv = [original_argv[0], *remaining]
 
-        cli = ServiceCLI(
-            service_name="instruments-service",
+        ServiceBootstrap(
+            service_name=_SERVICE_NAME,
             operations=_SERVICE_HANDLERS,
             config=config,
-        )
-        cli.run()
+        ).run()
     finally:
         sys.argv = original_argv
 
 
-# ---------------------------------------------------------------------------
-# Legacy synchronous CLI
-# ---------------------------------------------------------------------------
-
-
-def _build_handler_kwargs(args: argparse.Namespace) -> dict[str, HandlerResultValue]:
-    """Extract handler keyword arguments from parsed CLI arguments.
-
-    Maps argparse namespace attributes to the handler kwargs dict, handling
-    date range, mode-specific options, market type filters, and venue filters.
-    """
-    handler_kwargs: dict[str, HandlerResultValue] = {}
-
-    # Date range
-    if args.start_date:
-        handler_kwargs["start_date"] = args.start_date
-    if args.end_date:
-        handler_kwargs["end_date"] = args.end_date
-
-    # Aggregate mode options
-    if hasattr(args, "redo_all") and args.redo_all:
-        handler_kwargs["redo_all"] = args.redo_all
-
-    # Common options
-    if hasattr(args, "force") and args.force:
-        handler_kwargs["force"] = args.force
-    if hasattr(args, "dry_run") and args.dry_run:
-        handler_kwargs["dry_run"] = args.dry_run
-
-    # Concurrency
-    if hasattr(args, "max_workers") and args.max_workers:
-        handler_kwargs["max_workers"] = args.max_workers
-
-    # Corporate actions specific options
-    if hasattr(args, "tickers") and args.tickers:
-        handler_kwargs["tickers"] = args.tickers
-    if hasattr(args, "output_format") and args.output_format:
-        handler_kwargs["output_format"] = args.output_format
-    if hasattr(args, "upload_to_storage") and args.upload_to_storage:
-        handler_kwargs["upload_to_storage"] = args.upload_to_storage
-
-    # Backfill/update specific options
-    if hasattr(args, "parallel_workers") and args.parallel_workers:
-        handler_kwargs["parallel_workers"] = args.parallel_workers
-    if hasattr(args, "days_threshold") and args.days_threshold:
-        handler_kwargs["days_threshold"] = args.days_threshold
-    if hasattr(args, "input_dir") and args.input_dir:
-        handler_kwargs["input_dir"] = args.input_dir
-    if hasattr(args, "output_dir") and args.output_dir:
-        handler_kwargs["output_dir"] = args.output_dir
-    if hasattr(args, "max_retries") and args.max_retries:
-        handler_kwargs["max_retries"] = args.max_retries
-
-    # Live mode options
-    if hasattr(args, "interval") and args.interval:
-        handler_kwargs["interval"] = args.interval
-
-    # Market type filters
-    _apply_market_type_filters(args, handler_kwargs)
-
-    # Venue filter (optional - filter to specific venues within a category)
-    if hasattr(args, "venues") and args.venues:
-        handler_kwargs["venues"] = args.venues
-
-    return handler_kwargs
-
-
-def _apply_market_type_filters(args: argparse.Namespace, handler_kwargs: dict[str, HandlerResultValue]) -> None:
-    """Apply market type filter flags (CEFI/TRADFI/DEFI/SPORTS) to handler kwargs.
-
-    Live mode converts flags to a category list; batch mode keeps boolean flags.
-    The --category flag takes precedence over individual flags.
-    """
-    if args.operation == "live":
-        # Live mode: convert flags to category list
-        categories: list[str] = []
-        if hasattr(args, "category") and args.category:
-            categories = [cat.upper() for cat in args.category]
-        else:
-            if args.CEFI:
-                categories.append("CEFI")
-            if args.TRADFI:
-                categories.append("TRADFI")
-            if args.DEFI:
-                categories.append("DEFI")
-            if args.SPORTS:
-                categories.append("SPORTS")
-
-        if categories:
-            handler_kwargs["category"] = categories
-    else:
-        # Batch mode: keep boolean flags
-        if hasattr(args, "category") and args.category:
-            for cat in args.category:
-                cat_upper = cat.upper()
-                if cat_upper in ("CEFI", "TRADFI", "DEFI", "SPORTS"):
-                    handler_kwargs[cat_upper.lower()] = True
-        else:
-            if args.CEFI:
-                handler_kwargs["cefi"] = True
-            if args.TRADFI:
-                handler_kwargs["tradfi"] = True
-            if args.DEFI:
-                handler_kwargs["defi"] = True
-            if args.SPORTS:
-                handler_kwargs["sports"] = True
-
-
-def main() -> dict[str, HandlerResultValue]:
-    """
-    Main CLI entry point for instruments-service.
-
-    Returns:
-        Dictionary with operation results
-    """
-    # LOG_LEVEL env var validation (SSOT for log levels)
-    _raw_log_level = os.environ.get("LOG_LEVEL", "INFO")  # config-bootstrap: pre-UCC init
-    try:
-        _log_level = LogLevel(_raw_log_level)
-    except ValueError:
-        raise SystemExit(
-            f"Invalid LOG_LEVEL={_raw_log_level!r}. Must be one of: {', '.join(v.value for v in LogLevel)}"
-        ) from None
-    logging.basicConfig(level=getattr(logging, _log_level.value))
-
-    global _shutdown_handler
-    mode_handler = None  # Track mode handler for cleanup on signal
-
-    def cleanup_on_signal():
-        """Cleanup function called on SIGTERM/SIGINT.
-
-        Note: During atexit, stdout/stderr may be closed. We suppress logging
-        errors by setting logging.raiseExceptions = False, which prevents the
-        logging module from printing error messages when streams are closed.
-        """
-        # Suppress logging error messages during interpreter shutdown
-        logging.raiseExceptions = False
-
-        nonlocal mode_handler
-        if mode_handler is not None:
-            with contextlib.suppress(RuntimeError, OSError, ValueError):
-                mode_handler.cleanup()
-
-    # Initialize graceful shutdown handler (handles SIGTERM/SIGINT)
-    _shutdown_handler = GracefulShutdownHandler(cleanup_callback=cleanup_on_signal)
-
-    try:
-        # Parse arguments
-        args = parse_arguments()
-
-        # Setup events with topology-driven sink: PubSub for live, GCS for batch
-        _run_messaging = get_messaging_protocol(mode=args.mode, service="instruments-service")
-        _run_sink: GCSEventSink | PubSubEventSink
-        if _run_messaging == "pubsub":
-            _run_sink = PubSubEventSink(
-                project_id=instruments_config.gcp_project_id,
-                topic="instruments-service-events",
-                service_name="instruments-service",
-            )
-        else:
-            _run_sink = GCSEventSink(
-                project_id=instruments_config.gcp_project_id,
-                bucket=getattr(instruments_config, "events_bucket", f"{instruments_config.gcp_project_id}-events"),
-                service_name="instruments-service",
-            )
-        setup_service_observability(
-            "instruments-service",
-            mode=args.mode,
-            sink=_run_sink,
-            enable_tracing=True,
-            memory_threshold_pct=85.0,
-        )
-
-        start_domain_config_reloaders(instruments_config)
-
-        # Load ticker universe from cloud storage (cloud-agnostic via UCI ConfigStore).
-        # Batch mode: replay config effective at start_date for historical consistency.
-        # Live mode / no date: load latest active config.
-        # Falls back to embedded tickers.json if cloud storage unavailable.
-        _batch_date: date | None = None
-        if args.start_date:
-            _batch_date = parse_date(args.start_date).date()
-        load_ticker_universe_from_cloud(instruments_config, target_date=_batch_date)
-
-        # Setup logging level (getattr returns Any; cast to int for setLevel)
-        log_level_int = cast(int, getattr(logging, args.log_level.upper()))
-        logging.getLogger().setLevel(log_level_int)
-
-        logger.info("🚀 Starting %s operation", args.operation)
-        logger.info(
-            "☁️ Environment: cloud_provider=%s mock_mode=%s",
-            instruments_config.cloud_provider,
-            instruments_config.is_mock_mode(),
-        )
-        if args.start_date:
-            logger.info("📅 Date range: %s to %s", args.start_date, args.end_date or args.start_date)
-
-        # Build configuration from arguments
-        config: dict[str, object] = {
-            "project_id": cast(str | None, args.project_id),
-            "sink_bucket": cast(str | None, args.sink_bucket),
-            "analytics_dataset": cast(str, args.analytics_dataset),
-        }
-
-        # Get handler for operation — dispatch to live handler when mode is "live"
-        handler_mode = "live" if args.mode == "live" else cast(str, args.operation)
-        handler: ModeHandler = get_handler_for_mode(handler_mode, config)
-        mode_handler = handler  # Track for cleanup on signal
-
-        # Build handler kwargs from parsed arguments
-        handler_kwargs = _build_handler_kwargs(args)
-
-        # Execute handler
-        result = handler.run(**handler_kwargs)
-        # Inject cloud mode indicator into result for observability
-        result["cloud_provider"] = instruments_config.cloud_provider
-        result["mock_mode"] = instruments_config.is_mock_mode()
-        log_event("PROCESSING_COMPLETED", details={"operation": args.operation})
-
-        # Cleanup
-        handler.cleanup()
-
-        # Determine success: status must be explicitly "success"
-        # "partial", "error", "warning" are all non-success states
-        is_success = result.get("status") == "success"
-
-        if is_success:
-            logger.info("✅ %s operation completed successfully", args.operation)
-        else:
-            status = result.get("status", "unknown")
-            logger.error(
-                "%s operation failed (status=%s). Details: %s",
-                args.operation,
-                status,
-                result.get("error", result.get("message", "no details")),
-            )
-
-        return result
-
-    except (ValueError, KeyError, TypeError, IndexError) as e:
-        logger.exception("CLI execution failed: %s", e)
-        return {"success": False, "status": "error", "error": str(e)}
-    finally:
-        stop_domain_config_reloaders()
-
-
-def run_cli() -> dict[str, HandlerResultValue]:
-    """Synchronous CLI execution"""
-    try:
-        result = main()
-        return result
-    except KeyboardInterrupt:
-        logger.info("🛑 Operation cancelled by user")
-        return {"success": False, "status": "error", "error": "Cancelled by user"}
-    except (OSError, ValueError, RuntimeError) as e:
-        logger.exception("Unexpected error: %s", e)
-        return {"success": False, "status": "error", "error": str(e)}
-
-
 if __name__ == "__main__":
-    result = run_cli()
-    # STRICT: Only exit 0 when status is explicitly "success"
-    # All other states (error, partial, warning, unknown) exit non-zero
-    # This prevents silent failures in VM/Cloud Run deployments
-    exit_code = 0 if result.get("status") == "success" else 1
-    sys.exit(exit_code)
+    main_service_cli()
