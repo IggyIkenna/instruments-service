@@ -10,6 +10,7 @@ path so downstream services can consume it.
 """
 
 from __future__ import annotations
+from unified_trading_library import classify_and_emit_error
 
 import json
 import logging
@@ -171,7 +172,12 @@ def generate_mock_instruments(
         try:
             result[inst.instrument_key] = InstrumentDefinition(**filtered_dict)
         except Exception as exc:
-            logger.warning("Skipping %s: %s", inst.instrument_key, exc)
+            classify_and_emit_error(
+                exc,
+                service_name="instruments-service",
+                operation="mock_instrument_def",
+                instrument_key=inst.instrument_key,
+            )
 
     return result
 
