@@ -87,6 +87,11 @@ class StorageAdapter:
                 data_sink.write(df, partition=partition if partition else None, format="parquet")
                 entry["success"] = True
             except Exception as exc:
+                classify_and_emit_error(
+                    exc,
+                    service_name="instruments-service",
+                    operation="storage_write",
+                )
                 entry["success"] = False
                 entry["error"] = str(exc)
             results.append(entry)
