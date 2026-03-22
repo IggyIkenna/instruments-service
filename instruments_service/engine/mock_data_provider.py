@@ -93,21 +93,39 @@ def load_seed_instruments(date_str: str) -> dict[str, InstrumentDefinition]:
 def generate_mock_instruments(
     date: datetime,
     seed: int = 42,
+    scenario_name: str | None = None,
 ) -> dict[str, InstrumentDefinition]:
     """Generate instruments using InstrumentGenerator (deterministic).
 
     This is the inline fallback when no seed data exists on disk.
     Uses the same generator as seed_mock_data.py for consistency.
 
+    When scenario_name is provided, applies instrument_overrides from the
+    scenario config (expire/delist instruments, inject malformed ones).
+
     Args:
         date: Target date for instrument generation.
         seed: RNG seed for deterministic output.
+        scenario_name: Optional MockScenario name for instrument lifecycle mutations.
 
     Returns:
         Dict mapping instrument_key to InstrumentDefinition.
     """
     ref_date = date.date() if isinstance(date, datetime) else date
     gen = InstrumentGenerator(seed=seed)
+
+    # Apply scenario instrument_overrides if provided
+    if scenario_name:
+        from unified_internal_contracts.modes import MockScenario
+        from unified_internal_contracts.testing.scenario_config import ScenarioConfig
+
+        cfg = ScenarioConfig.load(MockScenario(scenario_name))
+        for override in cfg.instrument_overrides:
+            if override.action == "expire":
+                gen.expire_instrument(override.instrument_key or override.pattern)
+            elif override.action == "delist":
+                gen.delete_instrument(override.instrument_key or override.pattern)
+
     instruments: list[CanonicalInstrument] = gen.generate_all(
         ref_date=ref_date,
         include_options_chain=False,  # Skip options for speed in mock mode

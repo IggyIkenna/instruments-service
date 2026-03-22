@@ -297,7 +297,9 @@ class InstrumentSyncMixin:
             if result or expired_count:
                 logger.info(
                     "Processed %s instruments from %s via URDI (%s expired filtered out)",
-                    len(result), exchange, expired_count,
+                    len(result),
+                    exchange,
+                    expired_count,
                 )
             return result
         except (ValueError, KeyError, TypeError, IndexError) as e:
@@ -623,17 +625,32 @@ class InstrumentSyncMixin:
             )
             instrument_records = await urdi_adapter.get_instruments()
 
+            target_date_only = datetime.now(UTC).date()  # Databento doesn't pass target_date
             result: dict[str, InstrumentDefinition] = {}
+            expired_count = 0
             for record in instrument_records:
                 try:
+                    # Filter expired instruments
+                    inst_type_lower = str(record.instrument_type).lower()
+                    if record.expiry and inst_type_lower in ("future", "option", "spread", "spot"):
+                        expiry_date = record.expiry.date() if hasattr(record.expiry, "date") else record.expiry
+                        if expiry_date < target_date_only:
+                            expired_count += 1
+                            continue
+
                     inst = _map_instrument_record_to_tradfi_definition(record, exchange)
                     if inst is not None:
                         result[inst.instrument_key] = inst
                 except (ValueError, KeyError, TypeError) as e:
                     logger.warning("Failed to map InstrumentRecord %s: %s", record.instrument_key, e)
 
-            if result:
-                logger.info("Processed %s instruments from %s via URDI", len(result), exchange)
+            if result or expired_count:
+                logger.info(
+                    "Processed %s instruments from %s via URDI (%s expired filtered out)",
+                    len(result),
+                    exchange,
+                    expired_count,
+                )
             return result
         except (ValueError, KeyError, TypeError, IndexError, RuntimeError) as e:
             _err = EnhancedError(
