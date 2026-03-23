@@ -470,7 +470,7 @@ class TestCorporateActionsModelsFromBoost:
                 earnings=[],
             )
             assert bundle.ticker == "AAPL"
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
 
@@ -504,7 +504,7 @@ class TestCorporateActionsAdapterFetchFromBoost:
                     date(2024, 12, 31),
                 )
                 assert result is not None
-            except Exception:
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError):
                 pass
 
     def test_fetch_splits_with_mock(self):
@@ -531,7 +531,7 @@ class TestCorporateActionsAdapterFetchFromBoost:
                 date(2024, 12, 31),
             )
             assert result is not None
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
     def test_fetch_corporate_actions_with_mock(self):
@@ -557,7 +557,7 @@ class TestCorporateActionsAdapterFetchFromBoost:
                 date(2024, 12, 31),
             )
             assert result is not None
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
     def test_fetch_batch_with_mock(self):
@@ -583,5 +583,5 @@ class TestCorporateActionsAdapterFetchFromBoost:
                 date(2024, 12, 31),
             )
             assert result is not None
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass

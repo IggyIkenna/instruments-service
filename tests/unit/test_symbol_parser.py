@@ -293,7 +293,7 @@ class TestSymbolParserFromBoost:
         try:
             result = parser.parse("BTC/USDT")
             assert result is not None
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
     def test_parse_spot_symbol(self):
@@ -303,7 +303,7 @@ class TestSymbolParserFromBoost:
         try:
             result = parser.parse("ETH-USD")
             assert result is not None
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
 

@@ -228,7 +228,7 @@ class TestGenerateDateViewsHandlerFromBoost:
             try:
                 result = handler.run(input_dir=str(by_ticker_dir), output_dir=str(by_date_dir))
                 assert result is not None
-            except Exception:
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError):
                 pass
 
     def test_load_all_tickers_data_empty(self):
@@ -246,7 +246,7 @@ class TestGenerateDateViewsHandlerFromBoost:
 
                 result = handler._load_all_tickers_data(by_ticker_dir, "dividends")
                 assert isinstance(result, pd.DataFrame)
-            except Exception:
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError):
                 pass
 
     def test_load_all_tickers_data_with_csv(self):

@@ -348,7 +348,7 @@ def tardis_api_key(gcp_project_id: str, gcp_credentials: str | None) -> str:
 
     try:
         api_key = get_secret("tardis-api-key")
-    except Exception:
+    except (OSError, RuntimeError, ValueError, KeyError) as _secret_err:
         api_key = None
 
     if not api_key:

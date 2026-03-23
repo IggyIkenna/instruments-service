@@ -15,14 +15,14 @@ class TestStringConversionErrorHandling:
     def test_string_conversion_error_handled(self, caplog):
         """String conversion errors should be logged and handled gracefully."""
         invalid_value = MagicMock()
-        invalid_value.__str__ = MagicMock(side_effect=Exception("Conversion error"))
+        invalid_value.__str__ = MagicMock(side_effect=TypeError("Conversion error"))
 
         result = None
         try:
             result = str(invalid_value)
             if result and result != "None":
                 result = result
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError) as _conv_err:
             # Failed to convert value to string
             result = None
 
