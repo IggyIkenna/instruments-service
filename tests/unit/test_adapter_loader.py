@@ -393,7 +393,7 @@ class TestDataSourceAdapterFromBoost:
             try:
                 result = adapter.read_parquet("instrument_availability/by_date/day=2024-01-01/instruments.parquet")
                 assert isinstance(result, pd.DataFrame)
-            except Exception:
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError):
                 pass
 
     def test_read_parquet_file_not_found(self):
@@ -409,7 +409,7 @@ class TestDataSourceAdapterFromBoost:
             try:
                 result = adapter.read_parquet("instrument_availability/by_date/day=2024-01-01/instruments.parquet")
                 assert isinstance(result, pd.DataFrame)
-            except Exception:
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError):
                 pass
 
     def test_read_parquet_returns_data(self):
@@ -426,7 +426,7 @@ class TestDataSourceAdapterFromBoost:
             try:
                 result = adapter.read_parquet("instrument_availability/by_date/day=2024-01-01/instruments.parquet")
                 assert isinstance(result, pd.DataFrame)
-            except Exception:
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError):
                 pass
 
 

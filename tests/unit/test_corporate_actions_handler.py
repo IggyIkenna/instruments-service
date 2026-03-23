@@ -417,7 +417,7 @@ class TestCorporateActionsBackfillHandlerFromBoost:
             handler = CorporateActionsBackfillHandler({"project_id": "test-project"})
             assert handler is not None
             assert handler.project_id == "test-project"
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
     @patch("instruments_service.cli.handlers.corporate_actions_backfill_handler.CorporateActionsAdapter")
@@ -429,7 +429,7 @@ class TestCorporateActionsBackfillHandlerFromBoost:
             handler = CorporateActionsBackfillHandler({"project_id": "test"})
             tickers = handler._get_tickers(["aapl", "msft"])
             assert tickers == ["AAPL", "MSFT"]
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
     @patch("instruments_service.cli.handlers.corporate_actions_backfill_handler.CorporateActionsAdapter")
@@ -440,7 +440,7 @@ class TestCorporateActionsBackfillHandlerFromBoost:
         try:
             handler = CorporateActionsBackfillHandler({"project_id": "test"})
             assert "CorporateActionsBackfillHandler" in repr(handler)
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
 
@@ -466,7 +466,7 @@ class TestCorporateActionsProductionHandlerFromBoost:
             handler = CorporateActionsProductionHandler({"project_id": "test-project"})
             assert handler is not None
             assert handler.project_id == "test-project"
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
     @patch("instruments_service.cli.handlers.corporate_actions_production_handler.CorporateActionsAdapter")
@@ -479,7 +479,7 @@ class TestCorporateActionsProductionHandlerFromBoost:
         try:
             handler = CorporateActionsProductionHandler({"project_id": "test"})
             assert "CorporateActionsProductionHandler" in repr(handler)
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
     @patch("instruments_service.cli.handlers.corporate_actions_production_handler.CorporateActionsAdapter")
@@ -492,7 +492,7 @@ class TestCorporateActionsProductionHandlerFromBoost:
         try:
             handler = CorporateActionsProductionHandler({"project_id": "test"})
             handler.cleanup()
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
 
@@ -513,7 +513,7 @@ class TestCorporateActionsUpdateHandlerFromBoost:
         try:
             handler = CorporateActionsUpdateHandler({"project_id": "test-project"})
             assert handler is not None
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
     @patch("instruments_service.cli.handlers.corporate_actions_backfill_handler.CorporateActionsAdapter")
@@ -525,7 +525,7 @@ class TestCorporateActionsUpdateHandlerFromBoost:
             handler = CorporateActionsUpdateHandler({"project_id": "test"})
             assert hasattr(handler, "backfill_handler")
             assert hasattr(handler, "date_views_handler")
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
     @patch("instruments_service.cli.handlers.corporate_actions_backfill_handler.CorporateActionsAdapter")
@@ -536,7 +536,7 @@ class TestCorporateActionsUpdateHandlerFromBoost:
         try:
             handler = CorporateActionsUpdateHandler({"project_id": "test"})
             assert "CorporateActionsUpdateHandler" in repr(handler)
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
 

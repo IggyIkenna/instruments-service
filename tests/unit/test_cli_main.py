@@ -643,7 +643,7 @@ class TestCliMainFromBoost:
             import instruments_service.cli.main as main_mod
 
             assert main_mod is not None
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
     def test_logger_exists(self):
@@ -651,7 +651,7 @@ class TestCliMainFromBoost:
             import instruments_service.cli.main as main_mod
 
             assert hasattr(main_mod, "logger")
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
     def test_service_name_constant(self):
@@ -660,5 +660,5 @@ class TestCliMainFromBoost:
 
             assert hasattr(main_mod, "_SERVICE_NAME")
             assert main_mod._SERVICE_NAME == "instruments-service"
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass

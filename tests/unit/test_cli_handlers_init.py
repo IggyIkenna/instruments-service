@@ -159,5 +159,5 @@ class TestCliHandlersInitFromBoost:
             assert "nonexistent_mode_xyz" in str(e)
         except AssertionError:
             raise
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass

@@ -253,7 +253,7 @@ class TestAggregateHandlerFromBoost:
             try:
                 result = handler_no_project.run()
                 assert result.get("status") == "error"
-            except Exception:
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError):
                 pass
 
     @patch("instruments_service.cli.handlers.aggregate_handler.get_storage_client")
@@ -268,7 +268,7 @@ class TestAggregateHandlerFromBoost:
         try:
             result = handler.run()
             assert result is not None
-        except Exception:
+        except (OSError, RuntimeError, ValueError, TypeError, KeyError):
             pass
 
 

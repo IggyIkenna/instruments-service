@@ -205,7 +205,7 @@ class TestLiveModeHandlerFromBoost:
                 from instruments_service.cli.handlers.live_mode_handler import LiveModeHandler
 
                 assert LiveModeHandler is not None
-            except Exception:
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError):
                 pass
 
     def test_live_directory_prefix_constant(self):
@@ -226,7 +226,7 @@ class TestLiveModeHandlerFromBoost:
                 from instruments_service.cli.handlers.live_mode_handler import LIVE_DIRECTORY_PREFIX
 
                 assert LIVE_DIRECTORY_PREFIX == "live/"
-            except Exception:
+            except (OSError, RuntimeError, ValueError, TypeError, KeyError):
                 pass
 
 
