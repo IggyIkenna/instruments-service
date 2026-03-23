@@ -83,7 +83,7 @@ def main() -> int:
         else:
             logger.info(out)
         return 0
-    except Exception as e:
+    except (OSError, ValueError, RuntimeError) as e:
         logger.exception("%s", e)
         return 1
 
