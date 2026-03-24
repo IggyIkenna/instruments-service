@@ -50,16 +50,18 @@ class InstrumentsHandler(UnifiedServiceHandler):
         start_date: str = self.runtime.start_date
         all_venues = get_venues_for_categories(categories)
 
-        # Apply --venues filter (for sharding: process one venue or shard at a time)
         if self.runtime.venue_filter:
             requested = {v.upper() for v in self.runtime.venue_filter}
             all_venues = [v for v in all_venues if v.upper() in requested]
             logger.info("Venue filter: processing only %s", self.runtime.venue_filter)
-            self._venue_override = all_venues  # stored so process() can bypass category lookup
+            self._venue_override = all_venues
 
         active_venues = [v for v in all_venues if is_venue_available(v, start_date)] if start_date else all_venues
+        self._start_key_reloader(active_venues)
+        self._populate_completed_dates(start_date)
 
-        # 1. Start API key reloader — fail-fast on missing keys, periodic refresh
+    def _start_key_reloader(self, active_venues: list[str]) -> None:
+        """Start API key reloader — fail-fast on missing keys, periodic refresh."""
         try:
             self._key_reloader = ApiKeyReloader(
                 venues=active_venues,
@@ -77,7 +79,8 @@ class InstrumentsHandler(UnifiedServiceHandler):
             logger.error("API key validation failed: %s", exc)
             raise
 
-        # 2. Check which dates already have data (skip logic)
+    def _populate_completed_dates(self, start_date: str) -> None:
+        """Check which dates already have data (skip logic)."""
         try:
             bucket = get_bucket_name("instruments")
             end_date: str = self.runtime.end_date

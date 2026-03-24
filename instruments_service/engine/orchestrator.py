@@ -4,7 +4,7 @@ IMPORT CONTRACT
 ---------------
 This module imports from:
   1. unified_trading_library (UTL) — all infrastructure, framework, validation, storage
-  2. unified_api_contracts (T0) — domain types (VenueMapping)
+  2. unified_api_contracts (T0) — domain types (venue-agnostic enums)
 
 No direct imports from UEI, UCI, UMI, UDC, UCC. If something is needed from
 those libraries, it must come through UTL's re-exported surface.
@@ -12,7 +12,7 @@ those libraries, it must come through UTL's re-exported surface.
 PROCESS FLOW
 ------------
 For each date:
-  1. Skip venues not yet launched on that date (UAC VenueMapping)
+  1. Skip venues not yet launched on that date (startup dates in _VENUE_LAUNCH_DATES)
   2. Fetch InstrumentRecord[] from URDI via urdi_reference_provider
   3. Filter to instruments active on the requested date (available_since ≤ date ≤ available_to)
   4. Fail shard if zero records after filtering
@@ -29,7 +29,6 @@ from datetime import UTC, datetime
 from datetime import date as date_type
 
 import pandas as pd
-from unified_api_contracts import VenueMapping
 from unified_trading_library import (
     DataSink,
     DomainValidationService,
@@ -48,7 +47,68 @@ from instruments_service.config_reloaders import get_defi_major_assets
 
 logger = logging.getLogger(__name__)
 
-_VENUE_MAPPING = VenueMapping()
+# Venue startup dates (URDI canonical names) — skip venues before their launch date.
+# Dates from official protocol deployment records.
+_VENUE_LAUNCH_DATES: dict[str, str] = {
+    "UNISWAPV2-ETHEREUM": "2020-05-18",
+    "UNISWAPV3-ETHEREUM": "2021-05-05",
+    "UNISWAPV4-ETHEREUM": "2025-01-31",
+    "CURVE-ETHEREUM": "2020-01-20",
+    "BALANCER-ETH": "2020-03-31",
+    "AAVEV3-ETHEREUM": "2023-01-27",
+    "MORPHO-ETHEREUM": "2024-01-08",
+    "EULER-ETHEREUM": "2023-12-18",
+    "FLUID-ETHEREUM": "2024-03-01",
+    "LIDO-ETHEREUM": "2020-12-18",
+    "ETHERFI-ETHEREUM": "2023-11-01",
+    "ETHENA-ETHEREUM": "2024-02-19",
+    "HYPERLIQUID": "2023-01-01",
+    "BINANCE-SPOT": "2017-07-14",
+    "BINANCE-FUTURES": "2019-09-13",
+    "BYBIT": "2018-11-01",
+    "COINBASE-SPOT": "2014-01-01",
+    "COINBASE": "2014-01-01",
+    "DERIBIT": "2016-06-01",
+}
+
+_DEFI_VENUES: list[str] = [
+    "UNISWAPV2-ETHEREUM",
+    "UNISWAPV3-ETHEREUM",
+    "UNISWAPV4-ETHEREUM",
+    "CURVE-ETHEREUM",
+    "AAVEV3-ETHEREUM",
+    "MORPHO-ETHEREUM",
+    "EULER-ETHEREUM",
+    "FLUID-ETHEREUM",
+    "LIDO-ETHEREUM",
+    "ETHERFI-ETHEREUM",
+    "ETHENA-ETHEREUM",
+]
+
+_CEFI_VENUES: list[str] = [
+    "BINANCE-SPOT",
+    "BINANCE-FUTURES",
+    "BYBIT",
+    "OKX",
+    "OKX-SPOT",
+    "OKX-FUTURES",
+    "DERIBIT",
+    "COINBASE-SPOT",
+    "HYPERLIQUID",
+    "UPBIT",
+    "GEMINI-SPOT",
+    "PHEMEX-SPOT",
+    "ASTER",
+]
+
+_TRADFI_VENUES: list[str] = [
+    "CME",
+    "NASDAQ",
+    "NYSE",
+    "CBOE",
+    "ICE",
+    "FX",
+]
 
 # ---------------------------------------------------------------------------
 # DEFI instrument relevance filter
@@ -116,12 +176,11 @@ def get_venues_for_categories(categories: list[str]) -> list[str]:
     for cat in categories:
         cat_upper = cat.upper()
         if cat_upper in ("CEFI", "ALL"):
-            venues.extend(sorted(set(_VENUE_MAPPING.tardis_to_venue.values())))
-            venues.extend(["HYPERLIQUID", "ASTER"])
+            venues.extend(_CEFI_VENUES)
         if cat_upper in ("TRADFI", "ALL"):
-            venues.extend(_VENUE_MAPPING.all_databento_venues)
+            venues.extend(_TRADFI_VENUES)
         if cat_upper in ("DEFI", "ALL"):
-            venues.extend(_VENUE_MAPPING.all_defi_venues)
+            venues.extend(_DEFI_VENUES)
         if cat_upper in ("SPORTS", "ALL"):
             # API_FOOTBALL is the source for sports reference data (fixtures, teams, leagues).
             # BETFAIR is for live odds / tick data — belongs in market-tick-data-service, not here.
@@ -131,7 +190,10 @@ def get_venues_for_categories(categories: list[str]) -> list[str]:
 
 def is_venue_available(venue: str, date: str) -> bool:
     """Return True if the venue was launched on or before this date."""
-    return _VENUE_MAPPING.is_venue_available_on_date(venue, date)
+    launch_date = _VENUE_LAUNCH_DATES.get(venue)
+    if launch_date is None:
+        return True  # Unknown venue — assume always available
+    return date >= launch_date
 
 
 async def process_instruments(
@@ -227,7 +289,7 @@ async def process_instruments(
     )
     # Use the first (primary) category to route to the correct category-specific bucket.
     # UCI naming: instruments-store-{category.lower()}-{project}
-    # e.g. DEFI → instruments-store-defi-central-element-323112
+    # e.g. DEFI → instruments-store-defi-{gcp_project_id}
     primary_category = categories[0] if categories else None
     bucket = _get_instruments_bucket(primary_category)
     # prefix ensures writes land at instrument_availability/by_date/{day=X}/{venue=Y}/
