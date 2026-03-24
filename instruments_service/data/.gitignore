@@ -1,0 +1,4 @@
+# CSV samples dropped by the service in dev mode — never commit these
+*.csv
+*.parquet
+*.json
