@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from unified_api_contracts import DataTypeConfig, ExchangeInstrumentConfig, VenueMapping
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.reference.instrument_definition import strip_extra_keys
 from unified_market_interface import SubgraphService, TardisAdapter
 from unified_trading_library import determine_market_category  # noqa: domain-ucs — not yet in UDC
 
@@ -340,7 +341,7 @@ class InstrumentProcessingHandlers:
             symbol_info,
             available_to_datetime,
         )
-        return InstrumentDefinition.model_validate(inst_data)
+        return InstrumentDefinition.model_validate(strip_extra_keys(inst_data))
 
     def _resolve_base_quote(self, symbol_id: str, exchange: str) -> tuple[str, str]:
         """Parse and normalize base/quote assets from a symbol."""

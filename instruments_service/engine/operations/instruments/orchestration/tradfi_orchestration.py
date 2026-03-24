@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
 from unified_api_contracts import VenueMapping
+from unified_internal_contracts.reference.instrument_definition import strip_extra_keys
 
 from instruments_service.config import UnifiedInstrumentConfig
 from instruments_service.models import InstrumentDefinition
@@ -145,7 +146,7 @@ class TradFiOrchestrator:
         """Process CBOE (VIX) instruments."""
         vix_def_dict: InstrumentDefDict = create_vix_instrument_definition(date)
         if vix_def_dict:
-            vix_def = InstrumentDefinition.model_validate(vix_def_dict)
+            vix_def = InstrumentDefinition.model_validate(strip_extra_keys(vix_def_dict))
             logger.info("✅ Created VIX: %s", vix_def.instrument_key)
             return {vix_def.instrument_key: vix_def}
         return {}
@@ -154,7 +155,7 @@ class TradFiOrchestrator:
         """Process FX (KRW/USD) instruments."""
         krwusd_def_dict: InstrumentDefDict = create_krwusd_instrument_definition(date)
         if krwusd_def_dict:
-            krwusd_def = InstrumentDefinition.model_validate(krwusd_def_dict)
+            krwusd_def = InstrumentDefinition.model_validate(strip_extra_keys(krwusd_def_dict))
             logger.info("✅ Created KRW/USD: %s", krwusd_def.instrument_key)
             return {krwusd_def.instrument_key: krwusd_def}
         return {}
@@ -194,7 +195,7 @@ class TradFiOrchestrator:
                         ticker, date, get_us_equity_trading_hours
                     )
                     if etf_def_dict:
-                        etf_def = InstrumentDefinition.model_validate(etf_def_dict)
+                        etf_def = InstrumentDefinition.model_validate(strip_extra_keys(etf_def_dict))
                         instruments[etf_def.instrument_key] = etf_def
                         logger.info("✅ Created Bitcoin ETF: %s", etf_def.instrument_key)
         else:

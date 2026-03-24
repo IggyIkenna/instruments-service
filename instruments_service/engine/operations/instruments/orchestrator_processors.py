@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from unified_api_contracts import DEFI_PROTOCOLS, DEFI_VENUE_TO_PROTOCOL
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.reference.instrument_definition import strip_extra_keys
 from unified_market_interface import get_adapter
 
 from instruments_service.config import (
@@ -127,7 +128,7 @@ class MarketProcessors:
                     result: dict[str, InstrumentDefinition] = {}
                     for d in cast(list[dict[str, object]], instruments_raw):
                         try:
-                            inst = InstrumentDefinition.model_validate(d)
+                            inst = InstrumentDefinition.model_validate(strip_extra_keys(d))
                             key = cast(str, d.get("instrument_key") or inst.instrument_key)
                             result[key] = inst
                         except (ValueError, KeyError, TypeError, IndexError) as e:
@@ -373,16 +374,20 @@ class MarketProcessors:
         """Process on-chain CLOB venues (Hyperliquid, Aster)."""
         all_instruments: dict[str, InstrumentDefinition] = {}
 
-        cefi_onchain_clob_venues: list[str] = cast(list[str], self.venue_mapping.all_cefi_onchain_clob_venues)
+        # On-chain CLOBs (HYPERLIQUID, ASTER) are now in all_defi_venues; identify them
+        # as DeFi venues where the protocol has no chain (chain is None).
+        onchain_clob_venues: list[str] = [
+            v for v in self.venue_mapping.all_defi_venues if DEFI_VENUE_TO_PROTOCOL.get(v, ("", "chain"))[1] is None
+        ]
         cefi_clob_protocols: list[tuple[str, None]] = []
 
         if venues_filter:
             for venue in venues_filter:
-                if venue.upper() in cefi_onchain_clob_venues:
+                if venue.upper() in onchain_clob_venues:
                     protocol_name: str = venue.lower()
                     cefi_clob_protocols.append((protocol_name, None))
         else:
-            for venue in cefi_onchain_clob_venues:
+            for venue in onchain_clob_venues:
                 cefi_clob_protocols.append((venue.lower(), None))
 
         if cefi_clob_protocols:
@@ -420,14 +425,14 @@ class MarketProcessors:
             if exchange == "CBOE":
                 vix_def_dict: InstrumentDefDict = create_vix_instrument_definition(date)
                 if vix_def_dict:
-                    vix_def = InstrumentDefinition.model_validate(vix_def_dict)
+                    vix_def = InstrumentDefinition.model_validate(strip_extra_keys(vix_def_dict))
                     logger.info("✅ Created VIX: %s", vix_def.instrument_key)
                     return {vix_def.instrument_key: vix_def}
                 return {}
             elif exchange == "FX":
                 krwusd_def_dict: InstrumentDefDict = create_krwusd_instrument_definition(date)
                 if krwusd_def_dict:
-                    krwusd_def = InstrumentDefinition.model_validate(krwusd_def_dict)
+                    krwusd_def = InstrumentDefinition.model_validate(strip_extra_keys(krwusd_def_dict))
                     logger.info("✅ Created KRW/USD: %s", krwusd_def.instrument_key)
                     return {krwusd_def.instrument_key: krwusd_def}
                 return {}
@@ -445,7 +450,7 @@ class MarketProcessors:
                                 ticker, date, get_us_equity_trading_hours
                             )
                             if etf_def_dict:
-                                etf_def = InstrumentDefinition.model_validate(etf_def_dict)
+                                etf_def = InstrumentDefinition.model_validate(strip_extra_keys(etf_def_dict))
                                 instruments[etf_def.instrument_key] = etf_def
                                 logger.info("✅ Created Bitcoin ETF: %s", etf_def.instrument_key)
 

@@ -16,6 +16,7 @@ from typing import cast
 from uuid import uuid4
 
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.reference.instrument_definition import strip_extra_keys
 from unified_market_interface import DatabentoAdapter
 
 from instruments_service.engine.operations.instruments.processors.base_processor import BaseInstrumentProcessor
@@ -82,7 +83,7 @@ class TradFiInstrumentProcessor(BaseInstrumentProcessor):
                 instruments: dict[str, InstrumentDefinition] = {}
                 for inst_key, inst_data in raw_instruments.items():
                     try:
-                        inst_def = InstrumentDefinition.model_validate(inst_data)
+                        inst_def = InstrumentDefinition.model_validate(strip_extra_keys(inst_data))
                         instruments[inst_key] = inst_def
                     except (ValueError, KeyError, TypeError, IndexError) as e:
                         _err = EnhancedError(

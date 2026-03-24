@@ -6,10 +6,10 @@ Extends BaseGCSWriter from unified-trading-library with instrument specific path
 import logging
 from datetime import datetime
 
+from unified_internal_contracts.domain.instruments import INSTRUMENTS_SCHEMA
 from unified_trading_library import BaseGCSWriter
 
 from instruments_service.config import InstrumentsServiceConfig, get_config
-from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
 
 logger = logging.getLogger(__name__)
 

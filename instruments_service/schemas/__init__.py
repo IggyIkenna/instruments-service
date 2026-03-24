@@ -1,7 +1,10 @@
-"""
-Schema definitions for instruments-service.
+"""Schema definitions for instruments-service.
 
-This package contains schema definitions for:
-- Parquet files stored in GCS (batch historical data)
-- Future BigQuery schemas (if live streaming is needed)
+INSTRUMENTS_SCHEMA is the canonical output contract for instrument parquet files.
+The SSOT lives in unified_internal_contracts.domain.instruments — do not define
+a local copy here. This module re-exports it for backward-compatible imports.
 """
+
+from unified_internal_contracts.domain.instruments import INSTRUMENTS_SCHEMA
+
+__all__ = ["INSTRUMENTS_SCHEMA"]
