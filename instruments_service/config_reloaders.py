@@ -1,11 +1,14 @@
 """Domain config hot-reload wiring for instruments-service.
 
-Two config domains:
-1. InstrumentDomainConfig — subscription list, enabled venues, categories (hot-reloaded via PubSub)
-2. TickerUniverseConfig — S&P 500, ETF, NASDAQ tickers (loaded from cloud storage at startup;
-   batch mode uses TimeSeriesConfigStore.config_for_date() for historical replay)
+Manages three config domains:
+1. InstrumentDomainConfig — subscription list, enabled venues (hot-reloaded via PubSub)
+2. Ticker universe — SP500/ETF/NASDAQ tickers (from UAC registry as fallback,
+   or from cloud ConfigStore for date-replay in batch mode)
+3. DeFi major assets filter — which base/quote assets are kept in DEFI category
+   (whitelist of ETH, BTC, USDT, USDC and known derivatives). Defaults are
+   hardcoded here; can be overridden via cloud ConfigStore.
 
-Services use UCI ConfigStore (cloud-agnostic — routes to GCS/S3 based on CLOUD_PROVIDER mode var).
+Uses UTL DomainConfigReloader — no custom retry or PubSub wiring needed.
 """
 
 from __future__ import annotations
@@ -13,7 +16,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from unified_api_contracts import KNOWN_ETFS
+from unified_api_contracts import KNOWN_ETFS, TRADFI_TICKER_UNIVERSE
 from unified_config_interface import (
     ConfigStoreError,
     InstrumentDomainConfig,
@@ -23,206 +26,244 @@ from unified_config_interface import (
 from unified_events_interface import log_event
 from unified_trading_library import DomainConfigReloader
 
-from instruments_service.config.instrument_definitions import (
-    ETF_TICKERS,
-    NASDAQ_TICKERS,
-    SP500_TICKERS,
-)
+from instruments_service.config.service_config import InstrumentsServiceConfig
 
 logger = logging.getLogger(__name__)
-_instrument_reloader: DomainConfigReloader[InstrumentDomainConfig] | None = None
 
-# Module-level snapshot of the latest reloaded subscription list.
-# Consumers (e.g. InstrumentsService engine) call get_active_subscription_list()
-# to obtain the current live set without holding a reference to the reloader.
-_active_subscription_list: list[str] = []
-_active_enabled_venues: list[str] = []
 
-# Module-level snapshot of the ticker universe (loaded from cloud storage or fallback)
-_ticker_universe_sp500: list[str] = []
-_ticker_universe_etf: list[str] = []
-_ticker_universe_nasdaq: list[str] = []
-_ticker_universe_known_etfs: list[str] = []
-_ticker_universe_loaded: bool = False
+class InstrumentsDomainConfigState:
+    """Holds the latest hot-reloaded instruments domain config state.
+
+    Replaces module-level mutable globals — state is instance-owned
+    so tests can create isolated instances without cross-contamination.
+    """
+
+    # Default DeFi major assets: ETH/BTC/USDT/USDC and known liquid derivatives.
+    # Override via cloud ConfigStore — see load_ticker_universe_from_cloud().
+    _DEFAULT_DEFI_MAJOR_ASSETS: frozenset[str] = frozenset(
+        {
+            # ETH and liquid staking/restaking derivatives
+            "ETH",
+            "WETH",
+            "STETH",
+            "WSTETH",
+            "CBETH",
+            "RETH",
+            "WEETH",
+            "EETH",
+            "SFRXETH",
+            "FRXETH",
+            "OETH",
+            "OSETH",
+            "SWETH",
+            "ETHX",
+            "METH",
+            "EZETH",
+            "RSETH",
+            "PUFETH",
+            "ANKRETH",
+            # BTC and wrapped variants
+            "BTC",
+            "WBTC",
+            "TBTC",
+            "CBBTC",
+            "LBTC",
+            # Major stablecoins
+            "USDT",
+            "USDC",
+            "DAI",
+            "FRAX",
+            "USDE",
+            "SUSDE",
+            "GHO",
+            "CRVUSD",
+            "LUSD",
+            "PYUSD",
+            "EURC",
+            "SUSD",
+            "TUSD",
+            "USDP",
+            # Major DeFi governance / Aave collateral
+            "AAVE",
+            "LINK",
+            "UNI",
+            "MKR",
+            "CRV",
+            "SNX",
+            "BAL",
+            "LDO",
+            "RPL",
+            "COMP",
+            "YFI",
+            "SUSHI",
+            "1INCH",
+            "FXS",
+            # Other liquid assets on Aave
+            "SOL",
+            "MATIC",
+            "WMATIC",
+        }
+    )
+
+    def __init__(self) -> None:
+        self._subscription_list: list[str] = []
+        self._enabled_venues: list[str] = []
+        self._ticker_sp500: list[str] = list(TRADFI_TICKER_UNIVERSE["sp500_tickers"])
+        self._ticker_etf: list[str] = list(TRADFI_TICKER_UNIVERSE["etf_tickers"])
+        self._ticker_nasdaq: list[str] = list(TRADFI_TICKER_UNIVERSE["nasdaq_tickers"])
+        self._ticker_known_etfs: list[str] = sorted(KNOWN_ETFS)
+        self._ticker_from_cloud: bool = False
+        self._defi_major_assets: frozenset[str] = self._DEFAULT_DEFI_MAJOR_ASSETS
+        self._reloader: DomainConfigReloader[InstrumentDomainConfig] | None = None
+
+    def get_subscription_list(self) -> list[str]:
+        return list(self._subscription_list)
+
+    def get_enabled_venues(self) -> list[str]:
+        return list(self._enabled_venues)
+
+    def get_ticker_universe(self) -> dict[str, list[str]]:
+        return {
+            "sp500": list(self._ticker_sp500),
+            "etf": list(self._ticker_etf),
+            "nasdaq": list(self._ticker_nasdaq),
+            "known_etfs": list(self._ticker_known_etfs),
+        }
+
+    def is_ticker_universe_from_cloud(self) -> bool:
+        return self._ticker_from_cloud
+
+    def get_defi_major_assets(self) -> frozenset[str]:
+        """Return the current DeFi major assets whitelist.
+
+        Used by the orchestrator to filter DEFI instruments to ETH/BTC/USDT/USDC
+        and their liquid derivatives. Falls back to the hardcoded default if
+        no cloud config has been loaded.
+        """
+        return self._defi_major_assets
+
+    def update_defi_major_assets(self, assets: frozenset[str]) -> None:
+        """Replace the DeFi major assets whitelist (called on cloud config reload)."""
+        self._defi_major_assets = assets
+        logger.info("DeFi major assets filter updated: %d assets", len(assets))
+
+    def _on_reload(self, config: InstrumentDomainConfig) -> None:
+        self._subscription_list = list(config.subscription_list)
+        self._enabled_venues = list(config.enabled_venues)
+        logger.info(
+            "Instruments domain config reloaded: %d instruments, %d venues",
+            len(self._subscription_list),
+            len(self._enabled_venues),
+        )
+        log_event(
+            "CONFIG_RELOADED",
+            details={
+                "domain": "instruments",
+                "subscription_count": len(self._subscription_list),
+                "venue_count": len(self._enabled_venues),
+            },
+        )
+
+    def load_ticker_universe_from_cloud(
+        self,
+        service_config: InstrumentsServiceConfig,
+        target_date: date | None = None,
+    ) -> bool:
+        """Load ticker universe from cloud ConfigStore (batch replay or live latest).
+
+        Falls back to UAC registry (TRADFI_TICKER_UNIVERSE) if cloud unavailable.
+        Returns True if loaded from cloud, False if using fallback.
+        """
+        bucket: str = service_config.config_store_bucket
+        project_id: str | None = service_config.gcp_project_id
+        if not bucket:
+            logger.info("CONFIG_STORE_BUCKET not set — using UAC registry ticker defaults")
+            return False
+        try:
+            store = TimeSeriesConfigStore(
+                bucket_name=bucket,
+                service_name="instruments-reference-data",
+                schema_version="1.0",
+                project_id=project_id or "",
+            )
+            config = (
+                store.config_for_date(target_date, TickerUniverseConfig)
+                if target_date is not None
+                else store.load_config(TickerUniverseConfig)
+            )
+            self._ticker_sp500 = list(config.sp500_tickers)
+            self._ticker_etf = list(config.etf_tickers)
+            self._ticker_nasdaq = list(config.nasdaq_tickers)
+            self._ticker_known_etfs = list(config.known_etf_symbols)
+            self._ticker_from_cloud = True
+            log_event(
+                "CONFIG_LOADED",
+                details={"domain": "instruments-reference-data", "source": "cloud_storage"},
+            )
+            return True
+        except (ConfigStoreError, ImportError, ConnectionError, TimeoutError, OSError, ValueError) as exc:
+            logger.warning("Cloud ticker load failed, using UAC registry fallback: %s", exc)
+            return False
+
+    def start_watching(self, service_config: InstrumentsServiceConfig) -> None:
+        """Start hot-reload watcher for InstrumentDomainConfig."""
+        bucket: str = service_config.config_store_bucket
+        project_id: str | None = service_config.gcp_project_id
+        if not bucket:
+            logger.info("CONFIG_STORE_BUCKET not set — domain config hot-reload disabled")
+            return
+        self._reloader = DomainConfigReloader(
+            domain="instruments",
+            config_class=InstrumentDomainConfig,
+            config_bucket=bucket,
+            project_id=project_id,
+        )
+        self._reloader.on_reload(self._on_reload)
+        self._reloader.start_watching()
+        logger.info("Instruments domain config reloader started")
+
+    def stop_watching(self) -> None:
+        if self._reloader is not None:
+            self._reloader.stop_watching()
+            self._reloader = None
+
+
+# Module-level singleton — convenience functions below delegate to this instance.
+_state = InstrumentsDomainConfigState()
 
 
 def get_active_subscription_list() -> list[str]:
-    """Return the latest hot-reloaded instrument subscription list.
-
-    Returns an empty list if the reloader has not yet fired or cloud storage
-    reload is disabled (CONFIG_STORE_BUCKET not set).
-    """
-    return list(_active_subscription_list)
+    return _state.get_subscription_list()
 
 
 def get_active_enabled_venues() -> list[str]:
-    """Return the latest hot-reloaded enabled venue list."""
-    return list(_active_enabled_venues)
+    return _state.get_enabled_venues()
 
 
 def get_ticker_universe() -> dict[str, list[str]]:
-    """Return the loaded ticker universe (from cloud storage or fallback).
-
-    Returns dict with keys: sp500, etf, nasdaq, known_etfs.
-    Falls back to embedded tickers.json if cloud storage loading failed or was skipped.
-    """
-    if not _ticker_universe_loaded:
-        _load_ticker_universe_fallback()
-    return {
-        "sp500": list(_ticker_universe_sp500),
-        "etf": list(_ticker_universe_etf),
-        "nasdaq": list(_ticker_universe_nasdaq),
-        "known_etfs": list(_ticker_universe_known_etfs),
-    }
+    return _state.get_ticker_universe()
 
 
 def is_ticker_universe_from_cloud() -> bool:
-    """Return True if the ticker universe was loaded from cloud storage (not fallback)."""
-    return _ticker_universe_loaded
+    return _state.is_ticker_universe_from_cloud()
 
 
-def _load_ticker_universe_fallback() -> None:
-    """Load ticker universe from embedded tickers.json (fallback when cloud storage unavailable)."""
-    global _ticker_universe_sp500, _ticker_universe_etf, _ticker_universe_nasdaq
-    global _ticker_universe_known_etfs, _ticker_universe_loaded
-
-    _ticker_universe_sp500 = list(SP500_TICKERS)
-    _ticker_universe_etf = list(ETF_TICKERS)
-    _ticker_universe_nasdaq = list(NASDAQ_TICKERS)
-    _ticker_universe_known_etfs = sorted(KNOWN_ETFS)
-    # _ticker_universe_loaded stays False — indicates fallback, not cloud
-    logger.info(
-        "Ticker universe loaded from embedded defaults: %d SP500, %d ETF, %d NASDAQ",
-        len(_ticker_universe_sp500),
-        len(_ticker_universe_etf),
-        len(_ticker_universe_nasdaq),
-    )
+def load_ticker_universe_from_cloud(service_config: InstrumentsServiceConfig, target_date: date | None = None) -> bool:
+    return _state.load_ticker_universe_from_cloud(service_config, target_date)
 
 
-def _on_instruments_reload(config: InstrumentDomainConfig) -> None:
-    global _active_subscription_list, _active_enabled_venues
-
-    _active_subscription_list = list(config.subscription_list)
-    _active_enabled_venues = list(config.enabled_venues)
-
-    logger.info(
-        "Instruments domain config reloaded: %d instruments, %d venues",
-        len(_active_subscription_list),
-        len(_active_enabled_venues),
-    )
-    logger.debug(
-        "Active subscription list: %s",
-        _active_subscription_list[:10],  # log first 10 to avoid log spam
-    )
-
-    log_event(
-        "CONFIG_RELOADED",
-        details={
-            "domain": "instruments",
-            "subscription_count": len(_active_subscription_list),
-            "venue_count": len(_active_enabled_venues),
-        },
-    )
-
-
-def load_ticker_universe_from_cloud(
-    service_config: object,
-    target_date: date | None = None,
-) -> bool:
-    """Load ticker universe from cloud storage via UCI ConfigStore.
-
-    In batch mode: uses TimeSeriesConfigStore.config_for_date(target_date)
-    to load the config effective at the target date (historical replay).
-
-    In live mode (target_date=None): loads the active/latest config.
-
-    Falls back to embedded tickers.json if cloud storage is unavailable
-    or CONFIG_STORE_BUCKET is not set.
-
-    Args:
-        service_config: Service config with config_store_bucket and project_id
-        target_date: For batch mode, the date to replay config at. None for live/latest.
-
-    Returns:
-        True if loaded from cloud storage, False if fell back to embedded defaults.
-    """
-    global _ticker_universe_sp500, _ticker_universe_etf, _ticker_universe_nasdaq
-    global _ticker_universe_known_etfs, _ticker_universe_loaded
-
-    config_store_bucket: str = getattr(service_config, "config_store_bucket", "")
-    project_id: str | None = getattr(service_config, "project_id", None)
-
-    if not config_store_bucket:
-        logger.info("CONFIG_STORE_BUCKET not set — using embedded ticker defaults")
-        _load_ticker_universe_fallback()
-        return False
-
-    try:
-        store = TimeSeriesConfigStore(
-            bucket_name=config_store_bucket,
-            service_name="instruments-reference-data",
-            schema_version="1.0",
-            project_id=project_id or "",
-        )
-
-        if target_date is not None:
-            # Batch mode: replay config effective at target_date
-            config = store.config_for_date(target_date, TickerUniverseConfig)
-            logger.info("Ticker universe loaded from cloud storage (replay date=%s)", target_date)
-        else:
-            # Live mode: load latest active config
-            config = store.load_config(TickerUniverseConfig)
-            logger.info("Ticker universe loaded from cloud storage (latest active)")
-
-        _ticker_universe_sp500 = list(config.sp500_tickers)
-        _ticker_universe_etf = list(config.etf_tickers)
-        _ticker_universe_nasdaq = list(config.nasdaq_tickers)
-        _ticker_universe_known_etfs = list(config.known_etf_symbols)
-        _ticker_universe_loaded = True
-
-        log_event(
-            "CONFIG_LOADED",
-            details={
-                "domain": "instruments-reference-data",
-                "source": "cloud_storage",
-                "sp500_count": len(_ticker_universe_sp500),
-                "etf_count": len(_ticker_universe_etf),
-                "effective_date": config.effective_date,
-                "replay_date": str(target_date) if target_date else "latest",
-            },
-        )
-        return True
-
-    except (ConfigStoreError, ImportError, ConnectionError, TimeoutError, OSError, ValueError) as exc:
-        logger.warning("Cloud storage ticker universe load failed, using embedded defaults: %s", exc)
-        _load_ticker_universe_fallback()
-        return False
-
-
-def start_domain_config_reloaders(service_config: object) -> None:
-    global _instrument_reloader
-
-    config_store_bucket: str = getattr(service_config, "config_store_bucket", "")
-    project_id: str | None = getattr(service_config, "project_id", None)
-
-    if not config_store_bucket:
-        logger.info("CONFIG_STORE_BUCKET not set — domain config hot-reload disabled")
-        return
-
-    _instrument_reloader = DomainConfigReloader(
-        domain="instruments",
-        config_class=InstrumentDomainConfig,
-        config_bucket=config_store_bucket,
-        project_id=project_id,
-    )
-    _instrument_reloader.on_reload(_on_instruments_reload)
-    _instrument_reloader.start_watching()
-    logger.info("Instruments domain config reloader started")
+def start_domain_config_reloaders(service_config: InstrumentsServiceConfig) -> None:
+    _state.start_watching(service_config)
 
 
 def stop_domain_config_reloaders() -> None:
-    global _instrument_reloader
-    if _instrument_reloader is not None:
-        _instrument_reloader.stop_watching()
-        _instrument_reloader = None
-    logger.info("Instruments domain config reloader stopped")
+    _state.stop_watching()
+
+
+def get_defi_major_assets() -> frozenset[str]:
+    """Return the current DeFi major assets filter whitelist.
+
+    Called by the orchestrator's filter_defi_instruments_by_relevance.
+    Defaults to the hardcoded set; can be overridden via cloud ConfigStore.
+    """
+    return _state.get_defi_major_assets()
