@@ -20,6 +20,7 @@ from typing import cast
 from uuid import uuid4
 
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.reference.instrument_definition import strip_extra_keys
 from unified_market_interface import TardisAdapter
 from unified_trading_library import (
     determine_market_category,
@@ -506,7 +507,7 @@ class CeFiInstrumentProcessor(BaseInstrumentProcessor):
             "available_to_datetime": available_to_datetime,
             "data_types": data_types_str,
         }
-        return InstrumentDefinition.model_validate({**base_fields, **enhanced_fields})
+        return InstrumentDefinition.model_validate(strip_extra_keys({**base_fields, **enhanced_fields}))
 
     async def process_exchange_instruments(
         self,

@@ -18,6 +18,7 @@ import unified_market_interface.clients.subgraph_service as sg_module
 import unified_market_interface.clients.thegraph_base_client as tgc_module
 from unified_api_contracts import DataTypeConfig, ExchangeInstrumentConfig, VenueMapping
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.reference.instrument_definition import strip_extra_keys
 from unified_market_interface import DatabentoAdapter, SubgraphService, TardisAdapter
 from unified_trading_library import DateFilterService, get_secret_client, handle_api_errors
 
@@ -252,7 +253,7 @@ class DatabentoIntegrationMixin:
         instruments: dict[str, InstrumentDefinition] = {}
         for inst_key, inst_data in raw_instruments.items():
             try:
-                inst_def = InstrumentDefinition.model_validate(inst_data)
+                inst_def = InstrumentDefinition.model_validate(strip_extra_keys(inst_data))
                 instruments[inst_key] = inst_def
             except (ValueError, KeyError, TypeError, IndexError) as e:
                 _err = EnhancedError(
@@ -347,16 +348,25 @@ class CCXTIntegrationMixin:
                 venue_mapping=self.venue_mapping,
                 cache_ttl_hours=int(cast(int | float, config.get("cache_ttl_hours", 4))),
             )
-            # Pre-load CCXT markets in parallel
-            if config.get("preload_ccxt_markets", True):
-                venues_to_preload = [
-                    v
-                    for v in self.venue_mapping.all_tardis_exchanges
-                    if self.venue_mapping.venue_to_ccxt.get(v.upper())
-                ]
-                self.ccxt_service.preload_markets_parallel(venues=[v.upper() for v in venues_to_preload], max_workers=4)
+            # DeFi-only runs must not pay CeFi CCXT startup cost. Preload runs from
+            # `preload_ccxt_for_tardis_exchanges` when CeFi Tardis processing starts.
+            if config.get("preload_ccxt_markets", False):
+                self.preload_ccxt_for_tardis_exchanges(self.venue_mapping.all_tardis_exchanges)
         else:
             self.ccxt_service = None
+
+    def preload_ccxt_for_tardis_exchanges(self, tardis_exchanges: list[str]) -> None:
+        """Load CCXT markets for canonical venues mapped from Tardis exchange ids."""
+        if not self.ccxt_service:
+            return
+        canonical_venues: set[str] = set()
+        for ex in tardis_exchanges:
+            venue = self.venue_mapping.tardis_to_venue.get(ex.lower())
+            if venue and self.venue_mapping.venue_to_ccxt.get(venue):
+                canonical_venues.add(venue)
+        if not canonical_venues:
+            return
+        self.ccxt_service.preload_markets_parallel(venues=sorted(canonical_venues), max_workers=4)
 
     def get_manual_ccxt_fallback(self, venue: str, base_asset: str) -> dict[str, object]:
         """Manual fallback mappings when CCXT lookup fails."""

@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import pandas as pd
 from unified_cloud_interface import DataSink, RuntimeMode, get_data_sink, get_service_mode
-from unified_events_interface import log_event
+from unified_events_interface import VALIDATION_FAILED, log_event
 from unified_internal_contracts import (
     EnhancedError,
     ErrorCategory,
@@ -24,6 +24,7 @@ from unified_internal_contracts import (
     ErrorSeverity,
     LifecycleEventType,
 )
+from unified_internal_contracts.domain.instruments import INSTRUMENTS_SCHEMA
 from unified_trading_library import (
     ParquetSchemaEnforcer,
     SchemaValidationResult,
@@ -33,7 +34,6 @@ from unified_trading_library import (
     validate_timestamp_date_alignment,
 )
 
-from instruments_service.schemas.output_schemas import INSTRUMENTS_SCHEMA
 from instruments_service.schemas.parquet import get_required_columns
 
 logger = logging.getLogger(__name__)
@@ -260,9 +260,9 @@ class CloudInstrumentStorage:
                         category_venue,
                     )
                 bucket = None
-            data_sink: DataSink = get_data_sink(bucket=bucket)
+            data_sink: DataSink = get_data_sink(bucket=bucket, prefix="instrument_availability/by_date")
             logger.info(
-                "Writing %s %s instruments via %s (bucket=%s)",
+                "Writing %s %s instruments via %s (bucket=%s, prefix=instrument_availability/by_date)",
                 len(venue_df),
                 category_venue,
                 type(data_sink).__name__,
@@ -272,6 +272,7 @@ class CloudInstrumentStorage:
                 venue_df,
                 partition={"day": date_str, "venue": venue_folder},
                 format="parquet",
+                filename="instruments.parquet",
             )
             if result_uri:
                 logger.info(
@@ -313,7 +314,13 @@ class CloudInstrumentStorage:
         schema_enforcer: ParquetSchemaEnforcer,
         date_str: str,
     ) -> tuple[bool, int, int]:
-        """Iterate over category/venue groups, validate, and upload each. Returns (all_ok, stored, venues)."""
+        """Iterate over category/venue groups, validate, and upload each. Returns (all_ok, stored, venues).
+
+        Fail-fast: if any venue fails schema validation the entire shard is aborted.
+        No venues are written for this date — a partial shard is worse than no shard
+        because downstream consumers would silently get incomplete instrument coverage.
+        Fix the adapter, then rerun for the affected date.
+        """
         total_stored = 0
         venue_count = 0
         all_successful = True
@@ -328,8 +335,22 @@ class CloudInstrumentStorage:
                 self._coerce_venue_dtypes(venue_df_to_store)
 
                 if not self._validate_venue_schema(schema_enforcer, venue_df_to_store, category_str, str(venue)):
-                    all_successful = False
-                    continue
+                    log_event(
+                        VALIDATION_FAILED,
+                        details={
+                            "date": date_str,
+                            "category": category_str,
+                            "venue": str(venue),
+                            "reason": "schema_validation_failed",
+                            "action": "shard_aborted",
+                        },
+                    )
+                    raise ValueError(
+                        f"Shard {date_str}/{category_str} aborted at venue '{venue}': "
+                        f"schema validation failed. No venues written for this date. "
+                        f"Fix the adapter output (check for extra or null-in-required columns) "
+                        f"and rerun the instruments job for {date_str}."
+                    )
 
                 self._validate_timestamp_alignment(venue_df_to_store, date_str, category_str, str(venue))
 

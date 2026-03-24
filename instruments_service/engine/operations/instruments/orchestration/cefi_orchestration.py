@@ -10,8 +10,9 @@ from datetime import datetime
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
-from unified_api_contracts import VenueMapping
+from unified_api_contracts import DEFI_VENUE_TO_PROTOCOL, VenueMapping
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
+from unified_internal_contracts.reference.instrument_definition import strip_extra_keys
 from unified_market_interface import TardisAdapter, get_adapter
 
 from instruments_service.models import InstrumentDefinition
@@ -153,7 +154,7 @@ class CeFiOrchestrator:
                 result: dict[str, InstrumentDefinition] = {}
                 for d in instruments_raw:
                     try:
-                        inst = InstrumentDefinition.model_validate(d)
+                        inst = InstrumentDefinition.model_validate(strip_extra_keys(d))
                         key = cast(str, d.get("instrument_key") or inst.instrument_key)
                         result[key] = inst
                     except (ValueError, KeyError, TypeError, IndexError) as e:
@@ -210,16 +211,20 @@ class CeFiOrchestrator:
         self, venues_filter: list[str], date: datetime
     ) -> dict[str, InstrumentDefinition]:
         """Process on-chain CLOB venues (Hyperliquid, Aster) as part of CEFI."""
-        cefi_onchain_clob_venues: list[str] = cast(list[str], self.venue_mapping.all_cefi_onchain_clob_venues)
+        # On-chain CLOBs (HYPERLIQUID, ASTER) are now in all_defi_venues; identify them
+        # as DeFi venues where the protocol has no chain (chain is None).
+        onchain_clob_venues: list[str] = [
+            v for v in self.venue_mapping.all_defi_venues if DEFI_VENUE_TO_PROTOCOL.get(v, ("", "chain"))[1] is None
+        ]
         cefi_clob_protocols: list[tuple[str, None]] = []
 
         if venues_filter:
             for venue in venues_filter:
-                if venue.upper() in cefi_onchain_clob_venues:
+                if venue.upper() in onchain_clob_venues:
                     protocol_name: str = venue.lower()
                     cefi_clob_protocols.append((protocol_name, None))
         else:
-            for venue in cefi_onchain_clob_venues:
+            for venue in onchain_clob_venues:
                 cefi_clob_protocols.append((venue.lower(), None))
 
         all_instruments: dict[str, InstrumentDefinition] = {}

@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
-from unified_api_contracts import VenueMapping
+from unified_api_contracts import ONCHAIN_CLOB_CEFI_VENUES, VenueMapping
 from unified_cloud_interface import get_secret_client
 from unified_events_interface import VENUE_ZERO_INSTRUMENTS, log_event
 from unified_internal_contracts import (
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from instruments_service.app.core.instrument_processing_service import InstrumentProcessingService
 
 from unified_api_contracts import DEFI_PROTOCOLS, DEFI_VENUE_TO_PROTOCOL
+from unified_internal_contracts.reference.instrument_definition import strip_extra_keys
 
 from instruments_service.config import (
     UnifiedInstrumentConfig,
@@ -217,7 +218,7 @@ class InstrumentSyncMixin:
         result: dict[str, InstrumentDefinition] = {}
         for d in instruments_raw:
             try:
-                inst = InstrumentDefinition.model_validate(d)
+                inst = InstrumentDefinition.model_validate(strip_extra_keys(d))
                 key = cast(str, d.get("instrument_key") or inst.instrument_key)
                 result[key] = inst
             except (ValueError, KeyError, TypeError, IndexError) as e:
@@ -321,15 +322,16 @@ class InstrumentSyncMixin:
         date: datetime,
     ) -> dict[str, InstrumentDefinition]:
         """Process on-chain CLOB venues (Hyperliquid, Aster) as part of CEFI."""
-        cefi_onchain_clob_venues: list[str] = self.venue_mapping.all_cefi_onchain_clob_venues
+        # SSOT: ONCHAIN_CLOB_CEFI_VENUES — not in DEFI_VENUE_TO_PROTOCOL / DEFI_PROTOCOLS.
+        onchain_clob_venues: list[str] = list(ONCHAIN_CLOB_CEFI_VENUES)
         cefi_clob_protocols: list[tuple[str, None]] = []
 
         if venues_filter:
             for venue in venues_filter:
-                if venue.upper() in cefi_onchain_clob_venues:
+                if venue.upper() in onchain_clob_venues:
                     cefi_clob_protocols.append((venue.lower(), None))
         else:
-            for venue in cefi_onchain_clob_venues:
+            for venue in onchain_clob_venues:
                 cefi_clob_protocols.append((venue.lower(), None))
 
         if not cefi_clob_protocols:
@@ -373,7 +375,7 @@ class InstrumentSyncMixin:
                         "error": str(e),
                         "error_type": type(e).__name__,
                         "correlation_id": _err.correlation_id,
-                        "category": "cefi_onchain_clob",
+                        "category": "defi_onchain_clob",
                     },
                 )
 
@@ -413,6 +415,8 @@ class InstrumentSyncMixin:
         if not cefi_exchanges:
             logger.info("Skipping CEFI processing - no exchanges to process")
         else:
+            # CeFi metadata enrichment uses CCXT; preload once per run (skipped for DeFi-only jobs).
+            self.processing_service.preload_ccxt_for_tardis_exchanges(cefi_exchanges)
             logger.info("Processing %s CeFi exchanges in parallel...", len(cefi_exchanges))
             results: list[dict[str, InstrumentDefinition]] = await asyncio.gather(
                 *[self._fetch_tardis_instruments(ex, date, force) for ex in cefi_exchanges],
@@ -510,7 +514,7 @@ class InstrumentSyncMixin:
         """Process CBOE exchange (VIX instrument)."""
         vix_def_dict: InstrumentDefDict = create_vix_instrument_definition(date)
         if vix_def_dict:
-            vix_def = InstrumentDefinition.model_validate(vix_def_dict)
+            vix_def = InstrumentDefinition.model_validate(strip_extra_keys(vix_def_dict))
             logger.info("Created VIX: %s", vix_def.instrument_key)
             return {vix_def.instrument_key: vix_def}
         return {}
@@ -520,7 +524,7 @@ class InstrumentSyncMixin:
         """Process FX exchange (KRW/USD instrument)."""
         krwusd_def_dict: InstrumentDefDict = create_krwusd_instrument_definition(date)
         if krwusd_def_dict:
-            krwusd_def = InstrumentDefinition.model_validate(krwusd_def_dict)
+            krwusd_def = InstrumentDefinition.model_validate(strip_extra_keys(krwusd_def_dict))
             logger.info("Created KRW/USD: %s", krwusd_def.instrument_key)
             return {krwusd_def.instrument_key: krwusd_def}
         return {}
@@ -575,7 +579,7 @@ class InstrumentSyncMixin:
                     get_us_equity_trading_hours,
                 )
                 if etf_def_dict:
-                    etf_def = InstrumentDefinition.model_validate(etf_def_dict)
+                    etf_def = InstrumentDefinition.model_validate(strip_extra_keys(etf_def_dict))
                     instruments[etf_def.instrument_key] = etf_def
                     logger.info("Created Bitcoin ETF: %s", etf_def.instrument_key)
         return instruments
@@ -710,6 +714,14 @@ class InstrumentSyncMixin:
             logger.warning("No matching DEFI protocols found for venues: %s", defi_venues)
         return defi_protocols
 
+    @staticmethod
+    def _canonical_defi_venue_for_protocol(protocol: str, chain: str | None) -> str:
+        """Resolve canonical venue (e.g. BALANCER-ETH) for adapter protocol + chain."""
+        for venue, (prot, ch) in DEFI_VENUE_TO_PROTOCOL.items():
+            if prot == protocol and ch == chain:
+                return venue
+        return protocol
+
     async def _fetch_single_defi_protocol(
         self,
         protocol: str,
@@ -717,6 +729,7 @@ class InstrumentSyncMixin:
         date: datetime,
     ) -> dict[str, InstrumentDefinition]:
         """Fetch instruments from a single DeFi protocol."""
+        canonical_venue = self._canonical_defi_venue_for_protocol(protocol, chain)
         try:
             if chain:
                 defi_instruments = await self.processing_service.fetch_defi_instruments(
@@ -736,7 +749,8 @@ class InstrumentSyncMixin:
             log_event(
                 VENUE_ZERO_INSTRUMENTS,
                 details={
-                    "venue": protocol,
+                    "venue": canonical_venue,
+                    "protocol": protocol,
                     "chain": chain or "unknown",
                     "reason": "adapter returned 0 instruments",
                 },
@@ -745,7 +759,7 @@ class InstrumentSyncMixin:
         except (ValueError, KeyError, TypeError, IndexError, AttributeError, RuntimeError) as e:
             # Shard-level failure isolation: log and continue with remaining protocols.
             _err = EnhancedError(
-                message=f"DeFi protocol {protocol} failed: {e}",
+                message=f"DeFi protocol {protocol} ({canonical_venue}) failed: {e}",
                 category=ErrorCategory.SERVER_ERROR,
                 severity=ErrorSeverity.HIGH,
                 recovery_strategy=ErrorRecoveryStrategy.RETRY,
@@ -760,7 +774,8 @@ class InstrumentSyncMixin:
             log_event(
                 "VENUE_PROCESSING_FAILED",
                 details={
-                    "venue": protocol,
+                    "venue": canonical_venue,
+                    "protocol": protocol,
                     "error": str(e),
                     "error_type": type(e).__name__,
                     "correlation_id": _err.correlation_id,

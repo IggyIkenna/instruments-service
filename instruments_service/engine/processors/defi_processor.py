@@ -1,7 +1,10 @@
 """
-DeFi Instruments Processor
+DeFi and related on-chain instruments processor.
 
-Fetches DeFi instruments from various protocols.
+Fetches DeFi protocol instruments (lending, AMM, LST, etc.) and also covers
+on-chain-settled CeFi CLOB venues (Hyperliquid, Aster) that share URDI/CCXT-style
+fetch paths with the DeFi batch. Those CeFi CLOB rows use market_category CEFI,
+not DEFI — this module name reflects the historical fetch pipeline, not bucket.
 Extracted from InstrumentProcessingService.fetch_defi_instruments.
 """
 
@@ -17,6 +20,7 @@ from uuid import uuid4
 from unified_events_interface import VENUE_ZERO_INSTRUMENTS, log_event
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryStrategy, ErrorSeverity
 from unified_internal_contracts.reference.instrument import InstrumentRecord
+from unified_internal_contracts.reference.instrument_definition import strip_extra_keys
 from unified_reference_data_interface import create_reference_data_adapter
 
 from instruments_service.models import InstrumentDefinition
@@ -148,7 +152,6 @@ async def _fetch_raw_from_protocol(
         "lido": "lido",
         "etherfi": "etherfi",
         "aave_plasma": "aave_v3",
-        "hyperliquid": "hyperliquid",
     }
 
     if proto == "aster":
@@ -166,9 +169,14 @@ async def _fetch_raw_from_protocol(
                 inst_data["tardis_exchange"] = ""
                 inst_data["tardis_symbol"] = ""
                 inst_data["data_provider"] = "aster"
-                inst_data["market_category"] = "defi"
+                inst_data["market_category"] = "CEFI"
                 inst_data["data_types"] = "trades,book_snapshot_5,derivative_ticker"
         return raw
+
+    if proto == "hyperliquid":
+        hl_adapter = create_reference_data_adapter("hyperliquid")
+        hl_records = await hl_adapter.get_instruments()
+        return _records_to_raw_dict(hl_records)
 
     urdi_key = _proto_to_urdi_key.get(proto)
     if urdi_key is None:
@@ -339,7 +347,7 @@ async def fetch_defi_instruments(
                 if not _passes_mvp_filter(quote_asset, mvp_quotes):
                     continue
 
-                inst_def = InstrumentDefinition.model_validate(inst_data_dict)
+                inst_def = InstrumentDefinition.model_validate(strip_extra_keys(inst_data_dict))
                 if protocol.lower() == "hyperliquid":
                     _enrich_hyperliquid_instrument(service, inst_def)
                 instruments[inst_key] = inst_def
