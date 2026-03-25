@@ -45,20 +45,12 @@ class InstrumentsHandler(UnifiedServiceHandler):
         self._venue_override: list[str] | None = None  # set in preflight() when --venues is used
 
     async def preflight(self) -> None:
-        """Start API key reloader and check data availability."""
-        categories: list[str] = [c.value for c in self.runtime.category] if self.runtime.category else ["ALL"]
-        start_date: str = self.runtime.start_date
-        all_venues = get_venues_for_categories(categories)
-
-        if self.runtime.venue_filter:
-            requested = {v.upper() for v in self.runtime.venue_filter}
-            all_venues = [v for v in all_venues if v.upper() in requested]
-            logger.info("Venue filter: processing only %s", self.runtime.venue_filter)
-            self._venue_override = all_venues
-
-        active_venues = [v for v in all_venues if is_venue_available(v, start_date)] if start_date else all_venues
-        self._start_key_reloader(active_venues)
-        self._populate_completed_dates(start_date)
+        """Start API key reloader. Date/category filtering happens in process()."""
+        # Preflight runs once before any date is processed. We don't know
+        # the specific dates yet (BatchIO iterates them), so we validate keys
+        # for ALL venues across ALL categories. Per-date filtering is in process().
+        all_venues = get_venues_for_categories(["ALL"])
+        self._start_key_reloader(all_venues)
 
     def _start_key_reloader(self, active_venues: list[str]) -> None:
         """Start API key reloader — fail-fast on missing keys, periodic refresh."""
@@ -79,27 +71,20 @@ class InstrumentsHandler(UnifiedServiceHandler):
             logger.error("API key validation failed: %s", exc)
             raise
 
-    def _populate_completed_dates(self, start_date: str) -> None:
-        """Check which dates already have data (skip logic)."""
+    def _is_date_complete(self, date: str) -> bool:
+        """Check if a single date already has data in storage."""
         try:
             bucket = get_bucket_name("instruments")
-            end_date: str = self.runtime.end_date
-            if start_date and end_date:
-                self._completed_dates = validate_data_availability(
-                    service_name="instruments-service",
-                    bucket=bucket,
-                    path_pattern=_INSTRUMENTS_PATH_PATTERN,
-                    start_date=start_date,
-                    end_date=end_date,
-                )
-                logger.info(
-                    "preflight: %d dates already complete (of %s → %s)",
-                    len(self._completed_dates),
-                    start_date,
-                    end_date,
-                )
-        except Exception as exc:
-            logger.warning("preflight data availability check failed (proceeding): %s", exc)
+            completed = validate_data_availability(
+                service_name="instruments-service",
+                bucket=bucket,
+                path_pattern=_INSTRUMENTS_PATH_PATTERN,
+                start_date=date,
+                end_date=date,
+            )
+            return date in completed
+        except Exception:
+            return False
 
     async def process(self, payload: BatchPayload) -> object:
         """Process instruments for the date in the payload.
@@ -110,7 +95,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
         date = payload.date
         redo_all = bool(payload.extra.get("redo_all", False))
 
-        if date in self._completed_dates and not redo_all:
+        if not redo_all and self._is_date_complete(date):
             logger.debug("Skipping already-complete date=%s", date)
             return None
 
