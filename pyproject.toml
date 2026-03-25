@@ -41,6 +41,7 @@ dependencies = [
     "ccxt<5.0.0,>=4.5.24",
     "plotly>=6.4.0,<7.0.0",
     "unified-trading-library>=0.1.0,<1.0.0",
+    "unified-sports-reference-interface>=0.1.0,<1.0.0",
     "unified-api-contracts>=0.2.0,<1.0.0",
     "unified-config-interface>=0.2.0,<1.0.0",
     "unified-events-interface>=0.2.0,<1.0.0",
@@ -192,6 +193,11 @@ exclude_lines = [
     "@abstractmethod",
     "raise NotImplementedError",
 ]
+
+
+[tool.uv.sources.unified-sports-reference-interface]
+path = "../unified-sports-reference-interface"
+editable = true
 
 [tool.basedpyright]
 include = [
