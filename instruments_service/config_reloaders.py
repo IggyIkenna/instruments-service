@@ -50,8 +50,9 @@ class InstrumentsDomainConfigState:
         self._ticker_known_etfs: list[str] = sorted(KNOWN_ETFS)
         self._ticker_from_cloud: bool = False
         # SSOT for DeFi major assets is InstrumentDomainConfig.defi_major_assets (UCI).
-        # The default comes from UCI; cloud ConfigStore can override via hot-reload.
-        self._defi_major_assets: frozenset[str] = InstrumentDomainConfig().defi_major_assets
+        # Read the field default without instantiating the full config (avoids env var conflicts).
+        _field = InstrumentDomainConfig.model_fields["defi_major_assets"]
+        self._defi_major_assets: frozenset[str] = _field.default_factory() if _field.default_factory else frozenset()
         self._reloader: DomainConfigReloader[InstrumentDomainConfig] | None = None
 
     def get_subscription_list(self) -> list[str]:
