@@ -189,6 +189,10 @@ def get_venues_for_categories(categories: list[str]) -> list[str]:
             # API_FOOTBALL is the source for sports reference data (fixtures, teams, leagues).
             # BETFAIR is for live odds / tick data — belongs in market-tick-data-service, not here.
             venues.extend(["API_FOOTBALL"])
+        if cat_upper in ("PREDICTION", "ALL"):
+            # POLYMARKET + KALSHI: prediction market instruments (crypto up/down, soccer, macro).
+            # No auth required — Gamma API (Polymarket) and public API (Kalshi) are keyless.
+            venues.extend(["POLYMARKET", "KALSHI"])
     return list(dict.fromkeys(venues))
 
 

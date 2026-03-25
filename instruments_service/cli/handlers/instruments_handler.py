@@ -21,7 +21,7 @@ from unified_trading_library import (
 )
 
 from instruments_service.engine import orchestrator as engine_orchestrator
-from instruments_service.engine.orchestrator import get_venues_for_categories, is_venue_available
+from instruments_service.engine.orchestrator import get_venues_for_categories
 
 logger = logging.getLogger(__name__)
 
