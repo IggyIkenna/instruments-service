@@ -47,29 +47,10 @@ from instruments_service.config_reloaders import get_defi_major_assets
 
 logger = logging.getLogger(__name__)
 
-# Venue startup dates (URDI canonical names) — skip venues before their launch date.
-# Dates from official protocol deployment records.
-_VENUE_LAUNCH_DATES: dict[str, str] = {
-    "UNISWAPV2-ETHEREUM": "2020-05-18",
-    "UNISWAPV3-ETHEREUM": "2021-05-05",
-    "UNISWAPV4-ETHEREUM": "2025-01-31",
-    "CURVE-ETHEREUM": "2020-01-20",
-    "BALANCER-ETHEREUM": "2020-03-31",
-    "AAVEV3-ETHEREUM": "2023-01-27",
-    "MORPHO-ETHEREUM": "2024-01-08",
-    "EULER-ETHEREUM": "2023-12-18",
-    "FLUID-ETHEREUM": "2024-03-01",
-    "LIDO-ETHEREUM": "2020-12-18",
-    "ETHERFI-ETHEREUM": "2023-11-01",
-    "ETHENA-ETHEREUM": "2024-02-19",
-    "HYPERLIQUID": "2023-01-01",
-    "BINANCE-SPOT": "2017-07-14",
-    "BINANCE-FUTURES": "2019-09-13",
-    "BYBIT": "2018-11-01",
-    "COINBASE-SPOT": "2014-01-01",
-    "COINBASE": "2014-01-01",
-    "DERIBIT": "2016-06-01",
-}
+# Venue launch dates SSOT: UAC VenueMapping.venue_start_dates (canonical PROTOCOL-CHAIN format).
+# No local copy — read from VenueMapping at module load.
+_VENUE_MAPPING = VenueMapping()
+_VENUE_LAUNCH_DATES: dict[str, str] = _VENUE_MAPPING.venue_start_dates
 
 _DEFI_VENUES: list[str] = [
     "UNISWAPV2-ETHEREUM",
