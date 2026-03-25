@@ -17,13 +17,13 @@ import logging
 from datetime import date
 
 from unified_api_contracts import KNOWN_ETFS, TRADFI_TICKER_UNIVERSE
-from unified_config_interface import (
+from unified_trading_library import (
     ConfigStoreError,
     InstrumentDomainConfig,
     TickerUniverseConfig,
     TimeSeriesConfigStore,
 )
-from unified_events_interface import log_event
+from unified_trading_library import log_event
 from unified_trading_library import DomainConfigReloader
 
 from instruments_service.config.service_config import InstrumentsServiceConfig

@@ -58,7 +58,7 @@ _load_env_early()
 @pytest.fixture(autouse=True, scope="session")
 def setup_event_logging_for_tests():
     """Initialize event logging in mock mode for all tests."""
-    from unified_events_interface import MockEventSink, setup_events
+    from unified_trading_library import MockEventSink, setup_events
 
     setup_events(service_name="instruments-service", mode="test", sink=MockEventSink())
     yield

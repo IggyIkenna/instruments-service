@@ -31,7 +31,7 @@ from pathlib import Path
 
 import yaml
 from unified_api_contracts import KNOWN_ETFS, VenueMapping
-from unified_config_interface import (
+from unified_trading_library import (
     ConfigStore,
     InstrumentDomainConfig,
     TickerUniverseConfig,

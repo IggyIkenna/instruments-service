@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import SettingsConfigDict
-from unified_config_interface import UnifiedCloudConfig
+from unified_trading_library import UnifiedCloudConfig
 
 
 class InstrumentsServiceConfig(UnifiedCloudConfig):

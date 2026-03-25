@@ -67,7 +67,7 @@ def test_instruments_config_exported_from_package():
 
 def test_config_extends_unified_cloud_config():
     """InstrumentsServiceConfig extends UnifiedCloudConfig — inherits cloud settings."""
-    from unified_config_interface import UnifiedCloudConfig
+    from unified_trading_library import UnifiedCloudConfig
 
     from instruments_service.config.service_config import InstrumentsServiceConfig
 

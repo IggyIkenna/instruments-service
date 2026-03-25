@@ -43,8 +43,6 @@ dependencies = [
     "unified-trading-library>=0.1.0,<1.0.0",
     "unified-sports-reference-interface>=0.1.0,<1.0.0",
     "unified-api-contracts>=0.2.0,<1.0.0",
-    "unified-config-interface>=0.2.0,<1.0.0",
-    "unified-events-interface>=0.2.0,<1.0.0",
     "unified-internal-contracts>=0.1.0,<1.0.0",
     "unified-reference-data-interface>=0.1.0,<1.0.0",
     "ib_insync>=0.9.86,<1.0.0",
@@ -80,14 +78,6 @@ editable = true
 
 [tool.uv.sources.unified-api-contracts]
 path = "../unified-api-contracts"
-editable = true
-
-[tool.uv.sources.unified-config-interface]
-path = "../unified-config-interface"
-editable = true
-
-[tool.uv.sources.unified-events-interface]
-path = "../unified-events-interface"
 editable = true
 
 [tool.uv.sources.unified-internal-contracts]

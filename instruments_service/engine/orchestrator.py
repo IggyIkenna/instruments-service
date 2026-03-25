@@ -186,8 +186,11 @@ def get_venues_for_categories(categories: list[str]) -> list[str]:
         if cat_upper in ("DEFI", "ALL"):
             venues.extend(_DEFI_VENUES)
         if cat_upper in ("SPORTS", "ALL"):
-            # API_FOOTBALL is the source for sports reference data (fixtures, teams, leagues).
-            # BETFAIR is for live odds / tick data — belongs in market-tick-data-service, not here.
+            # instruments-service owns fixtures + slow-moving reference data
+            # (teams, leagues, players, referees, venues) via API-Football.
+            # Betting market instruments (the actual tradeable positions) come from
+            # market-tick-data-service via Odds API — documented exception because
+            # markets are only discoverable alongside odds data.
             venues.extend(["API_FOOTBALL"])
         if cat_upper in ("PREDICTION", "ALL"):
             # POLYMARKET + KALSHI: prediction market instruments (crypto up/down, soccer, macro).
@@ -331,6 +334,17 @@ async def process_instruments(
     else:
         _write_venue("all", df, date, bucket, sink, counts, sampler)
 
+    # 7. SPORTS enrichment: fetch and write reference data (teams, leagues, etc.)
+    # alongside fixtures. These are slow-moving entities that don't change per-date
+    # but are re-fetched to capture transfers, promotions, new seasons.
+    is_sports = any(c.upper() in ("SPORTS", "ALL") for c in categories)
+    if is_sports and api_keys:
+        sports_ref_counts = await _fetch_sports_reference_data(
+            date=date, api_key=api_keys.get("api_football", ""), bucket=bucket,
+        )
+        for k, v in sports_ref_counts.items():
+            counts[k] = counts.get(k, 0) + v
+
     total = sum(counts.values())
     log_event(
         "PROCESSING_COMPLETED",
@@ -367,6 +381,67 @@ def _write_venue(
         logger.error("Write failed for venue=%s date=%s: %s", venue_str, date, exc)
         log_event("WRITE_FAILED", details={"venue": venue_str, "date": date, "error": str(exc)})
     # Programming errors propagate — fail the shard
+
+
+async def _fetch_sports_reference_data(
+    date: str,
+    api_key: str,
+    bucket: str,
+) -> dict[str, int]:
+    """Fetch sports reference data (teams, leagues, players, referees, venues).
+
+    Calls USRI api_football adapter directly for enrichment data that
+    describes the instruments (fixtures). Written to the same bucket as
+    instruments under separate hive-partitioned prefixes.
+
+    This data is slow-moving (leagues/teams change per season, not per day)
+    but we re-fetch on each run to capture mid-season transfers, promotions,
+    and new referee assignments.
+    """
+    from unified_sports_reference_interface import create_sports_reference_adapter
+
+    adapter = create_sports_reference_adapter("api_football", api_key=api_key)
+    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    counts: dict[str, int] = {}
+
+    # Leagues — all known leagues
+    try:
+        leagues = await adapter.get_leagues()
+        if leagues:
+            df = pd.DataFrame([lg.model_dump() for lg in leagues])
+            sink.write(data=df, partition={"day": date, "entity": "leagues"}, format="parquet", filename="leagues.parquet")
+            counts["leagues"] = len(df)
+            logger.info("Sports reference: %d leagues written", len(df))
+    except Exception as exc:
+        logger.warning("Sports reference leagues fetch failed: %s", exc)
+
+    # Teams — for each prediction league
+    try:
+        from unified_api_contracts.canonical.domain.sports import get_prediction_leagues  # noqa: PLC0415
+
+        all_teams: list[dict[str, object]] = []
+        for league_def in get_prediction_leagues():
+            if league_def.api_football_id is None:
+                continue
+            try:
+                teams = await adapter.get_teams(league_def.api_football_id)
+                for t in teams:
+                    all_teams.append(t.model_dump())
+            except Exception as exc:
+                logger.warning(
+                    "Sports reference teams fetch failed for league %s: %s",
+                    league_def.league_id,
+                    exc,
+                )
+        if all_teams:
+            df = pd.DataFrame(all_teams)
+            sink.write(data=df, partition={"day": date, "entity": "teams"}, format="parquet", filename="teams.parquet")
+            counts["teams"] = len(df)
+            logger.info("Sports reference: %d teams written", len(df))
+    except Exception as exc:
+        logger.warning("Sports reference teams batch failed: %s", exc)
+
+    return counts
 
 
 def _get_instruments_bucket(category: str | None = None) -> str:

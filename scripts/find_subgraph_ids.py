@@ -9,7 +9,7 @@ import logging
 from uuid import uuid4
 
 import requests
-from unified_config_interface import UnifiedCloudConfig
+from unified_trading_library import UnifiedCloudConfig
 from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
 from unified_internal_contracts.schemas.errors import ErrorContext
 from unified_trading_library import get_secret_client
