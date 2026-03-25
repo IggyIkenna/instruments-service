@@ -1371,10 +1371,9 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "ruff" },
     { name = "unified-api-contracts" },
-    { name = "unified-config-interface" },
-    { name = "unified-events-interface" },
     { name = "unified-internal-contracts" },
     { name = "unified-reference-data-interface" },
+    { name = "unified-sports-reference-interface" },
     { name = "unified-trading-library" },
     { name = "web3" },
     { name = "yfinance" },
@@ -1411,10 +1410,9 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0,<2.0.0" },
     { name = "ruff", specifier = "==0.15.0" },
     { name = "unified-api-contracts", editable = "../unified-api-contracts" },
-    { name = "unified-config-interface", editable = "../unified-config-interface" },
-    { name = "unified-events-interface", editable = "../unified-events-interface" },
     { name = "unified-internal-contracts", editable = "../unified-internal-contracts" },
     { name = "unified-reference-data-interface", editable = "../unified-reference-data-interface" },
+    { name = "unified-sports-reference-interface", editable = "../unified-sports-reference-interface" },
     { name = "unified-trading-library", editable = "../unified-trading-library" },
     { name = "web3", specifier = ">=6.0.0,<7.0.0" },
     { name = "yfinance", specifier = ">=0.2.66,<1.0.0" },
@@ -3355,6 +3353,45 @@ requires-dist = [
     { name = "unified-events-interface", editable = "../unified-events-interface" },
     { name = "unified-internal-contracts", editable = "../unified-internal-contracts" },
     { name = "vcrpy", specifier = ">=8.0.0,<9.0.0" },
+]
+
+[[package]]
+name = "unified-sports-reference-interface"
+version = "0.1.0"
+source = { editable = "../unified-sports-reference-interface" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "bandit" },
+    { name = "basedpyright" },
+    { name = "pip-audit" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-socket" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+    { name = "ruff" },
+    { name = "unified-api-contracts" },
+    { name = "unified-events-interface" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiohttp", specifier = ">=3.13.2,<4.0.0" },
+    { name = "bandit", specifier = ">=1.7.0,<2.0.0" },
+    { name = "basedpyright", specifier = "==1.38.2" },
+    { name = "pip-audit", specifier = ">=2.7.0,<3.0.0" },
+    { name = "pre-commit", specifier = ">=3.0,<4.0.0" },
+    { name = "pytest", specifier = ">=9.0.1,<10.0.0" },
+    { name = "pytest-asyncio", specifier = ">=0.25.0,<2.0.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0,<8.0.0" },
+    { name = "pytest-socket", specifier = ">=0.7.0,<1.0.0" },
+    { name = "pytest-timeout", specifier = ">=2.4.0,<3.0.0" },
+    { name = "pytest-xdist", specifier = ">=3.6.0,<4.0.0" },
+    { name = "ruff", specifier = "==0.15.0" },
+    { name = "unified-api-contracts", editable = "../unified-api-contracts" },
+    { name = "unified-events-interface", editable = "../unified-events-interface" },
 ]
 
 [[package]]
