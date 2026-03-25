@@ -131,6 +131,7 @@ def filter_defi_instruments_by_relevance(records: list) -> list:
 def filter_instruments_by_date(
     records: list,
     date_dt: datetime,
+    defi_venues: frozenset[str] | None = None,
 ) -> list:
     """Return only instruments active on the given UTC datetime.
 
@@ -140,6 +141,16 @@ def filter_instruments_by_date(
 
     This is required because URDI adapters return the full historical universe.
     function reduces them to only the instruments tradeable on the requested day.
+
+    Args:
+        records: InstrumentRecord list from URDI.
+        date_dt: UTC datetime representing the requested processing date.
+        defi_venues: Optional set of DeFi venue names (uppercase). When provided,
+            a WARNING is emitted for any DeFi instrument where available_since=None
+            because on-chain creation timestamps are expected for all DeFi instruments
+            and absence indicates the URDI adapter did not provide them (data quality
+            is degraded — the instrument will still be included but with unknown
+            listing date).
     """
     result = []
     for r in records:
@@ -148,6 +159,16 @@ def filter_instruments_by_date(
         since_ok = since is None or since <= date_dt
         until_ok = until is None or until >= date_dt
         if since_ok and until_ok:
+            if defi_venues is not None and since is None:
+                venue = (getattr(r, "venue", None) or "").upper()
+                if venue in defi_venues:
+                    key = getattr(r, "instrument_key", repr(r))
+                    logger.warning(
+                        "DeFi instrument %s has available_since=None — "
+                        "URDI adapter did not provide on-chain creation timestamp; "
+                        "date accuracy degraded",
+                        key,
+                    )
             result.append(r)
     return result
 
@@ -221,13 +242,35 @@ async def process_instruments(
 
     # 3. Filter to instruments active on the requested date.
     # URDI adapters return the full historical instrument universe; this reduces
+    # it to only instruments tradeable on the requested day.
+    # Pass the DeFi venue set so the filter can warn on missing available_since.
+    is_defi_run = any(c.upper() in ("DEFI", "ALL") for c in categories)
+    defi_venue_set: frozenset[str] | None = frozenset(_DEFI_VENUES) if is_defi_run else None
     date_dt = datetime.fromisoformat(date).replace(tzinfo=UTC)
-    records = filter_instruments_by_date(records, date_dt)
+    records = filter_instruments_by_date(records, date_dt, defi_venues=defi_venue_set)
     logger.info(
         "Date filter %s: %d instruments active (from URDI fetch)",
         date,
         len(records),
     )
+
+    # 3a. DeFi available_since coverage summary.
+    # Counts how many DeFi instruments in the date-filtered set have a populated
+    # available_since vs None. Low coverage indicates URDI adapters are not
+    # returning on-chain creation timestamps and the date filter is permissive
+    # (treating None as "always available").
+    if is_defi_run and records:
+        defi_records = [r for r in records if (getattr(r, "venue", "") or "").upper() in _DEFI_VENUES]
+        if defi_records:
+            populated = sum(1 for r in defi_records if getattr(r, "available_since", None) is not None)
+            total_defi = len(defi_records)
+            pct = int(populated * 100 / total_defi)
+            logger.info(
+                "Date accuracy: %d/%d DeFi instruments have available_since populated (%d%% coverage)",
+                populated,
+                total_defi,
+                pct,
+            )
 
     # 3b. DEFI relevance filter: keep only instruments involving major liquid assets.
     # Whitelist is from config_reloaders.get_defi_major_assets() — defaults to
