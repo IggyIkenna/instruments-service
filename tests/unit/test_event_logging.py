@@ -35,7 +35,7 @@ def test_required_lifecycle_events_importable():
 
 def test_event_logging_initialized_in_mock_mode():
     """Events can be initialized and log_event can be called without error."""
-    from unified_events_interface import MockEventSink, log_event, setup_events
+    from unified_trading_library import MockEventSink, log_event, setup_events
 
     setup_events(service_name="instruments-service-test", mode="test", sink=MockEventSink())
 
@@ -48,7 +48,7 @@ def test_event_logging_initialized_in_mock_mode():
 
 def test_write_failed_event_is_emittable():
     """WRITE_FAILED event is emittable with venue/date context."""
-    from unified_events_interface import MockEventSink, log_event, setup_events
+    from unified_trading_library import MockEventSink, log_event, setup_events
 
     setup_events(service_name="instruments-service-test", mode="test", sink=MockEventSink())
 
@@ -57,7 +57,7 @@ def test_write_failed_event_is_emittable():
 
 def test_processing_failed_event_is_emittable():
     """PROCESSING_FAILED event is emittable when URDI returns zero records."""
-    from unified_events_interface import MockEventSink, log_event, setup_events
+    from unified_trading_library import MockEventSink, log_event, setup_events
 
     setup_events(service_name="instruments-service-test", mode="test", sink=MockEventSink())
 
@@ -66,7 +66,7 @@ def test_processing_failed_event_is_emittable():
 
 def test_validation_failed_event_is_emittable():
     """VALIDATION_FAILED event is emittable on schema issues."""
-    from unified_events_interface import MockEventSink, log_event, setup_events
+    from unified_trading_library import MockEventSink, log_event, setup_events
 
     setup_events(service_name="instruments-service-test", mode="test", sink=MockEventSink())
 

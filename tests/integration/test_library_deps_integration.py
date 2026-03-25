@@ -296,7 +296,7 @@ def test_uci_config_base_class_usable() -> None:
     """UnifiedCloudConfig is the base class for InstrumentsServiceConfig. If its
     constructor or required env vars change, the service fails at startup.
     """
-    from unified_config_interface import UnifiedCloudConfig
+    from unified_trading_library import UnifiedCloudConfig
 
     # Must be constructable in mock mode (no real GCP needed)
     cfg = UnifiedCloudConfig()
@@ -311,7 +311,7 @@ def test_uci_domain_config_types_importable() -> None:
     as the schema classes passed to TimeSeriesConfigStore. If they are moved or renamed,
     the hot-reload system silently does nothing.
     """
-    from unified_config_interface import (
+    from unified_trading_library import (
         ConfigStoreError,
         InstrumentDomainConfig,
         TickerUniverseConfig,
@@ -342,7 +342,7 @@ def test_uei_log_event_callable() -> None:
     """
     import inspect
 
-    from unified_events_interface import log_event
+    from unified_trading_library import log_event
 
     assert callable(log_event)
     sig = inspect.signature(log_event)
