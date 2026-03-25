@@ -1339,7 +1339,7 @@ wheels = [
 
 [[package]]
 name = "instruments-service"
-version = "0.1.117"
+version = "0.1.22"
 source = { editable = "." }
 dependencies = [
     { name = "bandit" },
@@ -3053,7 +3053,7 @@ wheels = [
 
 [[package]]
 name = "unified-api-contracts"
-version = "0.2.38"
+version = "0.1.20"
 source = { editable = "../unified-api-contracts" }
 dependencies = [
     { name = "bandit" },
@@ -3106,7 +3106,7 @@ requires-dist = [
 
 [[package]]
 name = "unified-cloud-interface"
-version = "0.11.39"
+version = "0.11.6"
 source = { editable = "../unified-cloud-interface" }
 dependencies = [
     { name = "bandit" },
@@ -3175,7 +3175,7 @@ requires-dist = [
 
 [[package]]
 name = "unified-config-interface"
-version = "0.2.1"
+version = "0.1.17"
 source = { editable = "../unified-config-interface" }
 dependencies = [
     { name = "bandit" },
@@ -3224,7 +3224,7 @@ requires-dist = [
 
 [[package]]
 name = "unified-events-interface"
-version = "0.2.48"
+version = "0.2.2"
 source = { editable = "../unified-events-interface" }
 dependencies = [
     { name = "bandit" },
@@ -3257,7 +3257,7 @@ requires-dist = [
 
 [[package]]
 name = "unified-internal-contracts"
-version = "0.1.95"
+version = "0.1.2"
 source = { editable = "../unified-internal-contracts" }
 dependencies = [
     { name = "bandit" },
@@ -3306,7 +3306,7 @@ requires-dist = [
 
 [[package]]
 name = "unified-reference-data-interface"
-version = "0.1.102"
+version = "0.1.0"
 source = { editable = "../unified-reference-data-interface" }
 dependencies = [
     { name = "aiohttp" },
@@ -3359,7 +3359,7 @@ requires-dist = [
 
 [[package]]
 name = "unified-trading-library"
-version = "0.3.191"
+version = "0.3.167"
 source = { editable = "../unified-trading-library" }
 dependencies = [
     { name = "bandit" },
