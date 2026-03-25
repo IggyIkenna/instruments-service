@@ -38,7 +38,5 @@ def main_service_cli() -> None:  # pragma: no cover
         service_name=_SERVICE_NAME,
         operations={"instruments": InstrumentsHandler},
         config=get_config(),
-        live_trigger="scheduled",  # --mode live → UTL ScheduledIO (15-min wall-clock)
-        interval_seconds=900,  # 15-minute intervals
         extra_args_fn=_add_service_args,
     ).run()
