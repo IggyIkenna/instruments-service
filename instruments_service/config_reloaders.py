@@ -38,72 +38,8 @@ class InstrumentsDomainConfigState:
     so tests can create isolated instances without cross-contamination.
     """
 
-    # Default DeFi major assets: ETH/BTC/USDT/USDC and known liquid derivatives.
-    # Override via cloud ConfigStore — see load_ticker_universe_from_cloud().
-    _DEFAULT_DEFI_MAJOR_ASSETS: frozenset[str] = frozenset(
-        {
-            # ETH and liquid staking/restaking derivatives
-            "ETH",
-            "WETH",
-            "STETH",
-            "WSTETH",
-            "CBETH",
-            "RETH",
-            "WEETH",
-            "EETH",
-            "SFRXETH",
-            "FRXETH",
-            "OETH",
-            "OSETH",
-            "SWETH",
-            "ETHX",
-            "METH",
-            "EZETH",
-            "RSETH",
-            "PUFETH",
-            "ANKRETH",
-            # BTC and wrapped variants
-            "BTC",
-            "WBTC",
-            "TBTC",
-            "CBBTC",
-            "LBTC",
-            # Major stablecoins
-            "USDT",
-            "USDC",
-            "DAI",
-            "FRAX",
-            "USDE",
-            "SUSDE",
-            "GHO",
-            "CRVUSD",
-            "LUSD",
-            "PYUSD",
-            "EURC",
-            "SUSD",
-            "TUSD",
-            "USDP",
-            # Major DeFi governance / Aave collateral
-            "AAVE",
-            "LINK",
-            "UNI",
-            "MKR",
-            "CRV",
-            "SNX",
-            "BAL",
-            "LDO",
-            "RPL",
-            "COMP",
-            "YFI",
-            "SUSHI",
-            "1INCH",
-            "FXS",
-            # Other liquid assets on Aave
-            "SOL",
-            "MATIC",
-            "WMATIC",
-        }
-    )
+    # DeFi major assets SSOT: InstrumentDomainConfig.defi_major_assets (UCI).
+    # No local copy — imported at __init__ time, hot-reloadable via cloud ConfigStore.
 
     def __init__(self) -> None:
         self._subscription_list: list[str] = []
@@ -113,7 +49,9 @@ class InstrumentsDomainConfigState:
         self._ticker_nasdaq: list[str] = list(TRADFI_TICKER_UNIVERSE["nasdaq_tickers"])
         self._ticker_known_etfs: list[str] = sorted(KNOWN_ETFS)
         self._ticker_from_cloud: bool = False
-        self._defi_major_assets: frozenset[str] = self._DEFAULT_DEFI_MAJOR_ASSETS
+        # SSOT for DeFi major assets is InstrumentDomainConfig.defi_major_assets (UCI).
+        # The default comes from UCI; cloud ConfigStore can override via hot-reload.
+        self._defi_major_assets: frozenset[str] = InstrumentDomainConfig().defi_major_assets
         self._reloader: DomainConfigReloader[InstrumentDomainConfig] | None = None
 
     def get_subscription_list(self) -> list[str]:
