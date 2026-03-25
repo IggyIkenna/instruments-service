@@ -29,6 +29,7 @@ from datetime import UTC, datetime
 from datetime import date as date_type
 
 import pandas as pd
+from unified_api_contracts import VenueMapping
 from unified_trading_library import (
     DataSink,
     DomainValidationService,
