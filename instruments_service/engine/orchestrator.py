@@ -79,8 +79,6 @@ _CEFI_VENUES: list[str] = [
     "COINBASE-SPOT",
     "HYPERLIQUID",
     "UPBIT",
-    "GEMINI-SPOT",
-    "PHEMEX-SPOT",
     "ASTER",
 ]
 
@@ -340,7 +338,9 @@ async def process_instruments(
     is_sports = any(c.upper() in ("SPORTS", "ALL") for c in categories)
     if is_sports and api_keys:
         sports_ref_counts = await _fetch_sports_reference_data(
-            date=date, api_key=api_keys.get("api_football", ""), bucket=bucket,
+            date=date,
+            api_key=api_keys.get("api_football", ""),
+            bucket=bucket,
         )
         for k, v in sports_ref_counts.items():
             counts[k] = counts.get(k, 0) + v
@@ -388,11 +388,14 @@ async def _fetch_sports_reference_data(
     api_key: str,
     bucket: str,
 ) -> dict[str, int]:
-    """Fetch sports reference data (teams, leagues, players, referees, venues).
+    """Fetch sports reference data (teams, leagues, standings, injuries, etc.).
 
-    Calls USRI api_football adapter directly for enrichment data that
-    describes the instruments (fixtures). Written to the same bucket as
-    instruments under separate hive-partitioned prefixes.
+    Calls USRI api_football adapter for enrichment data that describes the
+    instruments (fixtures). Written to the same bucket as instruments under
+    separate hive-partitioned prefixes:
+        sports_reference/by_date/day={date}/entity={type}/{type}.parquet
+        sports_reference/mappings/team_mapping.parquet
+        sports_reference/mappings/fixture_mapping.parquet
 
     This data is slow-moving (leagues/teams change per season, not per day)
     but we re-fetch on each run to capture mid-season transfers, promotions,
@@ -409,20 +412,24 @@ async def _fetch_sports_reference_data(
         leagues = await adapter.get_leagues()
         if leagues:
             df = pd.DataFrame([lg.model_dump() for lg in leagues])
-            sink.write(data=df, partition={"day": date, "entity": "leagues"}, format="parquet", filename="leagues.parquet")
+            sink.write(
+                data=df, partition={"day": date, "entity": "leagues"}, format="parquet", filename="leagues.parquet"
+            )
             counts["leagues"] = len(df)
             logger.info("Sports reference: %d leagues written", len(df))
     except Exception as exc:
         logger.warning("Sports reference leagues fetch failed: %s", exc)
 
     # Teams — for each prediction league
-    try:
-        from unified_api_contracts.canonical.domain.sports import get_prediction_leagues  # noqa: PLC0415
+    from unified_api_contracts.canonical.domain.sports import get_prediction_leagues
 
-        all_teams: list[dict[str, object]] = []
+    all_teams: list[dict[str, object]] = []
+    prediction_league_ids: list[int] = []
+    try:
         for league_def in get_prediction_leagues():
             if league_def.api_football_id is None:
                 continue
+            prediction_league_ids.append(league_def.api_football_id)
             try:
                 teams = await adapter.get_teams(league_def.api_football_id)
                 for t in teams:
@@ -441,7 +448,151 @@ async def _fetch_sports_reference_data(
     except Exception as exc:
         logger.warning("Sports reference teams batch failed: %s", exc)
 
+    # Standings — for each prediction league
+    all_standings: list[dict[str, object]] = []
+    for lid in prediction_league_ids:
+        try:
+            standings = await adapter.get_standings(lid)
+            for row in standings:
+                row["league_id"] = lid
+                all_standings.append(row)
+        except Exception as exc:
+            logger.warning("Standings fetch failed for league %d: %s", lid, exc)
+    if all_standings:
+        df = pd.DataFrame(all_standings)
+        sink.write(
+            data=df, partition={"day": date, "entity": "standings"}, format="parquet", filename="standings.parquet"
+        )
+        counts["standings"] = len(df)
+        logger.info("Sports reference: %d standing rows written", len(df))
+
+    # Injuries — for the target date
+    try:
+        injuries = await adapter.get_injuries(date)
+        if injuries:
+            df = pd.DataFrame(injuries)
+            sink.write(
+                data=df, partition={"day": date, "entity": "injuries"}, format="parquet", filename="injuries.parquet"
+            )
+            counts["injuries"] = len(df)
+            logger.info("Sports reference: %d injuries written", len(df))
+    except Exception as exc:
+        logger.warning("Injuries fetch failed: %s", exc)
+
+    # Cross-provider mapping tables
+    _write_team_mapping(bucket)
+    _write_fixture_mapping(bucket, date)
+
     return counts
+
+
+def _write_team_mapping(bucket: str) -> None:
+    """Build and write TeamMapping table to GCS.
+
+    Combines UAC team_mappings.py (API-Football names) and team_names.py
+    (Odds API / Understat names) into a single lookup table keyed by
+    canonical team_id. Used by FSS to resolve provider-specific IDs.
+
+    Path: sports_reference/mappings/team_mapping.parquet
+    """
+    from unified_api_contracts.external.api_football.team_mappings import (
+        BUNDESLIGA_TEAM_ALIASES,
+        EPL_TEAM_ALIASES,
+    )
+    from unified_api_contracts.external.odds_api.team_names import (
+        CANONICAL_TO_ODDS_API_BUNDESLIGA,
+        CANONICAL_TO_ODDS_API_EPL,
+        CANONICAL_TO_UNDERSTAT_EPL,
+    )
+
+    rows: list[dict[str, str]] = []
+
+    # EPL teams
+    epl_ids: set[str] = set(EPL_TEAM_ALIASES.keys()) | set(CANONICAL_TO_ODDS_API_EPL.keys())
+    for canonical_id in sorted(epl_ids):
+        aliases = EPL_TEAM_ALIASES.get(canonical_id, [])
+        display_name = aliases[0] if aliases else canonical_id
+        rows.append(
+            {
+                "canonical_team_id": canonical_id,
+                "display_name": display_name,
+                "odds_api_name": CANONICAL_TO_ODDS_API_EPL.get(canonical_id, ""),
+                "understat_name": CANONICAL_TO_UNDERSTAT_EPL.get(canonical_id, ""),
+                "league": "EPL",
+            }
+        )
+
+    # Bundesliga teams
+    bun_ids: set[str] = set(BUNDESLIGA_TEAM_ALIASES.keys()) | set(CANONICAL_TO_ODDS_API_BUNDESLIGA.keys())
+    for canonical_id in sorted(bun_ids):
+        aliases = BUNDESLIGA_TEAM_ALIASES.get(canonical_id, [])
+        display_name = aliases[0] if aliases else canonical_id
+        rows.append(
+            {
+                "canonical_team_id": canonical_id,
+                "display_name": display_name,
+                "odds_api_name": CANONICAL_TO_ODDS_API_BUNDESLIGA.get(canonical_id, ""),
+                "understat_name": "",
+                "league": "BUNDESLIGA",
+            }
+        )
+
+    if not rows:
+        return
+
+    try:
+        df = pd.DataFrame(rows)
+        mapping_sink = get_data_sink(bucket=bucket, prefix="sports_reference/mappings")
+        mapping_sink.write(data=df, partition={}, format="parquet", filename="team_mapping.parquet")
+        logger.info("Team mapping: %d entries written", len(df))
+    except Exception as exc:
+        logger.warning("Team mapping write failed: %s", exc)
+
+
+def _write_fixture_mapping(bucket: str, date: str) -> None:
+    """Build and write FixtureMapping table to GCS.
+
+    Reads the fixture instruments already written for today, extracts the
+    canonical_fixture_id and the API-Football numeric fixture_id, and
+    writes a mapping table that FSS uses to resolve provider-specific IDs.
+
+    Path: sports_reference/mappings/fixture_mapping.parquet
+    """
+    try:
+        # Read today's fixtures from the instruments parquet we just wrote
+        path = f"gs://{bucket}/instrument_availability/by_date/day={date}/venue=API_FOOTBALL/instruments.parquet"
+        df = pd.read_parquet(path)
+        if df.empty:
+            logger.debug("Fixture mapping: no fixtures found for %s", date)
+            return
+
+        rows: list[dict[str, str]] = []
+        for _, row in df.iterrows():
+            instrument_key = str(row.get("instrument_key", ""))
+            raw_symbol = str(row.get("raw_symbol", ""))
+            # Extract API-Football numeric ID from the symbol or key
+            # The instrument_key is canonical: ENGLAND_PREMIER_LEAGUE:ARSENAL_v_CHELSEA:20260322
+            # The raw_symbol is: Arsenal vs Chelsea
+            rows.append(
+                {
+                    "canonical_fixture_id": instrument_key,
+                    "raw_symbol": raw_symbol,
+                    "date": date,
+                    "venue": "API_FOOTBALL",
+                }
+            )
+
+        if not rows:
+            return
+
+        mapping_df = pd.DataFrame(rows)
+        mapping_sink = get_data_sink(bucket=bucket, prefix="sports_reference/mappings")
+        mapping_sink.write(data=mapping_df, partition={}, format="parquet", filename="fixture_mapping.parquet")
+        logger.info("Fixture mapping: %d entries written for %s", len(mapping_df), date)
+    except (FileNotFoundError, OSError) as exc:
+        logger.debug("Fixture mapping: could not read fixtures for %s: %s", date, exc)
+    except Exception as exc:
+        logger.warning("Fixture mapping write failed: %s", exc)
 
 
 def _get_instruments_bucket(category: str | None = None) -> str:
