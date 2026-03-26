@@ -86,7 +86,12 @@ async def fetch_instruments_for_all_venues(
         try:
             data_source = ADAPTER_DATA_SOURCES.get(adapter_key, "")
             api_key = (api_keys or {}).get(data_source) if data_source else None
-            adapter = get_adapter_for_canonical_venue(canonical, api_key=api_key, date=date)
+            adapter = get_adapter_for_canonical_venue(
+                canonical,
+                api_key=api_key,
+                date=date,
+                extra_api_keys=api_keys,
+            )
             records = await adapter.get_instruments(instrument_type=instrument_type)
             logger.info("URDI[%s]: fetched %d instruments", canonical, len(records))
             return records  # type already list[InstrumentRecord] from URDI

@@ -28,6 +28,10 @@ CATEGORY="${1:-DEFI}"
 START_DATE="${2:-2026-03-22}"
 END_DATE="${3:-$START_DATE}"
 
+export _RUN_CATEGORY="$CATEGORY"
+export _RUN_START="$START_DATE"
+export _RUN_END="$END_DATE"
+
 # Enable CSV sampling so you can inspect outputs in instruments_service/data/
 export ENABLE_CSV_SAMPLING="${ENABLE_CSV_SAMPLING:-true}"
 export CSV_SAMPLE_SIZE="${CSV_SAMPLE_SIZE:-50}"

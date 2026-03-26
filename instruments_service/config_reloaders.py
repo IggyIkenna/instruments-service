@@ -19,12 +19,12 @@ from datetime import date
 from unified_api_contracts import KNOWN_ETFS, TRADFI_TICKER_UNIVERSE
 from unified_trading_library import (
     ConfigStoreError,
+    DomainConfigReloader,
     InstrumentDomainConfig,
     TickerUniverseConfig,
     TimeSeriesConfigStore,
+    log_event,
 )
-from unified_trading_library import log_event
-from unified_trading_library import DomainConfigReloader
 
 from instruments_service.config.service_config import InstrumentsServiceConfig
 
