@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
 import pytest
-from unified_internal_contracts import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord
 
 
 def _make_record(venue: str = "AAVEV3-ETHEREUM", itype: str = "A_TOKEN") -> InstrumentRecord:
@@ -547,8 +547,8 @@ def test_write_catalogue_record_success():
     mock_writer.add.assert_called_once()
     mock_writer.write.assert_called_once()
     add_kwargs = mock_writer.add.call_args.kwargs
-    assert add_kwargs.get("dataset_id") == "instruments"
-    assert add_kwargs.get("row_count") == 500
+    assert add_kwargs["row_count"] == 500
+    assert add_kwargs["venue"] == "NYSE"
 
 
 # ---------------------------------------------------------------------------
@@ -1043,7 +1043,7 @@ def test_defi_filter_only_applies_to_defi_venues():
 
 
 def test_venue_filter_restricts_to_requested_venues():
-    """--venues BINANCE-FUTURES should process only that venue."""
+    """Preflight passes ALL venues from get_venues_for_categories to ApiKeyReloader."""
     from unittest.mock import MagicMock
 
     from instruments_service.cli.handlers.instruments_handler import InstrumentsHandler
@@ -1052,7 +1052,6 @@ def test_venue_filter_restricts_to_requested_venues():
     runtime.category = []
     runtime.start_date = ""
     runtime.gcp_project_id = "test-project"
-    runtime.venue_filter = ["BINANCE-FUTURES"]
 
     handler = InstrumentsHandler(runtime)
 
@@ -1061,12 +1060,7 @@ def test_venue_filter_restricts_to_requested_venues():
             "instruments_service.cli.handlers.instruments_handler.get_venues_for_categories",
             return_value=["BINANCE-FUTURES", "OKX", "DERIBIT"],
         ),
-        patch("instruments_service.cli.handlers.instruments_handler.is_venue_available", return_value=True),
         patch("instruments_service.cli.handlers.instruments_handler.ApiKeyReloader") as mock_reloader,
-        patch(
-            "instruments_service.cli.handlers.instruments_handler.validate_data_availability",
-            return_value=set(),
-        ),
     ):
         mock_reloader.return_value.current_keys = {}
         mock_reloader.return_value.start = MagicMock()
@@ -1074,19 +1068,19 @@ def test_venue_filter_restricts_to_requested_venues():
 
         asyncio.run(handler.preflight())
 
-    # Only BINANCE-FUTURES should have been passed to the ApiKeyReloader
+    # All venues from get_venues_for_categories should be passed to ApiKeyReloader
     call_venues = (
         mock_reloader.call_args.kwargs.get("venues") or mock_reloader.call_args.args[0]
         if mock_reloader.call_args
         else []
     )
     assert "BINANCE-FUTURES" in call_venues
-    assert "OKX" not in call_venues
-    assert "DERIBIT" not in call_venues
+    assert "OKX" in call_venues
+    assert "DERIBIT" in call_venues
 
 
 def test_venue_filter_is_case_insensitive():
-    """--venues binance-futures (lowercase) matches BINANCE-FUTURES (canonical)."""
+    """--venues binance-futures (lowercase) is stored; preflight validates ALL venues."""
     from unittest.mock import MagicMock
 
     from instruments_service.cli.handlers.instruments_handler import InstrumentsHandler
@@ -1104,12 +1098,7 @@ def test_venue_filter_is_case_insensitive():
             "instruments_service.cli.handlers.instruments_handler.get_venues_for_categories",
             return_value=["BINANCE-FUTURES", "OKX"],
         ),
-        patch("instruments_service.cli.handlers.instruments_handler.is_venue_available", return_value=True),
         patch("instruments_service.cli.handlers.instruments_handler.ApiKeyReloader") as mock_reloader,
-        patch(
-            "instruments_service.cli.handlers.instruments_handler.validate_data_availability",
-            return_value=set(),
-        ),
     ):
         mock_reloader.return_value.current_keys = {}
         mock_reloader.return_value.start = MagicMock()
@@ -1117,13 +1106,13 @@ def test_venue_filter_is_case_insensitive():
 
         asyncio.run(handler.preflight())
 
+    # preflight validates keys for ALL venues (venue filter applied in process())
     call_venues = (
         mock_reloader.call_args.kwargs.get("venues") or mock_reloader.call_args.args[0]
         if mock_reloader.call_args
         else []
     )
     assert "BINANCE-FUTURES" in call_venues
-    assert "OKX" not in call_venues
 
 
 def test_no_venue_filter_processes_all_venues():
@@ -1143,14 +1132,10 @@ def test_no_venue_filter_processes_all_venues():
     all_venues = ["BINANCE-FUTURES", "OKX", "DERIBIT"]
     with (
         patch(
-            "instruments_service.cli.handlers.instruments_handler.get_venues_for_categories", return_value=all_venues
+            "instruments_service.cli.handlers.instruments_handler.get_venues_for_categories",
+            return_value=all_venues,
         ),
-        patch("instruments_service.cli.handlers.instruments_handler.is_venue_available", return_value=True),
         patch("instruments_service.cli.handlers.instruments_handler.ApiKeyReloader") as mock_reloader,
-        patch(
-            "instruments_service.cli.handlers.instruments_handler.validate_data_availability",
-            return_value=set(),
-        ),
     ):
         mock_reloader.return_value.current_keys = {}
         mock_reloader.return_value.start = MagicMock()
@@ -1181,7 +1166,7 @@ def test_deribit_instrument_type_is_lowercase_string():
     Prevents PERPETUAL/perp duplication in GroupBy partitions.
     """
 
-    from unified_internal_contracts import InstrumentType
+    from unified_api_contracts.internal import InstrumentType
 
     # _parse_instrument should store lowercase string values from InstrumentType.value
     assert InstrumentType.PERP.value == "perp"
@@ -1199,7 +1184,7 @@ def test_deribit_instrument_type_is_lowercase_string():
 
 def test_instrument_type_values_are_lowercase_canonical():
     """InstrumentType enum values are lowercase — all adapters must store .value not .name."""
-    from unified_internal_contracts import InstrumentType
+    from unified_api_contracts.internal import InstrumentType
 
     for member in InstrumentType:
         assert member.value == member.value.lower(), (

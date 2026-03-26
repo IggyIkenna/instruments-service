@@ -82,7 +82,7 @@ def test_uic_instrument_record_constructable() -> None:
     """InstrumentRecord is the core domain type returned by URDI and written to storage.
     If its constructor signature changes (new required field), production breaks at runtime.
     """
-    from unified_internal_contracts import InstrumentRecord
+    from unified_api_contracts.internal import InstrumentRecord
 
     record = InstrumentRecord(
         instrument_key="UNISWAPV3-ETHEREUM:LP_TOKEN:WETH-USDC",
@@ -102,7 +102,7 @@ def test_uic_market_category_values() -> None:
     list[MarketCategory] and handler converts via .value. If values change, the
     CLI category args break silently.
     """
-    from unified_internal_contracts import MarketCategory
+    from unified_api_contracts.internal import MarketCategory
 
     assert MarketCategory.DEFI.value == "DEFI"
     assert MarketCategory.CEFI.value == "CEFI"
@@ -138,10 +138,9 @@ def test_utl_service_framework_symbols_exist() -> None:
     # Use __dataclass_fields__ since ServiceRuntime is a @dataclass.
     field_names = set(ServiceRuntime.__dataclass_fields__)
     assert "category" in field_names, "must have category field"
-    assert "start_date" in field_names, "must have start_date field (added for handler preflight)"
-    assert "end_date" in field_names, "must have end_date field (added for handler preflight)"
     assert "gcp_project_id" in field_names, "must have gcp_project_id field"
-    assert "live_trigger" in field_names, "must have live_trigger field (batch vs scheduled vs pubsub)"
+    assert "operation" in field_names, "must have operation field"
+    assert "mode" in field_names, "must have mode field"
 
     # UnifiedServiceHandler must have the methods InstrumentsHandler overrides
     import inspect
@@ -158,9 +157,9 @@ def test_utl_service_bootstrap_constructable() -> None:
     """
     from unittest.mock import MagicMock
 
-    from unified_trading_library import ServiceBootstrap, UnifiedServiceHandler
+    from unified_trading_library import BaseModeHandler, ServiceBootstrap
 
-    class _Stub(UnifiedServiceHandler):
+    class _Stub(BaseModeHandler):
         async def process(self, payload: object) -> object:
             return None
 
@@ -169,8 +168,6 @@ def test_utl_service_bootstrap_constructable() -> None:
         service_name="test-service",
         operations={"instruments": _Stub},
         config=MagicMock(),
-        live_trigger="scheduled",
-        interval_seconds=900,
     )
     assert sb is not None
 
