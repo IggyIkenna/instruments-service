@@ -18,7 +18,7 @@ from instruments_service.adapters.urdi_reference_provider import (
 
 
 def _make_record(venue: str = "MORPHO-ETHEREUM") -> object:
-    from unified_internal_contracts import InstrumentRecord
+    from unified_api_contracts.internal import InstrumentRecord
 
     return InstrumentRecord(
         instrument_key=f"{venue}:A_TOKEN:WETH",
@@ -152,7 +152,7 @@ async def test_fetch_multiple_venues_flat_list():
 
     call_count = 0
 
-    def _adapter_factory(venue: str, api_key=None, date=None):
+    def _adapter_factory(venue: str, api_key=None, date=None, extra_api_keys=None):
         nonlocal call_count
         call_count += 1
         return mock1 if call_count == 1 else mock2

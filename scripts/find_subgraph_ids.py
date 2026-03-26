@@ -9,10 +9,9 @@ import logging
 from uuid import uuid4
 
 import requests
-from unified_trading_library import UnifiedCloudConfig
-from unified_internal_contracts import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
-from unified_internal_contracts.schemas.errors import ErrorContext
-from unified_trading_library import get_secret_client
+from unified_api_contracts.internal import EnhancedError, ErrorCategory, ErrorRecoveryStrategy, ErrorSeverity
+from unified_api_contracts.internal.schemas.errors import ErrorContext
+from unified_trading_library import UnifiedCloudConfig, get_secret_client
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)

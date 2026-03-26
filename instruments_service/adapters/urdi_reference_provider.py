@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from unified_internal_contracts import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord
 from unified_reference_data_interface import (
     ADAPTER_DATA_SOURCES,
     CANONICAL_VENUE_TO_ADAPTER,

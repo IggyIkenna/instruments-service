@@ -50,12 +50,11 @@ async def test_handler_preflight_mock_mode_starts_reloader():
 
 
 @pytest.mark.asyncio
-async def test_handler_preflight_populates_completed_dates():
-    """preflight() stores completed dates from validate_data_availability."""
+async def test_handler_preflight_starts_reloader_for_all_categories():
+    """preflight() starts ApiKeyReloader with venues for ALL categories."""
     from instruments_service.cli.handlers.instruments_handler import InstrumentsHandler
 
     handler = InstrumentsHandler(_make_runtime("2026-03-22", "2026-03-22"))
-    completed = {"2026-03-22"}
 
     mock_reloader = MagicMock()
     mock_reloader.current_keys = {}
@@ -63,26 +62,29 @@ async def test_handler_preflight_populates_completed_dates():
     with (
         patch("instruments_service.cli.handlers.instruments_handler.ApiKeyReloader", return_value=mock_reloader),
         patch(
-            "instruments_service.cli.handlers.instruments_handler.validate_data_availability", return_value=completed
+            "instruments_service.cli.handlers.instruments_handler.get_venues_for_categories",
+            return_value=["BINANCE-FUTURES", "DERIBIT"],
         ),
     ):
         await handler.preflight()
 
-    assert handler._completed_dates == completed
+    mock_reloader.start.assert_called_once()
+    # _completed_dates stays empty after preflight (completion checked per-date in process)
+    assert handler._completed_dates == set()
 
 
 @pytest.mark.asyncio
 async def test_handler_process_skips_completed_date():
-    """process() returns None for dates already in _completed_dates."""
+    """process() returns None for dates that _is_date_complete returns True for."""
     from unified_trading_library import BatchPayload
 
     from instruments_service.cli.handlers.instruments_handler import InstrumentsHandler
 
     handler = InstrumentsHandler(_make_runtime())
-    handler._completed_dates = {"2026-03-22"}
 
     payload = BatchPayload(date="2026-03-22", categories=["DEFI"])
-    result = await handler.process(payload)
+    with patch.object(handler, "_is_date_complete", return_value=True):
+        result = await handler.process(payload)
 
     assert result is None
 
@@ -176,7 +178,7 @@ async def test_handler_preflight_data_availability_error_is_warned_not_raised():
 @pytest.mark.asyncio
 async def test_handler_preflight_handles_validation_error():
     """If ApiKeyReloader.start() fails, the exception propagates (fail the shard)."""
-    from unified_internal_contracts import StartupValidationError
+    from unified_api_contracts.internal import StartupValidationError
 
     from instruments_service.cli.handlers.instruments_handler import InstrumentsHandler
 
