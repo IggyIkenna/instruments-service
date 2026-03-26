@@ -30,13 +30,13 @@ from datetime import UTC, datetime
 from datetime import date as date_type
 
 import pandas as pd
-from unified_api_contracts import VenueMapping
-from unified_api_contracts.sports import (
+from unified_api_contracts import (
     BUNDESLIGA_TEAM_ALIASES,
     CANONICAL_TO_ODDS_API_BUNDESLIGA,
     CANONICAL_TO_ODDS_API_EPL,
     CANONICAL_TO_UNDERSTAT_EPL,
     EPL_TEAM_ALIASES,
+    VenueMapping,
     get_prediction_leagues,
 )
 from unified_sports_reference_interface import create_sports_reference_adapter

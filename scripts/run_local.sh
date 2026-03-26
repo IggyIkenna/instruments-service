@@ -38,7 +38,7 @@ export CSV_SAMPLE_SIZE="${CSV_SAMPLE_SIZE:-50}"
 export CSV_SAMPLE_DIR="${CSV_SAMPLE_DIR:-instruments_service/data}"
 
 # Write instrument parquet to GCS (not local disk) — DataSink backend
-export PROTOCOL_DATA_SINK_BACKEND="${PROTOCOL_DATA_SINK_BACKEND:-gcs}"
+export PROTOCOL_DATA_SINK_BACKEND="${PROTOCOL_DATA_SINK_BACKEND:-gcp}"
 
 echo "[run_local] Project: ${GCP_PROJECT_ID}"
 echo "[run_local] Mock mode: ${CLOUD_MOCK_MODE:-false}"
