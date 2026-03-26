@@ -23,6 +23,7 @@ For each date:
 
 from __future__ import annotations
 
+import io
 import logging
 import re
 from datetime import UTC, datetime
@@ -30,6 +31,15 @@ from datetime import date as date_type
 
 import pandas as pd
 from unified_api_contracts import VenueMapping
+from unified_api_contracts.sports import (
+    BUNDESLIGA_TEAM_ALIASES,
+    CANONICAL_TO_ODDS_API_BUNDESLIGA,
+    CANONICAL_TO_ODDS_API_EPL,
+    CANONICAL_TO_UNDERSTAT_EPL,
+    EPL_TEAM_ALIASES,
+    get_prediction_leagues,
+)
+from unified_sports_reference_interface import create_sports_reference_adapter
 from unified_trading_library import (
     DataSink,
     DomainValidationService,
@@ -38,6 +48,7 @@ from unified_trading_library import (
     create_sampling_service,
     get_bucket_name,
     get_data_sink,
+    get_storage_client,
     log_event,
 )
 from unified_trading_library import unified_config as _uc
@@ -337,13 +348,17 @@ async def process_instruments(
     # but are re-fetched to capture transfers, promotions, new seasons.
     is_sports = any(c.upper() in ("SPORTS", "ALL") for c in categories)
     if is_sports and api_keys:
-        sports_ref_counts = await _fetch_sports_reference_data(
-            date=date,
-            api_key=api_keys.get("api_football", ""),
-            bucket=bucket,
-        )
-        for k, v in sports_ref_counts.items():
-            counts[k] = counts.get(k, 0) + v
+        api_football_key = api_keys.get("api_football")
+        if not api_football_key:
+            logger.warning("api_football key missing from api_keys — skipping sports reference data")
+        else:
+            sports_ref_counts = await _fetch_sports_reference_data(
+                date=date,
+                api_key=api_football_key,
+                bucket=bucket,
+            )
+            for k, v in sports_ref_counts.items():
+                counts[k] = counts.get(k, 0) + v
 
     total = sum(counts.values())
     log_event(
@@ -401,8 +416,6 @@ async def _fetch_sports_reference_data(
     but we re-fetch on each run to capture mid-season transfers, promotions,
     and new referee assignments.
     """
-    from unified_sports_reference_interface import create_sports_reference_adapter
-
     adapter = create_sports_reference_adapter("api_football", api_key=api_key)
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
@@ -421,8 +434,6 @@ async def _fetch_sports_reference_data(
         logger.warning("Sports reference leagues fetch failed: %s", exc)
 
     # Teams — for each prediction league
-    from unified_api_contracts.canonical.domain.sports import get_prediction_leagues
-
     all_teams: list[dict[str, object]] = []
     prediction_league_ids: list[int] = []
     try:
@@ -495,16 +506,6 @@ def _write_team_mapping(bucket: str) -> None:
 
     Path: sports_reference/mappings/team_mapping.parquet
     """
-    from unified_api_contracts.external.api_football.team_mappings import (
-        BUNDESLIGA_TEAM_ALIASES,
-        EPL_TEAM_ALIASES,
-    )
-    from unified_api_contracts.external.odds_api.team_names import (
-        CANONICAL_TO_ODDS_API_BUNDESLIGA,
-        CANONICAL_TO_ODDS_API_EPL,
-        CANONICAL_TO_UNDERSTAT_EPL,
-    )
-
     rows: list[dict[str, str]] = []
 
     # EPL teams
@@ -560,16 +561,21 @@ def _write_fixture_mapping(bucket: str, date: str) -> None:
     """
     try:
         # Read today's fixtures from the instruments parquet we just wrote
-        path = f"gs://{bucket}/instrument_availability/by_date/day={date}/venue=API_FOOTBALL/instruments.parquet"
-        df = pd.read_parquet(path)
+        blob_path = f"instrument_availability/by_date/day={date}/venue=API_FOOTBALL/instruments.parquet"
+        storage = get_storage_client()
+        raw = storage.download_bytes(bucket, blob_path)
+        if raw is None:
+            logger.debug("Fixture mapping: no fixtures parquet found for %s", date)
+            return
+        df = pd.read_parquet(io.BytesIO(raw))
         if df.empty:
             logger.debug("Fixture mapping: no fixtures found for %s", date)
             return
 
         rows: list[dict[str, str]] = []
         for _, row in df.iterrows():
-            instrument_key = str(row.get("instrument_key", ""))
-            raw_symbol = str(row.get("raw_symbol", ""))
+            instrument_key = str(row["instrument_key"]) if "instrument_key" in row.index else ""
+            raw_symbol = str(row["raw_symbol"]) if "raw_symbol" in row.index else ""
             # Extract API-Football numeric ID from the symbol or key
             # The instrument_key is canonical: ENGLAND_PREMIER_LEAGUE:ARSENAL_v_CHELSEA:20260322
             # The raw_symbol is: Arsenal vs Chelsea
@@ -619,32 +625,25 @@ def _get_instruments_bucket(category: str | None = None) -> str:
 
 
 def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int) -> None:
-    """Write to the data catalogue within the instruments bucket.
+    """Update the consolidated availability index in the instruments bucket.
 
-    Uses ManifestWriter with catalogue_bucket=bucket and catalogue_prefix="_catalogue"
-    so the manifest lands at:
-      {instruments-bucket}/_catalogue/instruments-service/day={date}/manifest.parquet
+    Merges this venue/date record into:
+      gs://{bucket}/_index/availability_index.parquet
 
-    This co-locates the catalogue with the data (per-bucket basis) rather than
-    requiring a separate data-catalogue-* bucket.
+    Downstream services call read_availability_index(bucket) to check completeness
+    without listing thousands of GCS blobs.
     """
     try:
+        venue_match = re.search(r"venue=([^/]+)", path)
+        venue_str = venue_match.group(1) if venue_match else ""
         date_match = re.search(r"day=(\d{4}-\d{2}-\d{2})", path)
         date_str = date_match.group(1) if date_match else date
         parsed = date_type.fromisoformat(date_str)
         writer = ManifestWriter(
             service_name="instruments-service",
             catalogue_bucket=bucket,
-            catalogue_prefix="_catalogue",
         )
-        writer.add(
-            dataset_id="instruments",
-            category="",
-            processing_date=parsed,
-            row_count=record_count,
-            gcs_bucket=bucket,
-            gcs_prefix=path,
-        )
+        writer.add(processing_date=parsed, row_count=record_count, venue=venue_str)
         writer.write()
     except Exception as exc:
         logger.debug("ManifestWriter failed (non-blocking): %s", exc)
