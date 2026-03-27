@@ -2,6 +2,7 @@
 
 import contextlib
 import logging
+from datetime import date as date_type
 
 from unified_api_contracts.registry import (  # noqa: qg-deep-import
     CapabilityResolutionError,
@@ -228,8 +229,6 @@ def get_adapter_for_canonical_venue(
         adapter = adapter_class(project_id=project_id, api_key=api_key, chain=chain, date=date)
     elif adapter_key == "databento":
         # Databento: pass date for session metadata + expiry filtering
-        from datetime import date as date_type
-
         target = date_type.fromisoformat(date) if date else None
         adapter = DatabentoReferenceDataAdapter(project_id=project_id, api_key=api_key, target_date=target)
     elif adapter_key == "polymarket" and extra_api_keys:

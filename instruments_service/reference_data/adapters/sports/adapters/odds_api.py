@@ -307,7 +307,7 @@ def _parse_outcome_odds(
         return None
     try:
         decimal_odds = Decimal(str(price))
-    except Exception:
+    except Exception as _exc:
         return None
     if decimal_odds <= 0:
         return None

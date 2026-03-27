@@ -164,7 +164,7 @@ def _get_xcal(calendar_name: str) -> object | None:
         cal = xcals.get_calendar(xcal_code)
         _XCAL_CACHE[calendar_name] = cal
         return cal
-    except Exception:
+    except Exception as _exc:
         return None
 
 
@@ -182,7 +182,7 @@ def _is_trading_holiday(target: date, calendar_name: str) -> bool:
     try:
         ts = pd.Timestamp(target)
         return not cal.is_session(ts)
-    except Exception:
+    except Exception as _exc:
         return False
 
 
@@ -300,8 +300,8 @@ def _compute_utc_hours(
 
         _apply_early_close(calendar_name, target_date, venue, result)
 
-    except Exception as exc:
-        logger.warning("Failed to compute session hours for %s on %s: %s", venue, target_date, exc)
+    except Exception as _exc:
+        logger.warning("Failed to compute session hours for %s on %s: %s", venue, target_date, _exc)
 
 
 def _apply_early_close(
@@ -324,8 +324,8 @@ def _apply_early_close(
                 result["early_close_utc"] = early_dt.isoformat()
                 result["regular_close_utc"] = early_dt.isoformat()
                 result["trading_hours_close"] = early_dt.strftime("%H:%M:%S+00:00")
-    except Exception as exc:
-        logger.debug("Early close check failed for %s on %s: %s", venue, target_date, exc)
+    except Exception as _exc:
+        logger.debug("Early close check failed for %s on %s: %s", venue, target_date, _exc)
 
 
 def _get_session_metadata(venue: str, target_date: date) -> dict[str, str | bool | None]:
@@ -610,8 +610,8 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
 
         try:
             df = data.to_df()
-        except Exception as exc:
-            logger.warning("Failed to parse Databento DBN data for %s: %s", dataset, exc)
+        except Exception as _exc:
+            logger.warning("Failed to parse Databento DBN data for %s: %s", dataset, _exc)
             return []
 
         if df.empty:
@@ -677,13 +677,13 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         try:
             tick_val = Decimal(str(tick_raw)) if tick_raw else Decimal("0.01")
             tick_size = tick_val if tick_val.is_finite() and tick_val > 0 else Decimal("0.01")
-        except Exception:
+        except Exception as _exc:
             tick_size = Decimal("0.01")
         lot_raw = getattr(row, "min_lot_size_round_lot", None)
         try:
             lot_val = Decimal(str(lot_raw)) if lot_raw else Decimal("1")
             lot_size = lot_val if lot_val.is_finite() and lot_val > 0 else Decimal("1")
-        except Exception:
+        except Exception as _exc:
             lot_size = Decimal("1")
         return tick_size, lot_size
 
@@ -706,7 +706,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         try:
             val = Decimal(str(strike_raw))
             return val if val.is_finite() else None
-        except Exception:
+        except Exception as _exc:
             return None
 
     @staticmethod
