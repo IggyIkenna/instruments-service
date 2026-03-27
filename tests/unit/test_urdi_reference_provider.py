@@ -77,7 +77,7 @@ async def test_fetch_unsupported_venue_warns_and_skips(caplog):
 async def test_fetch_supported_venue_returns_records():
     record = _make_record()
     mock_adapter = MagicMock()
-    mock_adapter.get_instruments = AsyncMock(return_value=[record])
+    mock_adapter.get_instruments_cached = AsyncMock(return_value=[record])
 
     with patch(
         "instruments_service.adapters.urdi_reference_provider.get_adapter_for_canonical_venue",
@@ -86,7 +86,7 @@ async def test_fetch_supported_venue_returns_records():
         result = await fetch_instruments_for_all_venues(["MORPHO-ETHEREUM"])
 
     assert len(result) == 1
-    mock_adapter.get_instruments.assert_awaited_once_with(instrument_type=None)
+    mock_adapter.get_instruments_cached.assert_awaited_once_with(instrument_type=None)
 
 
 @pytest.mark.asyncio
@@ -94,7 +94,7 @@ async def test_fetch_deduplicates_shared_adapters():
     """Two canonical venues mapping to the same adapter key are deduplicated."""
     record = _make_record("AAVEV3-ETHEREUM")
     mock_adapter = MagicMock()
-    mock_adapter.get_instruments = AsyncMock(return_value=[record])
+    mock_adapter.get_instruments_cached = AsyncMock(return_value=[record])
 
     with patch(
         "instruments_service.adapters.urdi_reference_provider.get_adapter_for_canonical_venue",
@@ -104,13 +104,13 @@ async def test_fetch_deduplicates_shared_adapters():
         result = await fetch_instruments_for_all_venues(["AAVEV3-ETHEREUM"])
 
     assert len(result) == 1
-    assert mock_adapter.get_instruments.call_count == 1
+    assert mock_adapter.get_instruments_cached.call_count == 1
 
 
 @pytest.mark.asyncio
 async def test_fetch_network_error_skips_venue_logs_warning(caplog):
     mock_adapter = MagicMock()
-    mock_adapter.get_instruments = AsyncMock(side_effect=ConnectionError("timeout"))
+    mock_adapter.get_instruments_cached = AsyncMock(side_effect=ConnectionError("timeout"))
 
     with (
         patch(
@@ -128,7 +128,7 @@ async def test_fetch_network_error_skips_venue_logs_warning(caplog):
 @pytest.mark.asyncio
 async def test_fetch_not_implemented_skips_venue():
     mock_adapter = MagicMock()
-    mock_adapter.get_instruments = AsyncMock(side_effect=NotImplementedError("no options"))
+    mock_adapter.get_instruments_cached = AsyncMock(side_effect=NotImplementedError("no options"))
 
     with patch(
         "instruments_service.adapters.urdi_reference_provider.get_adapter_for_canonical_venue",
@@ -146,9 +146,9 @@ async def test_fetch_multiple_venues_flat_list():
     r2 = _make_record("CURVE-ETHEREUM")
 
     mock1 = MagicMock()
-    mock1.get_instruments = AsyncMock(return_value=[r1])
+    mock1.get_instruments_cached = AsyncMock(return_value=[r1])
     mock2 = MagicMock()
-    mock2.get_instruments = AsyncMock(return_value=[r2])
+    mock2.get_instruments_cached = AsyncMock(return_value=[r2])
 
     call_count = 0
 
@@ -171,7 +171,7 @@ async def test_fetch_injects_api_key():
     """API key is passed from api_keys dict to the adapter via data source lookup."""
     record = _make_record()
     mock_adapter = MagicMock()
-    mock_adapter.get_instruments = AsyncMock(return_value=[record])
+    mock_adapter.get_instruments_cached = AsyncMock(return_value=[record])
 
     with patch(
         "instruments_service.adapters.urdi_reference_provider.get_adapter_for_canonical_venue",
@@ -196,7 +196,7 @@ async def test_fetch_injects_api_key():
 async def test_fetch_via_urdi_delegates_to_all_venues():
     record = _make_record()
     mock_adapter = MagicMock()
-    mock_adapter.get_instruments = AsyncMock(return_value=[record])
+    mock_adapter.get_instruments_cached = AsyncMock(return_value=[record])
 
     with patch(
         "instruments_service.adapters.urdi_reference_provider.get_adapter_for_canonical_venue",
@@ -219,7 +219,7 @@ async def test_fetch_adapter_value_error_is_logged_not_raised(caplog):
     from instruments_service.adapters.urdi_reference_provider import fetch_instruments_for_all_venues
 
     mock_adapter = MagicMock()
-    mock_adapter.get_instruments = AsyncMock(side_effect=ValueError("invalid endpoint config"))
+    mock_adapter.get_instruments_cached = AsyncMock(side_effect=ValueError("invalid endpoint config"))
 
     with (
         caplog.at_level("ERROR"),
