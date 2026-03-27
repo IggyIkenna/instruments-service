@@ -295,7 +295,7 @@ async def test_fetch_instruments_for_all_venues_deduplicates_adapter():
 
     record = _make_record()
     mock_adapter = MagicMock()
-    mock_adapter.get_instruments = AsyncMock(return_value=[record])
+    mock_adapter.get_instruments_cached = AsyncMock(return_value=[record])
 
     with patch(
         "instruments_service.adapters.urdi_reference_provider.get_adapter_for_canonical_venue",
@@ -665,7 +665,7 @@ async def test_fetch_instruments_passes_api_key_to_adapter_constructor():
 
     record = _make_record()
     mock_adapter = MagicMock()
-    mock_adapter.get_instruments = AsyncMock(return_value=[record])
+    mock_adapter.get_instruments_cached = AsyncMock(return_value=[record])
 
     with patch(
         "instruments_service.adapters.urdi_reference_provider.get_adapter_for_canonical_venue",
