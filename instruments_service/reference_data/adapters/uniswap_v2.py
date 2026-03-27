@@ -25,13 +25,12 @@ from ..schemas import (
     OHLCVRef,
 )
 from ..utils import date_to_block
+from ..utils.defi_utils import classify_graph_error, order_base_quote, parse_created_timestamp
 
 logger = logging.getLogger(__name__)
 
 _SUBGRAPH_IDS: dict[str, str] = SUBGRAPH_IDS.get("uniswap_v2", {})
 _DEFAULT_CHAIN = "ETHEREUM"
-
-_QUOTE_TOKENS = {"USDC", "USDT", "DAI", "WETH", "ETH", "WBTC", "USDE"}
 
 # Query template — {block_clause} is replaced with '' or ', block: {number: N}'
 _PAIRS_QUERY_TEMPLATE = """
@@ -48,37 +47,6 @@ query GetPairs($first: Int!, $minReserve: BigDecimal!) {{
     }}
 }}
 """
-
-
-def _classify_error(exc: Exception, status: int | None = None) -> str:
-    if status == 429:
-        return "RATE_LIMIT"
-    if status is not None and status >= 500:
-        return "503"
-    msg = str(exc).lower()
-    if "429" in msg or "rate" in msg:
-        return "RATE_LIMIT"
-    if "503" in msg or "unavailable" in msg:
-        return "503"
-    return "UNKNOWN"
-
-
-def _order_base_quote(sym0: str, sym1: str) -> tuple[str, str]:
-    if sym1.upper() in _QUOTE_TOKENS and sym0.upper() not in _QUOTE_TOKENS:
-        return sym0.upper(), sym1.upper()
-    if sym0.upper() in _QUOTE_TOKENS and sym1.upper() not in _QUOTE_TOKENS:
-        return sym1.upper(), sym0.upper()
-    return sym0.upper(), sym1.upper()
-
-
-def _parse_created_timestamp(ts_raw: object) -> datetime | None:
-    """Parse a createdAtTimestamp field into a UTC datetime, or None."""
-    if ts_raw is None:
-        return None
-    try:
-        return datetime.fromtimestamp(int(str(ts_raw)), tz=UTC)
-    except (ValueError, OSError):
-        return None
 
 
 class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
@@ -170,7 +138,7 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
 
     def _log_fetch_error(self, exc: aiohttp.ClientError) -> None:
         """Classify and log an ADAPTER_FETCH_FAILED event for Uniswap V2."""
-        error_code = _classify_error(exc)
+        error_code = classify_graph_error(exc)
         classification = classify_venue_error("uniswap_v2", error_code)
         action = classification.action.value if classification else "fail"
         retry_safe = classification.retry_safe if classification else False
@@ -210,7 +178,7 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
         if not sym0 or not sym1:
             return None
 
-        base, quote = _order_base_quote(sym0, sym1)
+        base, quote = order_base_quote(sym0, sym1)
 
         # Filter: both tokens must be major assets (BTC/ETH/stablecoins)
         if base not in DEFI_MAJOR_ASSET_SYMBOLS or quote not in DEFI_MAJOR_ASSET_SYMBOLS:
@@ -220,7 +188,7 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
         venue_tag = f"UNISWAPV2-{self._chain}"
         instrument_key = f"{venue_tag}:POOL:{symbol}"
 
-        available_since = _parse_created_timestamp(pair.get("createdAtTimestamp"))
+        available_since = parse_created_timestamp(pair.get("createdAtTimestamp"))
 
         return InstrumentRecord(
             instrument_key=instrument_key,
