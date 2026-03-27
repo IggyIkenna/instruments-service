@@ -430,6 +430,9 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         # 3. Static FX spot pairs (not from Databento)
         results.extend(self._create_fx_spot_records())
 
+        # 3b. Static Yahoo Finance indices (VIX, etc. — not from Databento)
+        results.extend(self._create_yahoo_index_records())
+
         # 4. Enrich with session metadata (trading hours, holidays, early closes)
         self._enrich_session_metadata(results)
 
@@ -663,6 +666,26 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                     lot_size=Decimal("1"),
                     contract_size=Decimal("1"),
                     available_since=datetime(2020, 1, 1, tzinfo=UTC),
+                )
+            )
+        return records
+
+    def _create_yahoo_index_records(self) -> list[InstrumentRecord]:
+        """Create static InstrumentRecords for Yahoo Finance indices (VIX, etc.)."""
+        from unified_api_contracts.registry import YAHOO_INDICES
+
+        records: list[InstrumentRecord] = []
+        for idx in YAHOO_INDICES:
+            records.append(
+                InstrumentRecord(
+                    instrument_key=f"{idx.venue}:INDEX:{idx.symbol}",
+                    venue=idx.venue,
+                    asset_class=AssetClass(idx.asset_class),
+                    instrument_type="index",
+                    raw_symbol=idx.yahoo_ticker,
+                    base_asset=idx.base_asset,
+                    quote_asset="USD",
+                    available_since=datetime(2004, 3, 26, tzinfo=UTC),
                 )
             )
         return records
