@@ -1,0 +1,236 @@
+"""BaseSportsReferenceAdapter: ABC for all sports reference data adapters.
+
+Convention: interfaces are API-keyless. Services fetch credentials from
+Secret Manager and inject them at runtime via constructor params.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from abc import ABC, abstractmethod
+from uuid import uuid4
+
+import aiohttp
+from unified_api_contracts import classify_venue_error
+from unified_api_contracts.sports import (
+    CanonicalFixture,
+    CanonicalLeague,
+    CanonicalOdds,
+    CanonicalTeam,
+)
+from unified_trading_library import log_event
+
+logger = logging.getLogger(__name__)
+
+_RETRY_ATTEMPTS: int = 3
+_RETRY_BASE_DELAY: float = 1.0
+_RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
+
+
+class BaseSportsReferenceAdapter(ABC):
+    """Abstract base for sports reference data adapters.
+
+    All adapters use REST only. Sports reference data is slow-moving;
+    implementations should cache aggressively.
+
+    Convention: interfaces MUST NOT fetch secrets directly. Services fetch
+    credentials from Secret Manager and pass them in through the ``api_key``
+    constructor parameter.
+    """
+
+    def __init__(self, api_key: str | None = None) -> None:
+        self._api_key = api_key
+
+    @property
+    @abstractmethod
+    def venue(self) -> str:
+        """Venue identifier e.g. 'api_football', 'odds_api'."""
+        ...
+
+    @abstractmethod
+    async def get_fixtures(
+        self,
+        date: str,
+        league_ids: list[int] | None = None,
+    ) -> list[CanonicalFixture]:
+        """Fetch fixtures for a given date.
+
+        Args:
+            date: Date string in YYYY-MM-DD format.
+            league_ids: Optional list of league IDs to filter by.
+
+        Returns:
+            List of canonical fixtures.
+        """
+        ...
+
+    @abstractmethod
+    async def get_leagues(self) -> list[CanonicalLeague]:
+        """Fetch all available leagues.
+
+        Returns:
+            List of canonical leagues.
+        """
+        ...
+
+    @abstractmethod
+    async def get_teams(self, league_id: int, season: int | None = None) -> list[CanonicalTeam]:
+        """Fetch teams for a given league.
+
+        Args:
+            league_id: League ID.
+            season: Optional season year. Defaults to current season.
+
+        Returns:
+            List of canonical teams.
+        """
+        ...
+
+    @abstractmethod
+    async def get_odds(
+        self,
+        sport: str,
+        regions: str = "uk",
+        markets: str = "h2h",
+    ) -> list[CanonicalOdds]:
+        """Fetch odds for a given sport.
+
+        Args:
+            sport: Sport key (e.g. 'soccer_epl').
+            regions: Comma-separated region codes.
+            markets: Comma-separated market keys.
+
+        Returns:
+            List of canonical odds.
+        """
+        ...
+
+    async def get_standings(self, league_id: int, season: int | None = None) -> list[dict[str, object]]:
+        """Fetch league standings/table for a given season.
+
+        Returns:
+            List of dicts with position, team, points, GD, form, etc.
+        """
+        return []
+
+    async def get_injuries(self, date: str) -> list[dict[str, object]]:
+        """Fetch player injuries for a given date.
+
+        Returns:
+            List of dicts with player, team, reason, status.
+        """
+        return []
+
+    async def get_fixture_statistics(self, fixture_id: int) -> list[dict[str, object]]:
+        """Fetch match statistics (shots, possession, etc.) for a completed fixture.
+
+        Returns:
+            List of dicts with team statistics.
+        """
+        return []
+
+    async def get_fixture_events(self, fixture_id: int) -> list[dict[str, object]]:
+        """Fetch match events (goals, cards, subs) for a fixture.
+
+        Returns:
+            List of dicts with event timeline.
+        """
+        return []
+
+    async def get_fixture_lineups(self, fixture_id: int) -> list[dict[str, object]]:
+        """Fetch starting lineups for a fixture.
+
+        Returns:
+            List of dicts with formation and starting XI.
+        """
+        return []
+
+    async def get_fixture_player_stats(self, fixture_id: int) -> list[dict[str, object]]:
+        """Fetch per-player per-match statistics for a fixture.
+
+        Returns:
+            List of dicts with player stats (33+ fields per player).
+        """
+        return []
+
+    def _classify_error(self, exc: Exception, status: int | None = None) -> str:
+        """Map an HTTP/network error to a UAC error code string.
+
+        Subclasses may override for venue-specific classification.
+        """
+        msg = str(exc).lower()
+        if status == 401 or "401" in msg or "authentication" in msg:
+            return "INVALID_API_KEY"
+        if status == 429 or "429" in msg or "rate" in msg:
+            return "RATE_LIMIT_EXCEEDED"
+        if "timeout" in msg:
+            return "TIMEOUT_ERROR"
+        if status == 403 or "403" in msg or "forbidden" in msg:
+            return "FORBIDDEN"
+        return "UNKNOWN"
+
+    def _emit_fetch_failed(self, error_code: str, exc: Exception) -> None:
+        """Emit ADAPTER_FETCH_FAILED event with UAC error classification."""
+        classification = classify_venue_error(self.venue, error_code)
+        correlation_id = str(uuid4())
+        log_event(
+            "ADAPTER_FETCH_FAILED",
+            details={
+                "venue": self.venue,
+                "error_code": error_code,
+                "error_message": str(exc),
+                "correlation_id": correlation_id,
+                "classification": classification.action if classification else "UNKNOWN",
+            },
+        )
+        logger.warning(
+            "ADAPTER_FETCH_FAILED venue=%s error_code=%s: %s",
+            self.venue,
+            error_code,
+            exc,
+        )
+
+    async def _get_with_retry(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        params: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> object:
+        """GET request with exponential backoff retry on transient errors.
+
+        Retries up to _RETRY_ATTEMPTS times on HTTP 429/5xx and aiohttp
+        connection errors. On final failure raises the last exception.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(_RETRY_ATTEMPTS):
+            delay: float = _RETRY_BASE_DELAY * (1.0 * (1 << attempt))
+            try:
+                async with session.get(url, params=params, headers=headers) as resp:
+                    if resp.status in _RETRYABLE_STATUS_CODES:
+                        logger.warning(
+                            "Retryable HTTP %d from %s (attempt %d/%d)",
+                            resp.status,
+                            url,
+                            attempt + 1,
+                            _RETRY_ATTEMPTS,
+                        )
+                        if attempt < _RETRY_ATTEMPTS - 1:
+                            await asyncio.sleep(delay)
+                            continue
+                        raise RuntimeError(f"HTTP {resp.status} from {url} after {_RETRY_ATTEMPTS} attempts")
+                    resp.raise_for_status()
+                    return await resp.json()
+            except aiohttp.ClientError as exc:
+                last_exc = exc
+                logger.warning(
+                    "aiohttp error fetching %s (attempt %d/%d): %s",
+                    url,
+                    attempt + 1,
+                    _RETRY_ATTEMPTS,
+                    exc,
+                )
+                if attempt < _RETRY_ATTEMPTS - 1:
+                    await asyncio.sleep(delay)
+        raise RuntimeError(f"All {_RETRY_ATTEMPTS} attempts failed for {url}: {last_exc}") from last_exc

@@ -1,0 +1,26 @@
+interactions:
+  - request:
+      body: null
+      headers:
+        Accept:
+          - application/json
+        Accept-Encoding:
+          - gzip, deflate
+        Connection:
+          - keep-alive
+        User-Agent:
+          - python-requests/2.32.5
+      method: GET
+      uri: https://api.sportradar.com/soccer/trial/v4/en/competitors/sr:competitor:42/profile.json?api_key=[FILTERED]
+    response:
+      body:
+        string: '{"competitor":{"id":"sr:competitor:42","name":"Arsenal FC","abbreviation":"ARS","country":"England","country_code":"ENG","gender":"male"},"manager":{"id":"sr:player:12345","name":"Mikel Arteta","nationality":"Spain"},"venue":{"id":"sr:venue:574","name":"Emirates Stadium","capacity":60704,"city_name":"London","country_name":"England"},"players":[{"id":"sr:player:234567","name":"Bukayo Saka","type":"forward","nationality":"England","jersey_number":7,"date_of_birth":"2001-09-05","height":178,"weight":72},{"id":"sr:player:234568","name":"Martin Odegaard","type":"midfielder","nationality":"Norway","jersey_number":8,"date_of_birth":"1998-12-17","height":178,"weight":68}]}'
+      headers:
+        Content-Type:
+          - application/json;charset=UTF-8
+        Date:
+          - Wed, 18 Mar 2026 08:00:01 GMT
+      status:
+        code: 200
+        message: OK
+version: 1

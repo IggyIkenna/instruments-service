@@ -1,0 +1,30 @@
+interactions:
+  - request:
+      body: null
+      headers:
+        Accept:
+          - application/json
+        Accept-Encoding:
+          - gzip, deflate
+        Connection:
+          - keep-alive
+        User-Agent:
+          - python-requests/2.32.5
+      method: GET
+      uri: https://api.sportradar.com/soccer/trial/v4/en/schedules/2026-03-18/schedule.json?api_key=[FILTERED]
+    response:
+      body:
+        string: '{"generated_at":"2026-03-18T08:00:00+00:00","sport_events":[{"id":"sr:sport_event:45678901","scheduled":"2026-03-18T15:00:00+00:00","start_time_tbd":false,"status":"not_started","tournament":{"id":"sr:tournament:17","name":"Premier League","sport":{"id":"sr:sport:1","name":"Soccer"},"category":{"id":"sr:category:1","name":"England"}},"competitors":[{"id":"sr:competitor:42","name":"Arsenal FC","abbreviation":"ARS","qualifier":"home"},{"id":"sr:competitor:38","name":"Chelsea FC","abbreviation":"CHE","qualifier":"away"}],"venue":{"id":"sr:venue:574","name":"Emirates Stadium","capacity":60704,"city_name":"London","country_name":"England"}},{"id":"sr:sport_event:45678902","scheduled":"2026-03-18T17:30:00+00:00","start_time_tbd":false,"status":"not_started","tournament":{"id":"sr:tournament:17","name":"Premier League","sport":{"id":"sr:sport:1","name":"Soccer"},"category":{"id":"sr:category:1","name":"England"}},"competitors":[{"id":"sr:competitor:44","name":"Liverpool FC","abbreviation":"LIV","qualifier":"home"},{"id":"sr:competitor:17","name":"Manchester City","abbreviation":"MCI","qualifier":"away"}],"venue":{"id":"sr:venue:579","name":"Anfield","capacity":53394,"city_name":"Liverpool","country_name":"England"}}]}'
+      headers:
+        Content-Type:
+          - application/json;charset=UTF-8
+        Date:
+          - Wed, 18 Mar 2026 08:00:00 GMT
+        X-RateLimit-Limit:
+          - "1000"
+        X-RateLimit-Remaining:
+          - "998"
+      status:
+        code: 200
+        message: OK
+version: 1

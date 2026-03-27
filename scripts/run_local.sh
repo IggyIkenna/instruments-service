@@ -50,7 +50,7 @@ import os, asyncio, logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s %(name)s: %(message)s')
 
 from unified_trading_library import GCSEventSink
-from unified_events_interface import setup_events
+from unified_trading_library.events_interface import setup_events
 from instruments_service.config import get_config
 
 config = get_config()

@@ -1,0 +1,26 @@
+interactions:
+  - request:
+      body: '{"filter":{"eventTypeIds":["1"],"marketCountries":["GB"],"marketTypeCodes":["MATCH_ODDS"]},"maxResults":"100","marketProjection":["RUNNER_DESCRIPTION","EVENT","COMPETITION"]}'
+      headers:
+        Accept:
+          - application/json
+        Content-Type:
+          - application/json
+        X-Application:
+          - "[FILTERED]"
+        X-Authentication:
+          - "[FILTERED]"
+      method: POST
+      uri: https://api.betfair.com/exchange/betting/rest/v1.0/listMarketCatalogue/
+    response:
+      body:
+        string: '[{"marketId":"1.234567890","marketName":"Match Odds","marketStartTime":"2026-03-18T15:00:00.000Z","totalMatched":125430.50,"event":{"id":"32451678","name":"Arsenal v Chelsea","countryCode":"GB","timezone":"GMT","openDate":"2026-03-18T15:00:00.000Z"},"competition":{"id":"10932509","name":"Premier League"},"runners":[{"selectionId":47999,"runnerName":"Arsenal","sortPriority":1},{"selectionId":58805,"runnerName":"Chelsea","sortPriority":2},{"selectionId":60424,"runnerName":"The Draw","sortPriority":3}]},{"marketId":"1.234567891","marketName":"Match Odds","marketStartTime":"2026-03-18T17:30:00.000Z","totalMatched":89210.25,"event":{"id":"32451679","name":"Liverpool v Man City","countryCode":"GB","timezone":"GMT","openDate":"2026-03-18T17:30:00.000Z"},"competition":{"id":"10932509","name":"Premier League"},"runners":[{"selectionId":48001,"runnerName":"Liverpool","sortPriority":1},{"selectionId":48003,"runnerName":"Man City","sortPriority":2},{"selectionId":60425,"runnerName":"The Draw","sortPriority":3}]}]'
+      headers:
+        Content-Type:
+          - application/json
+        Date:
+          - Wed, 18 Mar 2026 10:00:00 GMT
+      status:
+        code: 200
+        message: OK
+version: 1
