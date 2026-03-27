@@ -106,6 +106,10 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "API_FOOTBALL": "api_football",
 }
 
+# Note: CCXTReferenceDataAdapter is router-only (reached via data_source="ccxt" in
+# ReferenceDataSourceConfig via router.py). It is not in this factory because the
+# factory maps UAC canonical venue names → adapters; CCXT is a cross-venue data source
+# accessed by exchange_id, not a canonical venue name.
 _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "aave_v3": AaveV3ReferenceDataAdapter,
     "api_football": ApiFootballReferenceDataAdapter,
