@@ -1,3 +1,4 @@
+# SCHEMA_PROVENANCE_EXEMPT — ReferenceDataSourceConfig is a service-internal routing config
 """DataSourceRouter: map (venue, data_source) pairs to reference data adapters.
 
 Services call create_reference_data_adapter_for_source() with a

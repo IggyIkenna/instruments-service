@@ -67,8 +67,8 @@ class InstrumentsHandler(UnifiedServiceHandler):
                     len(keys),
                     sorted(keys.keys()),
                 )
-        except Exception as exc:
-            logger.error("API key validation failed: %s", exc)
+        except Exception as _exc:
+            logger.error("API key validation failed: %s", _exc)
             raise
 
     def _is_date_complete(self, date: str) -> bool:
@@ -83,7 +83,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
                 end_date=date,
             )
             return date in completed
-        except Exception:
+        except Exception as _exc:
             return False
 
     async def process(self, payload: BatchPayload) -> object:

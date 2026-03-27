@@ -9,7 +9,7 @@ Ref: https://api.football-data-api.com
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 import aiohttp
 from unified_api_contracts.external.footystats import (  # noqa: qg-deep-import
@@ -156,7 +156,7 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
             List of canonical teams.
         """
         url = f"{_BASE_URL}/league-teams"
-        effective_season = season if season is not None else datetime.now().year
+        effective_season = season if season is not None else datetime.now(UTC).year
         params = self._params_with_key(
             {
                 "season_id": str(league_id),

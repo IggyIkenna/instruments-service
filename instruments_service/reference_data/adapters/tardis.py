@@ -18,6 +18,7 @@ OHLCV bars (requires /replay endpoint — out of scope for URDI REST adapter).
 import contextlib
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import cast
@@ -189,8 +190,6 @@ def _parse_deribit_symbol_expiry(raw_id: str) -> datetime | None:
 def _parse_ddmmmyy(date_part: str) -> datetime | None:
     """Parse DDMMMYY string (e.g. '27MAR26') into a UTC datetime."""
     try:
-        import re
-
         m = re.match(r"(\d{1,2})([A-Z]{3})(\d{2})", date_part.upper())
         if not m:
             return None

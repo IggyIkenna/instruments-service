@@ -11,6 +11,7 @@ import logging
 from datetime import UTC, datetime
 
 import aiohttp
+from unified_trading_library import get_secret_client
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +24,9 @@ def _resolve_alchemy_key(alchemy_key: str | None) -> str | None:
     if alchemy_key:
         return alchemy_key
     try:
-        from unified_trading_library import get_secret_client
-
         sc = get_secret_client()
         return sc.get_secret("alchemy-api-key").strip()
-    except Exception:
+    except Exception as _exc:
         logger.warning("date_to_block: cannot get alchemy-api-key from Secret Manager")
         return None
 
@@ -114,6 +113,6 @@ async def date_to_block(
         logger.debug("date_to_block: %s → block %d", date_str, lo)
         return lo
 
-    except Exception as exc:
-        logger.warning("date_to_block error for %s: %s", date_str, exc)
+    except Exception as _exc:
+        logger.warning("date_to_block error for %s: %s", date_str, _exc)
         return None

@@ -15,7 +15,7 @@ NOTE: Transfermarkt has no official public API.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 import aiohttp
 from unified_api_contracts.external.transfermarkt import (  # noqa: qg-deep-import
@@ -117,7 +117,7 @@ class TransfermarktAdapter(BaseSportsReferenceAdapter):
         Returns:
             List of canonical teams with squad/value data.
         """
-        effective_season = season if season is not None else datetime.now().year
+        effective_season = season if season is not None else datetime.now(UTC).year
         url = f"{_RAPIDAPI_BASE_URL}/clubs/search/{league_id}"
         params: dict[str, str] = {"season_id": str(effective_season)}
 

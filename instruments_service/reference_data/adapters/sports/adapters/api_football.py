@@ -9,7 +9,7 @@ Ref: https://www.api-football.com/documentation-v3
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 import aiohttp
 from unified_api_contracts.external.api_football import (  # noqa: qg-deep-import
@@ -49,7 +49,7 @@ def _effective_season_for_league(api_football_id: int) -> int:
         get_league_by_api_football_id,
     )
 
-    now = datetime.now()
+    now = datetime.now(UTC)
     league_def = get_league_by_api_football_id(api_football_id)
     start_month = (
         league_def.season_months[0] if league_def is not None else 8  # default: European Aug-start
@@ -502,6 +502,6 @@ def _parse_teams(teams_data: dict[str, object]) -> dict[str, object] | None:
         if isinstance(team_raw, dict):
             try:
                 result[side] = ApiFootballTeamWithWinner(**team_raw)
-            except Exception:
+            except Exception as _exc:
                 continue
     return result if result else None

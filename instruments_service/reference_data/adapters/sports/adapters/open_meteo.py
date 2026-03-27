@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 import aiohttp
 from unified_api_contracts.external.open_meteo import (  # noqa: qg-deep-import
@@ -75,9 +76,7 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
             WeatherData with temperature, wind, rain, humidity, or None on failure.
         """
         # Use archive-api for historical dates (>3 months ago), forecast for recent/future
-        from datetime import datetime, timedelta
-
-        cutoff = (datetime.utcnow() - timedelta(days=90)).strftime("%Y-%m-%d")
+        cutoff = (datetime.now(UTC) - timedelta(days=90)).strftime("%Y-%m-%d")
         url = "https://archive-api.open-meteo.com/v1/archive" if date < cutoff else f"{_BASE_URL}/forecast"
         params: dict[str, str] = {
             "latitude": str(venue_lat),
