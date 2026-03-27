@@ -24,6 +24,7 @@ from ..schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ..utils.defi_utils import classify_graph_error, parse_created_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -70,29 +71,6 @@ _CHAIN_TO_GQL = {
 }
 
 
-def _classify_error(exc: Exception, status: int | None = None) -> str:
-    if status == 429:
-        return "RATE_LIMIT"
-    if status is not None and status >= 500:
-        return "503"
-    msg = str(exc).lower()
-    if "429" in msg or "rate" in msg:
-        return "RATE_LIMIT"
-    if "503" in msg or "unavailable" in msg:
-        return "503"
-    return "UNKNOWN"
-
-
-def _parse_create_time(create_time_raw: object) -> datetime | None:
-    """Parse a Unix timestamp to a UTC datetime, returning None on failure."""
-    if create_time_raw is None:
-        return None
-    try:
-        return datetime.fromtimestamp(int(str(create_time_raw)), tz=UTC)
-    except (ValueError, OSError):
-        return None
-
-
 class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
     """Balancer reference data: pool discovery from Balancer API v3 (GraphQL).
 
@@ -134,7 +112,7 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
                 resp.raise_for_status()
                 raw = await resp.json()
         except aiohttp.ClientError as exc:
-            error_code = _classify_error(exc)
+            error_code = classify_graph_error(exc)
             classification = classify_venue_error("balancer", error_code)
             action = classification.action.value if classification else "fail"
             retry_safe = classification.retry_safe if classification else False
@@ -190,7 +168,7 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
         venue_tag = f"BALANCER-{self._chain}"
         instrument_key = f"{venue_tag}:POOL:{symbol}"
 
-        available_since = _parse_create_time(pool.get("createTime"))
+        available_since = parse_created_timestamp(pool.get("createTime"))
 
         return InstrumentRecord(
             instrument_key=instrument_key,

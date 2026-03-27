@@ -23,6 +23,7 @@ from ..schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ..utils.defi_utils import classify_graph_error
 
 logger = logging.getLogger(__name__)
 
@@ -52,19 +53,6 @@ query {
     }
 }
 """
-
-
-def _classify_error(exc: Exception, status: int | None = None) -> str:
-    if status == 429:
-        return "RATE_LIMIT"
-    if status is not None and status >= 500:
-        return "503"
-    msg = str(exc).lower()
-    if "429" in msg or "rate" in msg:
-        return "RATE_LIMIT"
-    if "503" in msg or "unavailable" in msg:
-        return "503"
-    return "UNKNOWN"
 
 
 class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
@@ -106,7 +94,7 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
                 if gql_errors:
                     logger.warning("Morpho GraphQL errors: %s", gql_errors)
         except aiohttp.ClientError as exc:
-            error_code = _classify_error(exc)
+            error_code = classify_graph_error(exc)
             classification = classify_venue_error("morpho", error_code)
             action = classification.action.value if classification else "fail"
             retry_safe = classification.retry_safe if classification else False
