@@ -1,0 +1,282 @@
+"""Uniswap V4 reference data adapter — instrument discovery via The Graph.
+
+Discovers Uniswap V4 liquidity pools on Ethereum.
+Pools are returned as InstrumentRecord with instrument_type="pool".
+
+Data source: The Graph (decentralized network).
+Reference: https://docs.uniswap.org/contracts/v4/overview
+"""
+
+import logging
+from datetime import UTC, datetime
+from decimal import Decimal
+
+import aiohttp
+from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
+from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.registry import SUBGRAPH_IDS  # noqa: qg-deep-import
+from unified_trading_library import log_event
+
+from ..base_adapter import BaseReferenceDataAdapter
+from ..schemas import (
+    CanonicalExpiryCalendar,
+    CanonicalOptionsChain,
+    FundingRateRef,
+    OHLCVRef,
+)
+from ..utils import date_to_block
+
+logger = logging.getLogger(__name__)
+
+_SUBGRAPH_IDS: dict[str, str] = SUBGRAPH_IDS.get("uniswap_v4", {})
+_DEFAULT_CHAIN = "ETHEREUM"
+
+_QUOTE_TOKENS = {"USDC", "USDT", "DAI", "WETH", "ETH", "WBTC", "USDE"}
+
+# Query template — {block_clause} is replaced with '' or ' block: {number: N},'
+_POOLS_QUERY_TEMPLATE = """
+query GetPools($first: Int!) {{
+    pools(
+        {block_clause}first: $first, orderBy: totalValueLockedUSD, orderDirection: desc
+    ) {{
+        id
+        feeTier
+        token0 {{ id symbol name decimals }}
+        token1 {{ id symbol name decimals }}
+        totalValueLockedUSD
+        createdAtTimestamp
+    }}
+}}
+"""
+
+
+def _classify_error(exc: Exception, status: int | None = None) -> str:
+    if status == 429:
+        return "RATE_LIMIT"
+    if status is not None and status >= 500:
+        return "503"
+    msg = str(exc).lower()
+    if "429" in msg or "rate" in msg:
+        return "RATE_LIMIT"
+    if "503" in msg or "unavailable" in msg:
+        return "503"
+    return "UNKNOWN"
+
+
+def _order_base_quote(sym0: str, sym1: str) -> tuple[str, str]:
+    if sym1.upper() in _QUOTE_TOKENS and sym0.upper() not in _QUOTE_TOKENS:
+        return sym0.upper(), sym1.upper()
+    if sym0.upper() in _QUOTE_TOKENS and sym1.upper() not in _QUOTE_TOKENS:
+        return sym1.upper(), sym0.upper()
+    return sym0.upper(), sym1.upper()
+
+
+def _parse_created_timestamp(ts_raw: object) -> datetime | None:
+    """Parse a createdAtTimestamp field into a UTC datetime, or None."""
+    if ts_raw is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(str(ts_raw)), tz=UTC)
+    except (ValueError, OSError):
+        return None
+
+
+class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
+    """Uniswap V4 reference data: pool discovery from The Graph subgraph.
+
+    Uniswap V4 launched February 2025. Protocol is young — all pools with
+    activity are worth tracking.
+    """
+
+    def __init__(
+        self,
+        project_id: str | None = None,
+        api_key: str | None = None,
+        chain: str = _DEFAULT_CHAIN,
+        date: str | None = None,
+    ) -> None:
+        super().__init__(project_id=project_id, api_key=api_key)
+        self._chain = chain.upper()
+        self._date = date
+
+    @property
+    def venue(self) -> str:
+        return "uniswap_v4"
+
+    async def get_instruments(
+        self,
+        instrument_type: str | None = None,
+    ) -> list[InstrumentRecord]:
+        """Fetch active Uniswap V4 pools as instruments."""
+        if instrument_type not in (None, "pool"):
+            return []
+
+        url = self._resolve_api_url()
+        if not url:
+            return []
+
+        variables = {"first": 500}
+        block_num = await self._resolve_block_num()
+        block_clause = f"block: {{number: {block_num}}}, " if block_num else ""
+        query = _POOLS_QUERY_TEMPLATE.format(block_clause=block_clause)
+
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    url,
+                    json={"query": query, "variables": variables},
+                    headers={"Content-Type": "application/json"},
+                ) as resp,
+            ):
+                resp.raise_for_status()
+                data = await resp.json()
+        except aiohttp.ClientError as exc:
+            self._log_fetch_error(exc)
+            return []
+
+        pools: list[dict[str, object]] = data.get("data", {}).get("pools", [])
+        now = datetime.now(UTC)
+        results: list[InstrumentRecord] = []
+
+        for pool in pools:
+            record = self._build_pool_record(pool, now)
+            if record:
+                results.append(record)
+
+        logger.info("UniswapV4: fetched %d pool instruments on %s", len(results), self._chain)
+        return results
+
+    def _resolve_api_url(self) -> str | None:
+        """Return the subgraph URL or None if API key / subgraph ID is missing."""
+        api_key = self._optional_api_key()
+        subgraph_id = _SUBGRAPH_IDS.get(self._chain, "")
+        if not api_key or not subgraph_id:
+            logger.warning(
+                "UniswapV4: missing API key or subgraph ID for chain %s",
+                self._chain,
+            )
+            return None
+        return f"https://gateway.thegraph.com/api/{api_key}/subgraphs/id/{subgraph_id}"
+
+    async def _resolve_block_num(self) -> int | None:
+        """Resolve the historical block number from self._date, if set."""
+        if not self._date:
+            return None
+        block_num = await date_to_block(self._date, chain=self._chain)
+        if block_num:
+            logger.debug(
+                "UniswapV4: querying at historical block %d for date %s",
+                block_num,
+                self._date,
+            )
+        return block_num
+
+    def _log_fetch_error(self, exc: aiohttp.ClientError) -> None:
+        """Classify and log an ADAPTER_FETCH_FAILED event for Uniswap V4."""
+        error_code = _classify_error(exc)
+        classification = classify_venue_error("uniswap_v4", error_code)
+        action = classification.action.value if classification else "fail"
+        retry_safe = classification.retry_safe if classification else False
+        logger.error(
+            "UniswapV4 pool query failed: %s (classified: %s, action: %s, retry_safe: %s)",
+            exc,
+            error_code,
+            action,
+            retry_safe,
+        )
+        log_event(
+            "ADAPTER_FETCH_FAILED",
+            details={
+                "venue": "uniswap_v4",
+                "endpoint": "thegraph_pools",
+                "error": str(exc),
+                "error_code": error_code,
+                "action": action,
+                "retry_safe": retry_safe,
+            },
+        )
+
+    def _build_pool_record(
+        self,
+        pool: dict[str, object],
+        now: datetime,
+    ) -> InstrumentRecord | None:
+        """Build an InstrumentRecord from a single Uniswap V4 pool, or None."""
+        pool_id = pool.get("id")
+        token0 = pool.get("token0")
+        token1 = pool.get("token1")
+        fee_tier = pool.get("feeTier")
+        if not pool_id or not isinstance(token0, dict) or not isinstance(token1, dict):
+            return None
+
+        sym0 = str(token0.get("symbol", ""))
+        sym1 = str(token1.get("symbol", ""))
+        if not sym0 or not sym1:
+            return None
+
+        base, quote = _order_base_quote(sym0, sym1)
+
+        # Filter: both tokens must be major assets (BTC/ETH/stablecoins)
+        if base not in DEFI_MAJOR_ASSET_SYMBOLS or quote not in DEFI_MAJOR_ASSET_SYMBOLS:
+            return None
+
+        fee_str = str(fee_tier) if fee_tier else "0"
+        symbol = f"{base}-{quote}:{fee_str}"
+        venue_tag = f"UNISWAPV4-{self._chain}"
+        instrument_key = f"{venue_tag}:POOL:{symbol}"
+
+        available_since = _parse_created_timestamp(pool.get("createdAtTimestamp"))
+
+        return InstrumentRecord(
+            instrument_key=instrument_key,
+            venue=venue_tag,
+            symbol=f"{base}/{quote}",
+            raw_symbol=str(pool_id),
+            instrument_type="pool",
+            base_asset=base,
+            quote_asset=quote,
+            tick_size=Decimal("0.000001"),
+            lot_size=Decimal("0.000001"),
+            min_order_size=Decimal("0"),
+            contract_size=Decimal("1"),
+            settlement_asset=quote,
+            expiry=None,
+            strike=None,
+            option_type=None,
+            is_active=True,
+            updated_at=now,
+            available_since=available_since,
+        )
+
+    async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
+        instruments = await self.get_instruments()
+        for inst in instruments:
+            if inst.raw_symbol == symbol or inst.symbol == symbol:
+                return inst
+        return None
+
+    async def get_options_chain(
+        self,
+        underlying: str,
+        expiry: datetime | None = None,
+    ) -> CanonicalOptionsChain:
+        raise NotImplementedError("Uniswap V4 does not support options")
+
+    async def get_expiry_calendar(
+        self,
+        underlying: str,
+        instrument_type: str = "future",
+    ) -> CanonicalExpiryCalendar:
+        raise NotImplementedError("Uniswap V4 pools have no expiry calendar")
+
+    async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        raise NotImplementedError("Uniswap V4 pools have no funding rate")
+
+    async def get_ohlcv(
+        self,
+        symbol: str,
+        interval: str = "1d",
+        limit: int = 100,
+    ) -> list[OHLCVRef]:
+        raise NotImplementedError("Uniswap V4 OHLCV not supported via reference data")

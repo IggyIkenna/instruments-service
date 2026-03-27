@@ -2,9 +2,9 @@
 
 All naming translation (canonical venue → URDI adapter) and credential routing
 (URDI adapter → data source → API key) is owned by URDI itself:
-  - CANONICAL_VENUE_TO_ADAPTER in unified_reference_data_interface.factory
-  - ADAPTER_DATA_SOURCES in unified_reference_data_interface.factory
-  - get_adapter_for_canonical_venue() in unified_reference_data_interface
+  - CANONICAL_VENUE_TO_ADAPTER in instruments_service.reference_data.factory
+  - ADAPTER_DATA_SOURCES in instruments_service.reference_data.factory
+  - get_adapter_for_canonical_venue() in instruments_service.reference_data
 
 instruments-service maintains no local translation tables. This file contains
 only orchestration logic: which venues to fetch, how to gather results, error policy.
@@ -23,7 +23,8 @@ import asyncio
 import logging
 
 from unified_api_contracts.internal import InstrumentRecord
-from unified_reference_data_interface import (
+
+from instruments_service.reference_data import (
     ADAPTER_DATA_SOURCES,
     CANONICAL_VENUE_TO_ADAPTER,
     get_adapter_for_canonical_venue,
@@ -82,29 +83,34 @@ async def fetch_instruments_for_all_venues(
     if not fetch_list:
         return []
 
+    # Cap concurrent adapter calls at 4 to avoid overloading APIs
+    sem = asyncio.Semaphore(4)
+
     async def _fetch_one(canonical: str, adapter_key: str) -> list[InstrumentRecord]:
-        try:
-            data_source = ADAPTER_DATA_SOURCES.get(adapter_key, "")
-            api_key = (api_keys or {}).get(data_source) if data_source else None
-            adapter = get_adapter_for_canonical_venue(
-                canonical,
-                api_key=api_key,
-                date=date,
-                extra_api_keys=api_keys,
-            )
-            records = await adapter.get_instruments(instrument_type=instrument_type)
-            logger.info("URDI[%s]: fetched %d instruments", canonical, len(records))
-            return records  # type already list[InstrumentRecord] from URDI
-        except NotImplementedError:
-            logger.debug("URDI[%s]: instrument_type=%r not supported", canonical, instrument_type)
-            return []
-        except (OSError, ConnectionError, TimeoutError) as exc:
-            logger.warning("URDI[%s]: network error (retryable): %s", canonical, exc)
-            return []
-        except ValueError as exc:
-            logger.error("URDI[%s]: adapter error: %s", canonical, exc)
-            return []
-        # Programming errors propagate — fail the shard
+        async with sem:
+            try:
+                data_source = ADAPTER_DATA_SOURCES.get(adapter_key, "")
+                api_key = (api_keys or {}).get(data_source) if data_source else None
+                adapter = get_adapter_for_canonical_venue(
+                    canonical,
+                    api_key=api_key,
+                    date=date,
+                    extra_api_keys=api_keys,
+                )
+                # Use cached path — adapter pool ensures reuse, cache avoids redundant fetches
+                records = await adapter.get_instruments_cached(instrument_type=instrument_type)
+                logger.info("URDI[%s]: fetched %d instruments", canonical, len(records))
+                return records
+            except NotImplementedError:
+                logger.debug("URDI[%s]: instrument_type=%r not supported", canonical, instrument_type)
+                return []
+            except (OSError, ConnectionError, TimeoutError) as exc:
+                logger.warning("URDI[%s]: network error (retryable): %s", canonical, exc)
+                return []
+            except ValueError as exc:
+                logger.error("URDI[%s]: adapter error: %s", canonical, exc)
+                return []
+            # Programming errors propagate — fail the shard
 
     results = await asyncio.gather(*[_fetch_one(c, k) for c, k in fetch_list])
     return [record for batch in results for record in batch]

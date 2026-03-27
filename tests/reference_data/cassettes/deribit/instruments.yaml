@@ -1,0 +1,26 @@
+interactions:
+  - request:
+      body: null
+      headers:
+        Accept:
+          - "*/*"
+        Accept-Encoding:
+          - gzip, deflate
+        Connection:
+          - keep-alive
+        User-Agent:
+          - python-requests/2.32.5
+      method: GET
+      uri: https://www.deribit.com/api/v2/public/get_instruments?currency=BTC&kind=future&expired=false
+    response:
+      body:
+        string: '{"jsonrpc":"2.0","result":[{"tick_size":2.5,"tick_size_steps":[],"taker_commission":0.0005,"strike":null,"settlement_period":"week","settlement_currency":"BTC","rfq":false,"quote_currency":"USD","price_index":"btc_usd","min_trade_amount":10.0,"max_liquidation_commission":0.001,"max_leverage":null,"maker_commission":-0.0001,"kind":"future","is_active":true,"instrument_type":"reversed","instrument_name":"BTC-6MAR26","instrument_id":432156,"future_type":"reversed","expiration_timestamp":1772784000000,"creation_timestamp":1760140800000,"counter_currency":"USD","contract_size":10.0,"block_trade_min_trade_amount":100000.0,"block_trade_commission":0.0003,"block_trade_leg_prices":false,"base_currency":"BTC"},{"tick_size":2.5,"tick_size_steps":[],"taker_commission":0.0005,"strike":null,"settlement_period":"week","settlement_currency":"BTC","rfq":false,"quote_currency":"USD","price_index":"btc_usd","min_trade_amount":10.0,"max_liquidation_commission":0.001,"max_leverage":null,"maker_commission":-0.0001,"kind":"future","is_active":true,"instrument_type":"reversed","instrument_name":"BTC-13MAR26","instrument_id":432157,"future_type":"reversed","expiration_timestamp":1773388800000,"creation_timestamp":1760745600000,"counter_currency":"USD","contract_size":10.0,"block_trade_min_trade_amount":100000.0,"block_trade_commission":0.0003,"block_trade_leg_prices":false,"base_currency":"BTC"}]}'
+      headers:
+        Content-Type:
+          - application/json
+        Date:
+          - Wed, 25 Feb 2026 08:00:00 GMT
+      status:
+        code: 200
+        message: OK
+version: 1

@@ -1,0 +1,135 @@
+"""EtherFi reference data adapter — instrument discovery for LST tokens.
+
+Discovers EtherFi liquid staking token (weETH) on Ethereum.
+Token is returned as InstrumentRecord with instrument_type="yield_bearing".
+
+Reference: https://www.ether.fi/
+"""
+
+import logging
+from datetime import UTC, datetime
+from decimal import Decimal
+
+from unified_api_contracts.internal import InstrumentRecord
+
+from ..base_adapter import BaseReferenceDataAdapter
+from ..schemas import (
+    CanonicalExpiryCalendar,
+    CanonicalOptionsChain,
+    FundingRateRef,
+    OHLCVRef,
+)
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_CHAIN = "ETHEREUM"
+
+# EtherFi Ethereum mainnet deployment date (2023-11-01).
+_ETHERFI_DEPLOY_DATE = datetime(2023, 11, 1, tzinfo=UTC)
+
+# EtherFi token address on Ethereum
+_WEETH_ADDRESS = "0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee"
+
+_LST_TOKENS: list[dict[str, str]] = [
+    {
+        "symbol": "WEETH",
+        "contract_address": _WEETH_ADDRESS,
+        "underlying": "ETH",
+    },
+]
+
+
+class EtherFiReferenceDataAdapter(BaseReferenceDataAdapter):
+    """EtherFi reference data: weETH LST token discovery.
+
+    EtherFi launched in 2024. weETH is a yield-bearing liquid restaking token.
+    """
+
+    def __init__(
+        self,
+        project_id: str | None = None,
+        api_key: str | None = None,
+        chain: str = _DEFAULT_CHAIN,
+    ) -> None:
+        super().__init__(project_id=project_id, api_key=api_key)
+        self._chain = chain.upper()
+
+    @property
+    def venue(self) -> str:
+        return "etherfi"
+
+    async def get_instruments(
+        self,
+        instrument_type: str | None = None,
+    ) -> list[InstrumentRecord]:
+        """Return EtherFi weETH as a yield-bearing instrument."""
+        if instrument_type not in (None, "yield_bearing"):
+            return []
+
+        now = datetime.now(UTC)
+        results: list[InstrumentRecord] = []
+        venue_tag = f"ETHERFI-{self._chain}"
+
+        for token in _LST_TOKENS:
+            symbol = token["symbol"]
+            address = token["contract_address"]
+            underlying = token["underlying"]
+
+            results.append(
+                InstrumentRecord(
+                    instrument_key=f"{venue_tag}:LST:{symbol}",
+                    venue=venue_tag,
+                    symbol=symbol,
+                    raw_symbol=address,
+                    instrument_type="yield_bearing",
+                    base_asset=underlying,
+                    quote_asset=underlying,
+                    tick_size=Decimal("0.000001"),
+                    lot_size=Decimal("0.000001"),
+                    min_order_size=Decimal("0"),
+                    contract_size=Decimal("1"),
+                    settlement_asset=underlying,
+                    expiry=None,
+                    strike=None,
+                    option_type=None,
+                    is_active=True,
+                    updated_at=now,
+                    underlying=underlying,
+                    available_since=_ETHERFI_DEPLOY_DATE,
+                )
+            )
+
+        logger.info("EtherFi: fetched %d LST instruments on %s", len(results), self._chain)
+        return results
+
+    async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
+        instruments = await self.get_instruments()
+        for inst in instruments:
+            if inst.raw_symbol == symbol or inst.symbol == symbol:
+                return inst
+        return None
+
+    async def get_options_chain(
+        self,
+        underlying: str,
+        expiry: datetime | None = None,
+    ) -> CanonicalOptionsChain:
+        raise NotImplementedError("EtherFi does not support options")
+
+    async def get_expiry_calendar(
+        self,
+        underlying: str,
+        instrument_type: str = "future",
+    ) -> CanonicalExpiryCalendar:
+        raise NotImplementedError("EtherFi LST tokens have no expiry calendar")
+
+    async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        raise NotImplementedError("EtherFi LST tokens have no funding rate")
+
+    async def get_ohlcv(
+        self,
+        symbol: str,
+        interval: str = "1d",
+        limit: int = 100,
+    ) -> list[OHLCVRef]:
+        raise NotImplementedError("EtherFi OHLCV not supported via reference data")

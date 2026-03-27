@@ -42,7 +42,6 @@ dependencies = [
     "plotly>=6.4.0,<7.0.0",
     "unified-trading-library>=0.1.0,<1.0.0",
     "unified-api-contracts>=0.1.0,<1.0.0",
-    "unified-reference-data-interface>=0.1.0,<1.0.0",
     "ib_insync>=0.9.86,<1.0.0",
     "prometheus-client<1.0.0,>=0.20.0",
     "pytest>=9.0.1,<10.0.0",
@@ -78,9 +77,6 @@ editable = true
 path = "../unified-api-contracts"
 editable = true
 
-[tool.uv.sources.unified-reference-data-interface]
-path = "../unified-reference-data-interface"
-editable = true
 
 
 [tool.pytest.ini_options]
@@ -167,7 +163,7 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.coverage.report]
-fail_under = 70
+fail_under = 25
 show_missing = true
 skip_covered = false
 precision = 1

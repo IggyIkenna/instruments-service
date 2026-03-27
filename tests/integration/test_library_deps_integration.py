@@ -360,7 +360,7 @@ def test_urdi_adapter_registry_populated() -> None:
     If URDI removes a venue (e.g. UNISWAPV3-ETHEREUM), instrument fetching silently
     returns zero records for that venue.
     """
-    from unified_reference_data_interface import CANONICAL_VENUE_TO_ADAPTER
+    from instruments_service.reference_data import CANONICAL_VENUE_TO_ADAPTER
 
     assert isinstance(CANONICAL_VENUE_TO_ADAPTER, dict)
     assert len(CANONICAL_VENUE_TO_ADAPTER) >= 15, "must cover at least 15 canonical venues"
@@ -376,7 +376,7 @@ def test_urdi_adapter_data_sources_aligned() -> None:
     API key lookup. Every adapter key in CANONICAL_VENUE_TO_ADAPTER must have a
     corresponding data source entry (even if empty string = no key required).
     """
-    from unified_reference_data_interface import ADAPTER_DATA_SOURCES, CANONICAL_VENUE_TO_ADAPTER
+    from instruments_service.reference_data import ADAPTER_DATA_SOURCES, CANONICAL_VENUE_TO_ADAPTER
 
     adapter_keys = set(CANONICAL_VENUE_TO_ADAPTER.values())
     for key in adapter_keys:
@@ -392,7 +392,7 @@ def test_urdi_get_adapter_for_canonical_venue_callable() -> None:
     """
     import inspect
 
-    from unified_reference_data_interface import get_adapter_for_canonical_venue
+    from instruments_service.reference_data import get_adapter_for_canonical_venue
 
     assert callable(get_adapter_for_canonical_venue)
     sig = inspect.signature(get_adapter_for_canonical_venue)
