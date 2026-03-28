@@ -14,6 +14,7 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -26,7 +27,7 @@ from ..schemas import (
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL = "https://api.marinade.finance"
+_BASE_URL = get_solana_protocol_url("marinade") or "https://api.marinade.finance"
 _DEFAULT_CHAIN = "SOLANA"
 
 

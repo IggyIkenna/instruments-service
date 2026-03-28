@@ -14,6 +14,7 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -26,7 +27,7 @@ from ..schemas import (
 
 logger = logging.getLogger(__name__)
 
-_DATA_API_URL = "https://data.api.drift.trade"
+_DATA_API_URL = get_solana_protocol_url("drift", "api_url") or "https://data.api.drift.trade"
 _DEFAULT_CHAIN = "SOLANA"
 
 

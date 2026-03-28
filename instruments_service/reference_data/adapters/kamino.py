@@ -14,6 +14,10 @@ from decimal import Decimal
 import aiohttp
 from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.registry import (
+    get_solana_protocol_url,
+    resolve_solana_mint,
+)
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -26,25 +30,8 @@ from ..schemas import (
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL = "https://api.kamino.finance"
+_BASE_URL = get_solana_protocol_url("kamino") or "https://api.kamino.finance"
 _DEFAULT_CHAIN = "SOLANA"
-
-# Well-known Solana token mints → symbol mapping
-_MINT_TO_SYMBOL: dict[str, str] = {
-    "So11111111111111111111111111111111111111112": "SOL",
-    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
-    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
-    "7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj": "WETH",
-    "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh": "WBTC",
-    "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So": "MSOL",
-    "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JITOSOL",
-    "BNso1VUJnh4zcfpZa6986Ea66P6TCp59hvtNJ8b1X85": "BNSOL",
-    "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs": "WETH",
-    "KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS": "KMNO",
-    "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": "JUP",
-    "hntyVP6YFm1Hg25TN9WGLqM12b8TQv3TXsxg8HBatYS": "HNT",
-    "rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof": "RNDR",
-}
 
 
 def _classify_kamino_error(exc: Exception, status: int | None = None) -> str:
@@ -141,7 +128,7 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
 
     def _resolve_symbol(self, mint: str) -> str:
         """Resolve a Solana token mint address to its symbol."""
-        return _MINT_TO_SYMBOL.get(mint, "")
+        return resolve_solana_mint(mint) or ""
 
     def _build_vault_record(
         self,
