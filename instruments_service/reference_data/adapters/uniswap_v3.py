@@ -141,9 +141,7 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         logger.info("UniswapV3: fetched %d pool instruments on %s", len(results), self._chain)
         return results
 
-    async def _fetch_messari_pools(
-        self, url: str
-    ) -> list[dict[str, object]]:
+    async def _fetch_messari_pools(self, url: str) -> list[dict[str, object]]:
         """Fetch pools from Messari-schema subgraph and normalise to official format."""
         try:
             async with (
@@ -172,14 +170,16 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             fees = lp.get("fees", [])
             fee_pct = next((f["feePercentage"] for f in fees if f.get("feeType") == "FIXED_TRADING_FEE"), "0.3")
             fee_tier = str(int(float(fee_pct) * 10000))
-            normalised.append({
-                "id": lp.get("id"),
-                "token0": tokens[0],
-                "token1": tokens[1],
-                "feeTier": fee_tier,
-                "totalValueLockedUSD": lp.get("totalValueLockedUSD", "0"),
-                "createdAtTimestamp": lp.get("createdTimestamp"),
-            })
+            normalised.append(
+                {
+                    "id": lp.get("id"),
+                    "token0": tokens[0],
+                    "token1": tokens[1],
+                    "feeTier": fee_tier,
+                    "totalValueLockedUSD": lp.get("totalValueLockedUSD", "0"),
+                    "createdAtTimestamp": lp.get("createdTimestamp"),
+                }
+            )
         logger.info("UniswapV3: Messari fallback found %d pools on %s", len(normalised), self._chain)
         return normalised
 

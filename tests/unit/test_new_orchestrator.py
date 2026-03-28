@@ -123,20 +123,19 @@ async def test_process_instruments_no_venues_returns_empty():
 
 @pytest.mark.asyncio
 async def test_process_instruments_all_venues_skipped_before_launch():
-    """Venues before their available_from date are filtered; returns empty."""
+    """Venues before their available_from date return zero records → RuntimeError."""
     from instruments_service.engine.orchestrator import process_instruments
 
     # Use a date before all venues launched (1900-01-01)
-    # Most venues have available_from set, so few/none would pass
-    with patch(
-        "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
-        return_value=[],
-    ) as mock_fetch:
-        result = await process_instruments("1900-01-01", ["DEFI"])
-
-    # Either no venues pass the filter (result={}) or fetch returns [] → RuntimeError caught?
-    # In any case, result should be {} or RuntimeError raised for zero records
-    assert isinstance(result, dict)
+    # URDI returns [] for all venues → orchestrator raises RuntimeError
+    with (
+        patch(
+            "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
+            return_value=[],
+        ),
+        pytest.raises(RuntimeError, match="URDI returned zero records"),
+    ):
+        await process_instruments("1900-01-01", ["DEFI"])
 
 
 @pytest.mark.asyncio

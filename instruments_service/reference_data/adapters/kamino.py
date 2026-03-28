@@ -1,0 +1,224 @@
+"""Kamino reference data adapter -- instrument discovery via REST API.
+
+Discovers Kamino liquidity vaults on Solana. Each vault is an automated
+LP position on Raydium/Orca CLMM pools, returned as instrument_type="pool".
+
+Data source: Kamino REST API (https://api.kamino.finance/strategies).
+Reference: https://docs.kamino.finance/
+"""
+
+import logging
+from datetime import UTC, datetime
+from decimal import Decimal
+
+import aiohttp
+from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
+from unified_api_contracts.internal import InstrumentRecord
+from unified_trading_library import log_event
+
+from ..base_adapter import BaseReferenceDataAdapter
+from ..schemas import (
+    CanonicalExpiryCalendar,
+    CanonicalOptionsChain,
+    FundingRateRef,
+    OHLCVRef,
+)
+
+logger = logging.getLogger(__name__)
+
+_BASE_URL = "https://api.kamino.finance"
+_DEFAULT_CHAIN = "SOLANA"
+
+# Well-known Solana token mints → symbol mapping
+_MINT_TO_SYMBOL: dict[str, str] = {
+    "So11111111111111111111111111111111111111112": "SOL",
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
+    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
+    "7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj": "WETH",
+    "3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh": "WBTC",
+    "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So": "MSOL",
+    "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JITOSOL",
+    "BNso1VUJnh4zcfpZa6986Ea66P6TCp59hvtNJ8b1X85": "BNSOL",
+    "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs": "WETH",
+    "KMNo3nJsBXfcpJTVhZcXLW7RmTwTt4GVFE7suUBo9sS": "KMNO",
+    "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": "JUP",
+    "hntyVP6YFm1Hg25TN9WGLqM12b8TQv3TXsxg8HBatYS": "HNT",
+    "rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof": "RNDR",
+}
+
+
+def _classify_kamino_error(exc: Exception, status: int | None = None) -> str:
+    """Map a Kamino HTTP/network error to a UAC error code for classification."""
+    msg = str(exc).lower()
+    if status == 429 or "429" in msg or "rate" in msg:
+        return "RATE_LIMIT"
+    if status == 503 or "503" in msg or "unavailable" in msg:
+        return "503"
+    is_server_err = status is not None and status >= 500
+    if is_server_err or "500" in msg or "internal" in msg or "server" in msg:
+        return "500"
+    return "UNKNOWN"
+
+
+class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
+    """Kamino reference data: liquidity vault discovery from REST API.
+
+    Discovers Kamino automated LP vaults (CLMM positions on Raydium/Orca).
+    Each vault produces one instrument with instrument_type="pool".
+    Only LIVE vaults with at least one major-asset token are included.
+    """
+
+    def __init__(
+        self,
+        project_id: str | None = None,
+        api_key: str | None = None,
+        chain: str = _DEFAULT_CHAIN,
+    ) -> None:
+        super().__init__(project_id=project_id, api_key=api_key)
+        self._chain = chain.upper()
+
+    @property
+    def venue(self) -> str:
+        return f"KAMINO-{self._chain}"
+
+    def _log_fetch_error(self, exc: aiohttp.ClientError) -> None:
+        """Classify and log an ADAPTER_FETCH_FAILED event for Kamino."""
+        error_code = _classify_kamino_error(exc)
+        classification = classify_venue_error("kamino", error_code)
+        action = classification.action.value if classification else "fail"
+        retry_safe = classification.retry_safe if classification else False
+        logger.error(
+            "Kamino strategies request failed: %s (classified: %s, action: %s, retry_safe: %s)",
+            exc,
+            error_code,
+            action,
+            retry_safe,
+        )
+        log_event(
+            "ADAPTER_FETCH_FAILED",
+            details={
+                "venue": self.venue,
+                "endpoint": "strategies",
+                "error": str(exc),
+                "error_code": error_code,
+                "action": action,
+                "retry_safe": retry_safe,
+            },
+        )
+
+    async def get_instruments(
+        self,
+        instrument_type: str | None = None,
+    ) -> list[InstrumentRecord]:
+        """Fetch active Kamino liquidity vaults as instruments."""
+        if instrument_type not in (None, "pool"):
+            return []
+
+        url = f"{_BASE_URL}/strategies"
+        params = {"status": "LIVE"}
+        try:
+            async with aiohttp.ClientSession() as session:
+                data = await self._get_with_retry(session, url, params=params)
+        except (aiohttp.ClientError, RuntimeError) as exc:
+            if isinstance(exc, aiohttp.ClientError):
+                self._log_fetch_error(exc)
+            else:
+                logger.error("Kamino strategies request failed after retries: %s", exc)
+            return []
+
+        strategies: list[dict[str, object]] = data if isinstance(data, list) else []
+        now = datetime.now(UTC)
+        results: list[InstrumentRecord] = []
+        venue_tag = self.venue
+
+        for strategy in strategies:
+            record = self._build_vault_record(strategy, venue_tag, now)
+            if record:
+                results.append(record)
+
+        logger.info("Kamino: fetched %d vault instruments on %s", len(results), self._chain)
+        return results
+
+    def _resolve_symbol(self, mint: str) -> str:
+        """Resolve a Solana token mint address to its symbol."""
+        return _MINT_TO_SYMBOL.get(mint, "")
+
+    def _build_vault_record(
+        self,
+        strategy: dict[str, object],
+        venue_tag: str,
+        now: datetime,
+    ) -> InstrumentRecord | None:
+        """Build InstrumentRecord from a Kamino strategy/vault entry."""
+        address = str(strategy.get("address", ""))
+        status = str(strategy.get("status", ""))
+        if not address or status != "LIVE":
+            return None
+
+        mint_a = str(strategy.get("tokenAMint", ""))
+        mint_b = str(strategy.get("tokenBMint", ""))
+        sym_a = self._resolve_symbol(mint_a)
+        sym_b = self._resolve_symbol(mint_b)
+
+        # Skip if we can't resolve either symbol
+        if not sym_a or not sym_b:
+            return None
+
+        # Filter: at least one token must be a major asset
+        if sym_a not in DEFI_MAJOR_ASSET_SYMBOLS and sym_b not in DEFI_MAJOR_ASSET_SYMBOLS:
+            return None
+
+        symbol = f"{sym_a}/{sym_b}"
+        instrument_key = f"{venue_tag}:VAULT:{sym_a}-{sym_b}:{address[:8]}"
+
+        return InstrumentRecord(
+            instrument_key=instrument_key,
+            venue=venue_tag,
+            symbol=symbol,
+            raw_symbol=address,
+            instrument_type="pool",
+            base_asset=sym_a,
+            quote_asset=sym_b,
+            tick_size=Decimal("0.000001"),
+            lot_size=Decimal("0.000001"),
+            min_order_size=Decimal("0"),
+            contract_size=Decimal("1"),
+            settlement_asset=sym_b,
+            expiry=None,
+            strike=None,
+            option_type=None,
+            is_active=True,
+            updated_at=now,
+        )
+
+    async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
+        instruments = await self.get_instruments()
+        for inst in instruments:
+            if inst.raw_symbol == symbol or inst.symbol == symbol:
+                return inst
+        return None
+
+    async def get_options_chain(
+        self,
+        underlying: str,
+        expiry: datetime | None = None,
+    ) -> CanonicalOptionsChain:
+        raise NotImplementedError("Kamino does not support options")
+
+    async def get_expiry_calendar(
+        self,
+        underlying: str,
+        instrument_type: str = "future",
+    ) -> CanonicalExpiryCalendar:
+        raise NotImplementedError("Kamino vaults have no expiry calendar")
+
+    async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        raise NotImplementedError("Kamino vaults have no funding rate")
+
+    async def get_ohlcv(
+        self,
+        symbol: str,
+        interval: str = "1d",
+        limit: int = 100,
+    ) -> list[OHLCVRef]:
+        raise NotImplementedError("Kamino OHLCV not supported via reference data")

@@ -19,9 +19,11 @@ from .adapters.betfair import BetfairReferenceDataAdapter
 from .adapters.binance import BinanceReferenceDataAdapter
 from .adapters.bybit import BybitReferenceDataAdapter
 from .adapters.coinbase import CoinbaseReferenceDataAdapter
+from .adapters.compound_v3 import CompoundV3ReferenceDataAdapter
 from .adapters.curve import CurveReferenceDataAdapter
 from .adapters.databento import DatabentoReferenceDataAdapter
 from .adapters.deribit import DeribitReferenceDataAdapter
+from .adapters.drift import DriftReferenceDataAdapter
 from .adapters.ethena import EthenaReferenceDataAdapter
 from .adapters.etherfi import EtherFiReferenceDataAdapter
 from .adapters.euler import EulerReferenceDataAdapter
@@ -29,11 +31,15 @@ from .adapters.fluid import FluidReferenceDataAdapter
 from .adapters.hyperliquid import HyperliquidReferenceDataAdapter
 from .adapters.ibkr import IBKRReferenceDataAdapter
 from .adapters.kalshi import KalshiReferenceDataAdapter
+from .adapters.kamino import KaminoReferenceDataAdapter
 from .adapters.lido import LidoReferenceDataAdapter
+from .adapters.marinade import MarinadeReferenceDataAdapter
 from .adapters.morpho import MorphoReferenceDataAdapter
 from .adapters.okx import OKXReferenceDataAdapter
+from .adapters.orca import OrcaReferenceDataAdapter
 from .adapters.polygon import PolygonReferenceDataAdapter
 from .adapters.polymarket import PolymarketReferenceDataAdapter
+from .adapters.raydium import RaydiumReferenceDataAdapter
 from .adapters.tardis import TardisReferenceDataAdapter
 from .adapters.uniswap_v2 import UniswapV2ReferenceDataAdapter
 from .adapters.uniswap_v3 import UniswapV3ReferenceDataAdapter
@@ -92,14 +98,20 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     # Sports
     "BETFAIR": "betfair",
     "API_FOOTBALL": "api_football",
+    # Solana DeFi (REST API, no subgraph)
+    "DRIFT-SOLANA": "drift",
+    "KAMINO-SOLANA": "kamino",
+    "RAYDIUM-SOLANA": "raydium",
+    "ORCA-SOLANA": "orca",
+    "MARINADE-SOLANA": "marinade",
+    "JUPITER-SOLANA": "jupiter_sol",
 }
 
 # Dynamically add multi-chain DeFi venues from SUBGRAPH_IDS (SSOT in UAC).
 # This auto-generates entries like AAVEV3-ARBITRUM → aave_v3, MORPHO-BASE → morpho, etc.
 _SUBGRAPH_VENUE_PREFIX_TO_ADAPTER: dict[str, str] = {
     "AAVEV3": "aave_v3",
-    # compound_v3 adapter not yet implemented — subgraph IDs ready in UAC
-    # "COMPOUNDV3": "compound_v3",
+    "COMPOUNDV3": "compound_v3",
     "MORPHO": "morpho",
     "EULERV2": "euler",
     "FLUID": "fluid",
@@ -117,7 +129,7 @@ from unified_api_contracts.registry.capability_declarations._defi import (  # no
 # Map adapter keys back to protocol slugs for subgraph lookup
 _ADAPTER_TO_PROTOCOL: dict[str, str] = {
     "aave_v3": "aave_v3",
-    # "compound_v3": not yet implemented
+    "compound_v3": "compound_v3",
     "morpho": "morpho",
     "euler": "euler_v2",
     "fluid": "fluid",
@@ -149,21 +161,27 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "binance": BinanceReferenceDataAdapter,
     "bybit": BybitReferenceDataAdapter,
     "coinbase": CoinbaseReferenceDataAdapter,
+    "compound_v3": CompoundV3ReferenceDataAdapter,
     "curve": CurveReferenceDataAdapter,
     "databento": DatabentoReferenceDataAdapter,
     "deribit": DeribitReferenceDataAdapter,
+    "drift": DriftReferenceDataAdapter,
     "ethena": EthenaReferenceDataAdapter,
     "etherfi": EtherFiReferenceDataAdapter,
     "euler": EulerReferenceDataAdapter,
     "fluid": FluidReferenceDataAdapter,
     "hyperliquid": HyperliquidReferenceDataAdapter,
+    "kamino": KaminoReferenceDataAdapter,
+    "marinade": MarinadeReferenceDataAdapter,
     "ibkr": IBKRReferenceDataAdapter,
     "kalshi": KalshiReferenceDataAdapter,
     "lido": LidoReferenceDataAdapter,
     "morpho": MorphoReferenceDataAdapter,
     "okx": OKXReferenceDataAdapter,
+    "orca": OrcaReferenceDataAdapter,
     "polygon": PolygonReferenceDataAdapter,
     "polymarket": PolymarketReferenceDataAdapter,
+    "raydium": RaydiumReferenceDataAdapter,
     "tardis": TardisReferenceDataAdapter,
     "uniswap_v2": UniswapV2ReferenceDataAdapter,
     "uniswap_v3": UniswapV3ReferenceDataAdapter,
@@ -192,6 +210,7 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "uniswap_v3": "thegraph",
     "uniswap_v4": "thegraph",
     "aave_v3": "thegraph",
+    "compound_v3": "thegraph",
     "morpho": "thegraph",
     "euler": "thegraph",
     "fluid": "thegraph",
@@ -202,6 +221,13 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "curve": "rpc",
     "api_football": "api_football",
     "betfair": "betfair",
+    # Solana adapters use public REST APIs (no API key needed)
+    "drift": "",
+    "kamino": "",
+    "raydium": "",
+    "orca": "",
+    "marinade": "",
+    "jupiter_sol": "",
 }
 
 
@@ -252,25 +278,39 @@ def get_adapter_for_canonical_venue(
     if pool_key in _adapter_pool:
         return _adapter_pool[pool_key]
 
-    # DeFi Graph-based adapters that accept chain parameter
-    _DEFI_GRAPH_ADAPTERS = {
-        "uniswap_v2", "uniswap_v3", "uniswap_v4",
-        "aave_v3", "compound_v3", "morpho", "euler", "fluid",
-        "balancer", "curve",
+    # DeFi adapters that accept chain parameter (EVM + Solana)
+    defi_graph_adapters = {
+        "uniswap_v2",
+        "uniswap_v3",
+        "uniswap_v4",
+        "aave_v3",
+        "compound_v3",
+        "morpho",
+        "euler",
+        "fluid",
+        "balancer",
+        "curve",
+        # Solana adapters
+        "drift",
+        "kamino",
+        "raydium",
+        "orca",
+        "marinade",
+        "jupiter_sol",
     }
 
     # Some adapters need extra constructor parameters derived from the canonical venue name.
     adapter: BaseReferenceDataAdapter
     if adapter_key == "api_football" and date is not None:
         adapter = ApiFootballReferenceDataAdapter(api_key=api_key, project_id=project_id, date=date)
-    elif adapter_key in _DEFI_GRAPH_ADAPTERS:
+    elif adapter_key in defi_graph_adapters:
         # DeFi adapters: parse chain from venue name, pass chain + optional date
         parts = canonical_venue.split("-", 1)
         chain = parts[1] if len(parts) == 2 else "ETHEREUM"
         adapter_class = _ADAPTERS[adapter_key]
         # Only some adapters accept date (aave_v3, uniswap_v2/v3/v4)
-        _ACCEPTS_DATE = {"uniswap_v2", "uniswap_v3", "uniswap_v4", "aave_v3"}
-        if adapter_key in _ACCEPTS_DATE:
+        accepts_date = {"uniswap_v2", "uniswap_v3", "uniswap_v4", "aave_v3", "compound_v3"}
+        if adapter_key in accepts_date:
             adapter = adapter_class(project_id=project_id, api_key=api_key, chain=chain, date=date)
         else:
             adapter = adapter_class(project_id=project_id, api_key=api_key, chain=chain)
