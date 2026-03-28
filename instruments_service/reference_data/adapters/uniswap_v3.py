@@ -52,6 +52,22 @@ query GetPools($first: Int!, $minTvl: BigDecimal!) {{
 }}
 """
 
+# Messari-standard subgraph schema (used by some chain deployments e.g. Base)
+_MESSARI_POOLS_QUERY = """
+query GetPools($first: Int!) {
+    liquidityPools(
+        first: $first, orderBy: totalValueLockedUSD, orderDirection: desc
+    ) {
+        id
+        name
+        inputTokens { id symbol name decimals }
+        fees { feePercentage feeType }
+        totalValueLockedUSD
+        createdTimestamp
+    }
+}
+"""
+
 
 class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
     """Uniswap V3 reference data: pool discovery from The Graph subgraph."""
@@ -103,7 +119,17 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             self._log_fetch_error(exc)
             return []
 
-        pools: list[dict[str, object]] = data.get("data", {}).get("pools", [])
+        if not isinstance(data, dict) or "data" not in data:
+            logger.warning("UniswapV3: empty response from %s subgraph", self._chain)
+            return []
+
+        raw_data = data.get("data") or {}
+        pools: list[dict[str, object]] = raw_data.get("pools") or []
+
+        # Fallback: Messari-schema subgraphs use 'liquidityPools' + 'inputTokens'
+        if not pools:
+            pools = await self._fetch_messari_pools(url)
+
         now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
 
@@ -114,6 +140,48 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         logger.info("UniswapV3: fetched %d pool instruments on %s", len(results), self._chain)
         return results
+
+    async def _fetch_messari_pools(
+        self, url: str
+    ) -> list[dict[str, object]]:
+        """Fetch pools from Messari-schema subgraph and normalise to official format."""
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    url,
+                    json={"query": _MESSARI_POOLS_QUERY, "variables": {"first": 500}},
+                    headers={"Content-Type": "application/json"},
+                ) as resp,
+            ):
+                resp.raise_for_status()
+                data = await resp.json()
+        except aiohttp.ClientError as exc:
+            logger.warning("UniswapV3 Messari fallback failed on %s: %s", self._chain, exc)
+            return []
+
+        if not isinstance(data, dict) or "data" not in data:
+            return []
+
+        raw_pools = data.get("data", {}).get("liquidityPools", [])
+        normalised: list[dict[str, object]] = []
+        for lp in raw_pools:
+            tokens = lp.get("inputTokens", [])
+            if len(tokens) < 2:
+                continue
+            fees = lp.get("fees", [])
+            fee_pct = next((f["feePercentage"] for f in fees if f.get("feeType") == "FIXED_TRADING_FEE"), "0.3")
+            fee_tier = str(int(float(fee_pct) * 10000))
+            normalised.append({
+                "id": lp.get("id"),
+                "token0": tokens[0],
+                "token1": tokens[1],
+                "feeTier": fee_tier,
+                "totalValueLockedUSD": lp.get("totalValueLockedUSD", "0"),
+                "createdAtTimestamp": lp.get("createdTimestamp"),
+            })
+        logger.info("UniswapV3: Messari fallback found %d pools on %s", len(normalised), self._chain)
+        return normalised
 
     def _resolve_api_url(self) -> str | None:
         """Return the subgraph URL or None if API key / subgraph ID is missing."""
@@ -172,8 +240,8 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
     ) -> InstrumentRecord | None:
         """Build an InstrumentRecord from a single Uniswap V3 pool, or None."""
         pool_id = pool.get("id")
-        token0 = pool.get("token0")
-        token1 = pool.get("token1")
+        token0 = pool.get("token0") or {}
+        token1 = pool.get("token1") or {}
         fee_tier = pool.get("feeTier")
         if not pool_id or not isinstance(token0, dict) or not isinstance(token1, dict):
             return None

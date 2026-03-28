@@ -85,19 +85,7 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "KALSHI": "kalshi",
     # Data aggregators
     "POLYGON": "polygon",
-    # DeFi — DEX protocols
-    "UNISWAPV2-ETHEREUM": "uniswap_v2",
-    "UNISWAPV3-ETHEREUM": "uniswap_v3",
-    "UNISWAPV4-ETHEREUM": "uniswap_v4",
-    "CURVE-ETHEREUM": "curve",
-    "BALANCER-ETHEREUM": "balancer",
-    # DeFi — Lending protocols
-    "AAVEV3-ETHEREUM": "aave_v3",
-    # To add back: find correct subgraph via scripts/find_subgraph_ids.py,
-    "MORPHO-ETHEREUM": "morpho",
-    "EULER-ETHEREUM": "euler",
-    "FLUID-ETHEREUM": "fluid",
-    # DeFi — LST/Yield protocols
+    # DeFi — LST/Yield protocols (Ethereum-only, no subgraph multi-chain)
     "LIDO-ETHEREUM": "lido",
     "ETHERFI-ETHEREUM": "etherfi",
     "ETHENA-ETHEREUM": "ethena",
@@ -105,6 +93,48 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "BETFAIR": "betfair",
     "API_FOOTBALL": "api_football",
 }
+
+# Dynamically add multi-chain DeFi venues from SUBGRAPH_IDS (SSOT in UAC).
+# This auto-generates entries like AAVEV3-ARBITRUM → aave_v3, MORPHO-BASE → morpho, etc.
+_SUBGRAPH_VENUE_PREFIX_TO_ADAPTER: dict[str, str] = {
+    "AAVEV3": "aave_v3",
+    # compound_v3 adapter not yet implemented — subgraph IDs ready in UAC
+    # "COMPOUNDV3": "compound_v3",
+    "MORPHO": "morpho",
+    "EULERV2": "euler",
+    "FLUID": "fluid",
+    "UNISWAPV2": "uniswap_v2",
+    "UNISWAPV3": "uniswap_v3",
+    "UNISWAPV4": "uniswap_v4",
+    "BALANCER": "balancer",
+    "CURVE": "curve",
+}
+
+from unified_api_contracts.registry.capability_declarations._defi import (  # noqa: E402, qg-inside-import
+    get_supported_chains_for_protocol,
+)
+
+# Map adapter keys back to protocol slugs for subgraph lookup
+_ADAPTER_TO_PROTOCOL: dict[str, str] = {
+    "aave_v3": "aave_v3",
+    # "compound_v3": not yet implemented
+    "morpho": "morpho",
+    "euler": "euler_v2",
+    "fluid": "fluid",
+    "uniswap_v2": "uniswap_v2",
+    "uniswap_v3": "uniswap_v3",
+    "uniswap_v4": "uniswap_v4",
+    "balancer": "balancer",
+    "curve": "curve",
+}
+
+for _prefix, _adapter_key in _SUBGRAPH_VENUE_PREFIX_TO_ADAPTER.items():
+    _protocol_slug = _ADAPTER_TO_PROTOCOL.get(_adapter_key, _adapter_key)
+    for _chain in get_supported_chains_for_protocol(_protocol_slug):
+        _venue = f"{_prefix}-{_chain}"
+        if _venue not in CANONICAL_VENUE_TO_ADAPTER:
+            CANONICAL_VENUE_TO_ADAPTER[_venue] = _adapter_key
+
 
 # Note: CCXTReferenceDataAdapter is router-only (reached via data_source="ccxt" in
 # ReferenceDataSourceConfig via router.py). It is not in this factory because the
@@ -216,21 +246,34 @@ def get_adapter_for_canonical_venue(
             f"No URDI adapter for canonical venue {canonical_venue!r}. "
             f"Add an entry to CANONICAL_VENUE_TO_ADAPTER. Supported: {supported}"
         )
-    # Check pool — reuse existing adapter if same key + credentials
-    pool_key = (adapter_key, api_key)
+    # Check pool — reuse existing adapter if same key + credentials + venue
+    # Include canonical_venue in pool key so AAVEV3-ARBITRUM != AAVEV3-ETHEREUM
+    pool_key = (adapter_key, api_key, canonical_venue)
     if pool_key in _adapter_pool:
         return _adapter_pool[pool_key]
+
+    # DeFi Graph-based adapters that accept chain parameter
+    _DEFI_GRAPH_ADAPTERS = {
+        "uniswap_v2", "uniswap_v3", "uniswap_v4",
+        "aave_v3", "compound_v3", "morpho", "euler", "fluid",
+        "balancer", "curve",
+    }
 
     # Some adapters need extra constructor parameters derived from the canonical venue name.
     adapter: BaseReferenceDataAdapter
     if adapter_key == "api_football" and date is not None:
         adapter = ApiFootballReferenceDataAdapter(api_key=api_key, project_id=project_id, date=date)
-    elif adapter_key in ("uniswap_v2", "uniswap_v3", "uniswap_v4", "aave_v3"):
-        # DeFi Graph adapters: pass date for historical block-based querying.
+    elif adapter_key in _DEFI_GRAPH_ADAPTERS:
+        # DeFi adapters: parse chain from venue name, pass chain + optional date
         parts = canonical_venue.split("-", 1)
         chain = parts[1] if len(parts) == 2 else "ETHEREUM"
         adapter_class = _ADAPTERS[adapter_key]
-        adapter = adapter_class(project_id=project_id, api_key=api_key, chain=chain, date=date)
+        # Only some adapters accept date (aave_v3, uniswap_v2/v3/v4)
+        _ACCEPTS_DATE = {"uniswap_v2", "uniswap_v3", "uniswap_v4", "aave_v3"}
+        if adapter_key in _ACCEPTS_DATE:
+            adapter = adapter_class(project_id=project_id, api_key=api_key, chain=chain, date=date)
+        else:
+            adapter = adapter_class(project_id=project_id, api_key=api_key, chain=chain)
     elif adapter_key == "databento":
         # Databento: pass date for session metadata + expiry filtering
         target = date_type.fromisoformat(date) if date else None

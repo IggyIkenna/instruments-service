@@ -39,6 +39,7 @@ from unified_api_contracts import (
     VenueMapping,
     get_prediction_leagues,
 )
+from unified_api_contracts.registry import get_supported_chains_for_protocol  # noqa: qg-deep-import
 from unified_trading_library import (
     DataSink,
     DomainValidationService,
@@ -64,20 +65,43 @@ logger = logging.getLogger(__name__)
 _VENUE_MAPPING = VenueMapping()
 _VENUE_LAUNCH_DATES: dict[str, str] = _VENUE_MAPPING.venue_start_dates
 
-_DEFI_VENUES: list[str] = [
-    "UNISWAPV2-ETHEREUM",
-    "UNISWAPV3-ETHEREUM",
-    "UNISWAPV4-ETHEREUM",
-    "CURVE-ETHEREUM",
-    "BALANCER-ETHEREUM",
-    "AAVEV3-ETHEREUM",
-    "MORPHO-ETHEREUM",
-    "EULER-ETHEREUM",
-    "FLUID-ETHEREUM",
+# ---------------------------------------------------------------------------
+# DeFi venue list: dynamically built from UAC SUBGRAPH_IDS + static protocols
+# ---------------------------------------------------------------------------
+# Protocols with subgraph IDs are multi-chain — we discover all chains
+# from the UAC registry so new chain deployments are picked up automatically.
+_SUBGRAPH_PROTOCOL_TO_VENUE_PREFIX: dict[str, str] = {
+    "aave_v3": "AAVEV3",
+    "uniswap_v2": "UNISWAPV2",
+    "uniswap_v3": "UNISWAPV3",
+    "uniswap_v4": "UNISWAPV4",
+    "balancer": "BALANCER",
+    "morpho": "MORPHO",
+    "curve": "CURVE",
+    "compound_v3": "COMPOUNDV3",
+    "euler_v2": "EULERV2",
+    "fluid": "FLUID",
+}
+
+# Protocols that don't use subgraphs (Ethereum-only, custom data sources).
+_STATIC_DEFI_VENUES: list[str] = [
     "LIDO-ETHEREUM",
     "ETHERFI-ETHEREUM",
     "ETHENA-ETHEREUM",
 ]
+
+
+def _build_defi_venues() -> list[str]:
+    """Build venue list from protocols that have subgraph IDs + static venues."""
+    venues: list[str] = []
+    for protocol, prefix in _SUBGRAPH_PROTOCOL_TO_VENUE_PREFIX.items():
+        for chain in get_supported_chains_for_protocol(protocol):
+            venues.append(f"{prefix}-{chain}")
+    venues.extend(_STATIC_DEFI_VENUES)
+    return venues
+
+
+_DEFI_VENUES: list[str] = _build_defi_venues()
 
 _CEFI_VENUES: list[str] = [
     "BINANCE-SPOT",
