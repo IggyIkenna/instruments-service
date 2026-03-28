@@ -90,6 +90,16 @@ _STATIC_DEFI_VENUES: list[str] = [
     "ETHENA-ETHEREUM",
 ]
 
+# Solana DeFi venues (non-EVM, REST API-based discovery).
+_SOLANA_DEFI_VENUES: list[str] = [
+    "DRIFT-SOLANA",
+    "KAMINO-SOLANA",
+    "RAYDIUM-SOLANA",
+    "ORCA-SOLANA",
+    "MARINADE-SOLANA",
+    "JUPITER-SOLANA",
+]
+
 
 def _build_defi_venues() -> list[str]:
     """Build venue list from protocols that have subgraph IDs + static venues."""
@@ -98,6 +108,7 @@ def _build_defi_venues() -> list[str]:
         for chain in get_supported_chains_for_protocol(protocol):
             venues.append(f"{prefix}-{chain}")
     venues.extend(_STATIC_DEFI_VENUES)
+    venues.extend(_SOLANA_DEFI_VENUES)
     return venues
 
 
