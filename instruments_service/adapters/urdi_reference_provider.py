@@ -59,7 +59,8 @@ async def fetch_instruments_for_all_venues(
     if not venues:
         return []
 
-    # Separate covered/uncovered; deduplicate by adapter key
+    # Separate covered/uncovered; deduplicate by canonical venue name
+    # (not adapter key — same adapter serves multiple chains)
     seen: set[str] = set()
     fetch_list: list[tuple[str, str]] = []  # (canonical, adapter_key)
     unsupported: list[str] = []
@@ -68,8 +69,8 @@ async def fetch_instruments_for_all_venues(
         adapter_key = CANONICAL_VENUE_TO_ADAPTER.get(canonical)
         if adapter_key is None:
             unsupported.append(canonical)
-        elif adapter_key not in seen:
-            seen.add(adapter_key)
+        elif canonical not in seen:
+            seen.add(canonical)
             fetch_list.append((canonical, adapter_key))
 
     if unsupported:
@@ -110,7 +111,9 @@ async def fetch_instruments_for_all_venues(
             except ValueError as exc:
                 logger.error("URDI[%s]: adapter error: %s", canonical, exc)
                 return []
-            # Programming errors propagate — fail the shard
+            except (AttributeError, KeyError, TypeError) as exc:
+                logger.warning("URDI[%s]: data parsing error: %s", canonical, exc)
+                return []
 
     results = await asyncio.gather(*[_fetch_one(c, k) for c, k in fetch_list])
     return [record for batch in results for record in batch]
