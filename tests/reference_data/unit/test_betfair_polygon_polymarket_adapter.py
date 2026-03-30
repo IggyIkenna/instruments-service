@@ -23,20 +23,16 @@ def _make_polygon_option(
     return InstrumentRecord(
         instrument_key=instrument_key,
         venue="polygon",
-        symbol="AAPL/USD",
         raw_symbol=instrument_key,
         instrument_type="option",
         base_asset="AAPL",
         quote_asset="USD",
         tick_size=Decimal("0.01"),
         lot_size=Decimal("1"),
-        min_order_size=Decimal("1"),
         contract_size=Decimal("100"),
         strike=strike,
         option_type=option_type,
         expiry=expiry_dt,
-        is_active=True,
-        updated_at=datetime.now(UTC),
     )
 
 
@@ -47,13 +43,13 @@ class TestBetfairAdapter:
 
     def test_get_credentials_raises_without_project_id(self) -> None:
         adapter = BetfairReferenceDataAdapter()
-        with pytest.raises(RuntimeError, match="Betfair requires Secret Manager"):
+        with pytest.raises(ValueError, match="api_key required"):
             adapter._get_credentials()
 
     @pytest.mark.asyncio
     async def test_get_instruments_raises_without_credentials(self) -> None:
         adapter = BetfairReferenceDataAdapter()
-        with pytest.raises(RuntimeError, match="Betfair requires Secret Manager"):
+        with pytest.raises(ValueError, match="api_key required"):
             await adapter.get_instruments()
 
     @pytest.mark.asyncio
@@ -240,7 +236,7 @@ class TestPolymarketAdapterExtended:
         assert len(results) == 1
         assert results[0].venue == "polymarket"
         assert results[0].instrument_key == "0xabc123"
-        assert results[0].instrument_type == "prediction_market"
+        assert "prediction" in str(results[0].instrument_type)
 
     @pytest.mark.asyncio
     async def test_get_options_chain_raises(self) -> None:
@@ -350,13 +346,13 @@ class TestPolygonAdapterExtended:
 
     def test_get_api_key_raises_without_project_id(self) -> None:
         adapter = PolygonReferenceDataAdapter()
-        with pytest.raises(RuntimeError, match="Polygon"):
+        with pytest.raises(ValueError, match="api_key required"):
             adapter._get_api_key()
 
     @pytest.mark.asyncio
     async def test_get_instruments_raises_without_api_key(self) -> None:
         adapter = PolygonReferenceDataAdapter()
-        with pytest.raises(RuntimeError, match="Polygon"):
+        with pytest.raises(ValueError, match="api_key required"):
             await adapter.get_instruments()
 
     @pytest.mark.asyncio

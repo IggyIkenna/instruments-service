@@ -16,7 +16,7 @@ class TestFactory:
     def test_create_binance(self) -> None:
         adapter = create_reference_data_adapter("binance")
         assert isinstance(adapter, BinanceReferenceDataAdapter)
-        assert adapter.venue == "binance"
+        assert adapter.venue == "BINANCE-SPOT"
 
     def test_create_bybit(self) -> None:
         adapter = create_reference_data_adapter("bybit")

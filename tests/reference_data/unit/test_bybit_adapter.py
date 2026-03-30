@@ -13,7 +13,7 @@ from instruments_service.reference_data.adapters.bybit import BybitReferenceData
 class TestBybitAdapter:
     def test_venue_name(self) -> None:
         adapter = BybitReferenceDataAdapter()
-        assert adapter.venue == "bybit"
+        assert adapter.venue == "BYBIT-SPOT"
 
 
 class TestBybitAdapterExtended:
@@ -215,7 +215,7 @@ class TestBybitAdapterExtended:
         mock_session.__aexit__ = AsyncMock(return_value=None)
         with patch("aiohttp.ClientSession", return_value=mock_session):
             result = await adapter.get_funding_rate("BTCUSDT")
-        assert result.venue == "bybit"
+        assert result.venue == "BYBIT-SPOT"
         from decimal import Decimal
 
         assert result.rate == Decimal("0.0003")
@@ -245,59 +245,44 @@ class TestBybitAdapterCoverage:
         call_inst = InstrumentRecord(
             instrument_key="BTC-31DEC24-50000-C",
             venue="bybit",
-            symbol="BTC-31DEC24-50000-C",
             raw_symbol="BTC-31DEC24-50000-C",
             instrument_type="option",
             base_asset="BTC",
             quote_asset="USDC",
             tick_size=Decimal("0.01"),
             lot_size=Decimal("0.01"),
-            min_order_size=Decimal("0.01"),
             contract_size=Decimal("1"),
-            settlement_asset="USDC",
             expiry=now,
             strike=Decimal("50000"),
             option_type="call",
-            is_active=True,
-            updated_at=now,
         )
         put_inst = InstrumentRecord(
             instrument_key="BTC-31DEC24-50000-P",
             venue="bybit",
-            symbol="BTC-31DEC24-50000-P",
             raw_symbol="BTC-31DEC24-50000-P",
             instrument_type="option",
             base_asset="BTC",
             quote_asset="USDC",
             tick_size=Decimal("0.01"),
             lot_size=Decimal("0.01"),
-            min_order_size=Decimal("0.01"),
             contract_size=Decimal("1"),
-            settlement_asset="USDC",
             expiry=now,
             strike=Decimal("50000"),
             option_type="put",
-            is_active=True,
-            updated_at=now,
         )
         wrong_base_inst = InstrumentRecord(
             instrument_key="ETH-31DEC24-3000-C",
             venue="bybit",
-            symbol="ETH-31DEC24-3000-C",
             raw_symbol="ETH-31DEC24-3000-C",
             instrument_type="option",
             base_asset="ETH",
             quote_asset="USDC",
             tick_size=Decimal("0.01"),
             lot_size=Decimal("0.01"),
-            min_order_size=Decimal("0.01"),
             contract_size=Decimal("1"),
-            settlement_asset="USDC",
             expiry=now,
             strike=Decimal("3000"),
             option_type="call",
-            is_active=True,
-            updated_at=now,
         )
         adapter = BybitReferenceDataAdapter()
         with patch.object(
@@ -308,7 +293,7 @@ class TestBybitAdapterCoverage:
             chain = await adapter.get_options_chain("BTC")
         assert len(chain.calls) == 1
         assert len(chain.puts) == 1
-        assert chain.venue == "bybit"
+        assert chain.venue == "BYBIT-SPOT"
 
     @pytest.mark.asyncio
     async def test_get_options_chain_expiry_mismatch_filtered(self) -> None:
@@ -318,21 +303,16 @@ class TestBybitAdapterCoverage:
         inst = InstrumentRecord(
             instrument_key="BTC-31DEC24-50000-C",
             venue="bybit",
-            symbol="BTC-31DEC24-50000-C",
             raw_symbol="BTC-31DEC24-50000-C",
             instrument_type="option",
             base_asset="BTC",
             quote_asset="USDC",
             tick_size=Decimal("0.01"),
             lot_size=Decimal("0.01"),
-            min_order_size=Decimal("0.01"),
             contract_size=Decimal("1"),
-            settlement_asset="USDC",
             expiry=future_expiry,
             strike=Decimal("50000"),
             option_type="call",
-            is_active=True,
-            updated_at=now,
         )
         adapter = BybitReferenceDataAdapter()
         # Request chain with a specific expiry that doesn't match inst.expiry
@@ -349,21 +329,14 @@ class TestBybitAdapterCoverage:
         eth_inst = InstrumentRecord(
             instrument_key="ETHUSD-240329",
             venue="bybit",
-            symbol="ETH/USD",
             raw_symbol="ETHUSD-240329",
             instrument_type="future",
             base_asset="ETH",
             quote_asset="USD",
             tick_size=Decimal("0.01"),
             lot_size=Decimal("0.01"),
-            min_order_size=Decimal("0.01"),
             contract_size=Decimal("1"),
-            settlement_asset="USD",
             expiry=expiry_dt,
-            strike=None,
-            option_type=None,
-            is_active=True,
-            updated_at=now,
         )
         adapter = BybitReferenceDataAdapter()
         with patch.object(adapter, "get_instruments", return_value=[eth_inst]):
@@ -379,21 +352,14 @@ class TestBybitAdapterCoverage:
         btc_inst = InstrumentRecord(
             instrument_key="BTCUSD-240329",
             venue="bybit",
-            symbol="BTC/USD",
             raw_symbol="BTCUSD-240329",
             instrument_type="future",
             base_asset="BTC",
             quote_asset="USD",
             tick_size=Decimal("0.5"),
             lot_size=Decimal("0.001"),
-            min_order_size=Decimal("0.001"),
             contract_size=Decimal("1"),
-            settlement_asset="USD",
             expiry=expiry_dt,
-            strike=None,
-            option_type=None,
-            is_active=True,
-            updated_at=now,
         )
         adapter = BybitReferenceDataAdapter()
         with patch.object(adapter, "get_instruments", return_value=[btc_inst]):
@@ -404,25 +370,16 @@ class TestBybitAdapterCoverage:
     @pytest.mark.asyncio
     async def test_get_instrument_found(self) -> None:
         """get_instrument returns the matching InstrumentRecord when symbol exists."""
-        now = datetime.now(UTC)
         btc_inst = InstrumentRecord(
             instrument_key="BTCUSDT",
             venue="bybit",
-            symbol="BTC/USDT",
             raw_symbol="BTCUSDT",
             instrument_type="perp",
             base_asset="BTC",
             quote_asset="USDT",
             tick_size=Decimal("0.5"),
             lot_size=Decimal("0.001"),
-            min_order_size=Decimal("0.001"),
             contract_size=Decimal("1"),
-            settlement_asset="USDT",
-            expiry=None,
-            strike=None,
-            option_type=None,
-            is_active=True,
-            updated_at=now,
         )
         adapter = BybitReferenceDataAdapter()
         with patch.object(adapter, "get_instruments", return_value=[btc_inst]):

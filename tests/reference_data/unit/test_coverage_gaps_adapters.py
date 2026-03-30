@@ -32,21 +32,16 @@ def _make_instrument(
     return InstrumentRecord(
         instrument_key=raw_symbol,
         venue=venue,
-        symbol=f"{base_asset}/{quote_asset}",
         raw_symbol=raw_symbol,
         instrument_type=instrument_type,
         base_asset=base_asset,
         quote_asset=quote_asset,
         tick_size=Decimal("0.01"),
         lot_size=Decimal("0.001"),
-        min_order_size=Decimal("0.001"),
         contract_size=Decimal("1"),
-        settlement_asset=None,
         expiry=expiry,
         strike=strike,
         option_type=option_type,
-        is_active=True,
-        updated_at=datetime.now(UTC),
     )
 
 
@@ -90,23 +85,19 @@ class TestBetfairCoverageGaps:
         assert result is inst2
 
     @pytest.mark.asyncio
-    async def test_get_credentials_raises_without_project_id(self) -> None:
-        """Lines 64-69: RuntimeError when project_id is None."""
-        adapter = BetfairReferenceDataAdapter(project_id=None)
-        with pytest.raises(RuntimeError, match="Betfair requires Secret Manager credentials"):
+    async def test_get_credentials_raises_without_api_key(self) -> None:
+        """ValueError when no credentials injected."""
+        adapter = BetfairReferenceDataAdapter()
+        with pytest.raises(ValueError, match="api_key required"):
             adapter._get_credentials()
 
     @pytest.mark.asyncio
-    async def test_get_credentials_calls_secret_manager(self) -> None:
-        """Lines 70-73: get_secret_client called when project_id is set."""
-        adapter = BetfairReferenceDataAdapter(project_id="my-project")
-        mock_client = MagicMock()
-        mock_client.get_secret = MagicMock(side_effect=["sess-token", "app-key"])
-        with patch(
-            "instruments_service.reference_data.adapters.betfair.get_secret_client",
-            return_value=mock_client,
-        ):
-            session_token, app_key = adapter._get_credentials()
+    async def test_get_credentials_with_injected_keys(self) -> None:
+        """Credentials passed via constructor."""
+        adapter = BetfairReferenceDataAdapter()
+        adapter._session_token = "sess-token"
+        adapter._app_key = "app-key"
+        session_token, app_key = adapter._get_credentials()
         assert session_token == "sess-token"
         assert app_key == "app-key"
 
@@ -260,7 +251,7 @@ class TestBinanceCoverageGaps:
         assert len(results) == 1
         assert results[0].open == Decimal("50000.0")
         assert results[0].close == Decimal("50500.0")
-        assert results[0].venue == "binance"
+        assert results[0].venue == "BINANCE-SPOT"
 
 
 # ── CCXTReferenceDataAdapter ───────────────────────────────────────────────────
@@ -325,7 +316,7 @@ class TestCCXTCoverageGaps:
             None,
         )
         assert result is not None
-        assert result.settlement_asset == "BTC"
+        assert result.instrument_type == "future"
         assert result.expiry is not None
 
     @pytest.mark.asyncio

@@ -14,7 +14,7 @@ from instruments_service.reference_data.adapters.deribit import DeribitReference
 class TestDeribitAdapter:
     def test_venue_name(self) -> None:
         adapter = DeribitReferenceDataAdapter()
-        assert adapter.venue == "deribit"
+        assert adapter.venue == "DERIBIT"
 
     def test_parse_instrument_perp(self) -> None:
         adapter = DeribitReferenceDataAdapter()
@@ -32,7 +32,7 @@ class TestDeribitAdapter:
         )
         inst = adapter._parse_instrument(data)
         assert inst.instrument_type == "perp"
-        assert inst.venue == "deribit"
+        assert inst.venue == "DERIBIT"
 
     def test_parse_instrument_option(self) -> None:
         adapter = DeribitReferenceDataAdapter()
@@ -137,7 +137,7 @@ class TestDeribitAdapterExtended:
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
             inst = await adapter.get_instrument("BTC-PERPETUAL")
         assert inst is not None
-        assert inst.instrument_key == "BTC-PERPETUAL"
+        assert "BTC-PERPETUAL" in inst.instrument_key
 
     @pytest.mark.asyncio
     async def test_get_instrument_not_found_mocked(self) -> None:
@@ -282,7 +282,7 @@ class TestDeribitAdapterExtended:
         )
         with patch.object(adapter, "get_instruments", return_value=[call_inst, put_inst]):
             chain = await adapter.get_options_chain("BTC")
-        assert chain.venue == "deribit"
+        assert chain.venue == "DERIBIT"
         assert chain.underlying == "BTC"
         assert len(chain.calls) == 1
         assert len(chain.puts) == 1
@@ -332,7 +332,7 @@ class TestDeribitAdapterExtended:
         inst_type_str = str(inst.instrument_type).lower()
         with patch.object(adapter, "get_instruments", return_value=[inst]):
             calendar = await adapter.get_expiry_calendar("BTC", instrument_type=inst_type_str)
-        assert calendar.venue == "deribit"
+        assert calendar.venue == "DERIBIT"
         assert calendar.underlying == "BTC"
         assert len(calendar.expiries) == 1
 

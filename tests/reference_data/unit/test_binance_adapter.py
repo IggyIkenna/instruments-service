@@ -14,7 +14,7 @@ from instruments_service.reference_data.adapters.binance import BinanceReference
 class TestBinanceAdapter:
     def test_venue_name(self) -> None:
         adapter = BinanceReferenceDataAdapter()
-        assert adapter.venue == "binance"
+        assert adapter.venue == "BINANCE-SPOT"
 
     def test_filter_size_found(self) -> None:
         filters = [
@@ -216,7 +216,7 @@ class TestBinanceAdapterExtended:
         mock_session_cm.__aexit__ = AsyncMock(return_value=None)
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
             calendar = await adapter.get_expiry_calendar("BTC")
-        assert calendar.venue == "binance"
+        assert calendar.venue == "BINANCE-SPOT"
         assert calendar.underlying == "BTC"
         assert len(calendar.expiries) == 1
 
@@ -251,7 +251,7 @@ class TestBinanceAdapterExtended:
         mock_session_cm.__aexit__ = AsyncMock(return_value=None)
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
             chain = await adapter.get_options_chain("BTCUSDT")
-        assert chain.venue == "binance"
+        assert chain.venue == "BINANCE-SPOT"
         assert chain.underlying == "BTCUSDT"
 
     @pytest.mark.asyncio

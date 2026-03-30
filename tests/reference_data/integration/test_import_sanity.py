@@ -9,4 +9,4 @@ from instruments_service.reference_data import create_reference_data_adapter
 def test_factory_creates_adapter():
     """Verify factory creates adapter for known venue."""
     adapter = create_reference_data_adapter("binance")
-    assert adapter.venue == "binance"
+    assert adapter.venue == "BINANCE-SPOT"

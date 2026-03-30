@@ -157,7 +157,7 @@ class DeribitReferenceDataAdapter(BaseReferenceDataAdapter):
         puts: list[InstrumentRecord] = []
         strikes: set[Decimal] = set()
         for inst in instruments:
-            if inst.base != underlying.upper():
+            if inst.base_asset != underlying.upper():
                 continue
             if expiry and inst.expiry and inst.expiry.date() != expiry.date():
                 continue
@@ -189,7 +189,11 @@ class DeribitReferenceDataAdapter(BaseReferenceDataAdapter):
         instruments = await self.get_instruments(instrument_type=instrument_type)
         expiry_set: set[datetime] = set()
         for inst in instruments:
-            if inst.base == underlying.upper() and inst.expiry and str(inst.instrument_type).lower() == instrument_type:
+            if (
+                inst.base_asset == underlying.upper()
+                and inst.expiry
+                and str(inst.instrument_type).lower() == instrument_type
+            ):
                 expiry_set.add(inst.expiry)
         return CanonicalExpiryCalendar(
             venue=self.venue,
@@ -431,8 +435,9 @@ class DeribitReferenceDataAdapter(BaseReferenceDataAdapter):
             venue=_DERIBIT_VENUE,
             asset_class=AssetClass.CRYPTO,
             instrument_type=inst_type_str,
-            base=base_currency,
-            quote=quote_currency,
+            base_asset=base_currency,
+            quote_asset=quote_currency,
+            raw_symbol=instrument_name,
             tick_size=Decimal(str(data.tick_size or "0.01")),
             lot_size=Decimal(str(data.min_trade_amount or "0.1")),
             contract_size=Decimal(str(data.contract_size or "1")),

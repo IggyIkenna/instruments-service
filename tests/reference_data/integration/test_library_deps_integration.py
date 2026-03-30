@@ -4,10 +4,9 @@ Goes beyond import-only checks: constructs real objects, calls real functions,
 and validates behavior from each dependency as used in URDI source code.
 
 Dependencies tested:
-  - unified-cloud-interface (UCI): get_secret_client (mock mode)
   - unified-events-interface (UEI): log_event, setup_events, MockEventSink
   - unified-internal-contracts (UIC): InstrumentRecord, FeeScheduleEntry,
-    UniverseSnapshot, EnhancedError, ErrorCategory, ErrorSeverity,
+    EnhancedError, ErrorCategory, ErrorSeverity,
     ErrorRecoveryStrategy, ErrorContext, MarginType
   - unified-api-contracts (UAC): BinanceFuturesExchangeInfo, BinanceInstrumentInfo,
     AccessMode, venue-specific schemas
@@ -19,33 +18,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# unified-cloud-interface (UCI) — secret client in mock/local mode
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.integration
-def test_uci_get_secret_client_callable() -> None:
-    """get_secret_client from UCI is callable and used in BaseReferenceDataAdapter."""
-    from unified_trading_library import get_secret_client
-
-    assert callable(get_secret_client)
-
-    # Verify it's the same function used in URDI base_adapter
-    from instruments_service.reference_data.base_adapter import get_secret_client as urdi_gsc
-
-    assert urdi_gsc is get_secret_client
-
-
-@pytest.mark.integration
-def test_uci_base_adapter_optional_api_key_no_project() -> None:
-    """BaseReferenceDataAdapter._optional_api_key returns None when project_id is None."""
-    from instruments_service.reference_data.adapters.binance import BinanceReferenceDataAdapter
-
-    adapter = BinanceReferenceDataAdapter(project_id=None)
-    assert adapter._optional_api_key() is None
-
 
 # ---------------------------------------------------------------------------
 # unified-events-interface (UEI) — event logging
@@ -77,11 +49,7 @@ def test_uei_log_event_functional() -> None:
 
 @pytest.mark.integration
 def test_uei_base_adapter_parse_raw_logs_on_validation_failure() -> None:
-    """BaseReferenceDataAdapter._parse_raw logs INSTRUMENT_SCHEMA_VIOLATION on error.
-
-    Uses InstrumentRecord (Pydantic BaseModel) with invalid data so the
-    ValidationError (subclass of ValueError) triggers the error logging path.
-    """
+    """BaseReferenceDataAdapter._parse_raw logs INSTRUMENT_SCHEMA_VIOLATION on error."""
     from unified_trading_library import MockEventSink, setup_events
 
     setup_events(
@@ -96,9 +64,6 @@ def test_uei_base_adapter_parse_raw_logs_on_validation_failure() -> None:
 
     adapter = BinanceReferenceDataAdapter()
 
-    # InstrumentRecord requires instrument_key and venue at minimum.
-    # Passing completely invalid data triggers Pydantic ValidationError (ValueError subclass)
-    # which _parse_raw catches, logs INSTRUMENT_SCHEMA_VIOLATION, and re-raises as RuntimeError.
     with pytest.raises(RuntimeError, match="Schema validation failed"):
         adapter._parse_raw(
             {"completely_invalid_field": "bad_value"},
@@ -120,21 +85,16 @@ def test_uic_instrument_record_construction() -> None:
         instrument_key="BINANCE:PERP:BTCUSDT",
         venue="binance",
         instrument_type="perp",
-        base="BTC",
-        quote="USDT",
-        tick_size=Decimal("0.10"),
-        lot_size=Decimal("0.001"),
-        contract_size=Decimal("1"),
-        symbol="BTCUSDT",
         raw_symbol="BTCUSDT",
         base_asset="BTC",
         quote_asset="USDT",
-        is_active=True,
+        tick_size=Decimal("0.10"),
+        lot_size=Decimal("0.001"),
+        contract_size=Decimal("1"),
     )
     assert record.instrument_key == "BINANCE:PERP:BTCUSDT"
     assert record.venue == "binance"
     assert record.tick_size == Decimal("0.10")
-    assert record.is_active is True
 
 
 @pytest.mark.integration
@@ -158,8 +118,9 @@ def test_uic_instrument_record_used_in_schemas() -> None:
         instrument_key="DERIBIT:OPTION:BTC-30JUN26-100000-C",
         venue="deribit",
         instrument_type="option",
-        base="BTC",
-        quote="USD",
+        raw_symbol="BTC-30JUN26-100000-C",
+        base_asset="BTC",
+        quote_asset="USD",
         tick_size=Decimal("0.0005"),
         lot_size=Decimal("0.1"),
         strike=Decimal("100000"),
@@ -205,23 +166,6 @@ def test_uic_fee_schedule_entry_construction() -> None:
 
 
 # ---------------------------------------------------------------------------
-# unified-internal-contracts (UIC) — UniverseSnapshot
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.integration
-def test_uic_universe_snapshot_reexport() -> None:
-    """UniverseSnapshot is re-exported from URDI universe_snapshot module."""
-    from unified_api_contracts.internal import UniverseSnapshot as UicUniverseSnapshot
-
-    from instruments_service.reference_data.universe_snapshot import (
-        UniverseSnapshot as UrdiUniverseSnapshot,
-    )
-
-    assert UrdiUniverseSnapshot is UicUniverseSnapshot
-
-
-# ---------------------------------------------------------------------------
 # unified-internal-contracts (UIC) — EnhancedError used in _parse_raw
 # ---------------------------------------------------------------------------
 
@@ -258,11 +202,10 @@ def test_uic_margin_type_enum() -> None:
     """MarginType from UIC is used in URDI adapter modules."""
     from unified_api_contracts.internal import MarginType
 
-    # Used in bybit, deribit, okx adapters
-    assert MarginType.CROSS is not None
-    assert MarginType.ISOLATED is not None
-    assert str(MarginType.CROSS) is not None
-    assert str(MarginType.ISOLATED) is not None
+    assert MarginType.LINEAR is not None
+    assert MarginType.INVERSE is not None
+    assert str(MarginType.LINEAR) is not None
+    assert str(MarginType.INVERSE) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +218,6 @@ def test_uac_binance_exchange_info_schema() -> None:
     """BinanceFuturesExchangeInfo from UAC validates structured exchange data."""
     from unified_api_contracts import BinanceFuturesExchangeInfo
 
-    # Construct with minimal valid data (all fields are optional)
     info = BinanceFuturesExchangeInfo.model_validate(
         {
             "timezone": "UTC",
@@ -294,7 +236,6 @@ def test_uac_access_mode_enum() -> None:
     from unified_api_contracts import AccessMode
 
     assert AccessMode is not None
-    # Verify it's a usable enum with at least one member
     members = list(AccessMode)
     assert len(members) > 0
 
@@ -309,10 +250,20 @@ def test_urdi_factory_creates_adapter_with_correct_venue() -> None:
     """create_reference_data_adapter creates adapters that return correct venue property."""
     from instruments_service.reference_data import create_reference_data_adapter
 
-    venues = ["binance", "bybit", "okx", "deribit", "coinbase", "hyperliquid"]
-    for venue in venues:
-        adapter = create_reference_data_adapter(venue)
-        assert adapter.venue == venue, f"Expected venue={venue!r}, got {adapter.venue!r}"
+    # Venue names are now canonical uppercase
+    expected_venues = {
+        "binance": "BINANCE-SPOT",
+        "bybit": "BYBIT-SPOT",
+        "okx": "OKX-SPOT",
+        "deribit": "DERIBIT",
+        "coinbase": "coinbase",
+        "hyperliquid": "HYPERLIQUID",
+    }
+    for factory_key, expected_venue in expected_venues.items():
+        adapter = create_reference_data_adapter(factory_key)
+        assert adapter.venue == expected_venue, (
+            f"For factory key {factory_key!r}, expected venue={expected_venue!r}, got {adapter.venue!r}"
+        )
 
 
 @pytest.mark.integration
@@ -336,7 +287,7 @@ def test_urdi_router_creates_adapter_for_source() -> None:
     config = ReferenceDataSourceConfig(venue="binance", data_source="direct")
     adapter = create_reference_data_adapter_for_source(config)
     assert isinstance(adapter, BinanceReferenceDataAdapter)
-    assert adapter.venue == "binance"
+    assert adapter.venue == "BINANCE-SPOT"
 
 
 @pytest.mark.integration

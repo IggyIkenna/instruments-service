@@ -25,11 +25,13 @@ from ..schemas import (
     OHLCVRef,
 )
 from ..utils.defi_utils import order_base_quote
+from ._solana_utils import get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
 
 _BASE_URL = get_solana_protocol_url("orca") or "https://api.mainnet.orca.so"
 _DEFAULT_CHAIN = "SOLANA"
+_ORCA_DEPLOY_DATE = get_protocol_floor_date("orca")
 
 
 def _classify_orca_error(exc: Exception, status: int | None = None) -> str:
@@ -126,6 +128,19 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
                 results.append(record)
 
         logger.info("Orca: fetched %d whirlpool instruments on %s", len(results), self._chain)
+
+        # Resolve creation timestamps via Solana RPC (getSignaturesForAddress)
+        if results:
+            from instruments_service.reference_data.adapters._solana_utils import (
+                batch_resolve_creation_timestamps,
+            )
+
+            addresses = [r.raw_symbol for r in results if r.raw_symbol]
+            ts_map = await batch_resolve_creation_timestamps(addresses, concurrency=5)
+            for record in results:
+                if record.raw_symbol in ts_map:
+                    record.available_since = ts_map[record.raw_symbol]
+
         return results
 
     def _build_pool_record(
@@ -148,8 +163,14 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
 
         base, quote = order_base_quote(sym_a, sym_b)
 
-        # Filter: at least one token must be a major asset
-        if base not in DEFI_MAJOR_ASSET_SYMBOLS and quote not in DEFI_MAJOR_ASSET_SYMBOLS:
+        # Filter: BOTH tokens must be major assets (consistent with EVM DEX adapters)
+        if base not in DEFI_MAJOR_ASSET_SYMBOLS or quote not in DEFI_MAJOR_ASSET_SYMBOLS:
+            return None
+
+        # TVL minimum: skip dust pools (Orca returns thousands of low-liquidity pools)
+        tvl_raw = pool.get("tvl") or pool.get("liquidity") or 0
+        tvl = float(str(tvl_raw)) if tvl_raw else 0
+        if tvl < 10_000:  # $10k minimum TVL
             return None
 
         venue_tag = self.venue
@@ -175,6 +196,7 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             is_active=True,
             updated_at=now,
+            available_since=_ORCA_DEPLOY_DATE,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:

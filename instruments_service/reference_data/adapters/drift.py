@@ -24,11 +24,13 @@ from ..schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ._solana_utils import get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
 
 _DATA_API_URL = get_solana_protocol_url("drift", "api_url") or "https://data.api.drift.trade"
 _DEFAULT_CHAIN = "SOLANA"
+_DRIFT_DEPLOY_DATE = get_protocol_floor_date("drift")
 
 
 def _classify_drift_error(exc: Exception, status: int | None = None) -> str:
@@ -173,6 +175,7 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             is_active=True,
             updated_at=now,
+            available_since=_DRIFT_DEPLOY_DATE,
         )
 
     def _build_spot_record(
@@ -207,6 +210,7 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             is_active=True,
             updated_at=now,
+            available_since=_DRIFT_DEPLOY_DATE,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
