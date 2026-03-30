@@ -24,12 +24,14 @@ from ..schemas import (
     FundingRateRef,
     OHLCVRef,
 )
-from ..utils.defi_utils import order_base_quote
+from ..utils.defi_utils import order_base_quote, parse_created_timestamp
+from ._solana_utils import get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
 
 _BASE_URL = get_solana_protocol_url("raydium") or "https://api-v3.raydium.io"
 _DEFAULT_CHAIN = "SOLANA"
+_RAYDIUM_DEPLOY_DATE = get_protocol_floor_date("raydium")
 
 
 def _classify_raydium_error(exc: Exception, status: int | None = None) -> str:
@@ -132,6 +134,19 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
                 results.append(record)
 
         logger.info("Raydium: fetched %d pool instruments on %s", len(results), self._chain)
+
+        # Resolve creation timestamps via Solana RPC
+        if results:
+            from instruments_service.reference_data.adapters._solana_utils import (
+                batch_resolve_creation_timestamps,
+            )
+
+            addresses = [r.raw_symbol for r in results if r.raw_symbol]
+            ts_map = await batch_resolve_creation_timestamps(addresses, concurrency=5)
+            for record in results:
+                if record.raw_symbol in ts_map:
+                    record.available_since = ts_map[record.raw_symbol]
+
         return results
 
     def _build_pool_record(
@@ -152,9 +167,18 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
 
         base, quote = order_base_quote(sym_a, sym_b)
 
-        # Filter: at least one token must be a major asset
-        if base not in DEFI_MAJOR_ASSET_SYMBOLS and quote not in DEFI_MAJOR_ASSET_SYMBOLS:
+        # Filter: BOTH tokens must be major assets (consistent with EVM DEX adapters)
+        if base not in DEFI_MAJOR_ASSET_SYMBOLS or quote not in DEFI_MAJOR_ASSET_SYMBOLS:
             return None
+
+        # TVL minimum: skip dust pools
+        tvl_raw = pool.get("tvl") or pool.get("liquidity") or 0
+        tvl = float(str(tvl_raw)) if tvl_raw else 0
+        if tvl < 10_000:  # $10k minimum TVL
+            return None
+
+        # Raydium API returns openTime (Unix seconds) for pool creation
+        available_since = parse_created_timestamp(pool.get("openTime")) or _RAYDIUM_DEPLOY_DATE
 
         venue_tag = self.venue
         symbol = f"{base}/{quote}"
@@ -179,6 +203,7 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             is_active=True,
             updated_at=now,
+            available_since=available_since,
         )
 
     def _extract_token_symbol(self, pool: dict[str, object], key: str) -> str:

@@ -97,7 +97,7 @@ _SOLANA_DEFI_VENUES: list[str] = [
     "RAYDIUM-SOLANA",
     "ORCA-SOLANA",
     "MARINADE-SOLANA",
-    "JUPITER-SOLANA",
+    # Jupiter is execution-only (swap aggregator), not instrument discovery.
 ]
 
 
@@ -118,8 +118,10 @@ _CEFI_VENUES: list[str] = [
     "BINANCE-SPOT",
     "BINANCE-FUTURES",
     "BYBIT",
-    "OKX",
+    # OKX: 3 separate Tardis exchanges — okex (spot), okex-swap (perps), okex-futures (fixed-expiry)
+    # Do NOT add bare "OKX" — it maps to same Tardis exchange as OKX-SPOT (duplicate data).
     "OKX-SPOT",
+    "OKX-SWAP",
     "OKX-FUTURES",
     "DERIBIT",
     "COINBASE-SPOT",
@@ -208,10 +210,11 @@ def filter_instruments_by_date(
                 venue = (getattr(r, "venue", None) or "").upper()
                 if venue in defi_venues:
                     key = getattr(r, "instrument_key", repr(r))
-                    logger.warning(
+                    logger.error(
                         "DeFi instrument %s has available_since=None — "
-                        "URDI adapter did not provide on-chain creation timestamp; "
-                        "date accuracy degraded",
+                        "URDI adapter MUST provide creation timestamp "
+                        "(protocol floor date or on-chain); "
+                        "instrument included but date accuracy is UNKNOWN",
                         key,
                     )
             result.append(r)
@@ -305,6 +308,14 @@ async def process_instruments(
         date,
         len(records),
     )
+
+    # Per-venue breakdown after date filter
+    venue_counts: dict[str, int] = {}
+    for r in records:
+        v = getattr(r, "venue", "UNKNOWN") or "UNKNOWN"
+        venue_counts[v] = venue_counts.get(v, 0) + 1
+    for v in sorted(venue_counts):
+        logger.info("  %s: %d instruments after date filter", v, venue_counts[v])
 
     # 3a. DeFi available_since coverage summary.
     # Counts how many DeFi instruments in the date-filtered set have a populated

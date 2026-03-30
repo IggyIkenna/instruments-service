@@ -69,13 +69,11 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "BYBIT-FUTURES": "tardis",
     "OKX": "tardis",
     "OKX-SPOT": "tardis",
+    "OKX-SWAP": "tardis",
     "OKX-FUTURES": "tardis",
     "DERIBIT": "tardis",
     "COINBASE-SPOT": "tardis",
-    "COINBASE": "tardis",
     "UPBIT": "tardis",
-    "HUOBI-SPOT": "tardis",
-    "HUOBI-FUTURES": "tardis",
     # Non-Tardis CeFi
     "HYPERLIQUID": "hyperliquid",
     "ASTER": "aster",
@@ -104,7 +102,7 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "RAYDIUM-SOLANA": "raydium",
     "ORCA-SOLANA": "orca",
     "MARINADE-SOLANA": "marinade",
-    "JUPITER-SOLANA": "jupiter_sol",
+    # Jupiter is execution-only (swap aggregator), not instrument discovery.
 }
 
 # Dynamically add multi-chain DeFi venues from SUBGRAPH_IDS (SSOT in UAC).
@@ -227,7 +225,6 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "raydium": "",
     "orca": "",
     "marinade": "",
-    "jupiter_sol": "",
 }
 
 
@@ -296,7 +293,6 @@ def get_adapter_for_canonical_venue(
         "raydium",
         "orca",
         "marinade",
-        "jupiter_sol",
     }
 
     # Some adapters need extra constructor parameters derived from the canonical venue name.
@@ -314,6 +310,31 @@ def get_adapter_for_canonical_venue(
             adapter = adapter_class(project_id=project_id, api_key=api_key, chain=chain, date=date)
         else:
             adapter = adapter_class(project_id=project_id, api_key=api_key, chain=chain)
+    elif adapter_key == "tardis":
+        # Tardis: pass ONLY the specific exchange for this venue (not all defaults)
+        from unified_api_contracts import VenueMapping as _VM_cls
+
+        _vm = _VM_cls()
+        tardis_exchange = _vm.get_tardis_exchange_for_venue(canonical_venue)
+        if tardis_exchange is None:
+            # Fallback: try direct lowercase conversion (BYBIT → bybit, DERIBIT → deribit)
+            # Only valid if the result exists as a key in tardis_to_venue
+            candidate = canonical_venue.lower()
+            if candidate in _vm.tardis_to_venue:
+                tardis_exchange = candidate
+        if not tardis_exchange:
+            # FAIL LOUD — do not silently fetch all exchanges
+            raise ValueError(
+                f"No Tardis exchange mapping for canonical venue {canonical_venue!r}. "
+                f"Add a mapping in VenueMapping.tardis_to_venue or "
+                f"venue_instrument_type_to_tardis for this venue."
+            )
+        _logger.debug("Tardis: %s → exchange=%s", canonical_venue, tardis_exchange)
+        adapter = TardisReferenceDataAdapter(
+            project_id=project_id,
+            api_key=api_key,
+            exchanges=[tardis_exchange],
+        )
     elif adapter_key == "databento":
         # Databento: pass date for session metadata + expiry filtering
         target = date_type.fromisoformat(date) if date else None

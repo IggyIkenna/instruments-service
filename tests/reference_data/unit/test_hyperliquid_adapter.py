@@ -10,7 +10,7 @@ from instruments_service.reference_data.adapters.hyperliquid import HyperliquidR
 class TestHyperliquidAdapter:
     def test_venue_name(self) -> None:
         adapter = HyperliquidReferenceDataAdapter()
-        assert adapter.venue == "hyperliquid"
+        assert adapter.venue == "HYPERLIQUID"
 
     @pytest.mark.asyncio
     async def test_get_options_chain_raises(self) -> None:

@@ -28,7 +28,7 @@ class TestIBKRAdapter:
     def test_build_stub_instrument(self) -> None:
         adapter = IBKRReferenceDataAdapter()
         inst = adapter._build_stub_instrument("AAPL")
-        assert inst.symbol == "AAPL"
+        assert inst.instrument_key == "AAPL"
         assert inst.venue == "ibkr"
 
     @pytest.mark.asyncio
@@ -90,7 +90,7 @@ class TestIBKRAdapter:
         # get_instruments fetches from _DEFAULT_EQUITY_SYMBOLS; we call get_instrument instead
         result = await adapter.get_instrument("AAPL")
         assert result is not None
-        assert result.symbol == "AAPL"
+        assert "AAPL" in result.instrument_key
         assert result.venue == "ibkr"
         mock_ib.reqContractDetailsAsync.assert_called_once()
 
@@ -219,7 +219,7 @@ class TestIBKRAdapter:
         }
         result = adapter._contract_details_to_instrument(raw)
         assert result is not None
-        assert result.symbol == "MSFT"
+        assert "MSFT" in result.instrument_key
         assert result.venue == "ibkr"
 
     def test_contract_details_to_instrument_missing_symbol_returns_none(self) -> None:
@@ -243,7 +243,7 @@ class TestIBKRAdapter:
         }
         result = adapter._contract_details_to_instrument(raw)
         assert result is not None
-        assert result.symbol == "ES"
+        assert "ES" in result.instrument_key
 
     def test_contract_details_no_multiplier_defaults_to_one(self) -> None:
         """_contract_details_to_instrument defaults contract_size to 1 when multiplier absent."""

@@ -15,7 +15,7 @@ from instruments_service.reference_data.adapters.okx import OKXReferenceDataAdap
 class TestOKXAdapter:
     def test_venue_name(self) -> None:
         adapter = OKXReferenceDataAdapter()
-        assert adapter.venue == "okx"
+        assert adapter.venue == "OKX-SPOT"
 
 
 class TestOKXAdapterExtended:
@@ -247,7 +247,7 @@ class TestOKXAdapterExtended:
         )
         with patch.object(adapter, "get_instruments", return_value=[call_inst, put_inst]):
             chain = await adapter.get_options_chain("BTC")
-        assert chain.venue == "okx"
+        assert chain.venue == "OKX-SPOT"
         assert chain.underlying == "BTC"
         assert len(chain.calls) == 1
         assert len(chain.puts) == 1
@@ -277,7 +277,7 @@ class TestOKXAdapterExtended:
         )
         with patch.object(adapter, "get_instruments", return_value=[inst]):
             calendar = await adapter.get_expiry_calendar("BTC", instrument_type="future")
-        assert calendar.venue == "okx"
+        assert calendar.venue == "OKX-SPOT"
         assert len(calendar.expiries) == 1
 
     def test_parse_okx_instrument_none_inst_id(self) -> None:

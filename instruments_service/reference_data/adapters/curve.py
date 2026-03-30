@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord
 from unified_trading_library import log_event
 
@@ -107,6 +107,10 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
             coin1 = coins[1] if isinstance(coins[1], dict) else {}
             sym0 = str(coin0.get("symbol", "UNKNOWN")).upper()
             sym1 = str(coin1.get("symbol", "UNKNOWN")).upper()
+
+            # Filter: both tokens must be major assets (consistent with Uniswap/Balancer)
+            if sym0 not in DEFI_MAJOR_ASSET_SYMBOLS or sym1 not in DEFI_MAJOR_ASSET_SYMBOLS:
+                continue
 
             symbol = f"{sym0}-{sym1}"
             venue_tag = f"CURVE-{self._chain}"

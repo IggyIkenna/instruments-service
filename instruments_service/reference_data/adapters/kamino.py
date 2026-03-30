@@ -27,11 +27,13 @@ from ..schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ._solana_utils import get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
 
 _BASE_URL = get_solana_protocol_url("kamino") or "https://api.kamino.finance"
 _DEFAULT_CHAIN = "SOLANA"
+_KAMINO_DEPLOY_DATE = get_protocol_floor_date("kamino")
 
 
 def _classify_kamino_error(exc: Exception, status: int | None = None) -> str:
@@ -124,6 +126,19 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
                 results.append(record)
 
         logger.info("Kamino: fetched %d vault instruments on %s", len(results), self._chain)
+
+        # Resolve creation timestamps via Solana RPC
+        if results:
+            from instruments_service.reference_data.adapters._solana_utils import (
+                batch_resolve_creation_timestamps,
+            )
+
+            addresses = [r.raw_symbol for r in results if r.raw_symbol]
+            ts_map = await batch_resolve_creation_timestamps(addresses, concurrency=5)
+            for record in results:
+                if record.raw_symbol in ts_map:
+                    record.available_since = ts_map[record.raw_symbol]
+
         return results
 
     def _resolve_symbol(self, mint: str) -> str:
@@ -151,8 +166,8 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
         if not sym_a or not sym_b:
             return None
 
-        # Filter: at least one token must be a major asset
-        if sym_a not in DEFI_MAJOR_ASSET_SYMBOLS and sym_b not in DEFI_MAJOR_ASSET_SYMBOLS:
+        # Filter: BOTH tokens must be major assets (consistent with all DEX adapters)
+        if sym_a not in DEFI_MAJOR_ASSET_SYMBOLS or sym_b not in DEFI_MAJOR_ASSET_SYMBOLS:
             return None
 
         symbol = f"{sym_a}/{sym_b}"
@@ -176,6 +191,7 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             is_active=True,
             updated_at=now,
+            available_since=_KAMINO_DEPLOY_DATE,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:

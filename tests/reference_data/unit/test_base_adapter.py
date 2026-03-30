@@ -104,17 +104,15 @@ class TestBaseAdapter:
         result = adapter._optional_api_key()
         assert result is None
 
-    def test_optional_api_key_fetches_from_secret_manager(self) -> None:
+    def test_optional_api_key_returns_injected_key(self) -> None:
+        adapter = _ConcreteAdapter(api_key="injected-key")
+        result = adapter._optional_api_key()
+        assert result == "injected-key"
+
+    def test_optional_api_key_returns_none_with_project_id_only(self) -> None:
         adapter = _ConcreteAdapter(project_id="my-project")
-        mock_secret_client = MagicMock()
-        mock_secret_client.get_secret.return_value = "test-api-key"
-        with patch(
-            "instruments_service.reference_data.base_adapter.get_secret_client",
-            return_value=mock_secret_client,
-        ):
-            result = adapter._optional_api_key()
-        assert result == "test-api-key"
-        mock_secret_client.get_secret.assert_called_once_with("TEST_VENUE_API_KEY")
+        result = adapter._optional_api_key()
+        assert result is None
 
     def test_parse_raw_success(self) -> None:
         from pydantic import BaseModel
@@ -482,19 +480,19 @@ class TestDatabentoAdapter:
     @pytest.mark.asyncio
     async def test_get_instruments_returns_empty_without_api_key(self) -> None:
         adapter = DatabentoReferenceDataAdapter()
-        with pytest.raises(RuntimeError, match="Databento requires an API key"):
+        with pytest.raises(ValueError, match="api_key required"):
             await adapter.get_instruments()
 
     @pytest.mark.asyncio
     async def test_get_instruments_with_type_raises_without_api_key(self) -> None:
         adapter = DatabentoReferenceDataAdapter()
-        with pytest.raises(RuntimeError, match="Databento requires an API key"):
+        with pytest.raises(ValueError, match="api_key required"):
             await adapter.get_instruments(instrument_type="future")
 
     @pytest.mark.asyncio
     async def test_get_instrument_raises_without_api_key(self) -> None:
         adapter = DatabentoReferenceDataAdapter()
-        with pytest.raises(RuntimeError, match="Databento requires an API key"):
+        with pytest.raises(ValueError, match="api_key required"):
             await adapter.get_instrument("ES.FUT.CME")
 
     @pytest.mark.asyncio

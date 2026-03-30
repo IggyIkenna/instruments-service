@@ -24,11 +24,13 @@ from ..schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ._solana_utils import get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
 
 _BASE_URL = get_solana_protocol_url("marinade") or "https://api.marinade.finance"
 _DEFAULT_CHAIN = "SOLANA"
+_MARINADE_DEPLOY_DATE = get_protocol_floor_date("marinade")
 
 
 def _classify_marinade_error(exc: Exception, status: int | None = None) -> str:
@@ -155,6 +157,7 @@ class MarinadeReferenceDataAdapter(BaseReferenceDataAdapter):
             is_active=True,
             updated_at=now,
             underlying="SOL",
+            available_since=_MARINADE_DEPLOY_DATE,
         )
 
     def _build_native_stake_record(
@@ -183,6 +186,7 @@ class MarinadeReferenceDataAdapter(BaseReferenceDataAdapter):
             is_active=True,
             updated_at=now,
             underlying="SOL",
+            available_since=_MARINADE_DEPLOY_DATE,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:

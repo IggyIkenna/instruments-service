@@ -11,113 +11,84 @@ from instruments_service.reference_data import (
     CanonicalCorporateAction,
     CanonicalExpiryCalendar,
     CanonicalOptionsChain,
+    FundingRateRef,
+    OHLCVRef,
 )
 from instruments_service.reference_data.adapters.hyperliquid import HyperliquidReferenceDataAdapter
-from instruments_service.reference_data.universe_snapshot import UniverseSnapshot
 
 
 class TestCanonicalInstrument:
     def test_instrument_creation(self) -> None:
-        now = datetime.now(UTC)
         inst = InstrumentRecord(
             instrument_key="BTCUSDT",
             venue="binance",
-            symbol="BTC/USDT",
             raw_symbol="BTCUSDT",
             instrument_type="spot",
             base_asset="BTC",
             quote_asset="USDT",
             tick_size=Decimal("0.01"),
             lot_size=Decimal("0.001"),
-            min_order_size=Decimal("0.001"),
             contract_size=Decimal("1"),
-            settlement_asset=None,
             expiry=None,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
         )
         assert inst.venue == "binance"
         assert inst.instrument_type == "spot"
         assert inst.tick_size == Decimal("0.01")
-        assert inst.settlement_asset is None
         assert inst.expiry is None
 
     def test_option_instrument(self) -> None:
-        now = datetime.now(UTC)
         inst = InstrumentRecord(
             instrument_key="BTC-31DEC24-50000-C",
             venue="deribit",
-            symbol="BTC-31DEC24-50000-C",
             raw_symbol="BTC-31DEC24-50000-C",
             instrument_type="option",
             base_asset="BTC",
             quote_asset="USD",
             tick_size=Decimal("0.0001"),
             lot_size=Decimal("0.1"),
-            min_order_size=Decimal("0.1"),
             contract_size=Decimal("1"),
-            settlement_asset="BTC",
             expiry=datetime(2024, 12, 31, tzinfo=UTC),
             strike=Decimal("50000"),
             option_type="call",
-            is_active=True,
-            updated_at=now,
         )
         assert inst.instrument_type == "option"
         assert inst.strike == Decimal("50000")
         assert inst.option_type == "call"
-        assert inst.settlement_asset == "BTC"
 
     def test_perpetual_instrument(self) -> None:
-        now = datetime.now(UTC)
         inst = InstrumentRecord(
             instrument_key="BTCUSDT",
             venue="bybit",
-            symbol="BTC/USDT",
             raw_symbol="BTCUSDT",
             instrument_type="perp",
             base_asset="BTC",
             quote_asset="USDT",
             tick_size=Decimal("0.1"),
             lot_size=Decimal("0.001"),
-            min_order_size=Decimal("0.001"),
             contract_size=Decimal("1"),
-            settlement_asset="USDT",
             expiry=None,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
         )
         assert inst.instrument_type == "perp"
         assert inst.expiry is None
 
     def test_instrument_fields_types(self) -> None:
-        now = datetime.now(UTC)
         inst = InstrumentRecord(
             instrument_key="ETH-USDT",
             venue="okx",
-            symbol="ETH/USDT",
             raw_symbol="ETH-USDT",
             instrument_type="spot",
             base_asset="ETH",
             quote_asset="USDT",
             tick_size=Decimal("0.001"),
             lot_size=Decimal("0.00001"),
-            min_order_size=Decimal("0.001"),
             contract_size=Decimal("1"),
-            settlement_asset=None,
-            expiry=None,
-            strike=None,
-            option_type=None,
-            is_active=True,
-            updated_at=now,
         )
         assert isinstance(inst.tick_size, Decimal)
         assert isinstance(inst.lot_size, Decimal)
-        assert isinstance(inst.updated_at, datetime)
 
 
 class TestCanonicalOptionsChain:
@@ -152,21 +123,16 @@ class TestCanonicalOptionsChain:
         inst = InstrumentRecord(
             instrument_key="BTC-31DEC24-50000-C",
             venue="deribit",
-            symbol="BTC-31DEC24-50000-C",
             raw_symbol="BTC-31DEC24-50000-C",
             instrument_type="option",
             base_asset="BTC",
             quote_asset="USD",
             tick_size=Decimal("0.0001"),
             lot_size=Decimal("0.1"),
-            min_order_size=Decimal("0.1"),
             contract_size=Decimal("1"),
-            settlement_asset="BTC",
             expiry=now,
             strike=Decimal("50000"),
             option_type="call",
-            is_active=True,
-            updated_at=now,
         )
         chain = CanonicalOptionsChain(
             venue="deribit",
@@ -248,65 +214,59 @@ class TestCanonicalCorporateAction:
         assert action.description == "10-for-1 stock split"
 
 
-# ---------------------------------------------------------------------------
-# UniverseSnapshot
-# ---------------------------------------------------------------------------
-
-
-class TestUniverseSnapshot:
-    def test_from_instruments_empty(self) -> None:
-        snap = UniverseSnapshot.from_instruments("binance", [])
-        assert snap.venue == "binance"
-        assert snap.instrument_count == 0
-        assert snap.instruments == []
-        assert snap.schema_version == "v1"
-        assert snap.snapshot_timestamp is not None
-
-    def test_from_instruments_single(self) -> None:
-        inst = InstrumentRecord(
-            instrument_key="BTCUSDT",
+class TestFundingRateRef:
+    def test_creation(self) -> None:
+        ref = FundingRateRef(
             venue="binance",
-            instrument_type="spot",
-            symbol="BTC/USDT",
-            raw_symbol="BTCUSDT",
+            symbol="BTCUSDT",
+            rate=Decimal("0.0001"),
+            next_funding_time=datetime(2024, 12, 1, 8, 0, tzinfo=UTC),
+            mark_price=Decimal("50000"),
         )
-        snap = UniverseSnapshot.from_instruments("binance", [inst])
-        assert snap.venue == "binance"
-        assert snap.instrument_count == 1
-        assert len(snap.instruments) == 1
-        assert snap.instruments[0].instrument_key == "BTCUSDT"
+        assert ref.venue == "binance"
+        assert ref.rate == Decimal("0.0001")
+        assert ref.mark_price == Decimal("50000")
 
-    def test_from_instruments_multiple(self) -> None:
-        instruments = [
-            InstrumentRecord(
-                instrument_key=f"SYM{i}",
-                venue="bybit",
-                instrument_type="perp",
-                symbol=f"SYM{i}/USDT",
-                raw_symbol=f"SYM{i}",
-            )
-            for i in range(5)
-        ]
-        snap = UniverseSnapshot.from_instruments("bybit", instruments)
-        assert snap.venue == "bybit"
-        assert snap.instrument_count == 5
-        assert len(snap.instruments) == 5
-
-    def test_snapshot_timestamp_is_utc(self) -> None:
-        snap = UniverseSnapshot.from_instruments("okx", [])
-        assert snap.snapshot_timestamp.tzinfo is not None
-
-    def test_model_fields_direct_construction(self) -> None:
-        now = datetime.now(UTC)
-        snap = UniverseSnapshot(
-            snapshot_timestamp=now,
-            venue="deribit",
-            instrument_count=0,
-            instruments=[],
+    def test_defaults(self) -> None:
+        ref = FundingRateRef(
+            venue="bybit",
+            symbol="ETHUSDT",
+            rate=Decimal("0.0003"),
+            next_funding_time=datetime(2024, 12, 1, tzinfo=UTC),
         )
-        assert snap.schema_version == "v1"
-        assert snap.venue == "deribit"
-        assert snap.snapshot_timestamp == now
+        assert ref.mark_price is None
+        assert ref.updated_at is not None
+
+
+class TestOHLCVRef:
+    def test_creation(self) -> None:
+        bar = OHLCVRef(
+            venue="binance",
+            symbol="BTCUSDT",
+            timestamp=datetime(2024, 12, 1, tzinfo=UTC),
+            open=Decimal("50000"),
+            high=Decimal("51000"),
+            low=Decimal("49000"),
+            close=Decimal("50500"),
+            volume=Decimal("1000"),
+            interval="1h",
+        )
+        assert bar.venue == "binance"
+        assert bar.interval == "1h"
+        assert bar.close == Decimal("50500")
+
+    def test_default_interval(self) -> None:
+        bar = OHLCVRef(
+            venue="bybit",
+            symbol="ETHUSDT",
+            timestamp=datetime(2024, 12, 1, tzinfo=UTC),
+            open=Decimal("3000"),
+            high=Decimal("3100"),
+            low=Decimal("2900"),
+            close=Decimal("3050"),
+            volume=Decimal("500"),
+        )
+        assert bar.interval == "1d"
 
 
 # ---------------------------------------------------------------------------
