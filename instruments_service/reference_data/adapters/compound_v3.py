@@ -4,19 +4,19 @@ Discovers Compound V3 lending markets across Ethereum, Arbitrum, Base, Polygon,
 Optimism, and Scroll. Each Comet market has a single base asset (e.g. USDC) that
 can be supplied and borrowed, with multiple collateral assets.
 
-Markets are returned as InstrumentRecord with instrument_type="lending_market".
+Markets are returned as InstrumentRecord with instrument_type="LENDING".
 
 Data source: The Graph (Messari Compound V3 subgraph).
 Reference: https://docs.compound.finance/
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
 from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import get_subgraph_id
 from unified_trading_library import log_event
 
@@ -28,13 +28,13 @@ from ..schemas import (
     OHLCVRef,
 )
 from ..utils.defi_utils import classify_graph_error
+from ..utils.evm_creation_resolver import block_to_timestamp, get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CHAIN = "ETHEREUM"
 
-# Compound V3 Ethereum mainnet deployment date (2022-08-26).
-_COMPOUND_V3_DEPLOY_DATE = datetime(2022, 8, 26, tzinfo=UTC)
+# Per-chain deploy dates now in evm_creation_resolver.LENDING_PROTOCOL_DEPLOY_DATES
 
 # Compound V3 uses Paperclip Labs community subgraph schema.
 # Each "market" represents a Comet deployment (one base asset + collateral assets).
@@ -128,16 +128,25 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
                 data = await resp.json()
         except aiohttp.ClientError as exc:
             self._log_fetch_error(exc)
-            return []
+            raise ConnectionError(str(exc)) from exc
 
         raw_data = data.get("data") or {}
         markets: list[dict[str, object]] = raw_data.get("markets") or []
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
         venue_tag = f"COMPOUNDV3-{self._chain}"
 
+        # Resolve creationBlockNumber → timestamp for each market
+        block_ts_map: dict[int, datetime] = {}
+        block_numbers = [int(str(m.get("creationBlockNumber", 0))) for m in markets if m.get("creationBlockNumber")]
+        for bn in set(block_numbers):
+            ts = await block_to_timestamp(bn, self._chain)
+            if ts:
+                block_ts_map[bn] = ts
+
         for market in markets:
-            results.extend(self._build_market_records(market, venue_tag, now))
+            creation_block = int(str(market.get("creationBlockNumber", 0))) if market.get("creationBlockNumber") else 0
+            available_since = block_ts_map.get(creation_block) or get_protocol_floor_date("compound_v3", self._chain)
+            results.extend(self._build_market_records(market, venue_tag, available_since))
 
         logger.info(
             "CompoundV3: fetched %d lending market instruments on %s",
@@ -175,7 +184,7 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         self,
         market: dict[str, object],
         venue_tag: str,
-        now: datetime,
+        available_since: datetime | None = None,
     ) -> list[InstrumentRecord]:
         """Build InstrumentRecord entries for a single Compound V3 market.
 
@@ -202,27 +211,25 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         if sym_upper not in DEFI_MAJOR_ASSET_SYMBOLS:
             return []
 
-        available_since = _COMPOUND_V3_DEPLOY_DATE
+        if available_since is None:
+            available_since = get_protocol_floor_date("compound_v3", self._chain)
 
         market_name = str(config.get("name", ""))
         base_kwargs = {
             "venue": venue_tag,
             "raw_symbol": market_name or str(market_id),
-            "instrument_type": "lending_market",
+            "instrument_type": InstrumentType.LENDING,
             "base_asset": sym_upper,
             "quote_asset": "",
             "tick_size": Decimal("0.000001"),
-            "lot_size": Decimal("0.000001"),
-            "min_order_size": Decimal("0"),
+            "min_size": Decimal("0.000001"),
             "contract_size": Decimal("1"),
-            "settlement_asset": sym_upper,
             "expiry": None,
             "strike": None,
             "option_type": None,
-            "is_active": True,
-            "updated_at": now,
+            "status": InstrumentStatus.ACTIVE,
             "underlying": sym_upper,
-            "available_since": available_since,
+            "available_from_datetime": available_since,
         }
 
         # Supply instrument (lend base asset)
@@ -230,7 +237,6 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         results = [
             InstrumentRecord(
                 instrument_key=f"{venue_tag}:SUPPLY:{supply_symbol}",
-                symbol=supply_symbol,
                 **base_kwargs,
             )
         ]
@@ -240,7 +246,6 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         results.append(
             InstrumentRecord(
                 instrument_key=f"{venue_tag}:BORROW:{borrow_symbol}",
-                symbol=borrow_symbol,
                 **base_kwargs,
             )
         )
@@ -264,7 +269,7 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Compound V3 lending markets have no expiry calendar")
 

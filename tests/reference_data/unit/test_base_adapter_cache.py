@@ -33,7 +33,7 @@ class _CacheTestAdapter(BaseReferenceDataAdapter):
             InstrumentRecord(
                 instrument_key="TEST:BTCUSDT",
                 venue="test_cache",
-                instrument_type="spot",
+                instrument_type="SPOT_PAIR",
                 base_asset="BTC",
                 quote_asset="USDT",
             )
@@ -45,7 +45,7 @@ class _CacheTestAdapter(BaseReferenceDataAdapter):
     async def get_options_chain(self, underlying: str, expiry: datetime | None = None) -> CanonicalOptionsChain:
         return CanonicalOptionsChain(venue="test_cache", underlying=underlying, expiry=expiry or datetime.now(UTC))
 
-    async def get_expiry_calendar(self, underlying: str, instrument_type: str = "future") -> CanonicalExpiryCalendar:
+    async def get_expiry_calendar(self, underlying: str, instrument_type: str = "FUTURE") -> CanonicalExpiryCalendar:
         return CanonicalExpiryCalendar(venue="test_cache", instrument_type=instrument_type, underlying=underlying)
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
@@ -71,7 +71,7 @@ class TestGetInstrumentsCached:
         adapter = _CacheTestAdapter()
         adapter.call_count = 0
         await adapter.get_instruments_cached(instrument_type=None)
-        await adapter.get_instruments_cached(instrument_type="spot")
+        await adapter.get_instruments_cached(instrument_type="SPOT_PAIR")
         assert adapter.call_count == 2  # different keys = different caches
 
     @pytest.mark.asyncio

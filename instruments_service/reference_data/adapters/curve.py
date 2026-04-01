@@ -1,7 +1,7 @@
 """Curve reference data adapter — instrument discovery via Curve REST API.
 
 Discovers Curve liquidity pools on Ethereum. Pools are returned as
-InstrumentRecord with instrument_type="pool".
+InstrumentRecord with instrument_type="POOL".
 
 Data source: Curve REST API (api.curve.fi).
 Reference: https://curve.fi/
@@ -13,7 +13,7 @@ from decimal import Decimal
 
 import aiohttp
 from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -60,7 +60,7 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Curve pools as instruments."""
-        if instrument_type not in (None, "pool"):
+        if instrument_type not in (None, InstrumentType.POOL):
             return []
 
         try:
@@ -90,10 +90,9 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
                     "retry_safe": retry_safe,
                 },
             )
-            return []
+            raise ConnectionError(str(exc)) from exc
 
         pool_data: list[dict[str, object]] = raw.get("data", {}).get("poolData", [])
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
 
         for pool in pool_data:
@@ -120,23 +119,19 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
                 InstrumentRecord(
                     instrument_key=instrument_key,
                     venue=venue_tag,
-                    symbol=f"{sym0}/{sym1}",
                     raw_symbol=str(pool_address),
-                    instrument_type="pool",
+                    instrument_type=InstrumentType.POOL,
                     base_asset=sym0,
                     quote_asset=sym1,
                     tick_size=Decimal("0.000001"),
-                    lot_size=Decimal("0.000001"),
-                    min_order_size=Decimal("0"),
+                    min_size=Decimal("0.000001"),
                     contract_size=Decimal("1"),
-                    settlement_asset=sym1,
                     expiry=None,
                     strike=None,
                     option_type=None,
-                    is_active=True,
-                    updated_at=now,
+                    status=InstrumentStatus.ACTIVE,
                     underlying=pool_name if pool_name else None,
-                    available_since=_CURVE_DEPLOY_DATE,
+                    available_from_datetime=_CURVE_DEPLOY_DATE,
                 )
             )
 
@@ -160,7 +155,7 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Curve pools have no expiry calendar")
 

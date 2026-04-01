@@ -46,6 +46,12 @@ class InstrumentsHandler(UnifiedServiceHandler):
 
     async def preflight(self) -> None:
         """Start API key reloader. Date/category filtering happens in process()."""
+        # Wire --venues CLI override to the handler
+        venues_arg: list[str] | None = getattr(self.args, "venues", None) if self.args else None
+        if venues_arg:
+            self._venue_override = venues_arg
+            logger.info("Venue override from CLI: %s", venues_arg)
+
         # Preflight runs once before any date is processed. We don't know
         # the specific dates yet (BatchIO iterates them), so we validate keys
         # for ALL venues across ALL categories. Per-date filtering is in process().
@@ -90,10 +96,10 @@ class InstrumentsHandler(UnifiedServiceHandler):
         """Process instruments for the date in the payload.
 
         Reads API keys from the hot-reloader (always fresh after rotation).
-        Skips dates already present in storage (unless redo_all=True).
+        Skips dates already present in storage (unless force=True).
         """
         date = payload.date
-        redo_all = bool(payload.extra.get("redo_all", False))
+        redo_all = payload.force or bool(payload.extra.get("redo_all", False))
 
         if not redo_all and self._is_date_complete(date):
             logger.debug("Skipping already-complete date=%s", date)
@@ -107,4 +113,5 @@ class InstrumentsHandler(UnifiedServiceHandler):
             redo_all=redo_all,
             api_keys=api_keys,
             venue_override=self._venue_override,
+            mode=str(self.runtime.mode),
         )

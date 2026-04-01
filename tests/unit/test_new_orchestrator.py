@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
@@ -16,6 +17,7 @@ def _make_record(venue: str = "AAVEV3-ETHEREUM", itype: str = "A_TOKEN") -> Inst
         instrument_type=itype,
         base_asset="WETH",
         quote_asset="USDC",
+        available_from_datetime=datetime(2021, 3, 16, tzinfo=UTC),
     )
 
 
@@ -341,8 +343,8 @@ async def test_process_instruments_full_write_path():
     from instruments_service.engine.orchestrator import process_instruments
 
     records = [
-        _make_record("UNISWAPV3-ETHEREUM", "LP_TOKEN"),
-        _make_record("UNISWAPV3-ETHEREUM", "LP_TOKEN"),
+        _make_record("UNISWAPV3-ETHEREUM", "POOL"),
+        _make_record("UNISWAPV3-ETHEREUM", "POOL"),
         _make_record("AAVEV3-ETHEREUM", "A_TOKEN"),
     ]
     mock_sink = MagicMock()
@@ -706,11 +708,11 @@ def _make_dated_record(
     return InstrumentRecord(
         instrument_key=f"{venue}:SPOT:BTC-USD",
         venue=venue,
-        instrument_type="SPOT",
+        instrument_type="SPOT_PAIR",
         base_asset="BTC",
         quote_asset="USD",
-        available_since=since,
-        available_to=until,
+        available_from_datetime=since,
+        available_to_datetime=until,
     )
 
 
@@ -921,7 +923,9 @@ async def test_process_instruments_uses_primary_category_for_bucket():
         await process_instruments("2026-03-22", ["DEFI", "CEFI"])
 
     # The bucket call should use the first category "DEFI"
-    mock_bucket.assert_called_once_with("DEFI")
+    # Called twice: once for shard freshness check, once for writing.
+    mock_bucket.assert_any_call("DEFI")
+    assert all(c.args == ("DEFI",) for c in mock_bucket.call_args_list)
 
 
 def test_filter_instruments_by_date_preserves_record_integrity():
@@ -1160,35 +1164,28 @@ def test_no_venue_filter_processes_all_venues():
 # ===========================================================================
 
 
-def test_deribit_instrument_type_is_lowercase_string():
-    """Deribit adapter stores 'perp' not InstrumentType.PERP in instrument_type field.
-    Prevents PERPETUAL/perp duplication in GroupBy partitions.
-    """
+def test_instrument_type_enum_values_are_uppercase():
+    """InstrumentType enum values are UPPERCASE — canonical standard since schema unification."""
 
     from unified_api_contracts.internal import InstrumentType
 
-    # _parse_instrument should store lowercase string values from InstrumentType.value
-    assert InstrumentType.PERP.value == "perp"
-    assert InstrumentType.FUTURES.value == "futures"
-    assert InstrumentType.OPTION.value == "option"
+    assert InstrumentType.PERPETUAL.value == "PERPETUAL"
+    assert InstrumentType.FUTURE.value == "FUTURE"
+    assert InstrumentType.OPTION.value == "OPTION"
+    assert InstrumentType.SPOT_PAIR.value == "SPOT_PAIR"
 
-    # The instrument_key for perp should use uppercase
-    perp_key = f"DERIBIT:{'perp'.upper()}:BTC-PERPETUAL"
-    assert perp_key == "DERIBIT:PERP:BTC-PERPETUAL"
-
-    # The instrument_type stored should be lowercase
-    assert InstrumentType.PERP.value == "perp"  # NOT "PERPETUAL"
-    assert InstrumentType.FUTURES.value == "futures"  # NOT "FUTURE"
+    # The instrument_key for perpetual should use UPPERCASE
+    perp_key = "DERIBIT:PERPETUAL:BTC-PERPETUAL"
+    assert perp_key == "DERIBIT:PERPETUAL:BTC-PERPETUAL"
 
 
-def test_instrument_type_values_are_lowercase_canonical():
-    """InstrumentType enum values are lowercase — all adapters must store .value not .name."""
+def test_instrument_type_values_are_uppercase_canonical():
+    """InstrumentType enum values are UPPERCASE — all adapters must store .value."""
     from unified_api_contracts.internal import InstrumentType
 
     for member in InstrumentType:
-        assert member.value == member.value.lower(), (
-            f"InstrumentType.{member.name} has non-lowercase value {member.value!r}. "
-            "Adapters must use .value to get the stored string."
+        assert member.value == member.value.upper(), (
+            f"InstrumentType.{member.name} has non-uppercase value {member.value!r}. All values must be UPPERCASE."
         )
 
 

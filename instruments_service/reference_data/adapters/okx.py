@@ -11,7 +11,13 @@ from unified_api_contracts import (
     OKXInstrumentsResponse,
     classify_venue_error,
 )
-from unified_api_contracts.internal import FeeScheduleEntry, InstrumentRecord, MarginType
+from unified_api_contracts.internal import (
+    FeeScheduleEntry,
+    InstrumentRecord,
+    InstrumentStatus,
+    InstrumentType,
+    OptionType,
+)
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -28,11 +34,14 @@ _BASE = "https://www.okx.com"
 _OKX_SPOT_VENUE = "OKX-SPOT"
 _OKX_FUTURES_VENUE = "OKX-FUTURES"
 
+# OKX exchange launch date (derivatives launched ~2020)
+_OKX_LAUNCH_DATE = datetime(2020, 1, 1, tzinfo=UTC)
+
 _INST_TYPE_MAP = {
-    "spot": "SPOT",
-    "perp": "SWAP",
-    "future": "FUTURES",
-    "option": "OPTION",
+    "SPOT_PAIR": "SPOT",
+    "PERPETUAL": "SWAP",
+    "FUTURE": "FUTURES",
+    "OPTION": "OPTION",
 }
 
 
@@ -69,7 +78,7 @@ class OKXReferenceDataAdapter(BaseReferenceDataAdapter):
         async with aiohttp.ClientSession() as session:
             for itype in inst_types:
                 okx_type = _INST_TYPE_MAP.get(itype, "SPOT")
-                if itype == "option":
+                if itype == "OPTION":
                     for uly in ["BTC-USD", "ETH-USD", "SOL-USD"]:
                         results.extend(await self._fetch_instruments(session, okx_type, uly=uly))
                 else:
@@ -88,7 +97,7 @@ class OKXReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
-        instruments = await self.get_instruments(instrument_type="option")
+        instruments = await self.get_instruments(instrument_type="OPTION")
         calls: list[InstrumentRecord] = []
         puts: list[InstrumentRecord] = []
         strikes: set[Decimal] = set()
@@ -99,7 +108,7 @@ class OKXReferenceDataAdapter(BaseReferenceDataAdapter):
                 continue
             if inst.strike:
                 strikes.add(inst.strike)
-            if inst.option_type == "C":
+            if inst.option_type == OptionType.CALL:
                 calls.append(inst)
             else:
                 puts.append(inst)
@@ -118,7 +127,7 @@ class OKXReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         instruments = await self.get_instruments(instrument_type=instrument_type)
         expiry_set: set[datetime] = set()
@@ -336,68 +345,47 @@ class OKXReferenceDataAdapter(BaseReferenceDataAdapter):
         if not sym.instId:
             return None
         if sym.instType == "SPOT":
-            mapped_type = "spot"
+            mapped_type = InstrumentType.SPOT_PAIR
         elif sym.instType == "SWAP":
-            mapped_type = "perp"
+            mapped_type = InstrumentType.PERPETUAL
         elif sym.instType == "FUTURES":
-            mapped_type = "future"
+            mapped_type = InstrumentType.FUTURE
         else:
-            mapped_type = "option"
+            mapped_type = InstrumentType.OPTION
         exp_time = sym.expTime
         expiry: datetime | None = None
         if exp_time and str(exp_time) != "":
             expiry = datetime.fromtimestamp(int(str(exp_time)) / 1000, tz=UTC)
-        settle_ccy = sym.settleCcy
-        opt_type = str(sym.optType).lower() if sym.optType else None
+        _raw_opt = str(sym.optType).upper() if sym.optType else ""
+        opt_type = (
+            OptionType.CALL if _raw_opt in ("C", "CALL") else OptionType.PUT if _raw_opt in ("P", "PUT") else None
+        )
         strike_val = sym.stk
         base_ccy = sym.baseCcy or ""
         quote_ccy = sym.quoteCcy or ""
-        margin_type = self._get_margin_type(sym.instType, sym.ctType, sym.settleCcy, base_ccy)
-        canonical = _OKX_SPOT_VENUE if mapped_type == "spot" else _OKX_FUTURES_VENUE
+        canonical = _OKX_SPOT_VENUE if mapped_type == InstrumentType.SPOT_PAIR else _OKX_FUTURES_VENUE
+        # Parse listing time from OKX API if available
+        list_time_raw = getattr(sym, "listTime", None)
+        available_since: datetime | None = _OKX_LAUNCH_DATE
+        if list_time_raw and str(list_time_raw) != "":
+            available_since = datetime.fromtimestamp(int(str(list_time_raw)) / 1000, tz=UTC)
         return InstrumentRecord(
-            instrument_key=f"{canonical}:{mapped_type.upper()}:{base_ccy}~{quote_ccy}",
+            instrument_key=f"{canonical}:{mapped_type}:{base_ccy}~{quote_ccy}",
             venue=canonical,
-            symbol=f"{base_ccy}/{quote_ccy}",
             raw_symbol=sym.instId,
             instrument_type=mapped_type,
             base_asset=base_ccy,
             quote_asset=quote_ccy,
             tick_size=Decimal(str(sym.tickSz or "0.01")),
-            lot_size=Decimal(str(sym.lotSz or "0.001")),
-            min_order_size=Decimal(str(sym.minSz or "0.001")),
+            min_size=Decimal(str(sym.lotSz or "0.001")),
             contract_size=Decimal(str(sym.ctVal)) if sym.ctVal else Decimal("1"),
-            settlement_asset=str(settle_ccy) if settle_ccy else None,
             expiry=expiry,
             strike=Decimal(str(strike_val)) if strike_val else None,
             option_type=opt_type,
-            margin_type=margin_type,
-            is_active=True,
-            updated_at=now,
+            underlying=base_ccy if mapped_type in (InstrumentType.FUTURE, InstrumentType.OPTION) else None,
+            available_from_datetime=available_since,
+            status=InstrumentStatus.ACTIVE,
         )
-
-    def _get_margin_type(
-        self,
-        inst_type: str,
-        ct_type: str | None,
-        settle_ccy: str | None,
-        base_ccy: str,
-    ) -> MarginType | None:
-        """Derive MarginType from OKX instrument fields.
-
-        SPOT/MARGIN: no margin type.
-        Derivatives: ctType="linear" → LINEAR, ctType="inverse" → INVERSE.
-        Fallback: settleCcy == baseCcy → INVERSE, else LINEAR.
-        """
-        if inst_type in ("SPOT", "MARGIN"):
-            return None
-        if ct_type == "linear":
-            return MarginType.LINEAR
-        if ct_type == "inverse":
-            return MarginType.INVERSE
-        # Fallback: coin-margined if settlement currency equals base asset
-        if settle_ccy and base_ccy and settle_ccy.upper() == base_ccy.upper():
-            return MarginType.INVERSE
-        return MarginType.LINEAR
 
     async def get_exchange_fee_schedule(
         self,

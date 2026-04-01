@@ -22,5 +22,5 @@ class TestHyperliquidAdapter:
     async def test_get_instruments_non_perp_returns_empty(self) -> None:
         adapter = HyperliquidReferenceDataAdapter()
         with patch("aiohttp.ClientSession"):
-            result = await adapter.get_instruments(instrument_type="spot")
+            result = await adapter.get_instruments(instrument_type="SPOT_PAIR")
         assert result == []

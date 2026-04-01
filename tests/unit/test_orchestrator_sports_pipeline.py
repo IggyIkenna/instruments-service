@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from instruments_service.engine.orchestrator import (
+    _fetch_sports_reference_data,
     _write_fixture_mapping,
     _write_team_mapping,
 )
@@ -151,8 +152,6 @@ class TestWriteFixtureMapping:
 # ---------------------------------------------------------------------------
 # _fetch_sports_reference_data
 # ---------------------------------------------------------------------------
-
-from instruments_service.engine.orchestrator import _fetch_sports_reference_data
 
 
 class TestFetchSportsReferenceData:

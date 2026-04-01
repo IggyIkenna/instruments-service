@@ -21,7 +21,7 @@ from unified_api_contracts import (
     BetfairRunnerCatalog,
     classify_venue_error,
 )
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentType
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -106,10 +106,10 @@ class BetfairReferenceDataAdapter(BaseReferenceDataAdapter):
     ) -> list[InstrumentRecord]:
         """Fetch available Betfair markets and return as InstrumentRecord list.
 
-        instrument_type filter: pass "sports_event" or None (all). Other values
+        instrument_type filter: pass "EXCHANGE_ODDS" or None (all). Other values
         return an empty list since Betfair only exposes sports markets.
         """
-        if instrument_type is not None and instrument_type != "sports_event":
+        if instrument_type is not None and instrument_type != "EXCHANGE_ODDS":
             return []
         session_token, app_key = self._get_credentials()
         raw_list = await self._fetch_markets_raw(session_token, app_key)
@@ -205,7 +205,7 @@ class BetfairReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError(
             "Betfair does not provide expiry calendars in the TradFi sense. "
@@ -271,11 +271,11 @@ class BetfairReferenceDataAdapter(BaseReferenceDataAdapter):
             venue=self.venue,
             symbol=display_symbol,
             raw_symbol=raw_symbol,
-            instrument_type="sports_event",
+            instrument_type=InstrumentType.EXCHANGE_ODDS,
             base_asset=sport_name,
             quote_asset="GBP",
             tick_size=Decimal("0.01"),
-            lot_size=Decimal("1"),
+            min_size=Decimal("1"),
             min_order_size=Decimal("2"),
             contract_size=Decimal("1"),
             settlement_asset="GBP",

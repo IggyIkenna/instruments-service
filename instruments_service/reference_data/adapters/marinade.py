@@ -1,19 +1,19 @@
 """Marinade Finance reference data adapter -- instrument discovery via REST API.
 
 Discovers Marinade stake pools on Solana (mSOL liquid staking + native staking).
-Pools are returned as InstrumentRecord with instrument_type="staking".
+Pools are returned as InstrumentRecord with instrument_type="STAKING".
 
 Data source: Marinade REST API (https://api.marinade.finance).
 Reference: https://docs.marinade.finance/
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
 from unified_api_contracts import classify_venue_error
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
 
@@ -98,7 +98,7 @@ class MarinadeReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch Marinade staking instruments."""
-        if instrument_type not in (None, "staking"):
+        if instrument_type not in (None, InstrumentType.STAKING):
             return []
 
         # Fetch Marinade mSOL APY data
@@ -109,22 +109,21 @@ class MarinadeReferenceDataAdapter(BaseReferenceDataAdapter):
         except (aiohttp.ClientError, RuntimeError) as exc:
             if isinstance(exc, aiohttp.ClientError):
                 self._log_fetch_error(exc)
-            else:
-                logger.error("Marinade state request failed after retries: %s", exc)
-            return []
+                raise ConnectionError(str(exc)) from exc
+            logger.error("Marinade state request failed after retries: %s", exc)
+            raise
 
         state: dict[str, object] = data if isinstance(data, dict) else {}
-        now = datetime.now(UTC)
         venue_tag = self.venue
         results: list[InstrumentRecord] = []
 
         # mSOL liquid staking instrument
-        msol_record = self._build_msol_record(state, venue_tag, now)
+        msol_record = self._build_msol_record(state, venue_tag)
         if msol_record:
             results.append(msol_record)
 
         # Native staking instrument
-        native_record = self._build_native_stake_record(state, venue_tag, now)
+        native_record = self._build_native_stake_record(state, venue_tag)
         if native_record:
             results.append(native_record)
 
@@ -135,58 +134,48 @@ class MarinadeReferenceDataAdapter(BaseReferenceDataAdapter):
         self,
         state: dict[str, object],
         venue_tag: str,
-        now: datetime,
     ) -> InstrumentRecord:
         """Build InstrumentRecord for mSOL liquid staking."""
         return InstrumentRecord(
             instrument_key=f"{venue_tag}:STAKE:MSOL",
             venue=venue_tag,
-            symbol="MSOL",
             raw_symbol="mSo1iD7sSuqGMvkKPzYGBAjJrpF9VRdrByciFizSJhc",
-            instrument_type="staking",
+            instrument_type=InstrumentType.STAKING,
             base_asset="SOL",
             quote_asset="MSOL",
             tick_size=Decimal("0.000000001"),
-            lot_size=Decimal("0.000000001"),
-            min_order_size=Decimal("0"),
+            min_size=Decimal("0.000000001"),
             contract_size=Decimal("1"),
-            settlement_asset="SOL",
             expiry=None,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
+            status=InstrumentStatus.ACTIVE,
             underlying="SOL",
-            available_since=_MARINADE_DEPLOY_DATE,
+            available_from_datetime=_MARINADE_DEPLOY_DATE,
         )
 
     def _build_native_stake_record(
         self,
         state: dict[str, object],
         venue_tag: str,
-        now: datetime,
     ) -> InstrumentRecord:
         """Build InstrumentRecord for Marinade native staking."""
         return InstrumentRecord(
             instrument_key=f"{venue_tag}:STAKE:NATIVE-SOL",
             venue=venue_tag,
-            symbol="NATIVE-SOL-STAKE",
-            raw_symbol="marinade-native",
-            instrument_type="staking",
+            raw_symbol="MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD",
+            instrument_type=InstrumentType.STAKING,
             base_asset="SOL",
             quote_asset="SOL",
             tick_size=Decimal("0.000000001"),
-            lot_size=Decimal("0.000000001"),
-            min_order_size=Decimal("0"),
+            min_size=Decimal("0.000000001"),
             contract_size=Decimal("1"),
-            settlement_asset="SOL",
             expiry=None,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
+            status=InstrumentStatus.ACTIVE,
             underlying="SOL",
-            available_since=_MARINADE_DEPLOY_DATE,
+            available_from_datetime=_MARINADE_DEPLOY_DATE,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
@@ -206,7 +195,7 @@ class MarinadeReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Marinade staking has no expiry calendar")
 

@@ -17,7 +17,7 @@ Usage:
     )
 
     adapter = get_reference_adapter("binance")
-    instruments = await adapter.get_instruments(instrument_type="perp")
+    instruments = await adapter.get_instruments(instrument_type="PERPETUAL")
 """
 
 from unified_api_contracts.internal import InstrumentRecord

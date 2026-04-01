@@ -46,7 +46,7 @@ class _RetryTestAdapter(BaseReferenceDataAdapter):
     async def get_options_chain(self, underlying: str, expiry: datetime | None = None) -> CanonicalOptionsChain:
         return CanonicalOptionsChain(venue=self.venue, underlying=underlying, expiry=expiry or datetime.now(UTC))
 
-    async def get_expiry_calendar(self, underlying: str, instrument_type: str = "future") -> CanonicalExpiryCalendar:
+    async def get_expiry_calendar(self, underlying: str, instrument_type: str = "FUTURE") -> CanonicalExpiryCalendar:
         return CanonicalExpiryCalendar(venue=self.venue, instrument_type=instrument_type, underlying=underlying)
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
@@ -140,7 +140,7 @@ class TestCanonicalExpiryCalendar:
 
         cal = CanonicalExpiryCalendar(
             venue="binance",
-            instrument_type="future",
+            instrument_type="FUTURE",
             underlying="BTC",
             expiries=[datetime(2025, 3, 28, tzinfo=UTC), datetime(2025, 6, 27, tzinfo=UTC)],
             settlement_assets={"2025-03-28": "USDT"},
@@ -154,7 +154,7 @@ class TestCanonicalExpiryCalendar:
 
         cal = CanonicalExpiryCalendar(
             venue="deribit",
-            instrument_type="option",
+            instrument_type="OPTION",
             underlying="ETH",
         )
         assert cal.expiries == []
@@ -165,13 +165,13 @@ class TestCanonicalExpiryCalendar:
 
         cal = CanonicalExpiryCalendar(
             venue="bybit",
-            instrument_type="future",
+            instrument_type="FUTURE",
             underlying="SOL",
         )
         d = dataclasses.asdict(cal)
         cal2 = CanonicalExpiryCalendar(**dict(d.items()))
         assert cal2.venue == "bybit"
-        assert cal2.instrument_type == "future"
+        assert cal2.instrument_type == "FUTURE"
         assert cal2.underlying == "SOL"
 
 

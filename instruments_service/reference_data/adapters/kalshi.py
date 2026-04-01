@@ -18,7 +18,7 @@ from unified_api_contracts import (
     KalshiMarket,
     classify_venue_error,
 )
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentType
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -104,10 +104,10 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
     ) -> list[InstrumentRecord]:
         """Fetch active Kalshi markets as InstrumentRecord list.
 
-        instrument_type filter: pass "prediction_market" or None (all). Other values
+        instrument_type filter: pass "PREDICTION_MARKET" or None (all). Other values
         return an empty list since Kalshi only exposes prediction markets.
         """
-        if instrument_type is not None and instrument_type != "prediction_market":
+        if instrument_type is not None and instrument_type != "PREDICTION_MARKET":
             return []
         results: list[InstrumentRecord] = []
         now = datetime.now(UTC)
@@ -251,7 +251,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError(
             "Kalshi does not provide expiry calendars. Market close times are in InstrumentRecord.expiry."
@@ -294,11 +294,11 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             venue=self.venue,
             symbol=str(title)[:100],
             raw_symbol=event_ticker,
-            instrument_type="prediction_market",
+            instrument_type=InstrumentType.PREDICTION_MARKET,
             base_asset=base_asset,
             quote_asset="USD",
             tick_size=tick_size,
-            lot_size=Decimal("1"),
+            min_size=Decimal("1"),
             min_order_size=min_order,
             contract_size=Decimal("1"),
             settlement_asset="USD",

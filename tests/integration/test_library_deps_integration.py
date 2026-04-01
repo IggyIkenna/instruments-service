@@ -85,13 +85,13 @@ def test_uic_instrument_record_constructable() -> None:
     from unified_api_contracts.internal import InstrumentRecord
 
     record = InstrumentRecord(
-        instrument_key="UNISWAPV3-ETHEREUM:LP_TOKEN:WETH-USDC",
+        instrument_key="UNISWAPV3-ETHEREUM:POOL:WETH-USDC",
         venue="UNISWAPV3-ETHEREUM",
-        instrument_type="LP_TOKEN",
+        instrument_type="POOL",
         base_asset="WETH",
         quote_asset="USDC",
     )
-    assert record.instrument_key == "UNISWAPV3-ETHEREUM:LP_TOKEN:WETH-USDC"
+    assert record.instrument_key == "UNISWAPV3-ETHEREUM:POOL:WETH-USDC"
     assert record.venue == "UNISWAPV3-ETHEREUM"
     assert record.model_dump() is not None, "model_dump() must work (used in orchestrator)"
 

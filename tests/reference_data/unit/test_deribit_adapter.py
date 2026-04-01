@@ -31,7 +31,7 @@ class TestDeribitAdapter:
             }
         )
         inst = adapter._parse_instrument(data)
-        assert inst.instrument_type == "perp"
+        assert inst.instrument_type == "PERPETUAL"
         assert inst.venue == "DERIBIT"
 
     def test_parse_instrument_option(self) -> None:
@@ -52,7 +52,7 @@ class TestDeribitAdapter:
             }
         )
         inst = adapter._parse_instrument(data)
-        assert inst.instrument_type == "option"
+        assert inst.instrument_type == "OPTION"
         assert inst.strike == Decimal("50000")
         assert inst.option_type == "call"
 
@@ -74,8 +74,8 @@ class TestDeribitAdapterExtended:
             }
         )
         inst = adapter._parse_instrument(data)
-        # Deribit maps non-perp futures to InstrumentType.FUTURES ("futures")
-        assert str(inst.instrument_type).lower() in ("future", "futures")
+        # Deribit maps non-perp futures to InstrumentType.FUTURE
+        assert inst.instrument_type == "FUTURE"
         assert inst.expiry is not None
 
     @pytest.mark.asyncio
@@ -106,7 +106,7 @@ class TestDeribitAdapterExtended:
         mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
         mock_session_cm.__aexit__ = AsyncMock(return_value=None)
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type="perp")
+            results = await adapter.get_instruments(instrument_type="PERPETUAL")
         assert len(results) >= 0  # just ensure no crash
 
     @pytest.mark.asyncio
@@ -225,7 +225,7 @@ class TestDeribitAdapterExtended:
         mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
         mock_session_cm.__aexit__ = AsyncMock(return_value=None)
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type="option")
+            results = await adapter.get_instruments(instrument_type="OPTION")
         assert results == []
 
     @pytest.mark.asyncio
@@ -242,7 +242,7 @@ class TestDeribitAdapterExtended:
         mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
         mock_session_cm.__aexit__ = AsyncMock(return_value=None)
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type="spot")
+            results = await adapter.get_instruments(instrument_type="SPOT_PAIR")
         assert results == []
 
     @pytest.mark.asyncio
@@ -329,7 +329,7 @@ class TestDeribitAdapterExtended:
                 }
             )
         )
-        inst_type_str = str(inst.instrument_type).lower()
+        inst_type_str = str(inst.instrument_type)
         with patch.object(adapter, "get_instruments", return_value=[inst]):
             calendar = await adapter.get_expiry_calendar("BTC", instrument_type=inst_type_str)
         assert calendar.venue == "DERIBIT"

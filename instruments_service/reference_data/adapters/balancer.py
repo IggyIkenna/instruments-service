@@ -1,7 +1,7 @@
 """Balancer reference data adapter — instrument discovery via Balancer API v3.
 
 Discovers Balancer liquidity pools on Ethereum via the public GraphQL API.
-Pools are returned as InstrumentRecord with instrument_type="pool".
+Pools are returned as InstrumentRecord with instrument_type="POOL".
 
 Data source: Balancer API v3 (api-v3.balancer.fi/graphql)
 Reference: https://docs.balancer.fi/
@@ -9,12 +9,12 @@ No API key required — public endpoint.
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
 from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -95,7 +95,7 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Balancer pools as instruments."""
-        if instrument_type not in (None, "pool"):
+        if instrument_type not in (None, InstrumentType.POOL):
             return []
 
         gql_chain = _CHAIN_TO_GQL.get(self._chain, "MAINNET")
@@ -134,21 +134,20 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
                     "retry_safe": retry_safe,
                 },
             )
-            return []
+            raise ConnectionError(str(exc)) from exc
 
         pools = raw.get("data", {}).get("poolGetPools", [])
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
 
         for pool in pools:
-            record = self._pool_to_record(pool, now)
+            record = self._pool_to_record(pool)
             if record is not None:
                 results.append(record)
 
         logger.info("Balancer: fetched %d pool instruments on %s", len(results), self._chain)
         return results
 
-    def _pool_to_record(self, pool: dict[str, object], now: datetime) -> InstrumentRecord | None:
+    def _pool_to_record(self, pool: dict[str, object]) -> InstrumentRecord | None:
         """Convert a raw Balancer pool dict to an InstrumentRecord, or None if filtered."""
         pool_address = pool.get("address")
         pool_name = str(pool.get("name", ""))
@@ -173,23 +172,19 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=venue_tag,
-            symbol=f"{sym0}/{sym1}",
             raw_symbol=str(pool_address),
-            instrument_type="pool",
+            instrument_type=InstrumentType.POOL,
             base_asset=sym0,
             quote_asset=sym1,
             tick_size=Decimal("0.000001"),
-            lot_size=Decimal("0.000001"),
-            min_order_size=Decimal("0"),
+            min_size=Decimal("0.000001"),
             contract_size=Decimal("1"),
-            settlement_asset=sym1,
             expiry=None,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
+            status=InstrumentStatus.ACTIVE,
             underlying=pool_name if pool_name else None,
-            available_since=available_since,
+            available_from_datetime=available_since,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
@@ -202,7 +197,7 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_options_chain(self, underlying: str, expiry: datetime | None = None) -> CanonicalOptionsChain:
         raise NotImplementedError("Balancer does not support options")
 
-    async def get_expiry_calendar(self, underlying: str, instrument_type: str = "future") -> CanonicalExpiryCalendar:
+    async def get_expiry_calendar(self, underlying: str, instrument_type: str = "FUTURE") -> CanonicalExpiryCalendar:
         raise NotImplementedError("Balancer pools have no expiry calendar")
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:

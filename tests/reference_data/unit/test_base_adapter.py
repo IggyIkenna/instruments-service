@@ -36,7 +36,7 @@ class _ConcreteAdapter(BaseReferenceDataAdapter):
             fetched_at=datetime.now(UTC),
         )
 
-    async def get_expiry_calendar(self, underlying: str, instrument_type: str = "future") -> CanonicalExpiryCalendar:
+    async def get_expiry_calendar(self, underlying: str, instrument_type: str = "FUTURE") -> CanonicalExpiryCalendar:
         return CanonicalExpiryCalendar(
             venue=self.venue,
             instrument_type=instrument_type,
@@ -86,12 +86,12 @@ class TestBaseAdapter:
         calendar = await adapter.get_expiry_calendar("BTC")
         assert calendar.venue == "test_venue"
         assert calendar.underlying == "BTC"
-        assert calendar.instrument_type == "future"
+        assert calendar.instrument_type == "FUTURE"
 
     @pytest.mark.asyncio
     async def test_get_instruments_with_filter(self) -> None:
         adapter = _ConcreteAdapter()
-        result = await adapter.get_instruments(instrument_type="spot")
+        result = await adapter.get_instruments(instrument_type="SPOT_PAIR")
         assert result == []
 
     def test_cannot_instantiate_abstract_base(self) -> None:
@@ -201,7 +201,7 @@ class TestCCXTAdapter:
         mock_exchange.load_markets = AsyncMock(return_value={})
         mock_exchange.close = AsyncMock()
         with patch.object(adapter, "_get_exchange", return_value=mock_exchange):
-            results = await adapter.get_instruments(instrument_type="perp")
+            results = await adapter.get_instruments(instrument_type="PERPETUAL")
         assert results == []
 
     @pytest.mark.asyncio
@@ -283,12 +283,12 @@ class TestCCXTAdapter:
 
     def test_map_ccxt_type_all_cases(self) -> None:
         """_map_ccxt_type covers all known mapping cases."""
-        assert CCXTReferenceDataAdapter._map_ccxt_type("spot") == "spot"
-        assert CCXTReferenceDataAdapter._map_ccxt_type("swap") == "perp"
-        assert CCXTReferenceDataAdapter._map_ccxt_type("perpetual") == "perp"
-        assert CCXTReferenceDataAdapter._map_ccxt_type("future") == "future"
-        assert CCXTReferenceDataAdapter._map_ccxt_type("option") == "option"
-        assert CCXTReferenceDataAdapter._map_ccxt_type("unknown_type") == "unknown_type"
+        assert CCXTReferenceDataAdapter._map_ccxt_type("spot") == "SPOT_PAIR"
+        assert CCXTReferenceDataAdapter._map_ccxt_type("swap") == "PERPETUAL"
+        assert CCXTReferenceDataAdapter._map_ccxt_type("perpetual") == "PERPETUAL"
+        assert CCXTReferenceDataAdapter._map_ccxt_type("future") == "FUTURE"
+        assert CCXTReferenceDataAdapter._map_ccxt_type("option") == "OPTION"
+        assert CCXTReferenceDataAdapter._map_ccxt_type("unknown_type") == "SPOT_PAIR"
 
     def test_parse_ccxt_expiry_valid(self) -> None:
         """_parse_ccxt_expiry parses ISO datetime strings to UTC datetimes."""
@@ -342,7 +342,7 @@ class TestCCXTAdapter:
             venue="deribit",
             symbol="BTC/USD",
             raw_symbol="BTC-31DEC24-50000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             quote_asset="USD",
             tick_size=Decimal("0.01"),
@@ -374,7 +374,7 @@ class TestCCXTAdapter:
             venue="deribit",
             symbol="BTC/USD",
             raw_symbol="BTC-31MAR24",
-            instrument_type="future",
+            instrument_type="FUTURE",
             base_asset="BTC",
             quote_asset="USD",
             tick_size=Decimal("0.5"),
@@ -386,7 +386,7 @@ class TestCCXTAdapter:
             updated_at=datetime.now(UTC),
         )
         with patch.object(adapter, "get_instruments", return_value=[fut]):
-            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="future")
+            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="FUTURE")
         assert len(calendar.expiries) == 1
         assert calendar.expiries[0] == expiry
 
@@ -487,7 +487,7 @@ class TestDatabentoAdapter:
     async def test_get_instruments_with_type_raises_without_api_key(self) -> None:
         adapter = DatabentoReferenceDataAdapter()
         with pytest.raises(ValueError, match="api_key required"):
-            await adapter.get_instruments(instrument_type="future")
+            await adapter.get_instruments(instrument_type="FUTURE")
 
     @pytest.mark.asyncio
     async def test_get_instrument_raises_without_api_key(self) -> None:

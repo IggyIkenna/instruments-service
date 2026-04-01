@@ -21,7 +21,7 @@ from instruments_service.reference_data.adapters.tardis import TardisReferenceDa
 
 def _make_instrument(
     raw_symbol: str = "BTCUSDT",
-    instrument_type: str = "spot",
+    instrument_type: str = "SPOT_PAIR",
     base_asset: str = "BTC",
     quote_asset: str = "USDT",
     venue: str = "test",
@@ -69,7 +69,7 @@ class TestBetfairCoverageGaps:
     async def test_get_instrument_found(self) -> None:
         """Lines 145-146: get_instrument returns matching instrument."""
         adapter = BetfairReferenceDataAdapter()
-        inst = _make_instrument(raw_symbol="1.234567/111", venue="betfair", instrument_type="sports_event")
+        inst = _make_instrument(raw_symbol="1.234567/111", venue="betfair", instrument_type="EXCHANGE_ODDS")
         with patch.object(adapter, "get_instruments", return_value=[inst]):
             result = await adapter.get_instrument("1.234567/111")
         assert result is inst
@@ -78,8 +78,8 @@ class TestBetfairCoverageGaps:
     async def test_get_instrument_by_key(self) -> None:
         """Lines 145-146: get_instrument matches instrument_key."""
         adapter = BetfairReferenceDataAdapter()
-        inst = _make_instrument(raw_symbol="other", venue="betfair", instrument_type="sports_event")
-        inst2 = _make_instrument(raw_symbol="market/sel", venue="betfair", instrument_type="sports_event")
+        inst = _make_instrument(raw_symbol="other", venue="betfair", instrument_type="EXCHANGE_ODDS")
+        inst2 = _make_instrument(raw_symbol="market/sel", venue="betfair", instrument_type="EXCHANGE_ODDS")
         with patch.object(adapter, "get_instruments", return_value=[inst, inst2]):
             result = await adapter.get_instrument("market/sel")
         assert result is inst2
@@ -126,7 +126,7 @@ class TestBetfairCoverageGaps:
         """Line 84-85: non-sports instrument_type filter returns []."""
         adapter = BetfairReferenceDataAdapter()
         with patch.object(adapter, "_get_credentials", return_value=("tok", "key")):
-            result = await adapter.get_instruments(instrument_type="future")
+            result = await adapter.get_instruments(instrument_type="FUTURE")
         assert result == []
 
 
@@ -189,9 +189,9 @@ class TestBinanceCoverageGaps:
             }
         )
         with patch("aiohttp.ClientSession", return_value=mock_session):
-            results = await adapter.get_instruments(instrument_type="spot")
+            results = await adapter.get_instruments(instrument_type="SPOT_PAIR")
         assert len(results) == 1
-        assert results[0].instrument_type == "spot"
+        assert results[0].instrument_type == "SPOT_PAIR"
 
     @pytest.mark.asyncio
     async def test_fetch_futures_with_delivery_date(self) -> None:
@@ -225,7 +225,7 @@ class TestBinanceCoverageGaps:
 
         results = await adapter._fetch_futures(mock_session_obj)
         assert len(results) == 1
-        assert results[0].instrument_type == "future"
+        assert results[0].instrument_type == "FUTURE"
         assert results[0].expiry is not None
 
     @pytest.mark.asyncio
@@ -267,11 +267,9 @@ class TestCCXTCoverageGaps:
     def test_parse_ccxt_market_inactive_returns_none(self) -> None:
         """Line 104: active=False market → None."""
         adapter = CCXTReferenceDataAdapter(venue="kraken")
-        now = datetime.now(UTC)
         result = adapter._parse_ccxt_market(
             "BTC/USDT",
             {"type": "spot", "active": False, "base": "BTC", "quote": "USDT"},
-            now,
             None,
         )
         assert result is None
@@ -279,26 +277,22 @@ class TestCCXTCoverageGaps:
     def test_parse_ccxt_market_wrong_type_returns_none(self) -> None:
         """Line 110: mapped_type != instrument_type filter → None."""
         adapter = CCXTReferenceDataAdapter(venue="kraken")
-        now = datetime.now(UTC)
         result = adapter._parse_ccxt_market(
             "BTC/USDT",
             {"type": "spot", "active": True, "base": "BTC", "quote": "USDT"},
-            now,
-            "perp",  # asking for perp but market is spot
+            "PERPETUAL",  # asking for perpetual but market is spot
         )
         assert result is None
 
     def test_parse_ccxt_market_non_dict_returns_none(self) -> None:
         """Line 103-104: market_raw not a dict → None."""
         adapter = CCXTReferenceDataAdapter(venue="kraken")
-        now = datetime.now(UTC)
-        result = adapter._parse_ccxt_market("BTC/USDT", "not a dict", now, None)
+        result = adapter._parse_ccxt_market("BTC/USDT", "not a dict", None)
         assert result is None
 
     def test_parse_ccxt_market_with_settle_and_expiry(self) -> None:
         """Lines 113, 114: market with settle and expiryDatetime → InstrumentRecord."""
         adapter = CCXTReferenceDataAdapter(venue="deribit")
-        now = datetime.now(UTC)
         result = adapter._parse_ccxt_market(
             "BTC-27JUN25",
             {
@@ -312,11 +306,10 @@ class TestCCXTCoverageGaps:
                 "limits": {"amount": {"min": "0.001"}},
                 "contractSize": "1",
             },
-            now,
             None,
         )
         assert result is not None
-        assert result.instrument_type == "future"
+        assert result.instrument_type == "FUTURE"
         assert result.expiry is not None
 
     @pytest.mark.asyncio
@@ -335,7 +328,7 @@ class TestCCXTCoverageGaps:
         expiry_dt = datetime(2026, 6, 27, tzinfo=UTC)
         call_inst = _make_instrument(
             raw_symbol="BTC-27JUN25-50000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             quote_asset="USD",
             expiry=expiry_dt,
@@ -345,7 +338,7 @@ class TestCCXTCoverageGaps:
         )
         put_inst = _make_instrument(
             raw_symbol="BTC-27JUN25-50000-P",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             quote_asset="USD",
             expiry=expiry_dt,
@@ -367,7 +360,7 @@ class TestCCXTCoverageGaps:
         other_expiry = datetime(2026, 9, 26, tzinfo=UTC)
         call_match = _make_instrument(
             raw_symbol="BTC-27JUN26-50000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             expiry=expiry_dt,
             strike=Decimal("50000"),
@@ -376,7 +369,7 @@ class TestCCXTCoverageGaps:
         )
         call_other = _make_instrument(
             raw_symbol="BTC-26SEP26-50000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             expiry=other_expiry,
             strike=Decimal("50000"),
@@ -395,13 +388,13 @@ class TestCCXTCoverageGaps:
         expiry_dt = datetime(2026, 6, 27, tzinfo=UTC)
         inst = _make_instrument(
             raw_symbol="BTC-27JUN26",
-            instrument_type="future",
+            instrument_type="FUTURE",
             base_asset="BTC",
             expiry=expiry_dt,
             venue="deribit",
         )
         with patch.object(adapter, "get_instruments", return_value=[inst]):
-            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="future")
+            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="FUTURE")
         assert expiry_dt in calendar.expiries
 
     @pytest.mark.asyncio
@@ -470,7 +463,7 @@ class TestOKXCoverageGaps:
     async def test_get_instrument_found(self) -> None:
         """Line 62: get_instrument returns matching instrument."""
         adapter = OKXReferenceDataAdapter()
-        inst = _make_instrument(raw_symbol="BTC-USDT", venue="okx", instrument_type="spot")
+        inst = _make_instrument(raw_symbol="BTC-USDT", venue="okx", instrument_type="SPOT_PAIR")
         with patch.object(adapter, "get_instruments", return_value=[inst]):
             result = await adapter.get_instrument("BTC-USDT")
         assert result is inst
@@ -482,7 +475,7 @@ class TestOKXCoverageGaps:
         expiry_dt = datetime(2026, 6, 27, tzinfo=UTC)
         call_inst = _make_instrument(
             raw_symbol="BTC-USD-260627-50000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             quote_asset="USD",
             expiry=expiry_dt,
@@ -492,7 +485,7 @@ class TestOKXCoverageGaps:
         )
         put_inst = _make_instrument(
             raw_symbol="BTC-USD-260627-50000-P",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             quote_asset="USD",
             expiry=expiry_dt,
@@ -502,7 +495,7 @@ class TestOKXCoverageGaps:
         )
         non_match_inst = _make_instrument(
             raw_symbol="ETH-USD-260627-2000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="ETH",
             venue="okx",
         )
@@ -520,7 +513,7 @@ class TestOKXCoverageGaps:
         other_expiry = datetime(2026, 9, 26, tzinfo=UTC)
         call_match = _make_instrument(
             raw_symbol="BTC-USD-260627-50000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             expiry=expiry_dt,
             strike=Decimal("50000"),
@@ -529,7 +522,7 @@ class TestOKXCoverageGaps:
         )
         call_other = _make_instrument(
             raw_symbol="BTC-USD-260926-50000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             expiry=other_expiry,
             strike=Decimal("50000"),
@@ -547,44 +540,6 @@ class TestOKXCoverageGaps:
         result = await adapter.get_exchange_fee_schedule("client-123")
         assert result is None
 
-    def test_get_margin_type_linear_ct_type(self) -> None:
-        """Line 289: ct_type='linear' → LINEAR."""
-        from unified_api_contracts.internal import MarginType
-
-        adapter = OKXReferenceDataAdapter()
-        result = adapter._get_margin_type("SWAP", "linear", "USDT", "BTC")
-        assert result == MarginType.LINEAR
-
-    def test_get_margin_type_inverse_ct_type(self) -> None:
-        """Line 291: ct_type='inverse' → INVERSE."""
-        from unified_api_contracts.internal import MarginType
-
-        adapter = OKXReferenceDataAdapter()
-        result = adapter._get_margin_type("SWAP", "inverse", "BTC", "BTC")
-        assert result == MarginType.INVERSE
-
-    def test_get_margin_type_fallback_inverse(self) -> None:
-        """Line 293-294: settle==base → INVERSE fallback."""
-        from unified_api_contracts.internal import MarginType
-
-        adapter = OKXReferenceDataAdapter()
-        result = adapter._get_margin_type("FUTURES", None, "BTC", "BTC")
-        assert result == MarginType.INVERSE
-
-    def test_get_margin_type_fallback_linear(self) -> None:
-        """Line 295: settle!=base → LINEAR fallback."""
-        from unified_api_contracts.internal import MarginType
-
-        adapter = OKXReferenceDataAdapter()
-        result = adapter._get_margin_type("FUTURES", None, "USDT", "BTC")
-        assert result == MarginType.LINEAR
-
-    def test_get_margin_type_spot_returns_none(self) -> None:
-        """Line 286-287: SPOT/MARGIN → None."""
-        adapter = OKXReferenceDataAdapter()
-        result = adapter._get_margin_type("SPOT", None, None, "BTC")
-        assert result is None
-
 
 # ── TardisReferenceDataAdapter ─────────────────────────────────────────────────
 
@@ -594,7 +549,7 @@ class TestTardisCoverageGaps:
     async def test_get_instrument_found(self) -> None:
         """Lines 110-111: get_instrument returns matching instrument."""
         adapter = TardisReferenceDataAdapter()
-        inst = _make_instrument(raw_symbol="BTCUSDT", venue="tardis", instrument_type="perp")
+        inst = _make_instrument(raw_symbol="BTCUSDT", venue="tardis", instrument_type="PERPETUAL")
         with patch.object(adapter, "get_instruments", return_value=[inst]):
             result = await adapter.get_instrument("BTCUSDT")
         assert result is inst
@@ -606,7 +561,7 @@ class TestTardisCoverageGaps:
         expiry_dt = datetime(2026, 6, 27, tzinfo=UTC)
         call_inst = _make_instrument(
             raw_symbol="BTC-27JUN26-50000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             expiry=expiry_dt,
             strike=Decimal("50000"),
@@ -615,7 +570,7 @@ class TestTardisCoverageGaps:
         )
         put_inst = _make_instrument(
             raw_symbol="BTC-27JUN26-50000-P",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             expiry=expiry_dt,
             strike=Decimal("50000"),
@@ -636,7 +591,7 @@ class TestTardisCoverageGaps:
         other_expiry = datetime(2026, 9, 26, tzinfo=UTC)
         call_match = _make_instrument(
             raw_symbol="BTC-27JUN26-50000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             expiry=expiry_dt,
             strike=Decimal("50000"),
@@ -645,7 +600,7 @@ class TestTardisCoverageGaps:
         )
         call_other = _make_instrument(
             raw_symbol="BTC-26SEP26-50000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             expiry=other_expiry,
             strike=Decimal("50000"),
@@ -663,13 +618,13 @@ class TestTardisCoverageGaps:
         expiry_dt = datetime(2026, 6, 27, tzinfo=UTC)
         inst = _make_instrument(
             raw_symbol="BTC-27JUN26",
-            instrument_type="future",
+            instrument_type="FUTURE",
             base_asset="BTC",
             expiry=expiry_dt,
             venue="tardis",
         )
         with patch.object(adapter, "get_instruments", return_value=[inst]):
-            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="future")
+            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="FUTURE")
         assert expiry_dt in calendar.expiries
 
     @pytest.mark.asyncio

@@ -1,19 +1,19 @@
 """Kamino reference data adapter -- instrument discovery via REST API.
 
 Discovers Kamino liquidity vaults on Solana. Each vault is an automated
-LP position on Raydium/Orca CLMM pools, returned as instrument_type="pool".
+LP position on Raydium/Orca CLMM pools, returned as instrument_type="POOL".
 
 Data source: Kamino REST API (https://api.kamino.finance/strategies).
 Reference: https://docs.kamino.finance/
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
 from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import (
     get_solana_protocol_url,
     resolve_solana_mint,
@@ -53,7 +53,7 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
     """Kamino reference data: liquidity vault discovery from REST API.
 
     Discovers Kamino automated LP vaults (CLMM positions on Raydium/Orca).
-    Each vault produces one instrument with instrument_type="pool".
+    Each vault produces one instrument with instrument_type="POOL".
     Only LIVE vaults with at least one major-asset token are included.
     """
 
@@ -100,7 +100,7 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Kamino liquidity vaults as instruments."""
-        if instrument_type not in (None, "pool"):
+        if instrument_type not in (None, InstrumentType.POOL):
             return []
 
         url = f"{_BASE_URL}/strategies"
@@ -111,17 +111,16 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
         except (aiohttp.ClientError, RuntimeError) as exc:
             if isinstance(exc, aiohttp.ClientError):
                 self._log_fetch_error(exc)
-            else:
-                logger.error("Kamino strategies request failed after retries: %s", exc)
-            return []
+                raise ConnectionError(str(exc)) from exc
+            logger.error("Kamino strategies request failed after retries: %s", exc)
+            raise
 
         strategies: list[dict[str, object]] = data if isinstance(data, list) else []
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
         venue_tag = self.venue
 
         for strategy in strategies:
-            record = self._build_vault_record(strategy, venue_tag, now)
+            record = self._build_vault_record(strategy, venue_tag)
             if record:
                 results.append(record)
 
@@ -134,10 +133,10 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
             )
 
             addresses = [r.raw_symbol for r in results if r.raw_symbol]
-            ts_map = await batch_resolve_creation_timestamps(addresses, concurrency=5)
+            ts_map = await batch_resolve_creation_timestamps(addresses)
             for record in results:
                 if record.raw_symbol in ts_map:
-                    record.available_since = ts_map[record.raw_symbol]
+                    record.available_from_datetime = ts_map[record.raw_symbol]
 
         return results
 
@@ -149,7 +148,6 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
         self,
         strategy: dict[str, object],
         venue_tag: str,
-        now: datetime,
     ) -> InstrumentRecord | None:
         """Build InstrumentRecord from a Kamino strategy/vault entry."""
         address = str(strategy.get("address", ""))
@@ -170,28 +168,23 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
         if sym_a not in DEFI_MAJOR_ASSET_SYMBOLS or sym_b not in DEFI_MAJOR_ASSET_SYMBOLS:
             return None
 
-        symbol = f"{sym_a}/{sym_b}"
         instrument_key = f"{venue_tag}:VAULT:{sym_a}-{sym_b}:{address[:8]}"
 
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=venue_tag,
-            symbol=symbol,
             raw_symbol=address,
-            instrument_type="pool",
+            instrument_type=InstrumentType.POOL,
             base_asset=sym_a,
             quote_asset=sym_b,
             tick_size=Decimal("0.000001"),
-            lot_size=Decimal("0.000001"),
-            min_order_size=Decimal("0"),
+            min_size=Decimal("0.000001"),
             contract_size=Decimal("1"),
-            settlement_asset=sym_b,
             expiry=None,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
-            available_since=_KAMINO_DEPLOY_DATE,
+            status=InstrumentStatus.ACTIVE,
+            available_from_datetime=_KAMINO_DEPLOY_DATE,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
@@ -211,7 +204,7 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Kamino vaults have no expiry calendar")
 

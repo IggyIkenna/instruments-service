@@ -1,19 +1,19 @@
 """Raydium reference data adapter -- instrument discovery via REST API.
 
 Discovers Raydium CLMM and standard AMM pools on Solana.
-Pools are returned as InstrumentRecord with instrument_type="pool".
+Pools are returned as InstrumentRecord with instrument_type="POOL".
 
 Data source: Raydium REST API (https://api-v3.raydium.io).
 Reference: https://docs.raydium.io/
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
 from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
 
@@ -51,7 +51,7 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
     """Raydium reference data: pool discovery from REST API.
 
     Discovers CLMM and standard AMM pools. Each pool produces one instrument
-    with instrument_type="pool" and symbol=f"{tokenA}/{tokenB}".
+    with instrument_type="POOL" and symbol=f"{tokenA}/{tokenB}".
     """
 
     def __init__(
@@ -97,7 +97,7 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Raydium pools as instruments."""
-        if instrument_type not in (None, "pool"):
+        if instrument_type not in (None, InstrumentType.POOL):
             return []
 
         url = f"{_BASE_URL}/pools/info/list"
@@ -114,22 +114,21 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
         except (aiohttp.ClientError, RuntimeError) as exc:
             if isinstance(exc, aiohttp.ClientError):
                 self._log_fetch_error(exc)
-            else:
-                logger.error("Raydium pools request failed after retries: %s", exc)
-            return []
+                raise ConnectionError(str(exc)) from exc
+            logger.error("Raydium pools request failed after retries: %s", exc)
+            raise
 
         # Raydium API returns { "id": "...", "success": true, "data": { "data": [...], "count": N, ... } }
         raw_data: dict[str, object] = data if isinstance(data, dict) else {}
         data_wrapper = raw_data.get("data") or {}
         pools: list[dict[str, object]] = (data_wrapper.get("data") if isinstance(data_wrapper, dict) else []) or []
 
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
 
         for pool in pools:
             if not isinstance(pool, dict):
                 continue
-            record = self._build_pool_record(pool, now)
+            record = self._build_pool_record(pool)
             if record:
                 results.append(record)
 
@@ -142,17 +141,16 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
             )
 
             addresses = [r.raw_symbol for r in results if r.raw_symbol]
-            ts_map = await batch_resolve_creation_timestamps(addresses, concurrency=5)
+            ts_map = await batch_resolve_creation_timestamps(addresses)
             for record in results:
                 if record.raw_symbol in ts_map:
-                    record.available_since = ts_map[record.raw_symbol]
+                    record.available_from_datetime = ts_map[record.raw_symbol]
 
         return results
 
     def _build_pool_record(
         self,
         pool: dict[str, object],
-        now: datetime,
     ) -> InstrumentRecord | None:
         """Build an InstrumentRecord from a single Raydium pool, or None."""
         pool_id = pool.get("id")
@@ -181,29 +179,24 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
         available_since = parse_created_timestamp(pool.get("openTime")) or _RAYDIUM_DEPLOY_DATE
 
         venue_tag = self.venue
-        symbol = f"{base}/{quote}"
         pool_type = str(pool.get("type", "Standard"))
         instrument_key = f"{venue_tag}:POOL:{base}-{quote}:{pool_type}"
 
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=venue_tag,
-            symbol=symbol,
             raw_symbol=str(pool_id),
-            instrument_type="pool",
+            instrument_type=InstrumentType.POOL,
             base_asset=base,
             quote_asset=quote,
             tick_size=Decimal("0.000001"),
-            lot_size=Decimal("0.000001"),
-            min_order_size=Decimal("0"),
+            min_size=Decimal("0.000001"),
             contract_size=Decimal("1"),
-            settlement_asset=quote,
             expiry=None,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
-            available_since=available_since,
+            status=InstrumentStatus.ACTIVE,
+            available_from_datetime=available_since,
         )
 
     def _extract_token_symbol(self, pool: dict[str, object], key: str) -> str:
@@ -242,7 +235,7 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Raydium pools have no expiry calendar")
 

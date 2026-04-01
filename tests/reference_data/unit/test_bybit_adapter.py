@@ -48,10 +48,10 @@ class TestBybitAdapterExtended:
             ]
         )
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type="spot")
+            results = await adapter.get_instruments(instrument_type="SPOT_PAIR")
         assert len(results) == 1
         assert results[0].raw_symbol == "BTCUSDT"
-        assert results[0].instrument_type == "spot"
+        assert results[0].instrument_type == "SPOT_PAIR"
 
     @pytest.mark.asyncio
     async def test_fetch_category_linear_perp(self) -> None:
@@ -72,9 +72,9 @@ class TestBybitAdapterExtended:
             ]
         )
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type="perp")
+            results = await adapter.get_instruments(instrument_type="PERPETUAL")
         assert len(results) == 1
-        assert results[0].instrument_type == "perp"
+        assert results[0].instrument_type == "PERPETUAL"
 
     @pytest.mark.asyncio
     async def test_fetch_category_filters_non_trading(self) -> None:
@@ -94,7 +94,7 @@ class TestBybitAdapterExtended:
             ]
         )
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type="spot")
+            results = await adapter.get_instruments(instrument_type="SPOT_PAIR")
         assert results == []
 
     @pytest.mark.asyncio
@@ -116,9 +116,9 @@ class TestBybitAdapterExtended:
             ]
         )
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type="future")
+            results = await adapter.get_instruments(instrument_type="FUTURE")
         assert len(results) == 1
-        assert results[0].instrument_type == "future"
+        assert results[0].instrument_type == "FUTURE"
         assert results[0].expiry is not None
 
     @pytest.mark.asyncio
@@ -246,7 +246,7 @@ class TestBybitAdapterCoverage:
             instrument_key="BTC-31DEC24-50000-C",
             venue="bybit",
             raw_symbol="BTC-31DEC24-50000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             quote_asset="USDC",
             tick_size=Decimal("0.01"),
@@ -260,7 +260,7 @@ class TestBybitAdapterCoverage:
             instrument_key="BTC-31DEC24-50000-P",
             venue="bybit",
             raw_symbol="BTC-31DEC24-50000-P",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             quote_asset="USDC",
             tick_size=Decimal("0.01"),
@@ -274,7 +274,7 @@ class TestBybitAdapterCoverage:
             instrument_key="ETH-31DEC24-3000-C",
             venue="bybit",
             raw_symbol="ETH-31DEC24-3000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="ETH",
             quote_asset="USDC",
             tick_size=Decimal("0.01"),
@@ -304,7 +304,7 @@ class TestBybitAdapterCoverage:
             instrument_key="BTC-31DEC24-50000-C",
             venue="bybit",
             raw_symbol="BTC-31DEC24-50000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             quote_asset="USDC",
             tick_size=Decimal("0.01"),
@@ -330,7 +330,7 @@ class TestBybitAdapterCoverage:
             instrument_key="ETHUSD-240329",
             venue="bybit",
             raw_symbol="ETHUSD-240329",
-            instrument_type="future",
+            instrument_type="FUTURE",
             base_asset="ETH",
             quote_asset="USD",
             tick_size=Decimal("0.01"),
@@ -340,7 +340,7 @@ class TestBybitAdapterCoverage:
         )
         adapter = BybitReferenceDataAdapter()
         with patch.object(adapter, "get_instruments", return_value=[eth_inst]):
-            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="future")
+            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="FUTURE")
         # ETH instrument should not appear in BTC calendar
         assert calendar.expiries == []
 
@@ -353,7 +353,7 @@ class TestBybitAdapterCoverage:
             instrument_key="BTCUSD-240329",
             venue="bybit",
             raw_symbol="BTCUSD-240329",
-            instrument_type="future",
+            instrument_type="FUTURE",
             base_asset="BTC",
             quote_asset="USD",
             tick_size=Decimal("0.5"),
@@ -363,7 +363,7 @@ class TestBybitAdapterCoverage:
         )
         adapter = BybitReferenceDataAdapter()
         with patch.object(adapter, "get_instruments", return_value=[btc_inst]):
-            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="future")
+            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="FUTURE")
         assert len(calendar.expiries) == 1
         assert calendar.expiries[0] == expiry_dt
 
@@ -374,7 +374,7 @@ class TestBybitAdapterCoverage:
             instrument_key="BTCUSDT",
             venue="bybit",
             raw_symbol="BTCUSDT",
-            instrument_type="perp",
+            instrument_type="PERPETUAL",
             base_asset="BTC",
             quote_asset="USDT",
             tick_size=Decimal("0.5"),

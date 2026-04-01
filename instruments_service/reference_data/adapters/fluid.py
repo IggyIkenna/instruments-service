@@ -1,17 +1,17 @@
 """Fluid reference data adapter — instrument discovery via curated markets.
 
 Discovers Fluid (Instadapp) lending markets on Ethereum. Markets are returned
-as InstrumentRecord with instrument_type="lending_market".
+as InstrumentRecord with instrument_type="LENDING".
 
 Fluid markets are curated (high-liquidity vaults with known addresses).
 Reference: https://fluid.instadapp.io/
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 
 from ..base_adapter import BaseReferenceDataAdapter
 from ..schemas import (
@@ -20,13 +20,16 @@ from ..schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ..utils.evm_creation_resolver import (
+    batch_resolve_evm_creation_timestamps,
+    get_protocol_floor_date,
+)
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CHAIN = "ETHEREUM"
 
-# Fluid (Instadapp) Ethereum mainnet deployment date (2024-03-01).
-_FLUID_DEPLOY_DATE = datetime(2024, 3, 1, tzinfo=UTC)
+# Per-chain deploy dates now in evm_creation_resolver.LENDING_PROTOCOL_DEPLOY_DATES.
 
 # Curated Fluid high-liquidity vaults (same as UMI adapter)
 _MVP_MARKETS: list[dict[str, str]] = [
@@ -90,37 +93,41 @@ class FluidReferenceDataAdapter(BaseReferenceDataAdapter):
         if instrument_type not in (None, "lending_market"):
             return []
 
-        now = datetime.now(UTC)
-        results: list[InstrumentRecord] = []
         venue_tag = f"FLUID-{self._chain}"
+        floor_date = get_protocol_floor_date("fluid", self._chain)
 
+        # Resolve vault contract creation timestamps (cached after first run)
+        vault_addresses = [m["vault_address"] for m in _MVP_MARKETS]
+        creation_ts_map = await batch_resolve_evm_creation_timestamps(
+            vault_addresses,
+            self._chain,
+        )
+
+        results: list[InstrumentRecord] = []
         for market in _MVP_MARKETS:
             collateral = market["collateral_asset"]
             borrow = market["borrow_asset"]
             address = market["vault_address"]
             symbol = f"{collateral}-{borrow}"
             instrument_key = f"{venue_tag}:LENDING_MARKET:{symbol}"
+            available_since = creation_ts_map.get(address, floor_date)
 
             results.append(
                 InstrumentRecord(
                     instrument_key=instrument_key,
                     venue=venue_tag,
-                    symbol=symbol,
                     raw_symbol=address,
-                    instrument_type="lending_market",
+                    instrument_type=InstrumentType.LENDING,
                     base_asset=collateral,
                     quote_asset=borrow,
                     tick_size=Decimal("0.000001"),
-                    lot_size=Decimal("0.000001"),
-                    min_order_size=Decimal("0"),
+                    min_size=Decimal("0.000001"),
                     contract_size=Decimal("1"),
-                    settlement_asset=borrow,
                     expiry=None,
                     strike=None,
                     option_type=None,
-                    is_active=True,
-                    updated_at=now,
-                    available_since=_FLUID_DEPLOY_DATE,
+                    status=InstrumentStatus.ACTIVE,
+                    available_from_datetime=available_since,
                 )
             )
 
@@ -144,7 +151,7 @@ class FluidReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Fluid lending markets have no expiry calendar")
 

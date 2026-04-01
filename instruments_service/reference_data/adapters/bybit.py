@@ -11,7 +11,14 @@ from unified_api_contracts import (
     BybitInstrumentsResponse,
     classify_venue_error,
 )
-from unified_api_contracts.internal import FeeScheduleEntry, InstrumentRecord, MarginType
+from unified_api_contracts.internal import (
+    FeeScheduleEntry,
+    InstrumentRecord,
+    InstrumentStatus,
+    InstrumentType,
+    MarginType,
+    OptionType,
+)
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -22,6 +29,9 @@ logger = logging.getLogger(__name__)
 _BASE = "https://api.bybit.com"
 _BYBIT_SPOT_VENUE = "BYBIT-SPOT"
 _BYBIT_FUTURES_VENUE = "BYBIT-FUTURES"
+
+# Bybit exchange launch date
+_BYBIT_LAUNCH_DATE = datetime(2018, 3, 1, tzinfo=UTC)
 
 
 def _classify_bybit_error(exc: Exception, status: int | None = None) -> str:
@@ -53,11 +63,11 @@ class BybitReferenceDataAdapter(BaseReferenceDataAdapter):
     ) -> list[InstrumentRecord]:
         results: list[InstrumentRecord] = []
         async with aiohttp.ClientSession() as session:
-            if instrument_type in (None, "spot"):
+            if instrument_type in (None, "SPOT_PAIR", InstrumentType.SPOT_PAIR):
                 results.extend(await self._fetch_category(session, "spot"))
-            if instrument_type in (None, "perp", "future"):
+            if instrument_type in (None, "PERPETUAL", "FUTURE", InstrumentType.PERPETUAL, InstrumentType.FUTURE):
                 results.extend(await self._fetch_linear_inverse(session))
-            if instrument_type in (None, "option"):
+            if instrument_type in (None, "OPTION", InstrumentType.OPTION):
                 results.extend(await self._fetch_options(session))
         return results
 
@@ -84,7 +94,7 @@ class BybitReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
-        instruments = await self.get_instruments(instrument_type="option")
+        instruments = await self.get_instruments(instrument_type=InstrumentType.OPTION)
         calls: list[InstrumentRecord] = []
         puts: list[InstrumentRecord] = []
         strikes: set[Decimal] = set()
@@ -95,7 +105,7 @@ class BybitReferenceDataAdapter(BaseReferenceDataAdapter):
                 continue
             if inst.strike:
                 strikes.add(inst.strike)
-            if inst.option_type == "call":
+            if inst.option_type == OptionType.CALL:
                 calls.append(inst)
             else:
                 puts.append(inst)
@@ -114,7 +124,7 @@ class BybitReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         instruments = await self.get_instruments(instrument_type=instrument_type)
         expiry_set: set[datetime] = set()
@@ -195,13 +205,6 @@ class BybitReferenceDataAdapter(BaseReferenceDataAdapter):
             mark_price=None,
             updated_at=now,
         )
-
-    _MARGIN_TYPE_MAP: ClassVar[dict[str, MarginType]] = {
-        "LinearPerpetual": MarginType.LINEAR,
-        "LinearFutures": MarginType.LINEAR,
-        "InversePerpetual": MarginType.INVERSE,
-        "InverseFutures": MarginType.INVERSE,
-    }
 
     _BYBIT_INTERVAL_MAP: ClassVar[dict[str, str]] = {
         "1m": "1",
@@ -342,39 +345,40 @@ class BybitReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
         contract_type = sym.contractType or ""
         if category == "spot":
-            inst_type = "spot"
-            margin_type: MarginType | None = None
+            inst_type = InstrumentType.SPOT_PAIR
+            margin_type = None
         elif contract_type in ("LinearPerpetual", "InversePerpetual"):
-            inst_type = "perp"
-            margin_type = self._MARGIN_TYPE_MAP.get(contract_type)
+            inst_type = InstrumentType.PERPETUAL
+            margin_type = MarginType.INVERSE if "Inverse" in contract_type else MarginType.LINEAR
         else:
-            inst_type = "future"
-            margin_type = self._MARGIN_TYPE_MAP.get(contract_type)
+            inst_type = InstrumentType.FUTURE
+            margin_type = MarginType.INVERSE if category == "inverse" else MarginType.LINEAR
         expiry = self._parse_delivery_time(sym.deliveryTime)
-        settle_coin = sym.settleCoin
         base_coin = sym.baseCoin or ""
         quote_coin = sym.quoteCoin or ""
-        tick_size, lot_size, min_order = self._parse_bybit_filters(sym.priceFilter, sym.lotSizeFilter)
-        canonical = _BYBIT_SPOT_VENUE if inst_type == "spot" else _BYBIT_FUTURES_VENUE
+        tick_size, lot_size_val, _min_order = self._parse_bybit_filters(sym.priceFilter, sym.lotSizeFilter)
+        canonical = _BYBIT_SPOT_VENUE if inst_type == InstrumentType.SPOT_PAIR else _BYBIT_FUTURES_VENUE
+        # Parse launch time from Bybit API if available
+        launch_time_raw = getattr(sym, "launchTime", None)
+        available_from: datetime | None = _BYBIT_LAUNCH_DATE
+        if launch_time_raw and str(launch_time_raw) not in ("", "0"):
+            available_from = datetime.fromtimestamp(int(str(launch_time_raw)) / 1000, tz=UTC)
+        inst_type_key = inst_type.value
         return InstrumentRecord(
-            instrument_key=f"{canonical}:{inst_type.upper()}:{base_coin}~{quote_coin}",
+            instrument_key=f"{canonical}:{inst_type_key}:{base_coin}~{quote_coin}",
             venue=canonical,
-            symbol=f"{base_coin}/{quote_coin}",
             raw_symbol=sym.symbol,
             instrument_type=inst_type,
             base_asset=base_coin,
             quote_asset=quote_coin,
             tick_size=tick_size,
-            lot_size=lot_size,
-            min_order_size=min_order,
+            min_size=lot_size_val,
             contract_size=Decimal("1"),
-            settlement_asset=str(settle_coin) if settle_coin else None,
             expiry=expiry,
-            strike=None,
-            option_type=None,
+            underlying=base_coin if inst_type in (InstrumentType.FUTURE, InstrumentType.PERPETUAL) else None,
             margin_type=margin_type,
-            is_active=True,
-            updated_at=now,
+            available_from_datetime=available_from,
+            status=InstrumentStatus.ACTIVE,
         )
 
     def _parse_delivery_time(self, expiry_ts: object) -> datetime | None:
@@ -452,33 +456,29 @@ class BybitReferenceDataAdapter(BaseReferenceDataAdapter):
         expiry: datetime | None = None
         if expiry_ts and str(expiry_ts) != "0":
             expiry = datetime.fromtimestamp(int(str(expiry_ts)) / 1000, tz=UTC)
-        opt_type_raw = (sym.optionsType or "").lower()
-        opt_type = "call" if opt_type_raw == "call" else "put"
+        opt_type_raw = (sym.optionsType or "").upper()
+        opt_type = OptionType.CALL if opt_type_raw == "CALL" else OptionType.PUT
         strike_raw = sym.strikePrice
         return InstrumentRecord(
             instrument_key=f"{_BYBIT_FUTURES_VENUE}:OPTION:{sym.symbol}",
             venue=_BYBIT_FUTURES_VENUE,
-            symbol=sym.symbol,
             raw_symbol=sym.symbol,
-            instrument_type="option",
+            instrument_type=InstrumentType.OPTION,
             base_asset=base,
             quote_asset="USDC",
             tick_size=Decimal(
                 str(price_filter.get("tickSize", "0.01")) if price_filter and price_filter.get("tickSize") else "0.01"
             ),
-            lot_size=Decimal(
+            min_size=Decimal(
                 str(lot_filter.get("qtyStep", "0.01")) if lot_filter and lot_filter.get("qtyStep") else "0.01"
             ),
-            min_order_size=Decimal(
-                str(lot_filter.get("minOrderQty", "0.01")) if lot_filter and lot_filter.get("minOrderQty") else "0.01"
-            ),
             contract_size=Decimal("1"),
-            settlement_asset="USDC",
             expiry=expiry,
             strike=Decimal(str(strike_raw)) if strike_raw else None,
             option_type=opt_type,
-            is_active=True,
-            updated_at=now,
+            underlying=base,
+            available_from_datetime=_BYBIT_LAUNCH_DATE,
+            status=InstrumentStatus.ACTIVE,
         )
 
     async def get_exchange_fee_schedule(

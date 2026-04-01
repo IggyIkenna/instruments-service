@@ -164,7 +164,7 @@ class TestIBKRAdapter:
         mock_ib = MagicMock()
         mock_ib.reqContractDetailsAsync = AsyncMock(return_value=[])
         adapter = IBKRReferenceDataAdapter(ib=mock_ib)
-        result = await adapter.get_instruments(instrument_type="equity")
+        result = await adapter.get_instruments(instrument_type="EQUITY")
         assert isinstance(result, list)
         # reqContractDetailsAsync called once per symbol in _DEFAULT_EQUITY_SYMBOLS
         assert mock_ib.reqContractDetailsAsync.call_count > 0
@@ -305,6 +305,6 @@ class TestIBKRAdapter:
         # First call raises, subsequent calls return empty
         mock_ib.reqContractDetailsAsync = AsyncMock(side_effect=ConnectionError("socket error"))
         adapter = IBKRReferenceDataAdapter(ib=mock_ib)
-        result = await adapter.get_instruments(instrument_type="future")
+        result = await adapter.get_instruments(instrument_type="FUTURE")
         # All calls raised → empty list, no exception propagated
         assert result == []

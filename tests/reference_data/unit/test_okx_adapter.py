@@ -60,10 +60,10 @@ class TestOKXAdapterExtended:
             ]
         )
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type="spot")
+            results = await adapter.get_instruments(instrument_type="SPOT_PAIR")
         assert len(results) == 1
         assert results[0].raw_symbol == "BTC-USDT"
-        assert results[0].instrument_type == "spot"
+        assert results[0].instrument_type == "SPOT_PAIR"
 
     @pytest.mark.asyncio
     async def test_fetch_instruments_swap_mapped_to_perp(self) -> None:
@@ -85,9 +85,9 @@ class TestOKXAdapterExtended:
             ]
         )
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type="perp")
+            results = await adapter.get_instruments(instrument_type="PERPETUAL")
         assert len(results) == 1
-        assert results[0].instrument_type == "perp"
+        assert results[0].instrument_type == "PERPETUAL"
 
     @pytest.mark.asyncio
     async def test_fetch_instruments_futures_mapped(self) -> None:
@@ -108,9 +108,9 @@ class TestOKXAdapterExtended:
             ]
         )
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type="future")
+            results = await adapter.get_instruments(instrument_type="FUTURE")
         assert len(results) == 1
-        assert results[0].instrument_type == "future"
+        assert results[0].instrument_type == "FUTURE"
         assert results[0].expiry is not None
 
     @pytest.mark.asyncio
@@ -168,7 +168,7 @@ class TestOKXAdapterExtended:
         mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
         mock_session_cm.__aexit__ = AsyncMock(return_value=None)
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type="option")
+            results = await adapter.get_instruments(instrument_type="OPTION")
         assert results == []
         # called 3 times (BTC-USD, ETH-USD, SOL-USD)
         assert mock_session_obj.get.call_count == 3
@@ -185,7 +185,7 @@ class TestOKXAdapterExtended:
             instrument_key="BTC-USDT",
             venue="okx",
             raw_symbol="BTC-USDT",
-            instrument_type="spot",
+            instrument_type="SPOT_PAIR",
             base_asset="BTC",
             quote_asset="USDT",
             tick_size=Decimal("0.01"),
@@ -219,7 +219,7 @@ class TestOKXAdapterExtended:
             instrument_key="BTC-USD-241231-50000-C",
             venue="okx",
             raw_symbol="BTC-USD-50000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             quote_asset="USD",
             tick_size=Decimal("0.01"),
@@ -234,7 +234,7 @@ class TestOKXAdapterExtended:
             instrument_key="BTC-USD-241231-50000-P",
             venue="okx",
             raw_symbol="BTC-USD-50000-P",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             quote_asset="USD",
             tick_size=Decimal("0.01"),
@@ -265,7 +265,7 @@ class TestOKXAdapterExtended:
             instrument_key="BTC-USDT-240329",
             venue="okx",
             raw_symbol="BTC-USDT-240329",
-            instrument_type="future",
+            instrument_type="FUTURE",
             base_asset="BTC",
             quote_asset="USDT",
             tick_size=Decimal("0.1"),
@@ -276,7 +276,7 @@ class TestOKXAdapterExtended:
             updated_at=now,
         )
         with patch.object(adapter, "get_instruments", return_value=[inst]):
-            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="future")
+            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="FUTURE")
         assert calendar.venue == "OKX-SPOT"
         assert len(calendar.expiries) == 1
 
@@ -312,7 +312,7 @@ class TestOKXAdapterExtended:
             now,
         )
         assert result is not None
-        assert result.instrument_type == "option"
+        assert result.instrument_type == "OPTION"
         assert result.strike == Decimal("50000")
         assert result.option_type == "c"
 
