@@ -23,7 +23,9 @@ For each date:
 
 from __future__ import annotations
 
+import asyncio
 import io
+import json
 import logging
 import re
 from datetime import UTC, datetime
@@ -35,16 +37,19 @@ from unified_api_contracts import (
     CANONICAL_TO_ODDS_API_BUNDESLIGA,
     CANONICAL_TO_ODDS_API_EPL,
     CANONICAL_TO_UNDERSTAT_EPL,
+    DEX_VENUE_KEYWORDS,
     EPL_TEAM_ALIASES,
     VenueMapping,
     get_prediction_leagues,
 )
-from unified_api_contracts.registry import get_supported_chains_for_protocol  # noqa: qg-deep-import
+from unified_api_contracts.internal import validate_instrument_records
+from unified_api_contracts.registry import get_supported_chains_for_protocol
 from unified_trading_library import (
     DataSink,
     DomainValidationService,
     ManifestWriter,
     SamplingService,
+    check_shard_freshness,
     create_sampling_service,
     get_bucket_name,
     get_data_sink,
@@ -56,6 +61,7 @@ from unified_trading_library import unified_config as _uc
 from instruments_service.adapters.urdi_reference_provider import fetch_instruments_for_all_venues
 from instruments_service.config import get_config
 from instruments_service.config_reloaders import get_defi_major_assets
+from instruments_service.reference_data.adapters._solana_utils import SolanaCacheSession
 from instruments_service.reference_data.adapters.sports import create_sports_reference_adapter
 
 logger = logging.getLogger(__name__)
@@ -79,7 +85,7 @@ _SUBGRAPH_PROTOCOL_TO_VENUE_PREFIX: dict[str, str] = {
     "morpho": "MORPHO",
     "curve": "CURVE",
     "compound_v3": "COMPOUNDV3",
-    "euler_v2": "EULERV2",
+    # euler_v2 removed from universe — not needed yet.
     "fluid": "FLUID",
 }
 
@@ -97,6 +103,7 @@ _SOLANA_DEFI_VENUES: list[str] = [
     "RAYDIUM-SOLANA",
     "ORCA-SOLANA",
     "MARINADE-SOLANA",
+    "JITO-SOLANA",
     # Jupiter is execution-only (swap aggregator), not instrument discovery.
 ]
 
@@ -139,12 +146,10 @@ _TRADFI_VENUES: list[str] = [
     "FX",
 ]
 
+
 # ---------------------------------------------------------------------------
 # DEFI instrument relevance filter
 # ---------------------------------------------------------------------------
-_DEX_VENUE_KEYWORDS = frozenset({"UNISWAP", "BALANCER", "CURVE"})
-
-
 def filter_defi_instruments_by_relevance(records: list) -> list:
     """Filter DEFI instruments to major liquid assets only.
 
@@ -152,11 +157,13 @@ def filter_defi_instruments_by_relevance(records: list) -> list:
     (InstrumentsDomainConfigState), which defaults to the hardcoded ETH/BTC/
     USDT/USDC and derivatives set and can be overridden via cloud ConfigStore.
 
+    DEX_VENUE_KEYWORDS is the SSOT from UAC (includes EVM + Solana DEXes).
+
     Rules:
-    - DEX pools (Uniswap, Balancer, Curve): both base AND quote must be in
-      the major assets set. Eliminates long-tail pairs like PEPE/WETH or
-      FAITH/MILAREPA while keeping WETH/USDC, WBTC/WETH, stETH/WETH, etc.
-    - Lending protocols (Aave, Morpho, Fluid, Euler, LST services): base
+    - DEX pools (Uniswap, Balancer, Curve, Orca, Raydium, Kamino): both
+      base AND quote must be in the major assets set. Eliminates long-tail
+      pairs like PEPE/WETH or FAITH/MILAREPA.
+    - Lending protocols (Aave, Morpho, Fluid, LST services): base
       asset must be in the major assets set. Keeps aWETH, aWBTC, aUSDC etc.
     """
     major = get_defi_major_assets()  # reads from config_reloaders (hot-reloadable)
@@ -165,7 +172,7 @@ def filter_defi_instruments_by_relevance(records: list) -> list:
         base = (getattr(r, "base_asset", None) or "").upper().strip()
         quote = (getattr(r, "quote_asset", None) or "").upper().strip()
         venue = (getattr(r, "venue", None) or "").upper()
-        is_dex = any(kw in venue for kw in _DEX_VENUE_KEYWORDS)
+        is_dex = any(kw in venue for kw in DEX_VENUE_KEYWORDS)
         if is_dex:
             if base in major and quote in major:
                 result.append(r)
@@ -201,8 +208,8 @@ def filter_instruments_by_date(
     """
     result = []
     for r in records:
-        since: datetime | None = getattr(r, "available_since", None)
-        until: datetime | None = getattr(r, "available_to", None)
+        since: datetime | None = getattr(r, "available_from_datetime", None)
+        until: datetime | None = getattr(r, "available_to_datetime", None)
         since_ok = since is None or since <= date_dt
         until_ok = until is None or until >= date_dt
         if since_ok and until_ok:
@@ -260,6 +267,7 @@ async def process_instruments(
     redo_all: bool = False,
     api_keys: dict[str, str] | None = None,
     venue_override: list[str] | None = None,
+    mode: str = "batch",
 ) -> dict[str, int]:
     """Process instruments for a single date and set of market categories.
 
@@ -285,6 +293,33 @@ async def process_instruments(
         logger.info("No active venues for date=%s categories=%s", date, categories)
         return {}
 
+    # 1b. Skip-if-exists: check manifest for fresh data (unless --force)
+    if not redo_all:
+        primary_category = categories[0] if categories else None
+        bucket = _get_instruments_bucket(primary_category)
+        is_fresh, stale, missing = check_shard_freshness(
+            bucket=bucket,
+            date=date,
+            service_name="instruments-service",
+            expected_venues=active_venues,
+        )
+        if is_fresh:
+            logger.info(
+                "SKIP date=%s: all %d venues already fresh in manifest (use --force to re-fetch)",
+                date,
+                len(active_venues),
+            )
+            return {}
+        if stale or missing:
+            logger.info(
+                "date=%s: %d stale + %d missing venues — will re-fetch (stale=%s, missing=%s)",
+                date,
+                len(stale),
+                len(missing),
+                stale[:5],
+                missing[:5],
+            )
+
     log_event(
         "PROCESSING_STARTED",
         details={"date": date, "categories": categories, "venue_count": len(active_venues)},
@@ -293,7 +328,14 @@ async def process_instruments(
     # 2. Fetch from URDI — sole external API path
     # api_keys injected from preflight() → validate_api_keys_for_venues() → Secret Manager
     # date passed so date-aware adapters (e.g. API-Football) can filter server-side
-    records = await fetch_instruments_for_all_venues(active_venues, api_keys=api_keys, date=date)
+    # SolanaCacheSession: single load/save of Solana timestamp cache across all
+    # concurrent Solana adapters (Drift, Orca, Kamino, Raydium, Marinade, Jito)
+    # to prevent last-writer-wins data loss from concurrent saves.
+    with SolanaCacheSession():
+        fetch_result = await fetch_instruments_for_all_venues(active_venues, api_keys=api_keys, date=date, mode=mode)
+    records = fetch_result.records
+    # Track retryable venues for post-write retry loop (step 8)
+    _retryable_venues = fetch_result.retryable_venues
 
     # 3. Filter to instruments active on the requested date.
     # URDI adapters return the full historical instrument universe; this reduces
@@ -308,6 +350,13 @@ async def process_instruments(
         date,
         len(records),
     )
+
+    # 3b. Enrich CeFi/DeFi instruments with timezone=UTC (24/7 markets).
+    # TradFi instruments get timezone from the databento adapter's session metadata.
+    _tradfi_set = frozenset(_TRADFI_VENUES)
+    for r in records:
+        if r.timezone is None and r.venue not in _tradfi_set:
+            r.timezone = "UTC"
 
     # Per-venue breakdown after date filter
     venue_counts: dict[str, int] = {}
@@ -325,7 +374,7 @@ async def process_instruments(
     if is_defi_run and records:
         defi_records = [r for r in records if (getattr(r, "venue", "") or "").upper() in _DEFI_VENUES]
         if defi_records:
-            populated = sum(1 for r in defi_records if getattr(r, "available_since", None) is not None)
+            populated = sum(1 for r in defi_records if getattr(r, "available_from_datetime", None) is not None)
             total_defi = len(defi_records)
             pct = int(populated * 100 / total_defi)
             logger.info(
@@ -359,9 +408,51 @@ async def process_instruments(
         log_event("PROCESSING_FAILED", details={"date": date, "reason": msg})
         raise RuntimeError(msg)
 
-    df = pd.DataFrame([r.model_dump() for r in records])
+    # 5. Schema validation — bad records fail the entire venue shard.
+    #    If ANY instrument in a venue fails validation, the whole venue is skipped.
+    valid_records, rejected = validate_instrument_records(records)
+    if rejected:
+        # Group rejections by venue — fail entire venue shard
+        failed_venues: dict[str, list[str]] = {}
+        for rec, reason in rejected:
+            failed_venues.setdefault(rec.venue, []).append(reason)
+        for venue, reasons in sorted(failed_venues.items()):
+            logger.error(
+                "SHARD FAILED date=%s venue=%s: %d instruments failed validation — %s",
+                date,
+                venue,
+                len(reasons),
+                reasons[0],
+            )
+        # Remove all records from failed venues (fail the shard, not just the record)
+        failed_venue_set = set(failed_venues.keys())
+        records = [r for r in valid_records if r.venue not in failed_venue_set]
+        log_event(
+            "SHARD_INCOMPLETE",
+            details={
+                "date": date,
+                "failed_venues": sorted(failed_venue_set),
+                "reason": "schema_validation_failure",
+            },
+        )
+    else:
+        records = valid_records
+    if not records:
+        msg = f"All records/venues rejected by schema validation for date={date}"
+        logger.error(msg)
+        log_event("PROCESSING_FAILED", details={"date": date, "reason": msg})
+        raise RuntimeError(msg)
 
-    # 5. Domain validation — logs anomalies, doesn't raise for instruments domain
+    rows = []
+    for r in records:
+        d = r.model_dump()
+        # Serialize legs list[InstrumentLeg] → JSON string for parquet storage
+        if d.get("legs") is not None:
+            d["legs"] = json.dumps(d["legs"])
+        rows.append(d)
+    df = pd.DataFrame(rows)
+
+    # 6. Domain validation — logs anomalies, doesn't raise for instruments domain
     DomainValidationService("instruments").validate_for_domain(df)
 
     # 6. Write per-venue parquet + catalogue + CSV sample
@@ -407,6 +498,137 @@ async def process_instruments(
                 counts[k] = counts.get(k, 0) + v
 
     total = sum(counts.values())
+
+    # 8. Shard completeness check + automatic retry for missing venues.
+    # Expected = configured active_venues (from category config + launch date filter),
+    # NOT what was fetched. If a venue returns 0 instruments (adapter error, network
+    # failure), it must show up as missing — never silently pass.
+    #
+    # When venues are missing (typically due to API rate limits or transient errors),
+    # retry just the missing venues with exponential backoff before failing.
+    expected_venues = set(active_venues)
+    written_venues = set(counts.keys())
+    missing_shards = expected_venues - written_venues
+
+    # Retry ONLY venues that failed with retryable errors (RATE_LIMIT, NETWORK, TIMEOUT,
+    # SERVER_ERROR). Permanent failures (UNSUPPORTED, ADAPTER_ERROR, PARSE_ERROR) are not
+    # retried — they'll fail the same way again.
+    # Exponential backoff: 10s, 30s. Enough for rate limits to clear.
+    retry_delays = [10, 30]
+    retryable_set = set(_retryable_venues)
+    for retry_idx, delay in enumerate(retry_delays):
+        # Only retry venues that are both missing AND had retryable errors
+        retry_candidates = missing_shards & retryable_set
+        if not retry_candidates or not written_venues:
+            break  # Nothing retryable, or total failure (retrying won't help)
+
+        logger.warning(
+            "Shard incomplete: %d/%d venues missing, %d retryable — retrying in %ds (attempt %d/%d): %s",
+            len(missing_shards),
+            len(expected_venues),
+            len(retry_candidates),
+            delay,
+            retry_idx + 1,
+            len(retry_delays),
+            sorted(retry_candidates),
+        )
+        await asyncio.sleep(delay)
+
+        # Re-fetch just the retryable venues
+        retry_venues = sorted(retry_candidates)
+        with SolanaCacheSession():
+            retry_result = await fetch_instruments_for_all_venues(
+                retry_venues,
+                api_keys=api_keys,
+                date=date,
+                mode=mode,
+            )
+        retry_records = retry_result.records
+        # Update retryable set from this attempt's failures
+        retryable_set = (retryable_set - set(retry_venues)) | set(retry_result.retryable_venues)
+
+        if not retry_records:
+            logger.warning(
+                "Retry %d/%d: still 0 records for %d venues",
+                retry_idx + 1,
+                len(retry_delays),
+                len(retry_venues),
+            )
+            continue
+
+        # Apply same pipeline: date filter → relevance filter → validation → write
+        retry_records = filter_instruments_by_date(retry_records, date_dt, defi_venues=defi_venue_set)
+        if any(c.upper() in ("DEFI", "ALL") for c in categories):
+            retry_records = filter_defi_instruments_by_relevance(retry_records)
+        if retry_records:
+            valid_retry, _ = validate_instrument_records(retry_records)
+            if valid_retry:
+                retry_rows = []
+                for r in valid_retry:
+                    d = r.model_dump()
+                    if d.get("legs") is not None:
+                        d["legs"] = json.dumps(d["legs"])
+                    retry_rows.append(d)
+                retry_df = pd.DataFrame(retry_rows)
+                if "venue" in retry_df.columns:
+                    for venue_name, venue_df in retry_df.groupby("venue"):
+                        _write_venue(str(venue_name), venue_df, date, bucket, sink, counts, sampler)
+
+        # Recalculate missing
+        written_venues = set(counts.keys())
+        missing_shards = expected_venues - written_venues
+        recovered = len(retry_venues) - len(missing_shards & set(retry_venues))
+        if recovered:
+            logger.info(
+                "Retry %d/%d: recovered %d/%d venues",
+                retry_idx + 1,
+                len(retry_delays),
+                recovered,
+                len(retry_venues),
+            )
+        total = sum(counts.values())
+
+    # Final completeness assessment
+    completeness_pct = int(len(written_venues) * 100 / len(expected_venues)) if expected_venues else 0
+
+    if missing_shards:
+        logger.error(
+            "SHARD COMPLETENESS FAILURE date=%s: %d/%d venues written (%d%% complete), %d missing — %s",
+            date,
+            len(written_venues),
+            len(expected_venues),
+            completeness_pct,
+            len(missing_shards),
+            sorted(missing_shards),
+        )
+        log_event(
+            "SHARD_INCOMPLETE",
+            details={
+                "date": date,
+                "expected": len(expected_venues),
+                "written": len(written_venues),
+                "missing": sorted(missing_shards),
+                "completeness_pct": completeness_pct,
+            },
+        )
+        # Below 50% completeness = catastrophic failure (network outage, API down).
+        # Fail the shard — the data is unusable and should not be treated as success.
+        if completeness_pct < 50:
+            msg = (
+                f"SHARD CATASTROPHIC FAILURE date={date}: only {len(written_venues)}/{len(expected_venues)} "
+                f"venues written ({completeness_pct}%). "
+                f"Missing: {sorted(missing_shards)[:10]}{'...' if len(missing_shards) > 10 else ''}"
+            )
+            log_event("PROCESSING_FAILED", details={"date": date, "reason": msg})
+            raise RuntimeError(msg)
+    else:
+        logger.info(
+            "Shard completeness OK: %d/%d venues written for date=%s",
+            len(written_venues),
+            len(expected_venues),
+            date,
+        )
+
     log_event(
         "PROCESSING_COMPLETED",
         details={"date": date, "total_records": total, "venues": len(counts)},
@@ -692,4 +914,4 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
         writer.add(processing_date=parsed, row_count=record_count, venue=venue_str)
         writer.write()
     except Exception as exc:
-        logger.debug("ManifestWriter failed (non-blocking): %s", exc)
+        logger.warning("ManifestWriter failed for %s: %s", path, exc)

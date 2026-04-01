@@ -13,10 +13,10 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts.external.odds_api import (  # noqa: qg-deep-import
+from unified_api_contracts.external.odds_api import (
     OddsApiFixture,
 )
-from unified_api_contracts.registry.endpoints import BASE_URLS  # noqa: qg-deep-import
+from unified_api_contracts.registry.endpoints import BASE_URLS
 from unified_api_contracts.sports import (
     CanonicalFixture,
     CanonicalLeague,

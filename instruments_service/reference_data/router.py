@@ -51,7 +51,7 @@ DeFi protocols
   curve       / direct    → CurveReferenceDataAdapter
   aave_v3     / direct    → AaveV3ReferenceDataAdapter
   morpho      / direct    → MorphoReferenceDataAdapter
-  euler       / direct    → EulerReferenceDataAdapter
+
   fluid       / direct    → FluidReferenceDataAdapter
   ethena      / direct    → EthenaReferenceDataAdapter
   balancer    / direct    → BalancerReferenceDataAdapter
@@ -73,7 +73,7 @@ import contextlib
 import logging
 
 from pydantic import BaseModel
-from unified_api_contracts.registry import (  # noqa: qg-deep-import
+from unified_api_contracts.registry import (
     CapabilityResolutionError,
     UnsupportedOperationError,
     bootstrap_capabilities,
@@ -94,7 +94,6 @@ from .adapters.databento import DatabentoReferenceDataAdapter
 from .adapters.deribit import DeribitReferenceDataAdapter
 from .adapters.ethena import EthenaReferenceDataAdapter
 from .adapters.etherfi import EtherFiReferenceDataAdapter
-from .adapters.euler import EulerReferenceDataAdapter
 from .adapters.fluid import FluidReferenceDataAdapter
 from .adapters.hyperliquid import HyperliquidReferenceDataAdapter
 from .adapters.ibkr import IBKRReferenceDataAdapter
@@ -336,7 +335,6 @@ def _route_direct(
         "deribit": DeribitReferenceDataAdapter,
         "ethena": EthenaReferenceDataAdapter,
         "etherfi": EtherFiReferenceDataAdapter,
-        "euler": EulerReferenceDataAdapter,
         "fluid": FluidReferenceDataAdapter,
         "hyperliquid": HyperliquidReferenceDataAdapter,
         "ibkr": IBKRReferenceDataAdapter,

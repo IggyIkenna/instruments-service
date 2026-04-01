@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 import aiohttp
-from unified_api_contracts.external.open_meteo import (  # noqa: qg-deep-import
+from unified_api_contracts.external.open_meteo import (
     OpenMeteoResponse,
     WeatherCondition,
 )
