@@ -163,15 +163,15 @@ steps:
         docker run --rm \
           --entrypoint "" \
           --user root \
-          -v /workspace/unified-trading-pm:/workspace/unified-trading-pm \
+          -v /workspace/unified-trading-pm:/app/unified-trading-pm \
           -e CLOUD_BUILD=true \
           -e CLOUD_MOCK_MODE=true \
           -e GCP_PROJECT_ID=$PROJECT_ID \
           asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REGISTRY_REPO}/${_SERVICE_NAME}:$$VERSION \
           /bin/bash -c "
             apt-get update -qq && apt-get install -y --no-install-recommends git > /dev/null 2>&1
-            git init -q . 2>/dev/null || true
-            export WORKSPACE_ROOT=/workspace REPO_ROOT=/workspace
+            git config --global --add safe.directory /app/instruments-service
+            git init -q .
             bash scripts/quality-gates.sh --no-fix --quick
           "
     waitFor: ["build", "clone-pm-scripts"]
