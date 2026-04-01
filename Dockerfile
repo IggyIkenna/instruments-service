@@ -33,8 +33,8 @@ COPY pip.conf /etc/pip.conf
 # Copy service source code and lockfile
 COPY . .
 
-# Install dependencies from lockfile
-RUN uv sync --frozen --no-dev
+# Install service dependencies (base image already has UTL + UAC pre-installed)
+RUN uv pip install --system --no-deps -e .
 
 # Create data directories
 RUN mkdir -p /app/instruments-service/data/samples /app/instruments-service/logs
