@@ -34,7 +34,7 @@ COPY pip.conf /etc/pip.conf
 COPY . .
 
 # Install dependencies from lockfile
-RUN uv sync --frozen --no-dev --system
+RUN uv sync --frozen --no-dev
 
 # Create data directories
 RUN mkdir -p /app/instruments-service/data/samples /app/instruments-service/logs
