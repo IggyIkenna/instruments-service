@@ -22,19 +22,19 @@ from unified_api_contracts import (
     PolymarketGammaMarket,
     classify_venue_error,
 )
-from unified_api_contracts.canonical.domain.prediction import (  # noqa: qg-deep-import
+from unified_api_contracts.canonical.domain.prediction import (
     PredictionMarketMapper,
 )
-from unified_api_contracts.canonical.domain.sports import (  # noqa: qg-deep-import
+from unified_api_contracts.canonical.domain.sports import (
     build_crypto_prediction_id,
     build_macro_prediction_id,
     build_prediction_instrument_id,
 )
-from unified_api_contracts.canonical.domain.sports.canonical_ids import (  # noqa: qg-deep-import
+from unified_api_contracts.canonical.domain.sports.canonical_ids import (
     POLYMARKET_MARKET_TO_CANONICAL,
     _slug,
 )
-from unified_api_contracts.external.polymarket import (  # noqa: qg-deep-import
+from unified_api_contracts.external.polymarket import (
     POLYMARKET_PREDICTION_LEAGUES,
     get_canonical_league_for_polymarket_series,
     get_canonical_team_for_polymarket,
@@ -274,12 +274,12 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch Polymarket markets as InstrumentRecord list.
 
         Args:
-            instrument_type: Filter by type. Pass "prediction_market" or None.
+            instrument_type: Filter by type. Pass "PREDICTION_MARKET" or None.
             date: If provided (YYYY-MM-DD), fetch ALL markets that ended on this date
                   (including closed/resolved). For batch/backtest mode.
                   If None, fetch currently active markets only (live mode).
         """
-        if instrument_type is not None and instrument_type != "prediction_market":
+        if instrument_type is not None and instrument_type != "PREDICTION_MARKET":
             return []
         results: list[InstrumentRecord] = []
         now = datetime.now(UTC)
@@ -323,7 +323,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError(
             "Polymarket does not provide expiry calendars. Market resolution dates are in InstrumentRecord.expiry."
@@ -553,7 +553,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
             base_asset=base_asset,
             quote_asset="USDC",
             tick_size=tick_size,
-            lot_size=Decimal("1"),
+            min_size=Decimal("1"),
             min_order_size=min_order,
             contract_size=Decimal("1"),
             settlement_asset="USDC",
@@ -717,7 +717,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         if cache_key in self._fixture_cache:
             return self._fixture_cache[cache_key]
 
-        from unified_api_contracts.canonical.domain.sports.league_data import (  # noqa: qg-deep-import
+        from unified_api_contracts.canonical.domain.sports.league_data import (
             get_league,
         )
 

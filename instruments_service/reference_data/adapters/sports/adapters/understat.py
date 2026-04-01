@@ -12,11 +12,11 @@ import json
 import logging
 
 import aiohttp
-from unified_api_contracts.external.understat import (  # noqa: qg-deep-import
+from unified_api_contracts.external.understat import (
     UnderstatMatch,
     UnderstatMatchTeam,
 )
-from unified_api_contracts.external.understat.normalize import (  # noqa: qg-deep-import
+from unified_api_contracts.external.understat.normalize import (
     normalize_understat_fixture,
 )
 from unified_api_contracts.sports import (

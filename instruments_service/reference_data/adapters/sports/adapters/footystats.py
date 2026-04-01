@@ -12,10 +12,10 @@ import logging
 from datetime import UTC, datetime
 
 import aiohttp
-from unified_api_contracts.external.footystats import (  # noqa: qg-deep-import
+from unified_api_contracts.external.footystats import (
     FootyStatsMatch,
 )
-from unified_api_contracts.external.footystats.normalize import (  # noqa: qg-deep-import
+from unified_api_contracts.external.footystats.normalize import (
     normalize_footystats_match,
 )
 from unified_api_contracts.sports import (

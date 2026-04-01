@@ -12,14 +12,14 @@ import logging
 from datetime import UTC, datetime
 
 import aiohttp
-from unified_api_contracts.external.api_football import (  # noqa: qg-deep-import
+from unified_api_contracts.external.api_football import (
     ApiFootballFixture,
     ApiFootballLeague,
 )
-from unified_api_contracts.external.api_football.normalize import (  # noqa: qg-deep-import
+from unified_api_contracts.external.api_football.normalize import (
     normalize_api_football_fixture,
 )
-from unified_api_contracts.registry.endpoints import BASE_URLS  # noqa: qg-deep-import
+from unified_api_contracts.registry.endpoints import BASE_URLS
 from unified_api_contracts.sports import (
     CanonicalFixture,
     CanonicalLeague,
@@ -45,7 +45,7 @@ def _effective_season_for_league(api_football_id: int) -> int:
     Uses ``LEAGUE_REGISTRY`` season_months to determine the start month.
     Falls back to the standard Aug-start heuristic for unknown leagues.
     """
-    from unified_api_contracts.canonical.domain.sports.league_data import (  # noqa: qg-deep-import
+    from unified_api_contracts.canonical.domain.sports.league_data import (
         get_league_by_api_football_id,
     )
 
@@ -77,7 +77,7 @@ def _parse_team_item(
     venue_data: object,
 ) -> CanonicalTeam:
     """Build a CanonicalTeam from an API-Football teams response item."""
-    from unified_api_contracts.canonical.domain.sports import (  # noqa: qg-deep-import
+    from unified_api_contracts.canonical.domain.sports import (
         CanonicalVenue,
         build_team_id,
         build_venue_id,
@@ -492,7 +492,7 @@ def _parse_fixture_list(response_list: list[dict[str, object]]) -> list[Canonica
 
 def _parse_teams(teams_data: dict[str, object]) -> dict[str, object] | None:
     """Parse teams dict preserving the home/away structure for normalization."""
-    from unified_api_contracts.external.api_football import (  # noqa: qg-deep-import
+    from unified_api_contracts.external.api_football import (
         ApiFootballTeamWithWinner,
     )
 

@@ -14,13 +14,13 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts.external.pinnacle import (  # noqa: qg-deep-import
+from unified_api_contracts.external.pinnacle import (
     PinnacleEvent,
     PinnacleOddsEvent,
     PinnacleOddsResponse,
     PinnaclePeriod,
 )
-from unified_api_contracts.registry.endpoints import BASE_URLS  # noqa: qg-deep-import
+from unified_api_contracts.registry.endpoints import BASE_URLS
 from unified_api_contracts.sports import (
     CanonicalFixture,
     CanonicalLeague,

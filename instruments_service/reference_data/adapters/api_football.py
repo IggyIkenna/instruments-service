@@ -9,10 +9,10 @@ it via the ``api_key`` constructor parameter.
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.sports import CanonicalFixture
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -57,19 +57,18 @@ class ApiFootballReferenceDataAdapter(BaseReferenceDataAdapter):
     ) -> list[InstrumentRecord]:
         """Fetch fixtures and return as InstrumentRecord list.
 
-        instrument_type filter: pass "sports_fixture" or None (all). Other
+        instrument_type filter: pass "FIXED_ODDS" or None (all). Other
         values return an empty list since API-Football only exposes fixtures.
         """
-        if instrument_type is not None and instrument_type != "sports_fixture":
+        if instrument_type is not None and instrument_type != "FIXED_ODDS":
             return []
         if not self._date:
             logger.warning("API-Football URDI adapter: no date set — returning empty list")
             return []
         fixtures = await self._sports_adapter.get_fixtures(date=self._date)
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
         for fixture in fixtures:
-            record = _canonical_fixture_to_instrument(fixture, now)
+            record = _canonical_fixture_to_instrument(fixture)
             if record is not None:
                 results.append(record)
         logger.info("API-Football date=%s: %d InstrumentRecords", self._date, len(results))
@@ -94,7 +93,7 @@ class ApiFootballReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError(
             "API-Football does not provide expiry calendars. Fixture dates are embedded in InstrumentRecord.expiry."
@@ -114,10 +113,9 @@ class ApiFootballReferenceDataAdapter(BaseReferenceDataAdapter):
 
 def _canonical_fixture_to_instrument(
     fixture: CanonicalFixture,
-    now: datetime,
 ) -> InstrumentRecord | None:
     """Convert a CanonicalFixture from the sports adapter to an InstrumentRecord."""
-    from unified_api_contracts.canonical.domain.sports.canonical_ids import (  # noqa: qg-deep-import
+    from unified_api_contracts.canonical.domain.sports.canonical_ids import (
         build_fixture_id,
         build_league_id,
         build_team_id,
@@ -143,21 +141,17 @@ def _canonical_fixture_to_instrument(
     return InstrumentRecord(
         instrument_key=instrument_key,
         venue="API_FOOTBALL",
-        symbol=raw_symbol,
         raw_symbol=raw_symbol,
-        instrument_type="sports_fixture",
+        instrument_type=InstrumentType.FIXED_ODDS,
         base_asset="football",
         quote_asset="USD",
+        status=InstrumentStatus.ACTIVE,
         tick_size=Decimal("0.01"),
-        lot_size=Decimal("1"),
-        min_order_size=Decimal("1"),
+        min_size=Decimal("1"),
         contract_size=Decimal("1"),
-        settlement_asset="USD",
         expiry=kickoff,
-        available_since=day_start,
-        available_to=day_end,
+        available_from_datetime=day_start,
+        available_to_datetime=day_end,
         strike=None,
         option_type=None,
-        is_active=True,
-        updated_at=now,
     )

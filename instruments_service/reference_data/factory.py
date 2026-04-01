@@ -4,7 +4,7 @@ import contextlib
 import logging
 from datetime import date as date_type
 
-from unified_api_contracts.registry import (  # noqa: qg-deep-import
+from unified_api_contracts.registry import (
     CapabilityResolutionError,
     UnsupportedOperationError,
     bootstrap_capabilities,
@@ -18,6 +18,7 @@ from .adapters.balancer import BalancerReferenceDataAdapter
 from .adapters.betfair import BetfairReferenceDataAdapter
 from .adapters.binance import BinanceReferenceDataAdapter
 from .adapters.bybit import BybitReferenceDataAdapter
+from .adapters.ccxt_adapter import CCXTReferenceDataAdapter
 from .adapters.coinbase import CoinbaseReferenceDataAdapter
 from .adapters.compound_v3 import CompoundV3ReferenceDataAdapter
 from .adapters.curve import CurveReferenceDataAdapter
@@ -26,10 +27,10 @@ from .adapters.deribit import DeribitReferenceDataAdapter
 from .adapters.drift import DriftReferenceDataAdapter
 from .adapters.ethena import EthenaReferenceDataAdapter
 from .adapters.etherfi import EtherFiReferenceDataAdapter
-from .adapters.euler import EulerReferenceDataAdapter
 from .adapters.fluid import FluidReferenceDataAdapter
 from .adapters.hyperliquid import HyperliquidReferenceDataAdapter
 from .adapters.ibkr import IBKRReferenceDataAdapter
+from .adapters.jito import JitoReferenceDataAdapter
 from .adapters.kalshi import KalshiReferenceDataAdapter
 from .adapters.kamino import KaminoReferenceDataAdapter
 from .adapters.lido import LidoReferenceDataAdapter
@@ -58,10 +59,9 @@ with contextlib.suppress(Exception):
 # Key: UAC canonical venue name (uppercase, hyphenated).
 # Value: key into _ADAPTERS below.
 CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
-    # CeFi — all venues through Tardis for batch (historical instrument universe).
-    # Tardis _DEFAULT_EXCHANGES lists the specific exchange names.
-    # Direct adapters (binance, deribit, etc.) exist for live mode but are not
-    # used for instrument reference data fetching.
+    # CeFi — Tardis for batch (historical instrument universe),
+    # CCXT for live (real-time active markets via public endpoints).
+    # Mode-aware routing in get_adapter_for_canonical_venue() selects the adapter.
     "BINANCE-SPOT": "tardis",
     "BINANCE-FUTURES": "tardis",
     "BYBIT": "tardis",
@@ -102,6 +102,7 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "RAYDIUM-SOLANA": "raydium",
     "ORCA-SOLANA": "orca",
     "MARINADE-SOLANA": "marinade",
+    "JITO-SOLANA": "jito",
     # Jupiter is execution-only (swap aggregator), not instrument discovery.
 }
 
@@ -111,7 +112,6 @@ _SUBGRAPH_VENUE_PREFIX_TO_ADAPTER: dict[str, str] = {
     "AAVEV3": "aave_v3",
     "COMPOUNDV3": "compound_v3",
     "MORPHO": "morpho",
-    "EULERV2": "euler",
     "FLUID": "fluid",
     "UNISWAPV2": "uniswap_v2",
     "UNISWAPV3": "uniswap_v3",
@@ -129,7 +129,6 @@ _ADAPTER_TO_PROTOCOL: dict[str, str] = {
     "aave_v3": "aave_v3",
     "compound_v3": "compound_v3",
     "morpho": "morpho",
-    "euler": "euler_v2",
     "fluid": "fluid",
     "uniswap_v2": "uniswap_v2",
     "uniswap_v3": "uniswap_v3",
@@ -146,10 +145,24 @@ for _prefix, _adapter_key in _SUBGRAPH_VENUE_PREFIX_TO_ADAPTER.items():
             CANONICAL_VENUE_TO_ADAPTER[_venue] = _adapter_key
 
 
-# Note: CCXTReferenceDataAdapter is router-only (reached via data_source="ccxt" in
-# ReferenceDataSourceConfig via router.py). It is not in this factory because the
-# factory maps UAC canonical venue names → adapters; CCXT is a cross-venue data source
-# accessed by exchange_id, not a canonical venue name.
+# Maps canonical CeFi venues → CCXT exchange IDs for live mode.
+# In live mode, these venues use CCXT (real-time public endpoints) instead of Tardis
+# (historical-only). No API key needed — instrument definitions are public.
+_CANONICAL_VENUE_TO_CCXT_EXCHANGE: dict[str, str] = {
+    "BINANCE-SPOT": "binance",
+    "BINANCE-FUTURES": "binanceusdm",
+    "BYBIT": "bybit",
+    "BYBIT-SPOT": "bybit",
+    "BYBIT-FUTURES": "bybit",
+    "OKX": "okx",
+    "OKX-SPOT": "okx",
+    "OKX-SWAP": "okx",
+    "OKX-FUTURES": "okx",
+    "DERIBIT": "deribit",
+    "COINBASE-SPOT": "coinbase",
+    "UPBIT": "upbit",
+}
+
 _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "aave_v3": AaveV3ReferenceDataAdapter,
     "api_football": ApiFootballReferenceDataAdapter,
@@ -166,9 +179,9 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "drift": DriftReferenceDataAdapter,
     "ethena": EthenaReferenceDataAdapter,
     "etherfi": EtherFiReferenceDataAdapter,
-    "euler": EulerReferenceDataAdapter,
     "fluid": FluidReferenceDataAdapter,
     "hyperliquid": HyperliquidReferenceDataAdapter,
+    "jito": JitoReferenceDataAdapter,
     "kamino": KaminoReferenceDataAdapter,
     "marinade": MarinadeReferenceDataAdapter,
     "ibkr": IBKRReferenceDataAdapter,
@@ -210,7 +223,6 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "aave_v3": "thegraph",
     "compound_v3": "thegraph",
     "morpho": "thegraph",
-    "euler": "thegraph",
     "fluid": "thegraph",
     "lido": "thegraph",
     "etherfi": "thegraph",
@@ -225,13 +237,14 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "raydium": "",
     "orca": "",
     "marinade": "",
+    "jito": "",
 }
 
 
 # Adapter pool: reuse adapter instances across calls.
 # Key: (adapter_key, api_key) → adapter instance.
 # Adapters are stateless (no mutable state beyond cache) so pooling is safe.
-_adapter_pool: dict[tuple[str, str | None], BaseReferenceDataAdapter] = {}
+_adapter_pool: dict[tuple[str, str | None, str], BaseReferenceDataAdapter] = {}
 
 
 def clear_adapter_pool() -> None:
@@ -247,6 +260,7 @@ def get_adapter_for_canonical_venue(
     project_id: str | None = None,
     date: str | None = None,
     extra_api_keys: dict[str, str] | None = None,
+    mode: str = "batch",
 ) -> BaseReferenceDataAdapter:
     """Create a reference data adapter for a UAC canonical venue name.
 
@@ -254,10 +268,17 @@ def get_adapter_for_canonical_venue(
     venue names (e.g. "UNISWAPV3-ETHEREUM", "BINANCE-SPOT"). Translates via
     CANONICAL_VENUE_TO_ADAPTER and delegates to create_reference_data_adapter().
 
+    For CeFi venues in live mode, routes to CCXT (real-time public endpoints)
+    instead of Tardis (historical-only). Batch mode always uses Tardis for
+    the full historical instrument universe.
+
     Args:
         canonical_venue: UAC canonical venue name (e.g. "UNISWAPV3-ETHEREUM").
         api_key: Injected API key from Secret Manager (via UTL validate_api_keys_for_venues).
         project_id: Deprecated.
+        date: ISO date string for date-aware adapters.
+        extra_api_keys: Additional API keys for multi-key adapters.
+        mode: "batch" (default) or "live". Live mode uses CCXT for CeFi venues.
 
     Raises:
         ValueError: If no adapter exists for this canonical venue name.
@@ -269,6 +290,26 @@ def get_adapter_for_canonical_venue(
             f"No URDI adapter for canonical venue {canonical_venue!r}. "
             f"Add an entry to CANONICAL_VENUE_TO_ADAPTER. Supported: {supported}"
         )
+
+    # Live mode: route CeFi Tardis venues to CCXT (real-time public endpoints).
+    # Tardis is historical-only and can't provide live instrument definitions.
+    ccxt_exchange_id = _CANONICAL_VENUE_TO_CCXT_EXCHANGE.get(canonical_venue)
+    if mode == "live" and adapter_key == "tardis" and ccxt_exchange_id:
+        pool_key = ("ccxt", None, canonical_venue)
+        if pool_key in _adapter_pool:
+            return _adapter_pool[pool_key]
+        _logger.info(
+            "Live mode: %s → CCXT (%s) instead of Tardis",
+            canonical_venue,
+            ccxt_exchange_id,
+        )
+        adapter: BaseReferenceDataAdapter = CCXTReferenceDataAdapter(
+            venue=ccxt_exchange_id,
+            canonical_venue=canonical_venue,
+        )
+        _adapter_pool[pool_key] = adapter
+        return adapter
+
     # Check pool — reuse existing adapter if same key + credentials + venue
     # Include canonical_venue in pool key so AAVEV3-ARBITRUM != AAVEV3-ETHEREUM
     pool_key = (adapter_key, api_key, canonical_venue)
@@ -283,7 +324,6 @@ def get_adapter_for_canonical_venue(
         "aave_v3",
         "compound_v3",
         "morpho",
-        "euler",
         "fluid",
         "balancer",
         "curve",
@@ -293,6 +333,7 @@ def get_adapter_for_canonical_venue(
         "raydium",
         "orca",
         "marinade",
+        "jito",
     }
 
     # Some adapters need extra constructor parameters derived from the canonical venue name.
@@ -336,9 +377,14 @@ def get_adapter_for_canonical_venue(
             exchanges=[tardis_exchange],
         )
     elif adapter_key == "databento":
-        # Databento: pass date for session metadata + expiry filtering
+        # Databento: pass date + venue filter so each venue only fetches its instruments
         target = date_type.fromisoformat(date) if date else None
-        adapter = DatabentoReferenceDataAdapter(project_id=project_id, api_key=api_key, target_date=target)
+        adapter = DatabentoReferenceDataAdapter(
+            project_id=project_id,
+            api_key=api_key,
+            target_date=target,
+            venue_filter=canonical_venue,
+        )
     elif adapter_key == "polymarket" and extra_api_keys:
         # Polymarket: pass API-Football key for fixture cross-referencing
         af_key = extra_api_keys.get("api_football")

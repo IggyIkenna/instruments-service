@@ -1,20 +1,20 @@
 """Uniswap V2 reference data adapter — instrument discovery via The Graph.
 
 Discovers Uniswap V2 liquidity pairs on Ethereum.
-Pairs are returned as InstrumentRecord with instrument_type="pool".
+Pairs are returned as InstrumentRecord with instrument_type="POOL".
 
 Data source: The Graph (decentralized network).
 Reference: https://docs.uniswap.org/contracts/v2/overview
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
 from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
-from unified_api_contracts.internal import InstrumentRecord
-from unified_api_contracts.registry import SUBGRAPH_IDS  # noqa: qg-deep-import
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.registry import SUBGRAPH_IDS
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -72,7 +72,7 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Uniswap V2 pairs as instruments."""
-        if instrument_type not in (None, "pool"):
+        if instrument_type not in (None, InstrumentType.POOL):
             return []
 
         url = self._resolve_api_url()
@@ -97,14 +97,13 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
                 data = await resp.json()
         except aiohttp.ClientError as exc:
             self._log_fetch_error(exc)
-            return []
+            raise ConnectionError(str(exc)) from exc
 
         pairs: list[dict[str, object]] = data.get("data", {}).get("pairs", [])
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
 
         for pair in pairs:
-            record = self._build_pair_record(pair, now)
+            record = self._build_pair_record(pair)
             if record:
                 results.append(record)
 
@@ -164,7 +163,6 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
     def _build_pair_record(
         self,
         pair: dict[str, object],
-        now: datetime,
     ) -> InstrumentRecord | None:
         """Build an InstrumentRecord from a single Uniswap V2 pair, or None."""
         pair_id = pair.get("id")
@@ -193,22 +191,18 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=venue_tag,
-            symbol=f"{base}/{quote}",
             raw_symbol=str(pair_id),
-            instrument_type="pool",
+            instrument_type=InstrumentType.POOL,
             base_asset=base,
             quote_asset=quote,
             tick_size=Decimal("0.000001"),
-            lot_size=Decimal("0.000001"),
-            min_order_size=Decimal("0"),
+            min_size=Decimal("0.000001"),
             contract_size=Decimal("1"),
-            settlement_asset=quote,
             expiry=None,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
-            available_since=available_since,
+            status=InstrumentStatus.ACTIVE,
+            available_from_datetime=available_since,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
@@ -228,7 +222,7 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Uniswap V2 pairs have no expiry calendar")
 

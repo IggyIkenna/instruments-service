@@ -1,20 +1,20 @@
 """Uniswap V3 reference data adapter — instrument discovery via The Graph.
 
 Discovers Uniswap V3 liquidity pools across Ethereum, Arbitrum, and Base.
-Pools are returned as InstrumentRecord with instrument_type="pool".
+Pools are returned as InstrumentRecord with instrument_type="POOL".
 
 Data source: The Graph (decentralized network).
 Reference: https://docs.uniswap.org/contracts/v3/overview
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
 from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
-from unified_api_contracts.internal import InstrumentRecord
-from unified_api_contracts.registry import SUBGRAPH_IDS  # noqa: qg-deep-import
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.registry import SUBGRAPH_IDS
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -92,7 +92,7 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Uniswap V3 pools as instruments."""
-        if instrument_type not in (None, "pool"):
+        if instrument_type not in (None, InstrumentType.POOL):
             return []
 
         url = self._resolve_api_url()
@@ -117,7 +117,7 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
                 data = await resp.json()
         except aiohttp.ClientError as exc:
             self._log_fetch_error(exc)
-            return []
+            raise ConnectionError(str(exc)) from exc
 
         if not isinstance(data, dict) or "data" not in data:
             logger.warning("UniswapV3: empty response from %s subgraph", self._chain)
@@ -130,11 +130,10 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         if not pools:
             pools = await self._fetch_messari_pools(url)
 
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
 
         for pool in pools:
-            record = self._build_pool_record(pool, now)
+            record = self._build_pool_record(pool)
             if record:
                 results.append(record)
 
@@ -236,7 +235,6 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
     def _build_pool_record(
         self,
         pool: dict[str, object],
-        now: datetime,
     ) -> InstrumentRecord | None:
         """Build an InstrumentRecord from a single Uniswap V3 pool, or None."""
         pool_id = pool.get("id")
@@ -267,22 +265,18 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=venue_tag,
-            symbol=f"{base}/{quote}",
             raw_symbol=str(pool_id),
-            instrument_type="pool",
+            instrument_type=InstrumentType.POOL,
             base_asset=base,
             quote_asset=quote,
             tick_size=Decimal("0.000001"),
-            lot_size=Decimal("0.000001"),
-            min_order_size=Decimal("0"),
+            min_size=Decimal("0.000001"),
             contract_size=Decimal("1"),
-            settlement_asset=quote,
             expiry=None,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
-            available_since=available_since,
+            status=InstrumentStatus.ACTIVE,
+            available_from_datetime=available_since,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
@@ -302,7 +296,7 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Uniswap V3 pools have no expiry calendar")
 
