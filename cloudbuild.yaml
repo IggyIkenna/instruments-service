@@ -107,6 +107,27 @@ steps:
     args: ["pull", "asia-northeast1-docker.pkg.dev/$PROJECT_ID/unified-trading-library/unified-trading-library:latest"]
     waitFor: ["configure-docker"]
 
+  # ── STEP 3.5: Clone unified-trading-pm for quality-gates base scripts ────
+  # QG step runs inside Docker — PM scripts must be mounted in.
+  # WORKSPACE_ROOT=/workspace resolves base-service.sh correctly.
+  - name: "gcr.io/google.com/cloudsdktool/cloud-sdk:alpine"
+    id: "clone-pm-scripts"
+    entrypoint: "bash"
+    args:
+      - "-c"
+      - |
+        set -e
+        GH_PAT=$$(gcloud secrets versions access latest --secret=GH_PAT --project=$PROJECT_ID 2>/dev/null || echo "")
+        if [ -n "$$GH_PAT" ] && [ ! -d "/workspace/unified-trading-pm" ]; then
+          git clone --depth=1 --branch live-defi-rollout \
+            "https://$$GH_PAT@github.com/IggyIkenna/unified-trading-pm.git" \
+            /workspace/unified-trading-pm
+          echo "Cloned unified-trading-pm to /workspace/unified-trading-pm"
+        else
+          echo "Skipping clone (PAT unavailable or already cloned)"
+        fi
+    waitFor: ["extract-version"]
+
   # ── STEP 4: Build Docker image ────────────────────────────────────────────
   - name: "gcr.io/cloud-builders/docker"
     id: "build"
@@ -137,12 +158,15 @@ steps:
         echo "Running quality gates inside ${_SERVICE_NAME} image..."
         docker run --rm \
           --entrypoint "" \
+          -v /workspace/unified-trading-pm:/workspace/unified-trading-pm \
           -e CLOUD_BUILD=true \
           -e CLOUD_MOCK_MODE=true \
           -e GCP_PROJECT_ID=$PROJECT_ID \
+          -e WORKSPACE_ROOT=/workspace \
+          -e REPO_ROOT=/workspace \
           asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REGISTRY_REPO}/${_SERVICE_NAME}:$$VERSION \
           /bin/bash -c "scripts/quality-gates.sh --no-fix --quick"
-    waitFor: ["build"]
+    waitFor: ["build", "clone-pm-scripts"]
 
   # ── STEP 6: REQUIRED — Push image ONLY if quality gates passed ────────────
   - name: "gcr.io/cloud-builders/docker"
