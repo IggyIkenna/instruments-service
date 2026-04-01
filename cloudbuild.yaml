@@ -156,16 +156,23 @@ steps:
         set -e
         VERSION=$(cat /workspace/VERSION 2>/dev/null || echo "$SHORT_SHA")
         echo "Running quality gates inside ${_SERVICE_NAME} image..."
+        # NOTE: quality-gates.sh line 72 runs `git rev-parse --show-toplevel` to derive
+        # WORKSPACE_ROOT. Docker images don't have git — install it, then init a git repo
+        # so the script can resolve the workspace root. Alternatively, export WORKSPACE_ROOT
+        # before the script runs so it uses /workspace (where PM scripts are mounted).
         docker run --rm \
           --entrypoint "" \
           -v /workspace/unified-trading-pm:/workspace/unified-trading-pm \
           -e CLOUD_BUILD=true \
           -e CLOUD_MOCK_MODE=true \
           -e GCP_PROJECT_ID=$PROJECT_ID \
-          -e WORKSPACE_ROOT=/workspace \
-          -e REPO_ROOT=/workspace \
           asia-northeast1-docker.pkg.dev/$PROJECT_ID/${_REGISTRY_REPO}/${_SERVICE_NAME}:$$VERSION \
-          /bin/bash -c "scripts/quality-gates.sh --no-fix --quick"
+          /bin/bash -c "
+            apt-get update -qq && apt-get install -y --no-install-recommends git ripgrep > /dev/null 2>&1 || true
+            git init -q . 2>/dev/null || true
+            export WORKSPACE_ROOT=/workspace REPO_ROOT=/workspace
+            bash scripts/quality-gates.sh --no-fix --quick
+          "
     waitFor: ["build", "clone-pm-scripts"]
 
   # ── STEP 6: REQUIRED — Push image ONLY if quality gates passed ────────────
