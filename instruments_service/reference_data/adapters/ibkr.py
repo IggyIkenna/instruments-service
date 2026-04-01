@@ -54,12 +54,12 @@ logger = logging.getLogger(__name__)
 
 # Map IBKR secType → canonical InstrumentType
 _SEC_TYPE_MAP: dict[str, InstrumentType] = {
-    "STK": InstrumentType.SPOT,
-    "FUT": InstrumentType.FUTURES,
+    "STK": InstrumentType.SPOT_PAIR,
+    "FUT": InstrumentType.FUTURE,
     "OPT": InstrumentType.OPTION,
-    "CASH": InstrumentType.SPOT,
-    "CFD": InstrumentType.PERP,
-    "BOND": InstrumentType.SPOT,
+    "CASH": InstrumentType.SPOT_PAIR,
+    "CFD": InstrumentType.PERPETUAL,
+    "BOND": InstrumentType.SPOT_PAIR,
     "FOP": InstrumentType.OPTION,
     "WAR": InstrumentType.OPTION,
     "IOPT": InstrumentType.OPTION,
@@ -158,7 +158,7 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
         ib = IB()
         ib.connect(cfg.ibkr_gateway_host, cfg.ibkr_gateway_port, clientId=1)
         adapter = IBKRReferenceDataAdapter(ib=ib)
-        instruments = await adapter.get_instruments(instrument_type="equity")
+        instruments = await adapter.get_instruments(instrument_type="EQUITY")
         ib.disconnect()
 
     Canonical test usage (MagicMock inject-IB pattern)::
@@ -257,7 +257,7 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
         if not symbol:
             return None
         sec_type = uac.secType or "STK"
-        instrument_type = _SEC_TYPE_MAP.get(sec_type, InstrumentType.SPOT)
+        instrument_type = _SEC_TYPE_MAP.get(sec_type, InstrumentType.SPOT_PAIR)
         asset_class = _SEC_TYPE_ASSET_CLASS_MAP.get(sec_type, AssetClass.EQUITY)
         currency = uac.currency or "USD"
         tick_size = Decimal(str(uac.minTick)) if uac.minTick else Decimal("0.01")
@@ -270,7 +270,7 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
             base=symbol,
             quote=currency,
             tick_size=tick_size,
-            lot_size=Decimal("1"),
+            min_size=Decimal("1"),
             contract_size=Decimal(str(uac.multiplier)) if uac.multiplier else Decimal("1"),
             status=InstrumentStatus.ACTIVE,
         )
@@ -302,11 +302,11 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
         Returns:
             (sec_type, symbols) tuple, or None if instrument_type is unsupported.
         """
-        if instrument_type in (None, "equity", "spot"):
+        if instrument_type in (None, "EQUITY", "SPOT_PAIR"):
             return "STK", list(_DEFAULT_EQUITY_SYMBOLS)
-        if instrument_type == "future":
+        if instrument_type == "FUTURE":
             return "FUT", list(_DEFAULT_EQUITY_SYMBOLS[:10])
-        if instrument_type == "option":
+        if instrument_type == "OPTION":
             return "OPT", list(_DEFAULT_EQUITY_SYMBOLS[:5])
         return None
 
@@ -538,7 +538,7 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError(
             "IBKR get_expiry_calendar: use Databento adapter for TradFi expiry calendars in batch mode."
@@ -561,14 +561,14 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
         """Build a placeholder instrument for testing purposes."""
         return InstrumentRecord(
             instrument_key=symbol,
-            symbol=symbol,
+            raw_symbol=symbol,
             venue=self.venue,
             asset_class=AssetClass.EQUITY,
-            instrument_type=InstrumentType.SPOT,
-            base=symbol,
-            quote="USD",
+            instrument_type=InstrumentType.SPOT_PAIR,
+            base_asset=symbol,
+            quote_asset="USD",
             tick_size=Decimal("0.01"),
-            lot_size=Decimal("1"),
+            min_size=Decimal("1"),
             contract_size=Decimal("1"),
             status=InstrumentStatus.ACTIVE,
         )

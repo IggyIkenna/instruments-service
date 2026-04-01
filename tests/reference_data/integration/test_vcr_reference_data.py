@@ -107,14 +107,14 @@ async def test_binance_spot_exchange_info_cassette_adapter_get_instruments() -> 
     adapter = create_reference_data_adapter("binance")
 
     with _VCR.use_cassette(str(cassette_path)):
-        instruments = await adapter.get_instruments(instrument_type="spot")
+        instruments = await adapter.get_instruments(instrument_type="SPOT_PAIR")
 
     # Cassette has BTCUSDT and ETHUSDT, both TRADING
     assert len(instruments) == 2
 
     btc = next(inst for inst in instruments if inst.raw_symbol == "BTCUSDT")
     assert btc.venue == "BINANCE-SPOT"
-    assert btc.instrument_type == "spot"
+    assert btc.instrument_type == "SPOT_PAIR"
     assert btc.base_asset == "BTC"
     assert btc.quote_asset == "USDT"
     assert btc.tick_size > 0
@@ -195,7 +195,7 @@ async def test_deribit_get_instruments_cassette_adapter() -> None:
     adapter = create_reference_data_adapter("deribit")
 
     with _VCR.use_cassette(str(cassette_path)):
-        instruments = await adapter.get_instruments(instrument_type="future")
+        instruments = await adapter.get_instruments(instrument_type="FUTURE")
 
     # BTC: 2, ETH: 1, SOL: 0, USDC: 0 = 3 total
     assert len(instruments) == 3

@@ -1,19 +1,19 @@
 """Drift reference data adapter -- instrument discovery via DLOB API.
 
 Discovers Drift perpetual and spot markets on Solana.
-Markets are returned as InstrumentRecord with instrument_type="perpetual" or "spot".
+Markets are returned as InstrumentRecord with instrument_type=PERPETUAL or SPOT_PAIR.
 
 Data source: Drift DLOB API (https://dlob.drift.trade) — public, no auth required.
 Reference: https://docs.drift.trade/
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
 from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
 from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
 
@@ -51,7 +51,7 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
 
     Uses the public Data API (https://data.api.drift.trade/stats/markets)
     which requires no auth and returns all 137 markets (74 perp + 63 spot).
-    Each Drift perp market produces one instrument with instrument_type="perpetual".
+    Each Drift perp market produces one instrument with instrument_type=PERPETUAL.
     Drift settles in USDC.
     """
 
@@ -100,7 +100,6 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
     ) -> list[InstrumentRecord]:
         """Fetch active Drift perp and spot markets as instruments."""
         markets = await self._fetch_all_markets()
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
 
         for market in markets:
@@ -109,12 +108,12 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
             if status != "active":
                 continue
 
-            if market_type == "perp" and instrument_type in (None, "perpetual"):
-                record = self._build_perp_record(market, now)
+            if market_type == "perp" and instrument_type in (None, InstrumentType.PERPETUAL):
+                record = self._build_perp_record(market)
                 if record:
                     results.append(record)
-            elif market_type == "spot" and instrument_type in (None, "spot"):
-                record = self._build_spot_record(market, now)
+            elif market_type == "spot" and instrument_type in (None, InstrumentType.SPOT_PAIR):
+                record = self._build_spot_record(market)
                 if record:
                     results.append(record)
 
@@ -130,9 +129,9 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
         except (aiohttp.ClientError, RuntimeError) as exc:
             if isinstance(exc, aiohttp.ClientError):
                 self._log_fetch_error(exc, "stats/markets")
-            else:
-                logger.error("Drift stats/markets request failed after retries: %s", exc)
-            return []
+                raise ConnectionError(str(exc)) from exc
+            logger.error("Drift stats/markets request failed after retries: %s", exc)
+            raise
 
         raw: dict[str, object] = data if isinstance(data, dict) else {}
         markets = raw.get("markets")
@@ -143,7 +142,6 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
     def _build_perp_record(
         self,
         market: dict[str, object],
-        now: datetime,
     ) -> InstrumentRecord | None:
         """Build an InstrumentRecord from a Drift perp market."""
         symbol = str(market.get("symbol", ""))
@@ -160,28 +158,25 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=venue_tag,
-            symbol=symbol.upper(),
             raw_symbol=symbol,
-            instrument_type="perpetual",
+            instrument_type=InstrumentType.PERPETUAL,
             base_asset=base_asset,
             quote_asset="USDC",
+            settle_asset="USDC",
+            margin_type=MarginType.LINEAR,
             tick_size=Decimal("0.0001"),
-            lot_size=Decimal("0.001"),
-            min_order_size=Decimal("0"),
+            min_size=Decimal("0.001"),
             contract_size=Decimal("1"),
-            settlement_asset="USDC",
             expiry=None,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
-            available_since=_DRIFT_DEPLOY_DATE,
+            status=InstrumentStatus.ACTIVE,
+            available_from_datetime=_DRIFT_DEPLOY_DATE,
         )
 
     def _build_spot_record(
         self,
         market: dict[str, object],
-        now: datetime,
     ) -> InstrumentRecord | None:
         """Build an InstrumentRecord from a Drift spot market."""
         symbol = str(market.get("symbol", ""))
@@ -195,22 +190,18 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=venue_tag,
-            symbol=base_asset,
             raw_symbol=symbol or base_asset,
-            instrument_type="spot",
+            instrument_type=InstrumentType.SPOT_PAIR,
             base_asset=base_asset,
             quote_asset="USDC",
             tick_size=Decimal("0.0001"),
-            lot_size=Decimal("0.001"),
-            min_order_size=Decimal("0"),
+            min_size=Decimal("0.001"),
             contract_size=Decimal("1"),
-            settlement_asset="USDC",
             expiry=None,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
-            available_since=_DRIFT_DEPLOY_DATE,
+            status=InstrumentStatus.ACTIVE,
+            available_from_datetime=_DRIFT_DEPLOY_DATE,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
@@ -230,7 +221,7 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Drift markets have no expiry calendar")
 

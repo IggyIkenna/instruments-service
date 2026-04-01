@@ -1,7 +1,7 @@
 """Lido reference data adapter — instrument discovery for LST tokens.
 
 Discovers Lido liquid staking tokens (stETH, wstETH) on Ethereum.
-Tokens are returned as InstrumentRecord with instrument_type="yield_bearing".
+Tokens are returned as InstrumentRecord with instrument_type="YIELD_BEARING".
 
 Reference: https://lido.fi/
 """
@@ -10,7 +10,7 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 
 from ..base_adapter import BaseReferenceDataAdapter
 from ..schemas import (
@@ -73,7 +73,6 @@ class LidoReferenceDataAdapter(BaseReferenceDataAdapter):
         if instrument_type not in (None, "yield_bearing"):
             return []
 
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
         venue_tag = f"LIDO-{self._chain}"
 
@@ -86,23 +85,19 @@ class LidoReferenceDataAdapter(BaseReferenceDataAdapter):
                 InstrumentRecord(
                     instrument_key=f"{venue_tag}:LST:{symbol}",
                     venue=venue_tag,
-                    symbol=symbol,
                     raw_symbol=address,
-                    instrument_type="yield_bearing",
+                    instrument_type=InstrumentType.YIELD_BEARING,
                     base_asset=underlying,
-                    quote_asset=underlying,
+                    quote_asset="",
                     tick_size=Decimal("0.000001"),
-                    lot_size=Decimal("0.000001"),
-                    min_order_size=Decimal("0"),
+                    min_size=Decimal("0.000001"),
                     contract_size=Decimal("1"),
-                    settlement_asset=underlying,
                     expiry=None,
                     strike=None,
                     option_type=None,
-                    is_active=True,
-                    updated_at=now,
+                    status=InstrumentStatus.ACTIVE,
                     underlying=underlying,
-                    available_since=_LIDO_DEPLOY_DATE,
+                    available_from_datetime=_LIDO_DEPLOY_DATE,
                 )
             )
 
@@ -126,7 +121,7 @@ class LidoReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Lido LST tokens have no expiry calendar")
 

@@ -15,7 +15,6 @@ from instruments_service.reference_data.adapters.curve import CurveReferenceData
 from instruments_service.reference_data.adapters.drift import DriftReferenceDataAdapter
 from instruments_service.reference_data.adapters.ethena import EthenaReferenceDataAdapter
 from instruments_service.reference_data.adapters.etherfi import EtherFiReferenceDataAdapter
-from instruments_service.reference_data.adapters.euler import EulerReferenceDataAdapter
 from instruments_service.reference_data.adapters.fluid import FluidReferenceDataAdapter
 from instruments_service.reference_data.adapters.kamino import KaminoReferenceDataAdapter
 from instruments_service.reference_data.adapters.lido import LidoReferenceDataAdapter
@@ -41,10 +40,6 @@ class TestDefiAdapterVenueProperty:
 
     def test_morpho_venue(self) -> None:
         adapter = MorphoReferenceDataAdapter()
-        assert adapter.venue is not None and len(adapter.venue) > 0
-
-    def test_euler_venue(self) -> None:
-        adapter = EulerReferenceDataAdapter()
         assert adapter.venue is not None and len(adapter.venue) > 0
 
     def test_fluid_venue(self) -> None:

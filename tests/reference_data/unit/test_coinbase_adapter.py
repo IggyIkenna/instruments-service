@@ -61,7 +61,7 @@ class TestCoinbaseAdapterExtended:
             results = await adapter.get_instruments()
         assert len(results) == 1
         assert results[0].raw_symbol == "BTC-USD"
-        assert results[0].instrument_type == "spot"
+        assert results[0].instrument_type == "SPOT_PAIR"
 
     @pytest.mark.asyncio
     async def test_get_instruments_non_spot_returns_empty(self) -> None:
@@ -70,7 +70,7 @@ class TestCoinbaseAdapterExtended:
         mock_session_cm.__aenter__ = AsyncMock(return_value=MagicMock())
         mock_session_cm.__aexit__ = AsyncMock(return_value=None)
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type="perp")
+            results = await adapter.get_instruments(instrument_type="PERPETUAL")
         assert results == []
 
     @pytest.mark.asyncio

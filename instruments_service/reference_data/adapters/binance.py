@@ -12,7 +12,13 @@ from unified_api_contracts import (
     BinanceOptionInstrumentInfo,
     classify_venue_error,
 )
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import (
+    InstrumentRecord,
+    InstrumentStatus,
+    InstrumentType,
+    MarginType,
+    OptionType,
+)
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -72,11 +78,11 @@ class BinanceReferenceDataAdapter(BaseReferenceDataAdapter):
     ) -> list[InstrumentRecord]:
         results: list[InstrumentRecord] = []
         async with aiohttp.ClientSession() as session:
-            if instrument_type in (None, "spot"):
+            if instrument_type in (None, "SPOT_PAIR", InstrumentType.SPOT_PAIR):
                 results.extend(await self._fetch_spot(session))
-            if instrument_type in (None, "perp", "future"):
+            if instrument_type in (None, "PERPETUAL", "FUTURE", InstrumentType.PERPETUAL, InstrumentType.FUTURE):
                 results.extend(await self._fetch_futures(session))
-            if instrument_type in (None, "option"):
+            if instrument_type in (None, "OPTION", InstrumentType.OPTION):
                 results.extend(await self._fetch_options(session))
         return results
 
@@ -110,7 +116,7 @@ class BinanceReferenceDataAdapter(BaseReferenceDataAdapter):
             if expiry and inst.expiry and inst.expiry.date() != expiry.date():
                 continue
             strikes.add(inst.strike or Decimal(0))
-            if inst.option_type == "call":
+            if inst.option_type == OptionType.CALL:
                 calls.append(inst)
             else:
                 puts.append(inst)
@@ -128,7 +134,7 @@ class BinanceReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         async with aiohttp.ClientSession() as session:
             url = f"{_FAPI_BASE}/fapi/v1/exchangeInfo"
@@ -182,7 +188,6 @@ class BinanceReferenceDataAdapter(BaseReferenceDataAdapter):
                 },
             )
             return []
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
         for sym in data.symbols or []:
             if sym.status != "TRADING":
@@ -190,28 +195,24 @@ class BinanceReferenceDataAdapter(BaseReferenceDataAdapter):
             filters: list[dict[str, object]] = sym.filters or []
             tick = self._filter_size(filters, "PRICE_FILTER", "tickSize")
             lot = self._filter_size(filters, "LOT_SIZE", "stepSize")
-            min_qty = self._filter_size(filters, "LOT_SIZE", "minQty")
             base = sym.baseAsset or ""
             quote = sym.quoteAsset or ""
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{_BINANCE_SPOT_VENUE}:SPOT:{base}~{quote}",
+                    instrument_key=f"{_BINANCE_SPOT_VENUE}:SPOT_PAIR:{base}~{quote}",
                     venue=_BINANCE_SPOT_VENUE,
-                    symbol=f"{base}/{quote}",
                     raw_symbol=sym.symbol,
-                    instrument_type="spot",
+                    instrument_type=InstrumentType.SPOT_PAIR,
                     base_asset=base,
                     quote_asset=quote,
+                    status=InstrumentStatus.ACTIVE,
                     tick_size=Decimal(tick),
-                    lot_size=Decimal(lot),
-                    min_order_size=Decimal(min_qty),
+                    min_size=Decimal(lot),
                     contract_size=Decimal("1"),
-                    settlement_asset=None,
                     expiry=None,
                     strike=None,
                     option_type=None,
-                    is_active=True,
-                    updated_at=now,
+                    available_from_datetime=datetime(2017, 7, 14, tzinfo=UTC),
                 )
             )
         return results
@@ -245,43 +246,42 @@ class BinanceReferenceDataAdapter(BaseReferenceDataAdapter):
                 },
             )
             return []
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
         for sym in data.symbols or []:
             if sym.status != "TRADING":
                 continue
             contract_type = sym.contractType or ""
-            inst_type = "perp" if contract_type == "PERPETUAL" else "future"
+            inst_type = InstrumentType.PERPETUAL if contract_type == "PERPETUAL" else InstrumentType.FUTURE
+            # Determine margin type from contract type
+            margin_asset = (sym.marginAsset or "").upper() if hasattr(sym, "marginAsset") else ""
+            margin_type = MarginType.INVERSE if margin_asset in ("BTC", "ETH") else MarginType.LINEAR
             filters: list[dict[str, object]] = sym.filters or []
             tick = self._filter_size(filters, "PRICE_FILTER", "tickSize")
             lot = self._filter_size(filters, "LOT_SIZE", "stepSize")
-            min_qty = self._filter_size(filters, "LOT_SIZE", "minQty")
             delivery_ts = sym.deliveryDate
             expiry: datetime | None = None
             if delivery_ts and int(str(delivery_ts)) > 0:
                 expiry = datetime.fromtimestamp(int(str(delivery_ts)) / 1000, tz=UTC)
             base_asset = sym.baseAsset or ""
             quote_asset = sym.quoteAsset or ""
-            inst_type_upper = inst_type.upper()
+            inst_type_key = inst_type.value
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"{_BINANCE_FUTURES_VENUE}:{inst_type_upper}:{base_asset}~{quote_asset}",
+                    instrument_key=f"{_BINANCE_FUTURES_VENUE}:{inst_type_key}:{base_asset}~{quote_asset}",
                     venue=_BINANCE_FUTURES_VENUE,
-                    symbol=f"{base_asset}/{quote_asset}",
                     raw_symbol=sym.symbol,
                     instrument_type=inst_type,
                     base_asset=base_asset,
                     quote_asset=quote_asset,
+                    status=InstrumentStatus.ACTIVE,
                     tick_size=Decimal(tick),
-                    lot_size=Decimal(lot),
-                    min_order_size=Decimal(min_qty),
+                    min_size=Decimal(lot),
                     contract_size=Decimal(str(sym.contractSize or 1)),
-                    settlement_asset=sym.marginAsset if sym.marginAsset else None,
                     expiry=expiry,
                     strike=None,
                     option_type=None,
-                    is_active=True,
-                    updated_at=now,
+                    margin_type=margin_type,
+                    available_from_datetime=datetime(2017, 7, 14, tzinfo=UTC),
                 )
             )
         return results
@@ -319,32 +319,29 @@ class BinanceReferenceDataAdapter(BaseReferenceDataAdapter):
         return [self._parse_option_symbol(s) for s in symbols if s.expiryDate]
 
     def _parse_option_symbol(self, sym: BinanceOptionInstrumentInfo) -> InstrumentRecord:
-        now = datetime.now(UTC)
         expiry_ts = sym.expiryDate
         expiry: datetime | None = None
         if expiry_ts:
             expiry = datetime.fromtimestamp(int(str(expiry_ts)) / 1000, tz=UTC)
         symbol_val = sym.symbol or ""
         underlying = sym.underlying or ""
-        side = sym.side or ""
+        side = (sym.side or "").upper()
+        opt_type = OptionType.CALL if side == "CALL" else OptionType.PUT
         return InstrumentRecord(
             instrument_key=f"{_BINANCE_FUTURES_VENUE}:OPTION:{symbol_val}",
             venue=_BINANCE_FUTURES_VENUE,
-            symbol=symbol_val,
             raw_symbol=symbol_val,
-            instrument_type="option",
+            instrument_type=InstrumentType.OPTION,
             base_asset=underlying,
             quote_asset="USDT",
+            status=InstrumentStatus.ACTIVE,
             tick_size=Decimal(str(sym.priceScale or "0.01")),
-            lot_size=Decimal(str(sym.quantityScale or "0.001")),
-            min_order_size=Decimal(str(sym.minQty or "0.001")),
+            min_size=Decimal(str(sym.quantityScale or "0.001")),
             contract_size=Decimal("1"),
-            settlement_asset="USDT",
             expiry=expiry,
             strike=Decimal(str(sym.strikePrice or "0")),
-            option_type=side.lower(),
-            is_active=True,
-            updated_at=now,
+            option_type=opt_type,
+            available_from_datetime=datetime(2017, 7, 14, tzinfo=UTC),
         )
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:

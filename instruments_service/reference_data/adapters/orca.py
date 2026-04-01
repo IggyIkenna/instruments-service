@@ -1,19 +1,19 @@
 """Orca Whirlpool reference data adapter -- instrument discovery via REST API.
 
 Discovers Orca concentrated liquidity (Whirlpool) pools on Solana.
-Pools are returned as InstrumentRecord with instrument_type="pool".
+Pools are returned as InstrumentRecord with instrument_type="POOL".
 
 Data source: Orca Whirlpool API (https://api.mainnet.orca.so).
 Reference: https://docs.orca.so/
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
 from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
 
@@ -50,7 +50,7 @@ def _classify_orca_error(exc: Exception, status: int | None = None) -> str:
 class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
     """Orca Whirlpool reference data: concentrated liquidity pool discovery.
 
-    Each Orca Whirlpool produces one instrument with instrument_type="pool"
+    Each Orca Whirlpool produces one instrument with instrument_type="POOL"
     and symbol=f"{tokenA}/{tokenB}".
     """
 
@@ -97,7 +97,7 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Orca Whirlpool pools as instruments."""
-        if instrument_type not in (None, "pool"):
+        if instrument_type not in (None, InstrumentType.POOL):
             return []
 
         url = f"{_BASE_URL}/v1/whirlpool/list"
@@ -107,9 +107,9 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
         except (aiohttp.ClientError, RuntimeError) as exc:
             if isinstance(exc, aiohttp.ClientError):
                 self._log_fetch_error(exc)
-            else:
-                logger.error("Orca whirlpools request failed after retries: %s", exc)
-            return []
+                raise ConnectionError(str(exc)) from exc
+            logger.error("Orca whirlpools request failed after retries: %s", exc)
+            raise
 
         # Orca API returns { "whirlpools": [...] }
         raw_data: dict[str, object] = data if isinstance(data, dict) else {}
@@ -117,13 +117,12 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
         if not isinstance(pools, list):
             pools = []
 
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
 
         for pool in pools:
             if not isinstance(pool, dict):
                 continue
-            record = self._build_pool_record(pool, now)
+            record = self._build_pool_record(pool)
             if record:
                 results.append(record)
 
@@ -136,17 +135,16 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
             )
 
             addresses = [r.raw_symbol for r in results if r.raw_symbol]
-            ts_map = await batch_resolve_creation_timestamps(addresses, concurrency=5)
+            ts_map = await batch_resolve_creation_timestamps(addresses)
             for record in results:
                 if record.raw_symbol in ts_map:
-                    record.available_since = ts_map[record.raw_symbol]
+                    record.available_from_datetime = ts_map[record.raw_symbol]
 
         return results
 
     def _build_pool_record(
         self,
         pool: dict[str, object],
-        now: datetime,
     ) -> InstrumentRecord | None:
         """Build an InstrumentRecord from a single Orca Whirlpool, or None."""
         address = pool.get("address")
@@ -174,29 +172,24 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         venue_tag = self.venue
-        symbol = f"{base}/{quote}"
         tick_spacing = pool.get("tickSpacing", "")
         instrument_key = f"{venue_tag}:POOL:{base}-{quote}:WP{tick_spacing}"
 
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=venue_tag,
-            symbol=symbol,
             raw_symbol=str(address),
-            instrument_type="pool",
+            instrument_type=InstrumentType.POOL,
             base_asset=base,
             quote_asset=quote,
             tick_size=Decimal("0.000001"),
-            lot_size=Decimal("0.000001"),
-            min_order_size=Decimal("0"),
+            min_size=Decimal("0.000001"),
             contract_size=Decimal("1"),
-            settlement_asset=quote,
             expiry=None,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
-            available_since=_ORCA_DEPLOY_DATE,
+            status=InstrumentStatus.ACTIVE,
+            available_from_datetime=_ORCA_DEPLOY_DATE,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
@@ -216,7 +209,7 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Orca pools have no expiry calendar")
 

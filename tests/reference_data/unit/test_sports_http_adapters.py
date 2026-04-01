@@ -12,6 +12,89 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from unified_api_contracts.external.open_meteo import WeatherCondition
+
+from instruments_service.reference_data.adapters.sports.adapters.api_football import (
+    ApiFootballAdapter,
+    _extract_response,
+    _flatten_standings_groups,
+    _parse_fixture_list,
+    _parse_fixture_response,
+    _parse_team_item,
+    _parse_teams,
+)
+from instruments_service.reference_data.adapters.sports.adapters.base import (
+    BaseSportsReferenceAdapter,
+)
+from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+    FootystatsAdapter,
+)
+from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+    _extract_data as _footystats_extract_data,
+)
+from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+    _parse_match as _footystats_parse_match,
+)
+from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+    _safe_float as _footystats_safe_float,
+)
+from instruments_service.reference_data.adapters.sports.adapters.footystats import (
+    _safe_int as _footystats_safe_int,
+)
+from instruments_service.reference_data.adapters.sports.adapters.odds_api import (
+    OddsApiAdapter,
+    _extract_events,
+    _normalize_event_odds,
+    _parse_bookmaker_odds,
+    _parse_market_outcomes,
+    _parse_outcome_odds,
+)
+from instruments_service.reference_data.adapters.sports.adapters.open_meteo import (
+    OpenMeteoAdapter,
+    _find_midday_index,
+    _parse_weather_response,
+    _safe_list_get,
+    _safe_list_get_int,
+    _weather_code_to_condition,
+)
+from instruments_service.reference_data.adapters.sports.adapters.pinnacle import (
+    PinnacleAdapter,
+    _extract_league_list,
+    _extract_leagues,
+    _parse_sport_id,
+)
+from instruments_service.reference_data.adapters.sports.adapters.soccerfootball_info import (
+    SoccerFootballInfoAdapter,
+)
+from instruments_service.reference_data.adapters.sports.adapters.soccerfootball_info import (
+    _extract_data as _sfi_extract_data,
+)
+from instruments_service.reference_data.adapters.sports.adapters.transfermarkt import (
+    TransfermarktAdapter,
+    _extract_clubs,
+    _parse_squad,
+)
+from instruments_service.reference_data.adapters.sports.adapters.transfermarkt import (
+    _extract_results as _tm_extract_results,
+)
+from instruments_service.reference_data.adapters.sports.adapters.transfermarkt import (
+    _safe_float as _tm_safe_float,
+)
+from instruments_service.reference_data.adapters.sports.adapters.transfermarkt import (
+    _safe_int as _tm_safe_int,
+)
+from instruments_service.reference_data.adapters.sports.adapters.understat import (
+    UnderstatAdapter,
+    _extract_dates_data,
+    _filter_and_normalize_matches,
+    _parse_understat_match,
+)
+from instruments_service.reference_data.adapters.sports.adapters.understat import (
+    _safe_float as _understat_safe_float,
+)
+from instruments_service.reference_data.adapters.sports.adapters.understat import (
+    _safe_int as _understat_safe_int,
+)
 
 # ---------------------------------------------------------------------------
 # Shared aiohttp mock helper
@@ -63,16 +146,6 @@ def _make_aiohttp_mock(
 # ===========================================================================
 # API Football adapter tests
 # ===========================================================================
-
-from instruments_service.reference_data.adapters.sports.adapters.api_football import (
-    ApiFootballAdapter,
-    _extract_response,
-    _flatten_standings_groups,
-    _parse_fixture_list,
-    _parse_fixture_response,
-    _parse_team_item,
-    _parse_teams,
-)
 
 
 class TestApiFootballHelpers:
@@ -288,7 +361,7 @@ class TestApiFootballAdapterHttp:
         mock_session = _make_aiohttp_mock({}, status=500)
         with (
             patch("aiohttp.ClientSession", return_value=mock_session),
-            pytest.raises(Exception),
+            pytest.raises(Exception, match="HTTP 500"),
         ):
             await adapter.get_fixtures("2026-03-22")
 
@@ -540,15 +613,6 @@ class TestApiFootballAdapterHttp:
 # Odds API adapter tests
 # ===========================================================================
 
-from instruments_service.reference_data.adapters.sports.adapters.odds_api import (
-    OddsApiAdapter,
-    _extract_events,
-    _normalize_event_odds,
-    _parse_bookmaker_odds,
-    _parse_market_outcomes,
-    _parse_outcome_odds,
-)
-
 
 class TestOddsApiHelpers:
     """Unit tests for Odds API helper functions."""
@@ -784,13 +848,6 @@ class TestOddsApiAdapterHttp:
 # Pinnacle adapter tests
 # ===========================================================================
 
-from instruments_service.reference_data.adapters.sports.adapters.pinnacle import (
-    PinnacleAdapter,
-    _extract_league_list,
-    _extract_leagues,
-    _parse_sport_id,
-)
-
 
 class TestPinnacleHelpers:
     """Unit tests for Pinnacle helper functions."""
@@ -977,22 +1034,6 @@ class TestPinnacleAdapterHttp:
 # ===========================================================================
 # FootyStats adapter tests
 # ===========================================================================
-
-from instruments_service.reference_data.adapters.sports.adapters.footystats import (
-    FootystatsAdapter,
-)
-from instruments_service.reference_data.adapters.sports.adapters.footystats import (
-    _extract_data as _footystats_extract_data,
-)
-from instruments_service.reference_data.adapters.sports.adapters.footystats import (
-    _parse_match as _footystats_parse_match,
-)
-from instruments_service.reference_data.adapters.sports.adapters.footystats import (
-    _safe_float as _footystats_safe_float,
-)
-from instruments_service.reference_data.adapters.sports.adapters.footystats import (
-    _safe_int as _footystats_safe_int,
-)
 
 
 class TestFootystatsHelpers:
@@ -1198,21 +1239,6 @@ class TestFootystatsAdapterHttp:
 # Transfermarkt adapter tests
 # ===========================================================================
 
-from instruments_service.reference_data.adapters.sports.adapters.transfermarkt import (
-    TransfermarktAdapter,
-    _extract_clubs,
-    _parse_squad,
-)
-from instruments_service.reference_data.adapters.sports.adapters.transfermarkt import (
-    _extract_results as _tm_extract_results,
-)
-from instruments_service.reference_data.adapters.sports.adapters.transfermarkt import (
-    _safe_float as _tm_safe_float,
-)
-from instruments_service.reference_data.adapters.sports.adapters.transfermarkt import (
-    _safe_int as _tm_safe_int,
-)
-
 
 class TestTransfermarktHelpers:
     """Unit tests for Transfermarkt helper functions."""
@@ -1396,19 +1422,6 @@ class TestTransfermarktAdapterHttp:
 # Understat adapter tests
 # ===========================================================================
 
-from instruments_service.reference_data.adapters.sports.adapters.understat import (
-    UnderstatAdapter,
-    _extract_dates_data,
-    _filter_and_normalize_matches,
-    _parse_understat_match,
-)
-from instruments_service.reference_data.adapters.sports.adapters.understat import (
-    _safe_float as _understat_safe_float,
-)
-from instruments_service.reference_data.adapters.sports.adapters.understat import (
-    _safe_int as _understat_safe_int,
-)
-
 
 class TestUnderstatHelpers:
     """Unit tests for Understat helper functions."""
@@ -1520,7 +1533,7 @@ class TestUnderstatAdapterHttp:
         adapter = UnderstatAdapter()
         leagues = await adapter.get_leagues()
         assert len(leagues) == 6
-        names = [l.name for l in leagues]
+        names = [league.name for league in leagues]
         assert "EPL" in names
         assert "La Liga" in names
         assert "Bundesliga" in names
@@ -1580,17 +1593,6 @@ class TestUnderstatAdapterHttp:
 # ===========================================================================
 # Open-Meteo adapter tests
 # ===========================================================================
-
-from unified_api_contracts.external.open_meteo import WeatherCondition
-
-from instruments_service.reference_data.adapters.sports.adapters.open_meteo import (
-    OpenMeteoAdapter,
-    _find_midday_index,
-    _parse_weather_response,
-    _safe_list_get,
-    _safe_list_get_int,
-    _weather_code_to_condition,
-)
 
 
 class TestOpenMeteoHelpers:
@@ -1744,13 +1746,6 @@ class TestOpenMeteoAdapterHttp:
 # SoccerFootball.info adapter tests
 # ===========================================================================
 
-from instruments_service.reference_data.adapters.sports.adapters.soccerfootball_info import (
-    SoccerFootballInfoAdapter,
-)
-from instruments_service.reference_data.adapters.sports.adapters.soccerfootball_info import (
-    _extract_data as _sfi_extract_data,
-)
-
 
 class TestSoccerFootballInfoHelpers:
     """Unit tests for SoccerFootball.info helper functions."""
@@ -1863,7 +1858,7 @@ class TestSoccerFootballInfoAdapterHttp:
 
     def test_headers_raises_without_key(self) -> None:
         adapter = SoccerFootballInfoAdapter()
-        with pytest.raises(ValueError, match="SoccerFootball.info adapter requires an API key"):
+        with pytest.raises(ValueError, match=r"SoccerFootball\.info adapter requires an API key"):
             adapter._headers()
 
     def test_headers_rapidapi_format(self) -> None:
@@ -1876,10 +1871,6 @@ class TestSoccerFootballInfoAdapterHttp:
 # ===========================================================================
 # Base adapter tests (error classification + emit)
 # ===========================================================================
-
-from instruments_service.reference_data.adapters.sports.adapters.base import (
-    BaseSportsReferenceAdapter,
-)
 
 
 class _ConcreteAdapter(BaseSportsReferenceAdapter):

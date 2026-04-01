@@ -84,7 +84,7 @@ def test_uic_instrument_record_construction() -> None:
     record = InstrumentRecord(
         instrument_key="BINANCE:PERP:BTCUSDT",
         venue="binance",
-        instrument_type="perp",
+        instrument_type="PERPETUAL",
         raw_symbol="BTCUSDT",
         base_asset="BTC",
         quote_asset="USDT",
@@ -117,7 +117,7 @@ def test_uic_instrument_record_used_in_schemas() -> None:
     record = InstrumentRecord(
         instrument_key="DERIBIT:OPTION:BTC-30JUN26-100000-C",
         venue="deribit",
-        instrument_type="option",
+        instrument_type="OPTION",
         raw_symbol="BTC-30JUN26-100000-C",
         base_asset="BTC",
         quote_asset="USD",
@@ -345,7 +345,7 @@ def test_urdi_all_schema_dataclasses_construct() -> None:
 
     calendar = CanonicalExpiryCalendar(
         venue="binance",
-        instrument_type="future",
+        instrument_type="FUTURE",
         underlying="ETH",
         expiries=[now],
     )

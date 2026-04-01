@@ -24,7 +24,7 @@ def _make_polygon_option(
         instrument_key=instrument_key,
         venue="polygon",
         raw_symbol=instrument_key,
-        instrument_type="option",
+        instrument_type="OPTION",
         base_asset="AAPL",
         quote_asset="USD",
         tick_size=Decimal("0.01"),
@@ -55,7 +55,7 @@ class TestBetfairAdapter:
     @pytest.mark.asyncio
     async def test_get_instruments_non_sports_event_returns_empty(self) -> None:
         adapter = BetfairReferenceDataAdapter()
-        results = await adapter.get_instruments(instrument_type="spot")
+        results = await adapter.get_instruments(instrument_type="SPOT_PAIR")
         assert results == []
 
     @pytest.mark.asyncio
@@ -96,7 +96,7 @@ class TestBetfairAdapter:
             results = await adapter.get_instruments()
         assert len(results) == 2
         assert results[0].venue == "betfair"
-        assert results[0].instrument_type == "sports_event"
+        assert results[0].instrument_type == "EXCHANGE_ODDS"
         assert results[0].instrument_key == "1.234567/111"
 
     @pytest.mark.asyncio
@@ -202,7 +202,7 @@ class TestPolymarketAdapterExtended:
     @pytest.mark.asyncio
     async def test_get_instruments_non_prediction_market_returns_empty(self) -> None:
         adapter = PolymarketReferenceDataAdapter()
-        results = await adapter.get_instruments(instrument_type="spot")
+        results = await adapter.get_instruments(instrument_type="SPOT_PAIR")
         assert results == []
 
     @pytest.mark.asyncio
@@ -236,7 +236,7 @@ class TestPolymarketAdapterExtended:
         assert len(results) == 1
         assert results[0].venue == "polymarket"
         assert results[0].instrument_key == "0xabc123"
-        assert "prediction" in str(results[0].instrument_type)
+        assert results[0].instrument_type == "PREDICTION_MARKET"
 
     @pytest.mark.asyncio
     async def test_get_options_chain_raises(self) -> None:
@@ -540,7 +540,7 @@ class TestPolygonAdapterExtended:
             patch.object(adapter, "_get_api_key", return_value="test-key"),
             patch.object(adapter, "_fetch_options", return_value=[]),
         ):
-            results = await adapter.get_instruments(instrument_type="option")
+            results = await adapter.get_instruments(instrument_type="OPTION")
         assert results == []
 
     @pytest.mark.asyncio

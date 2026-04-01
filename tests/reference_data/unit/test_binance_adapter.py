@@ -80,7 +80,7 @@ class TestBinanceAdapterExtended:
         results = await adapter._fetch_spot(mock_session)
         assert len(results) == 1
         assert results[0].raw_symbol == "BTCUSDT"
-        assert results[0].instrument_type == "spot"
+        assert results[0].instrument_type == "SPOT_PAIR"
         assert results[0].tick_size == Decimal("0.01")
 
     @pytest.mark.asyncio
@@ -122,8 +122,8 @@ class TestBinanceAdapterExtended:
         assert len(results) == 2
         perp = next(r for r in results if r.raw_symbol == "BTCUSDT")
         fut = next(r for r in results if r.raw_symbol == "BTCUSDT_240329")
-        assert perp.instrument_type == "perp"
-        assert fut.instrument_type == "future"
+        assert perp.instrument_type == "PERPETUAL"
+        assert fut.instrument_type == "FUTURE"
         assert fut.expiry is not None
 
     @pytest.mark.asyncio
@@ -177,7 +177,7 @@ class TestBinanceAdapterExtended:
             }
         )
         inst = adapter._parse_option_symbol(sym)
-        assert inst.instrument_type == "option"
+        assert inst.instrument_type == "OPTION"
         assert inst.strike == Decimal("50000")
         assert inst.option_type == "call"
         assert inst.expiry is not None

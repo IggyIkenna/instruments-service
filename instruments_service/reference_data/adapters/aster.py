@@ -17,7 +17,7 @@ from unified_api_contracts import (
     AsterExchangeInfo,
     classify_venue_error,
 )
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -31,6 +31,7 @@ from ..schemas import (
 logger = logging.getLogger(__name__)
 
 _BASE = "https://www.aster.exchange"
+_ASTER_LAUNCH_DATE = datetime(2024, 9, 1, tzinfo=UTC)
 
 
 def _classify_aster_error(exc: Exception, status: int | None = None) -> str:
@@ -76,7 +77,7 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active perpetual instruments from Aster exchangeInfo."""
-        if instrument_type not in (None, "perp"):
+        if instrument_type not in (None, InstrumentType.PERPETUAL):
             return []
 
         url = f"{_BASE}/fapi/v1/exchangeInfo"
@@ -111,7 +112,6 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
 
         data = AsterExchangeInfo.model_validate(raw)
         symbols: list[object] = data.symbols or []
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
 
         for sym_raw in symbols:
@@ -141,23 +141,19 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
 
             results.append(
                 InstrumentRecord(
-                    instrument_key=f"ASTER:PERPETUAL:{raw_symbol}",
+                    instrument_key=f"ASTER:PERP:{raw_symbol}",
                     venue="ASTER",
-                    symbol=f"{base_asset}/{quote_asset}",
                     raw_symbol=raw_symbol,
-                    instrument_type="perp",
+                    instrument_type=InstrumentType.PERPETUAL,
                     base_asset=base_asset,
                     quote_asset=quote_asset,
+                    settle_asset=quote_asset,
+                    margin_type=MarginType.LINEAR,
                     tick_size=tick_size,
-                    lot_size=lot_size,
-                    min_order_size=lot_size,
+                    min_size=lot_size,
                     contract_size=Decimal("1"),
-                    settlement_asset="USDC",
-                    expiry=None,
-                    strike=None,
-                    option_type=None,
-                    is_active=True,
-                    updated_at=now,
+                    available_from_datetime=_ASTER_LAUNCH_DATE,
+                    status=InstrumentStatus.ACTIVE,
                 )
             )
 
@@ -181,7 +177,7 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Aster perpetuals have no expiry calendar")
 

@@ -1,7 +1,7 @@
 """Ethena reference data adapter — instrument discovery for yield-bearing sUSDe.
 
 Ethena Protocol: Synthetic dollar (USDe) and staked USDe (sUSDe).
-sUSDe is a single yield-bearing instrument returned with instrument_type="yield_bearing".
+sUSDe is a single yield-bearing instrument returned with instrument_type="YIELD_BEARING".
 
 Reference: https://ethena.fi/
 """
@@ -10,7 +10,7 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 
 from ..base_adapter import BaseReferenceDataAdapter
 from ..schemas import (
@@ -59,30 +59,25 @@ class EthenaReferenceDataAdapter(BaseReferenceDataAdapter):
         if instrument_type not in (None, "yield_bearing"):
             return []
 
-        now = datetime.now(UTC)
         venue_tag = f"ETHENA-{self._chain}"
 
         results: list[InstrumentRecord] = [
             InstrumentRecord(
                 instrument_key=f"{venue_tag}:YIELD_BEARING:sUSDe",
                 venue=venue_tag,
-                symbol="sUSDe",
                 raw_symbol=_SUSDE_ADDRESS,
-                instrument_type="yield_bearing",
+                instrument_type=InstrumentType.YIELD_BEARING,
                 base_asset="sUSDe",
                 quote_asset="",
                 tick_size=Decimal("0.000001"),
-                lot_size=Decimal("0.000001"),
-                min_order_size=Decimal("0"),
+                min_size=Decimal("0.000001"),
                 contract_size=Decimal("1"),
-                settlement_asset="USDe",
                 expiry=None,
                 strike=None,
                 option_type=None,
-                is_active=True,
-                updated_at=now,
+                status=InstrumentStatus.ACTIVE,
                 underlying="USDe",
-                available_since=_ETHENA_DEPLOY_DATE,
+                available_from_datetime=_ETHENA_DEPLOY_DATE,
             )
         ]
 
@@ -106,7 +101,7 @@ class EthenaReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Ethena instruments have no expiry calendar")
 

@@ -21,7 +21,7 @@ from instruments_service.engine.orchestrator import (
 def _make_record(
     instrument_key: str = "TEST",
     venue: str = "TEST-VENUE",
-    instrument_type: str = "spot",
+    instrument_type: str = "SPOT_PAIR",
     base_asset: str = "ETH",
     quote_asset: str = "USDT",
     available_since: datetime | None = None,
@@ -33,8 +33,8 @@ def _make_record(
         instrument_type=instrument_type,
         base_asset=base_asset,
         quote_asset=quote_asset,
-        available_since=available_since,
-        available_to=available_to,
+        available_from_datetime=available_since,
+        available_to_datetime=available_to,
     )
 
 
@@ -105,15 +105,15 @@ class TestIsVenueAvailable:
         # If a venue has a launch date in 2020, checking 2010 should be False
         from instruments_service.engine.orchestrator import _VENUE_LAUNCH_DATES
 
-        for venue, launch_date in _VENUE_LAUNCH_DATES.items():
-            if launch_date > "2010-01-01":
+        for venue, _launch_date in _VENUE_LAUNCH_DATES.items():
+            if _launch_date > "2010-01-01":
                 assert is_venue_available(venue, "2010-01-01") is False
                 break
 
     def test_known_venue_after_launch_returns_true(self) -> None:
         from instruments_service.engine.orchestrator import _VENUE_LAUNCH_DATES
 
-        for venue, launch_date in _VENUE_LAUNCH_DATES.items():
+        for venue, _launch_date in _VENUE_LAUNCH_DATES.items():
             assert is_venue_available(venue, "2030-01-01") is True
             break
 

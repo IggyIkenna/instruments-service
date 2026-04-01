@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -72,16 +73,12 @@ class TestAsterAdapter:
         """Funding rate may raise NotImplementedError or return a result."""
         adapter = AsterReferenceDataAdapter()
         # Aster may implement funding rate — just verify no crash
-        try:
-            result = await adapter.get_funding_rate("BTC")
-        except (NotImplementedError, RuntimeError):
-            pass  # expected for some adapters
+        with contextlib.suppress(NotImplementedError, RuntimeError):
+            await adapter.get_funding_rate("BTC")
 
     @pytest.mark.asyncio
     async def test_get_ohlcv_raises_or_returns(self) -> None:
         """OHLCV may raise NotImplementedError or return a result."""
         adapter = AsterReferenceDataAdapter()
-        try:
-            result = await adapter.get_ohlcv("BTC")
-        except (NotImplementedError, RuntimeError):
-            pass  # expected for some adapters
+        with contextlib.suppress(NotImplementedError, RuntimeError):
+            await adapter.get_ohlcv("BTC")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,7 +18,7 @@ from instruments_service.engine.orchestrator import (
 def _make_record(
     instrument_key: str = "TEST:SPOT:BTCUSDT",
     venue: str = "BINANCE-SPOT",
-    instrument_type: str = "spot",
+    instrument_type: str = "SPOT_PAIR",
     base_asset: str = "BTC",
     quote_asset: str = "USDT",
 ) -> InstrumentRecord:
@@ -27,6 +28,8 @@ def _make_record(
         instrument_type=instrument_type,
         base_asset=base_asset,
         quote_asset=quote_asset,
+        tick_size=Decimal("0.01"),
+        available_from_datetime=datetime(2017, 7, 14, tzinfo=UTC),
     )
 
 

@@ -19,7 +19,7 @@ from instruments_service.reference_data.adapters.tardis import TardisReferenceDa
 def _make_record(
     key: str = "TEST:FUTURE:ESZ4",
     venue: str = "databento",
-    instrument_type: str = "future",
+    instrument_type: str = "FUTURE",
     raw_symbol: str = "ESZ4",
     base_asset: str = "ES",
     quote_asset: str = "USD",
@@ -56,26 +56,30 @@ class TestDatabentoAdapterMocked:
     async def test_get_instruments_with_key_returns_results(self) -> None:
         adapter = DatabentoReferenceDataAdapter(api_key="test-key")
         record = _make_record()
-        with patch.object(adapter, "_fetch_symbols", return_value=[record]):
-            with patch.object(adapter, "_get_equity_symbols", return_value=[]):
-                with patch.object(adapter, "_create_fx_spot_records", return_value=[]):
-                    with patch.object(adapter, "_create_yahoo_index_records", return_value=[]):
-                        with patch.object(adapter, "_enrich_session_metadata"):
-                            results = await adapter.get_instruments()
+        with (
+            patch.object(adapter, "_fetch_symbols", return_value=[record]),
+            patch.object(adapter, "_get_equity_symbols", return_value=[]),
+            patch.object(adapter, "_create_fx_spot_records", return_value=[]),
+            patch.object(adapter, "_create_yahoo_index_records", return_value=[]),
+            patch.object(adapter, "_enrich_session_metadata"),
+        ):
+            results = await adapter.get_instruments()
         assert len(results) >= 1
 
     @pytest.mark.asyncio
     async def test_get_instruments_with_type_filter(self) -> None:
         adapter = DatabentoReferenceDataAdapter(api_key="test-key")
-        fut = _make_record(instrument_type="future")
-        spot = _make_record(key="DBEQ:SPOT:AAPL", instrument_type="spot", raw_symbol="AAPL")
-        with patch.object(adapter, "_fetch_symbols", return_value=[fut, spot]):
-            with patch.object(adapter, "_get_equity_symbols", return_value=[]):
-                with patch.object(adapter, "_create_fx_spot_records", return_value=[]):
-                    with patch.object(adapter, "_create_yahoo_index_records", return_value=[]):
-                        with patch.object(adapter, "_enrich_session_metadata"):
-                            results = await adapter.get_instruments(instrument_type="future")
-        assert all(r.instrument_type == "future" for r in results)
+        fut = _make_record(instrument_type="FUTURE")
+        spot = _make_record(key="DBEQ:SPOT:AAPL", instrument_type="SPOT_PAIR", raw_symbol="AAPL")
+        with (
+            patch.object(adapter, "_fetch_symbols", return_value=[fut, spot]),
+            patch.object(adapter, "_get_equity_symbols", return_value=[]),
+            patch.object(adapter, "_create_fx_spot_records", return_value=[]),
+            patch.object(adapter, "_create_yahoo_index_records", return_value=[]),
+            patch.object(adapter, "_enrich_session_metadata"),
+        ):
+            results = await adapter.get_instruments(instrument_type="FUTURE")
+        assert all(r.instrument_type == "FUTURE" for r in results)
 
     @pytest.mark.asyncio
     async def test_get_instrument_found(self) -> None:
@@ -99,7 +103,7 @@ class TestDatabentoAdapterMocked:
         expiry_dt = datetime(2024, 6, 21, tzinfo=UTC)
         call_inst = _make_record(
             key="GLBX:OPT:ESM4 C4500",
-            instrument_type="option",
+            instrument_type="OPTION",
             raw_symbol="ESM4 C4500",
             strike=Decimal("4500"),
             option_type="Call",
@@ -117,12 +121,12 @@ class TestDatabentoAdapterMocked:
         expiry_dt = datetime(2024, 3, 15, tzinfo=UTC)
         fut_inst = _make_record(
             key="GLBX:FUTURE:ESH4",
-            instrument_type="future",
+            instrument_type="FUTURE",
             raw_symbol="ESH4",
             expiry=expiry_dt,
         )
         with patch.object(adapter, "get_instruments", AsyncMock(return_value=[fut_inst])):
-            calendar = await adapter.get_expiry_calendar("ES", instrument_type="future")
+            calendar = await adapter.get_expiry_calendar("ES", instrument_type="FUTURE")
         assert calendar.venue == "databento"
         assert expiry_dt in calendar.expiries
 
@@ -198,7 +202,7 @@ class TestTardisAdapterMocked:
             results = await adapter.get_instruments()
         assert len(results) == 1
         # Tardis stores raw type from API — "PERPETUAL" (uppercase)
-        assert "perpetual" in str(results[0].instrument_type).lower()
+        assert results[0].instrument_type == "PERPETUAL"
         # Tardis adapter uses the exchange name as venue (e.g. DERIBIT)
         assert results[0].venue is not None
 
@@ -270,7 +274,7 @@ class TestTardisAdapterMocked:
         call_inst = _make_record(
             key="deribit:BTC-31DEC24-50000-C",
             venue="tardis",
-            instrument_type="option",
+            instrument_type="OPTION",
             raw_symbol="BTC-31DEC24-50000-C",
             base_asset="BTC",
             quote_asset="USD",
@@ -289,14 +293,14 @@ class TestTardisAdapterMocked:
         fut_inst = _make_record(
             key="deribit:BTC-31MAR24",
             venue="tardis",
-            instrument_type="future",
+            instrument_type="FUTURE",
             raw_symbol="BTC-31MAR24",
             base_asset="BTC",
             quote_asset="USD",
             expiry=expiry_dt,
         )
         with patch.object(adapter, "get_instruments", AsyncMock(return_value=[fut_inst])):
-            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="future")
+            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="FUTURE")
         assert calendar.venue == "tardis"
         assert len(calendar.expiries) == 1
 
@@ -434,7 +438,7 @@ class TestBybitAdapterFullCoverage:
     async def test_get_expiry_calendar_mocked(self) -> None:
         adapter = BybitReferenceDataAdapter()
         with patch.object(adapter, "get_instruments", AsyncMock(return_value=[])):
-            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="future")
+            calendar = await adapter.get_expiry_calendar("BTC", instrument_type="FUTURE")
         assert calendar.venue == "BYBIT-SPOT"
         assert calendar.expiries == []
 
@@ -463,9 +467,9 @@ class TestBybitAdapterFullCoverage:
             ]
         )
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type="spot")
+            results = await adapter.get_instruments(instrument_type="SPOT_PAIR")
         assert len(results) == 1
-        assert results[0].instrument_type == "spot"
+        assert results[0].instrument_type == "SPOT_PAIR"
 
     @pytest.mark.asyncio
     async def test_fetch_category_perp(self) -> None:
@@ -486,9 +490,9 @@ class TestBybitAdapterFullCoverage:
             ]
         )
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type="perp")
+            results = await adapter.get_instruments(instrument_type="PERPETUAL")
         assert len(results) == 1
-        assert results[0].instrument_type == "perp"
+        assert results[0].instrument_type == "PERPETUAL"
 
     @pytest.mark.asyncio
     async def test_fetch_options(self) -> None:
@@ -515,9 +519,9 @@ class TestBybitAdapterFullCoverage:
         mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
         mock_session_cm.__aexit__ = AsyncMock(return_value=None)
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments(instrument_type="option")
+            results = await adapter.get_instruments(instrument_type="OPTION")
         assert len(results) >= 1
-        assert results[0].instrument_type == "option"
+        assert results[0].instrument_type == "OPTION"
         assert results[0].option_type == "call"
 
     def test_parse_category_symbol_no_symbol_returns_none(self) -> None:

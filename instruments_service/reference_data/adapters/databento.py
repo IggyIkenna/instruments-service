@@ -32,7 +32,7 @@ from unified_api_contracts import (
     VenueMapping,
     classify_venue_error,
 )
-from unified_api_contracts.internal import AssetClass, InstrumentRecord
+from unified_api_contracts.internal import AssetClass, InstrumentLeg, InstrumentRecord, InstrumentType, OptionType
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -45,20 +45,20 @@ from ..schemas import (
 
 logger = logging.getLogger(__name__)
 
-# Databento instrument_class → URDI instrument_type
-_CLASS_TO_TYPE: dict[str, str] = {
-    "B": "spot",  # Bond
-    "C": "option",  # Call option (CME/ICE)
-    "E": "spot",  # Equity
-    "F": "future",  # Future
-    "K": "spot",  # Forex spot
-    "M": "future",  # Monthly future (CME)
-    "N": "spot",  # ETF / Fund / Index
-    "O": "option",  # Option (generic)
-    "P": "option",  # Put option (CME/ICE)
-    "S": "spot",  # FX Spot / Equity spot
-    "T": "spread",  # Spread / Calendar spread
-    "X": "spot",  # Index
+# Databento instrument_class → canonical InstrumentType
+_CLASS_TO_TYPE: dict[str, InstrumentType] = {
+    "B": InstrumentType.SPOT_PAIR,  # Bond
+    "C": InstrumentType.OPTION,  # Call option (CME/ICE)
+    "E": InstrumentType.EQUITY,  # Equity
+    "F": InstrumentType.FUTURE,  # Future
+    "K": InstrumentType.SPOT_PAIR,  # Forex spot
+    "M": InstrumentType.FUTURE,  # Monthly future (CME)
+    "N": InstrumentType.ETF,  # ETF / Fund / Index
+    "O": InstrumentType.OPTION,  # Option (generic)
+    "P": InstrumentType.OPTION,  # Put option (CME/ICE)
+    "S": InstrumentType.SPOT_PAIR,  # FX Spot / Equity spot
+    "T": InstrumentType.COMBO,  # Exchange-defined spread / combo
+    "X": InstrumentType.SPOT_PAIR,  # Index
 }
 
 # Dataset → canonical venue mapping
@@ -89,11 +89,72 @@ _DATASET_TO_ASSET_CLASS: dict[str, AssetClass] = {
 
 # Per-instrument asset class from UAC registry.
 # Maps exchange_code → asset_class (e.g. "ES" → equity, "CL" → commodity).
-_EXCHANGE_CODE_ASSET_CLASS: dict[str, str] = {
-    inst.exchange_code: inst.asset_class for inst in TRADFI_DATABENTO_INSTRUMENTS if inst.exchange_code
-}
+# Build from both exchange_code AND the root symbol (part before ".FUT"/".OPT")
+# so that commodities like GC, CL, SI (which have exchange_code=None) are included.
+_EXCHANGE_CODE_ASSET_CLASS: dict[str, str] = {}
+for _inst in TRADFI_DATABENTO_INSTRUMENTS:
+    if _inst.exchange_code:
+        _EXCHANGE_CODE_ASSET_CLASS[_inst.exchange_code] = _inst.asset_class
+    # Also register the root symbol (e.g. "GC" from "GC.FUT", "BRN" from "BRN.FUT")
+    _root = _inst.symbol.split(".")[0] if "." in _inst.symbol else ""
+    if _root and _root not in _EXCHANGE_CODE_ASSET_CLASS:
+        _EXCHANGE_CODE_ASSET_CLASS[_root] = _inst.asset_class
 
 _VENUE_MAPPING = VenueMapping()
+
+# Futures datasets where class "S" = exchange-defined calendar spread (not equity spot).
+_FUTURES_DATASETS = frozenset({"GLBX.MDP3", "IFEU.IMPACT", "IFUS.IMPACT"})
+
+# Floor dates for venues where Databento doesn't populate the activation field.
+# These are conservative "data available from" dates based on Databento coverage.
+_DEFAULT_TRADFI_FLOOR = datetime(2020, 1, 1, tzinfo=UTC)
+_VENUE_FLOOR_DATES: dict[str, datetime] = {
+    "CME": datetime(2010, 1, 1, tzinfo=UTC),
+    "ICE": datetime(2015, 1, 1, tzinfo=UTC),
+    "NASDAQ": datetime(2015, 1, 1, tzinfo=UTC),
+    "NYSE": datetime(2015, 1, 1, tzinfo=UTC),
+    "CBOE": datetime(2015, 1, 1, tzinfo=UTC),
+    "FX": datetime(2020, 1, 1, tzinfo=UTC),
+}
+
+# Sorted exchange codes longest-first for greedy prefix matching.
+_SORTED_EXCHANGE_CODES: list[str] = sorted(_EXCHANGE_CODE_ASSET_CLASS.keys(), key=len, reverse=True)
+
+
+def _extract_underlying_from_symbol(raw_symbol: str) -> str:
+    """Derive underlying (parent/root symbol) from a futures raw symbol.
+
+    Matches the longest registered exchange_code that is a prefix of raw_symbol.
+    E.g. "ESH6" → "ES", "6MJ6" → "6M", "CLZ26" → "CL".
+    """
+    for code in _SORTED_EXCHANGE_CODES:
+        if raw_symbol.startswith(code) and len(raw_symbol) > len(code):
+            return code
+    return ""
+
+
+def _parse_cme_calendar_spread_legs(raw_symbol: str, venue: str) -> list[InstrumentLeg] | None:
+    """Parse CME exchange-defined calendar spread legs from raw_symbol.
+
+    Format: ``ROOTMONTHYEAR-ROOTMONTHYEAR`` (e.g. ``ESM6-ESU6``, ``CLZ26-CLF27``).
+    Returns [BUY front_leg, SELL back_leg] or None if unparseable.
+    """
+    parts = raw_symbol.split("-")
+    if len(parts) != 2:
+        return None
+    front, back = parts[0].strip(), parts[1].strip()
+    if not front or not back:
+        return None
+    # Both legs must resolve to a known underlying (registered exchange code)
+    front_und = _extract_underlying_from_symbol(front)
+    back_und = _extract_underlying_from_symbol(back)
+    if not front_und or not back_und:
+        return None
+    return [
+        InstrumentLeg(instrument_key=f"{venue}:FUTURE:{front}", side="BUY", ratio=1),
+        InstrumentLeg(instrument_key=f"{venue}:FUTURE:{back}", side="SELL", ratio=1),
+    ]
+
 
 # ---------------------------------------------------------------------------
 # Exchange calendar / trading hours enrichment
@@ -139,6 +200,8 @@ _EXCHANGE_HOURS: dict[str, dict[str, str | None]] = {
         "calendar": "NASDAQ",
         "auction_open": "09:28:00",
         "auction_close": "15:50:00",
+        "pre_market_open": "04:00:00",
+        "post_market_close": "20:00:00",
     },
     "NYSE": {
         "open": "09:30:00",
@@ -147,6 +210,8 @@ _EXCHANGE_HOURS: dict[str, dict[str, str | None]] = {
         "calendar": "NYSE",
         "auction_open": "09:28:00",
         "auction_close": "15:50:00",
+        "pre_market_open": "04:00:00",
+        "post_market_close": "20:00:00",
     },
 }
 
@@ -279,10 +344,12 @@ def _compute_utc_hours(
         result["regular_open_utc"] = open_utc.isoformat()
         result["regular_close_utc"] = close_utc.isoformat()
 
-        # Auction times
+        # Auction times + pre/post market
         for field, cfg_key in [
             ("auction_open_utc", "auction_open"),
             ("auction_close_utc", "auction_close"),
+            ("pre_market_open_utc", "pre_market_open"),
+            ("post_market_close_utc", "post_market_close"),
         ]:
             local_str = cfg.get(cfg_key)
             if local_str:
@@ -389,13 +456,15 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         datasets: list[str] | None = None,
         target_date: date | None = None,
         api_key: str | None = None,
+        venue_filter: str | None = None,
     ) -> None:
         super().__init__(project_id=project_id, api_key=api_key)
         self._target_date: date = target_date or date.today()
+        self._venue_filter: str | None = venue_filter
 
     @property
     def venue(self) -> str:
-        return "databento"
+        return self._venue_filter or "databento"
 
     async def get_instruments(
         self,
@@ -409,29 +478,52 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             )
 
         results: list[InstrumentRecord] = []
+        vf = self._venue_filter
 
         # 1. Fetch curated futures/options from TRADFI_DATABENTO_INSTRUMENTS
+        #    Filter to only instruments matching the requested venue.
         #    Grouped by (dataset, stype_in) to batch API calls.
+        filtered_defs = [d for d in TRADFI_DATABENTO_INSTRUMENTS if vf is None or d.venue == vf]
+        if not filtered_defs and vf:
+            logger.info("Databento: no instruments registered for venue %s", vf)
+
         groups: dict[tuple[str, str], list[str]] = {}
-        for inst_def in TRADFI_DATABENTO_INSTRUMENTS:
+        for inst_def in filtered_defs:
             key = (inst_def.dataset, inst_def.stype_in)
             groups.setdefault(key, []).append(inst_def.symbol)
 
         for (dataset, stype_in), symbols in groups.items():
+            logger.info(
+                "Databento [%s]: fetching %d symbols from %s (stype=%s)...",
+                vf or "ALL",
+                len(symbols),
+                dataset,
+                stype_in,
+            )
             batch = self._fetch_symbols(api_key, dataset, symbols, stype_in)
+            logger.info("Databento [%s]: %s returned %d instruments", vf or "ALL", dataset, len(batch))
             results.extend(batch)
 
-        # 2. Fetch S&P 500 equities + ETFs via DBEQ.BASIC / raw_symbol
-        equity_symbols = self._get_equity_symbols()
-        if equity_symbols:
-            batch = self._fetch_symbols(api_key, "DBEQ.BASIC", equity_symbols, "raw_symbol")
-            results.extend(batch)
+        # 2. Fetch S&P 500 equities + ETFs — only for NASDAQ/NYSE venues
+        if vf in (None, "NASDAQ", "NYSE"):
+            equity_symbols = self._get_equity_symbols()
+            if equity_symbols:
+                logger.info(
+                    "Databento [%s]: fetching %d equity/ETF symbols from DBEQ.BASIC...",
+                    vf or "ALL",
+                    len(equity_symbols),
+                )
+                batch = self._fetch_symbols(api_key, "DBEQ.BASIC", equity_symbols, "raw_symbol")
+                logger.info("Databento [%s]: DBEQ.BASIC returned %d instruments", vf or "ALL", len(batch))
+                results.extend(batch)
 
-        # 3. Static FX spot pairs (not from Databento)
-        results.extend(self._create_fx_spot_records())
+        # 3. Static FX spot pairs — only for FX venue
+        if vf in (None, "FX"):
+            results.extend(self._create_fx_spot_records())
 
-        # 3b. Static Yahoo Finance indices (VIX, etc. — not from Databento)
-        results.extend(self._create_yahoo_index_records())
+        # 3b. Static Yahoo Finance indices — only for CBOE venue (VIX etc.)
+        if vf in (None, "CBOE"):
+            results.extend(self._create_yahoo_index_records())
 
         # 4. Enrich with session metadata (trading hours, holidays, early closes)
         self._enrich_session_metadata(results)
@@ -462,6 +554,11 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                 record.regular_open_utc = meta.get("regular_open_utc")
                 record.regular_close_utc = meta.get("regular_close_utc")
                 record.early_close_utc = meta.get("early_close_utc")
+                record.pre_market_open_utc = meta.get("pre_market_open_utc")
+                record.post_market_close_utc = meta.get("post_market_close_utc")
+                record.auction_open_utc = meta.get("auction_open_utc")
+                record.auction_close_utc = meta.get("auction_close_utc")
+                record.holiday_calendar = meta.get("holiday_calendar")
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         instruments = await self.get_instruments()
@@ -475,7 +572,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
-        instruments = await self.get_instruments(instrument_type="option")
+        instruments = await self.get_instruments(instrument_type="OPTION")
         calls: list[InstrumentRecord] = []
         puts: list[InstrumentRecord] = []
         strikes: set[Decimal] = set()
@@ -485,9 +582,9 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                 continue
             if expiry and inst.expiry and inst.expiry.date() != expiry.date():
                 continue
-            if inst.option_type and inst.option_type.upper() in ("C", "CALL"):
+            if inst.option_type == OptionType.CALL:
                 calls.append(inst)
-            elif inst.option_type and inst.option_type.upper() in ("P", "PUT"):
+            elif inst.option_type == OptionType.PUT:
                 puts.append(inst)
             if inst.strike is not None:
                 strikes.add(inst.strike)
@@ -506,7 +603,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         instruments = await self.get_instruments(instrument_type=instrument_type)
         expiry_set: set[datetime] = set()
@@ -572,8 +669,13 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         # Databento has T+2 embargo — cap the query date to 3 days before today
         today = date.today()
         effective_date = min(target, today - timedelta(days=3))
-        start = datetime(effective_date.year, effective_date.month, effective_date.day, tzinfo=UTC)
-        end = start + timedelta(days=1)
+        # Equity datasets (DBEQ) have no data on weekends/holidays.
+        # Use a 5-day window ending on effective_date to catch the nearest trading day.
+        # Futures (GLBX, IFEU) trade Sunday evening so a 1-day window suffices.
+        is_equity_dataset = dataset.startswith("DBEQ")
+        lookback = timedelta(days=5) if is_equity_dataset else timedelta(days=0)
+        start = datetime(effective_date.year, effective_date.month, effective_date.day, tzinfo=UTC) - lookback
+        end = datetime(effective_date.year, effective_date.month, effective_date.day, tzinfo=UTC) + timedelta(days=1)
 
         try:
             data = client.timeseries.get_range(
@@ -633,11 +735,47 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             len(symbols),
         )
         canonical_venue = _DATASET_TO_VENUE.get(dataset, dataset)
+
+        # Pre-collect leg data for spread instruments (ICE populates leg fields,
+        # CME does not — leg_count=0 for all CME instruments).
+        combo_legs: dict[str, list[InstrumentLeg]] = {}
+        if "leg_count" in df.columns:
+            spread_rows = df[df["leg_count"] > 0]
+            for sym, grp in spread_rows.groupby("raw_symbol"):
+                legs: list[InstrumentLeg] = []
+                for _, leg_row in grp.sort_values("leg_index").iterrows():
+                    leg_sym = str(getattr(leg_row, "leg_raw_symbol", "") or "").strip()
+                    if not leg_sym:
+                        continue
+                    side_raw = str(getattr(leg_row, "leg_side", "B") or "B").strip()
+                    side = "SELL" if side_raw in ("A", "S") else "BUY"
+                    ratio_num = int(getattr(leg_row, "leg_ratio_qty_numerator", 1) or 1)
+                    ratio_den = int(getattr(leg_row, "leg_ratio_qty_denominator", 1) or 1)
+                    ratio = max(ratio_num // ratio_den, 1) if ratio_den else ratio_num
+                    # Resolve leg instrument_key — the leg is a separate instrument
+                    # in the same venue. Determine its type from instrument_class.
+                    leg_class = str(getattr(leg_row, "leg_instrument_class", "F") or "F")
+                    leg_type = _CLASS_TO_TYPE.get(leg_class, InstrumentType.FUTURE)
+                    leg_key = f"{canonical_venue}:{leg_type}:{leg_sym}"
+                    legs.append(InstrumentLeg(instrument_key=leg_key, side=side, ratio=ratio))
+                if legs:
+                    combo_legs[str(sym)] = legs
+
         results: list[InstrumentRecord] = []
         seen_symbols: set[str] = set()
 
         for _, row in df.iterrows():
-            record = self._parse_row_to_record(row, dataset, canonical_venue)
+            raw_sym = str(getattr(row, "raw_symbol", "") or "")
+            # For multi-row spreads (ICE), only process the first row per symbol.
+            # Leg data was already collected above.
+            if raw_sym in seen_symbols and raw_sym in combo_legs:
+                continue
+            record = self._parse_row_to_record(
+                row,
+                dataset,
+                canonical_venue,
+                combo_legs.get(raw_sym),
+            )
             if record is None:
                 continue
             # Deduplicate equities: DBEQ.BASIC returns multiple rows per symbol
@@ -655,17 +793,19 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             symbol = f"{fx.base}-{fx.quote}"
             records.append(
                 InstrumentRecord(
-                    instrument_key=f"FX:SPOT:{symbol}",
+                    instrument_key=f"FX:SPOT_PAIR:{symbol}",
                     venue="FX",
                     asset_class=AssetClass.FX,
-                    instrument_type="spot",
+                    instrument_type=InstrumentType.SPOT_PAIR,
                     raw_symbol=fx.yahoo_ticker,
                     base_asset=fx.base,
                     quote_asset=fx.quote,
                     tick_size=Decimal("0.0001"),
-                    lot_size=Decimal("1"),
+                    min_size=Decimal("1"),
                     contract_size=Decimal("1"),
-                    available_since=datetime(2020, 1, 1, tzinfo=UTC),
+                    available_from_datetime=datetime(2020, 1, 1, tzinfo=UTC),
+                    timezone="UTC",
+                    holiday_calendar="FX",
                 )
             )
         return records
@@ -681,11 +821,17 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                     instrument_key=f"{idx.venue}:INDEX:{idx.symbol}",
                     venue=idx.venue,
                     asset_class=AssetClass(idx.asset_class),
-                    instrument_type="index",
+                    instrument_type=InstrumentType.INDEX,
                     raw_symbol=idx.yahoo_ticker,
                     base_asset=idx.base_asset,
                     quote_asset="USD",
-                    available_since=datetime(2004, 3, 26, tzinfo=UTC),
+                    available_from_datetime=datetime(2004, 3, 26, tzinfo=UTC),
+                    # INDEX instruments are non-tradeable pricing references —
+                    # tick_size/min_size/contract_size not meaningful but set
+                    # for schema completeness.
+                    tick_size=Decimal("0.01"),
+                    min_size=Decimal("1"),
+                    contract_size=Decimal("1"),
                 )
             )
         return records
@@ -741,11 +887,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         return option_type_raw or None
 
     def _is_filtered_out(self, dataset: str, inst_class: str, expiry: datetime | None) -> bool:
-        """Check if a row should be filtered out (spreads, expired, too far out)."""
-        # Filter spreads from futures datasets
-        futures_datasets = {"GLBX.MDP3", "IFEU.IMPACT", "IFUS.IMPACT", "XCBF.PITCH"}
-        if dataset in futures_datasets and inst_class in ("S", "T"):
-            return True
+        """Check if a row should be filtered out (expired, too far out)."""
         if expiry is not None and expiry.date() < self._target_date:
             return True
         max_expiry = self._target_date + timedelta(days=365)
@@ -756,6 +898,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         row: object,
         dataset: str,
         canonical_venue: str,
+        pre_parsed_legs: list[InstrumentLeg] | None = None,
     ) -> InstrumentRecord | None:
         """Parse a single DataFrame row into an InstrumentRecord."""
         raw_symbol = str(getattr(row, "raw_symbol", "") or getattr(row, "symbol", "") or "")
@@ -763,28 +906,75 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         inst_class = str(getattr(row, "instrument_class", "E"))
-        instrument_type = _CLASS_TO_TYPE.get(inst_class, "spot")
+        instrument_type = _CLASS_TO_TYPE.get(inst_class, InstrumentType.SPOT_PAIR)
         currency = str(getattr(row, "currency", "USD") or "USD")
 
         expiry = self._parse_expiry_from_row(row)
         strike = self._parse_strike_from_row(row)
         option_type = self._parse_option_type_from_row(row, inst_class)
         underlying = str(getattr(row, "underlying", "") or "")
+        # Databento doesn't always populate `underlying` for futures/options.
+        # Derive from raw_symbol using registered exchange codes (parent symbols).
+        if not underlying and instrument_type in (InstrumentType.FUTURE, InstrumentType.OPTION) and raw_symbol:
+            underlying = _extract_underlying_from_symbol(raw_symbol)
         tick_size, lot_size = self._parse_tick_and_lot(row)
 
         if self._is_filtered_out(dataset, inst_class, expiry):
             return None
 
+        # CME class "S" from futures datasets = exchange-defined calendar spreads.
+        # Parse legs from raw_symbol (e.g. "ESM6-ESU6" → BUY ESM6 + SELL ESU6).
+        # Class S from equity datasets (DBEQ) remains SPOT_PAIR.
+        if inst_class == "S" and dataset in _FUTURES_DATASETS:
+            instrument_type = InstrumentType.COMBO
+            if pre_parsed_legs is None:
+                pre_parsed_legs = _parse_cme_calendar_spread_legs(raw_symbol, canonical_venue)
+
+        # User-defined combos/spreads (e.g. "UD:1V:CXT ...") come through as
+        # futures/options from parent symbology but have no derivable underlying.
+        # Reclassify them as COMBO instruments.
+        if instrument_type in (InstrumentType.FUTURE, InstrumentType.OPTION) and not underlying:
+            instrument_type = InstrumentType.COMBO
+
         # Determine asset class from the UAC registry per-instrument, not per-dataset.
         # Build lookup: exchange_code → asset_class from the curated registry.
         asset_class = self._resolve_asset_class(dataset, raw_symbol, underlying)
         if dataset == "DBEQ.BASIC" and raw_symbol in KNOWN_ETFS:
-            instrument_type = "etf"
+            instrument_type = InstrumentType.ETF
 
         # For equity-venue instruments, route to correct canonical venue
         if dataset == "DBEQ.BASIC":
             nasdaq_tickers = set(TRADFI_TICKER_UNIVERSE.get("nasdaq_tickers", []))
             canonical_venue = "NASDAQ" if raw_symbol in nasdaq_tickers else "NYSE"
+
+        # Parse available_since from Databento activation timestamp.
+        # Not all datasets populate activation (DBEQ.BASIC, IFEU/IFUS).
+        # For futures/options: estimate from expiry (listing period heuristic).
+        # For equities/spot: fall back to venue-level floor date.
+        activation_raw = getattr(row, "activation", None)
+        available_since: datetime | None = None
+        if activation_raw is not None:
+            with contextlib.suppress(ValueError, TypeError):
+                available_since = datetime.fromisoformat(str(activation_raw).replace("Z", "+00:00")).astimezone(UTC)
+        if available_since is None:
+            available_since = self._estimate_available_since(
+                instrument_type,
+                expiry,
+                canonical_venue,
+            )
+
+        # Resolve timezone from exchange hours config
+        venue_hours = _EXCHANGE_HOURS.get(canonical_venue)
+        tz = venue_hours["tz"] if venue_hours and venue_hours.get("tz") else "UTC"
+
+        is_combo = instrument_type == InstrumentType.COMBO
+
+        # COMBO instruments: only emit when real legs are available.
+        # ICE provides leg data (leg_count > 0) → pre_parsed_legs is populated.
+        # CME has leg_count=0 → no leg data → skip the combo entirely.
+        if is_combo and not pre_parsed_legs:
+            return None
+        legs = pre_parsed_legs if is_combo else None
 
         return InstrumentRecord(
             instrument_key=f"{canonical_venue}:{instrument_type.upper()}:{raw_symbol}",
@@ -794,15 +984,50 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             instrument_type=instrument_type,
             base_asset=underlying or raw_symbol,
             quote_asset=currency,
-            tick_size=tick_size,
-            lot_size=lot_size,
-            contract_size=Decimal("1"),
+            tick_size=tick_size if not is_combo else None,
+            min_size=lot_size if not is_combo else None,
+            contract_size=Decimal("1") if not is_combo else None,
             expiry=expiry,
-            strike=strike,
-            option_type=option_type if option_type and option_type in ("C", "P") else None,
+            strike=strike if not is_combo else None,
+            option_type=(
+                {"C": OptionType.CALL, "P": OptionType.PUT}.get(option_type) if option_type and not is_combo else None
+            ),
             underlying=underlying or None,
-            available_since=None,
+            legs=legs,
+            available_from_datetime=available_since,
+            timezone=tz,
         )
+
+    @staticmethod
+    def _estimate_available_since(
+        instrument_type: str,
+        expiry: datetime | None,
+        canonical_venue: str,
+    ) -> datetime:
+        """Estimate available_since when Databento doesn't populate activation.
+
+        For futures/options with an expiry: approximate listing date as
+        expiry minus a venue-specific listing period. CME lists standard
+        futures ~18 months out, ICE ~12 months. Options typically list
+        closer to expiry.
+
+        For equities/spot without expiry: fall back to venue floor date.
+        """
+        if expiry is not None and instrument_type in (InstrumentType.FUTURE, InstrumentType.OPTION):
+            # Listing period heuristic by venue
+            if instrument_type == InstrumentType.OPTION:
+                listing_months = 6  # options list closer to expiry
+            elif canonical_venue == "CME":
+                listing_months = 18  # CME standard futures
+            elif canonical_venue == "ICE":
+                listing_months = 12  # ICE futures
+            else:
+                listing_months = 12  # conservative default
+            estimated = expiry - timedelta(days=listing_months * 30)
+            # Don't go before the venue floor
+            floor = _VENUE_FLOOR_DATES.get(canonical_venue, _DEFAULT_TRADFI_FLOOR)
+            return max(estimated, floor)
+        return _VENUE_FLOOR_DATES.get(canonical_venue, _DEFAULT_TRADFI_FLOOR)
 
     @staticmethod
     def _resolve_asset_class(dataset: str, raw_symbol: str, underlying: str) -> AssetClass:

@@ -1,19 +1,19 @@
 """Aave V3 reference data adapter — instrument discovery via Aave subgraph.
 
 Discovers Aave V3 lending markets (aToken and debtToken instruments) on Ethereum.
-Markets are returned as InstrumentRecord with instrument_type="lending_market".
+Markets are returned as InstrumentRecord with instrument_type=InstrumentType.LENDING.
 
 Data source: The Graph (Aave V3 subgraph).
 Reference: https://aave.com/
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
 from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import get_subgraph_id
 from unified_trading_library import log_event
 
@@ -26,16 +26,18 @@ from ..schemas import (
 )
 from ..utils import date_to_block
 from ..utils.defi_utils import classify_graph_error
+from ..utils.evm_creation_resolver import (
+    batch_resolve_evm_creation_timestamps,
+    get_protocol_floor_date,
+)
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CHAIN = "ETHEREUM"
 
-# Aave V3 Ethereum mainnet deployment date (2023-01-27).
-# The Graph Aave V3 subgraph does not expose a per-reserve createdTimestamp
-# field, so we use the protocol launch date as the available_since floor for
-# all reserves on this chain.
-_AAVE_V3_DEPLOY_DATE = datetime(2023, 1, 27, tzinfo=UTC)
+# Per-chain deploy dates now in evm_creation_resolver.LENDING_PROTOCOL_DEPLOY_DATES.
+# Per-reserve creation is resolved dynamically via binary search on the
+# aToken contract address (eth_getCode).
 
 # Query template — {block_clause} is replaced with '' or 'block: {number: N}, '
 _RESERVES_QUERY_TEMPLATE = """
@@ -55,6 +57,7 @@ query GetReserves {{
         isActive
         isFrozen
         isPaused
+        aToken {{ id }}
     }}
 }}
 """
@@ -102,7 +105,7 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Aave V3 lending markets as instruments."""
-        if instrument_type not in (None, "lending_market"):
+        if instrument_type not in (None, InstrumentType.LENDING):
             return []
 
         url = self._resolve_api_url()
@@ -126,15 +129,38 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
                 data = await resp.json()
         except aiohttp.ClientError as exc:
             self._log_fetch_error(exc)
-            return []
+            raise ConnectionError(str(exc)) from exc
 
         reserves: list[dict[str, object]] = data.get("data", {}).get("reserves", [])
-        now = datetime.now(UTC)
-        results: list[InstrumentRecord] = []
         venue_tag = f"AAVEV3-{self._chain}"
 
-        for reserve in reserves:
-            results.extend(self._build_reserve_records(reserve, venue_tag, now))
+        # Collect aToken addresses for creation timestamp resolution
+        atoken_addresses: list[str] = []
+        atoken_to_reserve_idx: dict[str, int] = {}
+        for i, reserve in enumerate(reserves):
+            atoken_obj = reserve.get("aToken")
+            if isinstance(atoken_obj, dict):
+                atoken_addr = str(atoken_obj.get("id", ""))
+                if atoken_addr:
+                    atoken_addresses.append(atoken_addr)
+                    atoken_to_reserve_idx[atoken_addr] = i
+
+        # Batch-resolve aToken creation timestamps (cached — only RPC on first run)
+        creation_ts_map: dict[str, datetime] = {}
+        if atoken_addresses:
+            creation_ts_map = await batch_resolve_evm_creation_timestamps(
+                atoken_addresses,
+                self._chain,
+            )
+
+        floor_date = get_protocol_floor_date("aave_v3", self._chain)
+        results: list[InstrumentRecord] = []
+        for _i, reserve in enumerate(reserves):
+            # Find the creation timestamp for this reserve's aToken
+            atoken_obj = reserve.get("aToken")
+            atoken_addr = str(atoken_obj.get("id", "")) if isinstance(atoken_obj, dict) else ""
+            available_since = creation_ts_map.get(atoken_addr, floor_date)
+            results.extend(self._build_reserve_records(reserve, venue_tag, available_since))
 
         logger.info("AaveV3: fetched %d lending market instruments on %s", len(results), self._chain)
         return results
@@ -181,7 +207,7 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         self,
         reserve: dict[str, object],
         venue_tag: str,
-        now: datetime,
+        available_since: datetime | None = None,
     ) -> list[InstrumentRecord]:
         """Build InstrumentRecord entries for a single Aave reserve."""
         symbol = str(reserve.get("symbol", ""))
@@ -193,35 +219,31 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         if symbol.upper() not in DEFI_MAJOR_ASSET_SYMBOLS:
             return []
 
-        is_frozen = reserve.get("isFrozen", False)
-        is_paused = reserve.get("isPaused", False)
-        is_active = bool(reserve.get("isActive", True)) and not is_frozen and not is_paused
+        if available_since is None:
+            available_since = get_protocol_floor_date("aave_v3", self._chain)
+
         sym_upper = symbol.upper()
         base_kwargs = {
             "venue": venue_tag,
             "raw_symbol": underlying,
-            "instrument_type": "lending_market",
+            "instrument_type": InstrumentType.LENDING,
             "base_asset": sym_upper,
             "quote_asset": "",
             "tick_size": Decimal("0.000001"),
-            "lot_size": Decimal("0.000001"),
-            "min_order_size": Decimal("0"),
+            "min_size": Decimal("0.000001"),
             "contract_size": Decimal("1"),
-            "settlement_asset": sym_upper,
             "expiry": None,
             "strike": None,
             "option_type": None,
-            "is_active": is_active,
-            "updated_at": now,
+            "status": InstrumentStatus.ACTIVE,
             "underlying": sym_upper,
-            "available_since": _AAVE_V3_DEPLOY_DATE,
+            "available_from_datetime": available_since,
         }
 
         a_symbol = f"A{sym_upper}"
         results = [
             InstrumentRecord(
                 instrument_key=f"{venue_tag}:A_TOKEN:{a_symbol}",
-                symbol=a_symbol,
                 **base_kwargs,
             )
         ]
@@ -231,7 +253,6 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             results.append(
                 InstrumentRecord(
                     instrument_key=f"{venue_tag}:DEBT_TOKEN:{debt_symbol}",
-                    symbol=debt_symbol,
                     **base_kwargs,
                 )
             )
@@ -254,7 +275,7 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Aave V3 lending markets have no expiry calendar")
 

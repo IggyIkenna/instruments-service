@@ -1,19 +1,19 @@
 """Morpho Blue reference data adapter — instrument discovery via Morpho API.
 
 Discovers Morpho Blue isolated lending markets on Ethereum.
-Markets are returned as InstrumentRecord with instrument_type="lending_market".
+Markets are returned as InstrumentRecord with instrument_type="LENDING".
 
 Data source: Morpho Blue GraphQL API (blue-api.morpho.org).
 Reference: https://morpho.org/
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
 from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -24,34 +24,45 @@ from ..schemas import (
     OHLCVRef,
 )
 from ..utils.defi_utils import classify_graph_error
+from ..utils.evm_creation_resolver import get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
 
 _MORPHO_API_URL = "https://blue-api.morpho.org/graphql"
 _DEFAULT_CHAIN = "ETHEREUM"
 
-# Morpho Blue Ethereum mainnet deployment date (2024-01-08).
-# The Morpho GraphQL API does not expose per-market creation timestamps,
-# so we use the protocol launch date as the available_since floor for all markets.
-_MORPHO_DEPLOY_DATE = datetime(2024, 1, 8, tzinfo=UTC)
+# Per-chain deploy dates now in evm_creation_resolver.LENDING_PROTOCOL_DEPLOY_DATES.
+# Morpho uniqueKey is bytes32 (not a contract address), so binary-search eth_getCode
+# won't work. We use protocol floor dates per chain as the available_since floor.
 
-_MARKETS_QUERY = """
-query {
-    markets(first: 400, orderBy: SupplyAssets, orderDirection: Desc) {
-        items {
+# Chain name → EVM chain ID for Morpho Blue API filtering.
+# Morpho supports these chains via blue-api.morpho.org (chainId_in filter).
+_MORPHO_CHAIN_IDS: dict[str, int] = {
+    "ETHEREUM": 1,
+    "BASE": 8453,
+    "ARBITRUM": 42161,
+    "OPTIMISM": 10,
+    "POLYGON": 137,
+    "SCROLL": 534352,
+}
+
+_MARKETS_QUERY_TEMPLATE = """
+query {{
+    markets(first: 400, orderBy: SupplyAssets, orderDirection: Desc, where: {{ chainId_in: [{chain_id}] }}) {{
+        items {{
             uniqueKey
-            loanAsset { address symbol name decimals }
-            collateralAsset { address symbol name decimals }
+            loanAsset {{ address symbol name decimals }}
+            collateralAsset {{ address symbol name decimals }}
             lltv
-            state {
+            state {{
                 supplyAssets
                 borrowAssets
                 supplyApy
                 borrowApy
-            }
-        }
-    }
-}
+            }}
+        }}
+    }}
+}}
 """
 
 
@@ -79,27 +90,35 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
         if instrument_type not in (None, "lending_market"):
             return []
 
+        chain_id = _MORPHO_CHAIN_IDS.get(self._chain)
+        if chain_id is None:
+            logger.warning("Morpho: unsupported chain %s (supported: %s)", self._chain, list(_MORPHO_CHAIN_IDS))
+            return []
+
+        query = _MARKETS_QUERY_TEMPLATE.format(chain_id=chain_id)
+
         try:
             async with (
                 aiohttp.ClientSession() as session,
                 session.post(
                     _MORPHO_API_URL,
-                    json={"query": _MARKETS_QUERY},
+                    json={"query": query},
                     headers={"Content-Type": "application/json"},
                 ) as resp,
             ):
                 resp.raise_for_status()
-                data = await resp.json()
+                data: dict[str, object] = dict(await resp.json())
                 gql_errors = data.get("errors")
                 if gql_errors:
-                    logger.warning("Morpho GraphQL errors: %s", gql_errors)
+                    logger.warning("Morpho GraphQL errors on %s: %s", self._chain, gql_errors)
         except aiohttp.ClientError as exc:
             error_code = classify_graph_error(exc)
             classification = classify_venue_error("morpho", error_code)
             action = classification.action.value if classification else "fail"
             retry_safe = classification.retry_safe if classification else False
             logger.error(
-                "Morpho API request failed: %s (classified: %s, action: %s, retry_safe: %s)",
+                "Morpho API request failed on %s: %s (classified: %s, action: %s, retry_safe: %s)",
+                self._chain,
                 exc,
                 error_code,
                 action,
@@ -109,6 +128,7 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
                 "ADAPTER_FETCH_FAILED",
                 details={
                     "venue": "morpho",
+                    "chain": self._chain,
                     "endpoint": "morpho_api_markets",
                     "error": str(exc),
                     "error_code": error_code,
@@ -116,26 +136,44 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
                     "retry_safe": retry_safe,
                 },
             )
+            raise ConnectionError(str(exc)) from exc
+
+        # Safely navigate the GraphQL response — any layer could be None
+        raw_data: dict[str, object] = data if isinstance(data, dict) else {}
+        response_data_val: object = raw_data.get("data")
+        response_dict: dict[str, object] = response_data_val if isinstance(response_data_val, dict) else {}
+        markets_data_val: object = response_dict.get("markets")
+        if markets_data_val is None:
+            logger.warning(
+                "Morpho %s: API returned no markets data (response keys: %s)",
+                self._chain,
+                list(raw_data.keys()),
+            )
             return []
 
-        markets_data = data.get("data", {}).get("markets", {})
-        markets: list[dict[str, object]] = (
-            markets_data.get("items", []) if isinstance(markets_data, dict) else markets_data
-        )
-        now = datetime.now(UTC)
+        markets_dict: dict[str, object] = markets_data_val if isinstance(markets_data_val, dict) else {}
+        markets_items: object = markets_dict.get("items", [])
+        markets: list[dict[str, object]] = markets_items if isinstance(markets_items, list) else []
         results: list[InstrumentRecord] = []
         venue_tag = f"MORPHO-{self._chain}"
 
+        floor_date = get_protocol_floor_date("morpho", self._chain)
         for market in markets:
-            record = self._market_to_record(market, venue_tag, now)
+            record = self._market_to_record(market, venue_tag, floor_date)
             if record is not None:
                 results.append(record)
 
-        logger.info("Morpho: fetched %d lending market instruments on %s", len(results), self._chain)
+        logger.info(
+            "Morpho %s: fetched %d lending markets from %d API results", self._chain, len(results), len(markets)
+        )
         return results
 
     @staticmethod
-    def _market_to_record(market: dict[str, object], venue_tag: str, now: datetime) -> InstrumentRecord | None:
+    def _market_to_record(
+        market: dict[str, object],
+        venue_tag: str,
+        available_since: datetime | None = None,
+    ) -> InstrumentRecord | None:
         """Convert a raw Morpho market dict to an InstrumentRecord, or None if filtered."""
         loan_asset = market.get("loanAsset")
         collateral_asset = market.get("collateralAsset")
@@ -161,22 +199,18 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=venue_tag,
-            symbol=symbol,
             raw_symbol=market_key,
-            instrument_type="lending_market",
+            instrument_type=InstrumentType.LENDING,
             base_asset=collateral_symbol,
             quote_asset=loan_symbol,
             tick_size=Decimal("0.000001"),
-            lot_size=Decimal("0.000001"),
-            min_order_size=Decimal("0"),
+            min_size=Decimal("0.000001"),
             contract_size=Decimal("1"),
-            settlement_asset=loan_symbol,
             expiry=None,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
-            available_since=_MORPHO_DEPLOY_DATE,
+            status=InstrumentStatus.ACTIVE,
+            available_from_datetime=available_since or get_protocol_floor_date("morpho", "ETHEREUM"),
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
@@ -196,7 +230,7 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Morpho lending markets have no expiry calendar")
 

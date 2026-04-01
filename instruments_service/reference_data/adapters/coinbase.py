@@ -11,7 +11,7 @@ from unified_api_contracts import (
     CoinbaseProductsResponse,
     classify_venue_error,
 )
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -52,7 +52,7 @@ class CoinbaseReferenceDataAdapter(BaseReferenceDataAdapter):
         self,
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
-        if instrument_type not in (None, "spot"):
+        if instrument_type not in (None, InstrumentType.SPOT_PAIR):
             return []
         url = f"{_BASE}/api/v3/brokerage/products"
         try:
@@ -84,7 +84,6 @@ class CoinbaseReferenceDataAdapter(BaseReferenceDataAdapter):
             )
             return []
         products: list[CoinbaseProductInfo] = data.products
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
         for product in products:
             if str(product.status or "") != "online":
@@ -100,21 +99,18 @@ class CoinbaseReferenceDataAdapter(BaseReferenceDataAdapter):
                 InstrumentRecord(
                     instrument_key=product_id,
                     venue=self.venue,
-                    symbol=product_id,
                     raw_symbol=product_id,
-                    instrument_type="spot",
+                    instrument_type=InstrumentType.SPOT_PAIR,
                     base_asset=base,
                     quote_asset=quote,
+                    status=InstrumentStatus.ACTIVE,
                     tick_size=Decimal(str(product.quote_increment or "0.01")),
-                    lot_size=Decimal(str(product.base_increment or "0.00000001")),
-                    min_order_size=Decimal(str(product.base_min_size or "0.001")),
+                    min_size=Decimal(str(product.base_increment or "0.00000001")),
                     contract_size=Decimal("1"),
-                    settlement_asset=None,
                     expiry=None,
                     strike=None,
                     option_type=None,
-                    is_active=True,
-                    updated_at=now,
+                    available_from_datetime=datetime(2015, 1, 1, tzinfo=UTC),
                 )
             )
         return results
@@ -152,7 +148,6 @@ class CoinbaseReferenceDataAdapter(BaseReferenceDataAdapter):
                 },
             )
             return None
-        now = datetime.now(UTC)
         product_id = data.product_id
         base = data.base_currency_id
         quote = data.quote_currency_id
@@ -161,21 +156,18 @@ class CoinbaseReferenceDataAdapter(BaseReferenceDataAdapter):
         return InstrumentRecord(
             instrument_key=product_id,
             venue=self.venue,
-            symbol=product_id,
             raw_symbol=product_id,
-            instrument_type="spot",
+            instrument_type=InstrumentType.SPOT_PAIR,
             base_asset=base,
             quote_asset=quote,
+            status=InstrumentStatus.ACTIVE,
             tick_size=Decimal(str(data.quote_increment or "0.01")),
-            lot_size=Decimal(str(data.base_increment or "0.00000001")),
-            min_order_size=Decimal(str(data.base_min_size or "0.001")),
+            min_size=Decimal(str(data.base_increment or "0.00000001")),
             contract_size=Decimal("1"),
-            settlement_asset=None,
             expiry=None,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
+            available_from_datetime=datetime(2015, 1, 1, tzinfo=UTC),
         )
 
     async def get_options_chain(
@@ -188,7 +180,7 @@ class CoinbaseReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Coinbase does not support futures expiry calendar via public REST API")
 

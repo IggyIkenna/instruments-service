@@ -12,7 +12,7 @@ from unified_api_contracts import (
     HyperliquidMeta,
     classify_venue_error,
 )
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -26,6 +26,7 @@ from ..schemas import (
 logger = logging.getLogger(__name__)
 
 _BASE = "https://api.hyperliquid.xyz"
+_HYPERLIQUID_LAUNCH_DATE = datetime(2023, 11, 1, tzinfo=UTC)
 
 
 def _classify_hyperliquid_error(exc: Exception, status: int | None = None) -> str:
@@ -54,7 +55,7 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
         self,
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
-        if instrument_type not in (None, "perp"):
+        if instrument_type not in (None, InstrumentType.PERPETUAL):
             return []
         url = f"{_BASE}/info"
         payload = {"type": "meta"}
@@ -87,7 +88,6 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
             )
             return []
         universe: list[HyperliquidAssetInfo] = data.universe or []
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
         for asset in universe:
             name = asset.name
@@ -99,23 +99,19 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
             lot = Decimal(10) ** -sz_decimals
             results.append(
                 InstrumentRecord(
-                    instrument_key=name,
+                    instrument_key=f"HYPERLIQUID:PERP:{name}",
                     venue=self.venue,
-                    symbol=f"{name}/USD",
                     raw_symbol=name,
-                    instrument_type="perp",
+                    instrument_type=InstrumentType.PERPETUAL,
                     base_asset=name,
                     quote_asset="USD",
+                    settle_asset="USDC",
+                    margin_type=MarginType.LINEAR,
                     tick_size=Decimal("0.001"),
-                    lot_size=lot,
-                    min_order_size=lot,
+                    min_size=lot,
                     contract_size=Decimal("1"),
-                    settlement_asset="USDC",
-                    expiry=None,
-                    strike=None,
-                    option_type=None,
-                    is_active=True,
-                    updated_at=now,
+                    available_from_datetime=_HYPERLIQUID_LAUNCH_DATE,
+                    status=InstrumentStatus.ACTIVE,
                 )
             )
         return results
@@ -137,7 +133,7 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         raise NotImplementedError("Hyperliquid perpetuals have no expiry calendar")
 

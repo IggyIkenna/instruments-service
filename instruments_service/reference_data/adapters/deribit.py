@@ -17,7 +17,7 @@ from unified_api_contracts.internal import (
     InstrumentRecord,
     InstrumentStatus,
     InstrumentType,
-    MarginType,
+    OptionType,
 )
 from unified_trading_library import log_event
 
@@ -33,6 +33,19 @@ logger = logging.getLogger(__name__)
 
 _BASE = "https://www.deribit.com/api/v2"
 _DERIBIT_VENUE = "DERIBIT"  # Deribit is derivatives-only; single canonical name
+_DERIBIT_FLOOR_DATE = datetime(2019, 1, 1, tzinfo=UTC)
+
+
+def _normalize_option_type(raw: str | None) -> OptionType | None:
+    """Normalize Deribit option_type to OptionType enum, or None if unrecognised."""
+    if not raw:
+        return None
+    upper = raw.strip().upper()
+    if upper in ("CALL", "C"):
+        return OptionType.CALL
+    if upper in ("PUT", "P"):
+        return OptionType.PUT
+    return None
 
 
 def _classify_deribit_error(exc: Exception, status: int | None = None) -> str:
@@ -63,9 +76,9 @@ class DeribitReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         currencies = ["BTC", "ETH", "SOL", "USDC"]
-        if instrument_type in (None, "perp", "future"):
+        if instrument_type in (None, "PERPETUAL", "FUTURE"):
             kinds = ["future"]
-        elif instrument_type == "option":
+        elif instrument_type == "OPTION":
             kinds = ["option"]
         else:
             kinds = ["future", "option"]
@@ -108,7 +121,15 @@ class DeribitReferenceDataAdapter(BaseReferenceDataAdapter):
                         )
                         continue
                     for inst_data in data.result:
-                        results.append(self._parse_instrument(inst_data))
+                        try:
+                            results.append(self._parse_instrument(inst_data))
+                        except (ValueError, TypeError) as parse_exc:
+                            logger.error(
+                                "Deribit: instrument %s failed InstrumentRecord validation: %s",
+                                inst_data.instrument_name,
+                                parse_exc,
+                            )
+                            raise
         return results
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
@@ -152,7 +173,7 @@ class DeribitReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
-        instruments = await self.get_instruments(instrument_type="option")
+        instruments = await self.get_instruments(instrument_type="OPTION")
         calls: list[InstrumentRecord] = []
         puts: list[InstrumentRecord] = []
         strikes: set[Decimal] = set()
@@ -184,7 +205,7 @@ class DeribitReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         instruments = await self.get_instruments(instrument_type=instrument_type)
         expiry_set: set[datetime] = set()
@@ -415,36 +436,32 @@ class DeribitReferenceDataAdapter(BaseReferenceDataAdapter):
         if kind == "option":
             inst_type = InstrumentType.OPTION
         elif "perpetual" in inst_name:
-            inst_type = InstrumentType.PERP
+            inst_type = InstrumentType.PERPETUAL
         else:
-            inst_type = InstrumentType.FUTURES
+            inst_type = InstrumentType.FUTURE
         instrument_name = data.instrument_name or ""
         base_currency = data.base_currency or ""
         quote_currency = data.quote_currency or "USD"
-        # Inverse if settlement currency matches the base coin (coin-margined)
-        margin_type: MarginType | None = None
-        if inst_type in (InstrumentType.PERP, InstrumentType.FUTURES):
-            settle_ccy = (data.settlement_currency or "").upper()
-            base_ccy = base_currency.upper()
-            margin_type = MarginType.INVERSE if settle_ccy == base_ccy else MarginType.LINEAR
-        # Canonical type string — always lowercase to match InstrumentType enum values.
-        # Key uses uppercase for readability; type field stores the canonical enum value.
-        inst_type_str: str = inst_type.value  # e.g. "perp", "futures", "option"
+        # available_from_datetime: use creation_timestamp from API, fall back to floor date
+        creation_ts = data.creation_timestamp
+        available_from: datetime | None = _DERIBIT_FLOOR_DATE
+        if creation_ts:
+            available_from = datetime.fromtimestamp(int(str(creation_ts)) / 1000, tz=UTC)
         return InstrumentRecord(
-            instrument_key=f"{_DERIBIT_VENUE}:{inst_type_str.upper()}:{instrument_name}",
+            instrument_key=f"{_DERIBIT_VENUE}:{inst_type.value}:{instrument_name}",
             venue=_DERIBIT_VENUE,
             asset_class=AssetClass.CRYPTO,
-            instrument_type=inst_type_str,
+            instrument_type=inst_type,
             base_asset=base_currency,
             quote_asset=quote_currency,
             raw_symbol=instrument_name,
             tick_size=Decimal(str(data.tick_size or "0.01")),
-            lot_size=Decimal(str(data.min_trade_amount or "0.1")),
+            min_size=Decimal(str(data.min_trade_amount or "0.1")),
             contract_size=Decimal(str(data.contract_size or "1")),
             expiry=expiry,
             strike=Decimal(str(data.strike)) if data.strike else None,
-            option_type=str(data.option_type).lower() if data.option_type else None,
-            underlying=base_currency if kind == "option" else None,
-            margin_type=margin_type,
+            option_type=_normalize_option_type(data.option_type) if kind == "option" else None,
+            underlying=base_currency if kind in ("option", "future") else None,
+            available_from_datetime=available_from,
             status=InstrumentStatus.ACTIVE,
         )

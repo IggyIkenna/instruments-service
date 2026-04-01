@@ -23,7 +23,7 @@ class TestCanonicalInstrument:
             instrument_key="BTCUSDT",
             venue="binance",
             raw_symbol="BTCUSDT",
-            instrument_type="spot",
+            instrument_type="SPOT_PAIR",
             base_asset="BTC",
             quote_asset="USDT",
             tick_size=Decimal("0.01"),
@@ -34,7 +34,7 @@ class TestCanonicalInstrument:
             option_type=None,
         )
         assert inst.venue == "binance"
-        assert inst.instrument_type == "spot"
+        assert inst.instrument_type == "SPOT_PAIR"
         assert inst.tick_size == Decimal("0.01")
         assert inst.expiry is None
 
@@ -43,7 +43,7 @@ class TestCanonicalInstrument:
             instrument_key="BTC-31DEC24-50000-C",
             venue="deribit",
             raw_symbol="BTC-31DEC24-50000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             quote_asset="USD",
             tick_size=Decimal("0.0001"),
@@ -53,7 +53,7 @@ class TestCanonicalInstrument:
             strike=Decimal("50000"),
             option_type="call",
         )
-        assert inst.instrument_type == "option"
+        assert inst.instrument_type == "OPTION"
         assert inst.strike == Decimal("50000")
         assert inst.option_type == "call"
 
@@ -62,7 +62,7 @@ class TestCanonicalInstrument:
             instrument_key="BTCUSDT",
             venue="bybit",
             raw_symbol="BTCUSDT",
-            instrument_type="perp",
+            instrument_type="PERPETUAL",
             base_asset="BTC",
             quote_asset="USDT",
             tick_size=Decimal("0.1"),
@@ -72,7 +72,7 @@ class TestCanonicalInstrument:
             strike=None,
             option_type=None,
         )
-        assert inst.instrument_type == "perp"
+        assert inst.instrument_type == "PERPETUAL"
         assert inst.expiry is None
 
     def test_instrument_fields_types(self) -> None:
@@ -80,7 +80,7 @@ class TestCanonicalInstrument:
             instrument_key="ETH-USDT",
             venue="okx",
             raw_symbol="ETH-USDT",
-            instrument_type="spot",
+            instrument_type="SPOT_PAIR",
             base_asset="ETH",
             quote_asset="USDT",
             tick_size=Decimal("0.001"),
@@ -124,7 +124,7 @@ class TestCanonicalOptionsChain:
             instrument_key="BTC-31DEC24-50000-C",
             venue="deribit",
             raw_symbol="BTC-31DEC24-50000-C",
-            instrument_type="option",
+            instrument_type="OPTION",
             base_asset="BTC",
             quote_asset="USD",
             tick_size=Decimal("0.0001"),
@@ -152,7 +152,7 @@ class TestCanonicalExpiryCalendar:
         expiry = datetime(2024, 12, 27, tzinfo=UTC)
         cal = CanonicalExpiryCalendar(
             venue="binance",
-            instrument_type="future",
+            instrument_type="FUTURE",
             underlying="BTC",
             expiries=[expiry],
         )
@@ -163,7 +163,7 @@ class TestCanonicalExpiryCalendar:
     def test_expiry_calendar_defaults(self) -> None:
         cal = CanonicalExpiryCalendar(
             venue="deribit",
-            instrument_type="option",
+            instrument_type="OPTION",
             underlying="ETH",
         )
         assert cal.expiries == []
@@ -176,7 +176,7 @@ class TestCanonicalExpiryCalendar:
         ]
         cal = CanonicalExpiryCalendar(
             venue="bybit",
-            instrument_type="future",
+            instrument_type="FUTURE",
             underlying="BTC",
             expiries=expiries,
         )
@@ -299,7 +299,7 @@ class TestHyperliquidAdapterExtended:
             results = await adapter.get_instruments()
         assert len(results) == 2
         btc = next(r for r in results if r.raw_symbol == "BTC")
-        assert btc.instrument_type == "perp"
+        assert btc.instrument_type == "PERPETUAL"
         assert btc.lot_size == Decimal("0.001")  # 10^-3
 
     @pytest.mark.asyncio

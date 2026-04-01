@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import ccxt.async_support as ccxta
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 
 from ..base_adapter import BaseReferenceDataAdapter
 from ..schemas import (
@@ -30,9 +30,11 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
         venue: str,
         project_id: str | None = None,
         api_key: str | None = None,
+        canonical_venue: str | None = None,
     ) -> None:
         super().__init__(project_id=project_id, api_key=api_key)
-        self._venue = venue
+        self._exchange_id = venue
+        self._venue = canonical_venue or venue
 
     @property
     def venue(self) -> str:
@@ -40,10 +42,10 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
 
     def _get_exchange(self) -> ccxta.Exchange:
         """Instantiate a ccxt async exchange by venue name."""
-        exchange_class = getattr(ccxta, self._venue, None)
+        exchange_class = getattr(ccxta, self._exchange_id, None)
         if exchange_class is None:
             raise RuntimeError(
-                f"ccxt does not support exchange {self._venue!r}. "
+                f"ccxt does not support exchange {self._exchange_id!r}. "
                 "Check ccxt.exchanges for the list of supported venues."
             )
         return exchange_class()  # type: ignore[no-any-return]
@@ -54,30 +56,29 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
     ) -> list[InstrumentRecord]:
         """Fetch active markets via ccxt load_markets and map to InstrumentRecord list."""
         exchange = self._get_exchange()
-        now = datetime.now(UTC)
         results: list[InstrumentRecord] = []
         try:
             markets: dict[str, object] = await exchange.load_markets()
         finally:
             await exchange.close()
         for symbol, market_raw in markets.items():
-            record = self._parse_ccxt_market(symbol, market_raw, now, instrument_type)
+            record = self._parse_ccxt_market(symbol, market_raw, instrument_type)
             if record is not None:
                 results.append(record)
         return results
 
     @staticmethod
-    def _map_ccxt_type(ccxt_type: str) -> str:
-        """Map ccxt market type string to URDI instrument_type."""
+    def _map_ccxt_type(ccxt_type: str) -> InstrumentType:
+        """Map ccxt market type string to canonical InstrumentType enum member."""
         if ccxt_type == "spot":
-            return "spot"
+            return InstrumentType.SPOT_PAIR
         if ccxt_type in ("swap", "perpetual"):
-            return "perp"
+            return InstrumentType.PERPETUAL
         if ccxt_type == "future":
-            return "future"
+            return InstrumentType.FUTURE
         if ccxt_type == "option":
-            return "option"
-        return ccxt_type
+            return InstrumentType.OPTION
+        return InstrumentType.SPOT_PAIR
 
     @staticmethod
     def _extract_market_sizes(
@@ -101,7 +102,6 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
         self,
         symbol: str,
         market_raw: object,
-        now: datetime,
         instrument_type: str | None,
     ) -> InstrumentRecord | None:
         """Map a single ccxt market dict to an InstrumentRecord."""
@@ -115,27 +115,23 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
         base = str(market.get("base") or "")
         quote = str(market.get("quote") or "")
-        settle = market.get("settle")
         expiry = self._parse_ccxt_expiry(market.get("expiryDatetime"))
-        tick_raw, lot_raw, min_raw, contract_size_raw = self._extract_market_sizes(market)
+        tick_raw, lot_raw, _min_raw, contract_size_raw = self._extract_market_sizes(market)
         return InstrumentRecord(
             instrument_key=symbol,
             venue=self.venue,
-            symbol=symbol,
             raw_symbol=str(market.get("id") or symbol),
             instrument_type=mapped_type,
             base_asset=base,
             quote_asset=quote,
+            status=InstrumentStatus.ACTIVE,
             tick_size=Decimal(str(tick_raw)) if tick_raw is not None else Decimal("0.01"),
-            lot_size=Decimal(str(lot_raw)) if lot_raw is not None else Decimal("0.001"),
-            min_order_size=Decimal(str(min_raw)) if min_raw is not None else Decimal("0.001"),
+            min_size=Decimal(str(lot_raw)) if lot_raw is not None else Decimal("0.001"),
             contract_size=Decimal(str(contract_size_raw)) if contract_size_raw else Decimal("1"),
-            settlement_asset=str(settle) if settle else None,
             expiry=expiry,
             strike=None,
             option_type=None,
-            is_active=True,
-            updated_at=now,
+            available_from_datetime=datetime(2010, 1, 1, tzinfo=UTC),
         )
 
     @staticmethod
@@ -162,7 +158,7 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
         """Build options chain from ccxt markets filtered by underlying and expiry."""
-        instruments = await self.get_instruments(instrument_type="option")
+        instruments = await self.get_instruments(instrument_type="OPTION")
         calls: list[InstrumentRecord] = []
         puts: list[InstrumentRecord] = []
         strikes: set[Decimal] = set()
@@ -192,7 +188,7 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "future",
+        instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
         """Build expiry calendar from ccxt markets for the given underlying."""
         instruments = await self.get_instruments(instrument_type=instrument_type)

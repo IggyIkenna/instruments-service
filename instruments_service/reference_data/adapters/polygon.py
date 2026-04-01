@@ -23,7 +23,7 @@ from unified_api_contracts import (
     PolygonTicker,
     PolygonTickersResponse,
 )
-from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.internal import InstrumentRecord, InstrumentType
 
 from ..base_adapter import BaseReferenceDataAdapter
 from ..schemas import (
@@ -57,8 +57,8 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
     Provides US equity and options instrument definitions.
 
     Instrument mapping:
-      Equities/ETFs → instrument_type="spot", base_asset=ticker, quote_asset="USD"
-      Options       → instrument_type="option", strike/expiry/option_type populated
+      Equities/ETFs → instrument_type="SPOT_PAIR", base_asset=ticker, quote_asset="USD"
+      Options       → instrument_type="OPTION", strike/expiry/option_type populated
 
     Auth: service must fetch polygon-api-key from Secret Manager and pass
     it via the ``api_key`` constructor parameter.
@@ -93,9 +93,9 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
         """
         api_key = self._get_api_key()
         results: list[InstrumentRecord] = []
-        if instrument_type in (None, "spot"):
+        if instrument_type in (None, InstrumentType.SPOT_PAIR):
             results.extend(await self._fetch_tickers(api_key))
-        if instrument_type in (None, "option"):
+        if instrument_type in (None, InstrumentType.OPTION):
             results.extend(await self._fetch_options(api_key, underlying=None))
         return results
 
@@ -154,7 +154,7 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_expiry_calendar(
         self,
         underlying: str,
-        instrument_type: str = "option",
+        instrument_type: str = "OPTION",
     ) -> CanonicalExpiryCalendar:
         api_key = self._get_api_key()
         instruments = await self._fetch_options(api_key, underlying=underlying.upper())
@@ -338,11 +338,11 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
             venue=self.venue,
             symbol=ticker_sym,
             raw_symbol=ticker_sym,
-            instrument_type="option",
+            instrument_type=InstrumentType.OPTION,
             base_asset=underlying_ticker,
             quote_asset="USD",
             tick_size=Decimal("0.01"),
-            lot_size=Decimal("1"),
+            min_size=Decimal("1"),
             min_order_size=Decimal("1"),
             contract_size=Decimal(str(contract.shares_per_contract or 100)),
             settlement_asset="USD",
@@ -370,11 +370,11 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
             venue=self.venue,
             symbol=ticker_sym,
             raw_symbol=ticker_sym,
-            instrument_type="spot",
+            instrument_type=InstrumentType.SPOT_PAIR,
             base_asset=ticker_sym,
             quote_asset="USD",
             tick_size=Decimal("0.01"),
-            lot_size=Decimal("1"),
+            min_size=Decimal("1"),
             min_order_size=Decimal("1"),
             contract_size=Decimal("1"),
             settlement_asset="USD",
