@@ -50,6 +50,7 @@ from unified_trading_library import (
     ManifestWriter,
     SamplingService,
     check_shard_freshness,
+    classify_and_emit_error,
     create_sampling_service,
     get_bucket_name,
     get_data_sink,
@@ -144,31 +145,92 @@ def clear_defi_universe_cache() -> None:
     _defi_universe_retryable = []
 
 
+# ---------------------------------------------------------------------------
+# Adapter epoch versioning
+# ---------------------------------------------------------------------------
+# When adapter filtering logic changes (e.g. adding DEFI_MAJOR_ASSET_SYMBOLS
+# filter, changing TVL thresholds), old manifest HWM entries become invalid.
+# The epoch date marks when the current adapter version started — manifest
+# entries BEFORE this date are ignored for monotonicity comparison.
+#
+# Bump the epoch date when adapter logic changes for a venue.
+# Format: venue name → YYYY-MM-DD of the first run with new logic.
+_VENUE_ADAPTER_EPOCH: dict[str, str] = {
+    # 2026-04-02: removed DEFI_MAJOR_ASSET_SYMBOLS filter from all DeFi adapters
+    # and TVL threshold from Uniswap V3 GraphQL query. Filtering now handled
+    # post-fetch by filter_defi_instruments_by_relevance(). Manifest tracks
+    # true pre-filter counts for monotonicity. Old filtered counts are lower
+    # but new unfiltered counts are strictly >=, so no false regressions.
+    "AAVEV3": "2026-04-02",
+    "UNISWAPV2": "2026-04-02",
+    "UNISWAPV3": "2026-04-02",
+    "UNISWAPV4": "2026-04-02",
+    "BALANCER": "2026-04-02",
+    "CURVE": "2026-04-02",
+    "COMPOUNDV3": "2026-04-02",
+    "MORPHO": "2026-04-02",
+    "FLUID": "2026-04-02",
+    # Solana adapters, LST, and yield venues — epoch from first run
+    "DRIFT": "2026-04-02",
+    "KAMINO": "2026-04-02",
+    "ORCA": "2026-04-02",
+    "RAYDIUM": "2026-04-02",
+    "MARINADE": "2026-04-02",
+    "JITO": "2026-04-02",
+    "LIDO": "2026-04-02",
+    "ETHERFI": "2026-04-02",
+    "ETHENA": "2026-04-02",
+}
+
+
+def _get_venue_epoch(venue: str) -> str | None:
+    """Return the adapter epoch date for a venue, or None if no epoch set.
+
+    Matches by venue prefix: 'AAVEV3-ETHEREUM' matches epoch key 'AAVEV3'.
+    """
+    for prefix, epoch in _VENUE_ADAPTER_EPOCH.items():
+        if venue.startswith(prefix):
+            return epoch
+    return None
+
+
 def _get_defi_manifest_high_watermarks() -> dict[str, int]:
     """Read the DeFi manifest and return the max instrument_count per venue.
 
+    Only considers manifest entries from the current adapter epoch forward.
+    Entries before the epoch (from older adapter logic with different filtering)
+    are ignored — their counts are not comparable to the current code.
+
     DeFi instruments are monotonically increasing (immutable smart contracts,
     never deleted). If a fresh API call returns fewer instruments for a venue
-    than the manifest's historical maximum, the API gave an incomplete result.
+    than the manifest's post-epoch maximum, the API gave an incomplete result.
     """
     try:
         bucket = _get_instruments_bucket("DEFI")
         index_df = read_availability_index(bucket)
         if index_df.empty:
             return {}
-        # Group by venue, take max instrument_count across all dates
         hwm: dict[str, int] = {}
-        # Build {venue: max instrument_count} from the manifest.
         venue_vals: list[object] = list(index_df["venue"])
         count_vals: list[object] = list(index_df["instrument_count"])
-        for v_raw, c_raw in zip(venue_vals, count_vals, strict=True):
+        date_vals: list[object] = list(index_df["date"])
+        for v_raw, c_raw, d_raw in zip(venue_vals, count_vals, date_vals, strict=True):
             v = str(v_raw)
             c = int(str(c_raw))
+            d = str(d_raw)
+            # Skip entries from before the current adapter epoch
+            epoch = _get_venue_epoch(v)
+            if epoch is not None and d < epoch:
+                continue
             if c > hwm.get(v, 0):
                 hwm[v] = c
         return hwm
     except Exception as exc:
-        logger.warning("Could not read DeFi manifest for monotonicity check: %s", exc)
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="read_defi_manifest",
+        )
         return {}
 
 
@@ -951,7 +1013,11 @@ async def _fetch_sports_reference_data(
             counts["leagues"] = len(df)
             logger.info("Sports reference: %d leagues written", len(df))
     except Exception as exc:
-        logger.warning("Sports reference leagues fetch failed: %s", exc)
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="sports_reference_leagues_fetch",
+        )
 
     # Teams — for each prediction league
     all_teams: list[dict[str, object]] = []
@@ -966,10 +1032,11 @@ async def _fetch_sports_reference_data(
                 for t in teams:
                     all_teams.append(t.model_dump())
             except Exception as exc:
-                logger.warning(
-                    "Sports reference teams fetch failed for league %s: %s",
-                    league_def.league_id,
+                classify_and_emit_error(
                     exc,
+                    service_name="instruments-service",
+                    operation="sports_reference_teams_fetch",
+                    shard=str(league_def.league_id),
                 )
         if all_teams:
             df = pd.DataFrame(all_teams)
@@ -977,7 +1044,11 @@ async def _fetch_sports_reference_data(
             counts["teams"] = len(df)
             logger.info("Sports reference: %d teams written", len(df))
     except Exception as exc:
-        logger.warning("Sports reference teams batch failed: %s", exc)
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="sports_reference_teams_batch",
+        )
 
     # Standings — for each prediction league
     all_standings: list[dict[str, object]] = []
@@ -988,7 +1059,12 @@ async def _fetch_sports_reference_data(
                 row["league_id"] = lid
                 all_standings.append(row)
         except Exception as exc:
-            logger.warning("Standings fetch failed for league %d: %s", lid, exc)
+            classify_and_emit_error(
+                exc,
+                service_name="instruments-service",
+                operation="sports_reference_standings_fetch",
+                shard=str(lid),
+            )
     if all_standings:
         df = pd.DataFrame(all_standings)
         sink.write(
@@ -1008,7 +1084,12 @@ async def _fetch_sports_reference_data(
             counts["injuries"] = len(df)
             logger.info("Sports reference: %d injuries written", len(df))
     except Exception as exc:
-        logger.warning("Injuries fetch failed: %s", exc)
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="sports_reference_injuries_fetch",
+            shard=date,
+        )
 
     # Cross-provider mapping tables
     _write_team_mapping(bucket)
@@ -1067,7 +1148,11 @@ def _write_team_mapping(bucket: str) -> None:
         mapping_sink.write(data=df, partition={}, format="parquet", filename="team_mapping.parquet")
         logger.info("Team mapping: %d entries written", len(df))
     except Exception as exc:
-        logger.warning("Team mapping write failed: %s", exc)
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="team_mapping_write",
+        )
 
 
 def _write_fixture_mapping(bucket: str, date: str) -> None:
@@ -1118,7 +1203,11 @@ def _write_fixture_mapping(bucket: str, date: str) -> None:
     except (FileNotFoundError, OSError) as exc:
         logger.debug("Fixture mapping: could not read fixtures for %s: %s", date, exc)
     except Exception as exc:
-        logger.warning("Fixture mapping write failed: %s", exc)
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="fixture_mapping_write",
+        )
 
 
 async def fill_solana_creation_cache(
@@ -1218,4 +1307,9 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
         writer.add(processing_date=parsed, row_count=record_count, venue=venue_str)
         writer.write()
     except Exception as exc:
-        logger.warning("ManifestWriter failed for %s: %s", path, exc)
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="manifest_writer",
+            shard=path,
+        )
