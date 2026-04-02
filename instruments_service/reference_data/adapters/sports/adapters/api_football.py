@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from datetime import date as date_
 
 import aiohttp
 from unified_api_contracts.external.api_football import (
@@ -34,7 +35,10 @@ logger = logging.getLogger(__name__)
 _BASE_URL: str = BASE_URLS["api_football"]
 
 
-def _effective_season_for_league(api_football_id: int) -> int:
+def _effective_season_for_league(
+    api_football_id: int,
+    reference_date: date_ | None = None,
+) -> int:
     """Calculate the API-Football season year for a league.
 
     API-Football ``season`` = the calendar year when the season started.
@@ -44,18 +48,24 @@ def _effective_season_for_league(api_football_id: int) -> int:
 
     Uses ``LEAGUE_REGISTRY`` season_months to determine the start month.
     Falls back to the standard Aug-start heuristic for unknown leagues.
+
+    Args:
+        api_football_id: API Football league ID.
+        reference_date: The date being queried.  When fetching historical
+            fixtures (e.g. 2022-01-15), pass that date so the correct
+            season is calculated.  Defaults to today (UTC).
     """
     from unified_api_contracts.canonical.domain.sports.league_data import (
         get_league_by_api_football_id,
     )
 
-    now = datetime.now(UTC)
+    ref = reference_date or datetime.now(UTC).date()
     league_def = get_league_by_api_football_id(api_football_id)
     start_month = (
         league_def.season_months[0] if league_def is not None else 8  # default: European Aug-start
     )
 
-    return now.year if now.month >= start_month else now.year - 1
+    return ref.year if ref.month >= start_month else ref.year - 1
 
 
 def _flatten_standings_groups(
@@ -143,9 +153,11 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         url = f"{_BASE_URL}/fixtures"
         # API Football season = start year of the season.
         # Use league-aware season calculation when a specific league is requested.
+        # Parse the fetch date so historical queries get the correct season.
+        ref_date = date_.fromisoformat(date)
         params: dict[str, str] = {"date": date}
         if league_ids:
-            season_year = _effective_season_for_league(league_ids[0])
+            season_year = _effective_season_for_league(league_ids[0], reference_date=ref_date)
             params["league"] = str(league_ids[0])
             params["season"] = str(season_year)
 
@@ -170,7 +182,8 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
     async def _fetch_league_fixtures(self, date: str, league_id: int) -> list[CanonicalFixture]:
         """Fetch fixtures for a single league (used for multi-league queries)."""
         url = f"{_BASE_URL}/fixtures"
-        season_year = _effective_season_for_league(league_id)
+        ref_date = date_.fromisoformat(date)
+        season_year = _effective_season_for_league(league_id, reference_date=ref_date)
         params: dict[str, str] = {
             "date": date,
             "league": str(league_id),
