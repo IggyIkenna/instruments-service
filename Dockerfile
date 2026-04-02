@@ -13,7 +13,8 @@
 #     instruments-service --operation instruments --mode batch --start-date 2024-01-01 --CEFI
 
 ARG PROJECT_ID
-FROM --platform=linux/amd64 asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-trading-library/unified-trading-library:latest
+ARG BASE_IMAGE=asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-trading-library/unified-trading-library:latest
+FROM --platform=linux/amd64 ${BASE_IMAGE}
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1 \
