@@ -34,7 +34,7 @@ from unified_api_contracts import (
     VenueMapping,
     classify_venue_error,
 )
-from unified_api_contracts.internal import InstrumentLeg, InstrumentRecord, InstrumentType, OptionType
+from unified_api_contracts.internal import InstrumentLeg, InstrumentRecord, InstrumentType, MarginType, OptionType
 from unified_trading_library import log_event
 
 from ..base_adapter import BaseReferenceDataAdapter
@@ -311,6 +311,38 @@ def _infer_derivative_quote(upper_id: str, exchange: str) -> str:
     # Everything else: crypto derivatives default to USD settlement
     # (deribit inverse, binance COIN-M, generic perpetuals/futures)
     return "USD"
+
+
+def _infer_margin_type(
+    instrument_type: InstrumentType,
+    quote: str,
+    raw_id: str,
+    exchange: str,
+) -> MarginType | None:
+    """Infer margin type for derivative instruments.
+
+    INVERSE: coin-margined (settled in base asset — USD quote but crypto settlement).
+    LINEAR: USDT/USDC-margined or crypto-margined with stable quote.
+    None: spot instruments.
+
+    Coin-margined patterns:
+      - quote == "USD" on binance-futures (COIN-M), deribit (inverse), OKX (USD_UM)
+      - Deribit has both inverse (USD-settled) and linear (USDC-settled) — distinguish by quote
+    """
+    if instrument_type not in (InstrumentType.FUTURE, InstrumentType.PERPETUAL, InstrumentType.OPTION):
+        return None
+    upper_id = raw_id.upper()
+    # OKX coin-margined: symbol contains USD_UM or USD_CM
+    if "USD_UM" in upper_id or "USD_CM" in upper_id:
+        return MarginType.INVERSE
+    # Binance COIN-M futures: exchange is "binance-futures" and quote is USD (not USDT/USDC)
+    if exchange == "binance-futures" and quote.upper() == "USD":
+        return MarginType.INVERSE
+    # Deribit inverse: settled in BTC/ETH (USD quote but coin-margined)
+    if exchange == "deribit" and quote.upper() == "USD":
+        return MarginType.INVERSE
+    # All other derivatives with stable quote (USDT, USDC) or default → linear
+    return MarginType.LINEAR
 
 
 def _passes_asset_filter(base: str, quote: str, instrument_type: str) -> bool:
@@ -951,6 +983,8 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
             if not legs:
                 return None
 
+        margin_type = _infer_margin_type(instrument_type, quote, raw_id, exchange)
+
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=canonical_venue,
@@ -966,6 +1000,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=opt_type if not is_combo else None,
             underlying=underlying,
             legs=legs,
+            margin_type=margin_type,
             available_from_datetime=available_since_dt,
             available_to_datetime=available_to_dt,
             timezone="UTC",
