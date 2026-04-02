@@ -14,7 +14,7 @@ PROCESS FLOW
 For each date:
   1. Skip venues not yet launched on that date (startup dates in _VENUE_LAUNCH_DATES)
   2. Fetch InstrumentRecord[] from URDI via urdi_reference_provider
-  3. Filter to instruments active on the requested date (available_since ≤ date ≤ available_to)
+  3. Filter to instruments active on the requested date (available_from_datetime ≤ date ≤ available_to_datetime)
   4. Fail shard if zero records after filtering
   5. Validate with DomainValidationService("instruments") (UTL)
   6. Write per-venue parquet + catalogue record (UTL get_data_sink / ManifestWriter)
@@ -42,7 +42,7 @@ from unified_api_contracts import (
     VenueMapping,
     get_prediction_leagues,
 )
-from unified_api_contracts.internal import validate_instrument_records
+from unified_api_contracts.internal import InstrumentRecord, validate_instrument_records
 from unified_api_contracts.registry import get_supported_chains_for_protocol
 from unified_trading_library import (
     DataSink,
@@ -55,6 +55,7 @@ from unified_trading_library import (
     get_data_sink,
     get_storage_client,
     log_event,
+    read_availability_index,
 )
 from unified_trading_library import unified_config as _uc
 
@@ -63,6 +64,7 @@ from instruments_service.config import get_config
 from instruments_service.config_reloaders import get_defi_major_assets
 from instruments_service.reference_data.adapters._solana_utils import SolanaCacheSession
 from instruments_service.reference_data.adapters.sports import create_sports_reference_adapter
+from instruments_service.reference_data.utils.evm_creation_resolver import EvmCacheSession
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +122,209 @@ def _build_defi_venues() -> list[str]:
 
 
 _DEFI_VENUES: list[str] = _build_defi_venues()
+
+# ---------------------------------------------------------------------------
+# DeFi universe cache for batch optimization
+# ---------------------------------------------------------------------------
+# DeFi instruments are monotonically growing (immutable smart contracts, never
+# deleted). The full instrument universe (with available_from_datetime) can be
+# fetched once and reused for every date in a batch range. Each date just
+# filters available_from <= date — no per-date API call needed.
+#
+# The cache is populated on the first DeFi fetch in a batch run and reused
+# for all subsequent dates. Call clear_defi_universe_cache() between runs.
+_defi_universe_cache: list[InstrumentRecord] | None = None
+_defi_universe_retryable: list[str] = []
+
+
+def clear_defi_universe_cache() -> None:
+    """Clear the DeFi universe cache. Call at the start of each batch run."""
+    global _defi_universe_cache, _defi_universe_retryable
+    _defi_universe_cache = None
+    _defi_universe_retryable = []
+
+
+def _get_defi_manifest_high_watermarks() -> dict[str, int]:
+    """Read the DeFi manifest and return the max instrument_count per venue.
+
+    DeFi instruments are monotonically increasing (immutable smart contracts,
+    never deleted). If a fresh API call returns fewer instruments for a venue
+    than the manifest's historical maximum, the API gave an incomplete result.
+    """
+    try:
+        bucket = _get_instruments_bucket("DEFI")
+        index_df = read_availability_index(bucket)
+        if index_df.empty:
+            return {}
+        # Group by venue, take max instrument_count across all dates
+        hwm: dict[str, int] = {}
+        # Build {venue: max instrument_count} from the manifest.
+        venue_vals: list[object] = list(index_df["venue"])
+        count_vals: list[object] = list(index_df["instrument_count"])
+        for v_raw, c_raw in zip(venue_vals, count_vals, strict=True):
+            v = str(v_raw)
+            c = int(str(c_raw))
+            if c > hwm.get(v, 0):
+                hwm[v] = c
+        return hwm
+    except Exception as exc:
+        logger.warning("Could not read DeFi manifest for monotonicity check: %s", exc)
+        return {}
+
+
+def _count_per_venue(records: list[InstrumentRecord]) -> dict[str, int]:
+    """Count instruments per venue in a record list."""
+    counts: dict[str, int] = {}
+    for r in records:
+        v = r.venue or "UNKNOWN"
+        counts[v] = counts.get(v, 0) + 1
+    return counts
+
+
+async def _retry_regressed_venues(
+    regressed_venues: list[str],
+    api_keys: dict[str, str] | None,
+    mode: str,
+) -> list[InstrumentRecord]:
+    """Re-fetch instruments for venues that showed count regression.
+
+    Returns the retry results (may still be regressed — caller decides).
+    """
+    logger.info(
+        "DeFi monotonicity: retrying %d regressed venues: %s",
+        len(regressed_venues),
+        regressed_venues,
+    )
+    with SolanaCacheSession(), EvmCacheSession():
+        retry_result = await fetch_instruments_for_all_venues(regressed_venues, api_keys=api_keys, mode=mode)
+    return retry_result.records
+
+
+def _enforce_defi_monotonicity(
+    records: list[InstrumentRecord],
+    hwm: dict[str, int],
+) -> tuple[list[InstrumentRecord], set[str]]:
+    """Remove venues from records that regressed below their manifest high-water mark.
+
+    Returns (clean_records, blocked_venues). Blocked venues had fewer instruments
+    than the manifest max and must NOT be written to GCS (would overwrite better data).
+    """
+    new_counts = _count_per_venue(records)
+    blocked: set[str] = set()
+    for venue, old_max in hwm.items():
+        new_count = new_counts.get(venue, 0)
+        if new_count < old_max:
+            blocked.add(venue)
+            logger.error(
+                "DeFi monotonicity BLOCKED: %s has %d instruments (manifest max=%d) — "
+                "will NOT write to GCS (would overwrite better data)",
+                venue,
+                new_count,
+                old_max,
+            )
+        elif new_count > old_max:
+            logger.info(
+                "DeFi monotonicity OK: %s grew %d → %d (+%d)",
+                venue,
+                old_max,
+                new_count,
+                new_count - old_max,
+            )
+
+    if blocked:
+        records = [r for r in records if r.venue not in blocked]
+    return records, blocked
+
+
+async def _get_or_fetch_defi_universe(
+    defi_venues: list[str],
+    api_keys: dict[str, str] | None,
+    mode: str,
+) -> tuple[list[InstrumentRecord], list[str]]:
+    """Return cached DeFi universe or fetch fresh.
+
+    Includes a monotonicity check: if any venue returns fewer instruments
+    than its historical max in the manifest, that venue is retried once.
+    If still regressed after retry, the venue's records are REMOVED from
+    the result — they will not be written to GCS (would overwrite better data).
+    Good venues still proceed normally.
+
+    Returns (records, retryable_venues). On cache hit, retryable_venues
+    is the set from the original fetch.
+    """
+    global _defi_universe_cache, _defi_universe_retryable
+
+    if _defi_universe_cache is not None:
+        logger.info(
+            "DeFi batch optimisation: reusing cached universe (%d instruments, skipping API calls)",
+            len(_defi_universe_cache),
+        )
+        return _defi_universe_cache, _defi_universe_retryable
+
+    # First call in this batch run — fetch fresh
+    logger.info(
+        "DeFi batch optimisation: fetching full universe once (%d venues)",
+        len(defi_venues),
+    )
+    with SolanaCacheSession(), EvmCacheSession():
+        fetch_result = await fetch_instruments_for_all_venues(defi_venues, api_keys=api_keys, mode=mode)
+
+    all_records = list(fetch_result.records)
+    retryable = list(fetch_result.retryable_venues)
+
+    # Monotonicity check: compare per-venue counts against manifest high-water marks
+    hwm = _get_defi_manifest_high_watermarks()
+    if hwm:
+        new_counts = _count_per_venue(all_records)
+        regressed = [v for v, mx in hwm.items() if new_counts.get(v, 0) < mx]
+
+        if regressed:
+            for venue in regressed:
+                logger.warning(
+                    "DeFi monotonicity VIOLATION: %s has %d instruments (manifest max=%d)",
+                    venue,
+                    new_counts.get(venue, 0),
+                    hwm[venue],
+                )
+
+            # Retry regressed venues once
+            retry_records = await _retry_regressed_venues(regressed, api_keys, mode)
+            retry_counts = _count_per_venue(retry_records)
+
+            # For each regressed venue: use whichever fetch returned more
+            for venue in regressed:
+                old_count = new_counts.get(venue, 0)
+                retry_count = retry_counts.get(venue, 0)
+                if retry_count > old_count:
+                    all_records = [r for r in all_records if r.venue != venue]
+                    all_records.extend(r for r in retry_records if r.venue == venue)
+                    logger.info(
+                        "DeFi monotonicity: %s improved on retry (%d → %d)",
+                        venue,
+                        old_count,
+                        retry_count,
+                    )
+
+        # Final enforcement: block any venues still below high-water mark
+        all_records, blocked = _enforce_defi_monotonicity(all_records, hwm)
+        if blocked:
+            logger.error(
+                "DeFi monotonicity: %d venue(s) BLOCKED from GCS write: %s",
+                len(blocked),
+                sorted(blocked),
+            )
+    else:
+        logger.info("DeFi monotonicity: no manifest history — skipping check (first run)")
+
+    _defi_universe_cache = all_records
+    _defi_universe_retryable = retryable
+    logger.info(
+        "DeFi batch optimisation: cached %d instruments from %d venues",
+        len(_defi_universe_cache),
+        len(defi_venues),
+    )
+    return _defi_universe_cache, _defi_universe_retryable
+
 
 _CEFI_VENUES: list[str] = [
     "BINANCE-SPOT",
@@ -190,8 +395,8 @@ def filter_instruments_by_date(
     """Return only instruments active on the given UTC datetime.
 
     An instrument is active on `date_dt` when:
-    - available_since is None OR available_since <= date_dt
-    - available_to   is None OR available_to   >= date_dt
+    - available_from_datetime is None OR available_from_datetime <= date_dt
+    - available_to_datetime   is None OR available_to_datetime   >= date_dt
 
     This is required because URDI adapters return the full historical universe.
     function reduces them to only the instruments tradeable on the requested day.
@@ -200,7 +405,7 @@ def filter_instruments_by_date(
         records: InstrumentRecord list from URDI.
         date_dt: UTC datetime representing the requested processing date.
         defi_venues: Optional set of DeFi venue names (uppercase). When provided,
-            a WARNING is emitted for any DeFi instrument where available_since=None
+            a WARNING is emitted for any DeFi instrument where available_from_datetime=None
             because on-chain creation timestamps are expected for all DeFi instruments
             and absence indicates the URDI adapter did not provide them (data quality
             is degraded — the instrument will still be included but with unknown
@@ -218,7 +423,7 @@ def filter_instruments_by_date(
                 if venue in defi_venues:
                     key = getattr(r, "instrument_key", repr(r))
                     logger.error(
-                        "DeFi instrument %s has available_since=None — "
+                        "DeFi instrument %s has available_from_datetime=None — "
                         "URDI adapter MUST provide creation timestamp "
                         "(protocol floor date or on-chain); "
                         "instrument included but date accuracy is UNKNOWN",
@@ -328,19 +533,66 @@ async def process_instruments(
     # 2. Fetch from URDI — sole external API path
     # api_keys injected from preflight() → validate_api_keys_for_venues() → Secret Manager
     # date passed so date-aware adapters (e.g. API-Football) can filter server-side
-    # SolanaCacheSession: single load/save of Solana timestamp cache across all
-    # concurrent Solana adapters (Drift, Orca, Kamino, Raydium, Marinade, Jito)
-    # to prevent last-writer-wins data loss from concurrent saves.
-    with SolanaCacheSession():
-        fetch_result = await fetch_instruments_for_all_venues(active_venues, api_keys=api_keys, date=date, mode=mode)
-    records = fetch_result.records
-    # Track retryable venues for post-write retry loop (step 8)
-    _retryable_venues = fetch_result.retryable_venues
+    #
+    # DeFi batch optimisation: DeFi instruments are monotonically growing
+    # (immutable contracts, never deleted). In batch mode, the universe is
+    # fetched ONCE and cached — subsequent dates in the range just filter
+    # by available_from_datetime. Non-DeFi venues are fetched fresh per date.
+    defi_venue_names = frozenset(_DEFI_VENUES)
+    defi_active = [v for v in active_venues if v in defi_venue_names]
+    non_defi_active = [v for v in active_venues if v not in defi_venue_names]
+
+    records: list[InstrumentRecord] = []
+    _retryable_venues: list[str] = []
+
+    # DeFi: use cached universe (one API call for entire batch run)
+    if defi_active and mode == "batch":
+        defi_records, defi_retryable = await _get_or_fetch_defi_universe(defi_active, api_keys=api_keys, mode=mode)
+        records.extend(defi_records)
+        _retryable_venues.extend(defi_retryable)
+    elif defi_active:
+        # Live mode: always fetch fresh DeFi data (with monotonicity check)
+        with SolanaCacheSession(), EvmCacheSession():
+            defi_result = await fetch_instruments_for_all_venues(defi_active, api_keys=api_keys, date=date, mode=mode)
+        defi_live_records = list(defi_result.records)
+
+        # Monotonicity check: retry regressed venues, then block any still below HWM
+        hwm = _get_defi_manifest_high_watermarks()
+        if hwm:
+            live_counts = _count_per_venue(defi_live_records)
+            regressed = [v for v, mx in hwm.items() if live_counts.get(v, 0) < mx]
+            if regressed:
+                retry_records = await _retry_regressed_venues(regressed, api_keys, mode)
+                retry_counts = _count_per_venue(retry_records)
+                for venue in regressed:
+                    if retry_counts.get(venue, 0) > live_counts.get(venue, 0):
+                        defi_live_records = [r for r in defi_live_records if r.venue != venue]
+                        defi_live_records.extend(r for r in retry_records if r.venue == venue)
+            # Final enforcement: block venues still below HWM from being written
+            defi_live_records, blocked = _enforce_defi_monotonicity(defi_live_records, hwm)
+            if blocked:
+                logger.error(
+                    "DeFi live monotonicity: %d venue(s) BLOCKED: %s",
+                    len(blocked),
+                    sorted(blocked),
+                )
+
+        records.extend(defi_live_records)
+        _retryable_venues.extend(defi_result.retryable_venues)
+
+    # Non-DeFi: always fetch fresh (CeFi instruments change daily, TradFi has expiries)
+    if non_defi_active:
+        with SolanaCacheSession():
+            non_defi_result = await fetch_instruments_for_all_venues(
+                non_defi_active, api_keys=api_keys, date=date, mode=mode
+            )
+        records.extend(non_defi_result.records)
+        _retryable_venues.extend(non_defi_result.retryable_venues)
 
     # 3. Filter to instruments active on the requested date.
     # URDI adapters return the full historical instrument universe; this reduces
     # it to only instruments tradeable on the requested day.
-    # Pass the DeFi venue set so the filter can warn on missing available_since.
+    # Pass the DeFi venue set so the filter can warn on missing available_from_datetime.
     is_defi_run = any(c.upper() in ("DEFI", "ALL") for c in categories)
     defi_venue_set: frozenset[str] | None = frozenset(_DEFI_VENUES) if is_defi_run else None
     date_dt = datetime.fromisoformat(date).replace(tzinfo=UTC)
@@ -366,9 +618,9 @@ async def process_instruments(
     for v in sorted(venue_counts):
         logger.info("  %s: %d instruments after date filter", v, venue_counts[v])
 
-    # 3a. DeFi available_since coverage summary.
+    # 3a. DeFi available_from_datetime coverage summary.
     # Counts how many DeFi instruments in the date-filtered set have a populated
-    # available_since vs None. Low coverage indicates URDI adapters are not
+    # available_from_datetime vs None. Low coverage indicates URDI adapters are not
     # returning on-chain creation timestamps and the date filter is permissive
     # (treating None as "always available").
     if is_defi_run and records:
@@ -378,7 +630,7 @@ async def process_instruments(
             total_defi = len(defi_records)
             pct = int(populated * 100 / total_defi)
             logger.info(
-                "Date accuracy: %d/%d DeFi instruments have available_since populated (%d%% coverage)",
+                "Date accuracy: %d/%d DeFi instruments have available_from_datetime populated (%d%% coverage)",
                 populated,
                 total_defi,
                 pct,
@@ -867,6 +1119,58 @@ def _write_fixture_mapping(bucket: str, date: str) -> None:
         logger.debug("Fixture mapping: could not read fixtures for %s: %s", date, exc)
     except Exception as exc:
         logger.warning("Fixture mapping write failed: %s", exc)
+
+
+async def fill_solana_creation_cache(
+    api_keys: dict[str, str] | None = None,
+) -> dict[str, int]:
+    """Discover all Solana pool addresses and fill the creation timestamp cache.
+
+    Runs all Solana adapters once to discover pool addresses, then uses
+    Alchemy RPC to resolve creation timestamps for all discovered addresses.
+    Results are saved to GCS cache for all future runs.
+
+    Returns:
+        Dict with cache statistics (cached, new, unresolved).
+    """
+    from instruments_service.reference_data.adapters._solana_utils import fill_solana_cache
+
+    # 1. Discover all Solana pool addresses by running each adapter
+    all_addresses: list[str] = []
+    with SolanaCacheSession():
+        fetch_result = await fetch_instruments_for_all_venues(_SOLANA_DEFI_VENUES, api_keys=api_keys, mode="batch")
+
+    # Extract raw_symbol (which is the pool/account address) from each instrument
+    for record in fetch_result.records:
+        raw_sym = getattr(record, "raw_symbol", None)
+        if raw_sym and isinstance(raw_sym, str) and len(raw_sym) > 20:
+            all_addresses.append(raw_sym)
+
+    if not all_addresses:
+        logger.warning("Solana cache fill: no pool addresses discovered")
+        return {"cached": 0, "new": 0, "unresolved": 0}
+
+    # Deduplicate
+    unique_addresses = list(dict.fromkeys(all_addresses))
+    logger.info(
+        "Solana cache fill: discovered %d unique pool addresses from %d instruments",
+        len(unique_addresses),
+        len(fetch_result.records),
+    )
+
+    # 2. Fill the cache with higher concurrency
+    with SolanaCacheSession():
+        results = await fill_solana_cache(unique_addresses, concurrency=4)
+
+    cached_count = len(results)
+    unresolved = len(unique_addresses) - cached_count
+    logger.info(
+        "Solana cache fill complete: %d resolved, %d unresolved out of %d total",
+        cached_count,
+        unresolved,
+        len(unique_addresses),
+    )
+    return {"cached": cached_count, "new": cached_count, "unresolved": unresolved}
 
 
 def _get_instruments_bucket(category: str | None = None) -> str:
