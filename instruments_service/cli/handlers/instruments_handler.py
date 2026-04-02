@@ -16,12 +16,13 @@ from unified_trading_library import (
     BatchPayload,
     ServiceRuntime,
     UnifiedServiceHandler,
+    classify_and_emit_error,
     get_bucket_name,
     validate_data_availability,
 )
 
 from instruments_service.engine import orchestrator as engine_orchestrator
-from instruments_service.engine.orchestrator import get_venues_for_categories
+from instruments_service.engine.orchestrator import clear_defi_universe_cache, get_venues_for_categories
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,11 @@ class InstrumentsHandler(UnifiedServiceHandler):
 
     async def preflight(self) -> None:
         """Start API key reloader. Date/category filtering happens in process()."""
+        # Clear DeFi universe cache at the start of each batch run.
+        # The cache is populated on the first DeFi date and reused for all
+        # subsequent dates — one API call for the entire date range.
+        clear_defi_universe_cache()
+
         # Wire --venues CLI override to the handler
         venues_arg: list[str] | None = getattr(self.args, "venues", None) if self.args else None
         if venues_arg:
@@ -74,8 +80,12 @@ class InstrumentsHandler(UnifiedServiceHandler):
                     sorted(keys.keys()),
                 )
         except Exception as _exc:
-            logger.error("API key validation failed: %s", _exc)
-            raise
+            classify_and_emit_error(
+                _exc,
+                service_name="instruments-service",
+                operation="api_key_validation",
+                reraise=True,
+            )
 
     def _is_date_complete(self, date: str) -> bool:
         """Check if a single date already has data in storage."""
@@ -90,6 +100,12 @@ class InstrumentsHandler(UnifiedServiceHandler):
             )
             return date in completed
         except Exception as _exc:
+            classify_and_emit_error(
+                _exc,
+                service_name="instruments-service",
+                operation="check_date_completeness",
+                shard=date,
+            )
             return False
 
     async def process(self, payload: BatchPayload) -> object:
