@@ -23,9 +23,12 @@ from unified_trading_library import log_event
 
 logger = logging.getLogger(__name__)
 
-_RETRY_ATTEMPTS: int = 3
-_RETRY_BASE_DELAY: float = 1.0
+_RETRY_ATTEMPTS: int = 5
+_RETRY_BASE_DELAY: float = 5.0
 _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
+# Per-minute rate limiter: API Football Ultra allows ~100 req/min.
+# Throttle to 1 req/sec (60/min) for safety.
+_MIN_REQUEST_INTERVAL: float = 1.0
 
 
 class BaseSportsReferenceAdapter(ABC):
@@ -38,6 +41,8 @@ class BaseSportsReferenceAdapter(ABC):
     credentials from Secret Manager and pass them in through the ``api_key``
     constructor parameter.
     """
+
+    _last_request_time: float = 0.0
 
     def __init__(self, api_key: str | None = None) -> None:
         self._api_key = api_key
@@ -191,6 +196,16 @@ class BaseSportsReferenceAdapter(ABC):
             exc,
         )
 
+    async def _throttle(self) -> None:
+        """Enforce minimum interval between API requests."""
+        import time
+
+        now = time.monotonic()
+        elapsed = now - BaseSportsReferenceAdapter._last_request_time
+        if elapsed < _MIN_REQUEST_INTERVAL:
+            await asyncio.sleep(_MIN_REQUEST_INTERVAL - elapsed)
+        BaseSportsReferenceAdapter._last_request_time = time.monotonic()
+
     async def _get_with_retry(
         self,
         session: aiohttp.ClientSession,
@@ -201,20 +216,29 @@ class BaseSportsReferenceAdapter(ABC):
         """GET request with exponential backoff retry on transient errors.
 
         Retries up to _RETRY_ATTEMPTS times on HTTP 429/5xx and aiohttp
-        connection errors. On final failure raises the last exception.
+        connection errors.  On 429, respects Retry-After header if present,
+        otherwise uses exponential backoff (5s base).  Rate-limits all
+        requests to _MIN_REQUEST_INTERVAL apart.
         """
         last_exc: Exception | None = None
         for attempt in range(_RETRY_ATTEMPTS):
-            delay: float = _RETRY_BASE_DELAY * (1.0 * (1 << attempt))
+            await self._throttle()
             try:
                 async with session.get(url, params=params, headers=headers) as resp:
                     if resp.status in _RETRYABLE_STATUS_CODES:
+                        # Use Retry-After header if present, otherwise exponential backoff
+                        retry_after = resp.headers.get("Retry-After")
+                        if retry_after and resp.status == 429:
+                            delay = float(retry_after)
+                        else:
+                            delay = _RETRY_BASE_DELAY * (1 << attempt)
                         logger.warning(
-                            "Retryable HTTP %d from %s (attempt %d/%d)",
+                            "Retryable HTTP %d from %s (attempt %d/%d, backoff %.1fs)",
                             resp.status,
                             url,
                             attempt + 1,
                             _RETRY_ATTEMPTS,
+                            delay,
                         )
                         if attempt < _RETRY_ATTEMPTS - 1:
                             await asyncio.sleep(delay)
@@ -224,11 +248,13 @@ class BaseSportsReferenceAdapter(ABC):
                     return await resp.json()
             except aiohttp.ClientError as exc:
                 last_exc = exc
+                delay = _RETRY_BASE_DELAY * (1 << attempt)
                 logger.warning(
-                    "aiohttp error fetching %s (attempt %d/%d): %s",
+                    "aiohttp error fetching %s (attempt %d/%d, backoff %.1fs): %s",
                     url,
                     attempt + 1,
                     _RETRY_ATTEMPTS,
+                    delay,
                     exc,
                 )
                 if attempt < _RETRY_ATTEMPTS - 1:
