@@ -1,0 +1,30 @@
+interactions:
+  - request:
+      body: null
+      headers:
+        Accept:
+          - application/json
+        Accept-Encoding:
+          - gzip, deflate
+        Connection:
+          - keep-alive
+        User-Agent:
+          - python-requests/2.32.5
+      method: GET
+      uri: https://api.the-odds-api.com/v4/sports/soccer_epl/odds?apiKey=[FILTERED]&regions=uk,eu&markets=h2h&oddsFormat=decimal
+    response:
+      body:
+        string: '[{"id":"abc123def456","sport_key":"soccer_epl","sport_title":"EPL","commence_time":"2026-03-18T15:00:00Z","home_team":"Arsenal","away_team":"Chelsea","bookmakers":[{"key":"betfair_ex_uk","title":"Betfair Exchange","last_update":"2026-03-18T09:55:00Z","markets":[{"key":"h2h","last_update":"2026-03-18T09:55:00Z","outcomes":[{"name":"Arsenal","price":1.85},{"name":"Chelsea","price":4.20},{"name":"Draw","price":3.75}]}]},{"key":"pinnacle","title":"Pinnacle","last_update":"2026-03-18T09:54:30Z","markets":[{"key":"h2h","last_update":"2026-03-18T09:54:30Z","outcomes":[{"name":"Arsenal","price":1.83},{"name":"Chelsea","price":4.25},{"name":"Draw","price":3.80}]}]},{"key":"bet365","title":"Bet365","last_update":"2026-03-18T09:54:00Z","markets":[{"key":"h2h","last_update":"2026-03-18T09:54:00Z","outcomes":[{"name":"Arsenal","price":1.80},{"name":"Chelsea","price":4.33},{"name":"Draw","price":3.70}]}]}]},{"id":"ghi789jkl012","sport_key":"soccer_epl","sport_title":"EPL","commence_time":"2026-03-18T17:30:00Z","home_team":"Liverpool","away_team":"Man City","bookmakers":[{"key":"betfair_ex_uk","title":"Betfair Exchange","last_update":"2026-03-18T09:55:00Z","markets":[{"key":"h2h","last_update":"2026-03-18T09:55:00Z","outcomes":[{"name":"Liverpool","price":2.50},{"name":"Man City","price":2.90},{"name":"Draw","price":3.40}]}]}]}]'
+      headers:
+        Content-Type:
+          - application/json
+        Date:
+          - Wed, 18 Mar 2026 10:00:00 GMT
+        X-Requests-Remaining:
+          - "450"
+        X-Requests-Used:
+          - "50"
+      status:
+        code: 200
+        message: OK
+version: 1

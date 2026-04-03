@@ -1,0 +1,29 @@
+# VCR cassette: Binance Futures exchangeInfo — schema validation for BinanceFuturesExchangeInfo
+# Used to validate external API schema parity. No live API calls in tests.
+interactions:
+  - request:
+      body: null
+      headers:
+        Accept:
+          - "*/*"
+        Accept-Encoding:
+          - gzip, deflate
+        Connection:
+          - keep-alive
+        User-Agent:
+          - Python/3.13 aiohttp/3.13.2
+      method: GET
+      uri: https://fapi.binance.com/fapi/v1/exchangeInfo
+    response:
+      body:
+        string: |
+          {"symbols":[{"symbol":"BTCUSDT","status":"TRADING","baseAsset":"BTC","quoteAsset":"USDT","contractType":"PERPETUAL","deliveryDate":0,"marginAsset":"USDT","contractSize":"1","filters":[{"filterType":"PRICE_FILTER","tickSize":"0.01"},{"filterType":"LOT_SIZE","stepSize":"0.001","minQty":"0.001"}],"exchangeFilters":[]}],"exchangeFilters":[]}
+      headers:
+        Content-Type:
+          - application/json; charset=utf-8
+        Date:
+          - Fri, 13 Mar 2026 12:00:00 GMT
+      status:
+        code: 200
+        message: OK
+version: 1

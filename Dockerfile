@@ -1,6 +1,6 @@
 # Dockerfile for instruments-service
 #
-# Uses unified-trading-services base image from Artifact Registry.
+# Uses unified-trading-library base image from Artifact Registry.
 # No GitHub token (GH_PAT) required.
 #
 # Build:
@@ -10,10 +10,11 @@
 #   docker run -v /path/to/credentials.json:/app/credentials.json \
 #     -e GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json \
 #     -e GCP_PROJECT_ID=your-gcp-project-id \
-#     instruments-service --mode instruments --run-mode batch --start-date 2024-01-01 --CEFI
+#     instruments-service --operation instruments --mode batch --start-date 2024-01-01 --CEFI
 
 ARG PROJECT_ID
-FROM --platform=linux/amd64 asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-trading-services/unified-trading-services:latest
+ARG BASE_IMAGE=asia-northeast1-docker.pkg.dev/${PROJECT_ID}/unified-trading-library/unified-trading-library:latest
+FROM --platform=linux/amd64 ${BASE_IMAGE}
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1 \
@@ -27,22 +28,14 @@ RUN useradd --create-home --shell /bin/bash appuser
 # Set working directory
 WORKDIR /app/instruments-service
 
-# Install uv package manager (bootstrap with pip - acceptable exception per quality gate)
-RUN pip install uv --no-cache-dir
-
-# Install keyring FIRST (before pip.conf) to avoid auth loop
-# keyring must be installed from PyPI, not Artifact Registry
-RUN uv pip install --system --no-cache-dir keyrings.google-artifactregistry-auth
-
-# NOW copy pip.conf - keyring is ready to handle Artifact Registry auth
+# Copy pip.conf for Artifact Registry access
 COPY pip.conf /etc/pip.conf
 
-# Copy instruments-service source code
+# Copy service source code and lockfile
 COPY . .
 
-# Install service with dev dependencies
-# keyring + pip.conf enables authentication to Artifact Registry for unified-* packages
-RUN uv pip install --system --no-cache-dir -e ".[dev]"
+# Install service dependencies (base image already has UTL + UAC pre-installed)
+RUN uv pip install --system --no-deps -e .
 
 # Create data directories
 RUN mkdir -p /app/instruments-service/data/samples /app/instruments-service/logs

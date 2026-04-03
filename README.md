@@ -1,320 +1,122 @@
-# Instruments Service
+# instruments-service
 
-Service for generating canonical instrument definitions from exchange APIs.
+Fetches canonical instrument records from URDI, validates, and writes to GCS.
+No external API calls. No credential management. No canonicalization logic.
 
-## Status
-
-**✅ COMPLETE**: Full end-to-end implementation with CLI, orchestration service, and comprehensive examples.
-
-**Migration Status**: ✅ All instrument-related code has been successfully migrated from `market-tick-data-service`. Old files have been deleted and all imports updated.
-
-## Dependencies
-
-- `unified-trading-services` - For cloud operations (GCS, Secret Manager; BigQuery utilities for ad hoc use)
-- `ccxt` - For exchange metadata enrichment
-- `pydantic` - For data validation
-- `requests` - For Tardis API integration
-
-## Architecture
-
-**Implemented (UMI-INSTR-001):** instruments-service is a thin consumer of unified-market-interface (UMI). UMI owns CeFi (Tardis) instrument normalization; instruments-service calls UMI `get_adapter("tardis").fetch_instruments(normalize=True)`, converts to InstrumentDefinition, writes to GCS. TradFi and DeFi paths use InstrumentProcessingService. See: `unified-trading-codex/11-project-management/epics/umi-instrument-normalization-epic.md`
-
-**Optional (URDI):** unified-reference-data-interface provides direct exchange REST adapters. When `USE_URDI_REFERENCE_DATA=true` and URDI is installed, instruments-service can use `get_reference_adapter(venue).get_instruments()` for supported venues. URDI adapters handle API keys via `get_secret_client` internally.
-
-Follows unified repository structure per architecture plan:
-
-```
-instruments_service/
-├── app/
-│   ├── core/
-│   │   ├── instruments_service.py        # Main orchestration service
-│   │   ├── instrument_processing_service.py  # Instrument processing logic
-│   │   ├── cloud_instrument_storage.py   # Stores instruments to GCS (batch data only)
-│   │   ├── cloud_data_provider.py        # Reads instruments from unified-trading-services
-│   │   ├── batch_processor.py            # Batch processing with lookback
-│   │   └── validation_service.py        # Service-specific validation
-│   ├── venues/                           # ⚠️ DEVIATION: Venue-specific adapters (future)
-│   └── visualization/
-│       └── instrument_plotter.py         # Visualization utilities
-├── cli/
-│   ├── main.py                           # CLI entry point
-│   ├── parser.py                         # Argument parsing
-│   ├── base_handler.py                   # Base handler interface
-│   └── handlers/
-│       ├── instrument_handler.py         # Instrument generation handler
-│       └── instruments_query_handler.py  # Query handler
-├── models.py                             # InstrumentDefinition (from UMI), InstrumentKey, Venue, InstrumentType
-├── config.py                             # VenueMapping, ExchangeInstrumentConfig, DataTypeConfig, InstrumentsServiceConfig
-└── requirements.txt
-```
-
-## Migration Status: ✅ COMPLETE
-
-**All components have been successfully extracted and migrated from `market-tick-data-service`:**
-
-1. ✅ **Models** - `InstrumentDefinition` (from UMI), `InstrumentKey`, `Venue`, `InstrumentType` (extracted and migrated)
-2. ✅ **Configs** - `VenueMapping`, `ExchangeInstrumentConfig`, `DataTypeConfig` (extracted and migrated)
-3. ✅ **Service** - `InstrumentProcessingService` (extracted and migrated, ~1547 lines)
-4. ✅ **CLI Handlers** - Instrument generation and query handlers (extracted and migrated)
-
-**Old files deleted from `market-tick-data-service`:**
-
-- ✅ `market_data_tick_handler/services/instrument_processing_service.py`
-- ✅ `market_data_tick_handler/cli/handlers/instrument_handler.py`
-- ✅ `market_data_tick_handler/cli/handlers/instruments_query_handler.py`
-- ✅ `market_data_tick_handler/clients/instruments_client.py`
-
-**Breaking Changes:**
-
-- `market-tick-data-service` CLI no longer supports instrument modes - use `instruments-service` CLI directly
-- `market-tick-data-service` clients module no longer exports `InstrumentsClient` - import from `instruments_service.clients.instruments_client`
-
-### Integration Points:
-
-- Uses `unified-trading-services` for cloud operations
-- Stores instruments to `market-data-tick` GCS bucket (market_data domain)
-- Instruments are part of market_data domain (not separate domain)
-- Uses Secret Manager for API key retrieval (no env var required)
-
-## Quick Start
-
-### Prerequisites
-
-- Python 3.13.x (required - see installation below)
-- SSH key configured with GitHub (for unified-trading-services)
-
-**Note:** For local dev, use ADC: `gcloud auth application-default login` (no key file needed). Copy `.env.example` to `.env` and fill in placeholders.
-
-### One-Command Setup
+## Setup
 
 ```bash
-# 1. Install Python 3.13 SYSTEM-WIDE (not in venv - the venv is created from this)
-pyenv install 3.13.1 && pyenv local 3.13.1
-
-# 2. Clone instruments-service
-git clone git@github.com:IggyIkenna/instruments-service.git
-cd instruments-service
-
-# 3. Run setup (creates venv, installs everything, auto-activates)
-source ./scripts/setup.sh
-
-# 4. Verify installation
-python -m instruments_service --help
-
-# 5. Run quality gates
-./scripts/quality-gates.sh
+source scripts/setup.sh
 ```
 
-The setup script will:
+## What it does
 
-1. Ask you to confirm Python 3.13 is installed
-2. Show installation instructions if needed (brew, pyenv)
-3. Verify architecture on Apple Silicon (ARM64 required)
-4. Create a virtual environment (.venv/)
-5. Install unified-trading-services (latest) from GitHub
-6. Install instruments-service with all dependencies
-7. Auto-detect and configure GCP credentials
+For each configured venue and date:
 
-### Known Working Command
+1. `urdi_reference_provider.fetch(venue, date)` → `list[InstrumentRecord]` (canonical, already typed)
+2. Optional CCXT metadata enrichment (`engine/processors/cefi_metadata.py`) for leverage/margin fields
+3. `DomainValidationService("instruments").validate(df)` — flags anomalies via event log
+4. `ParquetSchemaEnforcer(INSTRUMENTS_SCHEMA).validate_dataframe(df)` — blocks bad writes
+5. Write per-venue parquet to GCS via `get_data_sink()` with catalogue entry
+
+Mode (batch/live), scheduling, credential injection, and data availability checks are handled by
+UTL `ServiceBootstrap`. The service does not inspect `--mode`.
+
+## CLI — service-specific args
+
+```
+--CEFI / --TRADFI / --DEFI / --SPORTS   categories to process (default: all)
+--redo-all                               reprocess dates already present in storage
+--venues [LIST]                          restrict to a subset of URDI_SUPPORTED_VENUES
+```
+
+Cross-cutting mode variables (`RUNTIME_MODE`, `DATA_MODE`, `TESTNET_MODE`, `ENVIRONMENT`, etc.):
+→ `unified-internal-contracts/unified_internal_contracts/modes.py`
+→ `unified-trading-codex/09-strategy/cross-cutting/operational-modes-matrix.md`
+
+## Config — 4 fields only
+
+| Env var                      | Default | Purpose                                              |
+| ---------------------------- | ------- | ---------------------------------------------------- |
+| `ENABLE_CCXT_INTEGRATION`    | `true`  | Post-URDI CCXT metadata enrichment (leverage/margin) |
+| `CONFIG_STORE_BUCKET`        | `""`    | Hot-reload config bucket                             |
+| `INSTRUMENTS_CATALOGUE_PATH` | `""`    | CI test override for catalogue path                  |
+
+Bucket names, API URLs, and deployment state are resolved by UTL `cloud_constants`, UCI provider
+manifest, and UTL `ServiceBootstrap` respectively — not service config.
+
+## Output schema
+
+`InstrumentRecord` — `unified-internal-contracts/` (UIC). Output path:
+`instrument_availability/by_date/day={date}/venue={venue}/instruments.parquet`
+
+## Live mode cadence
+
+`RUNTIME_MODE=live`: UTL `ScheduledIO` triggers every 15 minutes at wall-clock-aligned intervals
+(`:00`, `:15`, `:30`, `:45` UTC). The handler code is identical to batch — UTL selects the trigger.
+
+## Mock mode (`DATA_MODE=mock`)
 
 ```bash
-# Lightweight test: Generate CEFI instruments (fast, ~2 min)
-python -m instruments_service \
-  --category CEFI \
-  --start-date 2023-05-23 \
-  --end-date 2023-05-23
-
-# Dry run to verify setup
-python -m instruments_service \
-  --category CEFI \
-  --start-date 2023-05-23 \
-  --end-date 2023-05-23 \
-  --dry-run
+python scripts/seed_mock_data.py --scenario normal --seed 42 --env local
 ```
 
-> **Note:** This is the first service in the data pipeline. No upstream dependencies required.
+Substitutes URDI with `InstrumentGenerator` from `unified-internal-contracts`. This service is
+**Layer 1** of the mock data chain — all downstream services depend on this output.
 
-### Troubleshooting
+| Aspect                | Mock                                                               | Real                 |
+| --------------------- | ------------------------------------------------------------------ | -------------------- |
+| Data source           | `InstrumentGenerator(seed)` from UIC                               | URDI API calls       |
+| Instrument universe   | `UAC representative_sample.py` (the SSOT)                          | Live exchange APIs   |
+| Differentials         | Expiry events, new listings, delistings (driven by `MockScenario`) | As-is from exchanges |
+| Schema, paths, format | Identical to real                                                  | —                    |
 
-If terminal fails with exit code 1, check Python version:
+Scenario definitions (`NORMAL`, `STRESS`, `FLASH_CRASH`, `MISSING_DATA`, etc.):
+→ `unified-internal-contracts/unified_internal_contracts/modes.py` (`MockScenario`)
+→ `unified-internal-contracts/unified_internal_contracts/testing/scenarios/*.yaml`
 
-```bash
-# What Python version is active?
-python --version
+## Sharding
 
-# Should be Python 3.13.x
-# If not:
-pyenv local 3.13.1
-python --version
-```
+| Mode  | Dimensions              | Notes                                           |
+| ----- | ----------------------- | ----------------------------------------------- |
+| batch | category × venue × date | Each shard = one independent VM / Cloud Run job |
+| live  | venue                   | One instance per venue, 15-min polling          |
 
-### CLI Usage
+Full compute spec (VM type, memory, disk, timeout):
+→ `unified-trading-pm/configs/sharding.instruments-service.yaml`
+→ `unified-trading-pm/configs/sharding_config.yaml` (cross-service sharding SSOT)
 
-```bash
-# Generate instruments for all domains (CeFi + TradFi + DeFi)
-python -m instruments_service --mode instruments \
-    --start-date 2025-01-06 --end-date 2025-01-06 \
-    --CEFI --TRADFI --DEFI --force
+## Resource profile
 
-# Generate CeFi only (Binance, Deribit, Bybit, OKX via Tardis)
-python -m instruments_service --mode instruments \
-    --start-date 2025-01-06 --CEFI --force
+**Memory:** Instruments are API response objects, not files. One shard = one venue × one day
+= hundreds to a few thousand `InstrumentRecord` objects (≈1–2 MB). No chunking or streaming
+required. Everything fits in a single DataFrame per shard.
 
-# Generate TradFi only (CME, NASDAQ, NYSE via Databento)
-python -m instruments_service --mode instruments \
-    --start-date 2025-01-06 --TRADFI --force
+**Disk:** All output goes to GCS via API (`gcsfuse` disabled). No local parquet staging.
+Local disk = OS swap only. VM is self-deleted after each shard completes (`self_delete: true`).
 
-# Generate DeFi only (Uniswap, Aave, Curve via The Graph)
-python -m instruments_service --mode instruments \
-    --start-date 2025-01-06 --DEFI --force
-```
+**CPU:** URDI venue fetches run concurrently (`asyncio.gather`). Processing and writes are
+sequential. Cross-shard parallelism (many shards running as independent containers) is the
+primary scaling mechanism — no intra-shard thread pool.
 
-### Programmatic Usage
+**Reads:** This service never reads from storage. Streaming-read patterns do not apply here.
+(See `market-data-processing-service` for a service with large-file streaming reads.)
 
-```python
-from instruments_service.app.core.instruments_service import InstrumentsService
-from datetime import datetime, timezone
+## Extending coverage
 
-# Initialize service (project_id from config or GCP_PROJECT_ID env var)
-config = {
-    'project_id': 'your-gcp-project-id-here',
-    'enable_ccxt_integration': True
-}
-service = InstrumentsService(config)
+Add a venue: edit `adapters/urdi_reference_provider.py` → `URDI_SUPPORTED_VENUES`.
+URDI must have an adapter for the venue first — add it there, not here.
 
-# Generate instruments for a date
-result = await service.generate_instruments_for_date(
-    date=datetime(2023, 5, 23, tzinfo=timezone.utc)
-)
+## Where the real logic lives
 
-# Query instruments
-instruments_df = service.query_instruments(
-    venue='BINANCE-FUTURES',
-    instrument_type='PERPETUAL'
-)
-```
-
-## Sports Instruments
-
-Sports is the 4th asset class alongside CeFi, TradFi, and DeFi. The `instruments_service/sports/` module provides:
-
-- **League registry** — 101 leagues across football, basketball, tennis, etc.
-- **Team normalizer** — cross-provider fuzzy matching for consistent team identity
-- **Fixture parser** — converts provider fixture data into canonical instruments
-
-Canonical instrument key format: `{LEAGUE}:FIXTURE:{HOME_ID}-v-{AWAY_ID}@{YYYYMMDD}`
-
-See `spec/SPORTS_INTEGRATION.md` for full details.
-
-## OpenBB Integration (Corporate Actions)
-
-This service uses **OpenBB** for enhanced corporate actions data (earnings, dividends) via the `CorporateActionsAdapter`.
-
-### Data Sources
-
-| Data Type | Primary Provider | Fallback |
-| --------- | ---------------- | -------- |
-| Earnings  | FMP (via OpenBB) | yfinance |
-| Dividends | FMP (via OpenBB) | yfinance |
-
-OpenBB provides richer data (revenue, fiscal periods, surprise %) compared to yfinance.
-
-### Setup
-
-```bash
-# Install with OpenBB support
-pip install -e ".[openbb]"
-
-# Or install openbb separately
-pip install openbb
-```
-
-### API Keys
-
-API keys are loaded from Secret Manager or environment variables:
-
-| Secret Name          | Env Fallback  | Purpose                            |
-| -------------------- | ------------- | ---------------------------------- |
-| `openbb-fmp-api-key` | `FMP_API_KEY` | FMP fundamentals/corporate actions |
-
-Get a free FMP API key at: https://financialmodelingprep.com/developer/docs/ (250 calls/day free tier)
-
-### Usage
-
-```python
-from instruments_service.corporate_actions import CorporateActionsAdapter
-
-# Use OpenBB as primary provider with yfinance fallback
-adapter = CorporateActionsAdapter(
-    provider="openbb",
-    fallback_to_yfinance=True,
-    project_id="your-project-id"
-)
-
-# Fetch earnings with enhanced data
-earnings = adapter.fetch_earnings("AAPL", start_date, end_date)
-
-# Fetch dividends
-dividends = adapter.fetch_dividends("AAPL", start_date, end_date)
-```
-
-## Documentation
-
-- [Service Overview](docs/SERVICE_OVERVIEW.md) - Architecture and design
-- [API Reference](docs/API_REFERENCE.md) - Complete API documentation
-- [Usage Guide](docs/USAGE_GUIDE.md) - Usage examples and patterns
-- [Setup Guide](docs/SETUP_GUIDE.md) - Installation and configuration
-- [Instrument Key Specification](docs/INSTRUMENT_KEY.md) - Instrument ID format
-
-# Build trigger test Tue Jan 27 15:04:47 GMT 2026
-
----
-
-## 🚩 PRODUCTION READINESS UPDATES NEEDED (Epic: DATA-IO-PROD-001)
-
-See [GitHub Project #9](https://github.com/users/IggyIkenna/projects/9) for tracking.
-
-### P0-Critical Updates
-
-1. **Config.py File Size Violation** (Issue #76)
-   - Current: `instruments_service/config.py` is 1,929 lines
-   - Target: <1,500 lines per file
-   - Action: Split into `config/instrument_definitions.py`, keep `InstrumentsServiceConfig` in `config/service_config.py`
-
-2. **Per-Category Terraform Configs** (Issue #87)
-   - Current: Single deployment
-   - Target: 3 deployments (instruments-cefi, instruments-tradfi, instruments-defi)
-   - Machine specs: 2 core, 4GB per category
-   - See: `unified-trading-codex/04-architecture/deployment-grouping.md`
-
-3. **Hot-Reload Config Metadata** (Issue #80)
-   - Current: No metadata on config fields
-   - Target: Tag fields with `metadata={"hot_reloadable": bool, "requires_restart": bool}`
-   - See: `unified-trading-codex/05-infrastructure/config-management.md`
-
-### P1-High Updates
-
-4. **Test Coverage Threshold** (Issue #77)
-   - Current: pytest-cov configured, no threshold enforcement
-   - Target: 50%+ coverage with quality gates enforcement
-   - Action: Update `scripts/quality-gates.sh` to include `--cov-fail-under=50`
-
-5. **Live Mode Health Endpoint** (Issue #82)
-   - Current: No /health endpoint
-   - Target: Add for live mode monitoring (streaming counters, persistence health)
-   - See: `unified-trading-codex/03-observability/health-endpoints.md`
-
-6. **Batch vs Live Path Construction** (Issue #88)
-   - Current: Batch-only paths
-   - Target: Mode-aware paths (batch at root, live in `live/` subdirectory)
-   - See: `unified-trading-codex/02-data/partitioning.md#batch-vs-live`
-
-### Architecture Changes
-
-**Deployment Model:** 1 deployment → 3 per-category deployments
-**Communication:** GCS only → Pub/Sub between categories (instruments writes, downstream reads)
-**Library Imports:** Standalone → Imported by market-tick-data-service (within same category deployment)
-
-See: `unified-trading-codex/04-architecture/deployment-grouping.md` for full architecture.
-
----
+| Concern                                | Location                                                                                                |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Instrument key spec / canonical schema | `unified-trading-codex/02-data/` · UAC `unified_api_contracts/registry/`                                |
+| Parquet schema (`INSTRUMENTS_SCHEMA`)  | `unified-internal-contracts/` (UIC)                                                                     |
+| Venue adapters (fetch + normalise)     | `unified-reference-data-interface/` (URDI)                                                              |
+| Sports reference + team mappings       | `unified-sports-reference-interface/`                                                                   |
+| Mock instrument universe               | UAC `unified_api_contracts/registry/representative_sample.py`                                           |
+| Mock scenarios + mode enums            | `unified-internal-contracts/unified_internal_contracts/modes.py`                                        |
+| Batch vs live / scheduling             | UTL `ScheduledIO`/`BatchIO` · runtime topology DAG (`unified-trading-pm/configs/runtime-topology.yaml`) |
+| Config patterns · service framework    | `unified-trading-codex/06-coding-standards/`                                                            |
+| DeFi protocol details                  | `unified-trading-codex/09-strategy/defi/`                                                               |
