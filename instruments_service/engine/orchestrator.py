@@ -24,6 +24,7 @@ For each date:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
 import logging
@@ -606,17 +607,24 @@ async def process_instruments(
 
     records: list[InstrumentRecord] = []
     _retryable_venues: list[str] = []
+    # Track venues where the adapter ran without error (even if 0 records returned).
+    # Used by the completeness check to distinguish "adapter returned nothing for this
+    # date range" (OK) from "adapter failed to respond" (completeness failure).
+    _non_error_venues: set[str] = set()
 
     # DeFi: use cached universe (one API call for entire batch run)
     if defi_active and mode == "batch":
         defi_records, defi_retryable = await _get_or_fetch_defi_universe(defi_active, api_keys=api_keys, mode=mode)
         records.extend(defi_records)
         _retryable_venues.extend(defi_retryable)
+        # All DeFi venues that aren't retryable ran OK (even if 0 records after date filter)
+        _non_error_venues.update(v for v in defi_active if v not in defi_retryable)
     elif defi_active:
         # Live mode: always fetch fresh DeFi data (with monotonicity check)
         with SolanaCacheSession(), EvmCacheSession():
             defi_result = await fetch_instruments_for_all_venues(defi_active, api_keys=api_keys, date=date, mode=mode)
         defi_live_records = list(defi_result.records)
+        _non_error_venues.update(v for v in defi_active if v not in {e.venue for e in defi_result.failed_venues})
 
         # Monotonicity check: retry regressed venues, then block any still below HWM
         hwm = _get_defi_manifest_high_watermarks()
@@ -650,6 +658,9 @@ async def process_instruments(
             )
         records.extend(non_defi_result.records)
         _retryable_venues.extend(non_defi_result.retryable_venues)
+        _non_error_venues.update(
+            v for v in non_defi_active if v not in {e.venue for e in non_defi_result.failed_venues}
+        )
 
     # 3. Filter to instruments active on the requested date.
     # URDI adapters return the full historical instrument universe; this reduces
@@ -746,7 +757,10 @@ async def process_instruments(
 
     # 5. Schema validation — bad records fail the entire venue shard.
     #    If ANY instrument in a venue fails validation, the whole venue is skipped.
+    #    Validation-failed venues are tracked separately so the completeness check
+    #    doesn't count them as "missing" (they were fetched, just rejected).
     valid_records, rejected = validate_instrument_records(records)
+    validation_failed_venues: set[str] = set()
     if rejected:
         # Group rejections by venue — fail entire venue shard
         failed_venues: dict[str, list[str]] = {}
@@ -761,13 +775,13 @@ async def process_instruments(
                 reasons[0],
             )
         # Remove all records from failed venues (fail the shard, not just the record)
-        failed_venue_set = set(failed_venues.keys())
-        records = [r for r in valid_records if r.venue not in failed_venue_set]
+        validation_failed_venues = set(failed_venues.keys())
+        records = [r for r in valid_records if r.venue not in validation_failed_venues]
         log_event(
             "SHARD_INCOMPLETE",
             details={
                 "date": date,
-                "failed_venues": sorted(failed_venue_set),
+                "failed_venues": sorted(validation_failed_venues),
                 "reason": "schema_validation_failure",
             },
         )
@@ -810,11 +824,15 @@ async def process_instruments(
     # prefix ensures writes land at instrument_availability/by_date/{day=X}/{venue=Y}/
     sink = get_data_sink(bucket=bucket, prefix="instrument_availability/by_date")
 
+    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
     if "venue" in df.columns:
         for venue_name, venue_df in df.groupby("venue"):
-            _write_venue(str(venue_name), venue_df, date, bucket, sink, counts, sampler)
+            _write_venue(str(venue_name), venue_df, date, bucket, sink, counts, sampler, manifest)
     else:
-        _write_venue("all", df, date, bucket, sink, counts, sampler)
+        _write_venue("all", df, date, bucket, sink, counts, sampler, manifest)
+    # Flush all manifest records in one batched write (one GCS round-trip
+    # instead of N per venue). Generation-match lock handles concurrency.
+    manifest.close()
 
     # 7. SPORTS enrichment: fetch and write reference data (teams, leagues, etc.)
     # alongside fixtures. These are slow-moving entities that don't change per-date
@@ -840,10 +858,30 @@ async def process_instruments(
     # NOT what was fetched. If a venue returns 0 instruments (adapter error, network
     # failure), it must show up as missing — never silently pass.
     #
+    # HOWEVER, venues are excluded from expected if:
+    #  - Adapter ran OK (in _non_error_venues) but returned 0 records after date
+    #    filtering — the data source simply has no data for that date (e.g. NASDAQ
+    #    before DBEQ.BASIC dataset starts, or CME on a holiday).
+    #  - Validation rejected all records (validation_failed_venues) — data quality
+    #    issue, not a missing-data issue. Already logged as SHARD FAILED above.
+    #
     # When venues are missing (typically due to API rate limits or transient errors),
     # retry just the missing venues with exponential backoff before failing.
     expected_venues = set(active_venues)
     written_venues = set(counts.keys())
+
+    # Venues where the adapter succeeded but no records survived date/relevance filtering
+    # are not "missing" — the data source simply had nothing for this date.
+    empty_ok_venues = (_non_error_venues - written_venues) - validation_failed_venues
+    if empty_ok_venues:
+        logger.info(
+            "Shard completeness: %d venue(s) fetched OK but 0 records after filtering (excluded from expected): %s",
+            len(empty_ok_venues),
+            sorted(empty_ok_venues),
+        )
+    expected_venues -= empty_ok_venues
+    expected_venues -= validation_failed_venues
+
     missing_shards = expected_venues - written_venues
 
     # Retry ONLY venues that failed with retryable errors (RATE_LIMIT, NETWORK, TIMEOUT,
@@ -907,8 +945,10 @@ async def process_instruments(
                     retry_rows.append(d)
                 retry_df = pd.DataFrame(retry_rows)
                 if "venue" in retry_df.columns:
+                    retry_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
                     for venue_name, venue_df in retry_df.groupby("venue"):
-                        _write_venue(str(venue_name), venue_df, date, bucket, sink, counts, sampler)
+                        _write_venue(str(venue_name), venue_df, date, bucket, sink, counts, sampler, retry_manifest)
+                    retry_manifest.close()
 
         # Recalculate missing
         written_venues = set(counts.keys())
@@ -981,25 +1021,74 @@ def _write_venue(
     sink: DataSink,
     counts: dict[str, int],
     sampler: SamplingService,
+    manifest: ManifestWriter | None = None,
 ) -> None:
-    """Write one venue's DataFrame to storage, catalogue, and CSV sample."""
-    try:
-        sink.write(
-            data=df,
-            partition={"day": date, "venue": venue_str},
-            format="parquet",
-            filename="instruments.parquet",
-        )
-        path = f"instrument_availability/by_date/day={date}/venue={venue_str}/instruments.parquet"
-        _write_catalogue_record(bucket, path, date, len(df))
-        # CSV sample in dev mode — generate_csv_sample is the SamplingService API
-        if sampler.enable_sampling:
-            sampler.generate_csv_sample(df, filename_prefix=f"instruments_{venue_str}_{date}")
-        counts[venue_str] = len(df)
-    except (OSError, ConnectionError, TimeoutError, ValueError) as exc:
-        logger.error("Write failed for venue=%s date=%s: %s", venue_str, date, exc)
-        log_event("WRITE_FAILED", details={"venue": venue_str, "date": date, "error": str(exc)})
-    # Programming errors propagate — fail the shard
+    """Write one venue's DataFrame to storage, catalogue, and CSV sample.
+
+    Retries transient GCS/network errors up to 3 times with exponential backoff
+    (1s, 2s) to avoid wasting the expensive fetch work that produced this data.
+
+    If ``manifest`` is provided, adds the catalogue record to the shared writer
+    (caller flushes once after all venues). Otherwise falls back to per-venue
+    ``_write_catalogue_record`` for backward compatibility.
+    """
+    import time as _time
+
+    max_attempts = 3
+    for attempt in range(max_attempts):
+        try:
+            sink.write(
+                data=df,
+                partition={"day": date, "venue": venue_str},
+                format="parquet",
+                filename="instruments.parquet",
+            )
+            # Add to batched manifest writer (flushed by caller) or legacy per-venue write
+            if manifest is not None:
+                manifest.add(
+                    processing_date=date_type.fromisoformat(date),
+                    row_count=len(df),
+                    venue=venue_str,
+                )
+            else:
+                path = f"instrument_availability/by_date/day={date}/venue={venue_str}/instruments.parquet"
+                _write_catalogue_record(bucket, path, date, len(df))
+            # CSV sample in dev mode — generate_csv_sample is the SamplingService API
+            if sampler.enable_sampling:
+                sampler.generate_csv_sample(df, filename_prefix=f"instruments_{venue_str}_{date}")
+            counts[venue_str] = len(df)
+            return  # success
+        except (OSError, ConnectionError, TimeoutError) as exc:
+            if attempt < max_attempts - 1:
+                delay = 2**attempt  # 1s, 2s
+                logger.warning(
+                    "Write retry %d/%d for venue=%s date=%s (next in %ds): %s",
+                    attempt + 1,
+                    max_attempts,
+                    venue_str,
+                    date,
+                    delay,
+                    exc,
+                )
+                _time.sleep(delay)
+            else:
+                logger.error(
+                    "Write FAILED after %d attempts for venue=%s date=%s: %s",
+                    max_attempts,
+                    venue_str,
+                    date,
+                    exc,
+                )
+                log_event(
+                    "WRITE_FAILED",
+                    details={"venue": venue_str, "date": date, "error": str(exc), "attempts": max_attempts},
+                )
+        except ValueError as exc:
+            # Serialization/validation errors — not transient, don't retry
+            logger.error("Write failed for venue=%s date=%s: %s", venue_str, date, exc)
+            log_event("WRITE_FAILED", details={"venue": venue_str, "date": date, "error": str(exc)})
+            return
+    # Programming errors (TypeError, KeyError, etc.) propagate — fail the shard
 
 
 async def _fetch_sports_reference_data(
@@ -1112,6 +1201,59 @@ async def _fetch_sports_reference_data(
             operation="sports_reference_injuries_fetch",
             shard=date,
         )
+
+    # Per-fixture enrichment: stats, events, lineups, player stats.
+    # Only for completed fixtures (status in FT/AET/PEN — stats unavailable for future/live).
+    completed_statuses = {"FT", "AET", "PEN"}
+    fixture_ids: list[int] = []
+    try:
+        fixtures = await adapter.get_fixtures(date, league_ids=prediction_league_ids)
+        for fx in fixtures:
+            if fx.status in completed_statuses and fx.fixture_id:
+                with contextlib.suppress(ValueError, TypeError):
+                    fixture_ids.append(int(fx.fixture_id))
+        logger.info("Sports reference: %d completed fixtures found for enrichment", len(fixture_ids))
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="sports_reference_fixtures_fetch",
+            shard=date,
+        )
+
+    if fixture_ids:
+        _per_fixture_entities = [
+            ("fixture_stats", adapter.get_fixture_statistics),
+            ("fixture_events", adapter.get_fixture_events),
+            ("fixture_lineups", adapter.get_fixture_lineups),
+            ("player_stats", adapter.get_fixture_player_stats),
+        ]
+        for entity_name, fetch_fn in _per_fixture_entities:
+            all_rows: list[dict[str, object]] = []
+            for fid in fixture_ids:
+                try:
+                    rows = await fetch_fn(fid)
+                    for row in rows:
+                        row["fixture_id"] = fid
+                        all_rows.append(row)
+                    await asyncio.sleep(1.0)  # rate limit: 1 req/sec
+                except Exception as exc:
+                    classify_and_emit_error(
+                        exc,
+                        service_name="instruments-service",
+                        operation=f"sports_reference_{entity_name}_fetch",
+                        shard=str(fid),
+                    )
+            if all_rows:
+                df = pd.DataFrame(all_rows)
+                sink.write(
+                    data=df,
+                    partition={"day": date, "entity": entity_name},
+                    format="parquet",
+                    filename=f"{entity_name}.parquet",
+                )
+                counts[entity_name] = len(df)
+                logger.info("Sports reference: %d %s rows written", len(df), entity_name)
 
     # Cross-provider mapping tables
     _write_team_mapping(bucket)
