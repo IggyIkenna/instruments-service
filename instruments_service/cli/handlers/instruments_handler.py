@@ -104,7 +104,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
                 _exc,
                 service_name="instruments-service",
                 operation="check_date_completeness",
-                shard=date,
+                shard=str(date),
             )
             return False
 
@@ -114,7 +114,10 @@ class InstrumentsHandler(UnifiedServiceHandler):
         Reads API keys from the hot-reloader (always fresh after rotation).
         Skips dates already present in storage (unless force=True).
         """
-        date = payload.date
+        date = str(payload.date) if not isinstance(payload.date, str) else payload.date
+        # Normalize datetime to YYYY-MM-DD string (BatchIO yields datetime objects)
+        if "T" in date or " " in date:
+            date = date[:10]
         redo_all = payload.force or bool(payload.extra.get("redo_all", False))
 
         if not redo_all and self._is_date_complete(date):
