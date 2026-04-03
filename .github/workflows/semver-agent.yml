@@ -12,9 +12,9 @@ name: Semver Agent
 #
 # If commit label disagrees with API diff, posts FAILING commit status on staging HEAD to block staging-to-main.yml
 #
-# Placeholders replaced by rollout-semver-agent.sh:
+# Placeholders replaced by rollout-agent-workflows.sh:
 #   instruments-service  — e.g. market-tick-data-service
-#   instruments_service — e.g. market_tick_data_service (underscore form)
+#   instruments_service    — e.g. market_tick_data_service (underscore form)
 #
 # Pre-1.0.0 semver rules:
 #   feat!: / BREAKING CHANGE: → MINOR bump (never auto-cross to 1.0.0)
@@ -28,7 +28,7 @@ name: Semver Agent
 #   fix: / internal change         → PATCH bump
 #
 # Dispatch payload to unified-trading-pm:
-#   { repo, version, branch, commit_sha, is_breaking }
+#   { repo, version, branch, commit_sha }
 #
 # Secrets required:
 #   GH_PAT  — cross-repo dispatch and issue creation
@@ -43,7 +43,7 @@ env:
   GH_TOKEN: ${{ secrets.GH_PAT }}
   SERVICE_NAME: "instruments-service"
   SOURCE_DIR: "instruments_service"
-  GH_ORG: ${{ github.repository_owner }}
+  GH_ORG: IggyIkenna
 
 permissions:
   contents: read
@@ -63,14 +63,14 @@ jobs:
 
     steps:
       - name: Checkout repo at staging commit
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           token: ${{ secrets.GH_PAT }}
           fetch-depth: 0
 
       - name: Checkout unified-trading-codex (readiness checklist)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
         with:
           repository: ${{ env.GH_ORG }}/unified-trading-codex
           path: ../unified-trading-codex
@@ -130,7 +130,7 @@ jobs:
               -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${OWNER}/unified-trading-pm/dispatches" \
-              -d "{\"event_type\": \"version-bump\", \"client_payload\": {\"repo\": \"instruments-service\", \"version\": \"${NEW_VERSION}\", \"branch\": \"staging\", \"commit_sha\": \"${SHA}\", \"is_breaking\": \"false\"}}")
+              -d "{\"event_type\": \"version-bump\", \"client_payload\": {\"repo\": \"instruments-service\", \"version\": \"${NEW_VERSION}\", \"branch\": \"staging\", \"commit_sha\": \"${SHA}\"}}")
             if [ "$HTTP_STATUS" = "204" ]; then
               echo "Dispatched successfully to unified-trading-pm (always_patch)"
             else
@@ -340,18 +340,11 @@ jobs:
 
           echo "Version: $CURRENT → $NEW_VERSION (bump=$BUMP, reason=$BUMP_REASON)"
 
-          # Track whether this is a breaking change (feat!, removed exports, removed routes)
-          IS_BREAKING="false"
-          if [ "$BUMP" = "breaking" ]; then
-            IS_BREAKING="true"
-          fi
-
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "current_version=$CURRENT" >> "$GITHUB_OUTPUT"
           echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
           echo "bump_reason=$BUMP_REASON" >> "$GITHUB_OUTPUT"
-          echo "is_breaking=$IS_BREAKING" >> "$GITHUB_OUTPUT"
 
       - name: Open GitHub Issue for MAJOR bump approval (post-1.0.0)
         if: steps.compute.outputs.bump == 'major_blocked'
@@ -433,14 +426,13 @@ jobs:
           COMMIT_SHA="${{ github.event.workflow_run.head_sha }}"
           OWNER="${{ github.repository_owner }}"
 
-          IS_BREAKING="${{ steps.compute.outputs.is_breaking }}"
-          echo "Dispatching version-bump: repo=$REPO version=$VERSION branch=$BRANCH commit_sha=$COMMIT_SHA is_breaking=$IS_BREAKING"
+          echo "Dispatching version-bump: repo=$REPO version=$VERSION branch=$BRANCH commit_sha=$COMMIT_SHA"
 
           HTTP_STATUS=$(curl -s -o /tmp/dispatch_response.json -w "%{http_code}" -X POST \
             -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${OWNER}/unified-trading-pm/dispatches" \
-            -d "{\"event_type\": \"version-bump\", \"client_payload\": {\"repo\": \"${REPO}\", \"version\": \"${VERSION}\", \"branch\": \"${BRANCH}\", \"commit_sha\": \"${COMMIT_SHA}\", \"is_breaking\": \"${IS_BREAKING}\"}}")
+            -d "{\"event_type\": \"version-bump\", \"client_payload\": {\"repo\": \"${REPO}\", \"version\": \"${VERSION}\", \"branch\": \"${BRANCH}\", \"commit_sha\": \"${COMMIT_SHA}\"}}")
 
           if [ "$HTTP_STATUS" = "204" ]; then
             echo "Dispatched successfully to unified-trading-pm"
@@ -452,14 +444,12 @@ jobs:
 
       # ── TELEGRAM NOTIFY ─────────────────────────────────────────────────────
       - name: Notify Telegram
-        if: always()
+        if: always() && env.TELEGRAM_BOT_TOKEN != ''
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ vars.TELEGRAM_CHAT_ID }}
           STATUS: ${{ job.status }}
         run: |
-          [ -z "$TELEGRAM_BOT_TOKEN" ] && echo "No bot token — skipping Telegram notify" && exit 0
-          [ -z "$TELEGRAM_CHAT_ID" ] && echo "No chat ID — skipping Telegram notify" && exit 0
           TEXT="*semver-agent* | instruments-service | ${STATUS} | branch: staging | triggered by QG pass on staging (pre-SIT)"
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -d chat_id="${TELEGRAM_CHAT_ID}" \

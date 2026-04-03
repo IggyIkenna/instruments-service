@@ -1,0 +1,84 @@
+name: Plan Alignment Agent
+
+# Triggered on PR open/update. Claude reads the PR diff against active PM plans and posts
+# an advisory comment if the changes appear out-of-scope. NEVER blocks merge.
+#
+# Placeholders replaced by rollout-agent-workflows.sh:
+#   instruments-service  — e.g. market-tick-data-service
+#
+# Secrets required:
+#   ANTHROPIC_API_KEY  — Claude Code CLI
+#   GH_PAT             — clone PM + post PR comment
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+env:
+  GH_TOKEN: ${{ secrets.GH_PAT }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  SERVICE_NAME: "instruments-service"
+  GH_ORG: ${{ github.repository_owner }}
+
+jobs:
+  plan-alignment:
+    name: Plan Alignment Check — instruments-service
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only run if API key is available — advisory job, never required
+    if: vars.PLAN_ALIGNMENT_ENABLED != 'false'
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Checkout unified-trading-pm (active plans)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.GH_ORG }}/unified-trading-pm
+          path: unified-trading-pm
+          token: ${{ secrets.GH_PAT }}
+          sparse-checkout: |
+            plans/active/
+
+      - name: Install Claude Code CLI
+        if: env.ANTHROPIC_API_KEY != ''
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run plan alignment agent
+        if: env.ANTHROPIC_API_KEY != ''
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          PROMPT="You are reviewing a pull request in the instruments-service repository.
+
+          PR #${PR_NUMBER}: ${PR_TITLE}
+
+          === STEPS ===
+          1. Read the PR diff: gh pr diff ${PR_NUMBER}
+          2. Read all active plan files in unified-trading-pm/plans/active/ that mention instruments-service or are general
+          3. For each changed file in the PR:
+             - Check if the change aligns with an active plan todo or is a clear bugfix/chore
+             - Flag if the change introduces new functionality not covered by any active plan
+          4. If any significant out-of-scope changes found:
+             Post advisory comment via:
+             gh pr comment ${PR_NUMBER} --body 'ADVISORY (not blocking): <summary of out-of-scope changes and which plan to look at>'
+          5. If all changes are in-scope or are trivial: do NOT post a comment.
+
+          Rules:
+          - This is ADVISORY ONLY — never request changes, never block merge
+          - Only flag genuinely out-of-scope architectural changes, not style/chore/test PRs
+          - Keep comment concise (< 5 bullet points)
+          - If uncertain, do not post a comment"
+
+          claude --print --dangerously-skip-permissions --model claude-haiku-4-5-20251001 "$PROMPT" \
+            || echo "Plan alignment agent exited non-zero — check logs (advisory job, not blocking)"
+
+      - name: Skip — no API key
+        if: env.ANTHROPIC_API_KEY == ''
+        run: echo "ANTHROPIC_API_KEY not set — skipping plan alignment check"
