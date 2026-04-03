@@ -816,6 +816,9 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
 
         records: list[InstrumentRecord] = []
         for idx in YAHOO_INDICES:
+            # Resolve timezone from exchange hours config (same as Databento-sourced instruments)
+            venue_hours = _EXCHANGE_HOURS.get(idx.venue)
+            tz = venue_hours["tz"] if venue_hours and venue_hours.get("tz") else "UTC"
             records.append(
                 InstrumentRecord(
                     instrument_key=f"{idx.venue}:INDEX:{idx.symbol}",
@@ -825,6 +828,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                     raw_symbol=idx.yahoo_ticker,
                     base_asset=idx.base_asset,
                     quote_asset="USD",
+                    timezone=tz,
                     available_from_datetime=datetime(2004, 3, 26, tzinfo=UTC),
                     # INDEX instruments are non-tradeable pricing references —
                     # tick_size/min_size/contract_size not meaningful but set

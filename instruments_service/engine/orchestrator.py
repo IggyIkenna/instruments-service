@@ -164,9 +164,13 @@ _VENUE_ADAPTER_EPOCH: dict[str, str] = {
     # but new unfiltered counts are strictly >=, so no false regressions.
     "AAVEV3": "2026-04-02",
     "UNISWAPV2": "2026-04-02",
-    "UNISWAPV3": "2026-04-02",
-    "UNISWAPV4": "2026-04-02",
-    "BALANCER": "2026-04-02",
+    # 2026-04-03: Uniswap V3/V4 and Balancer adapters have _FETCH_LIMIT=1000
+    # but 2026-04-02 manifest entries have inflated counts (>1000) from a prior
+    # code path. Epoch bumped to ignore those unreproducible HWM values.
+    # TODO: add cursor-based pagination to these adapters, then epoch can stay.
+    "UNISWAPV3": "2026-04-03",
+    "UNISWAPV4": "2026-04-03",
+    "BALANCER": "2026-04-03",
     "CURVE": "2026-04-02",
     "COMPOUNDV3": "2026-04-02",
     "MORPHO": "2026-04-02",
