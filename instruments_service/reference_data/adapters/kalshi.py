@@ -301,7 +301,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             min_size=Decimal("1"),
             min_order_size=min_order,
             contract_size=Decimal("1"),
-            settlement_asset="USD",
+            settle_asset="USD",
             expiry=expiry,
             strike=None,
             option_type=None,

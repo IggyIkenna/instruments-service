@@ -63,7 +63,7 @@ from unified_trading_library import unified_config as _uc
 from instruments_service.adapters.urdi_reference_provider import fetch_instruments_for_all_venues
 from instruments_service.config import get_config
 from instruments_service.config_reloaders import get_defi_major_assets
-from instruments_service.reference_data.adapters._solana_utils import SolanaCacheSession
+from instruments_service.reference_data.adapters._solana_utils import SolanaCacheSession, fill_solana_cache
 from instruments_service.reference_data.adapters.sports import create_sports_reference_adapter
 from instruments_service.reference_data.utils.evm_creation_resolver import EvmCacheSession
 
@@ -1244,8 +1244,6 @@ async def fill_solana_creation_cache(
     Returns:
         Dict with cache statistics (cached, new, unresolved).
     """
-    from instruments_service.reference_data.adapters._solana_utils import fill_solana_cache
-
     # 1. Discover all Solana pool addresses by running each adapter
     all_addresses: list[str] = []
     with SolanaCacheSession():

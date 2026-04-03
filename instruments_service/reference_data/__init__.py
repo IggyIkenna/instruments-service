@@ -32,6 +32,7 @@ from .factory import (
     create_reference_data_adapter,
     get_adapter_for_canonical_venue,
 )
+from .intent_resolver import resolve_instruments, validate_resolved_instruments
 from .router import ReferenceDataSourceConfig, create_reference_data_adapter_for_source
 from .schemas import (
     CanonicalCorporateAction,
@@ -68,4 +69,6 @@ __all__ = [
     "get_adapter_for_canonical_venue",
     "get_reference_adapter",
     "get_reference_adapter_for_source",
+    "resolve_instruments",
+    "validate_resolved_instruments",
 ]

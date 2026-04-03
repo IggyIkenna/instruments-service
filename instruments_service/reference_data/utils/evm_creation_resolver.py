@@ -82,7 +82,8 @@ def _resolve_rpc_url(chain: str, alchemy_key: str | None = None) -> str | None:
             from unified_trading_library import get_secret_client
 
             sc = get_secret_client()
-            key = sc.get_secret("alchemy-api-key").strip()
+            raw_key: str = str(sc.get_secret("alchemy-api-key") or "")
+            key = raw_key.strip()
         except Exception:
             logger.warning("evm_creation_resolver: cannot get alchemy-api-key")
             return None
@@ -117,6 +118,14 @@ def _get_gcs_bucket() -> str | None:
         return None
 
 
+def _parse_json_cache(data: str | bytes) -> dict[str, str] | None:
+    """Parse JSON cache data into a string dict, or None if invalid."""
+    parsed: object = json.loads(data)
+    if isinstance(parsed, dict):
+        return {str(k): str(v) for k, v in parsed.items()}
+    return None
+
+
 def _load_cache() -> dict[str, str]:
     """Load cached (chain:address) -> ISO timestamp mapping.
 
@@ -129,12 +138,12 @@ def _load_cache() -> dict[str, str]:
         bucket = _get_gcs_bucket()
         if bucket:
             storage = get_storage_client()
-            data = storage.download_bytes(bucket, _GCS_CACHE_BLOB)
+            data: bytes | None = storage.download_bytes(bucket, _GCS_CACHE_BLOB)
             if data:
-                raw = json.loads(data)
-                if isinstance(raw, dict):
-                    logger.debug("EVM creation cache: loaded %d entries from GCS", len(raw))
-                    return raw
+                result = _parse_json_cache(data)
+                if result is not None:
+                    logger.debug("EVM creation cache: loaded %d entries from GCS", len(result))
+                    return result
     except Exception as exc:
         logger.debug("GCS cache load failed (will try local): %s", exc)
 
@@ -143,10 +152,10 @@ def _load_cache() -> dict[str, str]:
     for label, path in [("local", _LOCAL_CACHE_FILE), ("seed", _SEED_FILE)]:
         if path.exists():
             try:
-                raw = json.loads(path.read_text())
-                if isinstance(raw, dict):
-                    logger.debug("EVM creation cache: loaded %d entries from %s", len(raw), label)
-                    return raw
+                result = _parse_json_cache(path.read_text())
+                if result is not None:
+                    logger.debug("EVM creation cache: loaded %d entries from %s", len(result), label)
+                    return result
             except (json.JSONDecodeError, OSError) as exc:
                 logger.warning("Failed to load %s EVM creation cache: %s", label, exc)
     return {}
@@ -162,10 +171,10 @@ def _save_cache(cache: dict[str, str]) -> None:
         if bucket:
             storage = get_storage_client()
             try:
-                existing_data = storage.download_bytes(bucket, _GCS_CACHE_BLOB)
+                existing_data: bytes | None = storage.download_bytes(bucket, _GCS_CACHE_BLOB)
                 if existing_data:
-                    existing = json.loads(existing_data)
-                    merged = {**existing, **cache} if isinstance(existing, dict) else cache
+                    existing = _parse_json_cache(existing_data)
+                    merged = {**existing, **cache} if existing is not None else cache
                 else:
                     merged = cache
             except Exception:
@@ -255,8 +264,9 @@ async def _get_code_at_block(
         "params": [address, block_hex],
     }
     async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-        data = await resp.json()
-    code = data.get("result", "0x")
+        raw = await resp.json()
+    data: dict[str, str] = dict(raw) if isinstance(raw, dict) else {}
+    code: str = str(data.get("result", "0x"))
     # "0x" or "" means no code (contract not deployed yet)
     return code not in ("0x", "", None)
 
@@ -274,11 +284,13 @@ async def _get_block_timestamp(
         "params": [hex(block_number), False],
     }
     async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-        data = await resp.json()
-    result = data.get("result")
-    if not result:
+        raw = await resp.json()
+    data: dict[str, object] = dict(raw) if isinstance(raw, dict) else {}
+    result_val = data.get("result")
+    if not isinstance(result_val, dict):
         return None
-    ts_hex = result.get("timestamp", "0x0")
+    result: dict[str, str] = {str(k): str(v) for k, v in result_val.items()}
+    ts_hex: str = result.get("timestamp", "0x0")
     ts = int(ts_hex, 16)
     return datetime.fromtimestamp(ts, tz=UTC)
 
@@ -292,8 +304,14 @@ async def _get_latest_block(session: aiohttp.ClientSession, url: str) -> int:
         "params": ["latest", False],
     }
     async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-        data = await resp.json()
-    return int(data["result"]["number"], 16)
+        raw = await resp.json()
+    data: dict[str, object] = dict(raw) if isinstance(raw, dict) else {}
+    result_val = data.get("result")
+    if not isinstance(result_val, dict):
+        msg = f"Unexpected RPC response: {data}"
+        raise KeyError(msg)
+    block_hex = str(result_val.get("number", "0x0"))
+    return int(block_hex, 16)
 
 
 async def resolve_contract_creation(

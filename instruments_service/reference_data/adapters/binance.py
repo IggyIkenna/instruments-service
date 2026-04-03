@@ -213,6 +213,7 @@ class BinanceReferenceDataAdapter(BaseReferenceDataAdapter):
                     strike=None,
                     option_type=None,
                     available_from_datetime=datetime(2017, 7, 14, tzinfo=UTC),
+                    timezone="UTC",
                 )
             )
         return results
@@ -282,6 +283,7 @@ class BinanceReferenceDataAdapter(BaseReferenceDataAdapter):
                     option_type=None,
                     margin_type=margin_type,
                     available_from_datetime=datetime(2017, 7, 14, tzinfo=UTC),
+                    timezone="UTC",
                 )
             )
         return results
@@ -342,6 +344,7 @@ class BinanceReferenceDataAdapter(BaseReferenceDataAdapter):
             strike=Decimal(str(sym.strikePrice or "0")),
             option_type=opt_type,
             available_from_datetime=datetime(2017, 7, 14, tzinfo=UTC),
+            timezone="UTC",
         )
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:

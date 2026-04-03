@@ -12,7 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
+from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import SUBGRAPH_IDS
 from unified_trading_library import log_event
@@ -47,6 +47,8 @@ query GetPools($first: Int!) {{
     }}
 }}
 """
+
+_FETCH_LIMIT = 1000
 
 
 class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
@@ -83,11 +85,11 @@ class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
         if not url:
             return []
 
-        variables = {"first": 500}
         block_num = await self._resolve_block_num()
         block_clause = f"block: {{number: {block_num}}}, " if block_num else ""
         query = _POOLS_QUERY_TEMPLATE.format(block_clause=block_clause)
 
+        variables = {"first": _FETCH_LIMIT}
         try:
             async with (
                 aiohttp.ClientSession() as session,
@@ -103,7 +105,8 @@ class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
             self._log_fetch_error(exc)
             raise ConnectionError(str(exc)) from exc
 
-        pools: list[dict[str, object]] = data.get("data", {}).get("pools", [])
+        pools: list[dict[str, object]] = (data.get("data") or {}).get("pools") or []
+
         results: list[InstrumentRecord] = []
 
         for pool in pools:
@@ -182,10 +185,6 @@ class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         base, quote = order_base_quote(sym0, sym1)
-
-        # Filter: both tokens must be major assets (BTC/ETH/stablecoins)
-        if base not in DEFI_MAJOR_ASSET_SYMBOLS or quote not in DEFI_MAJOR_ASSET_SYMBOLS:
-            return None
 
         fee_str = str(fee_tier) if fee_tier else "0"
         symbol = f"{base}-{quote}:{fee_str}"

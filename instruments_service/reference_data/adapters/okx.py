@@ -385,6 +385,7 @@ class OKXReferenceDataAdapter(BaseReferenceDataAdapter):
             underlying=base_ccy if mapped_type in (InstrumentType.FUTURE, InstrumentType.OPTION) else None,
             available_from_datetime=available_since,
             status=InstrumentStatus.ACTIVE,
+            timezone="UTC",
         )
 
     async def get_exchange_fee_schedule(

@@ -556,7 +556,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
             min_size=Decimal("1"),
             min_order_size=min_order,
             contract_size=Decimal("1"),
-            settlement_asset="USDC",
+            settle_asset="USDC",
             expiry=expiry,
             strike=None,
             option_type=None,

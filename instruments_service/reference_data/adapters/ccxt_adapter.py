@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import ccxt.async_support as ccxta
-from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType, OptionType
 
 from ..base_adapter import BaseReferenceDataAdapter
 from ..schemas import (
@@ -115,8 +115,39 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
         base = str(market.get("base") or "")
         quote = str(market.get("quote") or "")
+        settle = str(market.get("settle") or "")
         expiry = self._parse_ccxt_expiry(market.get("expiryDatetime"))
         tick_raw, lot_raw, _min_raw, contract_size_raw = self._extract_market_sizes(market)
+
+        # Derive margin_type from ccxt linear/inverse flags
+        margin_type = None
+        if market.get("linear"):
+            margin_type = MarginType.LINEAR
+        elif market.get("inverse"):
+            margin_type = MarginType.INVERSE
+
+        # underlying: ccxt base asset is the underlying for derivatives
+        is_derivative = expiry or mapped_type in (
+            InstrumentType.PERPETUAL,
+            InstrumentType.FUTURE,
+            InstrumentType.OPTION,
+        )
+        underlying = base if is_derivative else None
+
+        # Parse strike and option_type for options
+        strike_raw = market.get("strike")
+        strike = Decimal(str(strike_raw)) if strike_raw is not None else None
+        option_type_raw = str(market.get("optionType") or "")
+        option_type: OptionType | None = None
+        if option_type_raw.lower() == "call":
+            option_type = OptionType.CALL
+        elif option_type_raw.lower() == "put":
+            option_type = OptionType.PUT
+
+        # Skip combo/conditional options with no strike — they fail validation
+        if mapped_type == InstrumentType.OPTION and strike is None:
+            return None
+
         return InstrumentRecord(
             instrument_key=symbol,
             venue=self.venue,
@@ -124,13 +155,16 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
             instrument_type=mapped_type,
             base_asset=base,
             quote_asset=quote,
+            settle_asset=settle or None,
+            underlying=underlying,
+            margin_type=margin_type,
             status=InstrumentStatus.ACTIVE,
             tick_size=Decimal(str(tick_raw)) if tick_raw is not None else Decimal("0.01"),
             min_size=Decimal(str(lot_raw)) if lot_raw is not None else Decimal("0.001"),
             contract_size=Decimal(str(contract_size_raw)) if contract_size_raw else Decimal("1"),
             expiry=expiry,
-            strike=None,
-            option_type=None,
+            strike=strike,
+            option_type=option_type,
             available_from_datetime=datetime(2010, 1, 1, tzinfo=UTC),
         )
 

@@ -278,7 +278,7 @@ class BetfairReferenceDataAdapter(BaseReferenceDataAdapter):
             min_size=Decimal("1"),
             min_order_size=Decimal("2"),
             contract_size=Decimal("1"),
-            settlement_asset="GBP",
+            settle_asset="GBP",
             expiry=market_expiry,
             strike=None,
             option_type=None,

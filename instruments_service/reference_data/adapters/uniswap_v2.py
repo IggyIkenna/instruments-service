@@ -12,7 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
+from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import SUBGRAPH_IDS
 from unified_trading_library import log_event
@@ -48,6 +48,8 @@ query GetPairs($first: Int!, $minReserve: BigDecimal!) {{
 }}
 """
 
+_FETCH_LIMIT = 1000
+
 
 class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
     """Uniswap V2 reference data: pair discovery from The Graph subgraph."""
@@ -79,11 +81,11 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
         if not url:
             return []
 
-        variables = {"first": 500, "minReserve": "100000"}
         block_num = await self._resolve_block_num()
         block_clause = f", block: {{number: {block_num}}}" if block_num else ""
         query = _PAIRS_QUERY_TEMPLATE.format(block_clause=block_clause)
 
+        variables = {"first": _FETCH_LIMIT, "minReserve": "100000"}
         try:
             async with (
                 aiohttp.ClientSession() as session,
@@ -99,7 +101,8 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
             self._log_fetch_error(exc)
             raise ConnectionError(str(exc)) from exc
 
-        pairs: list[dict[str, object]] = data.get("data", {}).get("pairs", [])
+        pairs: list[dict[str, object]] = (data.get("data") or {}).get("pairs") or []
+
         results: list[InstrumentRecord] = []
 
         for pair in pairs:
@@ -177,10 +180,6 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         base, quote = order_base_quote(sym0, sym1)
-
-        # Filter: both tokens must be major assets (BTC/ETH/stablecoins)
-        if base not in DEFI_MAJOR_ASSET_SYMBOLS or quote not in DEFI_MAJOR_ASSET_SYMBOLS:
-            return None
 
         symbol = f"{base}-{quote}"
         venue_tag = f"UNISWAPV2-{self._chain}"
