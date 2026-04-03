@@ -1,12 +1,20 @@
-name: Agent Audit
 # Agent Audit Workflow — instruments-service
-
-# Triggered by overnight-agent-orchestrator.yml for nightly quality-gate validation.
-# Runs quality gates (and optionally the Claude Code audit agent if ANTHROPIC_API_KEY is set).
-# Reports pass/fail to the orchestrator Telegram morning summary.
 #
-# To enable full Claude audit: add ANTHROPIC_API_KEY repo secret and
-# copy scripts/run-agent.sh from market-tick-data-service as prototype.
+# Runs the autonomous Claude Code agent that:
+#   1. Bootstraps a full workspace (all sibling deps + pm + codex)
+#   2. Runs the canonical audit (trading_system_audit_prompt.md)
+#   3. Runs quality gates (auto-fix → verify, no skips)
+#   4. Runs quickmerge → creates PR → enables auto-merge
+#
+# Prerequisites (one-time repo setup):
+#   - Settings > General > Allow auto-merge: ON
+#   - Branch protection on main: require "quality-gates" status check
+#   - Secrets: ANTHROPIC_API_KEY, GH_PAT (repo scope on all workspace repos)
+#
+# Trigger: manual only (workflow_dispatch) for prototype phase.
+# Extend to scheduled (cron) or push-triggered once validated.
+
+name: Agent Audit
 
 on:
   workflow_dispatch:
@@ -18,7 +26,7 @@ on:
         type: choice
         options: ["false", "true"]
       skip_quickmerge:
-        description: "Run audit + QG but skip PR creation"
+        description: "Run audit + quality gates but skip PR creation"
         required: false
         default: "false"
         type: choice
@@ -36,15 +44,113 @@ on:
         required: false
         default: ""
 
+env:
+  GH_TOKEN: ${{ secrets.GH_PAT }}
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  GH_ORG: IggyIkenna
+  PYTHON_VERSION: "3.13"
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  quality-gates:
-    name: Quality Gates
-    uses: IggyIkenna/unified-trading-pm/.github/workflows/python-quality-gates.yml@live-defi-rollout
-    with:
-      dep_repos: ""
-    secrets:
-      GH_PAT: ${{ secrets.GH_PAT }}
+  agent-audit:
+    name: Agent Audit + Quality Gates + Quickmerge
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      # ── WORKSPACE LAYOUT ─────────────────────────────────────────────────────
+      # Creates: /home/runner/work/workspace/instruments-service/
+      # So that ../unified-api-contracts resolves to /home/runner/work/workspace/unified-api-contracts/
+      - name: Create workspace directory
+        run: |
+          mkdir -p $HOME/workspace
+          echo "WORKSPACE_ROOT=$HOME/workspace" >> $GITHUB_ENV
+
+      - name: Checkout instruments-service
+        uses: actions/checkout@v6
+        with:
+          path: ${{ env.WORKSPACE_ROOT }}/instruments-service
+          token: ${{ secrets.GH_PAT }}
+
+      # ── SYSTEM DEPS + TOOLS ──────────────────────────────────────────────────
+      - name: Setup agent CI tools
+        uses: IggyIkenna/unified-trading-pm/.github/actions/setup-agent-tools@main
+
+      # ── WORKSPACE BOOTSTRAP ──────────────────────────────────────────────────
+      # Clones all sibling deps + pm + codex, creates .cursor/rules symlink,
+      # installs all Python deps with uv pip install -e .
+      - name: Bootstrap workspace (clone deps + install)
+        working-directory: ${{ env.WORKSPACE_ROOT }}/instruments-service
+        env:
+          DEP_BRANCH: ${{ inputs.dep_branch || 'main' }}
+        run: |
+          bash scripts/setup-workspace.sh
+          echo "✅ Workspace bootstrap complete"
+          ls $HOME/workspace/
+
+      # ── GIT IDENTITY ─────────────────────────────────────────────────────────
+      - name: Configure git identity
+        run: |
+          git config --global user.email "agent@ci.local"
+          git config --global user.name "Audit Agent"
+
+      # ── RUN AGENT ────────────────────────────────────────────────────────────
+      # Runs: audit → quality gates → quickmerge
+      # All output streamed to workflow logs
+      - name: Run agent (audit + quality gates + quickmerge)
+        working-directory: ${{ env.WORKSPACE_ROOT }}/instruments-service
+        env:
+          AUDIT_ONLY: ${{ inputs.audit_only || 'false' }}
+          SKIP_QUICKMERGE: ${{ inputs.skip_quickmerge || 'false' }}
+          CLOUD_MOCK_MODE: "true"
+          GCP_PROJECT_ID: "test-project"
+          # REPO_ROOT must point to the workspace root so quality-gates.sh scripts resolve correctly
+          REPO_ROOT: ${{ env.WORKSPACE_ROOT }}
+          ATTEMPT: ${{ inputs.attempt || '1' }}
+          PRIOR_CONTEXT: ${{ inputs.prior_context || '' }}
+        run: |
+          bash scripts/run-agent.sh
+
+      # ── SELF-DISPATCH ON FAILURE (retry loop) ─────────────────────────────────
+      - name: Self-dispatch retry on failure
+        if: failure() && fromJSON(inputs.attempt || '1') < 3
+        env:
+          NEXT_ATTEMPT: ${{ fromJSON(inputs.attempt || '1') + 1 }}
+        run: |
+          echo "Attempt ${{ inputs.attempt || '1' }} failed — dispatching attempt ${NEXT_ATTEMPT}..."
+          FAILURE_SUMMARY="Attempt ${{ inputs.attempt || '1' }} failed at $(date -u +%Y-%m-%dT%H:%M:%SZ). Prior context: ${{ inputs.prior_context || 'none' }}"
+          gh workflow run agent-audit.yml \
+            --repo "${{ github.repository }}" \
+            --ref main \
+            --field attempt="${NEXT_ATTEMPT}" \
+            --field prior_context="${FAILURE_SUMMARY}" \
+            || echo "WARN: self-dispatch failed — manual retry required"
+
+      # ── TELEGRAM NOTIFICATION ────────────────────────────────────────────────
+      - name: Notify Telegram
+        if: always() && env.TELEGRAM_BOT_TOKEN != ''
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          STATUS: ${{ job.status }}
+          ATTEMPT: ${{ inputs.attempt || '1' }}
+        run: |
+          ICON=$([[ "$STATUS" == "success" ]] && echo "✅" || echo "❌")
+          TEXT="${ICON} *instruments-service* | QG: ${STATUS} | attempt ${ATTEMPT}/3"
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="${TEXT}" \
+            -d parse_mode="Markdown" || true
+
+      # ── UPLOAD AUDIT REPORT ──────────────────────────────────────────────────
+      - name: Upload audit report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-report-${{ github.run_number }}
+          path: ${{ env.WORKSPACE_ROOT }}/instruments-service/audit-report-*.txt
+          if-no-files-found: warn
+          retention-days: 30
