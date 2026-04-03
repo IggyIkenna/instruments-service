@@ -17,16 +17,12 @@ from unified_trading_library import (
     ServiceRuntime,
     UnifiedServiceHandler,
     classify_and_emit_error,
-    get_bucket_name,
-    validate_data_availability,
 )
 
 from instruments_service.engine import orchestrator as engine_orchestrator
 from instruments_service.engine.orchestrator import clear_defi_universe_cache, get_venues_for_categories
 
 logger = logging.getLogger(__name__)
-
-_INSTRUMENTS_PATH_PATTERN = "instrument_availability/by_date/day={date}/"
 
 
 class InstrumentsHandler(UnifiedServiceHandler):
@@ -87,42 +83,18 @@ class InstrumentsHandler(UnifiedServiceHandler):
                 reraise=True,
             )
 
-    def _is_date_complete(self, date: str) -> bool:
-        """Check if a single date already has data in storage."""
-        try:
-            bucket = get_bucket_name("instruments")
-            completed = validate_data_availability(
-                service_name="instruments-service",
-                bucket=bucket,
-                path_pattern=_INSTRUMENTS_PATH_PATTERN,
-                start_date=date,
-                end_date=date,
-            )
-            return date in completed
-        except Exception as _exc:
-            classify_and_emit_error(
-                _exc,
-                service_name="instruments-service",
-                operation="check_date_completeness",
-                shard=str(date),
-            )
-            return False
-
     async def process(self, payload: BatchPayload) -> object:
         """Process instruments for the date in the payload.
 
         Reads API keys from the hot-reloader (always fresh after rotation).
-        Skips dates already present in storage (unless force=True).
+        Skip-if-exists is handled by the orchestrator's check_shard_freshness()
+        which uses the manifest with per-category buckets (correct bucket resolution).
         """
         date = str(payload.date) if not isinstance(payload.date, str) else payload.date
         # Normalize datetime to YYYY-MM-DD string (BatchIO yields datetime objects)
         if "T" in date or " " in date:
             date = date[:10]
         redo_all = payload.force or bool(payload.extra.get("redo_all", False))
-
-        if not redo_all and self._is_date_complete(date):
-            logger.debug("Skipping already-complete date=%s", date)
-            return None
 
         categories: list[str] = list(payload.categories) if payload.categories else ["ALL"]
         api_keys = self._key_reloader.current_keys if self._key_reloader else {}
