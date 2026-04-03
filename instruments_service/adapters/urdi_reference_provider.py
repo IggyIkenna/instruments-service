@@ -1,109 +1,222 @@
-"""URDI reference data provider for instruments-service.
+"""URDI reference data provider — the ONLY external API path for instruments-service.
 
-Wraps unified-reference-data-interface to fetch canonical InstrumentRecord
-objects for each venue. Used as a supplementary instrument discovery source
-alongside Tardis/CCXT for venues that have URDI adapters.
+All naming translation (canonical venue → URDI adapter) and credential routing
+(URDI adapter → data source → API key) is owned by URDI itself:
+  - CANONICAL_VENUE_TO_ADAPTER in instruments_service.reference_data.factory
+  - ADAPTER_DATA_SOURCES in instruments_service.reference_data.factory
+  - get_adapter_for_canonical_venue() in instruments_service.reference_data
 
-Wiring decision (which venues route through URDI) lives here as the
-URDI_SUPPORTED_VENUES constant — the canonical registry of venues for which
-get_reference_adapter(venue).get_instruments() is available.
+instruments-service maintains no local translation tables. This file contains
+only orchestration logic: which venues to fetch, how to gather results, error policy.
+
+ERROR HANDLING POLICY
+---------------------
+- Network errors (ConnectionError, TimeoutError): WARNING + return [] (retryable)
+- NotImplementedError: adapter unsupported instrument_type — DEBUG + return []
+- ValueError: no URDI adapter for this venue — ERROR + skip
+- Programming errors (TypeError etc.): reraise to fail the shard
+
+Failed venues are tracked in `VenueFetchResult.failed_venues` with their error
+classification (retryable/permanent) so the orchestrator can make retry decisions.
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Literal, cast
 
-from unified_reference_data_interface import InstrumentRecord, get_reference_adapter
+from unified_api_contracts.internal import InstrumentRecord
+
+from instruments_service.reference_data import (
+    ADAPTER_DATA_SOURCES,
+    CANONICAL_VENUE_TO_ADAPTER,
+    get_adapter_for_canonical_venue,
+)
 
 logger = logging.getLogger(__name__)
 
-# Venues with working URDI adapters (get_instruments() implemented).
-# Kept here so instruments-service has a single place to expand when new
-# URDI adapters land.
-URDI_SUPPORTED_VENUES: frozenset[str] = frozenset(
-    {
-        "binance",
-        "bybit",
-        "okx",
-        "deribit",
-        "coinbase",
-        "hyperliquid",
-        "polymarket",
-        "polygon",
-        "tardis",
-    }
-)
+# Covered canonical venues — services check membership without importing the full dict.
+URDI_SUPPORTED_VENUES: frozenset[str] = frozenset(CANONICAL_VENUE_TO_ADAPTER.keys())
 
-InstrumentType = Literal["perp", "spot", "option", "future", "all"]
+
+class VenueError:
+    """Error classification for a failed venue fetch."""
+
+    def __init__(self, venue: str, error_code: str, message: str, retryable: bool) -> None:
+        self.venue = venue
+        self.error_code = error_code  # RATE_LIMIT, NETWORK, TIMEOUT, PARSE_ERROR, ADAPTER_ERROR, UNSUPPORTED
+        self.message = message
+        self.retryable = retryable
+
+
+class VenueFetchResult:
+    """Result of fetching instruments for multiple venues.
+
+    Separates records from error info so the orchestrator can decide
+    which failed venues to retry based on error classification.
+    """
+
+    def __init__(
+        self,
+        records: list[InstrumentRecord] | None = None,
+        failed_venues: list[VenueError] | None = None,
+    ) -> None:
+        self.records = records if records is not None else []
+        self.failed_venues = failed_venues if failed_venues is not None else []
+
+    @property
+    def retryable_venues(self) -> list[str]:
+        """Venues that failed with retryable errors (rate limit, network, timeout)."""
+        return [v.venue for v in self.failed_venues if v.retryable]
+
+
+async def fetch_instruments_for_all_venues(
+    venues: list[str],
+    instrument_type: str | None = None,
+    api_keys: dict[str, str] | None = None,
+    date: str | None = None,
+    mode: str = "batch",
+) -> VenueFetchResult:
+    """Fetch canonical InstrumentRecord[] for all configured venues via URDI.
+
+    Args:
+        venues: UAC canonical venue names (e.g. "UNISWAPV3-ETHEREUM").
+        instrument_type: Optional URDI type filter. None = all.
+        api_keys: {data_source: api_key} from UTL validate_api_keys_for_venues().
+                  Injected into adapters at construction time.
+        date: ISO date string (YYYY-MM-DD). Passed to date-aware adapters
+              (e.g. API-Football) so they fetch only fixtures for that day.
+              Adapters that don't need date filtering ignore this parameter.
+
+    Returns:
+        VenueFetchResult with records and per-venue error classifications.
+    """
+    if not venues:
+        return VenueFetchResult()
+
+    # Separate covered/uncovered; deduplicate by canonical venue name
+    # (not adapter key — same adapter serves multiple chains)
+    seen: set[str] = set()
+    fetch_list: list[tuple[str, str]] = []  # (canonical, adapter_key)
+    unsupported: list[str] = []
+
+    for canonical in venues:
+        adapter_key = CANONICAL_VENUE_TO_ADAPTER.get(canonical)
+        if adapter_key is None:
+            unsupported.append(canonical)
+        elif canonical not in seen:
+            seen.add(canonical)
+            fetch_list.append((canonical, adapter_key))
+
+    failed: list[VenueError] = []
+    if unsupported:
+        logger.warning(
+            "No URDI adapter for %d venue(s) — add entry to CANONICAL_VENUE_TO_ADAPTER "
+            "in unified-reference-data-interface/factory.py: %s",
+            len(unsupported),
+            unsupported,
+        )
+        for v in unsupported:
+            failed.append(VenueError(v, "UNSUPPORTED", "No URDI adapter registered", retryable=False))
+
+    if not fetch_list:
+        return VenueFetchResult(failed_venues=failed)
+
+    # Cap concurrent adapter calls at 4 to avoid overloading APIs
+    sem = asyncio.Semaphore(4)
+
+    async def _fetch_one(canonical: str, adapter_key: str) -> list[InstrumentRecord]:
+        async with sem:
+            try:
+                data_source = ADAPTER_DATA_SOURCES.get(adapter_key, "")
+                api_key = (api_keys or {}).get(data_source) if data_source else None
+                adapter = get_adapter_for_canonical_venue(
+                    canonical,
+                    api_key=api_key,
+                    date=date,
+                    extra_api_keys=api_keys,
+                    mode=mode,
+                )
+                # Use cached path — adapter pool ensures reuse, cache avoids redundant fetches
+                records = await adapter.get_instruments_cached(instrument_type=instrument_type)
+                logger.info("URDI[%s]: fetched %d instruments", canonical, len(records))
+                return records
+            except NotImplementedError:
+                logger.debug("URDI[%s]: instrument_type=%r not supported", canonical, instrument_type)
+                failed.append(
+                    VenueError(
+                        canonical, "UNSUPPORTED", f"instrument_type={instrument_type!r} not supported", retryable=False
+                    )
+                )
+                return []
+            except TimeoutError as exc:
+                logger.warning("URDI[%s]: TIMEOUT (retryable): %s", canonical, exc)
+                failed.append(VenueError(canonical, "TIMEOUT", str(exc), retryable=True))
+                return []
+            except ConnectionError as exc:
+                logger.warning("URDI[%s]: NETWORK error (retryable): %s", canonical, exc)
+                failed.append(VenueError(canonical, "NETWORK", str(exc), retryable=True))
+                return []
+            except OSError as exc:
+                # OSError covers network-level failures (socket errors, DNS, etc.)
+                logger.warning("URDI[%s]: NETWORK error (retryable): %s", canonical, exc)
+                failed.append(VenueError(canonical, "NETWORK", str(exc), retryable=True))
+                return []
+            except RuntimeError as exc:
+                # _get_with_retry raises RuntimeError after exhausting retries.
+                # The underlying cause is typically rate limiting or server errors.
+                msg = str(exc).lower()
+                if "429" in msg or "rate" in msg:
+                    error_code = "RATE_LIMIT"
+                elif "503" in msg or "502" in msg or "500" in msg:
+                    error_code = "SERVER_ERROR"
+                else:
+                    error_code = "RETRY_EXHAUSTED"
+                logger.warning("URDI[%s]: %s (retryable): %s", canonical, error_code, exc)
+                failed.append(VenueError(canonical, error_code, str(exc), retryable=True))
+                return []
+            except ValueError as exc:
+                # Pydantic ValidationError is multi-line; compress to single line for log visibility
+                err_oneline = " | ".join(str(exc).splitlines()[:3])
+                logger.error("URDI[%s]: ADAPTER_ERROR (permanent): %s", canonical, err_oneline)
+                failed.append(VenueError(canonical, "ADAPTER_ERROR", err_oneline, retryable=False))
+                return []
+            except (AttributeError, KeyError, TypeError) as exc:
+                logger.error("URDI[%s]: PARSE_ERROR (permanent): %s", canonical, exc)
+                failed.append(VenueError(canonical, "PARSE_ERROR", str(exc), retryable=False))
+                return []
+
+    results = await asyncio.gather(*[_fetch_one(c, k) for c, k in fetch_list])
+    all_records = [record for batch in results for record in batch]
+
+    # Log summary of failures with classification
+    if failed:
+        retryable = [v for v in failed if v.retryable]
+        permanent = [v for v in failed if not v.retryable]
+        if retryable:
+            logger.warning(
+                "URDI fetch: %d venue(s) failed with RETRYABLE errors: %s",
+                len(retryable),
+                [(v.venue, v.error_code) for v in retryable],
+            )
+        if permanent:
+            logger.error(
+                "URDI fetch: %d venue(s) failed with PERMANENT errors: %s",
+                len(permanent),
+                [(v.venue, v.error_code) for v in permanent],
+            )
+
+    return VenueFetchResult(records=all_records, failed_venues=failed)
 
 
 async def fetch_instruments_via_urdi(
     venue: str,
-    instrument_type: InstrumentType = "perp",
+    instrument_type: str | None = None,
+    api_keys: dict[str, str] | None = None,
+    date: str | None = None,
 ) -> list[InstrumentRecord]:
-    """Fetch canonical instrument records for a single venue via URDI.
-
-    Args:
-        venue: Venue name (must be in URDI_SUPPORTED_VENUES).
-        instrument_type: One of perp / spot / option / future / all.
-
-    Returns:
-        List of InstrumentRecord objects, empty on error or unsupported venue.
-    """
-    if venue not in URDI_SUPPORTED_VENUES:
-        logger.debug("urdi_reference_provider: venue %r not in URDI_SUPPORTED_VENUES — skipped", venue)
-        return []
-
-    try:
-        adapter = get_reference_adapter(venue)
-        raw = await adapter.get_instruments(instrument_type=instrument_type)
-        instruments: list[InstrumentRecord] = cast(list[InstrumentRecord], raw)
-        logger.info(
-            "urdi_reference_provider: fetched %d %s instruments for venue=%s",
-            len(instruments),
-            instrument_type,
-            venue,
-        )
-        return instruments
-    except NotImplementedError:
-        # Some adapters raise NotImplementedError for unsupported instrument_type
-        logger.debug(
-            "urdi_reference_provider: venue=%s does not support instrument_type=%r — skipped",
-            venue,
-            instrument_type,
-        )
-        return []
-    except (OSError, ConnectionError, ValueError, RuntimeError) as exc:
-        logger.warning(
-            "urdi_reference_provider: failed to fetch instruments for venue=%s instrument_type=%s: %s",
-            venue,
-            instrument_type,
-            exc,
-        )
-        return []
-
-
-async def fetch_instruments_for_venues(
-    venues: list[str],
-    instrument_type: InstrumentType = "perp",
-) -> dict[str, list[InstrumentRecord]]:
-    """Fetch canonical instrument records for multiple venues concurrently.
-
-    Skips venues not in URDI_SUPPORTED_VENUES. Failures per venue are logged
-    and return an empty list — they do not propagate exceptions.
-
-    Args:
-        venues: List of venue names to fetch instruments for.
-        instrument_type: One of perp / spot / option / future / all.
-
-    Returns:
-        Mapping of venue → list[InstrumentRecord]. Only venues with at least
-        one record are included in the result dict.
-    """
-    venue_list: list[str] = [v for v in venues if v in URDI_SUPPORTED_VENUES]
-    if not venue_list:
-        return {}
-
-    coros = [fetch_instruments_via_urdi(v, instrument_type) for v in venue_list]
-    results: list[list[InstrumentRecord]] = list(await asyncio.gather(*coros, return_exceptions=False))
-    return {venue: records for venue, records in zip(venue_list, results, strict=True) if records}
+    """Single-venue fetch. Delegates to fetch_instruments_for_all_venues."""
+    result = await fetch_instruments_for_all_venues(
+        [venue], instrument_type=instrument_type, api_keys=api_keys, date=date
+    )
+    return result.records

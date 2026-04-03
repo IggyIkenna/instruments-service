@@ -1,0 +1,26 @@
+interactions:
+  - request:
+      body: '{"marketIds":["1.234567890"],"priceProjection":{"priceData":["EX_BEST_OFFERS"]}}'
+      headers:
+        Accept:
+          - application/json
+        Content-Type:
+          - application/json
+        X-Application:
+          - "[FILTERED]"
+        X-Authentication:
+          - "[FILTERED]"
+      method: POST
+      uri: https://api.betfair.com/exchange/betting/rest/v1.0/listMarketBook/
+    response:
+      body:
+        string: '[{"marketId":"1.234567890","isMarketDataDelayed":false,"status":"OPEN","betDelay":0,"bspReconciled":false,"complete":true,"inplay":false,"numberOfWinners":1,"numberOfRunners":3,"numberOfActiveRunners":3,"totalMatched":125430.50,"totalAvailable":34210.80,"runners":[{"selectionId":47999,"handicap":0.0,"status":"ACTIVE","lastPriceTraded":1.85,"totalMatched":52100.00,"ex":{"availableToBack":[{"price":1.85,"size":1250.00},{"price":1.84,"size":3200.00},{"price":1.83,"size":5100.00}],"availableToLay":[{"price":1.86,"size":980.00},{"price":1.87,"size":2100.00},{"price":1.88,"size":4300.00}]}},{"selectionId":58805,"handicap":0.0,"status":"ACTIVE","lastPriceTraded":4.20,"totalMatched":31200.00,"ex":{"availableToBack":[{"price":4.20,"size":850.00},{"price":4.10,"size":1600.00},{"price":4.00,"size":2800.00}],"availableToLay":[{"price":4.30,"size":720.00},{"price":4.40,"size":1400.00},{"price":4.50,"size":2100.00}]}},{"selectionId":60424,"handicap":0.0,"status":"ACTIVE","lastPriceTraded":3.75,"totalMatched":42130.50,"ex":{"availableToBack":[{"price":3.75,"size":1100.00},{"price":3.70,"size":2400.00},{"price":3.65,"size":3900.00}],"availableToLay":[{"price":3.80,"size":900.00},{"price":3.85,"size":1800.00},{"price":3.90,"size":3200.00}]}}]}]'
+      headers:
+        Content-Type:
+          - application/json
+        Date:
+          - Wed, 18 Mar 2026 10:00:01 GMT
+      status:
+        code: 200
+        message: OK
+version: 1

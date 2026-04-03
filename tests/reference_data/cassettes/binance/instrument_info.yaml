@@ -1,0 +1,26 @@
+interactions:
+  - request:
+      body: null
+      headers:
+        Accept:
+          - "*/*"
+        Accept-Encoding:
+          - gzip, deflate
+        Connection:
+          - keep-alive
+        User-Agent:
+          - python-requests/2.32.5
+      method: GET
+      uri: https://fapi.binance.com/fapi/v1/exchangeInfo
+    response:
+      body:
+        string: '{"timezone":"UTC","serverTime":1771900800000,"rateLimits":[{"rateLimitType":"REQUEST_WEIGHT","interval":"MINUTE","intervalNum":1,"limit":2400}],"exchangeFilters":[],"symbols":[{"symbol":"BTCUSDT","pair":"BTCUSDT","contractType":"PERPETUAL","deliveryDate":4133404800000,"onboardDate":1569398400000,"status":"TRADING","maintMarginPercent":"2.5000","requiredMarginPercent":"5.0000","baseAsset":"BTC","quoteAsset":"USDT","marginAsset":"USDT","pricePrecision":2,"quantityPrecision":3,"baseAssetPrecision":8,"quotePrecision":8,"quoteAssetPrecision":8,"baseCommissionPrecision":8,"quoteCommissionPrecision":8,"icebergAllowed":false,"ocoAllowed":false,"quoteOrderQtyMarketAllowed":false,"allowTrailingStop":true,"cancelReplaceAllowed":true,"isSpotTradingAllowed":false,"isMarginTradingAllowed":false,"underlyingType":"COIN","underlyingSubType":["PoW"],"settlePlan":0,"triggerProtect":"0.0500","liquidationFee":"0.012500","marketTakeBound":"0.05","maxMoveOrderLimit":10000,"filters":[{"filterType":"PRICE_FILTER","minPrice":"0.10","maxPrice":"300000","tickSize":"0.10"},{"filterType":"LOT_SIZE","minQty":"0.001","maxQty":"1000","stepSize":"0.001"},{"filterType":"MARKET_LOT_SIZE","minQty":"0.001","maxQty":"600","stepSize":"0.001"},{"filterType":"MAX_NUM_ORDERS","limit":200},{"filterType":"MAX_NUM_ALGO_ORDERS","limit":10},{"filterType":"MIN_NOTIONAL","notional":"5"},{"filterType":"PERCENT_PRICE","multiplierUp":"1.05","multiplierDown":"0.95","multiplierDecimal":"4"}],"orderTypes":["LIMIT","MARKET","STOP","STOP_MARKET","TAKE_PROFIT","TAKE_PROFIT_MARKET","TRAILING_STOP_MARKET"],"timeInForce":["GTC","IOC","FOK","GTX","GTD"]}]}'
+      headers:
+        Content-Type:
+          - application/json
+        Date:
+          - Wed, 25 Feb 2026 08:00:00 GMT
+      status:
+        code: 200
+        message: OK
+version: 1

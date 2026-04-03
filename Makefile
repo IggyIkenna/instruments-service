@@ -29,7 +29,7 @@ help:
 install:
 	@echo "Installing dependencies..."
 	pip install uv
-	uv pip install --system -e ".[dev]"
+	uv pip install --system -e "."
 
 # Main target that mirrors CI exactly
 ci-local:
