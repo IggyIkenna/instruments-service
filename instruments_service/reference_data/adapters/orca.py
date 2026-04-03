@@ -12,7 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
+from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
@@ -160,10 +160,6 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         base, quote = order_base_quote(sym_a, sym_b)
-
-        # Filter: BOTH tokens must be major assets (consistent with EVM DEX adapters)
-        if base not in DEFI_MAJOR_ASSET_SYMBOLS or quote not in DEFI_MAJOR_ASSET_SYMBOLS:
-            return None
 
         # TVL minimum: skip dust pools (Orca returns thousands of low-liquidity pools)
         tvl_raw = pool.get("tvl") or pool.get("liquidity") or 0

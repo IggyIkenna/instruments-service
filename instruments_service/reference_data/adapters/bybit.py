@@ -379,6 +379,7 @@ class BybitReferenceDataAdapter(BaseReferenceDataAdapter):
             margin_type=margin_type,
             available_from_datetime=available_from,
             status=InstrumentStatus.ACTIVE,
+            timezone="UTC",
         )
 
     def _parse_delivery_time(self, expiry_ts: object) -> datetime | None:

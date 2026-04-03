@@ -12,7 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
+from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
 from unified_api_contracts.registry import get_solana_protocol_url
 from unified_trading_library import log_event
@@ -149,8 +149,6 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         base_asset = symbol.split("-")[0].upper() if "-" in symbol else symbol.upper()
-        if base_asset not in DEFI_MAJOR_ASSET_SYMBOLS:
-            return None
 
         venue_tag = self.venue
         instrument_key = f"{venue_tag}:PERP:{symbol.upper()}"
@@ -172,6 +170,7 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             status=InstrumentStatus.ACTIVE,
             available_from_datetime=_DRIFT_DEPLOY_DATE,
+            timezone="UTC",
         )
 
     def _build_spot_record(
@@ -181,7 +180,7 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
         """Build an InstrumentRecord from a Drift spot market."""
         symbol = str(market.get("symbol", ""))
         base_asset = str(market.get("baseAsset", symbol)).upper()
-        if not base_asset or base_asset not in DEFI_MAJOR_ASSET_SYMBOLS:
+        if not base_asset:
             return None
 
         venue_tag = self.venue
@@ -202,6 +201,7 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             status=InstrumentStatus.ACTIVE,
             available_from_datetime=_DRIFT_DEPLOY_DATE,
+            timezone="UTC",
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:

@@ -12,7 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
+from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_trading_library import log_event
 
@@ -48,7 +48,7 @@ _MORPHO_CHAIN_IDS: dict[str, int] = {
 
 _MARKETS_QUERY_TEMPLATE = """
 query {{
-    markets(first: 400, orderBy: SupplyAssets, orderDirection: Desc, where: {{ chainId_in: [{chain_id}] }}) {{
+    markets(first: 1000, orderBy: SupplyAssets, orderDirection: Desc, where: {{ chainId_in: [{chain_id}] }}) {{
         items {{
             uniqueKey
             loanAsset {{ address symbol name decimals }}
@@ -185,12 +185,6 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
         market_key = str(market.get("uniqueKey", ""))
 
         if not collateral_symbol or not market_key:
-            return None
-
-        # Filter: both collateral and loan asset must be major
-        if collateral_symbol.upper() not in DEFI_MAJOR_ASSET_SYMBOLS:
-            return None
-        if loan_symbol.upper() not in DEFI_MAJOR_ASSET_SYMBOLS:
             return None
 
         symbol = f"{collateral_symbol}-{loan_symbol}"

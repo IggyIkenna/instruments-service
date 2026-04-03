@@ -13,7 +13,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
+from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_trading_library import log_event
 
@@ -34,7 +34,7 @@ _DEFAULT_CHAIN = "ETHEREUM"
 _POOLS_QUERY = """
 query GetPools($chain: [GqlChain!]!) {
   poolGetPools(
-    first: 500
+    first: 1000
     skip: 0
     orderBy: totalLiquidity
     orderDirection: desc
@@ -157,11 +157,6 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
 
         sym0 = str(tokens[0].get("symbol", "UNKNOWN")).upper()
         sym1 = str(tokens[1].get("symbol", "UNKNOWN")).upper()
-
-        # Filter: all pool tokens must be major assets (BTC/ETH/stablecoins)
-        token_symbols = [str(t.get("symbol", "")).upper() for t in tokens]
-        if not all(s in DEFI_MAJOR_ASSET_SYMBOLS for s in token_symbols):
-            return None
 
         symbol = f"{sym0}-{sym1}"
         venue_tag = f"BALANCER-{self._chain}"

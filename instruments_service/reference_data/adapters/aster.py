@@ -154,6 +154,7 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
                     contract_size=Decimal("1"),
                     available_from_datetime=_ASTER_LAUNCH_DATE,
                     status=InstrumentStatus.ACTIVE,
+                    timezone="UTC",
                 )
             )
 

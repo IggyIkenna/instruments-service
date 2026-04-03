@@ -12,7 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
+from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import (
     get_solana_protocol_url,
@@ -162,10 +162,6 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
 
         # Skip if we can't resolve either symbol
         if not sym_a or not sym_b:
-            return None
-
-        # Filter: BOTH tokens must be major assets (consistent with all DEX adapters)
-        if sym_a not in DEFI_MAJOR_ASSET_SYMBOLS or sym_b not in DEFI_MAJOR_ASSET_SYMBOLS:
             return None
 
         instrument_key = f"{venue_tag}:VAULT:{sym_a}-{sym_b}:{address[:8]}"

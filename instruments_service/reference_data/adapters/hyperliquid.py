@@ -112,6 +112,7 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
                     contract_size=Decimal("1"),
                     available_from_datetime=_HYPERLIQUID_LAUNCH_DATE,
                     status=InstrumentStatus.ACTIVE,
+                    timezone="UTC",
                 )
             )
         return results

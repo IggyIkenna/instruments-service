@@ -1,4 +1,10 @@
-"""Resolve StrategyInstrumentIntent to specific instrument IDs from GCS catalog."""
+"""Resolve StrategyInstrumentIntent to specific instrument IDs from GCS catalog.
+
+Includes ``validate_resolved_instruments`` to enforce that resolved instrument
+IDs satisfy strategy expectations. Raises ``ValueError`` on hard failures
+(missing critical currencies) instead of silently continuing, aligning with
+the rule: "no silent skip when instruments are missing".
+"""
 
 import logging
 
@@ -87,3 +93,63 @@ def resolve_instruments(
         date=date,
         missing_currencies=missing,
     )
+
+
+def validate_resolved_instruments(
+    resolved: ResolvedInstruments,
+    *,
+    required_currencies: list[str] | None = None,
+    min_instruments: int = 1,
+    raise_on_missing: bool = True,
+) -> list[str]:
+    """Validate that resolved instruments satisfy strategy expectations.
+
+    Logs a warning for every missing currency and raises ``ValueError`` when
+    required instruments are absent (unless ``raise_on_missing=False``).
+
+    This enforces the rule: *if instruments-service can't resolve what the
+    strategy expects, that's an error — not a silent skip*.
+
+    Args:
+        resolved: Result of a ``resolve_instruments()`` call.
+        required_currencies: Currencies that MUST have at least one matching
+            instrument. When ``None``, defaults to all ``resolved.intent.base_currencies``.
+        min_instruments: Minimum total number of resolved instruments required.
+        raise_on_missing: When ``True`` (default), raises ``ValueError`` on
+            any validation failure. When ``False``, only warns.
+
+    Returns:
+        List of validation warning messages (empty when all checks pass).
+
+    Raises:
+        ValueError: When ``raise_on_missing=True`` and required currencies
+            are missing or ``min_instruments`` is not met.
+    """
+    required = set(required_currencies or resolved.intent.base_currencies)
+    missing_required = required & set(resolved.missing_currencies)
+    warnings: list[str] = []
+
+    for currency in sorted(missing_required):
+        msg = (
+            f"Required currency {currency!r} has no matching instruments for "
+            f"{resolved.intent.protocol}/{resolved.intent.chain} on {resolved.date}"
+        )
+        logger.warning("%s", msg)
+        warnings.append(msg)
+
+    if len(resolved.instrument_ids) < min_instruments:
+        msg = (
+            f"Only {len(resolved.instrument_ids)} instruments resolved for "
+            f"{resolved.intent.protocol}/{resolved.intent.chain} on {resolved.date}; "
+            f"minimum required: {min_instruments}"
+        )
+        logger.warning("%s", msg)
+        warnings.append(msg)
+
+    if warnings and raise_on_missing:
+        raise ValueError(
+            f"Instrument resolution failed for intent "
+            f"{resolved.intent.protocol}/{resolved.intent.chain}: " + "; ".join(warnings)
+        )
+
+    return warnings

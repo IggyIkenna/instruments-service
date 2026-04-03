@@ -12,7 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
+from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import SUBGRAPH_IDS
 from unified_trading_library import log_event
@@ -37,10 +37,10 @@ _DEFAULT_CHAIN = "ETHEREUM"
 
 # Query template — {block_clause} is replaced with '' or ', block: {number: N}'
 _POOLS_QUERY_TEMPLATE = """
-query GetPools($first: Int!, $minTvl: BigDecimal!) {{
+query GetPools($first: Int!) {{
     pools(
-        first: $first, orderBy: totalValueLockedUSD, orderDirection: desc,
-        where: {{ totalValueLockedUSD_gt: $minTvl }}{block_clause}
+        first: $first, orderBy: totalValueLockedUSD, orderDirection: desc
+        {block_clause}
     ) {{
         id
         feeTier
@@ -51,6 +51,8 @@ query GetPools($first: Int!, $minTvl: BigDecimal!) {{
     }}
 }}
 """
+
+_FETCH_LIMIT = 1000
 
 # Messari-standard subgraph schema (used by some chain deployments e.g. Base)
 _MESSARI_POOLS_QUERY = """
@@ -99,11 +101,11 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         if not url:
             return []
 
-        variables = {"first": 500, "minTvl": "100000"}
         block_num = await self._resolve_block_num()
         block_clause = f", block: {{number: {block_num}}}" if block_num else ""
         query = _POOLS_QUERY_TEMPLATE.format(block_clause=block_clause)
 
+        variables = {"first": _FETCH_LIMIT}
         try:
             async with (
                 aiohttp.ClientSession() as session,
@@ -147,7 +149,7 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
                 aiohttp.ClientSession() as session,
                 session.post(
                     url,
-                    json={"query": _MESSARI_POOLS_QUERY, "variables": {"first": 500}},
+                    json={"query": _MESSARI_POOLS_QUERY, "variables": {"first": 1000}},
                     headers={"Content-Type": "application/json"},
                 ) as resp,
             ):
@@ -250,10 +252,6 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         base, quote = order_base_quote(sym0, sym1)
-
-        # Filter: both tokens must be major assets (BTC/ETH/stablecoins)
-        if base not in DEFI_MAJOR_ASSET_SYMBOLS or quote not in DEFI_MAJOR_ASSET_SYMBOLS:
-            return None
 
         fee_str = str(fee_tier) if fee_tier else "0"
         symbol = f"{base}-{quote}:{fee_str}"

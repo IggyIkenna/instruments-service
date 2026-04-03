@@ -25,8 +25,10 @@ from .adapters.curve import CurveReferenceDataAdapter
 from .adapters.databento import DatabentoReferenceDataAdapter
 from .adapters.deribit import DeribitReferenceDataAdapter
 from .adapters.drift import DriftReferenceDataAdapter
+from .adapters.eigenlayer import EigenLayerReferenceDataAdapter
 from .adapters.ethena import EthenaReferenceDataAdapter
 from .adapters.etherfi import EtherFiReferenceDataAdapter
+from .adapters.ethfi import EthFiGovernanceReferenceDataAdapter
 from .adapters.fluid import FluidReferenceDataAdapter
 from .adapters.hyperliquid import HyperliquidReferenceDataAdapter
 from .adapters.ibkr import IBKRReferenceDataAdapter
@@ -42,6 +44,7 @@ from .adapters.polygon import PolygonReferenceDataAdapter
 from .adapters.polymarket import PolymarketReferenceDataAdapter
 from .adapters.raydium import RaydiumReferenceDataAdapter
 from .adapters.tardis import TardisReferenceDataAdapter
+from .adapters.tradfi_live import TradFiLiveReferenceDataAdapter
 from .adapters.uniswap_v2 import UniswapV2ReferenceDataAdapter
 from .adapters.uniswap_v3 import UniswapV3ReferenceDataAdapter
 from .adapters.uniswap_v4 import UniswapV4ReferenceDataAdapter
@@ -93,6 +96,9 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "LIDO-ETHEREUM": "lido",
     "ETHERFI-ETHEREUM": "etherfi",
     "ETHENA-ETHEREUM": "ethena",
+    # DeFi — Governance tokens (on-chain, Ethereum)
+    "EIGENLAYER-ETHEREUM": "eigenlayer",
+    "ETHERFI-GOV-ETHEREUM": "ethfi_governance",
     # Sports
     "BETFAIR": "betfair",
     "API_FOOTBALL": "api_football",
@@ -177,7 +183,9 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "databento": DatabentoReferenceDataAdapter,
     "deribit": DeribitReferenceDataAdapter,
     "drift": DriftReferenceDataAdapter,
+    "eigenlayer": EigenLayerReferenceDataAdapter,
     "ethena": EthenaReferenceDataAdapter,
+    "ethfi_governance": EthFiGovernanceReferenceDataAdapter,
     "etherfi": EtherFiReferenceDataAdapter,
     "fluid": FluidReferenceDataAdapter,
     "hyperliquid": HyperliquidReferenceDataAdapter,
@@ -306,6 +314,25 @@ def get_adapter_for_canonical_venue(
         adapter: BaseReferenceDataAdapter = CCXTReferenceDataAdapter(
             venue=ccxt_exchange_id,
             canonical_venue=canonical_venue,
+        )
+        _adapter_pool[pool_key] = adapter
+        return adapter
+
+    # Live mode: route TradFi Databento venues to GCS-first adapter.
+    # Reads the most recent GCS snapshot, filters expired instruments,
+    # falls back to Databento (T-3 days) if no GCS data.
+    if mode == "live" and adapter_key == "databento":
+        pool_key = ("tradfi_live", api_key, canonical_venue)
+        if pool_key in _adapter_pool:
+            return _adapter_pool[pool_key]
+        _logger.info(
+            "Live mode: %s → GCS-first TradFi adapter (Databento fallback)",
+            canonical_venue,
+        )
+        adapter = TradFiLiveReferenceDataAdapter(
+            venue_filter=canonical_venue,
+            api_key=api_key,
+            project_id=project_id,
         )
         _adapter_pool[pool_key] = adapter
         return adapter

@@ -12,7 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 
 import aiohttp
-from unified_api_contracts import DEFI_MAJOR_ASSET_SYMBOLS, classify_venue_error
+from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.registry import get_subgraph_id
 from unified_trading_library import log_event
@@ -213,10 +213,6 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         symbol = str(reserve.get("symbol", ""))
         underlying = str(reserve.get("underlyingAsset", ""))
         if not symbol or not underlying:
-            return []
-
-        # Filter: only major assets
-        if symbol.upper() not in DEFI_MAJOR_ASSET_SYMBOLS:
             return []
 
         if available_since is None:

@@ -111,6 +111,7 @@ class CoinbaseReferenceDataAdapter(BaseReferenceDataAdapter):
                     strike=None,
                     option_type=None,
                     available_from_datetime=datetime(2015, 1, 1, tzinfo=UTC),
+                    timezone="UTC",
                 )
             )
         return results
@@ -168,6 +169,7 @@ class CoinbaseReferenceDataAdapter(BaseReferenceDataAdapter):
             strike=None,
             option_type=None,
             available_from_datetime=datetime(2015, 1, 1, tzinfo=UTC),
+            timezone="UTC",
         )
 
     async def get_options_chain(

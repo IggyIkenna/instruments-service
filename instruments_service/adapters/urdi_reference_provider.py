@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
 
 from unified_api_contracts.internal import InstrumentRecord
 
@@ -40,17 +39,16 @@ logger = logging.getLogger(__name__)
 URDI_SUPPORTED_VENUES: frozenset[str] = frozenset(CANONICAL_VENUE_TO_ADAPTER.keys())
 
 
-@dataclass
 class VenueError:
     """Error classification for a failed venue fetch."""
 
-    venue: str
-    error_code: str  # RATE_LIMIT, NETWORK, TIMEOUT, PARSE_ERROR, ADAPTER_ERROR, UNSUPPORTED
-    message: str
-    retryable: bool
+    def __init__(self, venue: str, error_code: str, message: str, retryable: bool) -> None:
+        self.venue = venue
+        self.error_code = error_code  # RATE_LIMIT, NETWORK, TIMEOUT, PARSE_ERROR, ADAPTER_ERROR, UNSUPPORTED
+        self.message = message
+        self.retryable = retryable
 
 
-@dataclass
 class VenueFetchResult:
     """Result of fetching instruments for multiple venues.
 
@@ -58,8 +56,13 @@ class VenueFetchResult:
     which failed venues to retry based on error classification.
     """
 
-    records: list[InstrumentRecord] = field(default_factory=list)
-    failed_venues: list[VenueError] = field(default_factory=list)
+    def __init__(
+        self,
+        records: list[InstrumentRecord] | None = None,
+        failed_venues: list[VenueError] | None = None,
+    ) -> None:
+        self.records = records if records is not None else []
+        self.failed_venues = failed_venues if failed_venues is not None else []
 
     @property
     def retryable_venues(self) -> list[str]:
