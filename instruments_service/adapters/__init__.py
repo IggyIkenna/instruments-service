@@ -1,11 +1,18 @@
-"""Adapters package for instruments-service.
+"""Adapters package — URDI reference data provider only.
 
-Thin I/O adapters that delegate to unified-trading-library.
+instruments-service has one adapter: the URDI reference provider.
+All infrastructure concerns (storage, messaging, cloud) are handled
+by UTL based on service identity — not declared here.
 """
 
-from instruments_service.adapters.broadcast_sink import BroadcastSink
-from instruments_service.adapters.data_source_adapter import DataSourceAdapter
-from instruments_service.adapters.live_data_source import LiveDataSource
-from instruments_service.adapters.storage_adapter import StorageAdapter
+from instruments_service.adapters.urdi_reference_provider import (
+    URDI_SUPPORTED_VENUES,
+    fetch_instruments_for_all_venues,
+    fetch_instruments_via_urdi,
+)
 
-__all__ = ["BroadcastSink", "DataSourceAdapter", "LiveDataSource", "StorageAdapter"]
+__all__ = [
+    "URDI_SUPPORTED_VENUES",
+    "fetch_instruments_for_all_venues",
+    "fetch_instruments_via_urdi",
+]

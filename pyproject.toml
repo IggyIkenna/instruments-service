@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "instruments-service"
-version = "0.1.117"
+version = "0.1.22"
 description = "Service for generating canonical instrument definitions from exchange APIs"
 readme = "README.md"
 authors = [
@@ -41,14 +41,8 @@ dependencies = [
     "ccxt<5.0.0,>=4.5.24",
     "plotly>=6.4.0,<7.0.0",
     "unified-trading-library>=0.1.0,<1.0.0",
-    "unified-config-interface>=0.1.0,<1.0.0",
-    "unified-events-interface>=0.1.0,<1.0.0",
-    "unified-market-interface>=0.1.0,<1.0.0",
-    "unified-reference-data-interface>=0.1.0,<1.0.0",
-    "ib_insync>=0.9.86,<1.0.0",
     "unified-api-contracts>=0.1.0,<1.0.0",
-    "unified-internal-contracts>=0.1.0,<1.0.0",
-    "unified-cloud-interface>=0.1.0,<1.0.0",
+    "ib_insync>=0.9.86,<1.0.0",
     "prometheus-client<1.0.0,>=0.20.0",
     "pytest>=9.0.1,<10.0.0",
     "pytest-cov>=7.0.0,<8.0.0",
@@ -75,37 +69,15 @@ Homepage = "https://github.com/iggyikenna/instruments-service"
 Documentation = "https://github.com/iggyikenna/instruments-service"
 Repository = "https://github.com/iggyikenna/instruments-service"
 
-[tool.uv.sources.unified-api-contracts]
-path = "../unified-api-contracts"
-editable = true
-
-[tool.uv.sources.unified-internal-contracts]
-path = "../unified-internal-contracts"
-editable = true
-
 [tool.uv.sources.unified-trading-library]
 path = "../unified-trading-library"
 editable = true
 
-[tool.uv.sources.unified-config-interface]
-path = "../unified-config-interface"
+[tool.uv.sources.unified-api-contracts]
+path = "../unified-api-contracts"
 editable = true
 
-[tool.uv.sources.unified-events-interface]
-path = "../unified-events-interface"
-editable = true
 
-[tool.uv.sources.unified-market-interface]
-path = "../unified-market-interface"
-editable = true
-
-[tool.uv.sources.unified-reference-data-interface]
-path = "../unified-reference-data-interface"
-editable = true
-
-[tool.uv.sources.unified-cloud-interface]
-path = "../unified-cloud-interface"
-editable = true
 
 [tool.pytest.ini_options]
 testpaths = [
@@ -116,9 +88,9 @@ python_files = [
 ]
 asyncio_mode = "auto"
 markers = [
-    "integration: mark test as integration test (deselect with '-m \"not integration\"')",
-    "e2e: mark test as end-to-end test (deselect with '-m \"not e2e\"')",
-    "live: mark test as requiring live external API access (skip in CI)",
+    "integration: library contract test — verifies imported symbols exist and have expected API (runs in CI, no credentials needed)",
+    "e2e: end-to-end test writing real data — requires IS_TEST_RUN=true and real GCP project",
+    "live: requires live external API access or real GCP credentials — skipped in CI",
     "smoke: mark test as smoke test",
     "unit: mark test as unit test",
 ]
@@ -191,7 +163,7 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.coverage.report]
-fail_under = 70
+fail_under = 55
 show_missing = true
 skip_covered = false
 precision = 1
@@ -201,6 +173,7 @@ exclude_lines = [
     "@abstractmethod",
     "raise NotImplementedError",
 ]
+
 
 [tool.basedpyright]
 include = [

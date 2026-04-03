@@ -132,3 +132,14 @@ logs/
 !instruments_service/config/
 !instruments_service/config/data/
 !instruments_service/config/data/tickers.json
+
+# Generated/local files
+htmlcov/
+.local-dev-cache/
+instruments_service/data/*.csv
+instruments_service/data/*.parquet
+instruments_service/data/*.json
+corporate_actions_run.log
+run_*.log
+coverage.xml
+.coverage

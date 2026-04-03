@@ -1,304 +1,332 @@
-"""
-Unit tests for orchestrator_helpers module.
+"""Tests for orchestrator helper functions — no cloud/network dependencies."""
 
-Tests normalize_venues_filter, extract_venues_from_instrument_ids,
-validate_venues, filter_by_instrument_ids, convert_to_dataframe,
-handle_no_instruments, and add_tradfi_placeholders.
-"""
+from __future__ import annotations
 
-import logging
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
-import pandas as pd
+from unified_api_contracts.internal import InstrumentRecord
 
-from instruments_service.engine.operations.instruments.orchestrator_helpers import (
-    add_tradfi_placeholders,
-    convert_to_dataframe,
-    extract_venues_from_instrument_ids,
-    filter_by_instrument_ids,
-    handle_no_instruments,
-    normalize_venues_filter,
-    validate_venues,
+from instruments_service.engine.orchestrator import (
+    _build_defi_venues,
+    _get_instruments_bucket,
+    _write_catalogue_record,
+    filter_defi_instruments_by_relevance,
+    filter_instruments_by_date,
+    get_venues_for_categories,
+    is_venue_available,
 )
 
-# ─── normalize_venues_filter ─────────────────────────────────────────────────
+
+def _make_record(
+    instrument_key: str = "TEST",
+    venue: str = "TEST-VENUE",
+    instrument_type: str = "SPOT_PAIR",
+    base_asset: str = "ETH",
+    quote_asset: str = "USDT",
+    available_since: datetime | None = None,
+    available_to: datetime | None = None,
+) -> InstrumentRecord:
+    return InstrumentRecord(
+        instrument_key=instrument_key,
+        venue=venue,
+        instrument_type=instrument_type,
+        base_asset=base_asset,
+        quote_asset=quote_asset,
+        available_from_datetime=available_since,
+        available_to_datetime=available_to,
+    )
 
 
-class TestNormalizeVenuesFilter:
-    def test_none_returns_empty_list(self):
-        assert normalize_venues_filter(None) == []
-
-    def test_string_returns_uppercase_list(self):
-        assert normalize_venues_filter("binance") == ["BINANCE"]
-
-    def test_list_returns_uppercase(self):
-        assert normalize_venues_filter(["binance", "bybit"]) == ["BINANCE", "BYBIT"]
-
-    def test_list_filters_empty_strings(self):
-        result = normalize_venues_filter(["binance", "", "bybit"])
-        assert "" not in result
-        assert "BINANCE" in result
-        assert "BYBIT" in result
-
-    def test_already_uppercase_unchanged(self):
-        assert normalize_venues_filter("DERIBIT") == ["DERIBIT"]
+# ---------------------------------------------------------------------------
+# get_venues_for_categories
+# ---------------------------------------------------------------------------
 
 
-# ─── extract_venues_from_instrument_ids ───────────────────────────────────────
+class TestGetVenuesForCategories:
+    def test_cefi_returns_cefi_venues(self) -> None:
+        venues = get_venues_for_categories(["CEFI"])
+        assert "BINANCE-SPOT" in venues
+        assert "DERIBIT" in venues
+        assert "HYPERLIQUID" in venues
+
+    def test_defi_returns_defi_venues(self) -> None:
+        venues = get_venues_for_categories(["DEFI"])
+        assert any("AAVEV3" in v for v in venues)
+        assert any("UNISWAPV3" in v for v in venues)
+
+    def test_tradfi_returns_tradfi_venues(self) -> None:
+        venues = get_venues_for_categories(["TRADFI"])
+        assert "CME" in venues
+        assert "NASDAQ" in venues
+
+    def test_sports_returns_api_football(self) -> None:
+        venues = get_venues_for_categories(["SPORTS"])
+        assert "API_FOOTBALL" in venues
+
+    def test_prediction_returns_polymarket_kalshi(self) -> None:
+        venues = get_venues_for_categories(["PREDICTION"])
+        assert "POLYMARKET" in venues
+        assert "KALSHI" in venues
+
+    def test_all_includes_all_categories(self) -> None:
+        venues = get_venues_for_categories(["ALL"])
+        assert "BINANCE-SPOT" in venues
+        assert "CME" in venues
+        assert "API_FOOTBALL" in venues
+        assert "POLYMARKET" in venues
+        assert any("AAVEV3" in v for v in venues)
+
+    def test_empty_categories_returns_empty(self) -> None:
+        venues = get_venues_for_categories([])
+        assert venues == []
+
+    def test_deduplication(self) -> None:
+        venues = get_venues_for_categories(["CEFI", "CEFI"])
+        # Should not have duplicates
+        assert len(venues) == len(set(venues))
+
+    def test_case_insensitive(self) -> None:
+        venues_upper = get_venues_for_categories(["CEFI"])
+        venues_lower = get_venues_for_categories(["cefi"])
+        assert venues_upper == venues_lower
 
 
-class TestExtractVenuesFromInstrumentIds:
-    def test_single_id_with_colon(self):
-        result = extract_venues_from_instrument_ids("BINANCE:SPOT_PAIR:BTC-USDT")
-        assert "BINANCE" in result
-
-    def test_list_of_ids(self):
-        result = extract_venues_from_instrument_ids(
-            [
-                "BINANCE:SPOT_PAIR:BTC-USDT",
-                "DERIBIT:PERPETUAL:BTC-USD@INV",
-            ]
-        )
-        assert "BINANCE" in result
-        assert "DERIBIT" in result
-
-    def test_id_without_colon_returns_empty(self):
-        result = extract_venues_from_instrument_ids("BTCUSDT")
-        assert result == []
-
-    def test_deduplication(self):
-        result = extract_venues_from_instrument_ids(
-            [
-                "BINANCE:SPOT_PAIR:BTC-USDT",
-                "BINANCE:SPOT_PAIR:ETH-USDT",
-            ]
-        )
-        assert result.count("BINANCE") == 1
-
-    def test_string_input_treated_as_single_id(self):
-        result = extract_venues_from_instrument_ids("CME:FUTURE:ES-USD-250328@LIN")
-        assert "CME" in result
+# ---------------------------------------------------------------------------
+# is_venue_available
+# ---------------------------------------------------------------------------
 
 
-# ─── validate_venues ─────────────────────────────────────────────────────────
+class TestIsVenueAvailable:
+    def test_unknown_venue_returns_true(self) -> None:
+        assert is_venue_available("TOTALLY_UNKNOWN_VENUE", "2020-01-01") is True
+
+    def test_known_venue_before_launch_returns_false(self) -> None:
+        # If a venue has a launch date in 2020, checking 2010 should be False
+        from instruments_service.engine.orchestrator import _VENUE_LAUNCH_DATES
+
+        for venue, _launch_date in _VENUE_LAUNCH_DATES.items():
+            if _launch_date > "2010-01-01":
+                assert is_venue_available(venue, "2010-01-01") is False
+                break
+
+    def test_known_venue_after_launch_returns_true(self) -> None:
+        from instruments_service.engine.orchestrator import _VENUE_LAUNCH_DATES
+
+        for venue, _launch_date in _VENUE_LAUNCH_DATES.items():
+            assert is_venue_available(venue, "2030-01-01") is True
+            break
 
 
-class TestValidateVenues:
-    def _make_mapping(self, tardis=None, databento=None, defi=None):
-        mapping = MagicMock()
-        mapping.all_tardis_exchanges = tardis or ["BINANCE", "BYBIT", "DERIBIT"]
-        mapping.all_databento_venues = databento or ["CME", "ICE", "NASDAQ"]
-        mapping.all_defi_venues = defi or ["UNISWAP_V3", "AAVE_V3"]
-        return mapping
-
-    def test_valid_cefi_venue_passes(self):
-        mapping = self._make_mapping()
-        valid, tradfi = validate_venues(["BINANCE"], mapping, cefi=True, tradfi=False, defi=False)
-        assert "BINANCE" in valid
-        assert tradfi is None
-
-    def test_invalid_venue_excluded(self):
-        mapping = self._make_mapping()
-        valid, _ = validate_venues(["UNKNOWN_VENUE"], mapping, cefi=True, tradfi=True, defi=True)
-        assert "UNKNOWN_VENUE" not in valid
-
-    def test_tradfi_only_venues_returns_tradfi_venues(self):
-        mapping = self._make_mapping()
-        valid, tradfi = validate_venues(["CME"], mapping, cefi=False, tradfi=True, defi=False)
-        assert "CME" in valid
-        assert tradfi == ["CME"]
-
-    def test_mixed_cefi_tradfi_not_tradfi_only(self):
-        mapping = self._make_mapping()
-        valid, tradfi = validate_venues(["BINANCE", "CME"], mapping, cefi=True, tradfi=True, defi=False)
-        assert "BINANCE" in valid
-        assert "CME" in valid
-        assert tradfi is None  # mixed, not tradfi-only
-
-    def test_empty_venues_filter_returns_empty(self):
-        mapping = self._make_mapping()
-        valid, tradfi = validate_venues([], mapping, cefi=True, tradfi=True, defi=True)
-        assert valid == []
-        assert tradfi is None
-
-    def test_defi_venue_passes_when_defi_enabled(self):
-        mapping = self._make_mapping()
-        valid, _ = validate_venues(["UNISWAP_V3"], mapping, cefi=False, tradfi=False, defi=True)
-        assert "UNISWAP_V3" in valid
+# ---------------------------------------------------------------------------
+# filter_instruments_by_date
+# ---------------------------------------------------------------------------
 
 
-# ─── filter_by_instrument_ids ─────────────────────────────────────────────────
-
-
-class TestFilterByInstrumentIds:
-    def _make_instruments(self, keys: list[str]) -> dict:
-        result = {}
-        for key in keys:
-            mock_inst = MagicMock()
-            result[key] = mock_inst
-        return result
-
-    def test_exact_match(self):
-        instruments = self._make_instruments(
-            [
-                "BINANCE:SPOT_PAIR:BTC-USDT",
-                "BINANCE:SPOT_PAIR:ETH-USDT",
-            ]
-        )
-        result = filter_by_instrument_ids(instruments, "BINANCE:SPOT_PAIR:BTC-USDT")
-        assert "BINANCE:SPOT_PAIR:BTC-USDT" in result
-        assert "BINANCE:SPOT_PAIR:ETH-USDT" not in result
-
-    def test_list_of_ids(self):
-        instruments = self._make_instruments(
-            [
-                "BINANCE:SPOT_PAIR:BTC-USDT",
-                "BINANCE:SPOT_PAIR:ETH-USDT",
-                "DERIBIT:PERPETUAL:BTC-USD@INV",
-            ]
-        )
-        result = filter_by_instrument_ids(instruments, ["BINANCE:SPOT_PAIR:BTC-USDT", "DERIBIT:PERPETUAL:BTC-USD@INV"])
-        assert len(result) == 2
-
-    def test_no_match_returns_empty(self):
-        instruments = self._make_instruments(["BINANCE:SPOT_PAIR:BTC-USDT"])
-        result = filter_by_instrument_ids(instruments, "NONEXISTENT:KEY")
-        assert result == {}
-
-    def test_case_insensitive_match(self):
-        instruments = self._make_instruments(["BINANCE:SPOT_PAIR:BTC-USDT"])
-        result = filter_by_instrument_ids(instruments, "binance:spot_pair:btc-usdt")
+class TestFilterInstrumentsByDate:
+    def test_no_date_constraints_passes(self) -> None:
+        record = _make_record()
+        date_dt = datetime(2024, 6, 1, tzinfo=UTC)
+        result = filter_instruments_by_date([record], date_dt)
         assert len(result) == 1
 
+    def test_available_since_before_date_passes(self) -> None:
+        record = _make_record(available_since=datetime(2024, 1, 1, tzinfo=UTC))
+        date_dt = datetime(2024, 6, 1, tzinfo=UTC)
+        result = filter_instruments_by_date([record], date_dt)
+        assert len(result) == 1
 
-# ─── convert_to_dataframe ─────────────────────────────────────────────────────
+    def test_available_since_after_date_filtered(self) -> None:
+        record = _make_record(available_since=datetime(2025, 1, 1, tzinfo=UTC))
+        date_dt = datetime(2024, 6, 1, tzinfo=UTC)
+        result = filter_instruments_by_date([record], date_dt)
+        assert len(result) == 0
+
+    def test_available_to_after_date_passes(self) -> None:
+        record = _make_record(available_to=datetime(2025, 1, 1, tzinfo=UTC))
+        date_dt = datetime(2024, 6, 1, tzinfo=UTC)
+        result = filter_instruments_by_date([record], date_dt)
+        assert len(result) == 1
+
+    def test_available_to_before_date_filtered(self) -> None:
+        record = _make_record(available_to=datetime(2024, 1, 1, tzinfo=UTC))
+        date_dt = datetime(2024, 6, 1, tzinfo=UTC)
+        result = filter_instruments_by_date([record], date_dt)
+        assert len(result) == 0
+
+    def test_defi_venue_missing_available_since_warns(self, caplog) -> None:
+        record = _make_record(venue="AAVEV3-ETHEREUM")
+        date_dt = datetime(2024, 6, 1, tzinfo=UTC)
+        defi_venues = frozenset(["AAVEV3-ETHEREUM"])
+        with caplog.at_level("WARNING"):
+            result = filter_instruments_by_date([record], date_dt, defi_venues=defi_venues)
+        assert len(result) == 1  # still included
+        assert any("available_since=None" in r.message for r in caplog.records)
+
+    def test_multiple_records_filters_correctly(self) -> None:
+        r1 = _make_record(instrument_key="A", available_since=datetime(2024, 1, 1, tzinfo=UTC))
+        r2 = _make_record(instrument_key="B", available_since=datetime(2025, 1, 1, tzinfo=UTC))
+        r3 = _make_record(instrument_key="C")
+        date_dt = datetime(2024, 6, 1, tzinfo=UTC)
+        result = filter_instruments_by_date([r1, r2, r3], date_dt)
+        assert len(result) == 2  # r1 and r3 pass, r2 filtered
 
 
-class TestConvertToDataframe:
-    def test_empty_dict_returns_empty_df(self):
-        result = convert_to_dataframe({}, skip_storage=False)
-        assert isinstance(result, pd.DataFrame)
-        assert result.empty
-
-    def test_model_dump_instruments(self):
-        mock_inst = MagicMock()
-        mock_inst.model_dump.return_value = {
-            "instrument_key": "BINANCE:SPOT_PAIR:BTC-USDT",
-            "venue": "BINANCE",
-            "instrument_type": "SPOT_PAIR",
-            "base_asset": "BTC",
-            "quote_asset": "USDT",
-            "market_category": "CEFI",
-        }
-        result = convert_to_dataframe({"BINANCE:SPOT_PAIR:BTC-USDT": mock_inst}, skip_storage=False)
-        assert not result.empty
-        assert "instrument_key" in result.columns
-
-    def test_non_pydantic_instruments(self):
-        instruments = {"KEY1": {"instrument_key": "KEY1", "venue": "TEST"}}
-        result = convert_to_dataframe(instruments, skip_storage=False)
-        assert not result.empty
+# ---------------------------------------------------------------------------
+# filter_defi_instruments_by_relevance
+# ---------------------------------------------------------------------------
 
 
-# ─── handle_no_instruments ────────────────────────────────────────────────────
-
-
-class TestHandleNoInstruments:
-    def _make_counter(self, errors=0, warnings=0):
-        counter = MagicMock(spec=logging.Handler)
-        counter.error_count = errors
-        counter.warning_count = warnings
-        return counter
-
-    def test_no_tradfi_returns_error_dict(self):
-        counter = self._make_counter(errors=2, warnings=1)
-        root_logger = MagicMock()
-        result = handle_no_instruments(
-            date_str="2025-03-28",
-            tradfi=False,
-            venues_filter=[],
-            error_warning_counter=counter,
-            root_logger=root_logger,
+class TestFilterDefiInstrumentsByRelevance:
+    def test_dex_both_major_passes(self) -> None:
+        record = _make_record(
+            venue="UNISWAPV3-ETHEREUM",
+            base_asset="WETH",
+            quote_asset="USDC",
         )
-        assert result["status"] == "error"
-        assert result["instruments_generated"] == 0
-        assert result["error_count"] == 2
+        with patch(
+            "instruments_service.engine.orchestrator.get_defi_major_assets",
+            return_value=frozenset({"WETH", "USDC", "WBTC", "ETH", "BTC", "USDT"}),
+        ):
+            result = filter_defi_instruments_by_relevance([record])
+        assert len(result) == 1
 
-    def test_tradfi_with_venues_returns_empty_dict(self):
-        counter = self._make_counter()
-        root_logger = MagicMock()
-        result = handle_no_instruments(
-            date_str="2025-03-28",
-            tradfi=True,
-            venues_filter=["CME"],
-            error_warning_counter=counter,
-            root_logger=root_logger,
+    def test_dex_one_long_tail_filtered(self) -> None:
+        record = _make_record(
+            venue="UNISWAPV3-ETHEREUM",
+            base_asset="PEPE",
+            quote_asset="WETH",
         )
-        assert result == {}
+        with patch(
+            "instruments_service.engine.orchestrator.get_defi_major_assets",
+            return_value=frozenset({"WETH", "USDC", "WBTC", "ETH", "BTC", "USDT"}),
+        ):
+            result = filter_defi_instruments_by_relevance([record])
+        assert len(result) == 0
 
-    def test_tradfi_without_venues_returns_error(self):
-        counter = self._make_counter(errors=1, warnings=0)
-        root_logger = MagicMock()
-        result = handle_no_instruments(
-            date_str="2025-03-28",
-            tradfi=True,
-            venues_filter=[],  # empty filter -> not tradfi with venues
-            error_warning_counter=counter,
-            root_logger=root_logger,
+    def test_lending_base_major_passes(self) -> None:
+        record = _make_record(
+            venue="AAVEV3-ETHEREUM",
+            base_asset="WETH",
+            quote_asset="USD",
         )
-        assert result["status"] == "error"
+        with patch(
+            "instruments_service.engine.orchestrator.get_defi_major_assets",
+            return_value=frozenset({"WETH", "USDC", "WBTC", "ETH", "BTC", "USDT"}),
+        ):
+            result = filter_defi_instruments_by_relevance([record])
+        assert len(result) == 1
 
-
-# ─── add_tradfi_placeholders ─────────────────────────────────────────────────
-
-
-class TestAddTradfiPlaceholders:
-    def _make_mapping(self, databento_venues=None):
-        mapping = MagicMock()
-        mapping.all_databento_venues = databento_venues or ["CME", "ICE"]
-        return mapping
-
-    def test_adds_placeholder_for_missing_venue(self):
-        mapping = self._make_mapping()
-        instruments_df = pd.DataFrame()
-        date = datetime(2025, 3, 28, tzinfo=UTC)
-        result = add_tradfi_placeholders(instruments_df, date, ["CME"], mapping)
-        assert not result.empty
-        assert any(result["venue"] == "CME")
-        assert any(result["instrument_type"] == "MARKET_CLOSED")
-
-    def test_no_placeholder_when_venue_already_present(self):
-        mapping = self._make_mapping()
-        df = pd.DataFrame(
-            [
-                {
-                    "venue": "CME",
-                    "instrument_key": "CME:FUTURE:ES-USD-250328@LIN",
-                    "instrument_type": "FUTURE",
-                }
-            ]
+    def test_lending_base_long_tail_filtered(self) -> None:
+        record = _make_record(
+            venue="AAVEV3-ETHEREUM",
+            base_asset="SHIB",
+            quote_asset="USD",
         )
-        date = datetime(2025, 3, 28, tzinfo=UTC)
-        result = add_tradfi_placeholders(df, date, ["CME"], mapping)
-        # Should not add a placeholder since CME is present
-        cme_rows = result[result["venue"] == "CME"]
-        closed_rows = cme_rows[cme_rows["instrument_type"] == "MARKET_CLOSED"]
-        assert len(closed_rows) == 0
+        with patch(
+            "instruments_service.engine.orchestrator.get_defi_major_assets",
+            return_value=frozenset({"WETH", "USDC", "WBTC", "ETH", "BTC", "USDT"}),
+        ):
+            result = filter_defi_instruments_by_relevance([record])
+        assert len(result) == 0
 
-    def test_no_tradfi_venues_in_filter_returns_unchanged(self):
-        mapping = self._make_mapping()
-        df = pd.DataFrame([{"venue": "BINANCE", "instrument_key": "BINANCE:SPOT_PAIR:BTC-USDT"}])
-        date = datetime(2025, 3, 28, tzinfo=UTC)
-        result = add_tradfi_placeholders(df, date, ["BINANCE"], mapping)
-        # BINANCE is not in databento_venues so no placeholder added
-        assert len(result) == len(df)
 
-    def test_placeholder_is_false_trading_day(self):
-        mapping = self._make_mapping()
-        df = pd.DataFrame()
-        date = datetime(2025, 1, 1, tzinfo=UTC)  # holiday
-        result = add_tradfi_placeholders(df, date, ["ICE"], mapping)
-        ice_rows = result[result["venue"] == "ICE"]
-        # np.False_ == False but is not identical with `is`; use == instead
-        assert not ice_rows.iloc[0]["is_trading_day"]
+# ---------------------------------------------------------------------------
+# _build_defi_venues
+# ---------------------------------------------------------------------------
+
+
+class TestBuildDefiVenues:
+    def test_includes_static_venues(self) -> None:
+        venues = _build_defi_venues()
+        assert "LIDO-ETHEREUM" in venues
+        assert "ETHERFI-ETHEREUM" in venues
+        assert "ETHENA-ETHEREUM" in venues
+
+    def test_includes_solana_venues(self) -> None:
+        venues = _build_defi_venues()
+        assert "DRIFT-SOLANA" in venues
+        assert "KAMINO-SOLANA" in venues
+        assert "RAYDIUM-SOLANA" in venues
+        assert "ORCA-SOLANA" in venues
+        assert "MARINADE-SOLANA" in venues
+
+    def test_includes_subgraph_venues(self) -> None:
+        venues = _build_defi_venues()
+        assert any("AAVEV3" in v for v in venues)
+        assert any("UNISWAPV3" in v for v in venues)
+
+    def test_returns_non_empty(self) -> None:
+        venues = _build_defi_venues()
+        assert len(venues) > 10
+
+
+# ---------------------------------------------------------------------------
+# _get_instruments_bucket
+# ---------------------------------------------------------------------------
+
+
+class TestGetInstrumentsBucket:
+    def test_bucket_with_category(self) -> None:
+        with patch(
+            "instruments_service.engine.orchestrator.get_bucket_name", return_value="instruments-store-defi-test"
+        ):
+            bucket = _get_instruments_bucket("DEFI")
+        assert "instruments" in bucket.lower()
+
+    def test_bucket_fallback(self) -> None:
+        with patch("instruments_service.engine.orchestrator.get_bucket_name", side_effect=AttributeError):
+            bucket = _get_instruments_bucket("CEFI")
+        assert "instruments" in bucket.lower()
+
+    def test_bucket_test_mode(self) -> None:
+        import instruments_service.config.service_config as sc
+
+        old = sc._config
+        try:
+            sc._config = None
+            with patch.dict("os.environ", {"IS_TEST_RUN": "true"}):
+                sc._config = None
+                cfg = sc.InstrumentsServiceConfig()
+                cfg.is_test_run = True
+                sc._config = cfg
+                with patch(
+                    "instruments_service.engine.orchestrator.get_bucket_name",
+                    return_value="instruments-store-defi-test",
+                ):
+                    bucket = _get_instruments_bucket("DEFI")
+                assert bucket.endswith("-test")
+        finally:
+            sc._config = old
+
+
+# ---------------------------------------------------------------------------
+# _write_catalogue_record
+# ---------------------------------------------------------------------------
+
+
+class TestWriteCatalogueRecord:
+    def test_non_blocking_on_error(self) -> None:
+        with patch(
+            "instruments_service.engine.orchestrator.ManifestWriter",
+            side_effect=ConnectionError("no GCS"),
+        ):
+            # Should not raise
+            _write_catalogue_record(
+                "bucket",
+                "instrument_availability/by_date/day=2026-03-22/venue=BINANCE-SPOT/instruments.parquet",
+                "2026-03-22",
+                10,
+            )
+
+    def test_successful_write(self) -> None:
+        mock_writer = MagicMock()
+        with patch("instruments_service.engine.orchestrator.ManifestWriter", return_value=mock_writer):
+            _write_catalogue_record(
+                "bucket",
+                "instrument_availability/by_date/day=2026-03-22/venue=BINANCE-SPOT/instruments.parquet",
+                "2026-03-22",
+                10,
+            )
+        mock_writer.add.assert_called_once()
+        mock_writer.write.assert_called_once()
