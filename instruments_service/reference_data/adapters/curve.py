@@ -1,9 +1,9 @@
 """Curve reference data adapter — instrument discovery via Curve REST API.
 
-Discovers Curve liquidity pools on Ethereum. Pools are returned as
+Discovers Curve liquidity pools across supported chains. Pools are returned as
 InstrumentRecord with instrument_type="POOL".
 
-Data source: Curve REST API (api.curve.fi).
+Data source: Curve REST API (api.curve.finance).
 Reference: https://curve.fi/
 """
 
@@ -27,13 +27,27 @@ from ..utils.defi_utils import classify_graph_error
 
 logger = logging.getLogger(__name__)
 
-_CURVE_API = "https://api.curve.fi/v1/getPools/ethereum/main"
+_CURVE_API_TEMPLATE = "https://api.curve.finance/v1/getPools/{chain_slug}/main"
 _DEFAULT_CHAIN = "ETHEREUM"
 
-# Curve Finance Ethereum mainnet deployment date (2020-01-20).
-# The Curve REST API does not include per-pool creation timestamps,
-# so we use the protocol launch date as the available_since floor for all pools.
-_CURVE_DEPLOY_DATE = datetime(2020, 1, 20, tzinfo=UTC)
+# Chain name → Curve API slug mapping
+_CHAIN_SLUG: dict[str, str] = {
+    "ETHEREUM": "ethereum",
+    "AVALANCHE": "avalanche",
+    "OPTIMISM": "optimism",
+    "ARBITRUM": "arbitrum",
+    "POLYGON": "polygon",
+    "BASE": "base",
+    "FANTOM": "fantom",
+}
+
+# Per-chain deploy dates for Curve — used as available_since floor.
+# Sourced from UAC VenueMapping venue_start_dates (SSOT).
+_CURVE_DEPLOY_DATES: dict[str, datetime] = {
+    "ETHEREUM": datetime(2020, 1, 20, tzinfo=UTC),
+    "AVALANCHE": datetime(2021, 11, 10, tzinfo=UTC),
+    "OPTIMISM": datetime(2022, 1, 13, tzinfo=UTC),
+}
 
 
 class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
@@ -59,12 +73,19 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
         self,
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
-        """Fetch active Curve pools as instruments."""
+        """Fetch active Curve pools as instruments for the configured chain."""
         if instrument_type not in (None, InstrumentType.POOL):
             return []
 
+        chain_slug = _CHAIN_SLUG.get(self._chain)
+        if not chain_slug:
+            logger.warning("Curve: unsupported chain %s, skipping", self._chain)
+            return []
+
+        api_url = _CURVE_API_TEMPLATE.format(chain_slug=chain_slug)
+
         try:
-            async with aiohttp.ClientSession() as session, session.get(_CURVE_API) as resp:
+            async with aiohttp.ClientSession() as session, session.get(api_url) as resp:
                 resp.raise_for_status()
                 raw = await resp.json()
         except aiohttp.ClientError as exc:
@@ -73,7 +94,8 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
             action = classification.action.value if classification else "fail"
             retry_safe = classification.retry_safe if classification else False
             logger.error(
-                "Curve API request failed: %s (classified: %s, action: %s, retry_safe: %s)",
+                "Curve API request failed for %s: %s (classified: %s, action: %s, retry_safe: %s)",
+                self._chain,
                 exc,
                 error_code,
                 action,
@@ -82,8 +104,9 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
             log_event(
                 "ADAPTER_FETCH_FAILED",
                 details={
-                    "venue": "curve",
+                    "venue": f"CURVE-{self._chain}",
                     "endpoint": "getPools",
+                    "chain": self._chain,
                     "error": str(exc),
                     "error_code": error_code,
                     "action": action,
@@ -94,6 +117,8 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
 
         pool_data: list[dict[str, object]] = raw.get("data", {}).get("poolData", [])
         results: list[InstrumentRecord] = []
+
+        deploy_date = _CURVE_DEPLOY_DATES.get(self._chain, datetime(2020, 1, 20, tzinfo=UTC))
 
         for pool in pool_data:
             pool_address = pool.get("address")
@@ -127,7 +152,7 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
                     option_type=None,
                     status=InstrumentStatus.ACTIVE,
                     underlying=pool_name if pool_name else None,
-                    available_from_datetime=_CURVE_DEPLOY_DATE,
+                    available_from_datetime=deploy_date,
                 )
             )
 
