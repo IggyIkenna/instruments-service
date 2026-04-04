@@ -433,6 +433,30 @@ _TRADFI_VENUES: list[str] = [
 # ---------------------------------------------------------------------------
 # DEFI instrument relevance filter
 # ---------------------------------------------------------------------------
+def _normalize_wrapped_token(symbol: str) -> str:
+    """Normalize wrapped/bridged token symbols to their canonical form.
+
+    Strips chain-specific prefixes and suffixes so that tokens like avUSDC,
+    aAvaDAI, USDT.e, renBTC match their canonical equivalents (USDC, DAI,
+    USDT, BTC) in the major assets set.
+
+    Prefix priority: longest match first to avoid false strips (e.g. "aAva"
+    before "a" so aAvaDAI → DAI, not AvaDAI).
+    """
+    s = symbol.upper().strip()
+    # Suffixes: .e (Avalanche bridged), .b (BNB bridged)
+    for suffix in (".E", ".B"):
+        if s.endswith(suffix):
+            s = s[: -len(suffix)]
+    # Prefixes: longest first. aAva (Aave on Avalanche), av (Avalanche native),
+    # ren (Ren bridge), st (staked variants handled by major list already)
+    for prefix in ("AAVA", "AV", "REN"):
+        if s.startswith(prefix) and len(s) > len(prefix):
+            s = s[len(prefix) :]
+            break
+    return s
+
+
 def filter_defi_instruments_by_relevance(records: list) -> list:
     """Filter DEFI instruments to major liquid assets only.
 
@@ -442,18 +466,23 @@ def filter_defi_instruments_by_relevance(records: list) -> list:
 
     DEX_VENUE_KEYWORDS is the SSOT from UAC (includes EVM + Solana DEXes).
 
+    Token matching uses _normalize_wrapped_token() to strip chain-specific
+    prefixes/suffixes (avUSDC → USDC, aAvaDAI → DAI, renBTC → BTC, USDT.e → USDT).
+
     Rules:
     - DEX pools (Uniswap, Balancer, Curve, Orca, Raydium, Kamino): both
-      base AND quote must be in the major assets set. Eliminates long-tail
-      pairs like PEPE/WETH or FAITH/MILAREPA.
+      base AND quote must match the major assets set (after normalization).
+      Eliminates long-tail pairs like PEPE/WETH or FAITH/MILAREPA.
     - Lending protocols (Aave, Morpho, Fluid, LST services): base
-      asset must be in the major assets set. Keeps aWETH, aWBTC, aUSDC etc.
+      asset must match. Keeps aWETH, aWBTC, aUSDC etc.
     """
     major = get_defi_major_assets()  # reads from config_reloaders (hot-reloadable)
     result = []
     for r in records:
-        base = (getattr(r, "base_asset", None) or "").upper().strip()
-        quote = (getattr(r, "quote_asset", None) or "").upper().strip()
+        raw_base = (getattr(r, "base_asset", None) or "").upper().strip()
+        raw_quote = (getattr(r, "quote_asset", None) or "").upper().strip()
+        base = raw_base if raw_base in major else _normalize_wrapped_token(raw_base)
+        quote = raw_quote if raw_quote in major else _normalize_wrapped_token(raw_quote)
         venue = (getattr(r, "venue", None) or "").upper()
         is_dex = any(kw in venue for kw in DEX_VENUE_KEYWORDS)
         if is_dex:
