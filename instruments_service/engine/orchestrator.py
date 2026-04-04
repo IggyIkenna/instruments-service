@@ -572,6 +572,12 @@ def is_venue_available(venue: str, date: str) -> bool:
     return date >= launch_date
 
 
+def earliest_venue_date(venues: list[str]) -> str | None:
+    """Return the earliest launch date across the given venues, or None if unknown."""
+    dates = [_VENUE_LAUNCH_DATES[v] for v in venues if v in _VENUE_LAUNCH_DATES]
+    return min(dates) if dates else None
+
+
 async def process_instruments(
     date: str | datetime,
     categories: list[str],
@@ -769,7 +775,9 @@ async def process_instruments(
     # For SPORTS: zero fixtures on a given day is normal (no matches scheduled).
     # Write an empty marker parquet so the manifest knows the day was processed
     # successfully and won't re-fetch without --force.
-    # For CeFi/DeFi/TradFi: zero records = something is broken → fail the shard.
+    # For DeFi in batch mode: zero records after date filter is expected for dates
+    # before the first pool was created — skip silently (no GCS write, no error).
+    # For CeFi/TradFi: zero records = something is broken → fail the shard.
     if not records:
         is_sports_only = all(c.upper() == "SPORTS" for c in categories)
         if is_sports_only:
@@ -789,6 +797,16 @@ async def process_instruments(
             logger.info("SPORTS: No fixtures for date=%s — wrote empty marker to manifest", date)
             log_event("PROCESSING_COMPLETED", details={"date": date, "categories": categories, "fixtures": 0})
             return {"api_football": 0}
+        # DeFi batch: zero records after date filter is normal for early dates
+        # (venue exists in UAC but no pools created yet on-chain). Skip without error.
+        is_defi_only = all(c.upper() in ("DEFI",) for c in categories)
+        if is_defi_only and mode == "batch":
+            logger.debug(
+                "DeFi batch: zero instruments after date filter for date=%s — "
+                "all venues pre-date their first pool creation. Skipping.",
+                date,
+            )
+            return {}
         msg = (
             f"URDI returned zero records for date={date} categories={categories}. "
             f"Venues attempted: {active_venues}. "

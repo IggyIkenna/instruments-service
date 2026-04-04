@@ -20,7 +20,11 @@ from unified_trading_library import (
 )
 
 from instruments_service.engine import orchestrator as engine_orchestrator
-from instruments_service.engine.orchestrator import clear_defi_universe_cache, get_venues_for_categories
+from instruments_service.engine.orchestrator import (
+    clear_defi_universe_cache,
+    earliest_venue_date,
+    get_venues_for_categories,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +57,9 @@ class InstrumentsHandler(UnifiedServiceHandler):
         if venues_arg:
             self._venue_override = venues_arg
             logger.info("Venue override from CLI: %s", venues_arg)
+            earliest = earliest_venue_date(venues_arg)
+            if earliest:
+                logger.info("Earliest venue launch date: %s (dates before this will be skipped)", earliest)
 
         # Preflight runs once before any date is processed. We don't know
         # the specific dates yet (BatchIO iterates them), so we validate keys
