@@ -34,9 +34,9 @@ _DEFAULT_CHAIN = "ETHEREUM"
 
 # Query template — {block_clause} is replaced with '' or ' block: {number: N},'
 _POOLS_QUERY_TEMPLATE = """
-query GetPools($first: Int!) {{
+query GetPools($first: Int!, $skip: Int!) {{
     pools(
-        {block_clause}first: $first, orderBy: totalValueLockedUSD, orderDirection: desc
+        {block_clause}first: $first, skip: $skip, orderBy: totalValueLockedUSD, orderDirection: desc
     ) {{
         id
         feeTier
@@ -49,6 +49,7 @@ query GetPools($first: Int!) {{
 """
 
 _FETCH_LIMIT = 1000
+_MAX_SKIP = 5000
 
 
 class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
@@ -89,27 +90,38 @@ class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
         block_clause = f"block: {{number: {block_num}}}, " if block_num else ""
         query = _POOLS_QUERY_TEMPLATE.format(block_clause=block_clause)
 
-        variables = {"first": _FETCH_LIMIT}
-        try:
-            async with (
-                aiohttp.ClientSession() as session,
-                session.post(
-                    url,
-                    json={"query": query, "variables": variables},
-                    headers={"Content-Type": "application/json"},
-                ) as resp,
-            ):
-                resp.raise_for_status()
-                data = await resp.json()
-        except aiohttp.ClientError as exc:
-            self._log_fetch_error(exc)
-            raise ConnectionError(str(exc)) from exc
+        # Paginate through all pools (The Graph caps skip at 5000)
+        all_pools: list[dict[str, object]] = []
+        skip = 0
+        async with aiohttp.ClientSession() as session:
+            while skip <= _MAX_SKIP:
+                variables = {"first": _FETCH_LIMIT, "skip": skip}
+                try:
+                    async with session.post(
+                        url,
+                        json={"query": query, "variables": variables},
+                        headers={"Content-Type": "application/json"},
+                    ) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
+                except aiohttp.ClientError as exc:
+                    self._log_fetch_error(exc)
+                    raise ConnectionError(str(exc)) from exc
 
-        pools: list[dict[str, object]] = (data.get("data") or {}).get("pools") or []
+                page: list[dict[str, object]] = (data.get("data") or {}).get("pools") or []
+                if not page:
+                    break
+
+                all_pools.extend(page)
+                logger.debug("UniswapV4: fetched page skip=%d, got %d pools", skip, len(page))
+
+                if len(page) < _FETCH_LIMIT:
+                    break  # last page
+                skip += _FETCH_LIMIT
 
         results: list[InstrumentRecord] = []
 
-        for pool in pools:
+        for pool in all_pools:
             record = self._build_pool_record(pool)
             if record:
                 results.append(record)

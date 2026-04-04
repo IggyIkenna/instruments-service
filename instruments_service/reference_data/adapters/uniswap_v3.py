@@ -37,9 +37,9 @@ _DEFAULT_CHAIN = "ETHEREUM"
 
 # Query template — {block_clause} is replaced with '' or ', block: {number: N}'
 _POOLS_QUERY_TEMPLATE = """
-query GetPools($first: Int!) {{
+query GetPools($first: Int!, $skip: Int!) {{
     pools(
-        first: $first, orderBy: totalValueLockedUSD, orderDirection: desc
+        first: $first, skip: $skip, orderBy: totalValueLockedUSD, orderDirection: desc
         {block_clause}
     ) {{
         id
@@ -53,6 +53,8 @@ query GetPools($first: Int!) {{
 """
 
 _FETCH_LIMIT = 1000
+# The Graph caps skip at 5000 — max reachable = 5000 + 1000 = 6000 pools
+_MAX_SKIP = 5000
 
 # Messari-standard subgraph schema (used by some chain deployments e.g. Base)
 _MESSARI_POOLS_QUERY = """
@@ -105,36 +107,48 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         block_clause = f", block: {{number: {block_num}}}" if block_num else ""
         query = _POOLS_QUERY_TEMPLATE.format(block_clause=block_clause)
 
-        variables = {"first": _FETCH_LIMIT}
-        try:
-            async with (
-                aiohttp.ClientSession() as session,
-                session.post(
-                    url,
-                    json={"query": query, "variables": variables},
-                    headers={"Content-Type": "application/json"},
-                ) as resp,
-            ):
-                resp.raise_for_status()
-                data = await resp.json()
-        except aiohttp.ClientError as exc:
-            self._log_fetch_error(exc)
-            raise ConnectionError(str(exc)) from exc
+        # Paginate through all pools (The Graph caps skip at 5000)
+        all_pools: list[dict[str, object]] = []
+        skip = 0
+        async with aiohttp.ClientSession() as session:
+            while skip <= _MAX_SKIP:
+                variables = {"first": _FETCH_LIMIT, "skip": skip}
+                try:
+                    async with session.post(
+                        url,
+                        json={"query": query, "variables": variables},
+                        headers={"Content-Type": "application/json"},
+                    ) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
+                except aiohttp.ClientError as exc:
+                    self._log_fetch_error(exc)
+                    raise ConnectionError(str(exc)) from exc
 
-        if not isinstance(data, dict) or "data" not in data:
-            logger.warning("UniswapV3: empty response from %s subgraph", self._chain)
-            return []
+                if not isinstance(data, dict) or "data" not in data:
+                    if skip == 0:
+                        logger.warning("UniswapV3: empty response from %s subgraph", self._chain)
+                    break
 
-        raw_data = data.get("data") or {}
-        pools: list[dict[str, object]] = raw_data.get("pools") or []
+                raw_data = data.get("data") or {}
+                page: list[dict[str, object]] = raw_data.get("pools") or []
+                if not page:
+                    break
+
+                all_pools.extend(page)
+                logger.debug("UniswapV3: fetched page skip=%d, got %d pools", skip, len(page))
+
+                if len(page) < _FETCH_LIMIT:
+                    break  # last page
+                skip += _FETCH_LIMIT
 
         # Fallback: Messari-schema subgraphs use 'liquidityPools' + 'inputTokens'
-        if not pools:
-            pools = await self._fetch_messari_pools(url)
+        if not all_pools:
+            all_pools = await self._fetch_messari_pools(url)
 
         results: list[InstrumentRecord] = []
 
-        for pool in pools:
+        for pool in all_pools:
             record = self._build_pool_record(pool)
             if record:
                 results.append(record)
