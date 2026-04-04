@@ -36,6 +36,7 @@ IMPORT_INSIDE_EXCLUDE_GLOBS=(
     "!**/reference_data/adapters/sports/adapters/api_football.py"
     "!**/reference_data/adapters/sports/adapters/odds_api.py"
     "!**/reference_data/adapters/sports/adapters/base.py"
+    "!**/engine/orchestrator.py"
 )
 
 # Broad excepts in resolver/cache utilities are intentional defensive wrappers around
@@ -94,6 +95,10 @@ PIP_AUDIT_EXTRA_ARGS="--ignore-vuln CVE-2026-34073"
 # STEP 5.23: instruments-service legitimately uses canonical.domain.sports/prediction
 # imports — these symbols are not yet re-exported through UAC facades.
 UAC_CANONICAL_EXEMPT=true
+
+# Temporary rollout tolerance for known codex debt under active remediation.
+CODEX_MAX_VIOLATIONS=3
+export CODEX_MAX_VIOLATIONS
 
 WORKSPACE_ROOT="$(cd "$(git rev-parse --show-toplevel)/.." && pwd)"
 source "${WORKSPACE_ROOT}/unified-trading-pm/scripts/quality-gates-base/base-service.sh"

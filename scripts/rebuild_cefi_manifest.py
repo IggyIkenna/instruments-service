@@ -30,8 +30,7 @@ def main() -> None:
     parser.add_argument("--prefix", default="instrument_availability/by_date", help="GCS data prefix")
     args = parser.parse_args()
 
-    from unified_trading_library.core.cloud_constants import get_bucket_name
-    from unified_trading_library.manifest_writer import read_availability_index, rebuild_manifest
+    from unified_trading_library import get_bucket_name, read_availability_index, rebuild_manifest
 
     bucket = get_bucket_name("instruments", args.category)
     logger.info("Bucket: %s", bucket)

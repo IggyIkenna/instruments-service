@@ -855,6 +855,27 @@ async def process_instruments(
             for k, v in sports_ref_counts.items():
                 counts[k] = counts.get(k, 0) + v
 
+            # Write manifest for sports reference entities
+            try:
+                sports_manifest = ManifestWriter(
+                    service_name="instruments-service",
+                    catalogue_bucket=bucket,
+                )
+                for entity_name, row_count in sports_ref_counts.items():
+                    sports_manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=row_count,
+                        venue=f"sports_reference_{entity_name}",
+                    )
+                sports_manifest.write()
+                logger.info(
+                    "Sports reference manifest: %d entities for %s",
+                    len(sports_ref_counts),
+                    date,
+                )
+            except Exception as exc:
+                logger.warning("Sports reference manifest write failed (non-blocking): %s", exc)
+
     total = sum(counts.values())
 
     # 8. Shard completeness check + automatic retry for missing venues.
