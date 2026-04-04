@@ -140,6 +140,23 @@ async def fetch_instruments_for_all_venues(
                 # Use cached path — adapter pool ensures reuse, cache avoids redundant fetches
                 records = await adapter.get_instruments_cached(instrument_type=instrument_type)
                 logger.info("URDI[%s]: fetched %d instruments", canonical, len(records))
+                # Venue-tag validation: every returned instrument must have a venue
+                # matching the canonical venue we requested. Prevents adapters that
+                # ignore their chain parameter from writing data under the wrong venue.
+                mismatched = [r for r in records if getattr(r, "venue", "").upper() != canonical.upper()]
+                if mismatched:
+                    wrong_venues = {getattr(r, "venue", "") for r in mismatched}
+                    logger.error(
+                        "URDI[%s]: VENUE MISMATCH — adapter returned %d/%d instruments "
+                        "with wrong venue tags %s (expected %s). "
+                        "Adapter likely ignores chain parameter. Dropping mismatched.",
+                        canonical,
+                        len(mismatched),
+                        len(records),
+                        sorted(wrong_venues),
+                        canonical,
+                    )
+                    records = [r for r in records if r not in mismatched]
                 return records
             except NotImplementedError:
                 logger.debug("URDI[%s]: instrument_type=%r not supported", canonical, instrument_type)
