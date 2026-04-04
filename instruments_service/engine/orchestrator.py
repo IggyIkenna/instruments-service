@@ -171,7 +171,10 @@ _VENUE_ADAPTER_EPOCH: dict[str, str] = {
     "UNISWAPV3": "2026-04-03",
     "UNISWAPV4": "2026-04-03",
     "BALANCER": "2026-04-03",
-    "CURVE": "2026-04-02",
+    # 2026-04-04: Curve adapter was hardcoded to Ethereum API, ignoring chain
+    # parameter — CURVE-AVALANCHE and CURVE-OPTIMISM had Ethereum pool counts.
+    # Adapter fixed to use per-chain API URLs. Epoch bumped past today's bad entries.
+    "CURVE": "2026-04-05",
     "COMPOUNDV3": "2026-04-02",
     "MORPHO": "2026-04-02",
     "FLUID": "2026-04-02",
@@ -275,10 +278,15 @@ def _enforce_defi_monotonicity(
 
     Returns (clean_records, blocked_venues). Blocked venues had fewer instruments
     than the manifest max and must NOT be written to GCS (would overwrite better data).
+    Only checks venues that are actually present in the records — venues not fetched
+    are ignored (they have 0 count but were never requested).
     """
     new_counts = _count_per_venue(records)
+    fetched_venues = set(new_counts.keys())
     blocked: set[str] = set()
     for venue, old_max in hwm.items():
+        if venue not in fetched_venues:
+            continue
         new_count = new_counts.get(venue, 0)
         if new_count < old_max:
             blocked.add(venue)
@@ -340,10 +348,13 @@ async def _get_or_fetch_defi_universe(
     retryable = list(fetch_result.retryable_venues)
 
     # Monotonicity check: compare per-venue counts against manifest high-water marks
+    # Scope to only the venues we actually fetched — otherwise venues not in the
+    # request appear "regressed" (0 vs HWM) and trigger unnecessary retries.
     hwm = _get_defi_manifest_high_watermarks()
     if hwm:
         new_counts = _count_per_venue(all_records)
-        regressed = [v for v, mx in hwm.items() if new_counts.get(v, 0) < mx]
+        fetched_venues = set(new_counts.keys())
+        regressed = [v for v, mx in hwm.items() if v in fetched_venues and new_counts.get(v, 0) < mx]
 
         if regressed:
             for venue in regressed:
