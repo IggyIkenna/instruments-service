@@ -164,13 +164,12 @@ _VENUE_ADAPTER_EPOCH: dict[str, str] = {
     # but new unfiltered counts are strictly >=, so no false regressions.
     "AAVEV3": "2026-04-02",
     "UNISWAPV2": "2026-04-02",
-    # 2026-04-03: Uniswap V3/V4 and Balancer adapters have _FETCH_LIMIT=1000
-    # but 2026-04-02 manifest entries have inflated counts (>1000) from a prior
-    # code path. Epoch bumped to ignore those unreproducible HWM values.
-    # TODO: add cursor-based pagination to these adapters, then epoch can stay.
-    "UNISWAPV3": "2026-04-03",
-    "UNISWAPV4": "2026-04-03",
-    "BALANCER": "2026-04-03",
+    # 2026-04-04: Uniswap V3/V4 and Balancer adapters had _FETCH_LIMIT=1000
+    # with no pagination — actual pool counts exceed 1000. Pagination added
+    # (skip-based, up to 6000 pools). Epoch bumped past all capped entries.
+    "UNISWAPV3": "2026-04-05",
+    "UNISWAPV4": "2026-04-05",
+    "BALANCER": "2026-04-05",
     # 2026-04-04: Curve adapter was hardcoded to Ethereum API, ignoring chain
     # parameter — CURVE-AVALANCHE and CURVE-OPTIMISM had Ethereum pool counts.
     # Adapter fixed to use per-chain API URLs. Epoch bumped past today's bad entries.

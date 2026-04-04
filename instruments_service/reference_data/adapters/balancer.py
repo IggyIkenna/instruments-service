@@ -32,10 +32,10 @@ _BALANCER_API = "https://api-v3.balancer.fi/graphql"
 _DEFAULT_CHAIN = "ETHEREUM"
 
 _POOLS_QUERY = """
-query GetPools($chain: [GqlChain!]!) {
+query GetPools($chain: [GqlChain!]!, $first: Int!, $skip: Int!) {
   poolGetPools(
-    first: 1000
-    skip: 0
+    first: $first
+    skip: $skip
     orderBy: totalLiquidity
     orderDirection: desc
     where: {
@@ -59,6 +59,9 @@ query GetPools($chain: [GqlChain!]!) {
   }
 }
 """
+
+_PAGE_SIZE = 1000
+_MAX_SKIP = 5000
 
 _CHAIN_TO_GQL = {
     "ETHEREUM": "MAINNET",
@@ -100,46 +103,57 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
 
         gql_chain = _CHAIN_TO_GQL.get(self._chain, "MAINNET")
 
-        try:
-            payload = {
-                "query": _POOLS_QUERY,
-                "variables": {"chain": [gql_chain]},
-            }
-            async with (
-                aiohttp.ClientSession() as session,
-                session.post(_BALANCER_API, json=payload) as resp,
-            ):
-                resp.raise_for_status()
-                raw = await resp.json()
-        except aiohttp.ClientError as exc:
-            error_code = classify_graph_error(exc)
-            classification = classify_venue_error("balancer", error_code)
-            action = classification.action.value if classification else "fail"
-            retry_safe = classification.retry_safe if classification else False
-            logger.error(
-                "Balancer API request failed: %s (classified: %s, action: %s, retry_safe: %s)",
-                exc,
-                error_code,
-                action,
-                retry_safe,
-            )
-            log_event(
-                "ADAPTER_FETCH_FAILED",
-                details={
-                    "venue": "balancer",
-                    "endpoint": "poolGetPools",
-                    "error": str(exc),
-                    "error_code": error_code,
-                    "action": action,
-                    "retry_safe": retry_safe,
-                },
-            )
-            raise ConnectionError(str(exc)) from exc
+        all_pools: list[dict[str, object]] = []
+        skip = 0
+        async with aiohttp.ClientSession() as session:
+            while skip <= _MAX_SKIP:
+                try:
+                    payload = {
+                        "query": _POOLS_QUERY,
+                        "variables": {"chain": [gql_chain], "first": _PAGE_SIZE, "skip": skip},
+                    }
+                    async with session.post(_BALANCER_API, json=payload) as resp:
+                        resp.raise_for_status()
+                        raw = await resp.json()
+                except aiohttp.ClientError as exc:
+                    error_code = classify_graph_error(exc)
+                    classification = classify_venue_error("balancer", error_code)
+                    action = classification.action.value if classification else "fail"
+                    retry_safe = classification.retry_safe if classification else False
+                    logger.error(
+                        "Balancer API request failed: %s (classified: %s, action: %s, retry_safe: %s)",
+                        exc,
+                        error_code,
+                        action,
+                        retry_safe,
+                    )
+                    log_event(
+                        "ADAPTER_FETCH_FAILED",
+                        details={
+                            "venue": "balancer",
+                            "endpoint": "poolGetPools",
+                            "error": str(exc),
+                            "error_code": error_code,
+                            "action": action,
+                            "retry_safe": retry_safe,
+                        },
+                    )
+                    raise ConnectionError(str(exc)) from exc
 
-        pools = raw.get("data", {}).get("poolGetPools", [])
+                page = raw.get("data", {}).get("poolGetPools", [])
+                if not page:
+                    break
+
+                all_pools.extend(page)
+                logger.debug("Balancer: fetched page skip=%d, got %d pools", skip, len(page))
+
+                if len(page) < _PAGE_SIZE:
+                    break
+                skip += _PAGE_SIZE
+
         results: list[InstrumentRecord] = []
 
-        for pool in pools:
+        for pool in all_pools:
             record = self._pool_to_record(pool)
             if record is not None:
                 results.append(record)
