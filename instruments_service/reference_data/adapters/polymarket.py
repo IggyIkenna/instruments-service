@@ -264,7 +264,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
-        return "polymarket"
+        return "POLYMARKET"
 
     async def get_instruments(
         self,
@@ -380,7 +380,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
                     raw: dict[str, object] = cast("dict[str, object]", await resp.json())
             except aiohttp.ClientError as exc:
                 error_code = _classify_polymarket_error(exc)
-                classification = classify_venue_error("polymarket", error_code)
+                classification = classify_venue_error("POLYMARKET", error_code)
                 action = classification.action.value if classification else "fail"
                 retry_safe = classification.retry_safe if classification else False
                 logger.error(
@@ -393,7 +393,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
                 log_event(
                     "ADAPTER_FETCH_FAILED",
                     details={
-                        "venue": "polymarket",
+                        "venue": "POLYMARKET",
                         "endpoint": "clob/prices-history",
                         "symbol": symbol,
                         "error": str(exc),
@@ -458,7 +458,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
                 raw_json: object = cast(object, await resp.json())
         except aiohttp.ClientError as exc:
             error_code = _classify_polymarket_error(exc)
-            classification = classify_venue_error("polymarket", error_code)
+            classification = classify_venue_error("POLYMARKET", error_code)
             action = classification.action.value if classification else "fail"
             retry_safe = classification.retry_safe if classification else False
             logger.error(
@@ -471,7 +471,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
             log_event(
                 "ADAPTER_FETCH_FAILED",
                 details={
-                    "venue": "polymarket",
+                    "venue": "POLYMARKET",
                     "endpoint": "gamma/markets",
                     "offset": offset,
                     "error": str(exc),
@@ -486,7 +486,13 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         results: list[InstrumentRecord] = []
         for raw_item in raw_list:
             _enrich_raw_event_fields(raw_item)
-            market = PolymarketGammaMarket.model_validate(raw_item)
+            try:
+                market = PolymarketGammaMarket.model_validate(raw_item)
+            except (ValueError, TypeError) as exc:
+                # Skip individual markets that fail validation — don't kill the whole page
+                slug = raw_item.get("market_slug", "?") if isinstance(raw_item, dict) else "?"
+                logger.debug("Polymarket: skipping market %s — validation error: %s", slug, exc)
+                continue
             record = self._parse_market(market, now)
             if record is not None:
                 results.append(record)
@@ -524,7 +530,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
 
         # Classify via PredictionMarketMapper
         mapped = _MAPPER.map_market(
-            venue="polymarket",
+            venue="POLYMARKET",
             market_id=condition_id,
             question=question,
             resolution_date=expiry,
@@ -542,14 +548,14 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         )
         if result is None:
             return None  # League not in prediction registry — skip
-        instrument_type, base_asset = result
+        _sub_category, base_asset = result
 
         return InstrumentRecord(
             instrument_key=condition_id,
             venue=self.venue,
             symbol=slug,
             raw_symbol=slug,
-            instrument_type=instrument_type,
+            instrument_type="PREDICTION_MARKET",
             base_asset=base_asset,
             quote_asset="USDC",
             tick_size=tick_size,
@@ -646,7 +652,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         selection = _selection_from_outcomes(outcomes, pm_market_type)
 
         instrument_id = build_prediction_instrument_id(
-            venue="polymarket",
+            venue="POLYMARKET",
             market_type=canonical_market,
             league_id=league_id,
             season=season,
