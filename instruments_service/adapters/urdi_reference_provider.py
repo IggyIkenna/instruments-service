@@ -138,7 +138,7 @@ async def fetch_instruments_for_all_venues(
                     mode=mode,
                 )
                 # Use cached path — adapter pool ensures reuse, cache avoids redundant fetches
-                records = await adapter.get_instruments_cached(instrument_type=instrument_type)
+                records = await adapter.get_instruments_cached(instrument_type=instrument_type, date=date)
                 logger.info("URDI[%s]: fetched %d instruments", canonical, len(records))
                 # Venue-tag validation: every returned instrument must have a venue
                 # matching the canonical venue we requested. Prevents adapters that

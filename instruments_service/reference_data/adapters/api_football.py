@@ -8,6 +8,7 @@ Auth: service must fetch api_football_api_key from Secret Manager and pass
 it via the ``api_key`` constructor parameter.
 """
 
+import contextlib
 import logging
 from datetime import datetime
 from decimal import Decimal
@@ -23,6 +24,10 @@ from ..schemas import (
     OHLCVRef,
 )
 from .sports.adapters.api_football import ApiFootballAdapter
+
+# Module-level cache: populated during get_instruments(), consumed by orchestrator's
+# _fetch_sports_reference_data() to avoid 33-league re-fetch (saves 33 API calls/date).
+_last_completed_fixture_ids: list[int] = []
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +51,10 @@ class ApiFootballReferenceDataAdapter(BaseReferenceDataAdapter):
         super().__init__(project_id=project_id, api_key=api_key)
         self._date = date
         self._sports_adapter = ApiFootballAdapter(api_key=api_key)
+        # Populated during get_instruments() — raw API Football numeric IDs of
+        # completed fixtures (FT/AET/PEN). Avoids 33-league re-fetch in
+        # _fetch_sports_reference_data (saves 33 API calls per date).
+        self.completed_fixture_ids: list[int] = []
 
     @property
     def venue(self) -> str:
@@ -65,13 +74,31 @@ class ApiFootballReferenceDataAdapter(BaseReferenceDataAdapter):
         if not self._date:
             logger.warning("API-Football URDI adapter: no date set — returning empty list")
             return []
+        global _last_completed_fixture_ids
         fixtures = await self._sports_adapter.get_fixtures(date=self._date)
         results: list[InstrumentRecord] = []
+        completed_statuses = {"FT", "AET", "PEN"}
+        completed_ids: list[int] = []
         for fixture in fixtures:
+            # Capture completed fixture IDs for downstream per-fixture enrichment
+            if fixture.status in completed_statuses and fixture.source_fixture_id:
+                with contextlib.suppress(ValueError, TypeError):
+                    completed_ids.append(int(fixture.source_fixture_id))
             record = _canonical_fixture_to_instrument(fixture)
             if record is not None:
                 results.append(record)
-        logger.info("API-Football date=%s: %d InstrumentRecords", self._date, len(results))
+        self.completed_fixture_ids = completed_ids
+        # Mutate in-place so importers who did `from ... import _last_completed_fixture_ids`
+        # see the update (Python rebinding semantics: assignment creates a new object,
+        # but the importer's reference still points to the old one).
+        _last_completed_fixture_ids.clear()
+        _last_completed_fixture_ids.extend(completed_ids)
+        logger.info(
+            "API-Football date=%s: %d InstrumentRecords (%d completed)",
+            self._date,
+            len(results),
+            len(completed_ids),
+        )
         return results
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:

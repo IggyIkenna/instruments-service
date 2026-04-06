@@ -47,10 +47,14 @@ class InstrumentsHandler(UnifiedServiceHandler):
 
     async def preflight(self) -> None:
         """Start API key reloader. Date/category filtering happens in process()."""
-        # Clear DeFi universe cache at the start of each batch run.
-        # The cache is populated on the first DeFi date and reused for all
-        # subsequent dates — one API call for the entire date range.
-        clear_defi_universe_cache()
+        # Resolve CLI --category (e.g. ["SPORTS"]) to scope preflight work
+        cli_categories: list[str] | None = getattr(self.args, "category", None) if self.args else None
+        categories = cli_categories or ["ALL"]
+
+        # Only clear DeFi universe cache if DeFi categories are in scope
+        is_all = any(c.upper() == "ALL" for c in categories)
+        if is_all or any(c.upper() == "DEFI" for c in categories):
+            clear_defi_universe_cache()
 
         # Wire --venues CLI override to the handler
         venues_arg: list[str] | None = getattr(self.args, "venues", None) if self.args else None
@@ -61,11 +65,10 @@ class InstrumentsHandler(UnifiedServiceHandler):
             if earliest:
                 logger.info("Earliest venue launch date: %s (dates before this will be skipped)", earliest)
 
-        # Preflight runs once before any date is processed. We don't know
-        # the specific dates yet (BatchIO iterates them), so we validate keys
-        # for ALL venues across ALL categories. Per-date filtering is in process().
-        all_venues = get_venues_for_categories(["ALL"])
-        self._start_key_reloader(all_venues)
+        # Scope key validation to the requested categories only.
+        # --category SPORTS only validates sports API keys (not CeFi/DeFi/TradFi).
+        active_venues = get_venues_for_categories(categories)
+        self._start_key_reloader(active_venues)
 
     def _start_key_reloader(self, active_venues: list[str]) -> None:
         """Start API key reloader — fail-fast on missing keys, periodic refresh."""

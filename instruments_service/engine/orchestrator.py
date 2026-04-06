@@ -65,6 +65,9 @@ from instruments_service.adapters.urdi_reference_provider import fetch_instrumen
 from instruments_service.config import get_config
 from instruments_service.config_reloaders import get_defi_major_assets
 from instruments_service.reference_data.adapters._solana_utils import SolanaCacheSession, fill_solana_cache
+from instruments_service.reference_data.adapters.api_football import (
+    _last_completed_fixture_ids as _urdi_completed_fixture_ids,
+)
 from instruments_service.reference_data.adapters.sports import create_sports_reference_adapter
 from instruments_service.reference_data.utils.evm_creation_resolver import EvmCacheSession
 
@@ -137,6 +140,29 @@ _DEFI_VENUES: list[str] = _build_defi_venues()
 # for all subsequent dates. Call clear_defi_universe_cache() between runs.
 _defi_universe_cache: list[InstrumentRecord] | None = None
 _defi_universe_retryable: list[str] = []
+
+# Sports reference core entity caches — leagues/teams/standings are the same
+# across all dates within a batch run. Fetched once, written to every date partition.
+_cached_leagues_df: pd.DataFrame | None = None
+_cached_teams_df: pd.DataFrame | None = None
+_cached_standings_df: pd.DataFrame | None = None
+_cached_prediction_league_ids: list[int] = []
+
+
+def _set_cached_leagues(df: pd.DataFrame) -> None:
+    global _cached_leagues_df
+    _cached_leagues_df = df
+
+
+def _set_cached_teams(df: pd.DataFrame, league_ids: list[int]) -> None:
+    global _cached_teams_df, _cached_prediction_league_ids
+    _cached_teams_df = df
+    _cached_prediction_league_ids = league_ids
+
+
+def _set_cached_standings(df: pd.DataFrame) -> None:
+    global _cached_standings_df
+    _cached_standings_df = df
 
 
 def clear_defi_universe_cache() -> None:
@@ -604,6 +630,10 @@ async def process_instruments(
     # venue_override bypasses category lookup when --venues filter is active (sharding)
     venues = venue_override if venue_override is not None else get_venues_for_categories(categories)
 
+    # Track which per-fixture entities are missing (set in skip-if-exists check).
+    # Empty = fetch everything; non-empty = only fetch these per-fixture entities.
+    _enrichment_only_entities: list[str] = []
+
     # 1. Skip venues not yet launched
     active_venues = [v for v in venues if is_venue_available(v, date)]
     if not active_venues:
@@ -614,28 +644,110 @@ async def process_instruments(
     if not redo_all:
         primary_category = categories[0] if categories else None
         bucket = _get_instruments_bucket(primary_category)
+
+        # For SPORTS, require both core AND per-fixture reference entities.
+        # Core: leagues/teams/standings/injuries (slow-moving, fetched every run).
+        # Per-fixture: fixture_stats/events/lineups/player_stats (one API call per
+        # completed fixture, rate-limited to 1 req/sec — expensive to re-fetch).
+        expected = list(active_venues)
+        is_sports_run = any(c.upper() in ("SPORTS", "ALL") for c in categories)
+        _sports_core_entities = [
+            "sports_reference_leagues",
+            "sports_reference_teams",
+            "sports_reference_standings",
+            "sports_reference_injuries",
+        ]
+        _sports_per_fixture_entities = [
+            "sports_reference_fixture_stats",
+            "sports_reference_fixture_events",
+            "sports_reference_fixture_lineups",
+            "sports_reference_player_stats",
+        ]
+        if is_sports_run:
+            expected.extend(_sports_core_entities)
+            expected.extend(_sports_per_fixture_entities)
+
         is_fresh, stale, missing = check_shard_freshness(
             bucket=bucket,
             date=date,
             service_name="instruments-service",
-            expected_venues=active_venues,
+            expected_venues=expected,
         )
         if is_fresh:
             logger.info(
-                "SKIP date=%s: all %d venues already fresh in manifest (use --force to re-fetch)",
+                "SKIP date=%s: all %d venues/entities already fresh in manifest (use --force to re-fetch)",
                 date,
-                len(active_venues),
+                len(expected),
             )
             return {}
+
+        # Detect partial completion: core entities done but per-fixture missing.
+        # In this case, skip the expensive URDI + core fetch and jump straight
+        # to per-fixture enrichment (saves ~33 API calls per league).
+        if is_sports_run and missing:
+            missing_set = set(missing)
+            core_missing = missing_set & set(_sports_core_entities)
+            pf_missing = [e for e in _sports_per_fixture_entities if e in missing_set]
+            instruments_missing = missing_set - set(_sports_core_entities) - set(_sports_per_fixture_entities)
+            if not core_missing and not instruments_missing and pf_missing:
+                _enrichment_only_entities = pf_missing
+                logger.info(
+                    "date=%s: core entities fresh, %d per-fixture entities missing — enrichment-only mode: %s",
+                    date,
+                    len(pf_missing),
+                    pf_missing,
+                )
+
         if stale or missing:
             logger.info(
-                "date=%s: %d stale + %d missing venues — will re-fetch (stale=%s, missing=%s)",
+                "date=%s: %d stale + %d missing venues/entities — will re-fetch (stale=%s, missing=%s)",
                 date,
                 len(stale),
                 len(missing),
                 stale[:5],
                 missing[:5],
             )
+
+    # Fast path: if only per-fixture enrichment is missing, skip URDI fetch entirely
+    # and jump straight to sports enrichment.
+    if _enrichment_only_entities and api_keys:
+        api_football_key = api_keys.get("api_football")
+        if api_football_key:
+            primary_category = categories[0] if categories else None
+            bucket = _get_instruments_bucket(primary_category)
+            logger.info(
+                "ENRICHMENT-ONLY date=%s: skipping URDI fetch, only fetching %s",
+                date,
+                _enrichment_only_entities,
+            )
+            sports_ref_counts = await _fetch_sports_reference_data(
+                date=date,
+                api_key=api_football_key,
+                bucket=bucket,
+                enrichment_only=True,
+            )
+            # Write manifest for newly fetched entities
+            if sports_ref_counts:
+                try:
+                    sports_manifest = ManifestWriter(
+                        service_name="instruments-service",
+                        catalogue_bucket=bucket,
+                    )
+                    for entity_name, row_count in sports_ref_counts.items():
+                        sports_manifest.add(
+                            processing_date=date_type.fromisoformat(date),
+                            row_count=row_count,
+                            venue=f"SPORTS_REFERENCE_{entity_name.upper()}",
+                        )
+                    sports_manifest.write()
+                    logger.info(
+                        "Enrichment-only manifest: %d entities for %s",
+                        len(sports_ref_counts),
+                        date,
+                    )
+                except Exception as exc:
+                    logger.warning("Enrichment-only manifest write failed (non-blocking): %s", exc)
+            return sports_ref_counts
 
     log_event(
         "PROCESSING_STARTED",
@@ -787,14 +899,40 @@ async def process_instruments(
             empty_df = pd.DataFrame(columns=["fixture_id", "venue", "league_id", "kickoff_utc", "status"])
             sink.write(
                 data=empty_df,
-                partition={"day": date, "venue": "api_football"},
+                partition={"day": date, "venue": "API_FOOTBALL"},
                 format="parquet",
                 filename="instruments.parquet",
             )
             _write_catalogue_record(
-                bucket, f"instrument_availability/by_date/day={date}/venue=api_football/instruments.parquet", date, 0
+                bucket, f"instrument_availability/by_date/day={date}/venue=API_FOOTBALL/instruments.parquet", date, 0
             )
             logger.info("SPORTS: No fixtures for date=%s — wrote empty marker to manifest", date)
+            # Still fetch sports reference data (leagues/teams/standings/injuries)
+            # even when no fixtures exist. These are date-independent slow-moving
+            # entities needed for downstream feature computation.
+            if api_keys:
+                api_football_key = api_keys.get("api_football")
+                if api_football_key:
+                    sports_ref_counts = await _fetch_sports_reference_data(
+                        date=date,
+                        api_key=api_football_key,
+                        bucket=bucket,
+                    )
+                    if sports_ref_counts:
+                        try:
+                            sports_manifest = ManifestWriter(
+                                service_name="instruments-service",
+                                catalogue_bucket=bucket,
+                            )
+                            for entity_name, row_count in sports_ref_counts.items():
+                                sports_manifest.add(
+                                    processing_date=date_type.fromisoformat(date),
+                                    row_count=row_count,
+                                    venue=f"SPORTS_REFERENCE_{entity_name.upper()}",
+                                )
+                            sports_manifest.write()
+                        except Exception as exc:
+                            logger.warning("Sports reference manifest write failed (non-blocking): %s", exc)
             log_event("PROCESSING_COMPLETED", details={"date": date, "categories": categories, "fixtures": 0})
             return {"api_football": 0}
         # DeFi batch: zero records after date filter is normal for early dates
@@ -904,10 +1042,14 @@ async def process_instruments(
         if not api_football_key:
             logger.warning("api_football key missing from api_keys — skipping sports reference data")
         else:
+            # Pass completed fixture IDs from URDI fetch to avoid 33-league re-fetch
+            # (saves 33 API calls per date). _urdi_completed_fixture_ids is populated
+            # during the URDI instruments fetch above.
             sports_ref_counts = await _fetch_sports_reference_data(
                 date=date,
                 api_key=api_football_key,
                 bucket=bucket,
+                fixture_ids_override=list(_urdi_completed_fixture_ids),
             )
             for k, v in sports_ref_counts.items():
                 counts[k] = counts.get(k, 0) + v
@@ -922,7 +1064,7 @@ async def process_instruments(
                     sports_manifest.add(
                         processing_date=date_type.fromisoformat(date),
                         row_count=row_count,
-                        venue=f"sports_reference_{entity_name}",
+                        venue=f"SPORTS_REFERENCE_{entity_name.upper()}",
                     )
                 sports_manifest.write()
                 logger.info(
@@ -1177,6 +1319,8 @@ async def _fetch_sports_reference_data(
     date: str,
     api_key: str,
     bucket: str,
+    enrichment_only: bool = False,
+    fixture_ids_override: list[int] | None = None,
 ) -> dict[str, int]:
     """Fetch sports reference data (teams, leagues, standings, injuries, etc.).
 
@@ -1190,118 +1334,175 @@ async def _fetch_sports_reference_data(
     This data is slow-moving (leagues/teams change per season, not per day)
     but we re-fetch on each run to capture mid-season transfers, promotions,
     and new referee assignments.
+
+    Args:
+        enrichment_only: If True, skip core entities (leagues/teams/standings/
+            injuries) and only fetch per-fixture data (stats/events/lineups/
+            player_stats). Used when core entities already exist in manifest.
+        fixture_ids_override: Pre-computed list of completed fixture IDs from the
+            URDI instruments fetch. When provided, skips the expensive 33-league
+            re-fetch (saves 33 API calls per date).
     """
     adapter = create_sports_reference_adapter("api_football", api_key=api_key)
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
 
-    # Leagues — all known leagues
-    try:
-        leagues = await adapter.get_leagues()
-        if leagues:
-            df = pd.DataFrame([lg.model_dump() for lg in leagues])
-            sink.write(
-                data=df, partition={"day": date, "entity": "leagues"}, format="parquet", filename="leagues.parquet"
-            )
-            counts["leagues"] = len(df)
-            logger.info("Sports reference: %d leagues written", len(df))
-    except Exception as exc:
-        classify_and_emit_error(
-            exc,
-            service_name="instruments-service",
-            operation="sports_reference_leagues_fetch",
-        )
+    if enrichment_only:
+        logger.info("Enrichment-only mode: skipping leagues/teams/standings/injuries for date=%s", date)
 
-    # Teams — for each prediction league
-    all_teams: list[dict[str, object]] = []
-    prediction_league_ids: list[int] = []
-    try:
-        for league_def in get_prediction_leagues():
-            if league_def.api_football_id is None:
-                continue
-            prediction_league_ids.append(league_def.api_football_id)
+    # Leagues/teams/standings are slow-moving (same within a season). Cache DataFrames
+    # across dates within the same batch run to save ~67 API calls per date.
+    if not enrichment_only:
+        leagues_df = _cached_leagues_df
+        if leagues_df is None:
             try:
-                teams = await adapter.get_teams(league_def.api_football_id)
-                for t in teams:
-                    all_teams.append(t.model_dump())
+                leagues = await adapter.get_leagues()
+                if leagues:
+                    leagues_df = pd.DataFrame([lg.model_dump() for lg in leagues])
+                    _set_cached_leagues(leagues_df)
+                    logger.info("Sports reference: %d leagues fetched (API call — will cache)", len(leagues_df))
             except Exception as exc:
                 classify_and_emit_error(
                     exc,
                     service_name="instruments-service",
-                    operation="sports_reference_teams_fetch",
-                    shard=str(league_def.league_id),
+                    operation="sports_reference_leagues_fetch",
                 )
-        if all_teams:
-            df = pd.DataFrame(all_teams)
-            sink.write(data=df, partition={"day": date, "entity": "teams"}, format="parquet", filename="teams.parquet")
-            counts["teams"] = len(df)
-            logger.info("Sports reference: %d teams written", len(df))
-    except Exception as exc:
-        classify_and_emit_error(
-            exc,
-            service_name="instruments-service",
-            operation="sports_reference_teams_batch",
-        )
+        else:
+            logger.info("Sports reference: %d leagues from cache (0 API calls)", len(leagues_df))
+        if leagues_df is not None:
+            sink.write(
+                data=leagues_df,
+                partition={"day": date, "entity": "leagues"},
+                format="parquet",
+                filename="leagues.parquet",
+            )
+            counts["leagues"] = len(leagues_df)
 
-    # Standings — for each prediction league
-    all_standings: list[dict[str, object]] = []
-    for lid in prediction_league_ids:
+        # Teams — for each prediction league (cached across dates)
+        teams_df = _cached_teams_df
+        prediction_league_ids: list[int] = []
+        if teams_df is None:
+            all_teams: list[dict[str, object]] = []
+            try:
+                for league_def in get_prediction_leagues():
+                    if league_def.api_football_id is None:
+                        continue
+                    prediction_league_ids.append(league_def.api_football_id)
+                    try:
+                        teams = await adapter.get_teams(league_def.api_football_id)
+                        for t in teams:
+                            all_teams.append(t.model_dump())
+                    except Exception as exc:
+                        classify_and_emit_error(
+                            exc,
+                            service_name="instruments-service",
+                            operation="sports_reference_teams_fetch",
+                            shard=str(league_def.league_id),
+                        )
+                if all_teams:
+                    teams_df = pd.DataFrame(all_teams)
+                    _set_cached_teams(teams_df, prediction_league_ids)
+                    logger.info("Sports reference: %d teams fetched (API calls — will cache)", len(teams_df))
+            except Exception as exc:
+                classify_and_emit_error(
+                    exc,
+                    service_name="instruments-service",
+                    operation="sports_reference_teams_batch",
+                )
+        else:
+            prediction_league_ids = _cached_prediction_league_ids
+            logger.info("Sports reference: %d teams from cache (0 API calls)", len(teams_df))
+        if teams_df is not None:
+            sink.write(
+                data=teams_df, partition={"day": date, "entity": "teams"}, format="parquet", filename="teams.parquet"
+            )
+            counts["teams"] = len(teams_df)
+
+        # Standings — for each prediction league (cached across dates)
+        standings_df = _cached_standings_df
+        if standings_df is None:
+            all_standings: list[dict[str, object]] = []
+            for lid in prediction_league_ids:
+                try:
+                    standings = await adapter.get_standings(lid)
+                    for row in standings:
+                        row["league_id"] = lid
+                        all_standings.append(row)
+                except Exception as exc:
+                    classify_and_emit_error(
+                        exc,
+                        service_name="instruments-service",
+                        operation="sports_reference_standings_fetch",
+                        shard=str(lid),
+                    )
+            if all_standings:
+                standings_df = pd.DataFrame(all_standings)
+                _set_cached_standings(standings_df)
+                logger.info("Sports reference: %d standing rows fetched (API calls — will cache)", len(standings_df))
+        else:
+            logger.info("Sports reference: %d standings from cache (0 API calls)", len(standings_df))
+        if standings_df is not None:
+            sink.write(
+                data=standings_df,
+                partition={"day": date, "entity": "standings"},
+                format="parquet",
+                filename="standings.parquet",
+            )
+            counts["standings"] = len(standings_df)
+
+        # Injuries — date-specific, always fetched fresh
         try:
-            standings = await adapter.get_standings(lid)
-            for row in standings:
-                row["league_id"] = lid
-                all_standings.append(row)
+            injuries = await adapter.get_injuries(date)
+            if injuries:
+                df = pd.DataFrame(injuries)
+                sink.write(
+                    data=df,
+                    partition={"day": date, "entity": "injuries"},
+                    format="parquet",
+                    filename="injuries.parquet",
+                )
+                counts["injuries"] = len(df)
+                logger.info("Sports reference: %d injuries written", len(df))
         except Exception as exc:
             classify_and_emit_error(
                 exc,
                 service_name="instruments-service",
-                operation="sports_reference_standings_fetch",
-                shard=str(lid),
+                operation="sports_reference_injuries_fetch",
+                shard=date,
             )
-    if all_standings:
-        df = pd.DataFrame(all_standings)
-        sink.write(
-            data=df, partition={"day": date, "entity": "standings"}, format="parquet", filename="standings.parquet"
-        )
-        counts["standings"] = len(df)
-        logger.info("Sports reference: %d standing rows written", len(df))
-
-    # Injuries — for the target date
-    try:
-        injuries = await adapter.get_injuries(date)
-        if injuries:
-            df = pd.DataFrame(injuries)
-            sink.write(
-                data=df, partition={"day": date, "entity": "injuries"}, format="parquet", filename="injuries.parquet"
-            )
-            counts["injuries"] = len(df)
-            logger.info("Sports reference: %d injuries written", len(df))
-    except Exception as exc:
-        classify_and_emit_error(
-            exc,
-            service_name="instruments-service",
-            operation="sports_reference_injuries_fetch",
-            shard=date,
-        )
 
     # Per-fixture enrichment: stats, events, lineups, player stats.
     # Only for completed fixtures (status in FT/AET/PEN — stats unavailable for future/live).
-    completed_statuses = {"FT", "AET", "PEN"}
+    # Use fixture_ids_override when available (from URDI fetch) to avoid redundant
+    # 33-league re-fetch (saves 33 API calls per date).
     fixture_ids: list[int] = []
-    try:
-        fixtures = await adapter.get_fixtures(date, league_ids=prediction_league_ids)
-        for fx in fixtures:
-            if fx.status in completed_statuses and fx.fixture_id:
-                with contextlib.suppress(ValueError, TypeError):
-                    fixture_ids.append(int(fx.fixture_id))
-        logger.info("Sports reference: %d completed fixtures found for enrichment", len(fixture_ids))
-    except Exception as exc:
-        classify_and_emit_error(
-            exc,
-            service_name="instruments-service",
-            operation="sports_reference_fixtures_fetch",
-            shard=date,
-        )
+    if fixture_ids_override is not None:
+        fixture_ids = fixture_ids_override
+        logger.info("Sports reference: %d completed fixture IDs passed from URDI (0 extra API calls)", len(fixture_ids))
+    else:
+        # Fallback: fetch fixtures from API (33 calls for 33 leagues).
+        # Only used when called from the zero-fixture early-return path
+        # where URDI returned 0 instruments.
+        completed_statuses = {"FT", "AET", "PEN"}
+        fallback_league_ids: list[int] = []
+        for league_def in get_prediction_leagues():
+            if league_def.api_football_id is not None:
+                fallback_league_ids.append(league_def.api_football_id)
+        try:
+            fixtures = await adapter.get_fixtures(date, league_ids=fallback_league_ids)
+            for fx in fixtures:
+                if fx.status in completed_statuses:
+                    raw_id = fx.source_fixture_id or fx.fixture_id
+                    with contextlib.suppress(ValueError, TypeError):
+                        fixture_ids.append(int(raw_id))
+            logger.info("Sports reference: %d completed fixtures found for enrichment (API fetch)", len(fixture_ids))
+        except Exception as exc:
+            classify_and_emit_error(
+                exc,
+                service_name="instruments-service",
+                operation="sports_reference_fixtures_fetch",
+                shard=date,
+            )
 
     if fixture_ids:
         _per_fixture_entities = [
@@ -1310,15 +1511,21 @@ async def _fetch_sports_reference_data(
             ("fixture_lineups", adapter.get_fixture_lineups),
             ("player_stats", adapter.get_fixture_player_stats),
         ]
-        for entity_name, fetch_fn in _per_fixture_entities:
-            all_rows: list[dict[str, object]] = []
-            for fid in fixture_ids:
+
+        # Concurrent per-fixture fetching with rate-limit semaphore.
+        # API Football Ultra plan allows ~10 req/sec. We use a semaphore to cap
+        # concurrent requests and a small delay between releases to stay safe.
+        concurrency = 10
+        sem = asyncio.Semaphore(concurrency)
+        entity_rows: dict[str, list[dict[str, object]]] = {name: [] for name, _ in _per_fixture_entities}
+
+        async def _fetch_one(entity_name: str, fetch_fn: object, fid: int) -> None:
+            async with sem:
                 try:
-                    rows = await fetch_fn(fid)
+                    rows = await fetch_fn(fid)  # type: ignore[operator]
                     for row in rows:
                         row["fixture_id"] = fid
-                        all_rows.append(row)
-                    await asyncio.sleep(1.0)  # rate limit: 1 req/sec
+                        entity_rows[entity_name].append(row)
                 except Exception as exc:
                     classify_and_emit_error(
                         exc,
@@ -1326,8 +1533,32 @@ async def _fetch_sports_reference_data(
                         operation=f"sports_reference_{entity_name}_fetch",
                         shard=str(fid),
                     )
+                await asyncio.sleep(0.12)  # ~8 req/sec effective throughput
+
+        # Build all tasks: 4 entities x N fixtures
+        tasks: list[asyncio.Task[None]] = []
+        for entity_name, fetch_fn in _per_fixture_entities:
+            for fid in fixture_ids:
+                tasks.append(asyncio.ensure_future(_fetch_one(entity_name, fetch_fn, fid)))
+
+        logger.info(
+            "Per-fixture enrichment: %d fixtures x %d entities = %d calls (concurrency=%d)",
+            len(fixture_ids),
+            len(_per_fixture_entities),
+            len(tasks),
+            concurrency,
+        )
+        await asyncio.gather(*tasks)
+
+        for entity_name, _ in _per_fixture_entities:
+            all_rows = entity_rows[entity_name]
             if all_rows:
-                df = pd.DataFrame(all_rows)
+                # Per-fixture API responses have mixed-type columns (e.g. fixture_stats
+                # "statistics" column contains "33%" strings alongside ints). Convert
+                # all values to strings before DataFrame creation to prevent both
+                # Pandas type inference errors and Parquet serialization failures.
+                sanitised_rows = [{k: str(v) if v is not None else None for k, v in row.items()} for row in all_rows]
+                df = pd.DataFrame(sanitised_rows)
                 sink.write(
                     data=df,
                     partition={"day": date, "entity": entity_name},
