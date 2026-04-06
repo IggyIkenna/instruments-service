@@ -194,6 +194,7 @@ class BaseReferenceDataAdapter(ABC):
     async def get_instruments_cached(
         self,
         instrument_type: str | None = None,
+        date: str | None = None,
     ) -> list[InstrumentRecord]:
         """Cache-aware wrapper around get_instruments().
 
@@ -201,7 +202,8 @@ class BaseReferenceDataAdapter(ABC):
         Adapters that need custom caching (e.g. Tardis fetches once then slices
         per-date) can override this method.
         """
-        cached = self._instruments_cache.get(instrument_type)
+        cache_key = (instrument_type, date)
+        cached = self._instruments_cache.get(cache_key)
         if cached is not None:
             records, ts = cached
             if (time.monotonic() - ts) < self._cache_ttl:
@@ -214,8 +216,15 @@ class BaseReferenceDataAdapter(ABC):
                 )
                 return records
 
-        records = await self.get_instruments(instrument_type=instrument_type)
-        self._instruments_cache[instrument_type] = (records, time.monotonic())
+        # Pass date to adapters that support it (e.g. Polymarket for historical mode)
+        import inspect
+
+        sig = inspect.signature(self.get_instruments)
+        if "date" in sig.parameters:
+            records = await self.get_instruments(instrument_type=instrument_type, date=date)
+        else:
+            records = await self.get_instruments(instrument_type=instrument_type)
+        self._instruments_cache[cache_key] = (records, time.monotonic())
         return records
 
     def clear_cache(self) -> None:
