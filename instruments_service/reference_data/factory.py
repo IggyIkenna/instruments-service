@@ -250,9 +250,9 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
 
 
 # Adapter pool: reuse adapter instances across calls.
-# Key: (adapter_key, api_key) → adapter instance.
-# Adapters are stateless (no mutable state beyond cache) so pooling is safe.
-_adapter_pool: dict[tuple[str, str | None, str], BaseReferenceDataAdapter] = {}
+# Key: (adapter_key, api_key, venue, date?) → adapter instance.
+# Date is included for date-aware adapters like Databento (target_date baked at init).
+_adapter_pool: dict[tuple[str, str | None, str, str | None], BaseReferenceDataAdapter] = {}
 
 
 def clear_adapter_pool() -> None:
@@ -303,7 +303,7 @@ def get_adapter_for_canonical_venue(
     # Tardis is historical-only and can't provide live instrument definitions.
     ccxt_exchange_id = _CANONICAL_VENUE_TO_CCXT_EXCHANGE.get(canonical_venue)
     if mode == "live" and adapter_key == "tardis" and ccxt_exchange_id:
-        pool_key = ("ccxt", None, canonical_venue)
+        pool_key = ("ccxt", None, canonical_venue, None)
         if pool_key in _adapter_pool:
             return _adapter_pool[pool_key]
         _logger.info(
@@ -322,7 +322,7 @@ def get_adapter_for_canonical_venue(
     # Reads the most recent GCS snapshot, filters expired instruments,
     # falls back to Databento (T-3 days) if no GCS data.
     if mode == "live" and adapter_key == "databento":
-        pool_key = ("tradfi_live", api_key, canonical_venue)
+        pool_key = ("tradfi_live", api_key, canonical_venue, None)
         if pool_key in _adapter_pool:
             return _adapter_pool[pool_key]
         _logger.info(
@@ -337,9 +337,11 @@ def get_adapter_for_canonical_venue(
         _adapter_pool[pool_key] = adapter
         return adapter
 
-    # Check pool — reuse existing adapter if same key + credentials + venue
+    # Check pool — reuse existing adapter if same key + credentials + venue + date
     # Include canonical_venue in pool key so AAVEV3-ARBITRUM != AAVEV3-ETHEREUM
-    pool_key = (adapter_key, api_key, canonical_venue)
+    # Include date for Databento (target_date baked into adapter at init time)
+    pool_date = date if adapter_key == "databento" else None
+    pool_key = (adapter_key, api_key, canonical_venue, pool_date)
     if pool_key in _adapter_pool:
         return _adapter_pool[pool_key]
 
