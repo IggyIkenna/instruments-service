@@ -1029,6 +1029,20 @@ async def process_instruments(
             _write_venue(str(venue_name), venue_df, date, bucket, sink, counts, sampler, manifest)
     else:
         _write_venue("all", df, date, bucket, sink, counts, sampler, manifest)
+
+    # PREDICTION shard breakdown: write per-underlying manifest entries so the
+    # deployment UI shows coverage per shard (BTC, ETH, SOL, FOOTBALL, etc.)
+    # instead of a single "POLYMARKET: 100%" bar.
+    is_prediction = primary_category and primary_category.upper() == "PREDICTION"
+    if is_prediction and "base_asset" in df.columns:
+        shard_counts = _compute_prediction_shards(df)
+        for shard_name, shard_count in shard_counts.items():
+            manifest.add(
+                processing_date=date_type.fromisoformat(date),
+                row_count=shard_count,
+                venue=shard_name,
+            )
+
     # Flush all manifest records in one batched write (one GCS round-trip
     # instead of N per venue). Generation-match lock handles concurrency.
     manifest.close()
@@ -1235,6 +1249,37 @@ async def process_instruments(
     )
     logger.info("instruments: date=%s wrote %d records across %d venues", date, total, len(counts))
     return counts
+
+
+_KNOWN_CRYPTO_UNDERLYINGS = {"BTC", "ETH", "SOL", "XRP", "DOGE", "HYPE", "BNB"}
+
+
+def _extract_prediction_shard(base_asset: str) -> str:
+    """Extract the underlying shard name from a PREDICTION instrument's base_asset.
+
+    Only extracts shards for well-formed base_assets matching known patterns.
+    Everything else → POLYMARKET:OTHER.
+
+    Patterns:
+      PREDICTION:POLYMARKET:UP_DOWN:BTC:1D:2026-04-05 → POLYMARKET:BTC
+      FOOTBALL:POLYMARKET:MATCH_ODDS:EPL:...          → POLYMARKET:FOOTBALL
+      anything else                                    → POLYMARKET:OTHER
+    """
+    parts = base_asset.split(":")
+    if len(parts) >= 2 and parts[0] == "FOOTBALL":
+        return "POLYMARKET:FOOTBALL"
+    if len(parts) >= 4 and parts[2] == "UP_DOWN" and parts[3] in _KNOWN_CRYPTO_UNDERLYINGS:
+        return f"POLYMARKET:{parts[3]}"
+    return "POLYMARKET:OTHER"
+
+
+def _compute_prediction_shards(df: pd.DataFrame) -> dict[str, int]:
+    """Group PREDICTION instruments by underlying shard, return {shard_venue: count}."""
+    shard_counts: dict[str, int] = {}
+    for ba in df["base_asset"]:
+        shard = _extract_prediction_shard(str(ba))
+        shard_counts[shard] = shard_counts.get(shard, 0) + 1
+    return shard_counts
 
 
 def _write_venue(
