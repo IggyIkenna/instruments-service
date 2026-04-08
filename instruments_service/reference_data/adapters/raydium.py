@@ -115,16 +115,17 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_instruments(
         self,
         instrument_type: str | None = None,
-        include_historical: bool = True,
+        include_historical: bool = False,
     ) -> list[InstrumentRecord]:
         """Fetch Raydium pools as instruments.
 
         Args:
             instrument_type: Filter by instrument type (only POOL supported).
             include_historical: If True, also discover historical pools via
-                on-chain RPC (getProgramAccounts). These are pools that existed
-                on-chain but are no longer returned by the REST API (delisted,
-                depleted, or removed pools from 2021-2024).
+                on-chain RPC (getProgramAccounts). Disabled by default — the
+                704K+ historical pools are overwhelmingly dead meme coin pools
+                with zero liquidity. The REST API set (~994 active pools) is
+                the tradeable universe.
         """
         if instrument_type not in (None, InstrumentType.POOL):
             return []
