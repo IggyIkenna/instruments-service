@@ -68,6 +68,7 @@ from instruments_service.reference_data.adapters._solana_utils import SolanaCach
 from instruments_service.reference_data.adapters.api_football import (
     _last_completed_fixture_ids as _urdi_completed_fixture_ids,
 )
+from instruments_service.reference_data.adapters.databento import is_non_trading_day
 from instruments_service.reference_data.adapters.sports import create_sports_reference_adapter
 from instruments_service.reference_data.utils.evm_creation_resolver import EvmCacheSession
 
@@ -94,6 +95,17 @@ _SUBGRAPH_PROTOCOL_TO_VENUE_PREFIX: dict[str, str] = {
     "compound_v3": "COMPOUNDV3",
     # euler_v2 removed from universe — not needed yet.
     "fluid": "FLUID",
+    # DEX forks — each has own subgraph IDs in UAC, reuse UniV3 adapter
+    "pancakeswap_v3": "PANCAKESWAPV3",
+    "sushiswap_v3": "SUSHISWAPV3",
+    "aerodrome_v3": "AERODROMEV3",
+    "camelot_v3": "CAMELOTV3",
+    "velodrome_v2": "VELODROMEV2",
+    "trader_joe_v2": "TRADERJOEV2",
+    "gmx": "GMX",
+    "sushiswap": "SUSHISWAP",
+    # Lending forks
+    "spark": "SPARK",
 }
 
 # Protocols that don't use subgraphs (Ethereum-only, custom data sources).
@@ -981,6 +993,40 @@ async def process_instruments(
                 date,
             )
             return {}
+
+        # TradFi non-trading day: zero instruments on weekends/holidays is expected.
+        # Write 0-count manifest entries per venue so the manifest marks the day as
+        # processed and won't re-fetch without --force. This prevents permanent gaps
+        # in instrument data for every weekend and exchange holiday.
+        tradfi_active = [v for v in active_venues if v in _TRADFI_VENUES]
+        if tradfi_active:
+            target_dt = date_type.fromisoformat(date)
+            non_trading_venues = [v for v in tradfi_active if is_non_trading_day(v, target_dt)]
+            if non_trading_venues and len(non_trading_venues) == len(tradfi_active):
+                primary_category = categories[0] if categories else None
+                bucket = _get_instruments_bucket(primary_category)
+                manifest = ManifestWriter(
+                    service_name="instruments-service",
+                    catalogue_bucket=bucket,
+                )
+                for venue in non_trading_venues:
+                    manifest.add(
+                        processing_date=target_dt,
+                        row_count=0,
+                        venue=venue,
+                    )
+                manifest.write()
+                logger.info(
+                    "TRADFI non-trading day: date=%s venues=%s — wrote 0-count manifest entries",
+                    date,
+                    sorted(non_trading_venues),
+                )
+                log_event(
+                    "PROCESSING_COMPLETED",
+                    details={"date": date, "categories": categories, "non_trading_venues": sorted(non_trading_venues)},
+                )
+                return dict.fromkeys(non_trading_venues, 0)
+
         msg = (
             f"URDI returned zero records for date={date} categories={categories}. "
             f"Venues attempted: {active_venues}. "

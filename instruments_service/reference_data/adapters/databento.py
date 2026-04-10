@@ -298,6 +298,24 @@ def _non_trading_result(session_label: str, calendar_name: str) -> dict[str, str
     }
 
 
+def is_non_trading_day(venue: str, target_date: date) -> bool:
+    """Check whether the given date is a non-trading day for a TradFi venue.
+
+    Uses exchange_calendars for holiday detection and venue-specific weekend
+    rules (CME/ICE open Sunday evening; equities closed all weekend).
+
+    This is the public interface used by the orchestrator to decide whether
+    zero instruments from Databento is expected (non-trading day) vs an error.
+    """
+    cfg = _EXCHANGE_HOURS.get(venue)
+    if cfg is None:
+        return False  # Unknown venue — assume trading (fail-safe)
+    calendar_name = cfg.get("calendar", venue)
+    is_holiday = _is_trading_holiday(target_date, calendar_name)
+    is_trading, _label = _resolve_trading_status(venue, target_date, is_holiday)
+    return not is_trading
+
+
 def _compute_utc_hours(
     cfg: dict[str, str | None],
     target_date: date,

@@ -1201,3 +1201,38 @@ async def test_process_instruments_cefi_venues_available():
     assert "OKX" in venues or "OKX-FUTURES" in venues or "OKX-SPOT" in venues
     # BETFAIR is NOT in CEFI — it's tick data only
     assert "BETFAIR" not in venues, "Betfair is tick-data only, must not appear in CEFI instruments"
+
+
+@pytest.mark.asyncio
+async def test_process_instruments_tradfi_non_trading_day_writes_manifest():
+    """TRADFI non-trading day (Saturday) writes 0-count manifest entries instead of raising."""
+    from instruments_service.engine.orchestrator import process_instruments
+
+    mock_manifest_cls = MagicMock()
+    mock_manifest_inst = MagicMock()
+    mock_manifest_cls.return_value = mock_manifest_inst
+
+    fetch_result = MagicMock(records=[], failed_venues=[], retryable_venues=[])
+
+    with (
+        patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
+        patch(
+            "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
+            new_callable=AsyncMock,
+            return_value=fetch_result,
+        ),
+        patch("instruments_service.engine.orchestrator.is_non_trading_day", return_value=True),
+        patch("instruments_service.engine.orchestrator.ManifestWriter", mock_manifest_cls),
+        patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
+        patch("instruments_service.engine.orchestrator.log_event"),
+    ):
+        # Saturday 2020-05-30 — should NOT raise, should write 0-count manifest
+        result = await process_instruments("2020-05-30", ["TRADFI"])
+
+    # Verify manifest was written with 0-count entries for each TRADFI venue
+    assert mock_manifest_inst.add.call_count > 0
+    for call in mock_manifest_inst.add.call_args_list:
+        assert call.kwargs["row_count"] == 0
+    mock_manifest_inst.write.assert_called_once()
+    # Result should map each venue to 0
+    assert all(v == 0 for v in result.values())
