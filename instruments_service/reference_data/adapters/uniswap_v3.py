@@ -56,6 +56,39 @@ _FETCH_LIMIT = 1000
 # The Graph caps skip at 5000 — max reachable = 5000 + 1000 = 6000 pools
 _MAX_SKIP = 5000
 
+# Algebra fork schema (Camelot V3, etc.) — no feeTier, uses directional feeZtO/feeOtZ
+_ALGEBRA_POOLS_QUERY_TEMPLATE = """
+query GetPools($first: Int!, $skip: Int!) {{
+    pools(
+        first: $first, skip: $skip, orderBy: totalValueLockedUSD, orderDirection: desc
+        {block_clause}
+    ) {{
+        id
+        feeZtO
+        feeOtZ
+        token0 {{ id symbol name decimals }}
+        token1 {{ id symbol name decimals }}
+        totalValueLockedUSD
+        createdAtTimestamp
+    }}
+}}
+"""
+
+# SushiSwap V3 custom schema — uses `pairs` entity instead of `pools`
+_SUSHISWAP_PAIRS_QUERY = """
+query GetPairs($first: Int!) {
+    pairs(
+        first: $first, orderBy: liquidityUSD, orderDirection: desc
+    ) {
+        id
+        token0 { id symbol name decimals }
+        token1 { id symbol name decimals }
+        liquidityUSD
+        createdAtTimestamp
+    }
+}
+"""
+
 # Messari-standard subgraph schema (used by some chain deployments e.g. Base)
 _MESSARI_POOLS_QUERY = """
 query GetPools($first: Int!) {
@@ -88,6 +121,8 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         self._chain = chain.upper()
         self._date = date
         self._protocol_slug = protocol_slug or "uniswap_v3"
+        # Convert protocol slug (e.g. "pancakeswap_v3") to UAC venue prefix (e.g. "PANCAKESWAPV3")
+        self._venue_prefix = self._protocol_slug.replace("_", "").upper()
 
     @property
     def venue(self) -> str:
@@ -112,6 +147,7 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         # Paginate through all pools (The Graph caps skip at 5000)
         all_pools: list[dict[str, object]] = []
         skip = 0
+        schema_error = False
         async with aiohttp.ClientSession() as session:
             while skip <= _MAX_SKIP:
                 variables = {"first": _FETCH_LIMIT, "skip": skip}
@@ -127,8 +163,22 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
                     self._log_fetch_error(exc)
                     raise ConnectionError(str(exc)) from exc
 
-                if not isinstance(data, dict) or "data" not in data:
-                    if skip == 0:
+                # Check for GraphQL errors (schema mismatches, indexer issues)
+                resp_errors: list[dict[str, object]] = data.get("errors", []) if isinstance(data, dict) else []
+                for err in resp_errors:
+                    msg = str(err.get("message", "")).lower()
+                    if "has no field" in msg or "no field" in msg:
+                        schema_error = True
+                    if "bad indexers" in msg or "unavailable" in msg or "too far behind" in msg:
+                        logger.warning(
+                            "%s: subgraph indexers unavailable on %s — infrastructure issue, skipping",
+                            self._protocol_slug,
+                            self._chain,
+                        )
+                        return []
+
+                if not isinstance(data, dict) or not data.get("data"):
+                    if skip == 0 and not schema_error:
                         logger.warning("UniswapV3: empty response from %s subgraph", self._chain)
                     break
 
@@ -144,7 +194,15 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
                     break  # last page
                 skip += _FETCH_LIMIT
 
-        # Fallback: Messari-schema subgraphs use 'liquidityPools' + 'inputTokens'
+        # Fallback 1: Algebra fork schema (Camelot V3) — pools entity, no feeTier
+        if not all_pools and schema_error:
+            all_pools = await self._fetch_algebra_pools(url, block_num)
+
+        # Fallback 2: SushiSwap custom schema — pairs entity instead of pools
+        if not all_pools:
+            all_pools = await self._fetch_sushiswap_pairs(url)
+
+        # Fallback 3: Messari-schema subgraphs use 'liquidityPools' + 'inputTokens'
         if not all_pools:
             all_pools = await self._fetch_messari_pools(url)
 
@@ -198,6 +256,92 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
                 }
             )
         logger.info("UniswapV3: Messari fallback found %d pools on %s", len(normalised), self._chain)
+        return normalised
+
+    async def _fetch_algebra_pools(self, url: str, block_num: int | None) -> list[dict[str, object]]:
+        """Fetch pools from Algebra-fork subgraphs (Camelot V3) — no feeTier field."""
+        block_clause = f", block: {{number: {block_num}}}" if block_num else ""
+        query = _ALGEBRA_POOLS_QUERY_TEMPLATE.format(block_clause=block_clause)
+        all_pools: list[dict[str, object]] = []
+        skip = 0
+        try:
+            async with aiohttp.ClientSession() as session:
+                while skip <= _MAX_SKIP:
+                    variables = {"first": _FETCH_LIMIT, "skip": skip}
+                    async with session.post(
+                        url,
+                        json={"query": query, "variables": variables},
+                        headers={"Content-Type": "application/json"},
+                    ) as resp:
+                        resp.raise_for_status()
+                        data = await resp.json()
+
+                    if not isinstance(data, dict) or "data" not in data:
+                        break
+
+                    page: list[dict[str, object]] = (data.get("data") or {}).get("pools") or []
+                    if not page:
+                        break
+
+                    # Normalise Algebra fee fields to feeTier (average of directional fees)
+                    for pool in page:
+                        fee_zto = int(str(pool.get("feeZtO", "0") or "0"))
+                        fee_otz = int(str(pool.get("feeOtZ", "0") or "0"))
+                        pool["feeTier"] = str((fee_zto + fee_otz) // 2)
+
+                    all_pools.extend(page)
+                    if len(page) < _FETCH_LIMIT:
+                        break
+                    skip += _FETCH_LIMIT
+        except aiohttp.ClientError as exc:
+            logger.warning("%s Algebra fallback failed on %s: %s", self._protocol_slug, self._chain, exc)
+            return []
+
+        if all_pools:
+            logger.info("%s: Algebra fallback found %d pools on %s", self._protocol_slug, len(all_pools), self._chain)
+        return all_pools
+
+    async def _fetch_sushiswap_pairs(self, url: str) -> list[dict[str, object]]:
+        """Fetch pairs from SushiSwap-custom subgraphs — uses `pairs` entity."""
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    url,
+                    json={"query": _SUSHISWAP_PAIRS_QUERY, "variables": {"first": 1000}},
+                    headers={"Content-Type": "application/json"},
+                ) as resp,
+            ):
+                resp.raise_for_status()
+                data = await resp.json()
+        except aiohttp.ClientError as exc:
+            logger.warning("%s SushiSwap pairs fallback failed on %s: %s", self._protocol_slug, self._chain, exc)
+            return []
+
+        if not isinstance(data, dict) or "data" not in data:
+            return []
+
+        raw_pairs: list[dict[str, object]] = (data.get("data") or {}).get("pairs") or []
+        # Normalise to same shape as native pools query (feeTier, totalValueLockedUSD)
+        normalised: list[dict[str, object]] = []
+        for pair in raw_pairs:
+            normalised.append(
+                {
+                    "id": pair.get("id"),
+                    "token0": pair.get("token0"),
+                    "token1": pair.get("token1"),
+                    "feeTier": "3000",  # SushiSwap V3 default 0.3%
+                    "totalValueLockedUSD": pair.get("liquidityUSD", "0"),
+                    "createdAtTimestamp": pair.get("createdAtTimestamp"),
+                }
+            )
+        if normalised:
+            logger.info(
+                "%s: SushiSwap pairs fallback found %d pools on %s",
+                self._protocol_slug,
+                len(normalised),
+                self._chain,
+            )
         return normalised
 
     def _resolve_api_url(self) -> str | None:
@@ -274,7 +418,7 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         fee_str = str(fee_tier) if fee_tier else "0"
         symbol = f"{base}-{quote}:{fee_str}"
-        venue_tag = f"UNISWAPV3-{self._chain}"
+        venue_tag = f"{self._venue_prefix}-{self._chain}"
         instrument_key = f"{venue_tag}:POOL:{symbol}"
 
         available_since = parse_created_timestamp(pool.get("createdAtTimestamp"))
