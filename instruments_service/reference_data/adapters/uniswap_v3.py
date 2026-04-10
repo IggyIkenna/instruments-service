@@ -82,14 +82,16 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         api_key: str | None = None,
         chain: str = _DEFAULT_CHAIN,
         date: str | None = None,
+        protocol_slug: str | None = None,
     ) -> None:
         super().__init__(project_id=project_id, api_key=api_key)
         self._chain = chain.upper()
         self._date = date
+        self._protocol_slug = protocol_slug or "uniswap_v3"
 
     @property
     def venue(self) -> str:
-        return "uniswap_v3"
+        return self._protocol_slug
 
     async def get_instruments(
         self,
@@ -201,10 +203,13 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
     def _resolve_api_url(self) -> str | None:
         """Return the subgraph URL or None if API key / subgraph ID is missing."""
         api_key = self._optional_api_key()
-        subgraph_id = _SUBGRAPH_IDS.get(self._chain, "")
+        # Look up subgraph ID for this protocol slug (supports forks like PancakeSwap, SushiSwap)
+        protocol_ids = SUBGRAPH_IDS.get(self._protocol_slug, _SUBGRAPH_IDS)
+        subgraph_id = protocol_ids.get(self._chain, "")
         if not api_key or not subgraph_id:
             logger.warning(
-                "UniswapV3: missing API key or subgraph ID for chain %s",
+                "%s: missing API key or subgraph ID for chain %s",
+                self._protocol_slug,
                 self._chain,
             )
             return None

@@ -77,25 +77,27 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         api_key: str | None = None,
         chain: str = _DEFAULT_CHAIN,
         date: str | None = None,
+        protocol_slug: str | None = None,
     ) -> None:
         super().__init__(project_id=project_id, api_key=api_key)
         self._chain = chain.upper()
         self._date = date
+        self._protocol_slug = protocol_slug or "aave_v3"
 
     @property
     def venue(self) -> str:
-        return "aave_v3"
+        return self._protocol_slug
 
     def _resolve_api_url(self) -> str | None:
         """Return the subgraph URL or None if API key / subgraph ID is missing."""
         api_key = self._optional_api_key()
         if not api_key:
-            logger.warning("AaveV3: missing API key for The Graph")
+            logger.warning("%s: missing API key for The Graph", self._protocol_slug)
             return None
 
-        subgraph_id = get_subgraph_id("aave_v3", self._chain)
+        subgraph_id = get_subgraph_id(self._protocol_slug, self._chain)
         if not subgraph_id:
-            logger.warning("AaveV3: no subgraph ID for chain %s in UAC SUBGRAPH_IDS", self._chain)
+            logger.warning("%s: no subgraph ID for chain %s in UAC SUBGRAPH_IDS", self._protocol_slug, self._chain)
             return None
 
         return f"https://gateway.thegraph.com/api/{api_key}/subgraphs/id/{subgraph_id}"

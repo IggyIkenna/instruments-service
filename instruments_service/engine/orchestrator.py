@@ -630,9 +630,9 @@ async def process_instruments(
     # venue_override bypasses category lookup when --venues filter is active (sharding)
     venues = venue_override if venue_override is not None else get_venues_for_categories(categories)
 
-    # Track which per-fixture entities are missing (set in skip-if-exists check).
-    # Empty = fetch everything; non-empty = only fetch these per-fixture entities.
-    _enrichment_only_entities: list[str] = []
+    # Track which sports entities are missing (set in skip-if-exists check).
+    # Empty = fetch everything; non-empty = only fetch these specific entities.
+    _sports_missing_entities: list[str] = []
 
     # 1. Skip venues not yet launched
     active_venues = [v for v in venues if is_venue_available(v, date)]
@@ -649,19 +649,20 @@ async def process_instruments(
         # Core: leagues/teams/standings/injuries (slow-moving, fetched every run).
         # Per-fixture: fixture_stats/events/lineups/player_stats (one API call per
         # completed fixture, rate-limited to 1 req/sec — expensive to re-fetch).
-        expected = list(active_venues)
+        # Remap venue names to match manifest entries (API_FOOTBALL → API_FOOTBALL_FIXTURES).
+        expected = ["API_FOOTBALL_FIXTURES" if v == "API_FOOTBALL" else v for v in active_venues]
         is_sports_run = any(c.upper() in ("SPORTS", "ALL") for c in categories)
         _sports_core_entities = [
-            "sports_reference_leagues",
-            "sports_reference_teams",
-            "sports_reference_standings",
-            "sports_reference_injuries",
+            "API_FOOTBALL_LEAGUES",
+            "API_FOOTBALL_TEAMS",
+            "API_FOOTBALL_STANDINGS",
+            "API_FOOTBALL_INJURIES",
         ]
         _sports_per_fixture_entities = [
-            "sports_reference_fixture_stats",
-            "sports_reference_fixture_events",
-            "sports_reference_fixture_lineups",
-            "sports_reference_player_stats",
+            "API_FOOTBALL_FIXTURE_STATS",
+            "API_FOOTBALL_FIXTURE_EVENTS",
+            "API_FOOTBALL_FIXTURE_LINEUPS",
+            "API_FOOTBALL_PLAYER_STATS",
         ]
         if is_sports_run:
             expected.extend(_sports_core_entities)
@@ -681,20 +682,29 @@ async def process_instruments(
             )
             return {}
 
-        # Detect partial completion: core entities done but per-fixture missing.
-        # In this case, skip the expensive URDI + core fetch and jump straight
-        # to per-fixture enrichment (saves ~33 API calls per league).
+        # Per-entity skip: pass the exact missing list so _fetch_sports_reference_data
+        # only fetches entities that are actually absent from the manifest.
         if is_sports_run and missing:
+            _sports_missing_entities = list(missing)
             missing_set = set(missing)
             core_missing = missing_set & set(_sports_core_entities)
             pf_missing = [e for e in _sports_per_fixture_entities if e in missing_set]
             instruments_missing = missing_set - set(_sports_core_entities) - set(_sports_per_fixture_entities)
+            logger.info(
+                "date=%s: per-entity breakdown — %d core missing (%s), %d per-fixture missing (%s), %d instruments missing",
+                date,
+                len(core_missing),
+                sorted(core_missing),
+                len(pf_missing),
+                pf_missing,
+                len(instruments_missing),
+            )
+            # If only per-fixture entities are missing (core + instruments done),
+            # skip the expensive URDI fetch and jump to enrichment.
             if not core_missing and not instruments_missing and pf_missing:
-                _enrichment_only_entities = pf_missing
                 logger.info(
-                    "date=%s: core entities fresh, %d per-fixture entities missing — enrichment-only mode: %s",
+                    "date=%s: core entities fresh — enrichment-only mode for %s",
                     date,
-                    len(pf_missing),
                     pf_missing,
                 )
 
@@ -708,46 +718,60 @@ async def process_instruments(
                 missing[:5],
             )
 
-    # Fast path: if only per-fixture enrichment is missing, skip URDI fetch entirely
-    # and jump straight to sports enrichment.
-    if _enrichment_only_entities and api_keys:
-        api_football_key = api_keys.get("api_football")
-        if api_football_key:
-            primary_category = categories[0] if categories else None
-            bucket = _get_instruments_bucket(primary_category)
-            logger.info(
-                "ENRICHMENT-ONLY date=%s: skipping URDI fetch, only fetching %s",
-                date,
-                _enrichment_only_entities,
-            )
-            sports_ref_counts = await _fetch_sports_reference_data(
-                date=date,
-                api_key=api_football_key,
-                bucket=bucket,
-                enrichment_only=True,
-            )
-            # Write manifest for newly fetched entities
-            if sports_ref_counts:
-                try:
-                    sports_manifest = ManifestWriter(
-                        service_name="instruments-service",
-                        catalogue_bucket=bucket,
+    # Fast path: if only specific sports entities are missing (core done,
+    # instruments done), skip URDI fetch and jump to targeted sports enrichment.
+    if _sports_missing_entities and api_keys:
+        missing_set = set(_sports_missing_entities)
+        core_missing = missing_set & set(_sports_core_entities)
+        instruments_missing = missing_set - set(_sports_core_entities) - set(_sports_per_fixture_entities)
+        if not core_missing and not instruments_missing:
+            api_football_key = api_keys.get("api_football")
+            if api_football_key:
+                primary_category = categories[0] if categories else None
+                bucket = _get_instruments_bucket(primary_category)
+                # Resolve fixture IDs from existing GCS fixtures parquet (0 API calls)
+                gcs_fixture_ids = _read_fixture_ids_from_gcs(bucket, date)
+                logger.info(
+                    "ENRICHMENT-ONLY date=%s: %d fixture IDs from GCS, fetching %s",
+                    date,
+                    len(gcs_fixture_ids),
+                    _sports_missing_entities,
+                )
+                sports_ref_counts = await _fetch_sports_reference_data(
+                    date=date,
+                    api_key=api_football_key,
+                    bucket=bucket,
+                    entities_to_fetch=_sports_missing_entities,
+                    fixture_ids_override=gcs_fixture_ids if gcs_fixture_ids else None,
+                )
+                # Write manifest for newly fetched entities
+                sports_manifest = ManifestWriter(
+                    service_name="instruments-service",
+                    catalogue_bucket=bucket,
+                )
+                for entity_name, row_count in sports_ref_counts.items():
+                    sports_manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=row_count,
+                        venue=f"API_FOOTBALL_{entity_name.upper()}",
                     )
-                    for entity_name, row_count in sports_ref_counts.items():
-                        sports_manifest.add(
-                            processing_date=date_type.fromisoformat(date),
-                            row_count=row_count,
-                            venue=f"SPORTS_REFERENCE_{entity_name.upper()}",
-                        )
-                    sports_manifest.write()
-                    logger.info(
-                        "Enrichment-only manifest: %d entities for %s",
-                        len(sports_ref_counts),
-                        date,
-                    )
-                except Exception as exc:
-                    logger.warning("Enrichment-only manifest write failed (non-blocking): %s", exc)
-            return sports_ref_counts
+                # Write blank entries for per-fixture entities that had 0 fixtures
+                if not gcs_fixture_ids:
+                    for pf_entity in _sports_per_fixture_entities:
+                        entity_short = pf_entity.replace("API_FOOTBALL_", "").lower()
+                        if entity_short not in sports_ref_counts:
+                            sports_manifest.add(
+                                processing_date=date_type.fromisoformat(date),
+                                row_count=0,
+                                venue=pf_entity,
+                            )
+                sports_manifest.write()
+                logger.info(
+                    "Enrichment-only manifest: %d entities for %s",
+                    len(sports_ref_counts),
+                    date,
+                )
+                return sports_ref_counts
 
     log_event(
         "PROCESSING_STARTED",
@@ -899,12 +923,15 @@ async def process_instruments(
             empty_df = pd.DataFrame(columns=["fixture_id", "venue", "league_id", "kickoff_utc", "status"])
             sink.write(
                 data=empty_df,
-                partition={"day": date, "venue": "API_FOOTBALL"},
+                partition={"day": date, "venue": "API_FOOTBALL_FIXTURES"},
                 format="parquet",
                 filename="instruments.parquet",
             )
             _write_catalogue_record(
-                bucket, f"instrument_availability/by_date/day={date}/venue=API_FOOTBALL/instruments.parquet", date, 0
+                bucket,
+                f"instrument_availability/by_date/day={date}/venue=API_FOOTBALL_FIXTURES/instruments.parquet",
+                date,
+                0,
             )
             logger.info("SPORTS: No fixtures for date=%s — wrote empty marker to manifest", date)
             # Still fetch sports reference data (leagues/teams/standings/injuries)
@@ -913,26 +940,35 @@ async def process_instruments(
             if api_keys:
                 api_football_key = api_keys.get("api_football")
                 if api_football_key:
+                    # Only fetch entities that are actually missing from the manifest
                     sports_ref_counts = await _fetch_sports_reference_data(
                         date=date,
                         api_key=api_football_key,
                         bucket=bucket,
+                        entities_to_fetch=_sports_missing_entities if _sports_missing_entities else None,
                     )
                     if sports_ref_counts:
-                        try:
-                            sports_manifest = ManifestWriter(
-                                service_name="instruments-service",
-                                catalogue_bucket=bucket,
+                        sports_manifest = ManifestWriter(
+                            service_name="instruments-service",
+                            catalogue_bucket=bucket,
+                        )
+                        for entity_name, row_count in sports_ref_counts.items():
+                            sports_manifest.add(
+                                processing_date=date_type.fromisoformat(date),
+                                row_count=row_count,
+                                venue=f"API_FOOTBALL_{entity_name.upper()}",
                             )
-                            for entity_name, row_count in sports_ref_counts.items():
+                        # Write blank entries for ALL per-fixture entities on zero-fixture dates
+                        # so manifest marks them as "done" and won't re-fetch.
+                        for pf_entity in _sports_per_fixture_entities:
+                            entity_short = pf_entity.replace("API_FOOTBALL_", "").lower()
+                            if entity_short not in sports_ref_counts:
                                 sports_manifest.add(
                                     processing_date=date_type.fromisoformat(date),
-                                    row_count=row_count,
-                                    venue=f"SPORTS_REFERENCE_{entity_name.upper()}",
+                                    row_count=0,
+                                    venue=pf_entity,
                                 )
-                            sports_manifest.write()
-                        except Exception as exc:
-                            logger.warning("Sports reference manifest write failed (non-blocking): %s", exc)
+                        sports_manifest.write()
             log_event("PROCESSING_COMPLETED", details={"date": date, "categories": categories, "fixtures": 0})
             return {"api_football": 0}
         # DeFi batch: zero records after date filter is normal for early dates
@@ -1059,35 +1095,34 @@ async def process_instruments(
             # Pass completed fixture IDs from URDI fetch to avoid 33-league re-fetch
             # (saves 33 API calls per date). _urdi_completed_fixture_ids is populated
             # during the URDI instruments fetch above.
+            # Only fetch entities that are actually missing from the manifest.
             sports_ref_counts = await _fetch_sports_reference_data(
                 date=date,
                 api_key=api_football_key,
                 bucket=bucket,
+                entities_to_fetch=_sports_missing_entities if _sports_missing_entities else None,
                 fixture_ids_override=list(_urdi_completed_fixture_ids),
             )
             for k, v in sports_ref_counts.items():
                 counts[k] = counts.get(k, 0) + v
 
             # Write manifest for sports reference entities
-            try:
-                sports_manifest = ManifestWriter(
-                    service_name="instruments-service",
-                    catalogue_bucket=bucket,
+            sports_manifest = ManifestWriter(
+                service_name="instruments-service",
+                catalogue_bucket=bucket,
+            )
+            for entity_name, row_count in sports_ref_counts.items():
+                sports_manifest.add(
+                    processing_date=date_type.fromisoformat(date),
+                    row_count=row_count,
+                    venue=f"API_FOOTBALL_{entity_name.upper()}",
                 )
-                for entity_name, row_count in sports_ref_counts.items():
-                    sports_manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=row_count,
-                        venue=f"SPORTS_REFERENCE_{entity_name.upper()}",
-                    )
-                sports_manifest.write()
-                logger.info(
-                    "Sports reference manifest: %d entities for %s",
-                    len(sports_ref_counts),
-                    date,
-                )
-            except Exception as exc:
-                logger.warning("Sports reference manifest write failed (non-blocking): %s", exc)
+            sports_manifest.write()
+            logger.info(
+                "Sports reference manifest: %d entities for %s",
+                len(sports_ref_counts),
+                date,
+            )
 
     total = sum(counts.values())
 
@@ -1313,11 +1348,14 @@ def _write_venue(
                 filename="instruments.parquet",
             )
             # Add to batched manifest writer (flushed by caller) or legacy per-venue write
+            # Remap venue for manifest: API_FOOTBALL → API_FOOTBALL_FIXTURES
+            # (GCS path stays venue=API_FOOTBALL/ for backwards compat)
+            manifest_venue = "API_FOOTBALL_FIXTURES" if venue_str == "API_FOOTBALL" else venue_str
             if manifest is not None:
                 manifest.add(
                     processing_date=date_type.fromisoformat(date),
                     row_count=len(df),
-                    venue=venue_str,
+                    venue=manifest_venue,
                 )
             else:
                 path = f"instrument_availability/by_date/day={date}/venue={venue_str}/instruments.parquet"
@@ -1360,10 +1398,40 @@ def _write_venue(
     # Programming errors (TypeError, KeyError, etc.) propagate — fail the shard
 
 
+def _read_fixture_ids_from_gcs(bucket: str, date: str) -> list[int]:
+    """Read completed fixture IDs from existing GCS fixtures parquet.
+
+    Returns fixture IDs with status FT/AET/PEN. Falls back to empty list
+    if no fixtures parquet exists for the date (zero-fixture day).
+    """
+    prefix = f"sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
+    try:
+        storage_client = get_storage_client()
+        blob = storage_client.bucket(bucket).blob(prefix)
+        if not blob.exists():
+            logger.debug("No fixtures parquet at gs://%s/%s", bucket, prefix)
+            return []
+        local = f"/tmp/_fixture_ids_{date}.parquet"
+        blob.download_to_filename(local)
+        df = pd.read_parquet(local)
+        completed = {"FT", "AET", "PEN"}
+        if "status_short" in df.columns and "af_fixture_id" in df.columns:
+            mask = df["status_short"].isin(completed)
+            ids = df.loc[mask, "af_fixture_id"].dropna().astype(int).tolist()
+            logger.info("GCS fixture lookup date=%s: %d completed fixture IDs", date, len(ids))
+            return ids
+        logger.debug("Fixtures parquet missing expected columns for date=%s", date)
+        return []
+    except Exception as exc:
+        logger.debug("Failed to read fixtures from GCS for date=%s: %s", date, exc)
+        return []
+
+
 async def _fetch_sports_reference_data(
     date: str,
     api_key: str,
     bucket: str,
+    entities_to_fetch: list[str] | None = None,
     enrichment_only: bool = False,
     fixture_ids_override: list[int] | None = None,
 ) -> dict[str, int]:
@@ -1381,23 +1449,43 @@ async def _fetch_sports_reference_data(
     and new referee assignments.
 
     Args:
-        enrichment_only: If True, skip core entities (leagues/teams/standings/
-            injuries) and only fetch per-fixture data (stats/events/lineups/
-            player_stats). Used when core entities already exist in manifest.
+        entities_to_fetch: Specific manifest entity names to fetch (e.g.
+            ["API_FOOTBALL_FIXTURE_LINEUPS", "API_FOOTBALL_PLAYER_STATS"]).
+            When provided, only these entities are fetched — all others skipped.
+            None = fetch everything (legacy behaviour).
+        enrichment_only: If True, skip core entities. Superseded by entities_to_fetch.
         fixture_ids_override: Pre-computed list of completed fixture IDs from the
-            URDI instruments fetch. When provided, skips the expensive 33-league
-            re-fetch (saves 33 API calls per date).
+            URDI instruments fetch or GCS lookup. When provided, skips the expensive
+            33-league re-fetch (saves 33 API calls per date).
     """
+    # Convert entities_to_fetch to a set of short entity names for easy lookup.
+    # E.g. "API_FOOTBALL_FIXTURE_LINEUPS" → "fixture_lineups"
+    _fetch_set: set[str] | None = None
+    if entities_to_fetch:
+        _fetch_set = set()
+        for e in entities_to_fetch:
+            short = e.replace("API_FOOTBALL_", "").lower()
+            _fetch_set.add(short)
+        # If only per-fixture entities requested, set enrichment_only
+        core_shorts = {"leagues", "teams", "standings", "injuries"}
+        if not (_fetch_set & core_shorts):
+            enrichment_only = True
     adapter = create_sports_reference_adapter("api_football", api_key=api_key)
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
+
+    def _should_fetch(entity_short: str) -> bool:
+        """Check if this entity should be fetched (not in _fetch_set or _fetch_set is None)."""
+        if _fetch_set is None:
+            return True
+        return entity_short in _fetch_set
 
     if enrichment_only:
         logger.info("Enrichment-only mode: skipping leagues/teams/standings/injuries for date=%s", date)
 
     # Leagues/teams/standings are slow-moving (same within a season). Cache DataFrames
     # across dates within the same batch run to save ~67 API calls per date.
-    if not enrichment_only:
+    if not enrichment_only and _should_fetch("leagues"):
         leagues_df = _cached_leagues_df
         if leagues_df is None:
             try:
@@ -1557,6 +1645,17 @@ async def _fetch_sports_reference_data(
             ("player_stats", adapter.get_fixture_player_stats),
         ]
 
+        # Filter to only fetch entities that are actually missing
+        if _fetch_set is not None:
+            _per_fixture_entities = [(name, fn) for name, fn in _per_fixture_entities if _should_fetch(name)]
+            skipped = 4 - len(_per_fixture_entities)
+            if skipped:
+                logger.info(
+                    "Per-fixture: skipping %d entities already in manifest, fetching %s",
+                    skipped,
+                    [n for n, _ in _per_fixture_entities],
+                )
+
         # Concurrent per-fixture fetching with rate-limit semaphore.
         # API Football Ultra plan allows ~10 req/sec. We use a semaphore to cap
         # concurrent requests and a small delay between releases to stay safe.
@@ -1580,7 +1679,7 @@ async def _fetch_sports_reference_data(
                     )
                 await asyncio.sleep(0.12)  # ~8 req/sec effective throughput
 
-        # Build all tasks: 4 entities x N fixtures
+        # Build all tasks: N entities x M fixtures (only missing entities)
         tasks: list[asyncio.Task[None]] = []
         for entity_name, fetch_fn in _per_fixture_entities:
             for fid in fixture_ids:
