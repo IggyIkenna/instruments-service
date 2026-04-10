@@ -113,6 +113,7 @@ _STATIC_DEFI_VENUES: list[str] = [
     "LIDO-ETHEREUM",
     "ETHERFI-ETHEREUM",
     "ETHENA-ETHEREUM",
+    "EIGENLAYER-ETHEREUM",
 ]
 
 # Solana DeFi venues (non-EVM, REST API-based discovery).
@@ -1123,6 +1124,29 @@ async def process_instruments(
                 processing_date=date_type.fromisoformat(date),
                 row_count=shard_count,
                 venue=shard_name,
+            )
+
+    # Write 0-count manifest entries for TRADFI venues that returned 0 instruments
+    # because the date is a non-trading day (weekend/holiday). Without this, those
+    # venues have no manifest entry and appear as permanent gaps in the data status.
+    _tradfi_set_for_manifest = frozenset(_TRADFI_VENUES)
+    tradfi_empty = _non_error_venues - set(counts.keys())
+    tradfi_empty = {v for v in tradfi_empty if v in _tradfi_set_for_manifest}
+    if tradfi_empty:
+        target_dt = date_type.fromisoformat(date)
+        non_trading = {v for v in tradfi_empty if is_non_trading_day(v, target_dt)}
+        if non_trading:
+            for venue in sorted(non_trading):
+                manifest.add(
+                    processing_date=target_dt,
+                    row_count=0,
+                    venue=venue,
+                )
+                counts[venue] = 0
+            logger.info(
+                "TRADFI non-trading day manifest: date=%s venues=%s — wrote 0-count entries",
+                date,
+                sorted(non_trading),
             )
 
     # Flush all manifest records in one batched write (one GCS round-trip
