@@ -125,6 +125,12 @@ async def fetch_instruments_for_all_venues(
     # Cap concurrent adapter calls at 4 to avoid overloading APIs
     sem = asyncio.Semaphore(4)
 
+    # Build set of all venues in this fetch batch so we can re-route
+    # mismatched instruments to sibling venues instead of dropping them.
+    # Example: DBEQ.BASIC returns both NYSE and NASDAQ instruments — if both
+    # are requested, keep all and let each venue claim its own tagged records.
+    batch_venues: set[str] = {c.upper() for c, _k in fetch_list}
+
     async def _fetch_one(canonical: str, adapter_key: str) -> list[InstrumentRecord]:
         async with sem:
             try:
@@ -140,24 +146,36 @@ async def fetch_instruments_for_all_venues(
                 # Use cached path — adapter pool ensures reuse, cache avoids redundant fetches
                 records = await adapter.get_instruments_cached(instrument_type=instrument_type, date=date)
                 logger.info("URDI[%s]: fetched %d instruments", canonical, len(records))
-                # Venue-tag validation: every returned instrument must have a venue
-                # matching the canonical venue we requested. Prevents adapters that
-                # ignore their chain parameter from writing data under the wrong venue.
-                mismatched = [r for r in records if getattr(r, "venue", "").upper() != canonical.upper()]
-                if mismatched:
-                    wrong_venues = {getattr(r, "venue", "") for r in mismatched}
-                    logger.error(
-                        "URDI[%s]: VENUE MISMATCH — adapter returned %d/%d instruments "
-                        "with wrong venue tags %s (expected %s). "
-                        "Adapter likely ignores chain parameter. Dropping mismatched.",
+                # Venue-tag filtering: keep only instruments tagged for this venue.
+                # Instruments tagged for sibling venues in the same batch are silently
+                # skipped here — the sibling's _fetch_one call will claim them.
+                # Only log a warning for instruments tagged for venues NOT in the batch
+                # (indicates a real adapter bug).
+                matched = []
+                sibling_routed = 0
+                unknown_venues: set[str] = set()
+                for r in records:
+                    tag = getattr(r, "venue", "").upper()
+                    if tag == canonical.upper():
+                        matched.append(r)
+                    elif tag in batch_venues:
+                        sibling_routed += 1  # will be claimed by sibling fetch
+                    else:
+                        unknown_venues.add(tag)
+                if sibling_routed:
+                    logger.debug(
+                        "URDI[%s]: %d instruments tagged for sibling venues (will be claimed by their fetch)",
                         canonical,
-                        len(mismatched),
-                        len(records),
-                        sorted(wrong_venues),
-                        canonical,
+                        sibling_routed,
                     )
-                    records = [r for r in records if r not in mismatched]
-                return records
+                if unknown_venues:
+                    logger.warning(
+                        "URDI[%s]: dropping %d instruments tagged for unknown venues %s",
+                        canonical,
+                        len([r for r in records if getattr(r, "venue", "").upper() in unknown_venues]),
+                        sorted(unknown_venues),
+                    )
+                return matched
             except NotImplementedError:
                 logger.debug("URDI[%s]: instrument_type=%r not supported", canonical, instrument_type)
                 failed.append(
