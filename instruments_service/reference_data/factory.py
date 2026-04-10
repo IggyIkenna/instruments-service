@@ -114,7 +114,9 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
 
 # Dynamically add multi-chain DeFi venues from SUBGRAPH_IDS (SSOT in UAC).
 # This auto-generates entries like AAVEV3-ARBITRUM → aave_v3, MORPHO-BASE → morpho, etc.
-_SUBGRAPH_VENUE_PREFIX_TO_ADAPTER: dict[str, str] = {
+# Maps UAC venue prefix → protocol slug (for subgraph ID lookup).
+# Protocols that reuse another adapter's class are resolved via _PROTOCOL_TO_ADAPTER_KEY.
+_SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL: dict[str, str] = {
     "AAVEV3": "aave_v3",
     "COMPOUNDV3": "compound_v3",
     "MORPHO": "morpho",
@@ -124,27 +126,40 @@ _SUBGRAPH_VENUE_PREFIX_TO_ADAPTER: dict[str, str] = {
     "UNISWAPV4": "uniswap_v4",
     "BALANCER": "balancer",
     "CURVE": "curve",
+    # DEX forks — each has own subgraph IDs, reuse UniV3 adapter (with Messari fallback)
+    "PANCAKESWAPV3": "pancakeswap_v3",
+    "SUSHISWAPV3": "sushiswap_v3",
+    "AERODROMEV3": "aerodrome_v3",
+    "CAMELOTV3": "camelot_v3",
+    # Messari-schema DEXes — use UniV3 adapter (Messari fallback query)
+    "VELODROMEV2": "velodrome_v2",
+    "TRADERJOEV2": "trader_joe_v2",
+    "GMX": "gmx",
+    # Messari lending (Spark = Aave V3 fork, same schema)
+    "SPARK": "spark",
+    # SushiSwap V2 / Messari — use UniV3 adapter (Messari fallback query)
+    "SUSHISWAP": "sushiswap",
+}
+
+# Protocols that reuse another adapter class. If not listed, adapter_key == protocol_slug.
+_PROTOCOL_TO_ADAPTER_KEY: dict[str, str] = {
+    "pancakeswap_v3": "uniswap_v3",
+    "sushiswap_v3": "uniswap_v3",
+    "aerodrome_v3": "uniswap_v3",
+    "camelot_v3": "uniswap_v3",
+    "velodrome_v2": "uniswap_v3",
+    "trader_joe_v2": "uniswap_v3",
+    "gmx": "uniswap_v3",
+    "sushiswap": "uniswap_v3",
+    "spark": "aave_v3",
 }
 
 from unified_api_contracts.registry.capability_declarations._defi import (  # noqa: E402, qg-inside-import
     get_supported_chains_for_protocol,
 )
 
-# Map adapter keys back to protocol slugs for subgraph lookup
-_ADAPTER_TO_PROTOCOL: dict[str, str] = {
-    "aave_v3": "aave_v3",
-    "compound_v3": "compound_v3",
-    "morpho": "morpho",
-    "fluid": "fluid",
-    "uniswap_v2": "uniswap_v2",
-    "uniswap_v3": "uniswap_v3",
-    "uniswap_v4": "uniswap_v4",
-    "balancer": "balancer",
-    "curve": "curve",
-}
-
-for _prefix, _adapter_key in _SUBGRAPH_VENUE_PREFIX_TO_ADAPTER.items():
-    _protocol_slug = _ADAPTER_TO_PROTOCOL.get(_adapter_key, _adapter_key)
+for _prefix, _protocol_slug in _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL.items():
+    _adapter_key = _PROTOCOL_TO_ADAPTER_KEY.get(_protocol_slug, _protocol_slug)
     for _chain in get_supported_chains_for_protocol(_protocol_slug):
         _venue = f"{_prefix}-{_chain}"
         if _venue not in CANONICAL_VENUE_TO_ADAPTER:
@@ -237,6 +252,16 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "ethena": "thegraph",
     "balancer": "balancer_api_v3",
     "curve": "rpc",
+    # New protocols — all use The Graph subgraphs
+    "pancakeswap_v3": "thegraph",
+    "sushiswap_v3": "thegraph",
+    "sushiswap": "thegraph",
+    "aerodrome_v3": "thegraph",
+    "camelot_v3": "thegraph",
+    "velodrome_v2": "thegraph",
+    "trader_joe_v2": "thegraph",
+    "gmx": "thegraph",
+    "spark": "thegraph",
     "api_football": "api_football",
     "betfair": "betfair",
     # Solana adapters use public REST APIs (no API key needed)
@@ -374,12 +399,20 @@ def get_adapter_for_canonical_venue(
         parts = canonical_venue.split("-", 1)
         chain = parts[1] if len(parts) == 2 else "ETHEREUM"
         adapter_class = _ADAPTERS[adapter_key]
+        # Resolve the actual protocol slug from the venue prefix (e.g., PANCAKESWAPV3 → pancakeswap_v3)
+        # This allows adapter reuse: UniV3 adapter can serve PancakeSwap, SushiSwap, etc.
+        venue_prefix = parts[0] if len(parts) >= 1 else canonical_venue
+        resolved_protocol = _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL.get(venue_prefix, adapter_key)
         # Only some adapters accept date (aave_v3, uniswap_v2/v3/v4)
         accepts_date = {"uniswap_v2", "uniswap_v3", "uniswap_v4", "aave_v3", "compound_v3"}
+        # Pass protocol_slug for adapters that support it (UniV3, AaveV3)
+        supports_protocol_slug = {"uniswap_v3", "aave_v3"}
+        kwargs: dict[str, str | None] = {"project_id": project_id, "api_key": api_key, "chain": chain}
         if adapter_key in accepts_date:
-            adapter = adapter_class(project_id=project_id, api_key=api_key, chain=chain, date=date)
-        else:
-            adapter = adapter_class(project_id=project_id, api_key=api_key, chain=chain)
+            kwargs["date"] = date
+        if adapter_key in supports_protocol_slug and resolved_protocol != adapter_key:
+            kwargs["protocol_slug"] = resolved_protocol
+        adapter = adapter_class(**kwargs)
     elif adapter_key == "tardis":
         # Tardis: pass ONLY the specific exchange for this venue (not all defaults)
         from unified_api_contracts import VenueMapping as _VM_cls
