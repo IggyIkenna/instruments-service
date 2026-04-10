@@ -83,6 +83,7 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         self._chain = chain.upper()
         self._date = date
         self._protocol_slug = protocol_slug or "aave_v3"
+        self._venue_prefix = self._protocol_slug.replace("_", "").upper()
 
     @property
     def venue(self) -> str:
@@ -134,7 +135,7 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             raise ConnectionError(str(exc)) from exc
 
         reserves: list[dict[str, object]] = data.get("data", {}).get("reserves", [])
-        venue_tag = f"AAVEV3-{self._chain}"
+        venue_tag = f"{self._venue_prefix}-{self._chain}"
 
         # Collect aToken addresses for creation timestamp resolution
         atoken_addresses: list[str] = []
