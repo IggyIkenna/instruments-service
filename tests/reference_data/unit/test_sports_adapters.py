@@ -18,9 +18,6 @@ from instruments_service.reference_data.adapters.sports.adapters.odds_api import
 from instruments_service.reference_data.adapters.sports.adapters.open_meteo import (
     OpenMeteoAdapter,
 )
-from instruments_service.reference_data.adapters.sports.adapters.pinnacle import (
-    PinnacleAdapter,
-)
 from instruments_service.reference_data.adapters.sports.adapters.soccerfootball_info import (
     SoccerFootballInfoAdapter,
 )
@@ -197,12 +194,6 @@ class TestOddsApiAdapter:
 # ---------------------------------------------------------------------------
 # Other sports adapters — constructor and venue
 # ---------------------------------------------------------------------------
-
-
-class TestPinnacleAdapter:
-    def test_init(self) -> None:
-        adapter = PinnacleAdapter(api_key="test-key")
-        assert adapter.venue == "pinnacle"
 
 
 class TestFootyStatsAdapter:

@@ -65,7 +65,6 @@ Sports / prediction markets
   polymarket   / polymarket   → PolymarketReferenceDataAdapter
   kalshi       / kalshi       → KalshiReferenceDataAdapter
   kalshi       / direct       → KalshiReferenceDataAdapter
-  pinnacle     / pinnacle     → (raises NotImplementedError — stub)
   odds_api     / odds_api     → (raises NotImplementedError — stub)
 """
 
