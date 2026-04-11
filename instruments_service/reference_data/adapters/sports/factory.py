@@ -14,7 +14,6 @@ from .adapters.base import BaseSportsReferenceAdapter
 from .adapters.footystats import FootystatsAdapter
 from .adapters.odds_api import OddsApiAdapter
 from .adapters.open_meteo import OpenMeteoAdapter
-from .adapters.pinnacle import PinnacleAdapter
 from .adapters.soccerfootball_info import SoccerFootballInfoAdapter
 from .adapters.transfermarkt import TransfermarktAdapter
 from .adapters.understat import UnderstatAdapter
@@ -26,7 +25,6 @@ _ADAPTERS: dict[str, type[BaseSportsReferenceAdapter]] = {
     "footystats": FootystatsAdapter,
     "odds_api": OddsApiAdapter,
     "open_meteo": OpenMeteoAdapter,
-    "pinnacle": PinnacleAdapter,
     "soccer_football_info": SoccerFootballInfoAdapter,
     "soccerfootball_info": SoccerFootballInfoAdapter,  # legacy alias
     "transfermarkt": TransfermarktAdapter,
@@ -42,7 +40,7 @@ def create_sports_reference_adapter(
 
     Args:
         venue: Venue identifier (e.g. 'api_football', 'odds_api', 'footystats',
-                 'understat', 'transfermarkt', 'open_meteo', 'pinnacle',
+                 'understat', 'transfermarkt', 'open_meteo',
                  'soccerfootball_info').
         api_key: API key for the venue. The calling service MUST fetch this
                  from Secret Manager and pass it in. Adapters that require
