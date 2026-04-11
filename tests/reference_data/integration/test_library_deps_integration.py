@@ -60,9 +60,9 @@ def test_uei_base_adapter_parse_raw_logs_on_validation_failure() -> None:
 
     from unified_api_contracts.internal import InstrumentRecord
 
-    from instruments_service.reference_data.adapters.binance import BinanceReferenceDataAdapter
+    from instruments_service.reference_data.adapters.cefi.tardis import TardisReferenceDataAdapter
 
-    adapter = BinanceReferenceDataAdapter()
+    adapter = TardisReferenceDataAdapter()
 
     with pytest.raises(RuntimeError, match="Schema validation failed"):
         adapter._parse_raw(
@@ -282,12 +282,12 @@ def test_urdi_router_creates_adapter_for_source() -> None:
         ReferenceDataSourceConfig,
         create_reference_data_adapter_for_source,
     )
-    from instruments_service.reference_data.adapters.binance import BinanceReferenceDataAdapter
+    from instruments_service.reference_data.adapters.cefi.hyperliquid import HyperliquidReferenceDataAdapter
 
-    config = ReferenceDataSourceConfig(venue="binance", data_source="direct")
+    config = ReferenceDataSourceConfig(venue="hyperliquid", data_source="direct")
     adapter = create_reference_data_adapter_for_source(config)
-    assert isinstance(adapter, BinanceReferenceDataAdapter)
-    assert adapter.venue == "BINANCE-SPOT"
+    assert isinstance(adapter, HyperliquidReferenceDataAdapter)
+    assert adapter.venue == "HYPERLIQUID"
 
 
 @pytest.mark.integration
@@ -297,7 +297,7 @@ def test_urdi_router_ccxt_source() -> None:
         ReferenceDataSourceConfig,
         create_reference_data_adapter_for_source,
     )
-    from instruments_service.reference_data.adapters.ccxt_adapter import CCXTReferenceDataAdapter
+    from instruments_service.reference_data.adapters.cefi.ccxt_adapter import CCXTReferenceDataAdapter
 
     config = ReferenceDataSourceConfig(venue="bybit", data_source="ccxt")
     adapter = create_reference_data_adapter_for_source(config)

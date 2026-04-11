@@ -161,7 +161,7 @@ class TestFilterInstrumentsByDate:
         with caplog.at_level("WARNING"):
             result = filter_instruments_by_date([record], date_dt, defi_venues=defi_venues)
         assert len(result) == 1  # still included
-        assert any("available_since=None" in r.message for r in caplog.records)
+        assert any("available_from_datetime=None" in r.message for r in caplog.records)
 
     def test_multiple_records_filters_correctly(self) -> None:
         r1 = _make_record(instrument_key="A", available_since=datetime(2024, 1, 1, tzinfo=UTC))

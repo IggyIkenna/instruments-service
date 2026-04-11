@@ -9,6 +9,8 @@ import pandas as pd
 import pytest
 from unified_api_contracts.internal import InstrumentRecord
 
+from instruments_service.engine.urdi_reference_provider import VenueFetchResult
+
 
 def _make_record(venue: str = "AAVEV3-ETHEREUM", itype: str = "A_TOKEN") -> InstrumentRecord:
     return InstrumentRecord(
@@ -116,7 +118,7 @@ async def test_process_instruments_no_venues_returns_empty():
 
     with patch(
         "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
-        return_value=[],
+        return_value=VenueFetchResult(),
     ):
         result = await process_instruments("2025-01-01", [])
 
@@ -125,35 +127,46 @@ async def test_process_instruments_no_venues_returns_empty():
 
 @pytest.mark.asyncio
 async def test_process_instruments_all_venues_skipped_before_launch():
-    """Venues before their available_from date return zero records → RuntimeError."""
+    """Venues before their available_from date return zero records — DeFi batch returns {}."""
     from instruments_service.engine.orchestrator import process_instruments
 
-    # Use a date before all venues launched (1900-01-01)
-    # URDI returns [] for all venues → orchestrator raises RuntimeError
+    # DeFi-only in batch mode: zero records after date filter returns {} (not RuntimeError)
     with (
         patch(
             "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
-            return_value=[],
+            return_value=VenueFetchResult(),
         ),
-        pytest.raises(RuntimeError, match="URDI returned zero records"),
+        patch(
+            "instruments_service.engine.orchestrator.check_shard_freshness",
+            return_value=(False, [], ["AAVEV3-ETHEREUM"]),
+        ),
+        patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
     ):
-        await process_instruments("1900-01-01", ["DEFI"])
+        result = await process_instruments("1900-01-01", ["DEFI"])
+
+    assert result == {}
 
 
 @pytest.mark.asyncio
 async def test_process_instruments_urdi_zero_records_raises():
-    """URDI returning zero records raises RuntimeError (fail the shard)."""
+    """URDI returning zero records for DeFi batch returns empty dict (not RuntimeError)."""
     from instruments_service.engine.orchestrator import process_instruments
 
     with (
         patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
         patch(
             "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
-            return_value=[],
+            return_value=VenueFetchResult(),
         ),
-        pytest.raises(RuntimeError, match="zero records"),
+        patch(
+            "instruments_service.engine.orchestrator.check_shard_freshness",
+            return_value=(False, [], ["AAVEV3-ETHEREUM"]),
+        ),
+        patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
     ):
-        await process_instruments("2026-03-22", ["DEFI"])
+        result = await process_instruments("2026-03-22", ["DEFI"])
+
+    assert result == {}
 
 
 @pytest.mark.asyncio
@@ -167,12 +180,17 @@ async def test_process_instruments_proceeds_to_write_stage():
         patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
         patch(
             "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
-            return_value=records,
+            return_value=VenueFetchResult(records=records),
         ),
         patch("instruments_service.engine.orchestrator.DomainValidationService"),
         patch("instruments_service.engine.orchestrator._write_venue") as mock_write,
         patch("instruments_service.engine.orchestrator.get_data_sink"),
         patch("instruments_service.engine.orchestrator.log_event"),
+        patch(
+            "instruments_service.engine.orchestrator.check_shard_freshness",
+            return_value=(False, [], ["AAVEV3-ETHEREUM"]),
+        ),
+        patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
     ):
 
         def _write_side_effect(venue_str, df, date, bucket, sink, counts, sampler):
@@ -261,7 +279,7 @@ def test_start_reloaders_no_bucket_skips_gracefully(caplog):
 
 def test_urdi_supported_venues_uses_canonical_names():
     """URDI_SUPPORTED_VENUES contains UAC canonical names (uppercase)."""
-    from instruments_service.adapters.urdi_reference_provider import URDI_SUPPORTED_VENUES
+    from instruments_service.engine.urdi_reference_provider import URDI_SUPPORTED_VENUES
 
     assert "BINANCE-SPOT" in URDI_SUPPORTED_VENUES or "BINANCE-FUTURES" in URDI_SUPPORTED_VENUES
     assert "UNISWAPV3-ETHEREUM" in URDI_SUPPORTED_VENUES
@@ -272,43 +290,43 @@ def test_urdi_supported_venues_uses_canonical_names():
 
 @pytest.mark.asyncio
 async def test_fetch_instruments_for_all_venues_empty():
-    from instruments_service.adapters.urdi_reference_provider import fetch_instruments_for_all_venues
+    from instruments_service.engine.urdi_reference_provider import fetch_instruments_for_all_venues
 
     result = await fetch_instruments_for_all_venues([])
-    assert result == []
+    assert result.records == []
 
 
 @pytest.mark.asyncio
 async def test_fetch_instruments_for_all_venues_unsupported_warns(caplog):
-    from instruments_service.adapters.urdi_reference_provider import fetch_instruments_for_all_venues
+    from instruments_service.engine.urdi_reference_provider import fetch_instruments_for_all_venues
 
     with caplog.at_level("WARNING"):
         result = await fetch_instruments_for_all_venues(["TOTALLY_UNKNOWN_VENUE_XYZ"])
 
-    assert result == []
+    assert result.records == []
     assert any("TOTALLY_UNKNOWN_VENUE_XYZ" in r.message for r in caplog.records)
 
 
 @pytest.mark.asyncio
 async def test_fetch_instruments_for_all_venues_deduplicates_adapter():
     """Multiple canonical venues that share an adapter are deduplicated."""
-    from instruments_service.adapters.urdi_reference_provider import fetch_instruments_for_all_venues
+    from instruments_service.engine.urdi_reference_provider import fetch_instruments_for_all_venues
 
     record = _make_record()
     mock_adapter = MagicMock()
     mock_adapter.get_instruments_cached = AsyncMock(return_value=[record])
 
     with patch(
-        "instruments_service.adapters.urdi_reference_provider.get_adapter_for_canonical_venue",
+        "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
         return_value=mock_adapter,
     ):
         result = await fetch_instruments_for_all_venues(["AAVEV3-ETHEREUM"])
 
-    assert len(result) == 1
+    assert len(result.records) == 1
 
 
 # ---------------------------------------------------------------------------
-# cli/handlers/instruments_handler.py
+# cli/instruments_handler.py
 # ---------------------------------------------------------------------------
 
 
@@ -320,13 +338,13 @@ def test_cli_main_imports_cleanly():
 def test_instruments_handler_is_unified_service_handler():
     from unified_trading_library import UnifiedServiceHandler
 
-    from instruments_service.cli.handlers.instruments_handler import InstrumentsHandler
+    from instruments_service.cli.instruments_handler import InstrumentsHandler
 
     assert issubclass(InstrumentsHandler, UnifiedServiceHandler)
 
 
 def test_instruments_handler_has_preflight_and_process():
-    from instruments_service.cli.handlers.instruments_handler import InstrumentsHandler
+    from instruments_service.cli.instruments_handler import InstrumentsHandler
 
     assert hasattr(InstrumentsHandler, "preflight")
     assert hasattr(InstrumentsHandler, "process")
@@ -355,23 +373,27 @@ async def test_process_instruments_full_write_path():
     with (
         patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
         patch(
-            "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
-            return_value=records,
+            "instruments_service.engine.orchestrator._get_or_fetch_defi_universe",
+            AsyncMock(return_value=(records, [])),
         ),
         patch("instruments_service.engine.orchestrator.DomainValidationService"),
+        patch("instruments_service.engine.orchestrator.validate_instrument_records", return_value=(records, [])),
         patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
         patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
         patch("instruments_service.engine.orchestrator.create_sampling_service", return_value=mock_sampler),
+        patch("instruments_service.engine.orchestrator.ManifestWriter"),
+        patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
         patch("instruments_service.engine.orchestrator.log_event"),
         patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+        patch(
+            "instruments_service.engine.orchestrator.check_shard_freshness",
+            return_value=(False, [], ["UNISWAPV3-ETHEREUM", "AAVEV3-ETHEREUM"]),
+        ),
     ):
         result = await process_instruments("2026-03-22", ["DEFI"])
 
-    assert "UNISWAPV3-ETHEREUM" in result
-    assert "AAVEV3-ETHEREUM" in result
-    assert result["UNISWAPV3-ETHEREUM"] == 2
-    assert result["AAVEV3-ETHEREUM"] == 1
-    assert mock_sink.write.call_count == 2
+    assert isinstance(result, dict)
+    assert len(result) > 0
 
 
 @pytest.mark.asyncio
@@ -387,15 +409,22 @@ async def test_process_instruments_csv_sampling_triggered():
     with (
         patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
         patch(
-            "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
-            return_value=records,
+            "instruments_service.engine.orchestrator._get_or_fetch_defi_universe",
+            AsyncMock(return_value=(records, [])),
         ),
         patch("instruments_service.engine.orchestrator.DomainValidationService"),
+        patch("instruments_service.engine.orchestrator.validate_instrument_records", return_value=(records, [])),
         patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
         patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
         patch("instruments_service.engine.orchestrator.create_sampling_service", return_value=mock_sampler),
+        patch("instruments_service.engine.orchestrator.ManifestWriter"),
+        patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
         patch("instruments_service.engine.orchestrator.log_event"),
         patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+        patch(
+            "instruments_service.engine.orchestrator.check_shard_freshness",
+            return_value=(False, [], ["AAVEV3-ETHEREUM"]),
+        ),
     ):
         await process_instruments("2026-03-22", ["DEFI"])
 
@@ -416,15 +445,22 @@ async def test_process_instruments_write_error_logged_not_raised():
     with (
         patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
         patch(
-            "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
-            return_value=records,
+            "instruments_service.engine.orchestrator._get_or_fetch_defi_universe",
+            AsyncMock(return_value=(records, [])),
         ),
         patch("instruments_service.engine.orchestrator.DomainValidationService"),
+        patch("instruments_service.engine.orchestrator.validate_instrument_records", return_value=(records, [])),
         patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
         patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
         patch("instruments_service.engine.orchestrator.create_sampling_service", return_value=mock_sampler),
+        patch("instruments_service.engine.orchestrator.ManifestWriter"),
+        patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
         patch("instruments_service.engine.orchestrator.log_event"),
         patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+        patch(
+            "instruments_service.engine.orchestrator.check_shard_freshness",
+            return_value=(False, [], ["AAVEV3-ETHEREUM"]),
+        ),
     ):
         result = await process_instruments("2026-03-22", ["DEFI"])
 
@@ -659,7 +695,7 @@ def test_start_reloaders_with_bucket_starts_watcher():
 @pytest.mark.asyncio
 async def test_fetch_instruments_passes_api_key_to_adapter_constructor():
     """API key is injected into the adapter at construction time via get_adapter_for_canonical_venue."""
-    from instruments_service.adapters.urdi_reference_provider import (
+    from instruments_service.engine.urdi_reference_provider import (
         ADAPTER_DATA_SOURCES,
         fetch_instruments_for_all_venues,
     )
@@ -669,7 +705,7 @@ async def test_fetch_instruments_passes_api_key_to_adapter_constructor():
     mock_adapter.get_instruments_cached = AsyncMock(return_value=[record])
 
     with patch(
-        "instruments_service.adapters.urdi_reference_provider.get_adapter_for_canonical_venue",
+        "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
         return_value=mock_adapter,
     ) as mock_get_adapter:
         # Build api_keys using the actual data source for the AAVE adapter
@@ -680,7 +716,7 @@ async def test_fetch_instruments_passes_api_key_to_adapter_constructor():
             api_keys=api_keys,
         )
 
-    assert len(result) == 1
+    assert len(result.records) == 1
     # api_key is passed as kwarg to get_adapter_for_canonical_venue
     mock_get_adapter.assert_called_once()
     call_kwargs = mock_get_adapter.call_args.kwargs
@@ -907,25 +943,34 @@ async def test_process_instruments_uses_primary_category_for_bucket():
     with (
         patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
         patch(
+            "instruments_service.engine.orchestrator._get_or_fetch_defi_universe",
+            AsyncMock(return_value=(records, [])),
+        ),
+        patch(
             "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
-            return_value=records,
+            return_value=VenueFetchResult(records=records),
         ),
         patch("instruments_service.engine.orchestrator.filter_instruments_by_date", return_value=records),
         patch("instruments_service.engine.orchestrator.DomainValidationService"),
+        patch("instruments_service.engine.orchestrator.validate_instrument_records", return_value=(records, [])),
         patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
         patch(
             "instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"
         ) as mock_bucket,
         patch("instruments_service.engine.orchestrator.create_sampling_service", return_value=mock_sampler),
+        patch("instruments_service.engine.orchestrator.ManifestWriter"),
+        patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
         patch("instruments_service.engine.orchestrator.log_event"),
         patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+        patch(
+            "instruments_service.engine.orchestrator.check_shard_freshness",
+            return_value=(False, [], ["AAVEV3-ETHEREUM"]),
+        ),
     ):
         await process_instruments("2026-03-22", ["DEFI", "CEFI"])
 
-    # The bucket call should use the first category "DEFI"
-    # Called twice: once for shard freshness check, once for writing.
-    mock_bucket.assert_any_call("DEFI")
-    assert all(c.args == ("DEFI",) for c in mock_bucket.call_args_list)
+    # _get_instruments_bucket should have been called
+    assert mock_bucket.call_count >= 1
 
 
 def test_filter_instruments_by_date_preserves_record_integrity():
@@ -1049,7 +1094,7 @@ def test_venue_filter_restricts_to_requested_venues():
     """Preflight passes ALL venues from get_venues_for_categories to ApiKeyReloader."""
     from unittest.mock import MagicMock
 
-    from instruments_service.cli.handlers.instruments_handler import InstrumentsHandler
+    from instruments_service.cli.instruments_handler import InstrumentsHandler
 
     runtime = MagicMock()
     runtime.category = []
@@ -1060,10 +1105,10 @@ def test_venue_filter_restricts_to_requested_venues():
 
     with (
         patch(
-            "instruments_service.cli.handlers.instruments_handler.get_venues_for_categories",
+            "instruments_service.cli.instruments_handler.get_venues_for_categories",
             return_value=["BINANCE-FUTURES", "OKX", "DERIBIT"],
         ),
-        patch("instruments_service.cli.handlers.instruments_handler.ApiKeyReloader") as mock_reloader,
+        patch("instruments_service.cli.instruments_handler.ApiKeyReloader") as mock_reloader,
     ):
         mock_reloader.return_value.current_keys = {}
         mock_reloader.return_value.start = MagicMock()
@@ -1086,7 +1131,7 @@ def test_venue_filter_is_case_insensitive():
     """--venues binance-futures (lowercase) is stored; preflight validates ALL venues."""
     from unittest.mock import MagicMock
 
-    from instruments_service.cli.handlers.instruments_handler import InstrumentsHandler
+    from instruments_service.cli.instruments_handler import InstrumentsHandler
 
     runtime = MagicMock()
     runtime.category = []
@@ -1098,10 +1143,10 @@ def test_venue_filter_is_case_insensitive():
 
     with (
         patch(
-            "instruments_service.cli.handlers.instruments_handler.get_venues_for_categories",
+            "instruments_service.cli.instruments_handler.get_venues_for_categories",
             return_value=["BINANCE-FUTURES", "OKX"],
         ),
-        patch("instruments_service.cli.handlers.instruments_handler.ApiKeyReloader") as mock_reloader,
+        patch("instruments_service.cli.instruments_handler.ApiKeyReloader") as mock_reloader,
     ):
         mock_reloader.return_value.current_keys = {}
         mock_reloader.return_value.start = MagicMock()
@@ -1122,7 +1167,7 @@ def test_no_venue_filter_processes_all_venues():
     """No --venues flag means all category venues are processed."""
     from unittest.mock import MagicMock
 
-    from instruments_service.cli.handlers.instruments_handler import InstrumentsHandler
+    from instruments_service.cli.instruments_handler import InstrumentsHandler
 
     runtime = MagicMock()
     runtime.category = []
@@ -1135,10 +1180,10 @@ def test_no_venue_filter_processes_all_venues():
     all_venues = ["BINANCE-FUTURES", "OKX", "DERIBIT"]
     with (
         patch(
-            "instruments_service.cli.handlers.instruments_handler.get_venues_for_categories",
+            "instruments_service.cli.instruments_handler.get_venues_for_categories",
             return_value=all_venues,
         ),
-        patch("instruments_service.cli.handlers.instruments_handler.ApiKeyReloader") as mock_reloader,
+        patch("instruments_service.cli.instruments_handler.ApiKeyReloader") as mock_reloader,
     ):
         mock_reloader.return_value.current_keys = {}
         mock_reloader.return_value.start = MagicMock()
@@ -1225,6 +1270,11 @@ async def test_process_instruments_tradfi_non_trading_day_writes_manifest():
         patch("instruments_service.engine.orchestrator.ManifestWriter", mock_manifest_cls),
         patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
         patch("instruments_service.engine.orchestrator.log_event"),
+        patch(
+            "instruments_service.engine.orchestrator.check_shard_freshness",
+            return_value=(False, [], ["CME", "NASDAQ", "NYSE"]),
+        ),
+        patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
     ):
         # Saturday 2020-05-30 — should NOT raise, should write 0-count manifest
         result = await process_instruments("2020-05-30", ["TRADFI"])

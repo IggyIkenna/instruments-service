@@ -41,11 +41,15 @@ def order_base_quote(sym0: str, sym1: str) -> tuple[str, str]:
 def parse_created_timestamp(ts_raw: object) -> datetime | None:
     """Parse a ``createdAtTimestamp`` field (Unix seconds as string/int) into UTC datetime.
 
-    Returns ``None`` for missing, unparseable, or out-of-range values.
+    Returns ``None`` for missing, unparseable, zero, or out-of-range values.
+    Epoch 0 (1970-01-01) is treated as "unknown" — no DeFi protocol existed before 2015.
     """
     if ts_raw is None:
         return None
     try:
-        return datetime.fromtimestamp(int(str(ts_raw)), tz=UTC)
+        ts = int(str(ts_raw))
+        if ts <= 0:
+            return None
+        return datetime.fromtimestamp(ts, tz=UTC)
     except (ValueError, OSError):
         return None

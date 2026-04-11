@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from unified_trading_library import ServiceBootstrap
 
-from instruments_service.cli.handlers.instruments_handler import InstrumentsHandler
+from instruments_service.cli.instruments_handler import InstrumentsHandler
 from instruments_service.config import get_config
 
 _SERVICE_NAME = "instruments-service"  # pragma: no cover

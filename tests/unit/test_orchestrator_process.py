@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pandas as pd
 import pytest
 from unified_api_contracts.internal import InstrumentRecord
 
@@ -13,6 +14,7 @@ from instruments_service.engine.orchestrator import (
     _write_venue,
     process_instruments,
 )
+from instruments_service.engine.urdi_reference_provider import VenueFetchResult
 
 
 def _make_record(
@@ -62,9 +64,16 @@ class TestProcessInstruments:
             ),
             patch(
                 "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
-                AsyncMock(return_value=[]),
+                AsyncMock(return_value=VenueFetchResult()),
             ),
             patch("instruments_service.engine.orchestrator.log_event"),
+            patch(
+                "instruments_service.engine.orchestrator.check_shard_freshness",
+                return_value=(False, [], ["BINANCE-SPOT"]),
+            ),
+            patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
+            patch("instruments_service.engine.orchestrator.ManifestWriter"),
+            patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
             pytest.raises(RuntimeError, match="zero records"),
         ):
             await process_instruments("2026-03-22", ["CEFI"])
@@ -85,7 +94,7 @@ class TestProcessInstruments:
             patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
             patch(
                 "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
-                AsyncMock(return_value=records),
+                AsyncMock(return_value=VenueFetchResult(records=records)),
             ),
             patch("instruments_service.engine.orchestrator.log_event"),
             patch("instruments_service.engine.orchestrator.DomainValidationService") as mock_dvs,
@@ -93,6 +102,12 @@ class TestProcessInstruments:
             patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
             patch("instruments_service.engine.orchestrator.create_sampling_service", return_value=mock_sampler),
             patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch(
+                "instruments_service.engine.orchestrator.check_shard_freshness",
+                return_value=(False, [], ["BINANCE-SPOT"]),
+            ),
+            patch("instruments_service.engine.orchestrator.ManifestWriter"),
+            patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
         ):
             mock_dvs.return_value.validate_for_domain = MagicMock()
             result = await process_instruments("2026-03-22", ["CEFI"])
@@ -116,7 +131,7 @@ class TestProcessInstruments:
             patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
             patch(
                 "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
-                AsyncMock(return_value=records),
+                AsyncMock(return_value=VenueFetchResult(records=records)),
             ),
             patch("instruments_service.engine.orchestrator.log_event"),
             patch("instruments_service.engine.orchestrator.DomainValidationService") as mock_dvs,
@@ -124,6 +139,12 @@ class TestProcessInstruments:
             patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
             patch("instruments_service.engine.orchestrator.create_sampling_service", return_value=mock_sampler),
             patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch(
+                "instruments_service.engine.orchestrator.check_shard_freshness",
+                return_value=(False, [], ["BINANCE-SPOT"]),
+            ),
+            patch("instruments_service.engine.orchestrator.ManifestWriter"),
+            patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
         ):
             mock_dvs.return_value.validate_for_domain = MagicMock()
             result = await process_instruments(datetime(2026, 3, 22, tzinfo=UTC), ["CEFI"])
@@ -140,7 +161,7 @@ class TestProcessInstruments:
             patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
             patch(
                 "instruments_service.engine.orchestrator.fetch_instruments_for_all_venues",
-                AsyncMock(return_value=records),
+                AsyncMock(return_value=VenueFetchResult(records=records)),
             ),
             patch("instruments_service.engine.orchestrator.log_event"),
             patch("instruments_service.engine.orchestrator.DomainValidationService") as mock_dvs,
@@ -148,6 +169,12 @@ class TestProcessInstruments:
             patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
             patch("instruments_service.engine.orchestrator.create_sampling_service", return_value=mock_sampler),
             patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch(
+                "instruments_service.engine.orchestrator.check_shard_freshness",
+                return_value=(False, [], ["BINANCE-SPOT"]),
+            ),
+            patch("instruments_service.engine.orchestrator.ManifestWriter"),
+            patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
         ):
             mock_dvs.return_value.validate_for_domain = MagicMock()
             result = await process_instruments(
