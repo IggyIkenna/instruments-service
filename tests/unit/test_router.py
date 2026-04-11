@@ -5,8 +5,8 @@ import pytest
 from instruments_service.reference_data.adapters.cefi.ccxt_adapter import CCXTReferenceDataAdapter
 from instruments_service.reference_data.adapters.cefi.hyperliquid import HyperliquidReferenceDataAdapter
 from instruments_service.reference_data.adapters.cefi.tardis import TardisReferenceDataAdapter
-from instruments_service.reference_data.adapters.prediction.betfair import BetfairReferenceDataAdapter
 from instruments_service.reference_data.adapters.prediction.polymarket import PolymarketReferenceDataAdapter
+from instruments_service.reference_data.adapters.sports.adapters.betfair import BetfairReferenceDataAdapter
 from instruments_service.reference_data.adapters.tradfi.databento import DatabentoReferenceDataAdapter
 from instruments_service.reference_data.adapters.tradfi.ibkr import IBKRReferenceDataAdapter
 from instruments_service.reference_data.adapters.tradfi.polygon import PolygonReferenceDataAdapter

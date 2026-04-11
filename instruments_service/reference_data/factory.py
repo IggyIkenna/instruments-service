@@ -36,9 +36,9 @@ from .adapters.defi.raydium import RaydiumReferenceDataAdapter
 from .adapters.defi.uniswap_v2 import UniswapV2ReferenceDataAdapter
 from .adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
 from .adapters.defi.uniswap_v4 import UniswapV4ReferenceDataAdapter
-from .adapters.prediction.betfair import BetfairReferenceDataAdapter
 from .adapters.prediction.kalshi import KalshiReferenceDataAdapter
 from .adapters.prediction.polymarket import PolymarketReferenceDataAdapter
+from .adapters.sports.adapters.betfair import BetfairReferenceDataAdapter
 from .adapters.tradfi.databento import DatabentoReferenceDataAdapter
 from .adapters.tradfi.ibkr import IBKRReferenceDataAdapter
 from .adapters.tradfi.polygon import PolygonReferenceDataAdapter

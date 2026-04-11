@@ -12,7 +12,7 @@ from unified_api_contracts.internal import InstrumentRecord
 
 from instruments_service.reference_data.adapters.cefi.ccxt_adapter import CCXTReferenceDataAdapter
 from instruments_service.reference_data.adapters.cefi.tardis import TardisReferenceDataAdapter
-from instruments_service.reference_data.adapters.prediction.betfair import BetfairReferenceDataAdapter
+from instruments_service.reference_data.adapters.sports.adapters.betfair import BetfairReferenceDataAdapter
 
 # ── shared helpers ─────────────────────────────────────────────────────────────
 

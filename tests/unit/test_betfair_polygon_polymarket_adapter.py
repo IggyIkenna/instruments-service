@@ -8,8 +8,8 @@ import aiohttp
 import pytest
 from unified_api_contracts.internal import InstrumentRecord
 
-from instruments_service.reference_data.adapters.prediction.betfair import BetfairReferenceDataAdapter
 from instruments_service.reference_data.adapters.prediction.polymarket import PolymarketReferenceDataAdapter
+from instruments_service.reference_data.adapters.sports.adapters.betfair import BetfairReferenceDataAdapter
 from instruments_service.reference_data.adapters.tradfi.polygon import PolygonReferenceDataAdapter
 
 
