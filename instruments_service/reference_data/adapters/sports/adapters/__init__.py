@@ -5,7 +5,6 @@ from .base import BaseSportsReferenceAdapter
 from .footystats import FootystatsAdapter
 from .odds_api import OddsApiAdapter
 from .open_meteo import OpenMeteoAdapter
-from .pinnacle import PinnacleAdapter
 from .soccerfootball_info import SoccerFootballInfoAdapter
 from .transfermarkt import TransfermarktAdapter
 from .understat import UnderstatAdapter
@@ -16,7 +15,6 @@ __all__ = [
     "FootystatsAdapter",
     "OddsApiAdapter",
     "OpenMeteoAdapter",
-    "PinnacleAdapter",
     "SoccerFootballInfoAdapter",
     "TransfermarktAdapter",
     "UnderstatAdapter",

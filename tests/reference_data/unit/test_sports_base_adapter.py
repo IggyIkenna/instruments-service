@@ -36,10 +36,6 @@ class TestSportsFactory:
         adapter = create_sports_reference_adapter("transfermarkt")
         assert adapter is not None
 
-    def test_create_pinnacle(self) -> None:
-        adapter = create_sports_reference_adapter("pinnacle", api_key="test-key")
-        assert adapter is not None
-
     def test_create_soccerfootball_info(self) -> None:
         adapter = create_sports_reference_adapter("soccerfootball_info")
         assert adapter is not None
@@ -75,10 +71,6 @@ class TestSportsAdapterVenueProperty:
     def test_transfermarkt_venue(self) -> None:
         adapter = create_sports_reference_adapter("transfermarkt")
         assert adapter.venue == "transfermarkt"
-
-    def test_pinnacle_venue(self) -> None:
-        adapter = create_sports_reference_adapter("pinnacle", api_key="test")
-        assert adapter.venue == "pinnacle"
 
     def test_soccerfootball_info_venue(self) -> None:
         adapter = create_sports_reference_adapter("soccerfootball_info")
