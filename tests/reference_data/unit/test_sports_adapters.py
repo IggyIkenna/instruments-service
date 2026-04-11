@@ -5,15 +5,15 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from instruments_service.reference_data.adapters.sports.adapters.odds_api import (
+    OddsApiAdapter,
+)
 
 from instruments_service.reference_data.adapters.sports.adapters.api_football import (
     ApiFootballAdapter,
 )
 from instruments_service.reference_data.adapters.sports.adapters.footystats import (
     FootystatsAdapter,
-)
-from instruments_service.reference_data.adapters.sports.adapters.odds_api import (
-    OddsApiAdapter,
 )
 from instruments_service.reference_data.adapters.sports.adapters.open_meteo import (
     OpenMeteoAdapter,

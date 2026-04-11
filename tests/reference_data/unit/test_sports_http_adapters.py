@@ -12,6 +12,14 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from instruments_service.reference_data.adapters.sports.adapters.odds_api import (
+    OddsApiAdapter,
+    _extract_events,
+    _normalize_event_odds,
+    _parse_bookmaker_odds,
+    _parse_market_outcomes,
+    _parse_outcome_odds,
+)
 from unified_api_contracts.external.open_meteo import WeatherCondition
 
 from instruments_service.reference_data.adapters.sports.adapters.api_football import (
@@ -40,14 +48,6 @@ from instruments_service.reference_data.adapters.sports.adapters.footystats impo
 )
 from instruments_service.reference_data.adapters.sports.adapters.footystats import (
     _safe_int as _footystats_safe_int,
-)
-from instruments_service.reference_data.adapters.sports.adapters.odds_api import (
-    OddsApiAdapter,
-    _extract_events,
-    _normalize_event_odds,
-    _parse_bookmaker_odds,
-    _parse_market_outcomes,
-    _parse_outcome_odds,
 )
 from instruments_service.reference_data.adapters.sports.adapters.open_meteo import (
     OpenMeteoAdapter,
