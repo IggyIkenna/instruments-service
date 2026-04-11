@@ -3,7 +3,7 @@
 Covers uncovered lines/branches in:
 - instruments_service/reference_data/adapters/prediction/polymarket.py
 - instruments_service/reference_data/adapters/prediction/kalshi.py
-- instruments_service/reference_data/adapters/prediction/betfair.py
+- instruments_service/reference_data/adapters/sports/adapters/betfair.py
 
 All tests are credential-free, mock all HTTP, and use no live network calls.
 """
@@ -17,10 +17,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 
-from instruments_service.reference_data.adapters.prediction.betfair import (
-    BetfairReferenceDataAdapter,
-    _classify_betfair_error,
-)
 from instruments_service.reference_data.adapters.prediction.kalshi import (
     KalshiReferenceDataAdapter,
     _classify_kalshi_error,
@@ -30,6 +26,10 @@ from instruments_service.reference_data.adapters.prediction.polymarket import (
     _normalize_team_pair,
     _parse_vs_string,
     _selection_from_outcomes,
+)
+from instruments_service.reference_data.adapters.sports.adapters.betfair import (
+    BetfairReferenceDataAdapter,
+    _classify_betfair_error,
 )
 
 # ---------------------------------------------------------------------------

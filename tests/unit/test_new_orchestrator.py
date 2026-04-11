@@ -1102,6 +1102,7 @@ def test_venue_filter_restricts_to_requested_venues():
     runtime.gcp_project_id = "test-project"
 
     handler = InstrumentsHandler(runtime)
+    handler.args = None
 
     with (
         patch(
@@ -1140,6 +1141,7 @@ def test_venue_filter_is_case_insensitive():
     runtime.venue_filter = ["binance-futures"]  # lowercase
 
     handler = InstrumentsHandler(runtime)
+    handler.args = None
 
     with (
         patch(
@@ -1176,6 +1178,7 @@ def test_no_venue_filter_processes_all_venues():
     runtime.venue_filter = []  # empty = no filter
 
     handler = InstrumentsHandler(runtime)
+    handler.args = None
 
     all_venues = ["BINANCE-FUTURES", "OKX", "DERIBIT"]
     with (

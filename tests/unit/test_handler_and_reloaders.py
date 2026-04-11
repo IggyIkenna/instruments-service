@@ -35,6 +35,7 @@ async def test_handler_preflight_mock_mode_starts_reloader():
     from instruments_service.cli.instruments_handler import InstrumentsHandler
 
     handler = InstrumentsHandler(_make_runtime())
+    handler.args = None
 
     mock_reloader = MagicMock()
     mock_reloader.current_keys = {}
@@ -52,6 +53,7 @@ async def test_handler_preflight_starts_reloader_for_all_categories():
     from instruments_service.cli.instruments_handler import InstrumentsHandler
 
     handler = InstrumentsHandler(_make_runtime("2026-03-22", "2026-03-22"))
+    handler.args = None
 
     mock_reloader = MagicMock()
     mock_reloader.current_keys = {}
@@ -140,6 +142,7 @@ async def test_handler_preflight_logs_api_keys_when_present():
     from instruments_service.cli.instruments_handler import InstrumentsHandler
 
     handler = InstrumentsHandler(_make_runtime())
+    handler.args = None
 
     mock_reloader = MagicMock()
     mock_reloader.current_keys = {"tardis": "key1", "databento": "key2"}
@@ -157,6 +160,7 @@ async def test_handler_preflight_data_availability_error_is_warned_not_raised():
     from instruments_service.cli.instruments_handler import InstrumentsHandler
 
     handler = InstrumentsHandler(_make_runtime())
+    handler.args = None
 
     mock_reloader = MagicMock()
     mock_reloader.current_keys = {}
@@ -175,6 +179,7 @@ async def test_handler_preflight_handles_validation_error():
     from instruments_service.cli.instruments_handler import InstrumentsHandler
 
     handler = InstrumentsHandler(_make_runtime())
+    handler.args = None
 
     mock_reloader = MagicMock()
     mock_reloader.start.side_effect = StartupValidationError("Missing key")
