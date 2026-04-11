@@ -206,11 +206,11 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
         regions: str = "uk",
         markets: str = "h2h",
     ) -> list[CanonicalOdds]:
-        """FootyStats does not provide odds in OddsAPI format.
+        """FootyStats does not provide odds data.
 
-        Use OddsApiAdapter for odds. This returns an empty list.
+        This adapter is for reference data only. Returns an empty list.
         """
-        logger.info("get_odds not supported on FootyStats adapter — use OddsApiAdapter")
+        logger.info("get_odds not supported on FootyStats adapter")
         return []
 
 

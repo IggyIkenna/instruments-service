@@ -187,9 +187,9 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
     ) -> list[CanonicalOdds]:
         """SoccerFootball.info does not provide odds data.
 
-        Use OddsApiAdapter for odds. This returns an empty list.
+        This adapter is for reference data only. Returns an empty list.
         """
-        logger.info("get_odds not supported on SoccerFootball.info adapter — use OddsApiAdapter")
+        logger.info("get_odds not supported on SoccerFootball.info adapter")
         return []
 
 

@@ -142,9 +142,9 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
     ) -> list[CanonicalOdds]:
         """Open-Meteo does not provide odds data.
 
-        Use OddsApiAdapter for odds. This returns an empty list.
+        This adapter is for weather data only. Returns an empty list.
         """
-        logger.info("get_odds not supported on Open-Meteo adapter — use OddsApiAdapter")
+        logger.info("get_odds not supported on Open-Meteo adapter")
         return []
 
 
