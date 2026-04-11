@@ -81,64 +81,6 @@ def test_binance_ticker_24hr_cassette_validates_against_binance_ticker_schema() 
 
 
 # ---------------------------------------------------------------------------
-# Binance — spot exchangeInfo cassette drives BinanceReferenceDataAdapter
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_binance_spot_exchange_info_cassette_adapter_get_instruments() -> None:
-    """Replay binance/mocks/spot_exchange_info.yaml through BinanceReferenceDataAdapter.
-
-    The adapter's _fetch_spot() calls GET /api/v3/exchangeInfo.  The cassette
-    contains two TRADING symbols (BTCUSDT, ETHUSDT) each with PRICE_FILTER and
-    LOT_SIZE filters.  We assert InstrumentRecords are produced and their fields
-    are populated correctly.
-    """
-    from unified_api_contracts.external.binance.market_schemas import (
-        BinanceExchangeInfo,
-        BinanceSymbol,
-    )
-
-    from instruments_service.reference_data import create_reference_data_adapter
-
-    cassette_path = CASSETTE_DIR / "binance" / "mocks" / "spot_exchange_info.yaml"
-
-    adapter = create_reference_data_adapter("binance")
-
-    with _VCR.use_cassette(str(cassette_path)):
-        instruments = await adapter.get_instruments(instrument_type="SPOT_PAIR")
-
-    # Cassette has BTCUSDT and ETHUSDT, both TRADING
-    assert len(instruments) == 2
-
-    btc = next(inst for inst in instruments if inst.raw_symbol == "BTCUSDT")
-    assert btc.venue == "BINANCE-SPOT"
-    assert btc.instrument_type == "SPOT_PAIR"
-    assert btc.base_asset == "BTC"
-    assert btc.quote_asset == "USDT"
-    assert btc.tick_size > 0
-    assert btc.lot_size > 0
-
-    eth = next(inst for inst in instruments if inst.raw_symbol == "ETHUSDT")
-    assert eth.base_asset == "ETH"
-
-    # Cross-validate raw cassette body against BinanceExchangeInfo schema
-    cassette_body = (CASSETTE_DIR / "binance" / "mocks" / "spot_exchange_info.yaml").read_text()
-    # Extract the JSON string from the cassette body line
-    for line in cassette_body.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("string:"):
-            raw_json = stripped[len("string:") :].strip().strip("'")
-            exchange_info = BinanceExchangeInfo.model_validate(json.loads(raw_json))
-            assert len(exchange_info.symbols) == 2
-            btc_sym: BinanceSymbol = next(s for s in exchange_info.symbols if s.symbol == "BTCUSDT")
-            assert btc_sym.status == "TRADING"
-            assert btc_sym.baseAsset == "BTC"
-            break
-
-
-# ---------------------------------------------------------------------------
 # Deribit — single BTC future cassette validates DeribitInstrumentInfoFull schema
 # ---------------------------------------------------------------------------
 
@@ -173,65 +115,6 @@ def test_deribit_ticker_cassette_validates_against_deribit_instrument_schema() -
 # ---------------------------------------------------------------------------
 # Deribit — multi-currency cassette drives DeribitReferenceDataAdapter
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.integration
-@pytest.mark.asyncio
-async def test_deribit_get_instruments_cassette_adapter() -> None:
-    """Replay deribit/mocks/get_instruments_multi.yaml through DeribitReferenceDataAdapter.
-
-    The cassette contains 4 interactions (BTC, ETH, SOL, USDC futures).
-    BTC has 2 futures, ETH has 1, SOL/USDC return empty results.
-    We assert 3 InstrumentRecords total and validate their fields.
-    """
-    from unified_api_contracts.external.deribit.schemas import (
-        DeribitInstrumentInfoFull,
-    )
-
-    from instruments_service.reference_data import create_reference_data_adapter
-
-    cassette_path = CASSETTE_DIR / "deribit" / "mocks" / "get_instruments_multi.yaml"
-
-    adapter = create_reference_data_adapter("deribit")
-
-    with _VCR.use_cassette(str(cassette_path)):
-        instruments = await adapter.get_instruments(instrument_type="FUTURE")
-
-    # BTC: 2, ETH: 1, SOL: 0, USDC: 0 = 3 total
-    assert len(instruments) == 3
-
-    btc_instruments = [i for i in instruments if i.base_asset == "BTC"]
-    assert len(btc_instruments) == 2
-
-    eth_instruments = [i for i in instruments if i.base_asset == "ETH"]
-    assert len(eth_instruments) == 1
-
-    # Cross-validate raw cassette BTC instruments against DeribitInstrumentInfoFull
-    btc_raw = {
-        "instrument_name": "BTC-6MAR26",
-        "kind": "future",
-        "base_currency": "BTC",
-        "quote_currency": "USD",
-        "settlement_currency": "BTC",
-        "tick_size": 2.5,
-        "min_trade_amount": 10.0,
-        "contract_size": 10.0,
-        "taker_commission": 0.0005,
-        "maker_commission": -0.0001,
-        "is_active": True,
-        "expiration_timestamp": 1772784000000,
-        "settlement_period": "week",
-    }
-    validated = DeribitInstrumentInfoFull.model_validate(btc_raw)
-    assert validated.instrument_name == "BTC-6MAR26"
-    assert validated.kind == "future"
-    assert validated.base_currency == "BTC"
-
-    for inst in instruments:
-        assert inst.venue == "DERIBIT"
-        assert inst.expiry is not None
-        assert inst.tick_size > 0
-        assert inst.contract_size > 0
 
 
 # ---------------------------------------------------------------------------

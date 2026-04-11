@@ -333,10 +333,13 @@ class TestFetchSportsReferenceData:
             patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
             patch("instruments_service.engine.orchestrator._write_team_mapping"),
             patch("instruments_service.engine.orchestrator._write_fixture_mapping"),
+            patch("instruments_service.engine.orchestrator._cached_leagues_df", None),
+            patch("instruments_service.engine.orchestrator._cached_teams_df", None),
+            patch("instruments_service.engine.orchestrator._cached_standings_df", None),
         ):
             counts = await _fetch_sports_reference_data("2026-03-22", "test-key", "test-bucket")
 
-        # Should still return counts (without leagues)
+        # Should still return counts (without leagues — the exception was caught)
         assert isinstance(counts, dict)
         assert "leagues" not in counts
 

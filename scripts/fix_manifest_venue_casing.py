@@ -27,8 +27,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     args = parser.parse_args()
 
-    from unified_trading_library import get_bucket_name, read_availability_index
-    from unified_trading_library.cloud_interface import get_storage_client
+    from unified_trading_library import get_bucket_name, get_storage_client, read_availability_index
 
     bucket = get_bucket_name("instruments", args.category)
     logger.info("Bucket: %s", bucket)

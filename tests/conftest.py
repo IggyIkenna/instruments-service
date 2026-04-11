@@ -23,6 +23,7 @@ MARKER SEMANTICS
 
 import os
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -82,3 +83,22 @@ def _skip_real_infra_without_opt_in(request: pytest.FixtureRequest) -> None:
         is_opted_in = os.getenv("IS_TEST_RUN", "false").lower() in ("true", "1")
         if not is_opted_in:
             pytest.skip("Real-infra test — set IS_TEST_RUN=true to run (writes to test bucket)")
+
+
+@pytest.fixture
+def mock_ib() -> MagicMock:
+    """MagicMock(spec=IB) fixture for IBKR adapter unit tests."""
+    from ib_insync import IB
+
+    ib = MagicMock(spec=IB)
+    ib.reqContractDetailsAsync = AsyncMock(return_value=[])
+    ib.reqMatchingSymbolsAsync = AsyncMock(return_value=[])
+    return ib
+
+
+@pytest.fixture
+def ibkr_adapter(mock_ib: MagicMock):
+    """IBKRReferenceDataAdapter with injected mock IB connection."""
+    from instruments_service.reference_data.adapters.tradfi.ibkr import IBKRReferenceDataAdapter
+
+    return IBKRReferenceDataAdapter(ib=mock_ib)

@@ -41,13 +41,7 @@ from unified_trading_library import (
 logger = logging.getLogger(__name__)
 
 # Resolve tickers.json relative to instruments_service package
-TICKERS_JSON_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "instruments_service"
-    / "config"
-    / "data"
-    / "tickers.json"
-)
+TICKERS_JSON_PATH = Path(__file__).resolve().parent.parent / "instruments_service" / "config" / "data" / "tickers.json"
 
 SERVICE_NAME = "instruments-service"
 SCHEMA_VERSION = "1.0"
@@ -240,11 +234,15 @@ def main() -> None:
     if args.dry_run:
         _print_yaml("TickerUniverseConfig", ticker_universe)
         _print_yaml("InstrumentDomainConfig", instrument_domain)
-        print(f"\nTicker universe: {len(ticker_universe.sp500_tickers)} SP500, "
-              f"{len(ticker_universe.etf_tickers)} ETF (tickers.json), "
-              f"{len(ticker_universe.known_etf_symbols)} known ETF symbols (merged with UAC KNOWN_ETFS)")
-        print(f"Instrument domain: {len(instrument_domain.enabled_venues)} venues, "
-              f"{len(instrument_domain.categories)} categories")
+        print(
+            f"\nTicker universe: {len(ticker_universe.sp500_tickers)} SP500, "
+            f"{len(ticker_universe.etf_tickers)} ETF (tickers.json), "
+            f"{len(ticker_universe.known_etf_symbols)} known ETF symbols (merged with UAC KNOWN_ETFS)"
+        )
+        print(
+            f"Instrument domain: {len(instrument_domain.enabled_venues)} venues, "
+            f"{len(instrument_domain.categories)} categories"
+        )
         print(f"Effective date: {effective_date}")
         print("\nDry run complete. Use --upload to push to cloud storage.")
         return
