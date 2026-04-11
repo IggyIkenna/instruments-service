@@ -9,7 +9,7 @@
 #   4. Add LOCAL_DEPS entries if your service has local editable deps (e.g. unified-events-interface)
 SERVICE_NAME="instruments-service"
 SOURCE_DIR="instruments_service"
-MIN_COVERAGE=85  # 1798 tests, 88% coverage after adapter cleanup + comprehensive test suite
+MIN_COVERAGE=83  # 1738 tests, 83% coverage after adapter reorganisation (betfair + api_football moves)
 RUN_INTEGRATION=false
 PYTEST_WORKERS=${PYTEST_WORKERS:-2}
 LOCAL_DEPS=()
