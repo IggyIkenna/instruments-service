@@ -27,7 +27,6 @@ logger = logging.getLogger(__name__)
 _GCS_CACHE_BLOB = "_cache/evm_creation_timestamps.json"
 _LOCAL_CACHE_DIR = Path(__file__).resolve().parent.parent.parent.parent / ".cache"
 _LOCAL_CACHE_FILE = _LOCAL_CACHE_DIR / "evm_creation_timestamps.json"
-_SEED_FILE = Path(__file__).resolve().parent / "evm_creation_timestamps_seed.json"
 
 # ── Protocol deploy date floors (same role as Solana floor dates) ────
 # Used as guaranteed fallback when RPC resolution fails.
@@ -40,7 +39,6 @@ LENDING_PROTOCOL_DEPLOY_DATES: dict[str, dict[str, datetime]] = {
         "POLYGON": datetime(2023, 1, 27, tzinfo=UTC),
         "AVALANCHE": datetime(2023, 1, 27, tzinfo=UTC),
         "GNOSIS": datetime(2023, 10, 1, tzinfo=UTC),
-        "SCROLL": datetime(2024, 1, 15, tzinfo=UTC),
         "BSC": datetime(2024, 6, 1, tzinfo=UTC),
     },
     "compound_v3": {
@@ -49,7 +47,6 @@ LENDING_PROTOCOL_DEPLOY_DATES: dict[str, dict[str, datetime]] = {
         "BASE": datetime(2023, 8, 9, tzinfo=UTC),
         "POLYGON": datetime(2023, 5, 24, tzinfo=UTC),
         "OPTIMISM": datetime(2024, 1, 10, tzinfo=UTC),
-        "SCROLL": datetime(2024, 3, 1, tzinfo=UTC),
     },
     "morpho": {
         "ETHEREUM": datetime(2024, 1, 8, tzinfo=UTC),
@@ -147,9 +144,8 @@ def _load_cache() -> dict[str, str]:
     except Exception as exc:
         logger.debug("GCS cache load failed (will try local): %s", exc)
 
-    # 2. Local file
-    # 3. Seed file
-    for label, path in [("local", _LOCAL_CACHE_FILE), ("seed", _SEED_FILE)]:
+    # 2. Local file fallback (dev)
+    for label, path in [("local", _LOCAL_CACHE_FILE)]:
         if path.exists():
             try:
                 result = _parse_json_cache(path.read_text())

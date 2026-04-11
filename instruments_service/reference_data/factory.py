@@ -11,43 +11,38 @@ from unified_api_contracts.registry import (
     validate_operation,
 )
 
-from .adapters.aave_v3 import AaveV3ReferenceDataAdapter
 from .adapters.api_football import ApiFootballReferenceDataAdapter
-from .adapters.aster import AsterReferenceDataAdapter
-from .adapters.balancer import BalancerReferenceDataAdapter
-from .adapters.betfair import BetfairReferenceDataAdapter
-from .adapters.binance import BinanceReferenceDataAdapter
-from .adapters.bybit import BybitReferenceDataAdapter
-from .adapters.ccxt_adapter import CCXTReferenceDataAdapter
-from .adapters.coinbase import CoinbaseReferenceDataAdapter
-from .adapters.compound_v3 import CompoundV3ReferenceDataAdapter
-from .adapters.curve import CurveReferenceDataAdapter
-from .adapters.databento import DatabentoReferenceDataAdapter
-from .adapters.deribit import DeribitReferenceDataAdapter
-from .adapters.drift import DriftReferenceDataAdapter
-from .adapters.eigenlayer import EigenLayerReferenceDataAdapter
-from .adapters.ethena import EthenaReferenceDataAdapter
-from .adapters.etherfi import EtherFiReferenceDataAdapter
-from .adapters.ethfi import EthFiGovernanceReferenceDataAdapter
-from .adapters.fluid import FluidReferenceDataAdapter
-from .adapters.hyperliquid import HyperliquidReferenceDataAdapter
-from .adapters.ibkr import IBKRReferenceDataAdapter
-from .adapters.jito import JitoReferenceDataAdapter
-from .adapters.kalshi import KalshiReferenceDataAdapter
-from .adapters.kamino import KaminoReferenceDataAdapter
-from .adapters.lido import LidoReferenceDataAdapter
-from .adapters.marinade import MarinadeReferenceDataAdapter
-from .adapters.morpho import MorphoReferenceDataAdapter
-from .adapters.okx import OKXReferenceDataAdapter
-from .adapters.orca import OrcaReferenceDataAdapter
-from .adapters.polygon import PolygonReferenceDataAdapter
-from .adapters.polymarket import PolymarketReferenceDataAdapter
-from .adapters.raydium import RaydiumReferenceDataAdapter
-from .adapters.tardis import TardisReferenceDataAdapter
-from .adapters.tradfi_live import TradFiLiveReferenceDataAdapter
-from .adapters.uniswap_v2 import UniswapV2ReferenceDataAdapter
-from .adapters.uniswap_v3 import UniswapV3ReferenceDataAdapter
-from .adapters.uniswap_v4 import UniswapV4ReferenceDataAdapter
+from .adapters.cefi.aster import AsterReferenceDataAdapter
+from .adapters.cefi.ccxt_adapter import CCXTReferenceDataAdapter
+from .adapters.cefi.hyperliquid import HyperliquidReferenceDataAdapter
+from .adapters.cefi.tardis import TardisReferenceDataAdapter
+from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
+from .adapters.defi.balancer import BalancerReferenceDataAdapter
+from .adapters.defi.compound_v3 import CompoundV3ReferenceDataAdapter
+from .adapters.defi.curve import CurveReferenceDataAdapter
+from .adapters.defi.drift import DriftReferenceDataAdapter
+from .adapters.defi.eigenlayer import EigenLayerReferenceDataAdapter
+from .adapters.defi.ethena import EthenaReferenceDataAdapter
+from .adapters.defi.etherfi import EtherFiReferenceDataAdapter
+from .adapters.defi.ethfi import EthFiGovernanceReferenceDataAdapter
+from .adapters.defi.fluid import FluidReferenceDataAdapter
+from .adapters.defi.jito import JitoReferenceDataAdapter
+from .adapters.defi.kamino import KaminoReferenceDataAdapter
+from .adapters.defi.lido import LidoReferenceDataAdapter
+from .adapters.defi.marinade import MarinadeReferenceDataAdapter
+from .adapters.defi.morpho import MorphoReferenceDataAdapter
+from .adapters.defi.orca import OrcaReferenceDataAdapter
+from .adapters.defi.raydium import RaydiumReferenceDataAdapter
+from .adapters.defi.uniswap_v2 import UniswapV2ReferenceDataAdapter
+from .adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
+from .adapters.defi.uniswap_v4 import UniswapV4ReferenceDataAdapter
+from .adapters.prediction.betfair import BetfairReferenceDataAdapter
+from .adapters.prediction.kalshi import KalshiReferenceDataAdapter
+from .adapters.prediction.polymarket import PolymarketReferenceDataAdapter
+from .adapters.tradfi.databento import DatabentoReferenceDataAdapter
+from .adapters.tradfi.ibkr import IBKRReferenceDataAdapter
+from .adapters.tradfi.polygon import PolygonReferenceDataAdapter
+from .adapters.tradfi.tradfi_live import TradFiLiveReferenceDataAdapter
 from .base_adapter import BaseReferenceDataAdapter
 
 _logger = logging.getLogger(__name__)
@@ -190,13 +185,9 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "aster": AsterReferenceDataAdapter,
     "balancer": BalancerReferenceDataAdapter,
     "betfair": BetfairReferenceDataAdapter,
-    "binance": BinanceReferenceDataAdapter,
-    "bybit": BybitReferenceDataAdapter,
-    "coinbase": CoinbaseReferenceDataAdapter,
     "compound_v3": CompoundV3ReferenceDataAdapter,
     "curve": CurveReferenceDataAdapter,
     "databento": DatabentoReferenceDataAdapter,
-    "deribit": DeribitReferenceDataAdapter,
     "drift": DriftReferenceDataAdapter,
     "eigenlayer": EigenLayerReferenceDataAdapter,
     "ethena": EthenaReferenceDataAdapter,
@@ -211,7 +202,6 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "kalshi": KalshiReferenceDataAdapter,
     "lido": LidoReferenceDataAdapter,
     "morpho": MorphoReferenceDataAdapter,
-    "okx": OKXReferenceDataAdapter,
     "orca": OrcaReferenceDataAdapter,
     "polygon": PolygonReferenceDataAdapter,
     "polymarket": PolymarketReferenceDataAdapter,
@@ -227,11 +217,6 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
 # Used by services to know which credential each URDI adapter needs.
 # UTL's validate_api_keys_for_venues() returns {data_source: api_key}.
 ADAPTER_DATA_SOURCES: dict[str, str] = {
-    "binance": "tardis",
-    "bybit": "tardis",
-    "okx": "tardis",
-    "deribit": "tardis",
-    "coinbase": "tardis",
     "hyperliquid": "hyperliquid",
     "aster": "aster",
     "tardis": "tardis",
@@ -470,9 +455,9 @@ def create_reference_data_adapter(
     """Create and return a reference data adapter for the given venue.
 
     Args:
-        venue: Venue identifier (aster, binance, bybit, okx, deribit, coinbase,
-               hyperliquid, ibkr, databento, tardis, betfair, polymarket,
-               polygon).
+        venue: Venue identifier (aster, hyperliquid, ibkr, databento, tardis,
+               ccxt, betfair, polymarket, polygon, kalshi, api_football,
+               or any DeFi protocol key).
         project_id: Deprecated. Retained for call-site compatibility but no
                     longer used for internal Secret Manager lookups.
         api_key: API key for the venue. The calling service MUST fetch this

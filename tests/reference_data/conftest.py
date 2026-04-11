@@ -4,23 +4,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from instruments_service.reference_data.adapters.binance import BinanceReferenceDataAdapter
-from instruments_service.reference_data.adapters.deribit import DeribitReferenceDataAdapter
-from instruments_service.reference_data.adapters.ibkr import IBKRReferenceDataAdapter
+from instruments_service.reference_data.adapters.tradfi.ibkr import IBKRReferenceDataAdapter
 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "integration: mark test as integration test (requires external services)")
-
-
-@pytest.fixture(scope="session")
-def binance_adapter() -> BinanceReferenceDataAdapter:
-    return BinanceReferenceDataAdapter()
-
-
-@pytest.fixture(scope="session")
-def deribit_adapter() -> DeribitReferenceDataAdapter:
-    return DeribitReferenceDataAdapter()
 
 
 @pytest.fixture

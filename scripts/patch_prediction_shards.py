@@ -47,8 +47,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     args = parser.parse_args()
 
-    from unified_trading_library import ManifestWriter, UnifiedCloudConfig, read_availability_index
-    from unified_trading_library.cloud_interface import get_storage_client
+    from unified_trading_library import ManifestWriter, UnifiedCloudConfig, get_storage_client, read_availability_index
 
     client = get_storage_client()
     project_id = UnifiedCloudConfig().gcp_project_id

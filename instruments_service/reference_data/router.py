@@ -8,18 +8,12 @@ The data source is configurable — never hardcoded in the caller.
 Routing table
 -------------
 Crypto
-  binance   / direct    → BinanceReferenceDataAdapter
-  binance   / databento → DatabentoReferenceDataAdapter(datasets=["XNAS.ITCH"])
   binance   / tardis    → TardisReferenceDataAdapter(exchanges=["binance-futures"])
   binance   / ccxt      → CcxtReferenceDataAdapter(exchange_id="binance")
-  bybit     / direct    → BybitReferenceDataAdapter
   bybit     / tardis    → TardisReferenceDataAdapter(exchanges=["bybit"])
   bybit     / ccxt      → CcxtReferenceDataAdapter(exchange_id="bybit")
-  okx       / direct    → OKXReferenceDataAdapter
   okx       / ccxt      → CcxtReferenceDataAdapter(exchange_id="okx")
-  deribit   / direct    → DeribitReferenceDataAdapter
   deribit   / tardis    → TardisReferenceDataAdapter(exchanges=["deribit"])
-  coinbase  / direct    → CoinbaseReferenceDataAdapter
   hyperliquid / direct  → HyperliquidReferenceDataAdapter
   aster     / direct    → AsterReferenceDataAdapter
 
@@ -65,7 +59,6 @@ Sports / prediction markets
   polymarket   / polymarket   → PolymarketReferenceDataAdapter
   kalshi       / kalshi       → KalshiReferenceDataAdapter
   kalshi       / direct       → KalshiReferenceDataAdapter
-  odds_api     / odds_api     → (raises NotImplementedError — stub)
 """
 
 import contextlib
@@ -79,33 +72,28 @@ from unified_api_contracts.registry import (
     validate_operation,
 )
 
-from .adapters.aave_v3 import AaveV3ReferenceDataAdapter
 from .adapters.api_football import ApiFootballReferenceDataAdapter
-from .adapters.aster import AsterReferenceDataAdapter
-from .adapters.balancer import BalancerReferenceDataAdapter
-from .adapters.betfair import BetfairReferenceDataAdapter
-from .adapters.binance import BinanceReferenceDataAdapter
-from .adapters.bybit import BybitReferenceDataAdapter
-from .adapters.ccxt_adapter import CCXTReferenceDataAdapter
-from .adapters.coinbase import CoinbaseReferenceDataAdapter
-from .adapters.curve import CurveReferenceDataAdapter
-from .adapters.databento import DatabentoReferenceDataAdapter
-from .adapters.deribit import DeribitReferenceDataAdapter
-from .adapters.ethena import EthenaReferenceDataAdapter
-from .adapters.etherfi import EtherFiReferenceDataAdapter
-from .adapters.fluid import FluidReferenceDataAdapter
-from .adapters.hyperliquid import HyperliquidReferenceDataAdapter
-from .adapters.ibkr import IBKRReferenceDataAdapter
-from .adapters.kalshi import KalshiReferenceDataAdapter
-from .adapters.lido import LidoReferenceDataAdapter
-from .adapters.morpho import MorphoReferenceDataAdapter
-from .adapters.okx import OKXReferenceDataAdapter
-from .adapters.polygon import PolygonReferenceDataAdapter
-from .adapters.polymarket import PolymarketReferenceDataAdapter
-from .adapters.tardis import TardisReferenceDataAdapter
-from .adapters.uniswap_v2 import UniswapV2ReferenceDataAdapter
-from .adapters.uniswap_v3 import UniswapV3ReferenceDataAdapter
-from .adapters.uniswap_v4 import UniswapV4ReferenceDataAdapter
+from .adapters.cefi.aster import AsterReferenceDataAdapter
+from .adapters.cefi.ccxt_adapter import CCXTReferenceDataAdapter
+from .adapters.cefi.hyperliquid import HyperliquidReferenceDataAdapter
+from .adapters.cefi.tardis import TardisReferenceDataAdapter
+from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
+from .adapters.defi.balancer import BalancerReferenceDataAdapter
+from .adapters.defi.curve import CurveReferenceDataAdapter
+from .adapters.defi.ethena import EthenaReferenceDataAdapter
+from .adapters.defi.etherfi import EtherFiReferenceDataAdapter
+from .adapters.defi.fluid import FluidReferenceDataAdapter
+from .adapters.defi.lido import LidoReferenceDataAdapter
+from .adapters.defi.morpho import MorphoReferenceDataAdapter
+from .adapters.defi.uniswap_v2 import UniswapV2ReferenceDataAdapter
+from .adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
+from .adapters.defi.uniswap_v4 import UniswapV4ReferenceDataAdapter
+from .adapters.prediction.betfair import BetfairReferenceDataAdapter
+from .adapters.prediction.kalshi import KalshiReferenceDataAdapter
+from .adapters.prediction.polymarket import PolymarketReferenceDataAdapter
+from .adapters.tradfi.databento import DatabentoReferenceDataAdapter
+from .adapters.tradfi.ibkr import IBKRReferenceDataAdapter
+from .adapters.tradfi.polygon import PolygonReferenceDataAdapter
 from .base_adapter import BaseReferenceDataAdapter
 
 _logger = logging.getLogger(__name__)
@@ -327,11 +315,7 @@ def _route_direct(
         "aster": AsterReferenceDataAdapter,
         "balancer": BalancerReferenceDataAdapter,
         "betfair": BetfairReferenceDataAdapter,
-        "binance": BinanceReferenceDataAdapter,
-        "bybit": BybitReferenceDataAdapter,
-        "coinbase": CoinbaseReferenceDataAdapter,
         "curve": CurveReferenceDataAdapter,
-        "deribit": DeribitReferenceDataAdapter,
         "ethena": EthenaReferenceDataAdapter,
         "etherfi": EtherFiReferenceDataAdapter,
         "fluid": FluidReferenceDataAdapter,
@@ -340,7 +324,6 @@ def _route_direct(
         "kalshi": KalshiReferenceDataAdapter,
         "lido": LidoReferenceDataAdapter,
         "morpho": MorphoReferenceDataAdapter,
-        "okx": OKXReferenceDataAdapter,
         "polygon": PolygonReferenceDataAdapter,
         "polymarket": PolymarketReferenceDataAdapter,
         "uniswap_v2": UniswapV2ReferenceDataAdapter,
