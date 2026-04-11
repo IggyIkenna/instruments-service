@@ -50,7 +50,7 @@ class BaseSportsReferenceAdapter(ABC):
     @property
     @abstractmethod
     def venue(self) -> str:
-        """Venue identifier e.g. 'api_football', 'odds_api'."""
+        """Venue identifier e.g. 'api_football', 'pinnacle'."""
         ...
 
     @abstractmethod

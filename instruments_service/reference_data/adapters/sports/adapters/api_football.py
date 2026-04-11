@@ -305,11 +305,11 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         regions: str = "uk",
         markets: str = "h2h",
     ) -> list[CanonicalOdds]:
-        """API Football does not provide odds via OddsAPI format.
+        """API Football does not provide odds data.
 
-        Use OddsApiAdapter for odds. This returns an empty list.
+        This adapter is for reference data only. Returns an empty list.
         """
-        logger.info("get_odds not supported on API Football adapter — use OddsApiAdapter")
+        logger.info("get_odds not supported on API Football adapter")
         return []
 
     async def get_standings(self, league_id: int, season: int | None = None) -> list[dict[str, object]]:

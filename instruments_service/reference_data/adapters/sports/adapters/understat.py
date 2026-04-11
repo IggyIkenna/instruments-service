@@ -171,9 +171,9 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
     ) -> list[CanonicalOdds]:
         """Understat does not provide odds data.
 
-        Use OddsApiAdapter for odds. This returns an empty list.
+        This adapter is for xG/stats data only. Returns an empty list.
         """
-        logger.info("get_odds not supported on Understat adapter — use OddsApiAdapter")
+        logger.info("get_odds not supported on Understat adapter")
         return []
 
 
