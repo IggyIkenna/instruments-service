@@ -11,11 +11,22 @@ import logging
 
 from .adapters.api_football import ApiFootballAdapter
 from .adapters.base import BaseSportsReferenceAdapter
+from .adapters.footystats import FootystatsAdapter
+from .adapters.open_meteo import OpenMeteoAdapter
+from .adapters.soccerfootball_info import SoccerFootballInfoAdapter
+from .adapters.transfermarkt import TransfermarktAdapter
+from .adapters.understat import UnderstatAdapter
 
 _logger = logging.getLogger(__name__)
 
 _ADAPTERS: dict[str, type[BaseSportsReferenceAdapter]] = {
     "api_football": ApiFootballAdapter,
+    "footystats": FootystatsAdapter,
+    "open_meteo": OpenMeteoAdapter,
+    "soccer_football_info": SoccerFootballInfoAdapter,
+    "soccerfootball_info": SoccerFootballInfoAdapter,
+    "transfermarkt": TransfermarktAdapter,
+    "understat": UnderstatAdapter,
 }
 
 

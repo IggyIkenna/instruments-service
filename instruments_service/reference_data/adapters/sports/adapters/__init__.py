@@ -2,8 +2,18 @@
 
 from .api_football import ApiFootballAdapter
 from .base import BaseSportsReferenceAdapter
+from .footystats import FootystatsAdapter
+from .open_meteo import OpenMeteoAdapter
+from .soccerfootball_info import SoccerFootballInfoAdapter
+from .transfermarkt import TransfermarktAdapter
+from .understat import UnderstatAdapter
 
 __all__ = [
     "ApiFootballAdapter",
     "BaseSportsReferenceAdapter",
+    "FootystatsAdapter",
+    "OpenMeteoAdapter",
+    "SoccerFootballInfoAdapter",
+    "TransfermarktAdapter",
+    "UnderstatAdapter",
 ]
