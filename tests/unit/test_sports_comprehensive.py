@@ -19,10 +19,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import aiohttp
 import pytest
 
-from instruments_service.reference_data.adapters.api_football import (
-    ApiFootballReferenceDataAdapter,
-    _canonical_fixture_to_instrument,
-)
 from instruments_service.reference_data.adapters.sports._normalizer import (
     TeamNormalizer,
     _extract_core_name,
@@ -36,6 +32,10 @@ from instruments_service.reference_data.adapters.sports.adapters.api_football im
     _flatten_standings_groups,
     _parse_fixture_response,
     _parse_teams,
+)
+from instruments_service.reference_data.adapters.sports.adapters.api_football_reference import (
+    ApiFootballReferenceDataAdapter,
+    _canonical_fixture_to_instrument,
 )
 from instruments_service.reference_data.adapters.sports.adapters.base import (
     BaseSportsReferenceAdapter,
