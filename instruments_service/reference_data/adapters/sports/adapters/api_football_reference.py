@@ -1,8 +1,7 @@
 """API-Football URDI adapter — sports fixtures as InstrumentRecords.
 
-Thin shim: delegates fixture fetching to the sports-domain
-``ApiFootballAdapter`` (adapters/sports/adapters/api_football.py) and
-wraps ``CanonicalFixture`` → ``InstrumentRecord``.
+Wraps the sports-domain ``ApiFootballAdapter`` and converts
+``CanonicalFixture`` → ``InstrumentRecord`` for the instrument pipeline.
 
 Auth: service must fetch api_football_api_key from Secret Manager and pass
 it via the ``api_key`` constructor parameter.
@@ -16,14 +15,14 @@ from decimal import Decimal
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 from unified_api_contracts.sports import CanonicalFixture
 
-from ..base_adapter import BaseReferenceDataAdapter
-from ..schemas import (
+from ....base_adapter import BaseReferenceDataAdapter
+from ....schemas import (
     CanonicalExpiryCalendar,
     CanonicalOptionsChain,
     FundingRateRef,
     OHLCVRef,
 )
-from .sports.adapters.api_football import ApiFootballAdapter
+from .api_football import ApiFootballAdapter
 
 # Module-level cache: populated during get_instruments(), consumed by orchestrator's
 # _fetch_sports_reference_data() to avoid 33-league re-fetch (saves 33 API calls/date).
@@ -33,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 class ApiFootballReferenceDataAdapter(BaseReferenceDataAdapter):
-    """API-Football URDI shim.
+    """API-Football URDI adapter.
 
     Wraps the sports-domain ApiFootballAdapter, converting CanonicalFixture
     objects to InstrumentRecord for the instrument reference-data pipeline.

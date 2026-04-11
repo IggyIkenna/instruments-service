@@ -64,11 +64,11 @@ from unified_trading_library import unified_config as _uc
 from instruments_service.config import get_config
 from instruments_service.config_reloaders import get_defi_major_assets
 from instruments_service.engine.urdi_reference_provider import fetch_instruments_for_all_venues
-from instruments_service.reference_data.adapters.api_football import (
-    _last_completed_fixture_ids as _urdi_completed_fixture_ids,
-)
 from instruments_service.reference_data.adapters.defi._solana_utils import SolanaCacheSession, fill_solana_cache
 from instruments_service.reference_data.adapters.sports import create_sports_reference_adapter
+from instruments_service.reference_data.adapters.sports.adapters.api_football_reference import (
+    _last_completed_fixture_ids as _urdi_completed_fixture_ids,
+)
 from instruments_service.reference_data.adapters.tradfi.databento import is_non_trading_day
 from instruments_service.reference_data.utils.evm_creation_resolver import EvmCacheSession
 

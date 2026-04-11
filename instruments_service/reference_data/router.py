@@ -72,7 +72,6 @@ from unified_api_contracts.registry import (
     validate_operation,
 )
 
-from .adapters.api_football import ApiFootballReferenceDataAdapter
 from .adapters.cefi.aster import AsterReferenceDataAdapter
 from .adapters.cefi.ccxt_adapter import CCXTReferenceDataAdapter
 from .adapters.cefi.hyperliquid import HyperliquidReferenceDataAdapter
@@ -90,6 +89,7 @@ from .adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
 from .adapters.defi.uniswap_v4 import UniswapV4ReferenceDataAdapter
 from .adapters.prediction.kalshi import KalshiReferenceDataAdapter
 from .adapters.prediction.polymarket import PolymarketReferenceDataAdapter
+from .adapters.sports.adapters.api_football_reference import ApiFootballReferenceDataAdapter
 from .adapters.sports.adapters.betfair import BetfairReferenceDataAdapter
 from .adapters.tradfi.databento import DatabentoReferenceDataAdapter
 from .adapters.tradfi.ibkr import IBKRReferenceDataAdapter
