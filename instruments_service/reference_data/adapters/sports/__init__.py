@@ -22,7 +22,6 @@ from .adapters.api_football import (
 from .adapters.base import (
     BaseSportsReferenceAdapter as BaseSportsReferenceAdapter,
 )
-from .adapters.odds_api import OddsApiAdapter as OddsApiAdapter
 from .competition_phase import (
     CompetitionPhase as CompetitionPhase,
 )
