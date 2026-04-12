@@ -17,6 +17,7 @@ from unified_api_contracts.external.footystats import (
 )
 from unified_api_contracts.external.footystats.normalize import (
     normalize_footystats_match,
+    normalize_footystats_predictions,
 )
 from unified_api_contracts.sports import (
     CanonicalFixture,
@@ -200,6 +201,73 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
         )
         return teams
 
+    async def get_fixture_predictions(
+        self,
+        date: str,
+        league_ids: list[int] | None = None,
+    ) -> list[dict[str, object]]:
+        """Fetch predictive/proprietary fields from FootyStats for a given date.
+
+        Returns flat dicts of fixture_id + predictive potentials suitable for
+        writing as ``entity=footystats_predictions`` in GCS. Uses the same
+        ``/todays-matches`` endpoint as ``get_fixtures`` — one API call.
+
+        Args:
+            date: Date string in YYYY-MM-DD format.
+            league_ids: Optional list of FootyStats league/competition IDs.
+
+        Returns:
+            List of dicts with fixture_id and predictive fields.
+        """
+        url = f"{_BASE_URL}/todays-matches"
+        params = self._params_with_key({"date": date})
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                raw_response = await self._get_with_retry(session, url, params=params)
+        except Exception as exc:
+            error_code = self._classify_error(exc)
+            self._emit_fetch_failed(error_code, exc)
+            raise
+
+        predictions: list[dict[str, object]] = []
+        match_list = _extract_data(raw_response)
+        for item in match_list:
+            try:
+                match = _parse_match(item)
+                if match is None:
+                    continue
+                if league_ids and match.competition_id not in league_ids:
+                    continue
+                pred = normalize_footystats_predictions(match)
+                # Only include if at least one predictive field is non-null
+                has_data = any(
+                    pred.get(k) is not None
+                    for k in (
+                        "btts_potential",
+                        "o25_potential",
+                        "o35_potential",
+                        "o45_potential",
+                        "xg_prematch_home",
+                        "xg_prematch_away",
+                        "corners_potential",
+                        "cards_potential",
+                        "avg_potential",
+                    )
+                )
+                if has_data:
+                    predictions.append(pred)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to extract FootyStats predictions for match %s: %s",
+                    item.get("match_id", "unknown") if isinstance(item, dict) else "unknown",
+                    exc,
+                )
+                continue
+
+        logger.info("Extracted %d prediction rows for date=%s", len(predictions), date)
+        return predictions
+
     async def get_odds(
         self,
         sport: str,
@@ -253,6 +321,16 @@ def _parse_match(item: dict[str, object]) -> FootyStatsMatch | None:
             away_shots=_safe_int(item.get("team_b_shots")),
             home_corners=_safe_int(item.get("team_a_corners")),
             away_corners=_safe_int(item.get("team_b_corners")),
+            # Predictive potentials (FootyStats proprietary)
+            btts_potential=_safe_int(item.get("btts_potential")),
+            o25_potential=_safe_int(item.get("o25_potential") or item.get("over25_potential")),
+            o35_potential=_safe_int(item.get("o35_potential") or item.get("ov35_potential")),
+            o45_potential=_safe_int(item.get("o45_potential")),
+            xg_prematch_home=_safe_float(item.get("team_a_xg_prematch")),
+            xg_prematch_away=_safe_float(item.get("team_b_xg_prematch")),
+            corners_potential=_safe_int(item.get("corners_potential")),
+            cards_potential=_safe_int(item.get("cards_potential")),
+            avg_potential=_safe_int(item.get("avg_potential")),
         )
     except Exception as exc:
         logger.warning("Failed to parse FootyStats match item: %s", exc)
