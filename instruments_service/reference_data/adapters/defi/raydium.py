@@ -34,7 +34,6 @@ from ...schemas import (
 )
 from ...utils.defi_utils import order_base_quote, parse_created_timestamp
 from ._solana_utils import (
-    _make_session,
     batch_resolve_creation_timestamps,
     discover_program_pool_accounts,
     get_protocol_floor_date,
@@ -170,7 +169,7 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
             "page": "1",
         }
         try:
-            async with _make_session() as session:
+            async with self._make_session() as session:
                 data = await self._get_with_retry(session, url, params=params)
         except (aiohttp.ClientError, RuntimeError) as exc:
             if isinstance(exc, aiohttp.ClientError):

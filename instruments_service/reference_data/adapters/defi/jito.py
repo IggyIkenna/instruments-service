@@ -106,7 +106,7 @@ class JitoReferenceDataAdapter(BaseReferenceDataAdapter):
 
         url = f"{_BASE_URL}/api/v1/stake_pool_stats"
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 await self._get_with_retry(session, url)
         except (aiohttp.ClientError, RuntimeError) as exc:
             if isinstance(exc, aiohttp.ClientError):

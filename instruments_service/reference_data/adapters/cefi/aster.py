@@ -82,7 +82,7 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
 
         url = f"{_BASE}/fapi/v1/exchangeInfo"
         try:
-            async with aiohttp.ClientSession() as session, session.get(url) as resp:
+            async with self._make_session() as session, session.get(url) as resp:
                 resp.raise_for_status()
                 raw = await resp.json()
         except aiohttp.ClientError as exc:
@@ -193,7 +193,7 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
         now = datetime.now(UTC)
 
         try:
-            async with aiohttp.ClientSession() as session, session.get(url, params=params) as resp:
+            async with self._make_session() as session, session.get(url, params=params) as resp:
                 resp.raise_for_status()
                 raw: object = cast(object, await resp.json())
         except aiohttp.ClientError as exc:
@@ -290,7 +290,7 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
         }
 
         try:
-            async with aiohttp.ClientSession() as session, session.get(url, params=params) as resp:
+            async with self._make_session() as session, session.get(url, params=params) as resp:
                 resp.raise_for_status()
                 raw_ohlcv: object = cast(object, await resp.json())
         except aiohttp.ClientError as exc:

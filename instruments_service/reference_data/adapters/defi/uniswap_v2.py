@@ -88,7 +88,7 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
         variables = {"first": _FETCH_LIMIT, "minReserve": "100000"}
         try:
             async with (
-                aiohttp.ClientSession() as session,
+                self._make_session() as session,
                 session.post(
                     url,
                     json={"query": query, "variables": variables},

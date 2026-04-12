@@ -1,17 +1,19 @@
 """Understat adapter — xG (expected goals), shot data, advanced stats.
 
-Auth: None (public AJAX endpoints, browser-like headers).
+Auth: None (public JSON API, browser-like headers).
 Base URL: https://understat.com
 Ref: https://understat.com
 Leagues: EPL, La_Liga, Bundesliga, Serie_A, Ligue_1, RFPL
+
+Data fetched via ``GET /getLeagueData/{league}/{season}`` which returns
+JSON with ``{teams, players, dates}`` — the ``dates`` array has per-match
+xG, goals, and team info.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 
-import aiohttp
 from unified_api_contracts.external.understat import (
     UnderstatMatch,
     UnderstatMatchTeam,
@@ -39,11 +41,11 @@ _UNDERSTAT_LEAGUES: list[str] = ["EPL", "La_Liga", "Bundesliga", "Serie_A", "Lig
 class UnderstatAdapter(BaseSportsReferenceAdapter):
     """Understat sports reference data adapter.
 
-    Scrapes xG (expected goals), shot data, and advanced stats from
-    Understat public AJAX endpoints. No API key required.
+    Fetches xG (expected goals), shot data, and advanced stats from
+    Understat's JSON API. No API key required.
 
-    Understat embeds JSON data in HTML pages via JavaScript variables.
-    This adapter fetches HTML and extracts the embedded JSON.
+    Data is fetched via ``/getLeagueData/{league}/{season}`` which returns
+    JSON with match-level xG, goals, and team metadata.
     """
 
     @property
@@ -51,10 +53,11 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
         return "understat"
 
     def _headers(self) -> dict[str, str]:
-        """Build request headers with browser-like User-Agent."""
+        """Build request headers — Understat AJAX requires XMLHttpRequest."""
         return {
-            "User-Agent": "Mozilla/5.0 (compatible; UnifiedTradingSystem/1.0)",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
         }
 
     async def get_fixtures(
@@ -102,29 +105,24 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
         season: int,
         target_date: str,
     ) -> list[CanonicalFixture]:
-        """Fetch fixtures for a single league/season from Understat."""
-        url = f"{_BASE_URL}/league/{league}/{season}"
+        """Fetch fixtures for a single league/season from Understat JSON API.
+
+        Uses ``GET /getLeagueData/{league}/{season}`` which returns JSON
+        with ``{dates: [...], teams: {...}, players: [...]}`` where each
+        entry in ``dates`` is a match with xG, goals, and team info.
+        """
+        url = f"{_BASE_URL}/getLeagueData/{league}/{season}"
+        headers = {**self._headers(), "Referer": f"{_BASE_URL}/league/{league}/{season}"}
 
         try:
-            async with (
-                aiohttp.ClientSession() as session,
-                session.get(url, headers=self._headers()) as resp,
-            ):
-                if resp.status != 200:
-                    logger.warning(
-                        "Understat returned HTTP %d for %s/%d",
-                        resp.status,
-                        league,
-                        season,
-                    )
-                    return []
-                html = await resp.text()
+            async with self._make_session() as session:
+                raw_response = await self._get_with_retry(session, url, headers=headers)
         except Exception as exc:
             error_code = self._classify_error(exc)
             self._emit_fetch_failed(error_code, exc)
             return []
 
-        matches = _extract_dates_data(html)
+        matches = _extract_dates_from_json(raw_response)
         return _filter_and_normalize_matches(matches, target_date, league, season)
 
     async def get_leagues(self) -> list[CanonicalLeague]:
@@ -155,7 +153,7 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
         logger.info("Returned %d Understat leagues", len(leagues))
         return leagues
 
-    async def get_teams(self, league_id: int, season: int | None = None) -> list[CanonicalTeam]:
+    async def get_teams(self, league_id: int | str, season: int | None = None) -> list[CanonicalTeam]:
         """Understat does not support team lookup by numeric league ID.
 
         Use ApiFootballAdapter for team reference data. This returns an empty list.
@@ -206,31 +204,18 @@ def _filter_and_normalize_matches(
     return fixtures
 
 
-def _extract_dates_data(html: str) -> list[dict[str, object]]:
-    """Extract match data from Understat HTML page.
+def _extract_dates_from_json(raw: object) -> list[dict[str, object]]:
+    """Extract match list from Understat ``/getLeagueData`` JSON response.
 
-    Understat embeds data as JSON.parse('\\xHH...') with hex-encoded content.
-    League pages may have match lists; match pages have single match dicts.
+    Response shape: ``{dates: [...], teams: {...}, players: [...]}``
+    Each entry in ``dates`` is a match dict with id, h, a, goals, xG, datetime.
     """
-    import codecs
-
-    results: list[dict[str, object]] = []
-    parts = html.split("JSON.parse('")
-    for part in parts[1:]:
-        end = part.find("')")
-        if end == -1:
-            continue
-        raw = part[:end]
-        try:
-            decoded = codecs.decode(raw, "unicode_escape")
-            data = json.loads(decoded)
-            if isinstance(data, list):
-                results.extend(item for item in data if isinstance(item, dict))
-            elif isinstance(data, dict) and ("h_xg" in data or "xG" in data or "h_goals" in data):
-                results.append(data)
-        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
-            logger.debug("Failed to decode Understat JSON block: %s", exc)
-    return results
+    if not isinstance(raw, dict):
+        return []
+    dates = raw.get("dates")
+    if isinstance(dates, list):
+        return [item for item in dates if isinstance(item, dict)]
+    return []
 
 
 def _parse_understat_match(item: dict[str, object]) -> UnderstatMatch | None:

@@ -124,7 +124,7 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch all markets from Drift Data API /stats/markets (public, no auth)."""
         url = f"{_DATA_API_URL}/stats/markets"
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 data = await self._get_with_retry(session, url)
         except (aiohttp.ClientError, RuntimeError) as exc:
             if isinstance(exc, aiohttp.ClientError):

@@ -60,7 +60,7 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
         url = f"{_BASE}/info"
         payload = {"type": "meta"}
         try:
-            async with aiohttp.ClientSession() as session, session.post(url, json=payload) as resp:
+            async with self._make_session() as session, session.post(url, json=payload) as resp:
                 resp.raise_for_status()
                 data = HyperliquidMeta.model_validate(await resp.json())
         except aiohttp.ClientError as exc:
@@ -151,7 +151,7 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
             "startTime": int((now.timestamp() - 8 * 3600) * 1000),
         }
         try:
-            async with aiohttp.ClientSession() as session, session.post(url, json=payload) as resp:
+            async with self._make_session() as session, session.post(url, json=payload) as resp:
                 resp.raise_for_status()
                 raw: object = cast(object, await resp.json())
         except aiohttp.ClientError as exc:
@@ -260,7 +260,7 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
             },
         }
         try:
-            async with aiohttp.ClientSession() as session, session.post(url, json=payload) as resp:
+            async with self._make_session() as session, session.post(url, json=payload) as resp:
                 resp.raise_for_status()
                 raw_ohlcv: object = cast(object, await resp.json())
         except aiohttp.ClientError as exc:

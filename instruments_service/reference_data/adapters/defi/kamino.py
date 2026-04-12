@@ -106,7 +106,7 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
         url = f"{_BASE_URL}/strategies"
         params = {"status": "LIVE"}
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 data = await self._get_with_retry(session, url, params=params)
         except (aiohttp.ClientError, RuntimeError) as exc:
             if isinstance(exc, aiohttp.ClientError):

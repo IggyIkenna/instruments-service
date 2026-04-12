@@ -148,7 +148,7 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         all_pools: list[dict[str, object]] = []
         skip = 0
         schema_error = False
-        async with aiohttp.ClientSession() as session:
+        async with self._make_session() as session:
             while skip <= _MAX_SKIP:
                 variables = {"first": _FETCH_LIMIT, "skip": skip}
                 try:
@@ -220,7 +220,7 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch pools from Messari-schema subgraph and normalise to official format."""
         try:
             async with (
-                aiohttp.ClientSession() as session,
+                self._make_session() as session,
                 session.post(
                     url,
                     json={"query": _MESSARI_POOLS_QUERY, "variables": {"first": 1000}},
@@ -265,7 +265,7 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         all_pools: list[dict[str, object]] = []
         skip = 0
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 while skip <= _MAX_SKIP:
                     variables = {"first": _FETCH_LIMIT, "skip": skip}
                     async with session.post(
@@ -305,7 +305,7 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch pairs from SushiSwap-custom subgraphs — uses `pairs` entity."""
         try:
             async with (
-                aiohttp.ClientSession() as session,
+                self._make_session() as session,
                 session.post(
                     url,
                     json={"query": _SUSHISWAP_PAIRS_QUERY, "variables": {"first": 1000}},
