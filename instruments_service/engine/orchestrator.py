@@ -45,6 +45,7 @@ from unified_api_contracts import (
 )
 from unified_api_contracts.internal import InstrumentRecord, validate_instrument_records
 from unified_api_contracts.registry import get_supported_chains_for_protocol
+from unified_api_contracts.sports import FOOTYSTATS_SEASON_IDS
 from unified_trading_library import (
     DataSink,
     DomainValidationService,
@@ -707,9 +708,20 @@ async def process_instruments(
             "API_FOOTBALL_FIXTURE_LINEUPS",
             "API_FOOTBALL_PLAYER_STATS",
         ]
+        _sports_enrichment_entities = [
+            "FOOTYSTATS_MATCHES",
+            "FOOTYSTATS_PREDICTIONS",
+            "UNDERSTAT_XG",
+            "TRANSFERMARKT_LEAGUES",
+            "TRANSFERMARKT_TEAMS",
+            "SFI_LEAGUES",
+            "SFI_STANDINGS",
+            "WEATHER",
+        ]
         if is_sports_run:
             expected.extend(_sports_core_entities)
             expected.extend(_sports_per_fixture_entities)
+            expected.extend(_sports_enrichment_entities)
 
         is_fresh, stale, missing = check_shard_freshness(
             bucket=bucket,
@@ -1012,6 +1024,91 @@ async def process_instruments(
                                     venue=pf_entity,
                                 )
                         sports_manifest.write()
+                # Also fetch enrichment providers on zero-fixture days
+                # (leagues/teams/standings are date-independent)
+                footystats_key = api_keys.get("footystats")
+                if footystats_key:
+                    try:
+                        _fs_pred = await _fetch_footystats_predictions(
+                            date=date,
+                            api_key=footystats_key,
+                            bucket=bucket,
+                        )
+                        sports_ref_counts.update(_fs_pred)
+                    except Exception as exc:
+                        classify_and_emit_error(
+                            exc,
+                            service_name="instruments-service",
+                            operation="footystats_predictions_fetch",
+                            shard=date,
+                        )
+                    try:
+                        _fs_match = await _fetch_footystats_matches(
+                            date=date,
+                            api_key=footystats_key,
+                            bucket=bucket,
+                        )
+                        sports_ref_counts.update(_fs_match)
+                    except Exception as exc:
+                        classify_and_emit_error(
+                            exc,
+                            service_name="instruments-service",
+                            operation="footystats_matches_fetch",
+                            shard=date,
+                        )
+                try:
+                    _us_xg = await _fetch_understat_xg(date=date, bucket=bucket)
+                    sports_ref_counts.update(_us_xg)
+                except Exception as exc:
+                    classify_and_emit_error(
+                        exc,
+                        service_name="instruments-service",
+                        operation="understat_xg_fetch",
+                        shard=date,
+                    )
+                transfermarkt_key = api_keys.get("transfermarkt")
+                if transfermarkt_key:
+                    try:
+                        _tm = await _fetch_transfermarkt_data(
+                            date=date,
+                            api_key=transfermarkt_key,
+                            bucket=bucket,
+                        )
+                        sports_ref_counts.update(_tm)
+                    except Exception as exc:
+                        classify_and_emit_error(
+                            exc,
+                            service_name="instruments-service",
+                            operation="transfermarkt_data_fetch",
+                            shard=date,
+                        )
+                sfi_key = api_keys.get("soccer_football_info")
+                if sfi_key:
+                    try:
+                        _sfi = await _fetch_sfi_data(
+                            date=date,
+                            api_key=sfi_key,
+                            bucket=bucket,
+                        )
+                        sports_ref_counts.update(_sfi)
+                    except Exception as exc:
+                        classify_and_emit_error(
+                            exc,
+                            service_name="instruments-service",
+                            operation="sfi_data_fetch",
+                            shard=date,
+                        )
+                # Weather: no fixture venues on zero-fixture days, write 0-count
+                _w_manifest = ManifestWriter(
+                    service_name="instruments-service",
+                    catalogue_bucket=bucket,
+                )
+                _w_manifest.add(
+                    processing_date=date_type.fromisoformat(date),
+                    row_count=0,
+                    venue="WEATHER",
+                )
+                _w_manifest.write()
             log_event("PROCESSING_COMPLETED", details={"date": date, "categories": categories, "fixtures": 0})
             return {"api_football": 0}
         # DeFi batch: zero records after date filter is normal for early dates
@@ -1244,6 +1341,87 @@ async def process_instruments(
                     operation="footystats_predictions_fetch",
                     shard=date,
                 )
+
+            # FootyStats matches: detailed fixture stats (possession, shots, xG)
+            try:
+                match_counts = await _fetch_footystats_matches(
+                    date=date,
+                    api_key=footystats_key,
+                    bucket=bucket,
+                )
+                for k, v in match_counts.items():
+                    counts[k] = counts.get(k, 0) + v
+            except Exception as exc:
+                classify_and_emit_error(
+                    exc,
+                    service_name="instruments-service",
+                    operation="footystats_matches_fetch",
+                    shard=date,
+                )
+
+        # Understat xG: expected goals + shot data (no API key needed)
+        try:
+            xg_counts = await _fetch_understat_xg(date=date, bucket=bucket)
+            for k, v in xg_counts.items():
+                counts[k] = counts.get(k, 0) + v
+        except Exception as exc:
+            classify_and_emit_error(
+                exc,
+                service_name="instruments-service",
+                operation="understat_xg_fetch",
+                shard=date,
+            )
+
+        # Transfermarkt: leagues + teams with player values
+        transfermarkt_key = api_keys.get("transfermarkt") if api_keys else None
+        if transfermarkt_key:
+            try:
+                tm_counts = await _fetch_transfermarkt_data(
+                    date=date,
+                    api_key=transfermarkt_key,
+                    bucket=bucket,
+                )
+                for k, v in tm_counts.items():
+                    counts[k] = counts.get(k, 0) + v
+            except Exception as exc:
+                classify_and_emit_error(
+                    exc,
+                    service_name="instruments-service",
+                    operation="transfermarkt_data_fetch",
+                    shard=date,
+                )
+
+        # SoccerFootball.info: leagues + standings
+        sfi_key = api_keys.get("soccer_football_info") if api_keys else None
+        if sfi_key:
+            try:
+                sfi_counts = await _fetch_sfi_data(
+                    date=date,
+                    api_key=sfi_key,
+                    bucket=bucket,
+                )
+                for k, v in sfi_counts.items():
+                    counts[k] = counts.get(k, 0) + v
+            except Exception as exc:
+                classify_and_emit_error(
+                    exc,
+                    service_name="instruments-service",
+                    operation="sfi_data_fetch",
+                    shard=date,
+                )
+
+        # Open-Meteo weather: temperature, wind, rain for fixture venues
+        try:
+            weather_counts = await _fetch_weather_data(date=date, bucket=bucket)
+            for k, v in weather_counts.items():
+                counts[k] = counts.get(k, 0) + v
+        except Exception as exc:
+            classify_and_emit_error(
+                exc,
+                service_name="instruments-service",
+                operation="weather_data_fetch",
+                shard=date,
+            )
 
     total = sum(counts.values())
 
@@ -2007,6 +2185,455 @@ async def _fetch_footystats_predictions(
             operation="footystats_predictions_fetch",
             shard=date,
         )
+
+    return counts
+
+
+async def _fetch_footystats_matches(
+    date: str,
+    api_key: str,
+    bucket: str,
+) -> dict[str, int]:
+    """Fetch FootyStats match data and write to GCS.
+
+    FootyStats provides detailed match statistics (possession, shots, corners,
+    xG) from a different source than API Football. Written as a separate entity
+    so downstream consumers can cross-validate or merge with API Football data.
+
+    GCS path: sports_reference/by_date/day={date}/entity=footystats_matches/
+              footystats_matches.parquet
+    """
+    adapter = create_sports_reference_adapter("footystats", api_key=api_key)
+    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    counts: dict[str, int] = {}
+
+    try:
+        # FootyStats league IDs are seasonal — use UAC SSOT
+        league_ids = list(FOOTYSTATS_SEASON_IDS.values())
+        fixtures = await adapter.get_fixtures(date, league_ids=league_ids)
+        if fixtures:
+            rows = [fx.model_dump() for fx in fixtures]
+            # Flatten nested models for parquet compatibility
+            flat_rows: list[dict[str, str | None]] = []
+            for row in rows:
+                flat: dict[str, str | None] = {}
+                for k, v in row.items():
+                    if isinstance(v, dict):
+                        for sub_k, sub_v in v.items():
+                            flat[f"{k}_{sub_k}"] = str(sub_v) if sub_v is not None else None
+                    else:
+                        flat[k] = str(v) if v is not None else None
+                flat_rows.append(flat)
+            df = pd.DataFrame(flat_rows)
+            sink.write(
+                data=df,
+                partition={"day": date, "entity": "footystats_matches"},
+                format="parquet",
+                filename="footystats_matches.parquet",
+            )
+            counts["footystats_matches"] = len(df)
+            logger.info("FootyStats matches: %d rows written for date=%s", len(df), date)
+
+            # Manifest entry
+            manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+            manifest.add(
+                processing_date=date_type.fromisoformat(date),
+                row_count=len(df),
+                venue="FOOTYSTATS_MATCHES",
+            )
+            manifest.write()
+        else:
+            logger.info("FootyStats matches: no fixtures for date=%s", date)
+            # Write 0-count manifest so date is marked as processed
+            manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+            manifest.add(
+                processing_date=date_type.fromisoformat(date),
+                row_count=0,
+                venue="FOOTYSTATS_MATCHES",
+            )
+            manifest.write()
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="footystats_matches_fetch",
+            shard=date,
+        )
+
+    return counts
+
+
+async def _fetch_understat_xg(
+    date: str,
+    bucket: str,
+) -> dict[str, int]:
+    """Fetch Understat xG data and write to GCS.
+
+    Understat provides expected goals (xG), shot data, and advanced stats
+    scraped from public pages. No API key required. Covers 6 leagues:
+    EPL, La Liga, Bundesliga, Serie A, Ligue 1, RFPL.
+
+    GCS path: sports_reference/by_date/day={date}/entity=understat_xg/
+              understat_xg.parquet
+    """
+    adapter = create_sports_reference_adapter("understat")
+    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    counts: dict[str, int] = {}
+
+    try:
+        fixtures = await adapter.get_fixtures(date)
+        if fixtures:
+            rows = [fx.model_dump() for fx in fixtures]
+            flat_rows: list[dict[str, str | None]] = []
+            for row in rows:
+                flat: dict[str, str | None] = {}
+                for k, v in row.items():
+                    if isinstance(v, dict):
+                        for sub_k, sub_v in v.items():
+                            flat[f"{k}_{sub_k}"] = str(sub_v) if sub_v is not None else None
+                    else:
+                        flat[k] = str(v) if v is not None else None
+                flat_rows.append(flat)
+            df = pd.DataFrame(flat_rows)
+            sink.write(
+                data=df,
+                partition={"day": date, "entity": "understat_xg"},
+                format="parquet",
+                filename="understat_xg.parquet",
+            )
+            counts["understat_xg"] = len(df)
+            logger.info("Understat xG: %d rows written for date=%s", len(df), date)
+
+            manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+            manifest.add(
+                processing_date=date_type.fromisoformat(date),
+                row_count=len(df),
+                venue="UNDERSTAT_XG",
+            )
+            manifest.write()
+        else:
+            logger.info("Understat xG: no fixtures for date=%s", date)
+            manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+            manifest.add(
+                processing_date=date_type.fromisoformat(date),
+                row_count=0,
+                venue="UNDERSTAT_XG",
+            )
+            manifest.write()
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="understat_xg_fetch",
+            shard=date,
+        )
+
+    return counts
+
+
+async def _fetch_transfermarkt_data(
+    date: str,
+    api_key: str,
+    bucket: str,
+) -> dict[str, int]:
+    """Fetch Transfermarkt leagues and teams (with player values) to GCS.
+
+    Transfermarkt provides squad composition, player market values, and
+    transfer history. Data is slow-moving (changes per transfer window,
+    not per day) but re-fetched to capture mid-season transfers.
+
+    GCS paths:
+        sports_reference/by_date/day={date}/entity=transfermarkt_leagues/
+        sports_reference/by_date/day={date}/entity=transfermarkt_teams/
+    """
+    adapter = create_sports_reference_adapter("transfermarkt", api_key=api_key)
+    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    counts: dict[str, int] = {}
+
+    # Leagues
+    try:
+        leagues = await adapter.get_leagues()
+        if leagues:
+            rows = [lg.model_dump() for lg in leagues]
+            df = pd.DataFrame([{k: str(v) if v is not None else None for k, v in r.items()} for r in rows])
+            sink.write(
+                data=df,
+                partition={"day": date, "entity": "transfermarkt_leagues"},
+                format="parquet",
+                filename="transfermarkt_leagues.parquet",
+            )
+            counts["transfermarkt_leagues"] = len(df)
+            logger.info("Transfermarkt leagues: %d rows written", len(df))
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="transfermarkt_leagues_fetch",
+            shard=date,
+        )
+
+    # Teams — for each prediction league that has an API Football ID
+    # (Transfermarkt uses numeric league IDs similar to API Football)
+    try:
+        all_teams: list[dict[str, str | None]] = []
+        for league_def in get_prediction_leagues():
+            if league_def.api_football_id is None:
+                continue
+            try:
+                teams = await adapter.get_teams(league_def.api_football_id)
+                for t in teams:
+                    row = t.model_dump()
+                    flat: dict[str, str | None] = {k: str(v) if v is not None else None for k, v in row.items()}
+                    flat["league_id"] = str(league_def.api_football_id)
+                    flat["canonical_league"] = league_def.league_id
+                    all_teams.append(flat)
+            except Exception as exc:
+                classify_and_emit_error(
+                    exc,
+                    service_name="instruments-service",
+                    operation="transfermarkt_teams_fetch",
+                    shard=str(league_def.league_id),
+                )
+        if all_teams:
+            df = pd.DataFrame(all_teams)
+            sink.write(
+                data=df,
+                partition={"day": date, "entity": "transfermarkt_teams"},
+                format="parquet",
+                filename="transfermarkt_teams.parquet",
+            )
+            counts["transfermarkt_teams"] = len(df)
+            logger.info("Transfermarkt teams: %d rows written", len(df))
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="transfermarkt_teams_batch",
+            shard=date,
+        )
+
+    # Manifest
+    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+    manifest.add(
+        processing_date=date_type.fromisoformat(date),
+        row_count=counts.get("transfermarkt_leagues", 0),
+        venue="TRANSFERMARKT_LEAGUES",
+    )
+    manifest.add(
+        processing_date=date_type.fromisoformat(date),
+        row_count=counts.get("transfermarkt_teams", 0),
+        venue="TRANSFERMARKT_TEAMS",
+    )
+    manifest.write()
+
+    return counts
+
+
+async def _fetch_sfi_data(
+    date: str,
+    api_key: str,
+    bucket: str,
+) -> dict[str, int]:
+    """Fetch SoccerFootball.info leagues and standings to GCS.
+
+    SFI provides league standings and tables from an independent source,
+    useful for cross-validation with API Football standings.
+
+    GCS paths:
+        sports_reference/by_date/day={date}/entity=sfi_leagues/
+        sports_reference/by_date/day={date}/entity=sfi_standings/
+    """
+    adapter = create_sports_reference_adapter("soccer_football_info", api_key=api_key)
+    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    counts: dict[str, int] = {}
+
+    # Leagues
+    sfi_league_ids: list[str] = []
+    try:
+        leagues = await adapter.get_leagues()
+        if leagues:
+            rows = [lg.model_dump() for lg in leagues]
+            df = pd.DataFrame([{k: str(v) if v is not None else None for k, v in r.items()} for r in rows])
+            sink.write(
+                data=df,
+                partition={"day": date, "entity": "sfi_leagues"},
+                format="parquet",
+                filename="sfi_leagues.parquet",
+            )
+            counts["sfi_leagues"] = len(df)
+            sfi_league_ids = [lg.league_id for lg in leagues]
+            logger.info("SFI leagues: %d rows written", len(df))
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="sfi_leagues_fetch",
+            shard=date,
+        )
+
+    # Standings — for each SFI league
+    if sfi_league_ids:
+        try:
+            all_standings: list[dict[str, str | None]] = []
+            for lid in sfi_league_ids:
+                try:
+                    standings = await adapter.get_standings(lid)  # type: ignore[arg-type]
+                    for entry in standings:
+                        flat: dict[str, str | None] = {k: str(v) if v is not None else None for k, v in entry.items()}
+                        flat["league_id"] = lid
+                        all_standings.append(flat)
+                except Exception as exc:
+                    classify_and_emit_error(
+                        exc,
+                        service_name="instruments-service",
+                        operation="sfi_standings_fetch",
+                        shard=lid,
+                    )
+            if all_standings:
+                df = pd.DataFrame(all_standings)
+                sink.write(
+                    data=df,
+                    partition={"day": date, "entity": "sfi_standings"},
+                    format="parquet",
+                    filename="sfi_standings.parquet",
+                )
+                counts["sfi_standings"] = len(df)
+                logger.info("SFI standings: %d rows written", len(df))
+        except Exception as exc:
+            classify_and_emit_error(
+                exc,
+                service_name="instruments-service",
+                operation="sfi_standings_batch",
+                shard=date,
+            )
+
+    # Manifest
+    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+    manifest.add(
+        processing_date=date_type.fromisoformat(date),
+        row_count=counts.get("sfi_leagues", 0),
+        venue="SFI_LEAGUES",
+    )
+    manifest.add(
+        processing_date=date_type.fromisoformat(date),
+        row_count=counts.get("sfi_standings", 0),
+        venue="SFI_STANDINGS",
+    )
+    manifest.write()
+
+    return counts
+
+
+async def _fetch_weather_data(
+    date: str,
+    bucket: str,
+) -> dict[str, int]:
+    """Fetch Open-Meteo weather data for fixture venues and write to GCS.
+
+    Weather (temperature, wind, rain, humidity) affects match outcomes —
+    particularly relevant for outdoor sports prediction models. Reads fixture
+    venues from existing GCS fixtures parquet (written by API Football) and
+    fetches weather for each unique lat/lon pair.
+
+    GCS path: sports_reference/by_date/day={date}/entity=weather/
+              weather.parquet
+    """
+    from instruments_service.reference_data.adapters.sports.adapters.open_meteo import WeatherData
+
+    adapter = create_sports_reference_adapter("open_meteo")
+    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    counts: dict[str, int] = {}
+
+    # Read fixture venues from GCS (we need lat/lon)
+    venues_with_coords: list[tuple[float, float, str]] = []
+    try:
+        prefix = f"sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
+        storage = get_storage_client()
+        blob = storage.bucket(bucket).blob(prefix)
+        if blob.exists():
+            local = f"/tmp/_weather_fixtures_{date}.parquet"
+            blob.download_to_filename(local)
+            df = pd.read_parquet(local)
+            # Extract unique venue lat/lon from fixture data
+            lat_col = None
+            lon_col = None
+            for col in df.columns:
+                if "latitude" in col.lower() or col == "venue_latitude":
+                    lat_col = col
+                if "longitude" in col.lower() or col == "venue_longitude":
+                    lon_col = col
+            if lat_col and lon_col:
+                venue_df = df[[lat_col, lon_col]].dropna().drop_duplicates()
+                for _, row in venue_df.iterrows():
+                    lat_val = float(row[lat_col])
+                    lon_val = float(row[lon_col])
+                    if lat_val != 0.0 and lon_val != 0.0:
+                        venues_with_coords.append((lat_val, lon_val, f"{lat_val:.2f},{lon_val:.2f}"))
+    except Exception as exc:
+        logger.debug("Weather: could not read fixture venues for date=%s: %s", date, exc)
+
+    if not venues_with_coords:
+        logger.info("Weather: no fixture venues with coordinates for date=%s — skipping", date)
+        manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+        manifest.add(
+            processing_date=date_type.fromisoformat(date),
+            row_count=0,
+            venue="WEATHER",
+        )
+        manifest.write()
+        return counts
+
+    # Fetch weather for each unique venue
+    weather_rows: list[dict[str, str | None]] = []
+    for lat, lon, label in venues_with_coords:
+        try:
+            weather: WeatherData | None = await adapter.get_weather(lat, lon, date)  # type: ignore[attr-defined]
+            if weather is not None:
+                weather_rows.append(
+                    {
+                        "latitude": str(weather.latitude),
+                        "longitude": str(weather.longitude),
+                        "temperature_celsius": str(weather.temperature_celsius),
+                        "wind_speed_ms": str(weather.wind_speed_ms) if weather.wind_speed_ms is not None else None,
+                        "humidity_pct": str(weather.humidity_pct) if weather.humidity_pct is not None else None,
+                        "precipitation_mm": str(weather.precipitation_mm)
+                        if weather.precipitation_mm is not None
+                        else None,
+                        "cloud_cover_pct": str(weather.cloud_cover_pct)
+                        if weather.cloud_cover_pct is not None
+                        else None,
+                        "condition": weather.condition.value if weather.condition is not None else None,
+                        "observation_time": weather.observation_time,
+                        "date": date,
+                    }
+                )
+        except Exception as exc:
+            classify_and_emit_error(
+                exc,
+                service_name="instruments-service",
+                operation="weather_fetch",
+                shard=label,
+            )
+
+    if weather_rows:
+        df = pd.DataFrame(weather_rows)
+        sink.write(
+            data=df,
+            partition={"day": date, "entity": "weather"},
+            format="parquet",
+            filename="weather.parquet",
+        )
+        counts["weather"] = len(df)
+        logger.info("Weather: %d venue observations written for date=%s", len(df), date)
+
+    # Manifest
+    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+    manifest.add(
+        processing_date=date_type.fromisoformat(date),
+        row_count=counts.get("weather", 0),
+        venue="WEATHER",
+    )
+    manifest.write()
 
     return counts
 
