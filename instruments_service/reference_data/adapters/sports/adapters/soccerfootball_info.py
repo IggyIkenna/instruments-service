@@ -3,18 +3,17 @@
 Auth: service must fetch soccer-football-info-api-key from Secret Manager
 and pass it via the ``api_key`` constructor parameter. Uses RapidAPI.
 Base URL: https://soccer-football-info.p.rapidapi.com
-Note: UAC does not have external/soccerfootball_info yet; raw dicts used.
 """
 
 from __future__ import annotations
 
 import logging
 
-import aiohttp
 from unified_api_contracts.sports import (
     CanonicalFixture,
     CanonicalLeague,
     CanonicalOdds,
+    CanonicalStanding,
     CanonicalTeam,
 )
 
@@ -61,7 +60,7 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
         url = f"{_BASE_URL}/championships/list/"
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, headers=self._headers())
         except Exception as exc:
             error_code = self._classify_error(exc)
@@ -93,7 +92,7 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
         logger.info("Fetched %d leagues from SoccerFootball.info", len(leagues))
         return leagues
 
-    async def get_standings(self, league_id: str, season: str | None = None) -> list[dict[str, object]]:
+    async def get_standings(self, league_id: str, season: str | None = None) -> list[CanonicalStanding]:
         """Fetch standings/table for a specific league.
 
         Args:
@@ -101,7 +100,7 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
             season: Optional season identifier.
 
         Returns:
-            List of standings entries as raw dicts (no UAC schema yet).
+            List of validated CanonicalStanding models.
         """
         url = f"{_BASE_URL}/leagues/{league_id}/standings"
         params: dict[str, str] = {}
@@ -109,7 +108,7 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
             params["season"] = season
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(
                     session,
                     url,
@@ -121,13 +120,20 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
             self._emit_fetch_failed(error_code, exc)
             raise
 
-        standings = _extract_data(raw_response)
+        raw_rows = _extract_data(raw_response)
+        results: list[CanonicalStanding] = []
+        for item in raw_rows:
+            try:
+                results.append(_normalize_sfi_standing(item, league_id, season))
+            except Exception as exc:
+                logger.warning("Failed to normalize SFI standing: %s", exc)
+                continue
         logger.info(
             "Fetched %d standings entries for league=%s",
-            len(standings),
+            len(results),
             league_id,
         )
-        return standings
+        return results
 
     async def get_fixtures(
         self,
@@ -141,7 +147,7 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
         logger.info("get_fixtures not supported on SoccerFootball.info adapter — use ApiFootballAdapter")
         return []
 
-    async def get_teams(self, league_id: int, season: int | None = None) -> list[CanonicalTeam]:
+    async def get_teams(self, league_id: int | str, season: int | None = None) -> list[CanonicalTeam]:
         """Fetch teams from standings for a league.
 
         Args:
@@ -154,21 +160,17 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
         standings = await self.get_standings(str(league_id))
         teams: list[CanonicalTeam] = []
         for entry in standings:
-            if not isinstance(entry, dict):
-                continue
             try:
-                team_id = str(entry.get("team_id", "") or entry.get("id", ""))
-                name = str(entry.get("team_name", "") or entry.get("name", ""))
-                if not name:
+                if not entry.team_name:
                     continue
                 teams.append(
                     CanonicalTeam(
-                        team_id=team_id,
-                        name=name,
-                        short_name=str(entry.get("short_name", "")) if entry.get("short_name") else None,
+                        team_id=entry.team_id,
+                        name=entry.team_name,
+                        short_name=None,
                         country=None,
                         founded=None,
-                        logo_url=str(entry.get("logo", "")) if entry.get("logo") else None,
+                        logo_url=None,
                         venue=None,
                     )
                 )
@@ -204,3 +206,38 @@ def _extract_data(raw: object) -> list[dict[str, object]]:
     if isinstance(raw, list):
         return [item for item in raw if isinstance(item, dict)]
     return []
+
+
+def _normalize_sfi_standing(
+    item: dict[str, object],
+    league_id: str,
+    season: str | None,
+) -> CanonicalStanding:
+    """Map a SFI standings row to CanonicalStanding."""
+    return CanonicalStanding(
+        league_id=league_id,
+        season=season,
+        rank=_safe_int(item.get("position") or item.get("rank")) or 0,
+        team_id=str(item.get("team_id", "") or item.get("id", "")),
+        team_name=str(item.get("team_name", "") or item.get("name", "")),
+        points=_safe_int(item.get("points")) or 0,
+        goals_diff=_safe_int(item.get("goal_difference") or item.get("goals_diff")),
+        group=str(item.get("group", "")) if item.get("group") else None,
+        form=str(item.get("form", "")) if item.get("form") else None,
+        played=_safe_int(item.get("played") or item.get("matches_played")),
+        wins=_safe_int(item.get("wins") or item.get("won")),
+        draws=_safe_int(item.get("draws") or item.get("drawn")),
+        losses=_safe_int(item.get("losses") or item.get("lost")),
+        goals_for=_safe_int(item.get("goals_for") or item.get("goals_scored")),
+        goals_against=_safe_int(item.get("goals_against") or item.get("goals_conceded")),
+    )
+
+
+def _safe_int(val: object) -> int | None:
+    """Safely convert to int, returning None on failure."""
+    if val is None:
+        return None
+    try:
+        return int(str(val))
+    except (ValueError, TypeError):
+        return None

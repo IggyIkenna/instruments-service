@@ -285,7 +285,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         now = datetime.now(UTC)
         max_pages = _MAX_PAGES_HISTORICAL if date else _MAX_PAGES_ACTIVE
         self._last_raw_page_size = 0
-        async with aiohttp.ClientSession() as session:
+        async with self._make_session() as session:
             for page in range(max_pages):
                 offset = page * _PAGE_LIMIT
                 batch = await self._fetch_page(session, offset, now, date=date)
@@ -373,7 +373,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch raw price history from Polymarket CLOB API. Returns [] on error."""
         url = "https://clob.polymarket.com/prices-history"
         params = {"market": symbol, "interval": clob_interval, "fidelity": "1"}
-        async with aiohttp.ClientSession() as session:
+        async with self._make_session() as session:
             try:
                 async with session.get(url, params=params) as resp:
                     resp.raise_for_status()

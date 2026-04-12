@@ -102,7 +102,7 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
 
         url = f"{_BASE_URL}/v1/whirlpool/list"
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 data = await self._get_with_retry(session, url)
         except (aiohttp.ClientError, RuntimeError) as exc:
             if isinstance(exc, aiohttp.ClientError):

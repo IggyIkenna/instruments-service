@@ -412,7 +412,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
     ) -> list[InstrumentRecord]:
         api_key = self._optional_api_key()
         results: list[InstrumentRecord] = []
-        async with aiohttp.ClientSession() as session:
+        async with self._make_session() as session:
             for exchange in self._exchanges:
                 batch = await self._fetch_exchange_instruments(session, api_key, exchange)
                 if instrument_type is not None:
@@ -507,7 +507,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
     ) -> tuple[dict[str, object] | None, str]:
         """Scan configured exchanges for most recent derivative_ticker funding rate."""
         last_exchange: str = self._exchanges[0] if self._exchanges else "deribit"
-        async with aiohttp.ClientSession() as session:
+        async with self._make_session() as session:
             for exchange in self._exchanges:
                 rate = await self._find_funding_rate(session, exchange, from_ts, to_ts, filter_json, headers, None)
                 if rate is not None:
@@ -578,7 +578,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
     ) -> list[OHLCVRef]:
         """Collect OHLCV bars from the first exchange that returns data."""
         results: list[OHLCVRef] = []
-        async with aiohttp.ClientSession() as session:
+        async with self._make_session() as session:
             for exchange in self._exchanges:
                 if results:
                     break

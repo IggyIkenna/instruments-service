@@ -11,9 +11,17 @@ import logging
 from datetime import UTC, datetime
 
 import aiohttp
+import aiohttp.resolver
 from unified_trading_library import get_secret_client
 
 logger = logging.getLogger(__name__)
+
+
+def _make_session(**kwargs: object) -> aiohttp.ClientSession:
+    """Create an aiohttp session with ThreadedResolver (OS DNS)."""
+    connector = aiohttp.TCPConnector(resolver=aiohttp.resolver.ThreadedResolver())
+    return aiohttp.ClientSession(connector=connector, **kwargs)  # type: ignore[arg-type]
+
 
 # Alchemy RPC endpoint template — key injected at runtime
 _ALCHEMY_URL_TEMPLATE = "https://eth-mainnet.g.alchemy.com/v2/{key}"
@@ -107,7 +115,7 @@ async def date_to_block(
 
         url = _ALCHEMY_URL_TEMPLATE.format(key=key)
 
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
+        async with _make_session(timeout=aiohttp.ClientTimeout(total=30)) as session:
             lo = await _binary_search_block(url, target_ts, session)
 
         logger.debug("date_to_block: %s → block %d", date_str, lo)

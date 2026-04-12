@@ -12,19 +12,30 @@ import logging
 from datetime import UTC, datetime
 from datetime import date as date_
 
-import aiohttp
 from unified_api_contracts.external.api_football import (
     ApiFootballFixture,
     ApiFootballLeague,
 )
 from unified_api_contracts.external.api_football.normalize import (
     normalize_api_football_fixture,
+    normalize_api_football_fixture_event,
+    normalize_api_football_fixture_stats,
+    normalize_api_football_injury,
+    normalize_api_football_lineup,
+    normalize_api_football_player_stats,
+    normalize_api_football_standing,
 )
 from unified_api_contracts.registry.endpoints import BASE_URLS
 from unified_api_contracts.sports import (
     CanonicalFixture,
+    CanonicalFixtureEvent,
+    CanonicalFixtureStats,
+    CanonicalInjury,
     CanonicalLeague,
+    CanonicalLineupEntry,
     CanonicalOdds,
+    CanonicalPlayerPerformance,
+    CanonicalStanding,
     CanonicalTeam,
 )
 
@@ -162,7 +173,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             params["season"] = str(season_year)
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
         except Exception as exc:
             error_code = self._classify_error(exc)
@@ -190,7 +201,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             "season": str(season_year),
         }
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
         except Exception as exc:
             error_code = self._classify_error(exc)
@@ -219,7 +230,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         """
         url = f"{_BASE_URL}/leagues"
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, headers=self._headers())
         except Exception as exc:
             error_code = self._classify_error(exc)
@@ -255,7 +266,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         logger.info("Fetched %d leagues", len(leagues))
         return leagues
 
-    async def get_teams(self, league_id: int, season: int | None = None) -> list[CanonicalTeam]:
+    async def get_teams(self, league_id: int | str, season: int | None = None) -> list[CanonicalTeam]:
         """Fetch teams for a given league from API Football.
 
         Args:
@@ -274,7 +285,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             "season": str(effective_season),
         }
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
         except Exception as exc:
             error_code = self._classify_error(exc)
@@ -312,7 +323,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         logger.info("get_odds not supported on API Football adapter")
         return []
 
-    async def get_standings(self, league_id: int, season: int | None = None) -> list[dict[str, object]]:
+    async def get_standings(self, league_id: int, season: int | None = None) -> list[CanonicalStanding]:
         """Fetch league standings from API Football.
 
         API endpoint: GET /standings?league={id}&season={year}
@@ -322,13 +333,13 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         effective_season = season if season is not None else _effective_season_for_league(league_id)
         params: dict[str, str] = {"league": str(league_id), "season": str(effective_season)}
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
             return []
 
-        results: list[dict[str, object]] = []
+        raw_rows: list[dict[str, object]] = []
         response_list = _extract_response(raw_response)
         for item in response_list:
             league_data = item.get("league")
@@ -337,8 +348,12 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             standings_groups = league_data.get("standings")
             if not isinstance(standings_groups, list):
                 continue
-            results.extend(_flatten_standings_groups(standings_groups))
+            raw_rows.extend(_flatten_standings_groups(standings_groups))
 
+        results = [
+            normalize_api_football_standing(row, league_id=str(league_id), season=str(effective_season))
+            for row in raw_rows
+        ]
         logger.info(
             "Fetched %d standing rows for league=%d season=%d",
             len(results),
@@ -347,7 +362,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         )
         return results
 
-    async def get_injuries(self, date: str) -> list[dict[str, object]]:
+    async def get_injuries(self, date: str) -> list[CanonicalInjury]:
         """Fetch injuries for a given date from API Football.
 
         API endpoint: GET /injuries?date={YYYY-MM-DD}
@@ -355,17 +370,18 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         url = f"{_BASE_URL}/injuries"
         params: dict[str, str] = {"date": date}
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
             return []
 
-        results = _extract_response(raw_response)
+        raw_rows = _extract_response(raw_response)
+        results = [normalize_api_football_injury(row) for row in raw_rows]
         logger.info("Fetched %d injuries for date=%s", len(results), date)
         return results
 
-    async def get_fixture_statistics(self, fixture_id: int) -> list[dict[str, object]]:
+    async def get_fixture_statistics(self, fixture_id: int) -> list[CanonicalFixtureStats]:
         """Fetch match statistics for a completed fixture.
 
         API endpoint: GET /fixtures/statistics?fixture={id}
@@ -374,17 +390,18 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         url = f"{_BASE_URL}/fixtures/statistics"
         params: dict[str, str] = {"fixture": str(fixture_id)}
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
             return []
 
-        results = _extract_response(raw_response)
+        raw_rows = _extract_response(raw_response)
+        results = [normalize_api_football_fixture_stats(row, fixture_id=str(fixture_id)) for row in raw_rows]
         logger.info("Fetched %d stat groups for fixture=%d", len(results), fixture_id)
         return results
 
-    async def get_fixture_events(self, fixture_id: int) -> list[dict[str, object]]:
+    async def get_fixture_events(self, fixture_id: int) -> list[CanonicalFixtureEvent]:
         """Fetch match events (goals, cards, substitutions) for a fixture.
 
         API endpoint: GET /fixtures/events?fixture={id}
@@ -392,17 +409,18 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         url = f"{_BASE_URL}/fixtures/events"
         params: dict[str, str] = {"fixture": str(fixture_id)}
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
             return []
 
-        results = _extract_response(raw_response)
+        raw_rows = _extract_response(raw_response)
+        results = [normalize_api_football_fixture_event(row, fixture_id=str(fixture_id)) for row in raw_rows]
         logger.info("Fetched %d events for fixture=%d", len(results), fixture_id)
         return results
 
-    async def get_fixture_lineups(self, fixture_id: int) -> list[dict[str, object]]:
+    async def get_fixture_lineups(self, fixture_id: int) -> list[CanonicalLineupEntry]:
         """Fetch starting lineups for a fixture.
 
         API endpoint: GET /fixtures/lineups?fixture={id}
@@ -411,17 +429,20 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         url = f"{_BASE_URL}/fixtures/lineups"
         params: dict[str, str] = {"fixture": str(fixture_id)}
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
             return []
 
-        results = _extract_response(raw_response)
+        raw_rows = _extract_response(raw_response)
+        results: list[CanonicalLineupEntry] = []
+        for row in raw_rows:
+            results.extend(normalize_api_football_lineup(row, fixture_id=str(fixture_id)))
         logger.info("Fetched %d lineup entries for fixture=%d", len(results), fixture_id)
         return results
 
-    async def get_fixture_player_stats(self, fixture_id: int) -> list[dict[str, object]]:
+    async def get_fixture_player_stats(self, fixture_id: int) -> list[CanonicalPlayerPerformance]:
         """Fetch per-player per-match statistics for a fixture.
 
         API endpoint: GET /fixtures/players?fixture={id}
@@ -430,14 +451,17 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         url = f"{_BASE_URL}/fixtures/players"
         params: dict[str, str] = {"fixture": str(fixture_id)}
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
         except Exception as exc:
             self._emit_fetch_failed(self._classify_error(exc), exc)
             return []
 
-        results = _extract_response(raw_response)
-        logger.info("Fetched %d player stat groups for fixture=%d", len(results), fixture_id)
+        raw_rows = _extract_response(raw_response)
+        results: list[CanonicalPlayerPerformance] = []
+        for row in raw_rows:
+            results.extend(normalize_api_football_player_stats(row, fixture_id=str(fixture_id)))
+        logger.info("Fetched %d player stat entries for fixture=%d", len(results), fixture_id)
         return results
 
 

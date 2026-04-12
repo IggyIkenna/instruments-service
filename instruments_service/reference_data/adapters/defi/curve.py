@@ -85,7 +85,7 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
         api_url = _CURVE_API_TEMPLATE.format(chain_slug=chain_slug)
 
         try:
-            async with aiohttp.ClientSession() as session, session.get(api_url) as resp:
+            async with self._make_session() as session, session.get(api_url) as resp:
                 resp.raise_for_status()
                 raw = await resp.json()
         except aiohttp.ClientError as exc:

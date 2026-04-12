@@ -13,6 +13,7 @@ from typing import TypeVar, cast
 from uuid import uuid4
 
 import aiohttp
+import aiohttp.resolver
 from pydantic import BaseModel
 from unified_api_contracts.internal import (
     EnhancedError,
@@ -76,6 +77,18 @@ class BaseReferenceDataAdapter(ABC):
         # Subclasses inherit this. TTL is configurable per adapter.
         self._instruments_cache: dict[str | None, tuple[list[InstrumentRecord], float]] = {}
         self._cache_ttl: float = 3600.0  # 1 hour default; subclasses can override
+
+    @staticmethod
+    def _make_session(**kwargs: object) -> aiohttp.ClientSession:
+        """Create an aiohttp session with ThreadedResolver.
+
+        Uses the OS DNS resolver (via thread pool) instead of aiodns/c-ares.
+        c-ares has known issues with container DNS, CNAME chains, and certain
+        host configurations.  ThreadedResolver is reliable everywhere with
+        negligible overhead at our connection scale.
+        """
+        connector = aiohttp.TCPConnector(resolver=aiohttp.resolver.ThreadedResolver())
+        return aiohttp.ClientSession(connector=connector, **kwargs)  # type: ignore[arg-type]
 
     def _optional_api_key(self) -> str | None:
         """Return the injected API key, or None if not provided.

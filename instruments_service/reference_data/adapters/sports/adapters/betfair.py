@@ -150,7 +150,7 @@ class BetfairReferenceDataAdapter(BaseReferenceDataAdapter):
             },
             "id": 1,
         }
-        async with aiohttp.ClientSession() as session:
+        async with self._make_session() as session:
             try:
                 async with session.post(_BETFAIR_RPC_URL, json=payload, headers=headers) as resp:
                     if resp.status == 401:
