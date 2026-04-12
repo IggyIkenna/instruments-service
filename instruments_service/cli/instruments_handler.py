@@ -14,6 +14,7 @@ import logging
 from unified_trading_library import (
     ApiKeyReloader,
     BatchPayload,
+    ManifestWriter,
     ServiceRuntime,
     UnifiedServiceHandler,
     classify_and_emit_error,
@@ -44,6 +45,8 @@ class InstrumentsHandler(UnifiedServiceHandler):
         self._completed_dates: set[str] = set()
         self._key_reloader: ApiKeyReloader | None = None
         self._venue_override: list[str] | None = None  # set in preflight() when --venues is used
+        self._sports_entity_filter: str | None = None  # set in preflight() when --sports-entity is used
+        self._league_filter: list[str] | None = None  # set in preflight() when --league is used
 
     async def preflight(self) -> None:
         """Start API key reloader. Date/category filtering happens in process()."""
@@ -64,6 +67,20 @@ class InstrumentsHandler(UnifiedServiceHandler):
             earliest = earliest_venue_date(venues_arg)
             if earliest:
                 logger.info("Earliest venue launch date: %s (dates before this will be skipped)", earliest)
+
+        # Wire --sports-entity filter (entity-scoped VM: one VM per manifest entity type)
+        sports_entity_arg: str | None = getattr(self.args, "sports_entity", None) if self.args else None
+        if sports_entity_arg:
+            self._sports_entity_filter = sports_entity_arg
+            logger.info(
+                "Sports entity filter from CLI: %s (only this entity will be checked/fetched)", sports_entity_arg
+            )
+
+        # Wire --league filter (league-scoped VM: only process specified leagues)
+        league_arg: str | None = getattr(self.args, "league", None) if self.args else None
+        if league_arg:
+            self._league_filter = [lid.strip() for lid in league_arg.split(",") if lid.strip()]
+            logger.info("League filter from CLI: %s", self._league_filter)
 
         # Scope key validation to the requested categories only.
         # --category SPORTS only validates sports API keys (not CeFi/DeFi/TradFi).
@@ -115,4 +132,23 @@ class InstrumentsHandler(UnifiedServiceHandler):
             api_keys=api_keys,
             venue_override=self._venue_override,
             mode=str(self.runtime.mode),
+            sports_entity_filter=self._sports_entity_filter,
+            league_filter=self._league_filter,
         )
+
+    async def cleanup(self) -> None:
+        """Flush any buffered manifest writes to GCS at end of batch."""
+        from instruments_service.engine.orchestrator import _get_instruments_bucket
+
+        flushed: list[str] = []
+        for category in ("SPORTS", "CEFI", "DEFI", "TRADFI"):
+            try:
+                bucket = _get_instruments_bucket(category)
+                if bucket:
+                    writer = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+                    writer.flush()
+                    flushed.append(bucket)
+            except Exception as exc:
+                logger.warning("ManifestWriter final flush failed for %s: %s", category, exc)
+        if flushed:
+            logger.info("ManifestWriter cleanup: flushed buffers for %s", flushed)
