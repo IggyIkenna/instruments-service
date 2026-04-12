@@ -93,7 +93,7 @@ class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
         # Paginate through all pools (The Graph caps skip at 5000)
         all_pools: list[dict[str, object]] = []
         skip = 0
-        async with aiohttp.ClientSession() as session:
+        async with self._make_session() as session:
             while skip <= _MAX_SKIP:
                 variables = {"first": _FETCH_LIMIT, "skip": skip}
                 try:

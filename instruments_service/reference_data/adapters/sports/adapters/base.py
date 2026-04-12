@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from uuid import uuid4
 
 import aiohttp
+import aiohttp.resolver
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.sports import (
     CanonicalFixture,
@@ -47,6 +48,12 @@ class BaseSportsReferenceAdapter(ABC):
     def __init__(self, api_key: str | None = None) -> None:
         self._api_key = api_key
 
+    @staticmethod
+    def _make_session(**kwargs: object) -> aiohttp.ClientSession:
+        """Create an aiohttp session with ThreadedResolver (OS DNS)."""
+        connector = aiohttp.TCPConnector(resolver=aiohttp.resolver.ThreadedResolver())
+        return aiohttp.ClientSession(connector=connector, **kwargs)  # type: ignore[arg-type]
+
     @property
     @abstractmethod
     def venue(self) -> str:
@@ -80,11 +87,11 @@ class BaseSportsReferenceAdapter(ABC):
         ...
 
     @abstractmethod
-    async def get_teams(self, league_id: int, season: int | None = None) -> list[CanonicalTeam]:
+    async def get_teams(self, league_id: int | str, season: int | None = None) -> list[CanonicalTeam]:
         """Fetch teams for a given league.
 
         Args:
-            league_id: League ID.
+            league_id: League ID (numeric for API Football, string code for Transfermarkt).
             season: Optional season year. Defaults to current season.
 
         Returns:
@@ -111,7 +118,7 @@ class BaseSportsReferenceAdapter(ABC):
         """
         ...
 
-    async def get_standings(self, league_id: int, season: int | None = None) -> list[dict[str, object]]:
+    async def get_standings(self, league_id: int | str, season: int | None = None) -> list[dict[str, object]]:
         """Fetch league standings/table for a given season.
 
         Returns:
@@ -245,7 +252,7 @@ class BaseSportsReferenceAdapter(ABC):
                             continue
                         raise RuntimeError(f"HTTP {resp.status} from {url} after {_RETRY_ATTEMPTS} attempts")
                     resp.raise_for_status()
-                    return await resp.json()
+                    return await resp.json(content_type=None)
             except aiohttp.ClientError as exc:
                 last_exc = exc
                 delay = _RETRY_BASE_DELAY * (1 << attempt)

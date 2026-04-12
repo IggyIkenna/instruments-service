@@ -117,7 +117,7 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         try:
             async with (
-                aiohttp.ClientSession() as session,
+                self._make_session() as session,
                 session.post(
                     url,
                     json={"query": _MARKETS_QUERY},

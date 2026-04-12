@@ -8,10 +8,8 @@ Ref: https://open-meteo.com/en/docs
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-import aiohttp
 from unified_api_contracts.external.open_meteo import (
     OpenMeteoResponse,
     WeatherCondition,
@@ -21,6 +19,7 @@ from unified_api_contracts.sports import (
     CanonicalLeague,
     CanonicalOdds,
     CanonicalTeam,
+    CanonicalWeather,
 )
 
 from .base import BaseSportsReferenceAdapter
@@ -28,21 +27,6 @@ from .base import BaseSportsReferenceAdapter
 logger = logging.getLogger(__name__)
 
 _BASE_URL: str = "https://api.open-meteo.com/v1"
-
-
-@dataclass(frozen=True)
-class WeatherData:
-    """Weather observation for a venue at a specific time."""
-
-    latitude: float
-    longitude: float
-    temperature_celsius: float
-    wind_speed_ms: float | None
-    humidity_pct: int | None
-    precipitation_mm: float | None
-    cloud_cover_pct: int | None
-    condition: WeatherCondition | None
-    observation_time: str
 
 
 class OpenMeteoAdapter(BaseSportsReferenceAdapter):
@@ -64,7 +48,7 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
         venue_lat: float,
         venue_lon: float,
         date: str,
-    ) -> WeatherData | None:
+    ) -> CanonicalWeather | None:
         """Fetch weather data for a venue location and date.
 
         Args:
@@ -88,7 +72,7 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params)
         except Exception as exc:
             error_code = self._classify_error(exc)
@@ -126,7 +110,7 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
         logger.info("get_leagues not supported on Open-Meteo adapter — use ApiFootballAdapter")
         return []
 
-    async def get_teams(self, league_id: int, season: int | None = None) -> list[CanonicalTeam]:
+    async def get_teams(self, league_id: int | str, season: int | None = None) -> list[CanonicalTeam]:
         """Open-Meteo does not provide team data.
 
         Use ApiFootballAdapter for teams. This returns an empty list.
@@ -153,8 +137,8 @@ def _parse_weather_response(
     venue_lat: float,
     venue_lon: float,
     date: str,
-) -> WeatherData | None:
-    """Parse an Open-Meteo API response into WeatherData."""
+) -> CanonicalWeather | None:
+    """Parse an Open-Meteo API response into CanonicalWeather."""
     if not isinstance(raw_response, dict):
         return None
     try:
@@ -175,7 +159,8 @@ def _parse_weather_response(
     wind = _safe_list_get(hourly.wind_speed_10m, target_idx)
     wind_ms = wind / 3.6 if wind is not None else None
     obs_time = hourly.time[target_idx] if target_idx < len(hourly.time) else date
-    return WeatherData(
+    condition = _weather_code_to_condition(_safe_list_get_int(hourly.weather_code, target_idx))
+    return CanonicalWeather(
         latitude=venue_lat,
         longitude=venue_lon,
         temperature_celsius=temp,
@@ -183,8 +168,9 @@ def _parse_weather_response(
         humidity_pct=_safe_list_get_int(hourly.relative_humidity_2m, target_idx),
         precipitation_mm=_safe_list_get(hourly.precipitation, target_idx),
         cloud_cover_pct=_safe_list_get_int(hourly.cloud_cover, target_idx),
-        condition=_weather_code_to_condition(_safe_list_get_int(hourly.weather_code, target_idx)),
+        condition=condition.value if condition is not None else None,
         observation_time=obs_time,
+        date=date,
     )
 
 

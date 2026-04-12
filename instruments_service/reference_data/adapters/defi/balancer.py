@@ -105,7 +105,7 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
 
         all_pools: list[dict[str, object]] = []
         skip = 0
-        async with aiohttp.ClientSession() as session:
+        async with self._make_session() as session:
             while skip <= _MAX_SKIP:
                 try:
                     payload = {

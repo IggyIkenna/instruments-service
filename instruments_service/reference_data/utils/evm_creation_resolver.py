@@ -20,8 +20,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import aiohttp
+import aiohttp.resolver
 
 logger = logging.getLogger(__name__)
+
+
+def _make_session(**kwargs: object) -> aiohttp.ClientSession:
+    """Create an aiohttp session with ThreadedResolver (OS DNS)."""
+    connector = aiohttp.TCPConnector(resolver=aiohttp.resolver.ThreadedResolver())
+    return aiohttp.ClientSession(connector=connector, **kwargs)  # type: ignore[arg-type]
+
 
 # ── Cache files ──────────────────────────────────────────────────────
 _GCS_CACHE_BLOB = "_cache/evm_creation_timestamps.json"
@@ -330,7 +338,7 @@ async def resolve_contract_creation(
 
     owns_session = session is None
     if owns_session:
-        session = aiohttp.ClientSession()
+        session = _make_session()
 
     try:
         latest = await _get_latest_block(session, url)
@@ -377,7 +385,7 @@ async def block_to_timestamp(
     url = rpc_url or _resolve_rpc_url(chain)
     if not url:
         return None
-    async with aiohttp.ClientSession() as session:
+    async with _make_session() as session:
         return await _get_block_timestamp(session, url, block_number)
 
 
@@ -438,7 +446,7 @@ async def batch_resolve_evm_creation_timestamps(
     sem = asyncio.Semaphore(concurrency)
     new_resolved: dict[str, datetime] = {}
 
-    async with aiohttp.ClientSession() as session:
+    async with _make_session() as session:
 
         async def _resolve_one(addr: str) -> None:
             async with sem:

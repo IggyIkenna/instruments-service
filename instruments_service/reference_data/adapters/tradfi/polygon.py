@@ -103,7 +103,7 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
         api_key = self._get_api_key()
         headers = {"Authorization": f"Bearer {api_key}"}
         url = f"{_POLYGON_BASE}/v3/reference/tickers/{symbol.upper()}"
-        async with aiohttp.ClientSession() as session:
+        async with self._make_session() as session:
             try:
                 async with session.get(url, headers=headers) as resp:
                     if resp.status == 404:
@@ -234,7 +234,7 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
         url = f"{_POLYGON_BASE}/v2/aggs/ticker/{symbol.upper()}/range/{multiplier}/{timespan}/{from_date}/{to_date}"
         params = {"adjusted": "true", "sort": "asc", "limit": str(limit)}
         headers = {"Authorization": f"Bearer {api_key}"}
-        async with aiohttp.ClientSession() as session:
+        async with self._make_session() as session:
             try:
                 async with session.get(url, params=params, headers=headers) as resp:
                     if resp.status == 403:
@@ -263,7 +263,7 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
             "limit": str(_PAGE_LIMIT),
         }
         pages = 0
-        async with aiohttp.ClientSession() as session:
+        async with self._make_session() as session:
             while url and pages < _MAX_PAGES:
                 try:
                     async with session.get(url, params=params, headers=headers) as resp:
@@ -301,7 +301,7 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
         if underlying:
             params["underlying_ticker"] = underlying
         pages = 0
-        async with aiohttp.ClientSession() as session:
+        async with self._make_session() as session:
             while url and pages < _MAX_PAGES:
                 try:
                     async with session.get(url, params=params, headers=headers) as resp:

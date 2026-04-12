@@ -112,7 +112,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         results: list[InstrumentRecord] = []
         now = datetime.now(UTC)
         cursor: str | None = None
-        async with aiohttp.ClientSession() as session:
+        async with self._make_session() as session:
             for _page in range(_MAX_PAGES):
                 batch, cursor = await self._fetch_markets_page(session, cursor, now)
                 results.extend(batch)
@@ -201,7 +201,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         url = f"{_KALSHI_BASE_URL}/markets/{symbol}"
         headers = self._get_headers()
         now = datetime.now(UTC)
-        async with aiohttp.ClientSession() as session:
+        async with self._make_session() as session:
             try:
                 async with session.get(url, headers=headers) as resp:
                     if resp.status == 404:

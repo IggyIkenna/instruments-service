@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-import aiohttp
 from unified_api_contracts.external.footystats import (
     FootyStatsMatch,
 )
@@ -23,6 +22,7 @@ from unified_api_contracts.sports import (
     CanonicalFixture,
     CanonicalLeague,
     CanonicalOdds,
+    CanonicalPrediction,
     CanonicalTeam,
 )
 
@@ -78,7 +78,7 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
         params = self._params_with_key({"date": date})
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params)
         except Exception as exc:
             error_code = self._classify_error(exc)
@@ -117,7 +117,7 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
         params = self._params_with_key({"chosen_leagues_only": "true"})
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params)
         except Exception as exc:
             error_code = self._classify_error(exc)
@@ -146,7 +146,7 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
         logger.info("Fetched %d leagues from FootyStats", len(leagues))
         return leagues
 
-    async def get_teams(self, league_id: int, season: int | None = None) -> list[CanonicalTeam]:
+    async def get_teams(self, league_id: int | str, season: int | None = None) -> list[CanonicalTeam]:
         """Fetch teams for a league from FootyStats.
 
         Args:
@@ -165,7 +165,7 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
         )
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params)
         except Exception as exc:
             error_code = self._classify_error(exc)
@@ -205,10 +205,10 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
         self,
         date: str,
         league_ids: list[int] | None = None,
-    ) -> list[dict[str, object]]:
+    ) -> list[CanonicalPrediction]:
         """Fetch predictive/proprietary fields from FootyStats for a given date.
 
-        Returns flat dicts of fixture_id + predictive potentials suitable for
+        Returns validated CanonicalPrediction models suitable for
         writing as ``entity=footystats_predictions`` in GCS. Uses the same
         ``/todays-matches`` endpoint as ``get_fixtures`` — one API call.
 
@@ -217,20 +217,20 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
             league_ids: Optional list of FootyStats league/competition IDs.
 
         Returns:
-            List of dicts with fixture_id and predictive fields.
+            List of validated CanonicalPrediction models.
         """
         url = f"{_BASE_URL}/todays-matches"
         params = self._params_with_key({"date": date})
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._make_session() as session:
                 raw_response = await self._get_with_retry(session, url, params=params)
         except Exception as exc:
             error_code = self._classify_error(exc)
             self._emit_fetch_failed(error_code, exc)
             raise
 
-        predictions: list[dict[str, object]] = []
+        predictions: list[CanonicalPrediction] = []
         match_list = _extract_data(raw_response)
         for item in match_list:
             try:
@@ -242,7 +242,7 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
                 pred = normalize_footystats_predictions(match)
                 # Only include if at least one predictive field is non-null
                 has_data = any(
-                    pred.get(k) is not None
+                    getattr(pred, k) is not None
                     for k in (
                         "btts_potential",
                         "o25_potential",

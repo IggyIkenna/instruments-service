@@ -98,7 +98,7 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
 
         try:
             async with (
-                aiohttp.ClientSession() as session,
+                self._make_session() as session,
                 session.post(
                     _MORPHO_API_URL,
                     json={"query": query},
