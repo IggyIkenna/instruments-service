@@ -613,7 +613,19 @@ def get_venues_for_categories(categories: list[str]) -> list[str]:
             # Betting market instruments (the actual tradeable positions) come from
             # market-tick-data-service via Odds API — documented exception because
             # markets are only discoverable alongside odds data.
-            venues.extend(["API_FOOTBALL"])
+            # Enrichment providers (no instruments — reference data for features):
+            # FootyStats (match stats), Understat (xG), Transfermarkt (player values),
+            # SoccerFootball.info (standings), Open-Meteo (weather).
+            venues.extend(
+                [
+                    "API_FOOTBALL",
+                    "FOOTYSTATS",
+                    "UNDERSTAT",
+                    "TRANSFERMARKT",
+                    "SOCCER_FOOTBALL_INFO",
+                    "OPEN_METEO",
+                ]
+            )
         if cat_upper in ("PREDICTION", "ALL"):
             # POLYMARKET + KALSHI: prediction market instruments (crypto up/down, soccer, macro).
             # No auth required — Gamma API (Polymarket) and public API (Kalshi) are keyless.
@@ -1211,6 +1223,27 @@ async def process_instruments(
                 len(sports_ref_counts),
                 date,
             )
+
+        # FootyStats predictive data: proprietary potentials (btts_potential,
+        # o25_potential, xg_prematch, etc.) written as a separate entity so FSS
+        # can consume them as third-party signal input alongside odds.
+        footystats_key = api_keys.get("footystats") if api_keys else None
+        if footystats_key:
+            try:
+                pred_counts = await _fetch_footystats_predictions(
+                    date=date,
+                    api_key=footystats_key,
+                    bucket=bucket,
+                )
+                for k, v in pred_counts.items():
+                    counts[k] = counts.get(k, 0) + v
+            except Exception as exc:
+                classify_and_emit_error(
+                    exc,
+                    service_name="instruments-service",
+                    operation="footystats_predictions_fetch",
+                    shard=date,
+                )
 
     total = sum(counts.values())
 
@@ -1917,6 +1950,65 @@ def _write_fixture_mapping(bucket: str, date: str) -> None:
             service_name="instruments-service",
             operation="fixture_mapping_write",
         )
+
+
+async def _fetch_footystats_predictions(
+    date: str,
+    api_key: str,
+    bucket: str,
+) -> dict[str, int]:
+    """Fetch FootyStats predictive data and write to GCS as a separate entity.
+
+    Predictive fields (btts_potential, o25_potential, xg_prematch, etc.) are
+    FootyStats-proprietary pre-match signals. Written separately from factual
+    fixture data so FSS can consume them as third-party signal input.
+
+    GCS path: sports_reference/by_date/day={date}/entity=footystats_predictions/
+              footystats_predictions.parquet
+    """
+    adapter = create_sports_reference_adapter("footystats", api_key=api_key)
+    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    counts: dict[str, int] = {}
+
+    try:
+        predictions = await adapter.get_fixture_predictions(date)  # type: ignore[attr-defined]
+        if predictions:
+            df = pd.DataFrame(predictions)
+            sink.write(
+                data=df,
+                partition={"day": date, "entity": "footystats_predictions"},
+                format="parquet",
+                filename="footystats_predictions.parquet",
+            )
+            counts["footystats_predictions"] = len(df)
+            logger.info(
+                "FootyStats predictions: %d rows written for date=%s",
+                len(df),
+                date,
+            )
+
+            # Manifest entry
+            pred_manifest = ManifestWriter(
+                service_name="instruments-service",
+                catalogue_bucket=bucket,
+            )
+            pred_manifest.add(
+                processing_date=date_type.fromisoformat(date),
+                row_count=len(df),
+                venue="FOOTYSTATS_PREDICTIONS",
+            )
+            pred_manifest.write()
+        else:
+            logger.info("FootyStats predictions: no predictive data for date=%s", date)
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="footystats_predictions_fetch",
+            shard=date,
+        )
+
+    return counts
 
 
 async def fill_solana_creation_cache(
