@@ -6,9 +6,15 @@ ServiceBootstrap handles all infrastructure:
 
 Standard args provided by ServiceCLI (no service code needed):
   --mode, --category, --start-date, --end-date, --log-level, --venues, --force
+
+Custom args (registered via extra_args_fn):
+  --sports-entity  Restrict to a single sports manifest entity (e.g. API_FOOTBALL_INJURIES).
+                   Used for entity-scoped parallel VMs where one VM handles one entity type.
 """
 
 from __future__ import annotations
+
+import argparse
 
 from unified_trading_library import ServiceBootstrap
 
@@ -18,10 +24,33 @@ from instruments_service.config import get_config
 _SERVICE_NAME = "instruments-service"  # pragma: no cover
 
 
+def _add_instruments_extra_args(parser: argparse.ArgumentParser) -> None:  # pragma: no cover
+    parser.add_argument(
+        "--sports-entity",
+        type=str,
+        default=None,
+        help=(
+            "Restrict this run to a single sports manifest entity "
+            "(e.g. API_FOOTBALL_INJURIES, API_FOOTBALL_FIXTURE_STATS). "
+            "Used for entity-scoped parallel VMs."
+        ),
+    )
+    parser.add_argument(
+        "--league",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated list of canonical league IDs to process "
+            "(e.g. EPL,BUNDESLIGA). Default: all prediction leagues."
+        ),
+    )
+
+
 def main_service_cli() -> None:  # pragma: no cover
     """ServiceBootstrap entry point for instruments-service."""
     ServiceBootstrap(
         service_name=_SERVICE_NAME,
         operations={"instruments": InstrumentsHandler},
         config=get_config(),
+        extra_args_fn=_add_instruments_extra_args,
     ).run()
