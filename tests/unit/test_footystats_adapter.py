@@ -73,16 +73,35 @@ _SAMPLE_MATCH_RAW: dict[str, object] = {
     "team_b_shots": 8,
     "team_a_corners": 7,
     "team_b_corners": 3,
-    # Predictive fields
+    # Predictive fields — core
     "btts_potential": 65,
+    "btts_fhg_potential": 30,
+    "btts_2hg_potential": 45,
+    "o05_potential": 95,
+    "o15_potential": 80,
     "o25_potential": 72,
     "ov35_potential": 40,
     "o45_potential": 18,
+    "u05_potential": 5,
+    "u15_potential": 20,
+    "u25_potential": 28,
+    "u35_potential": 60,
+    "u45_potential": 82,
     "team_a_xg_prematch": 1.6,
     "team_b_xg_prematch": 0.8,
+    "total_xg_prematch": 2.4,
+    # Predictive fields — sparse + PPG
     "corners_potential": 55,
+    "corners_o85_potential": 60,
+    "corners_o95_potential": 45,
+    "corners_o105_potential": 30,
     "cards_potential": 48,
+    "offsides_potential": 35,
     "avg_potential": 52,
+    "pre_match_home_ppg": 2.1,
+    "pre_match_away_ppg": 1.5,
+    "pre_match_team_a_overall_ppg": 1.9,
+    "pre_match_team_b_overall_ppg": 1.4,
 }
 
 
@@ -105,15 +124,35 @@ class TestParseMatch:
     def test_parse_match_predictive_fields(self) -> None:
         match = _parse_match(_SAMPLE_MATCH_RAW)
         assert match is not None
+        # Core potentials
         assert match.btts_potential == 65
+        assert match.btts_fhg_potential == 30
+        assert match.btts_2hg_potential == 45
+        assert match.o05_potential == 95
+        assert match.o15_potential == 80
         assert match.o25_potential == 72
         assert match.o35_potential == 40
         assert match.o45_potential == 18
+        assert match.u05_potential == 5
+        assert match.u15_potential == 20
+        assert match.u25_potential == 28
+        assert match.u35_potential == 60
+        assert match.u45_potential == 82
         assert match.xg_prematch_home == 1.6
         assert match.xg_prematch_away == 0.8
+        assert match.xg_prematch_total == 2.4
+        # Sparse + PPG
         assert match.corners_potential == 55
+        assert match.corners_o85_potential == 60
+        assert match.corners_o95_potential == 45
+        assert match.corners_o105_potential == 30
         assert match.cards_potential == 48
+        assert match.offsides_potential == 35
         assert match.avg_potential == 52
+        assert match.pre_match_home_ppg == 2.1
+        assert match.pre_match_away_ppg == 1.5
+        assert match.pre_match_home_overall_ppg == 1.9
+        assert match.pre_match_away_overall_ppg == 1.4
 
     def test_parse_match_no_id(self) -> None:
         result = _parse_match({"status": "complete"})
@@ -200,16 +239,15 @@ class TestFootystatsAdapterGetPredictions:
 
         assert len(preds) == 1
         pred = preds[0]
-        assert pred["btts_potential"] == 65
-        assert pred["o25_potential"] == 72
-        assert pred["xg_prematch_home"] == 1.6
-        assert pred["xg_prematch_away"] == 0.8
-        assert pred["corners_potential"] == 55
-        assert pred["cards_potential"] == 48
-        assert pred["avg_potential"] == 52
-        assert "fixture_id" in pred
-        assert "source" in pred
-        assert pred["source"] == "footystats"
+        assert pred.btts_potential == 65
+        assert pred.o25_potential == 72
+        assert pred.xg_prematch_home == 1.6
+        assert pred.xg_prematch_away == 0.8
+        assert pred.corners_potential == 55
+        assert pred.cards_potential == 48
+        assert pred.avg_potential == 52
+        assert pred.fixture_id
+        assert pred.source == "footystats"
 
     @pytest.mark.asyncio
     async def test_get_predictions_skips_no_data(self) -> None:

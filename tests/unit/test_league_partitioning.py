@@ -92,14 +92,14 @@ class TestManifestLeagueId:
         assert calls[0] == call(
             processing_date=date_type.fromisoformat(date),
             row_count=5,
-            venue="API_FOOTBALL_FIXTURES",
+            data_type="FIXTURES",
             league_id="EPL",
         )
         # Second call: BUNDESLIGA
         assert calls[1] == call(
             processing_date=date_type.fromisoformat(date),
             row_count=3,
-            venue="API_FOOTBALL_FIXTURES",
+            data_type="FIXTURES",
             league_id="BUNDESLIGA",
         )
 

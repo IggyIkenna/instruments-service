@@ -413,7 +413,7 @@ class TestApiFootballAdapterHttp:
         with patch("aiohttp.ClientSession", return_value=mock_session):
             standings = await adapter.get_standings(39, season=2025)
         assert len(standings) == 2
-        assert standings[0]["rank"] == 1
+        assert standings[0].rank == 1
 
     @pytest.mark.asyncio
     async def test_get_standings_empty_on_error(self) -> None:
@@ -495,7 +495,14 @@ class TestApiFootballAdapterHttp:
         mock_session = _make_aiohttp_mock(
             {
                 "response": [
-                    {"team": {"name": "Liverpool"}, "formation": "4-3-3", "startXI": []},
+                    {
+                        "team": {"id": 40, "name": "Liverpool"},
+                        "formation": "4-3-3",
+                        "startXI": [
+                            {"player": {"id": 1, "name": "Alisson", "number": 1, "pos": "G", "grid": "1:1"}},
+                        ],
+                        "substitutes": [],
+                    },
                 ]
             }
         )

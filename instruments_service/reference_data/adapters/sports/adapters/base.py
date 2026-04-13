@@ -254,6 +254,9 @@ class BaseSportsReferenceAdapter(ABC):
                     resp.raise_for_status()
                     return await resp.json(content_type=None)
             except aiohttp.ClientError as exc:
+                # 4xx client errors are not transient — retrying won't help.
+                if isinstance(exc, aiohttp.ClientResponseError) and exc.status is not None and 400 <= exc.status < 500:
+                    raise
                 last_exc = exc
                 delay = _RETRY_BASE_DELAY * (1 << attempt)
                 logger.warning(

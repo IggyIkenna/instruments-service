@@ -848,7 +848,7 @@ async def process_instruments(
                     sports_manifest.add(
                         processing_date=date_type.fromisoformat(date),
                         row_count=row_count,
-                        venue=f"API_FOOTBALL_{entity_name.upper()}",
+                        data_type=entity_name.upper(),
                     )
                 # Write blank entries for per-fixture entities that had 0 fixtures
                 if not gcs_fixture_ids:
@@ -858,7 +858,7 @@ async def process_instruments(
                             sports_manifest.add(
                                 processing_date=date_type.fromisoformat(date),
                                 row_count=0,
-                                venue=pf_entity,
+                                data_type=pf_entity.replace("API_FOOTBALL_", "").upper(),
                             )
                 sports_manifest.write()
                 logger.info(
@@ -2592,6 +2592,13 @@ async def _fetch_transfermarkt_data(
                         flat: dict[str, str | None] = {k: str(v) if v is not None else None for k, v in row.items()}
                         flat["league_id"] = str(tm_code)
                         flat["canonical_league"] = league_def.league_id
+                        # Derive player_count for FSS normalizer
+                        players = row.get("players")
+                        flat["player_count"] = (
+                            str(len(players)) if isinstance(players, list) else flat.get("squad_size")
+                        )
+                        # Drop nested players list (serializes as unhelpful string)
+                        flat.pop("players", None)
                         all_teams.append(flat)
                 except Exception as exc:
                     classify_and_emit_error(
@@ -2602,14 +2609,15 @@ async def _fetch_transfermarkt_data(
                     )
             if all_teams:
                 df = pd.DataFrame(all_teams)
+                # Write as player_values entity (FSS reads this name)
                 sink.write(
                     data=df,
-                    partition={"day": date, "entity": "transfermarkt_teams"},
+                    partition={"day": date, "entity": "player_values"},
                     format="parquet",
-                    filename="transfermarkt_teams.parquet",
+                    filename="player_values.parquet",
                 )
                 counts["transfermarkt_teams"] = len(df)
-                logger.info("Transfermarkt teams: %d rows written", len(df))
+                logger.info("Transfermarkt teams → player_values: %d rows written", len(df))
         except Exception as exc:
             classify_and_emit_error(
                 exc,
