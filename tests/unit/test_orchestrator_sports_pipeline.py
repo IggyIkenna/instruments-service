@@ -259,9 +259,9 @@ class TestFetchSportsReferenceData:
         mock_adapter = AsyncMock()
         mock_adapter.get_leagues.return_value = []
         mock_adapter.get_teams.return_value = []
-        mock_adapter.get_standings.return_value = [
-            {"rank": 1, "team": "Liverpool", "points": 80},
-        ]
+        mock_standing = MagicMock()
+        mock_standing.model_dump.return_value = {"rank": 1, "team_name": "Liverpool", "points": 80, "league_id": "39"}
+        mock_adapter.get_standings.return_value = [mock_standing]
         mock_adapter.get_injuries.return_value = []
 
         mock_sink = MagicMock()
@@ -295,9 +295,15 @@ class TestFetchSportsReferenceData:
         mock_adapter.get_leagues.return_value = []
         mock_adapter.get_teams.return_value = []
         mock_adapter.get_standings.return_value = []
-        mock_adapter.get_injuries.return_value = [
-            {"player": "Mo Salah", "type": "Hamstring"},
-        ]
+        mock_injury = MagicMock()
+        mock_injury.model_dump.return_value = {
+            "player_id": "1",
+            "player_name": "Mo Salah",
+            "injury_type": "Hamstring",
+            "team_id": "40",
+            "team_name": "Liverpool",
+        }
+        mock_adapter.get_injuries.return_value = [mock_injury]
 
         mock_sink = MagicMock()
 
