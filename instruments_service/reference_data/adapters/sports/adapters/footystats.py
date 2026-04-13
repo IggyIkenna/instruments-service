@@ -240,7 +240,7 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
                 if league_ids and match.competition_id not in league_ids:
                     continue
                 pred = normalize_footystats_predictions(match)
-                # Only include if at least one predictive field is non-null
+                # Only include if at least one core predictive field is non-null
                 has_data = any(
                     getattr(pred, k) is not None
                     for k in (
@@ -250,9 +250,6 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
                         "o45_potential",
                         "xg_prematch_home",
                         "xg_prematch_away",
-                        "corners_potential",
-                        "cards_potential",
-                        "avg_potential",
                     )
                 )
                 if has_data:
@@ -321,16 +318,39 @@ def _parse_match(item: dict[str, object]) -> FootyStatsMatch | None:
             away_shots=_safe_int(item.get("team_b_shots")),
             home_corners=_safe_int(item.get("team_a_corners")),
             away_corners=_safe_int(item.get("team_b_corners")),
-            # Predictive potentials (FootyStats proprietary)
+            # Predictive potentials (FootyStats proprietary) — core
             btts_potential=_safe_int(item.get("btts_potential")),
+            btts_fhg_potential=_safe_int(item.get("btts_fhg_potential")),
+            btts_2hg_potential=_safe_int(item.get("btts_2hg_potential")),
+            o05_potential=_safe_int(item.get("o05_potential")),
+            o15_potential=_safe_int(item.get("o15_potential")),
             o25_potential=_safe_int(item.get("o25_potential") or item.get("over25_potential")),
             o35_potential=_safe_int(item.get("o35_potential") or item.get("ov35_potential")),
             o45_potential=_safe_int(item.get("o45_potential")),
+            u05_potential=_safe_int(item.get("u05_potential")),
+            u15_potential=_safe_int(item.get("u15_potential")),
+            u25_potential=_safe_int(item.get("u25_potential")),
+            u35_potential=_safe_int(item.get("u35_potential")),
+            u45_potential=_safe_int(item.get("u45_potential")),
             xg_prematch_home=_safe_float(item.get("team_a_xg_prematch")),
             xg_prematch_away=_safe_float(item.get("team_b_xg_prematch")),
+            xg_prematch_total=_safe_float(item.get("total_xg_prematch")),
+            # Sparse potentials + PPG
             corners_potential=_safe_int(item.get("corners_potential")),
+            corners_o85_potential=_safe_int(item.get("corners_o85_potential")),
+            corners_o95_potential=_safe_int(item.get("corners_o95_potential")),
+            corners_o105_potential=_safe_int(item.get("corners_o105_potential")),
             cards_potential=_safe_int(item.get("cards_potential")),
+            offsides_potential=_safe_int(item.get("offsides_potential")),
             avg_potential=_safe_int(item.get("avg_potential")),
+            pre_match_home_ppg=_safe_float(item.get("pre_match_home_ppg")),
+            pre_match_away_ppg=_safe_float(item.get("pre_match_away_ppg")),
+            pre_match_home_overall_ppg=_safe_float(
+                item.get("pre_match_team_a_overall_ppg"),
+            ),
+            pre_match_away_overall_ppg=_safe_float(
+                item.get("pre_match_team_b_overall_ppg"),
+            ),
         )
     except Exception as exc:
         logger.warning("Failed to parse FootyStats match item: %s", exc)
