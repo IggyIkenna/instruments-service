@@ -2924,18 +2924,59 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
 
     Downstream services call read_availability_index(bucket) to check completeness
     without listing thousands of GCS blobs.
+
+    v4: Extracts chain (DeFi), data_type (prediction markets), league_id from path.
     """
     try:
         venue_match = re.search(r"venue=([^/]+)", path)
         venue_str = venue_match.group(1) if venue_match else ""
-        date_match = re.search(r"day=(\d{4}-\d{2}-\d{2})", path)
+        date_match = re.search(r"day[=-](\d{4}-\d{2}-\d{2})", path)
         date_str = date_match.group(1) if date_match else date
         parsed = date_type.fromisoformat(date_str)
+
+        # v4: Extract shard dimensions from path/venue
+        manifest_venue = venue_str
+        manifest_chain = ""
+        manifest_data_type = ""
+        manifest_league_id = ""
+
+        # DeFi: split AAVEV3-ETHEREUM → venue=AAVE_V3, chain=ETHEREUM
+        if "-" in venue_str:
+            try:
+                from unified_api_contracts.registry.capability_declarations._defi import (
+                    parse_defi_venue,
+                    KNOWN_CHAINS,
+                )
+                protocol, chain = parse_defi_venue(venue_str)
+                if chain in KNOWN_CHAINS:
+                    manifest_venue = protocol.upper()
+                    manifest_chain = chain
+            except (ImportError, ValueError):
+                pass
+
+        # Prediction: split POLYMARKET:BTC → venue=POLYMARKET, data_type=BTC
+        if ":" in venue_str:
+            parts = venue_str.split(":", 1)
+            manifest_venue = parts[0]
+            manifest_data_type = parts[1]
+
+        # Sports: extract league from path
+        league_match = re.search(r"league=([^/]+)", path)
+        if league_match:
+            manifest_league_id = league_match.group(1)
+
         writer = ManifestWriter(
             service_name="instruments-service",
             catalogue_bucket=bucket,
         )
-        writer.add(processing_date=parsed, row_count=record_count, venue=venue_str)
+        writer.add(
+            processing_date=parsed,
+            row_count=record_count,
+            venue=manifest_venue,
+            chain=manifest_chain,
+            data_type=manifest_data_type,
+            league_id=manifest_league_id,
+        )
         writer.write()
     except Exception as exc:
         classify_and_emit_error(
