@@ -47,6 +47,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
         self._venue_override: list[str] | None = None  # set in preflight() when --venues is used
         self._sports_entity_filter: str | None = None  # set in preflight() when --sports-entity is used
         self._league_filter: list[str] | None = None  # set in preflight() when --league is used
+        self._season_override: int | None = None  # set in preflight() when --season is used
 
     async def preflight(self) -> None:
         """Start API key reloader. Date/category filtering happens in process()."""
@@ -81,6 +82,12 @@ class InstrumentsHandler(UnifiedServiceHandler):
         if league_arg:
             self._league_filter = [lid.strip() for lid in league_arg.split(",") if lid.strip()]
             logger.info("League filter from CLI: %s", self._league_filter)
+
+        # Wire --season override for historical Transfermarkt backfill
+        season_arg: int | None = getattr(self.args, "season", None) if self.args else None
+        if season_arg is not None:
+            self._season_override = season_arg
+            logger.info("Season override from CLI: %d", season_arg)
 
         # Scope key validation to the requested categories only.
         # --category SPORTS only validates sports API keys (not CeFi/DeFi/TradFi).
@@ -134,6 +141,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
             mode=str(self.runtime.mode),
             sports_entity_filter=self._sports_entity_filter,
             league_filter=self._league_filter,
+            season_override=self._season_override,
         )
 
     async def cleanup(self) -> None:
