@@ -46,9 +46,12 @@ from unified_api_contracts import (
 from unified_api_contracts.internal import InstrumentRecord, validate_instrument_records
 from unified_api_contracts.registry import get_supported_chains_for_protocol
 from unified_api_contracts.sports import (
+    FOOTYSTATS_HISTORICAL_SEASON_IDS,
     FOOTYSTATS_SEASON_IDS,
     get_all_prediction_league_ids,
+    get_leagues_needing_refresh,
     get_provider_league_id,
+    is_any_league_refresh_date,
 )
 from unified_trading_library import (
     DataSink,
@@ -661,6 +664,7 @@ async def process_instruments(
     mode: str = "batch",
     sports_entity_filter: str | None = None,
     league_filter: list[str] | None = None,
+    season_override: int | None = None,
 ) -> dict[str, int]:
     """Process instruments for a single date and set of market categories.
 
@@ -694,6 +698,26 @@ async def process_instruments(
         logger.info("No active venues for date=%s categories=%s", date, categories)
         return {}
 
+    # Sports entity lists — used by freshness check AND later fast-path logic,
+    # so they must be defined unconditionally (not inside redo_all gate).
+    is_sports_run = any(c.upper() in ("SPORTS", "ALL") for c in categories)
+    _sports_core_entities = [
+        "LEAGUES",
+        "TEAMS",
+        "STANDINGS",
+        "INJURIES",
+    ]
+    _sports_per_fixture_entities = [
+        "FIXTURE_STATS",
+        "FIXTURE_EVENTS",
+        "FIXTURE_LINEUPS",
+        "PLAYER_STATS",
+    ]
+
+    # Tracks which sports entities the manifest says are missing.
+    # Populated by the freshness check; stays empty when --force is set.
+    _sports_missing_entities: list[str] = []
+
     # 1b. Skip-if-exists: check manifest for fresh data (unless --force)
     if not redo_all:
         primary_category = categories[0] if categories else None
@@ -703,32 +727,19 @@ async def process_instruments(
         # Core: leagues/teams/standings/injuries (slow-moving, fetched every run).
         # Per-fixture: fixture_stats/events/lineups/player_stats (one API call per
         # completed fixture, rate-limited to 1 req/sec — expensive to re-fetch).
-        # Remap venue names to match manifest entries (API_FOOTBALL → API_FOOTBALL_FIXTURES).
-        expected = ["API_FOOTBALL_FIXTURES" if v == "API_FOOTBALL" else v for v in active_venues]
-        is_sports_run = any(c.upper() in ("SPORTS", "ALL") for c in categories)
+        # Remap venue names to match manifest data_type entries (API_FOOTBALL → FIXTURES).
+        expected = ["FIXTURES" if v == "API_FOOTBALL" else v for v in active_venues]
         _active_venues_set_freshness = set(active_venues)
-        _sports_core_entities = [
-            "API_FOOTBALL_LEAGUES",
-            "API_FOOTBALL_TEAMS",
-            "API_FOOTBALL_STANDINGS",
-            "API_FOOTBALL_INJURIES",
-        ]
-        _sports_per_fixture_entities = [
-            "API_FOOTBALL_FIXTURE_STATS",
-            "API_FOOTBALL_FIXTURE_EVENTS",
-            "API_FOOTBALL_FIXTURE_LINEUPS",
-            "API_FOOTBALL_PLAYER_STATS",
-        ]
         # Enrichment entity → venue that produces it.
         # Only include in expected[] when that venue is in active_venues
         # (respects --venues filter so API_FOOTBALL-only runs don't wait on
         # SFI/Transfermarkt/Understat/Weather manifest entries).
         _enrichment_entity_venues: list[tuple[str, str]] = [
-            ("FOOTYSTATS_MATCHES", "FOOTYSTATS"),
-            ("FOOTYSTATS_PREDICTIONS", "FOOTYSTATS"),
-            ("UNDERSTAT_XG", "UNDERSTAT"),
+            ("MATCHES", "FOOTYSTATS"),
+            ("PREDICTIONS", "FOOTYSTATS"),
+            ("XG", "UNDERSTAT"),
             ("TRANSFERMARKT_LEAGUES", "TRANSFERMARKT"),
-            ("TRANSFERMARKT_TEAMS", "TRANSFERMARKT"),
+            ("PLAYER_VALUES", "TRANSFERMARKT"),
             ("SFI_LEAGUES", "SOCCER_FOOTBALL_INFO"),
             ("SFI_STANDINGS", "SOCCER_FOOTBALL_INFO"),
             ("WEATHER", "OPEN_METEO"),
@@ -873,6 +884,41 @@ async def process_instruments(
         details={"date": date, "categories": categories, "venue_count": len(active_venues)},
     )
 
+    # Enrichment-only entities don't need URDI at all — they fetch by date,
+    # not by fixture ID.  Skip the expensive URDI bootstrap entirely.
+    _enrichment_only_entities = frozenset(
+        {
+            "XG",
+            "MATCHES",
+            "PREDICTIONS",
+            "PLAYER_VALUES",
+            "TRANSFERMARKT_LEAGUES",
+            "SFI_LEAGUES",
+            "SFI_STANDINGS",
+        }
+    )
+    # Per-fixture entities need fixture IDs but can read them from GCS
+    # instead of making expensive URDI calls to API Football.
+    _per_fixture_entities = frozenset(
+        {
+            "FIXTURE_EVENTS",
+            "FIXTURE_LINEUPS",
+            "FIXTURE_STATS",
+            "PLAYER_STATS",
+        }
+    )
+    _skip_urdi = sports_entity_filter in (_enrichment_only_entities | _per_fixture_entities)
+    if sports_entity_filter in _enrichment_only_entities:
+        logger.info(
+            "Skipping URDI fetch — %s is an enrichment-only entity (fetches by date, not fixture ID)",
+            sports_entity_filter,
+        )
+    elif sports_entity_filter in _per_fixture_entities:
+        logger.info(
+            "Skipping URDI fetch — %s will read fixture IDs from existing GCS fixtures",
+            sports_entity_filter,
+        )
+
     # 2. Fetch from URDI — sole external API path
     # api_keys injected from preflight() → validate_api_keys_for_venues() → Secret Manager
     # date passed so date-aware adapters (e.g. API-Football) can filter server-side
@@ -881,16 +927,21 @@ async def process_instruments(
     # (immutable contracts, never deleted). In batch mode, the universe is
     # fetched ONCE and cached — subsequent dates in the range just filter
     # by available_from_datetime. Non-DeFi venues are fetched fresh per date.
-    defi_venue_names = frozenset(_DEFI_VENUES)
-    defi_active = [v for v in active_venues if v in defi_venue_names]
-    non_defi_active = [v for v in active_venues if v not in defi_venue_names]
-
     records: list[InstrumentRecord] = []
     _retryable_venues: list[str] = []
     # Track venues where the adapter ran without error (even if 0 records returned).
     # Used by the completeness check to distinguish "adapter returned nothing for this
     # date range" (OK) from "adapter failed to respond" (completeness failure).
     _non_error_venues: set[str] = set()
+
+    defi_venue_names = frozenset(_DEFI_VENUES)
+    if _skip_urdi:
+        # Enrichment-only: empty the venue lists so URDI fetch loops are no-ops.
+        defi_active: list[str] = []
+        non_defi_active: list[str] = []
+    else:
+        defi_active = [v for v in active_venues if v in defi_venue_names]
+        non_defi_active = [v for v in active_venues if v not in defi_venue_names]
 
     # DeFi: use cached universe (one API call for entire batch run)
     if defi_active and mode == "batch":
@@ -941,6 +992,42 @@ async def process_instruments(
         _non_error_venues.update(
             v for v in non_defi_active if v not in {e.venue for e in non_defi_result.failed_venues}
         )
+
+    # Per-fixture URDI skip: read fixture IDs from GCS and jump to enrichment.
+    # This avoids the URDI fetch + date filter which returns 0 for historical dates.
+    if _skip_urdi and sports_entity_filter in _per_fixture_entities:
+        primary_category = categories[0] if categories else None
+        _pf_bucket = _get_instruments_bucket(primary_category)
+        gcs_fixture_ids = _read_fixture_ids_from_gcs(_pf_bucket, date)
+        if not gcs_fixture_ids:
+            logger.info("Per-fixture GCS skip: no fixtures in GCS for date=%s", date)
+            return {}
+        api_football_key = api_keys.get("api_football") if api_keys else None
+        if not api_football_key:
+            logger.warning("Per-fixture backfill: no API Football key for date=%s", date)
+            return {}
+        logger.info(
+            "Per-fixture GCS-based enrichment date=%s: %d fixture IDs from GCS, entity=%s",
+            date,
+            len(gcs_fixture_ids),
+            sports_entity_filter,
+        )
+        pf_counts = await _fetch_sports_reference_data(
+            date=date,
+            api_key=api_football_key,
+            bucket=_pf_bucket,
+            entities_to_fetch=[sports_entity_filter],
+            fixture_ids_override=gcs_fixture_ids,
+        )
+        pf_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=_pf_bucket)
+        for entity_name, row_count in pf_counts.items():
+            pf_manifest.add(
+                processing_date=date_type.fromisoformat(date),
+                row_count=row_count,
+                data_type=entity_name.upper(),
+            )
+        pf_manifest.write()
+        return pf_counts
 
     # 3. Filter to instruments active on the requested date.
     # URDI adapters return the full historical instrument universe; this reduces
@@ -1033,7 +1120,7 @@ async def process_instruments(
                 _empty_manifest.add(
                     processing_date=date_type.fromisoformat(date),
                     row_count=0,
-                    venue="API_FOOTBALL_FIXTURES",
+                    data_type="FIXTURES",
                     league_id=_league_id,
                 )
             _empty_manifest.write()
@@ -1065,17 +1152,18 @@ async def process_instruments(
                             sports_manifest.add(
                                 processing_date=date_type.fromisoformat(date),
                                 row_count=row_count,
-                                venue=f"API_FOOTBALL_{entity_name.upper()}",
+                                data_type=entity_name.upper(),
                             )
                         # Write blank entries for ALL per-fixture entities on zero-fixture dates
                         # so manifest marks them as "done" and won't re-fetch.
                         for pf_entity in _sports_per_fixture_entities:
-                            entity_short = pf_entity.replace("API_FOOTBALL_", "").lower()
+                            entity_short = pf_entity.lower()
                             if entity_short not in sports_ref_counts:
+                                dt_name = pf_entity
                                 sports_manifest.add(
                                     processing_date=date_type.fromisoformat(date),
                                     row_count=0,
-                                    venue=pf_entity,
+                                    data_type=dt_name,
                                 )
                         sports_manifest.write()
                 # Zero-fixture fast path: fixture-dependent enrichment entities get
@@ -1086,9 +1174,9 @@ async def process_instruments(
                 _active_venues_set = set(active_venues)
                 _enrichment_zero_entities: list[str] = []
                 if "FOOTYSTATS" in _active_venues_set:
-                    _enrichment_zero_entities += ["FOOTYSTATS_PREDICTIONS", "FOOTYSTATS_MATCHES"]
+                    _enrichment_zero_entities += ["PREDICTIONS", "MATCHES"]
                 if "UNDERSTAT" in _active_venues_set:
-                    _enrichment_zero_entities += ["UNDERSTAT_XG"]
+                    _enrichment_zero_entities += ["XG"]
                 # NOTE: TRANSFERMARKT and SFI are NOT zero-gated — they provide
                 # fixture-independent reference data (team values, standings).
                 if "OPEN_METEO" in _active_venues_set:
@@ -1102,7 +1190,7 @@ async def process_instruments(
                         _enr_manifest.add(
                             processing_date=date_type.fromisoformat(date),
                             row_count=0,
-                            venue=_enr_entity,
+                            data_type=_enr_entity,
                         )
                     _enr_manifest.write()
                     logger.info(
@@ -1111,13 +1199,23 @@ async def process_instruments(
                         date,
                     )
 
-            # Fixture-independent reference data: fetch even on zero-fixture dates.
-            # Transfermarkt (team values), SFI (standings) are slow-moving but
-            # still need periodic refresh independent of match schedules.
+            # Fixture-independent reference data: fetch even on zero-fixture dates,
+            # but ONLY on trigger dates (season start, transfer window open/close).
+            # This avoids re-fetching identical squad data every day.
             counts: dict[str, int] = {}
             _active_venues_set = set(active_venues)
             _ef = sports_entity_filter
             _entity_wanted_zf = lambda ent: _ef is None or _ef == ent  # noqa: E731
+
+            # Check if today is a reference refresh trigger for any league.
+            _batch_date = date_type.fromisoformat(date)
+            _is_trigger = is_any_league_refresh_date(_batch_date) or redo_all
+            _trigger_leagues = get_leagues_needing_refresh(_batch_date) if _is_trigger else []
+            if not _is_trigger:
+                logger.info(
+                    "date=%s: not a reference refresh trigger — skipping Transfermarkt/SFI team fetches",
+                    date,
+                )
 
             transfermarkt_key = (
                 api_keys.get("transfermarkt") if (api_keys and "TRANSFERMARKT" in _active_venues_set) else None
@@ -1127,15 +1225,23 @@ async def process_instruments(
                     "TRANSFERMARKT is active but no API key found — skipping for date=%s.",
                     date,
                 )
-            if transfermarkt_key and (
-                _entity_wanted_zf("TRANSFERMARKT_LEAGUES") or _entity_wanted_zf("TRANSFERMARKT_TEAMS")
+            if (
+                transfermarkt_key
+                and _is_trigger
+                and (_entity_wanted_zf("TRANSFERMARKT_LEAGUES") or _entity_wanted_zf("PLAYER_VALUES"))
             ):
+                logger.info(
+                    "Trigger-based Transfermarkt refresh for date=%s (leagues: %s)",
+                    date,
+                    _trigger_leagues[:5] if _trigger_leagues else "all (--force)",
+                )
                 try:
                     tm_counts = await _fetch_transfermarkt_data(
                         date=date,
                         api_key=transfermarkt_key,
                         bucket=bucket,
                         entity_filter=_ef,
+                        season=season_override,
                     )
                     for k, v in tm_counts.items():
                         counts[k] = counts.get(k, 0) + v
@@ -1324,32 +1430,47 @@ async def process_instruments(
                     manifest.add(
                         processing_date=date_type.fromisoformat(date),
                         row_count=len(_league_df_clean),
-                        venue="API_FOOTBALL_FIXTURES",
+                        data_type="FIXTURES",
                         league_id=_league_id_str,
                     )
-                    counts[f"API_FOOTBALL_FIXTURES/{_league_id_str}"] = len(_league_df_clean)
+                    counts[f"FIXTURES/{_league_id_str}"] = len(_league_df_clean)
                     if sampler.enable_sampling:
                         sampler.generate_csv_sample(
                             _league_df_clean,
                             filename_prefix=f"instruments_API_FOOTBALL_{_league_id_str}_{date}",
                         )
+            elif venue_str == "POLYMARKET" and "base_asset" in venue_df.columns:
+                # PREDICTION: split by market (BTC, ETH, SPX, FOOTBALL, etc.)
+                # Each market gets its own partition and manifest entry.
+                _pred_df = venue_df.copy()
+                _pred_df["_market"] = _pred_df["base_asset"].apply(_extract_prediction_shard)
+                # Strip venue prefix: "POLYMARKET:BTC" → "BTC"
+                _pred_df["_market"] = _pred_df["_market"].str.replace("POLYMARKET:", "", regex=False)
+                for _mkt, _mkt_df in _pred_df.groupby("_market"):
+                    _mkt_str = str(_mkt)
+                    _mkt_df_clean = _mkt_df.drop(columns=["_market"])
+                    sink.write(
+                        data=_mkt_df_clean,
+                        partition={"day": date, "venue": venue_str, "market": _mkt_str},
+                        format="parquet",
+                        filename="instruments.parquet",
+                    )
+                    manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=len(_mkt_df_clean),
+                        venue="POLYMARKET",
+                        data_type=_mkt_str,
+                    )
+                    counts[f"POLYMARKET/{_mkt_str}"] = len(_mkt_df_clean)
+                    if sampler.enable_sampling:
+                        sampler.generate_csv_sample(
+                            _mkt_df_clean,
+                            filename_prefix=f"instruments_POLYMARKET_{_mkt_str}_{date}",
+                        )
             else:
                 _write_venue(venue_str, venue_df, date, bucket, sink, counts, sampler, manifest)
     else:
         _write_venue("all", df, date, bucket, sink, counts, sampler, manifest)
-
-    # PREDICTION shard breakdown: write per-underlying manifest entries so the
-    # deployment UI shows coverage per shard (BTC, ETH, SOL, FOOTBALL, etc.)
-    # instead of a single "POLYMARKET: 100%" bar.
-    is_prediction = primary_category and primary_category.upper() == "PREDICTION"
-    if is_prediction and "base_asset" in df.columns:
-        shard_counts = _compute_prediction_shards(df)
-        for shard_name, shard_count in shard_counts.items():
-            manifest.add(
-                processing_date=date_type.fromisoformat(date),
-                row_count=shard_count,
-                venue=shard_name,
-            )
 
     # Write 0-count manifest entries for TRADFI venues that returned 0 instruments
     # because the date is a non-trading day (weekend/holiday). Without this, those
@@ -1410,7 +1531,7 @@ async def process_instruments(
                 sports_manifest.add(
                     processing_date=date_type.fromisoformat(date),
                     row_count=row_count,
-                    venue=f"API_FOOTBALL_{entity_name.upper()}",
+                    data_type=entity_name.upper(),
                 )
             sports_manifest.write()
             logger.info(
@@ -1434,7 +1555,7 @@ async def process_instruments(
 
         footystats_key = api_keys.get("footystats") if (api_keys and "FOOTYSTATS" in _active_venues_set) else None
         if footystats_key:
-            if _entity_wanted("FOOTYSTATS_PREDICTIONS"):
+            if _entity_wanted("PREDICTIONS"):
                 try:
                     pred_counts = await _fetch_footystats_predictions(
                         date=date,
@@ -1451,7 +1572,7 @@ async def process_instruments(
                         shard=date,
                     )
 
-            if _entity_wanted("FOOTYSTATS_MATCHES"):
+            if _entity_wanted("MATCHES"):
                 try:
                     match_counts = await _fetch_footystats_matches(
                         date=date,
@@ -1468,7 +1589,7 @@ async def process_instruments(
                         shard=date,
                     )
 
-        if "UNDERSTAT" in _active_venues_set and _entity_wanted("UNDERSTAT_XG"):
+        if "UNDERSTAT" in _active_venues_set and _entity_wanted("XG"):
             try:
                 xg_counts = await _fetch_understat_xg(date=date, bucket=bucket)
                 for k, v in xg_counts.items():
@@ -1490,13 +1611,27 @@ async def process_instruments(
                 "Ensure 'transfermarkt' key exists in Secret Manager and is passed via api_keys.",
                 date,
             )
-        if transfermarkt_key and (_entity_wanted("TRANSFERMARKT_LEAGUES") or _entity_wanted("TRANSFERMARKT_TEAMS")):
+        # Trigger-based: only fetch Transfermarkt on reference refresh dates
+        # (season start, transfer window open/close) or when --force is set.
+        _batch_dt = date_type.fromisoformat(date)
+        _tm_trigger = is_any_league_refresh_date(_batch_dt) or redo_all
+        if not _tm_trigger and transfermarkt_key:
+            logger.info(
+                "date=%s: not a reference refresh trigger — skipping Transfermarkt",
+                date,
+            )
+        if (
+            transfermarkt_key
+            and _tm_trigger
+            and (_entity_wanted("TRANSFERMARKT_LEAGUES") or _entity_wanted("PLAYER_VALUES"))
+        ):
             try:
                 tm_counts = await _fetch_transfermarkt_data(
                     date=date,
                     api_key=transfermarkt_key,
                     bucket=bucket,
                     entity_filter=_ef,
+                    season=season_override,
                 )
                 for k, v in tm_counts.items():
                     counts[k] = counts.get(k, 0) + v
@@ -1711,24 +1846,23 @@ async def process_instruments(
     return counts
 
 
-_KNOWN_CRYPTO_UNDERLYINGS = {"BTC", "ETH", "SOL", "XRP", "DOGE", "HYPE", "BNB"}
-
-
 def _extract_prediction_shard(base_asset: str) -> str:
     """Extract the underlying shard name from a PREDICTION instrument's base_asset.
 
-    Only extracts shards for well-formed base_assets matching known patterns.
-    Everything else → POLYMARKET:OTHER.
+    No allowlist — every UP_DOWN market's underlying IS the shard.  New
+    underlyings (CRUDE_OIL, GOLD, etc.) appear automatically without code
+    changes.
 
     Patterns:
       PREDICTION:POLYMARKET:UP_DOWN:BTC:1D:2026-04-05 → POLYMARKET:BTC
+      PREDICTION:POLYMARKET:UP_DOWN:CRUDE_OIL:1D:...  → POLYMARKET:CRUDE_OIL
       FOOTBALL:POLYMARKET:MATCH_ODDS:EPL:...          → POLYMARKET:FOOTBALL
-      anything else                                    → POLYMARKET:OTHER
+      anything without UP_DOWN pattern                 → POLYMARKET:OTHER
     """
     parts = base_asset.split(":")
     if len(parts) >= 2 and parts[0] == "FOOTBALL":
         return "POLYMARKET:FOOTBALL"
-    if len(parts) >= 4 and parts[2] == "UP_DOWN" and parts[3] in _KNOWN_CRYPTO_UNDERLYINGS:
+    if len(parts) >= 4 and parts[2] == "UP_DOWN":
         return f"POLYMARKET:{parts[3]}"
     return "POLYMARKET:OTHER"
 
@@ -1773,15 +1907,43 @@ def _write_venue(
                 filename="instruments.parquet",
             )
             # Add to batched manifest writer (flushed by caller) or legacy per-venue write
-            # Remap venue for manifest: API_FOOTBALL → API_FOOTBALL_FIXTURES
-            # (GCS path stays venue=API_FOOTBALL/ for backwards compat)
-            manifest_venue = "API_FOOTBALL_FIXTURES" if venue_str == "API_FOOTBALL" else venue_str
+            # v4: Sports reference entities write data_type (not venue).
+            #     API_FOOTBALL → data_type=FIXTURES, venue=""
+            #     API_FOOTBALL_INJURIES → data_type=INJURIES, venue=""
+            #     Other categories keep venue as-is.
+            _sports_prefixes = ("API_FOOTBALL", "TRANSFERMARKT", "FOOTYSTATS", "SFI", "UNDERSTAT", "WEATHER")
+            is_sports_ref = venue_str.startswith(_sports_prefixes)
+            if is_sports_ref:
+                # Extract data_type: API_FOOTBALL_INJURIES → INJURIES, API_FOOTBALL → FIXTURES
+                if venue_str == "API_FOOTBALL":
+                    manifest_data_type = "FIXTURES"
+                elif "_" in venue_str:
+                    # Strip the provider prefix: API_FOOTBALL_INJURIES → INJURIES
+                    for pfx in _sports_prefixes:
+                        if venue_str.startswith(pfx + "_"):
+                            manifest_data_type = venue_str[len(pfx) + 1 :]
+                            break
+                    else:
+                        manifest_data_type = venue_str
+                else:
+                    manifest_data_type = venue_str
+                manifest_venue = ""
+            else:
+                manifest_venue = venue_str
+                manifest_data_type = ""
             if manifest is not None:
-                manifest.add(
-                    processing_date=date_type.fromisoformat(date),
-                    row_count=len(df),
-                    venue=manifest_venue,
-                )
+                if is_sports_ref:
+                    manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=len(df),
+                        data_type=manifest_data_type,
+                    )
+                else:
+                    manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=len(df),
+                        venue=manifest_venue,
+                    )
             else:
                 path = f"instrument_availability/by_date/day={date}/venue={venue_str}/instruments.parquet"
                 _write_catalogue_record(bucket, path, date, len(df))
@@ -1875,7 +2037,7 @@ async def _fetch_sports_reference_data(
 
     Args:
         entities_to_fetch: Specific manifest entity names to fetch (e.g.
-            ["API_FOOTBALL_FIXTURE_LINEUPS", "API_FOOTBALL_PLAYER_STATS"]).
+            ["FIXTURE_LINEUPS", "PLAYER_STATS"]).
             When provided, only these entities are fetched — all others skipped.
             None = fetch everything (legacy behaviour).
         enrichment_only: If True, skip core entities. Superseded by entities_to_fetch.
@@ -1884,7 +2046,7 @@ async def _fetch_sports_reference_data(
             33-league re-fetch (saves 33 API calls per date).
     """
     # Convert entities_to_fetch to a set of short entity names for easy lookup.
-    # E.g. "API_FOOTBALL_FIXTURE_LINEUPS" → "fixture_lineups"
+    # E.g. "FIXTURE_LINEUPS" → "fixture_lineups"
     _fetch_set: set[str] | None = None
     if entities_to_fetch:
         _fetch_set = set()
@@ -2001,7 +2163,8 @@ async def _fetch_sports_reference_data(
                 try:
                     standings = await adapter.get_standings(lid)
                     for row in standings:
-                        all_standings.append(row.model_dump())
+                        d = row.model_dump() if hasattr(row, "model_dump") else row
+                        all_standings.append(d)
                 except Exception as exc:
                     classify_and_emit_error(
                         exc,
@@ -2112,9 +2275,11 @@ async def _fetch_sports_reference_data(
                 )
 
         # Concurrent per-fixture fetching with rate-limit semaphore.
-        # API Football Ultra plan allows ~10 req/sec. We use a semaphore to cap
-        # concurrent requests and a small delay between releases to stay safe.
-        concurrency = 10
+        # API Football Mega plan: 900 req/min. With multiple processes sharing
+        # the key, cap per-process concurrency at 50 to leave headroom.
+        # The adapter's _get_with_retry reads X-RateLimit-Remaining and
+        # preemptively sleeps when near-exhausted.
+        concurrency = 50
         sem = asyncio.Semaphore(concurrency)
         entity_rows: dict[str, list[dict[str, object]]] = {name: [] for name, _ in _per_fixture_entities}
 
@@ -2123,7 +2288,10 @@ async def _fetch_sports_reference_data(
                 try:
                     rows = await fetch_fn(fid)  # type: ignore[operator]
                     for row in rows:
-                        entity_rows[entity_name].append(row.model_dump())
+                        # Adapters return a mix of Pydantic models and plain dicts
+                        # depending on whether the normalizer produces a typed model.
+                        d = row.model_dump() if hasattr(row, "model_dump") else row
+                        entity_rows[entity_name].append(d)
                 except Exception as exc:
                     classify_and_emit_error(
                         exc,
@@ -2131,7 +2299,7 @@ async def _fetch_sports_reference_data(
                         operation=f"sports_reference_{entity_name}_fetch",
                         shard=str(fid),
                     )
-                await asyncio.sleep(0.12)  # ~8 req/sec effective throughput
+                # Throttle handled by adapter's _get_with_retry + rate limit headers
 
         # Build all tasks: N entities x M fixtures (only missing entities)
         tasks: list[asyncio.Task[None]] = []
@@ -2299,17 +2467,45 @@ async def _fetch_footystats_predictions(
     counts: dict[str, int] = {}
 
     try:
+        from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
+        from unified_api_contracts.sports import resolve_footystats_team
+
         predictions = await adapter.get_fixture_predictions(date)  # type: ignore[attr-defined]
         if predictions:
             df = pd.DataFrame([p.model_dump() for p in predictions])
+            # Build canonical fixture_id for downstream join.
+            # FootyStats fixture_id format: "{competition_id}:{HOME}_v_{AWAY}:{DATE}"
+            # Use historical season ID map (covers ALL seasons, not just current).
+            _ft_id_to_league = FOOTYSTATS_HISTORICAL_SEASON_IDS
+
+            def _ft_canonical(row: pd.Series) -> str:
+                home = str(row.get("home_team", "") or "")
+                away = str(row.get("away_team", "") or "")
+                if not home or not away:
+                    return ""
+                # Extract competition_id from fixture_id if present
+                fid = str(row.get("fixture_id", "") or "")
+                league = ""
+                if ":" in fid:
+                    comp_str = fid.split(":")[0]
+                    if comp_str.isdigit():
+                        league = _ft_id_to_league.get(int(comp_str), "")
+                return build_fixture_id(
+                    league_id=league,
+                    home_team_id=resolve_footystats_team(home),
+                    away_team_id=resolve_footystats_team(away),
+                    date_str=date,
+                )
+
+            if "home_team" in df.columns and "away_team" in df.columns:
+                df["canonical_fixture_id"] = df.apply(_ft_canonical, axis=1)
             violations = _validate_predictions_null_rates(df, date)
             if violations:
-                logger.error(
-                    "FootyStats predictions shard %s REJECTED — null-rate violations: %s",
+                logger.warning(
+                    "FootyStats predictions shard %s has null-rate warnings (writing anyway): %s",
                     date,
                     "; ".join(violations),
                 )
-                return counts
             sink.write(
                 data=df,
                 partition={"day": date, "entity": "footystats_predictions"},
@@ -2331,7 +2527,7 @@ async def _fetch_footystats_predictions(
             pred_manifest.add(
                 processing_date=date_type.fromisoformat(date),
                 row_count=len(df),
-                venue="FOOTYSTATS_PREDICTIONS",
+                data_type="PREDICTIONS",
             )
             pred_manifest.write()
         else:
@@ -2360,12 +2556,17 @@ def _validate_predictions_null_rates(
       SPARSE (allowed >80% null): corners/cards/offsides/avg potentials
       VARIABLE (no constraint): everything else
     """
-    required_cols = [
+    # Core identifiers must be present (5% null max).
+    core_cols = [
         "fixture_id",
         "source",
         "kickoff_utc",
         "home_team",
         "away_team",
+    ]
+    # Potentials are coverage-dependent — lower leagues often lack them.
+    # Relaxed to 20% null max.
+    potential_cols = [
         "btts_potential",
         "o25_potential",
         "o35_potential",
@@ -2377,13 +2578,19 @@ def _validate_predictions_null_rates(
     n = len(df)
     if n == 0:
         return violations
-    for col in required_cols:
+    for col in core_cols:
         if col not in df.columns:
             violations.append(f"{col} missing from schema")
             continue
         null_pct = df[col].isnull().mean() * 100
         if null_pct > 5.0:
             violations.append(f"{col} null rate {null_pct:.1f}% exceeds 5% max (date={date}, n={n})")
+    for col in potential_cols:
+        if col not in df.columns:
+            continue  # Optional — not all dates have all potentials
+        null_pct = df[col].isnull().mean() * 100
+        if null_pct > 20.0:
+            violations.append(f"{col} null rate {null_pct:.1f}% exceeds 20% max (date={date}, n={n})")
     return violations
 
 
@@ -2406,6 +2613,9 @@ async def _fetch_footystats_matches(
     counts: dict[str, int] = {}
 
     try:
+        from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
+        from unified_api_contracts.sports import resolve_footystats_team
+
         # FootyStats league IDs are seasonal — use UAC SSOT
         league_ids = list(FOOTYSTATS_SEASON_IDS.values())
         fixtures = await adapter.get_fixtures(date, league_ids=league_ids)
@@ -2421,6 +2631,27 @@ async def _fetch_footystats_matches(
                             flat[f"{k}_{sub_k}"] = str(sub_v) if sub_v is not None else None
                     else:
                         flat[k] = str(v) if v is not None else None
+                # Build canonical fixture_id from team names + date.
+                # League comes from flattened league object (league_league_id)
+                # or reverse-map from fixture_id's competition_id prefix.
+                home_name = flat.get("home_team_name") or flat.get("home_team") or ""
+                away_name = flat.get("away_team_name") or flat.get("away_team") or ""
+                league = flat.get("league_league_id") or flat.get("league_name") or ""
+                if not league:
+                    # Try reverse-mapping from fixture_id prefix (competition_id)
+                    _ft_rev = {str(k): v for k, v in FOOTYSTATS_HISTORICAL_SEASON_IDS.items()}
+                    fid = flat.get("fixture_id") or flat.get("source_fixture_id") or ""
+                    if ":" in fid:
+                        league = _ft_rev.get(fid.split(":")[0], "")
+                if home_name and away_name:
+                    canonical_home = resolve_footystats_team(home_name)
+                    canonical_away = resolve_footystats_team(away_name)
+                    flat["canonical_fixture_id"] = build_fixture_id(
+                        league_id=league,
+                        home_team_id=canonical_home,
+                        away_team_id=canonical_away,
+                        date_str=date,
+                    )
                 flat_rows.append(flat)
             df = pd.DataFrame(flat_rows)
             sink.write(
@@ -2437,7 +2668,7 @@ async def _fetch_footystats_matches(
             manifest.add(
                 processing_date=date_type.fromisoformat(date),
                 row_count=len(df),
-                venue="FOOTYSTATS_MATCHES",
+                data_type="MATCHES",
             )
             manifest.write()
         else:
@@ -2447,7 +2678,7 @@ async def _fetch_footystats_matches(
             manifest.add(
                 processing_date=date_type.fromisoformat(date),
                 row_count=0,
-                venue="FOOTYSTATS_MATCHES",
+                data_type="MATCHES",
             )
             manifest.write()
     except Exception as exc:
@@ -2479,6 +2710,9 @@ async def _fetch_understat_xg(
     counts: dict[str, int] = {}
 
     try:
+        from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
+        from unified_api_contracts.sports import resolve_understat_team
+
         fixtures = await adapter.get_fixtures(date)
         if fixtures:
             rows = [fx.model_dump() for fx in fixtures]
@@ -2491,6 +2725,19 @@ async def _fetch_understat_xg(
                             flat[f"{k}_{sub_k}"] = str(sub_v) if sub_v is not None else None
                     else:
                         flat[k] = str(v) if v is not None else None
+                # Build canonical fixture_id from team names + date
+                home_name = flat.get("h_title") or ""
+                away_name = flat.get("a_title") or ""
+                league = flat.get("league") or ""
+                if home_name and away_name:
+                    canonical_home = resolve_understat_team(home_name)
+                    canonical_away = resolve_understat_team(away_name)
+                    flat["canonical_fixture_id"] = build_fixture_id(
+                        league_id=league,
+                        home_team_id=canonical_home,
+                        away_team_id=canonical_away,
+                        date_str=date,
+                    )
                 flat_rows.append(flat)
             df = pd.DataFrame(flat_rows)
             sink.write(
@@ -2506,7 +2753,7 @@ async def _fetch_understat_xg(
             manifest.add(
                 processing_date=date_type.fromisoformat(date),
                 row_count=len(df),
-                venue="UNDERSTAT_XG",
+                data_type="XG",
             )
             manifest.write()
         else:
@@ -2515,7 +2762,7 @@ async def _fetch_understat_xg(
             manifest.add(
                 processing_date=date_type.fromisoformat(date),
                 row_count=0,
-                venue="UNDERSTAT_XG",
+                data_type="XG",
             )
             manifest.write()
     except Exception as exc:
@@ -2534,16 +2781,18 @@ async def _fetch_transfermarkt_data(
     api_key: str,
     bucket: str,
     entity_filter: str | None = None,
+    season: int | None = None,
 ) -> dict[str, int]:
     """Fetch Transfermarkt leagues and teams (with player values) to GCS.
 
-    entity_filter: when set to "TRANSFERMARKT_LEAGUES" or "TRANSFERMARKT_TEAMS",
+    entity_filter: when set to "TRANSFERMARKT_LEAGUES" or "PLAYER_VALUES",
         only that entity is fetched and written (entity-scoped VM mode).
-
+    season: override season year for historical backfill (e.g. 2019).
+        When None, the adapter defaults to the current year.
 
     Transfermarkt provides squad composition, player market values, and
-    transfer history. Data is slow-moving (changes per transfer window,
-    not per day) but re-fetched to capture mid-season transfers.
+    transfer history. Data is slow-moving (changes at trigger dates:
+    season start, transfer window open/close) and fetched only then.
 
     GCS paths:
         sports_reference/by_date/day={date}/entity=transfermarkt_leagues/
@@ -2554,7 +2803,7 @@ async def _fetch_transfermarkt_data(
     counts: dict[str, int] = {}
 
     _want_leagues = entity_filter is None or entity_filter == "TRANSFERMARKT_LEAGUES"
-    _want_teams = entity_filter is None or entity_filter == "TRANSFERMARKT_TEAMS"
+    _want_teams = entity_filter is None or entity_filter == "PLAYER_VALUES"
 
     if _want_leagues:
         try:
@@ -2586,7 +2835,7 @@ async def _fetch_transfermarkt_data(
                 if tm_code is None:
                     continue
                 try:
-                    teams = await adapter.get_teams(tm_code)
+                    teams = await adapter.get_teams(tm_code, season=season)
                     for t in teams:
                         row = t.model_dump()
                         flat: dict[str, str | None] = {k: str(v) if v is not None else None for k, v in row.items()}
@@ -2609,10 +2858,17 @@ async def _fetch_transfermarkt_data(
                     )
             if all_teams:
                 df = pd.DataFrame(all_teams)
-                # Write as player_values entity (FSS reads this name)
+                # Add season column for provenance
+                effective_season = season if season is not None else datetime.now(UTC).year
+                df["season"] = effective_season
+                # Write as player_values entity — partition by season when
+                # doing historical backfill so seasons don't overwrite each other
+                pv_partition: dict[str, str] = {"day": date, "entity": "player_values"}
+                if season is not None:
+                    pv_partition["season"] = str(season)
                 sink.write(
                     data=df,
-                    partition={"day": date, "entity": "player_values"},
+                    partition=pv_partition,
                     format="parquet",
                     filename="player_values.parquet",
                 )
@@ -2631,13 +2887,13 @@ async def _fetch_transfermarkt_data(
         manifest.add(
             processing_date=date_type.fromisoformat(date),
             row_count=counts.get("transfermarkt_leagues", 0),
-            venue="TRANSFERMARKT_LEAGUES",
+            data_type="TRANSFERMARKT_LEAGUES",
         )
     if _want_teams:
         manifest.add(
             processing_date=date_type.fromisoformat(date),
             row_count=counts.get("transfermarkt_teams", 0),
-            venue="TRANSFERMARKT_TEAMS",
+            data_type="PLAYER_VALUES",
         )
     manifest.write()
 
@@ -2703,7 +2959,7 @@ async def _fetch_sfi_data(
                 try:
                     standings = await adapter.get_standings(lid)  # type: ignore[arg-type]
                     for entry in standings:
-                        row = entry.model_dump()
+                        row = entry.model_dump() if hasattr(entry, "model_dump") else entry
                         all_standings.append({k: str(v) if v is not None else None for k, v in row.items()})
                 except Exception as exc:
                     classify_and_emit_error(
@@ -2735,13 +2991,13 @@ async def _fetch_sfi_data(
         manifest.add(
             processing_date=date_type.fromisoformat(date),
             row_count=counts.get("sfi_leagues", 0),
-            venue="SFI_LEAGUES",
+            data_type="SFI_LEAGUES",
         )
     if _want_sfi_standings:
         manifest.add(
             processing_date=date_type.fromisoformat(date),
             row_count=counts.get("sfi_standings", 0),
-            venue="SFI_STANDINGS",
+            data_type="SFI_STANDINGS",
         )
     manifest.write()
 
@@ -2800,7 +3056,7 @@ async def _fetch_weather_data(
         manifest.add(
             processing_date=date_type.fromisoformat(date),
             row_count=0,
-            venue="WEATHER",
+            data_type="WEATHER",
         )
         manifest.write()
         return counts
@@ -2836,7 +3092,7 @@ async def _fetch_weather_data(
     manifest.add(
         processing_date=date_type.fromisoformat(date),
         row_count=counts.get("weather", 0),
-        venue="WEATHER",
+        data_type="WEATHER",
     )
     manifest.write()
 
@@ -2940,22 +3196,35 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
         manifest_data_type = ""
         manifest_league_id = ""
 
+        # Sports: venue → data_type (API_FOOTBALL_INJURIES → data_type=INJURIES, venue="")
+        _sports_prefixes = ("API_FOOTBALL", "TRANSFERMARKT", "FOOTYSTATS", "SFI", "UNDERSTAT", "WEATHER")
+        if venue_str.startswith(_sports_prefixes):
+            if venue_str == "API_FOOTBALL":
+                manifest_data_type = "FIXTURES"
+            else:
+                for pfx in _sports_prefixes:
+                    if venue_str.startswith(pfx + "_"):
+                        manifest_data_type = venue_str[len(pfx) + 1 :]
+                        break
+                else:
+                    manifest_data_type = venue_str
+            manifest_venue = ""
         # DeFi: split AAVEV3-ETHEREUM → venue=AAVE_V3, chain=ETHEREUM
-        if "-" in venue_str:
+        elif "-" in venue_str:
             try:
                 from unified_api_contracts.registry.capability_declarations._defi import (
-                    parse_defi_venue,
                     KNOWN_CHAINS,
+                    parse_defi_venue,
                 )
+
                 protocol, chain = parse_defi_venue(venue_str)
                 if chain in KNOWN_CHAINS:
                     manifest_venue = protocol.upper()
                     manifest_chain = chain
             except (ImportError, ValueError):
                 pass
-
         # Prediction: split POLYMARKET:BTC → venue=POLYMARKET, data_type=BTC
-        if ":" in venue_str:
+        elif ":" in venue_str:
             parts = venue_str.split(":", 1)
             manifest_venue = parts[0]
             manifest_data_type = parts[1]

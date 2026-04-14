@@ -81,7 +81,7 @@ class TestManifestLeagueId:
             mock_manifest.add(
                 processing_date=date_type.fromisoformat(date),
                 row_count=row_count,
-                venue="API_FOOTBALL_FIXTURES",
+                data_type="FIXTURES",
                 league_id=league_id,
             )
 
@@ -130,7 +130,7 @@ class TestEmptyFixtureMarkers:
             mock_manifest.add(
                 processing_date=date_type.fromisoformat(date),
                 row_count=0,
-                venue="API_FOOTBALL_FIXTURES",
+                data_type="FIXTURES",
                 league_id=league_id,
             )
 

@@ -31,7 +31,7 @@ def _add_instruments_extra_args(parser: argparse.ArgumentParser) -> None:  # pra
         default=None,
         help=(
             "Restrict this run to a single sports manifest entity "
-            "(e.g. API_FOOTBALL_INJURIES, API_FOOTBALL_FIXTURE_STATS). "
+            "(e.g. INJURIES, FIXTURE_STATS, XG, PREDICTIONS). "
             "Used for entity-scoped parallel VMs."
         ),
     )
@@ -42,6 +42,16 @@ def _add_instruments_extra_args(parser: argparse.ArgumentParser) -> None:  # pra
         help=(
             "Comma-separated list of canonical league IDs to process "
             "(e.g. EPL,BUNDESLIGA). Default: all prediction leagues."
+        ),
+    )
+    parser.add_argument(
+        "--season",
+        type=int,
+        default=None,
+        help=(
+            "Override season year for Transfermarkt squad data fetch "
+            "(e.g. --season 2022). Default: current year. "
+            "Used for historical backfill of player values."
         ),
     )
 
