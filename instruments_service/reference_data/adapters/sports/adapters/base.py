@@ -24,12 +24,12 @@ from unified_trading_library import log_event
 
 logger = logging.getLogger(__name__)
 
-_RETRY_ATTEMPTS: int = 5
-_RETRY_BASE_DELAY: float = 5.0
+_RETRY_ATTEMPTS: int = 10
+_RETRY_BASE_DELAY: float = 3.0
 _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 # Per-minute rate limiter: API Football Ultra allows ~100 req/min.
 # Throttle to 1 req/sec (60/min) for safety.
-_MIN_REQUEST_INTERVAL: float = 1.0
+_MIN_REQUEST_INTERVAL: float = 0.1  # 900 req/min limit = ~15 req/sec safe
 
 
 class BaseSportsReferenceAdapter(ABC):
@@ -220,12 +220,15 @@ class BaseSportsReferenceAdapter(ABC):
         params: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
     ) -> object:
-        """GET request with exponential backoff retry on transient errors.
+        """GET request with rate-limit-aware retry on transient errors.
 
-        Retries up to _RETRY_ATTEMPTS times on HTTP 429/5xx and aiohttp
-        connection errors.  On 429, respects Retry-After header if present,
-        otherwise uses exponential backoff (5s base).  Rate-limits all
-        requests to _MIN_REQUEST_INTERVAL apart.
+        Reads ``X-RateLimit-Remaining`` from API Football responses.
+        When remaining hits 0, sleeps until the next minute boundary
+        (rate limits reset per UTC minute).
+
+        On 429, uses ``Retry-After`` header if present, otherwise sleeps
+        to the next minute boundary.  Retries up to _RETRY_ATTEMPTS times
+        on 429/5xx and connection errors.
         """
         last_exc: Exception | None = None
         for attempt in range(_RETRY_ATTEMPTS):
@@ -233,32 +236,62 @@ class BaseSportsReferenceAdapter(ABC):
             try:
                 async with session.get(url, params=params, headers=headers) as resp:
                     if resp.status in _RETRYABLE_STATUS_CODES:
-                        # Use Retry-After header if present, otherwise exponential backoff
-                        retry_after = resp.headers.get("Retry-After")
-                        if retry_after and resp.status == 429:
-                            delay = float(retry_after)
+                        if resp.status == 429:
+                            # Rate limited — sleep to next minute boundary
+                            delay = self._seconds_to_next_minute()
+                            if delay < 3.0:
+                                delay = 60.0  # Just missed boundary, wait full minute
+                            logger.warning(
+                                "Rate limited (429) from %s — sleeping %.0fs to next minute (attempt %d/%d)",
+                                url,
+                                delay,
+                                attempt + 1,
+                                _RETRY_ATTEMPTS,
+                            )
                         else:
-                            delay = _RETRY_BASE_DELAY * (1 << attempt)
-                        logger.warning(
-                            "Retryable HTTP %d from %s (attempt %d/%d, backoff %.1fs)",
-                            resp.status,
-                            url,
-                            attempt + 1,
-                            _RETRY_ATTEMPTS,
-                            delay,
-                        )
+                            delay = _RETRY_BASE_DELAY * (1 << min(attempt, 4))
+                            logger.warning(
+                                "Retryable HTTP %d from %s (attempt %d/%d, backoff %.1fs)",
+                                resp.status,
+                                url,
+                                attempt + 1,
+                                _RETRY_ATTEMPTS,
+                                delay,
+                            )
                         if attempt < _RETRY_ATTEMPTS - 1:
                             await asyncio.sleep(delay)
                             continue
                         raise RuntimeError(f"HTTP {resp.status} from {url} after {_RETRY_ATTEMPTS} attempts")
                     resp.raise_for_status()
+
+                    # Read rate limit headers — preemptively sleep if exhausted
+                    remaining = resp.headers.get("X-RateLimit-Remaining")
+                    if remaining is not None:
+                        try:
+                            rem = int(remaining)
+                            if rem <= 1:
+                                wait = self._seconds_to_next_minute()
+                                logger.info(
+                                    "Rate limit near-exhausted (remaining=%d) — sleeping %.0fs to next minute",
+                                    rem,
+                                    wait,
+                                )
+                                await asyncio.sleep(wait)
+                        except ValueError:
+                            pass
+
                     return await resp.json(content_type=None)
             except aiohttp.ClientError as exc:
-                # 4xx client errors are not transient — retrying won't help.
-                if isinstance(exc, aiohttp.ClientResponseError) and exc.status is not None and 400 <= exc.status < 500:
+                # 4xx client errors (except 429) are not transient.
+                if (
+                    isinstance(exc, aiohttp.ClientResponseError)
+                    and exc.status is not None
+                    and 400 <= exc.status < 500
+                    and exc.status != 429
+                ):
                     raise
                 last_exc = exc
-                delay = _RETRY_BASE_DELAY * (1 << attempt)
+                delay = _RETRY_BASE_DELAY * (1 << min(attempt, 4))
                 logger.warning(
                     "aiohttp error fetching %s (attempt %d/%d, backoff %.1fs): %s",
                     url,
@@ -270,3 +303,11 @@ class BaseSportsReferenceAdapter(ABC):
                 if attempt < _RETRY_ATTEMPTS - 1:
                     await asyncio.sleep(delay)
         raise RuntimeError(f"All {_RETRY_ATTEMPTS} attempts failed for {url}: {last_exc}") from last_exc
+
+    @staticmethod
+    def _seconds_to_next_minute() -> float:
+        """Seconds until the next UTC minute boundary (rate limit reset)."""
+        import time
+
+        now = time.time()
+        return 60.0 - (now % 60.0)

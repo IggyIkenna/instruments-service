@@ -23,21 +23,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 
-_KNOWN_CRYPTO_UNDERLYINGS = {"BTC", "ETH", "SOL", "XRP", "DOGE", "HYPE", "BNB"}
-
-
 def _extract_shard(base_asset: str) -> str:
-    """Parse base_asset to get the shard venue name.
-
-    Only extracts shards for well-formed base_assets matching known patterns.
-    Everything else → POLYMARKET:OTHER.
-    """
+    """Parse base_asset to get the shard venue name. No allowlist."""
     parts = base_asset.split(":")
-    # FOOTBALL:POLYMARKET:MATCH_ODDS:... → POLYMARKET:FOOTBALL
     if len(parts) >= 2 and parts[0] == "FOOTBALL":
         return "POLYMARKET:FOOTBALL"
-    # PREDICTION:POLYMARKET:UP_DOWN:BTC:1D:... → POLYMARKET:BTC
-    if len(parts) >= 4 and parts[2] == "UP_DOWN" and parts[3] in _KNOWN_CRYPTO_UNDERLYINGS:
+    if len(parts) >= 4 and parts[2] == "UP_DOWN":
         return f"POLYMARKET:{parts[3]}"
     return "POLYMARKET:OTHER"
 
@@ -108,10 +99,15 @@ def main() -> None:
             from datetime import date as date_type
 
             for shard_name, count in shard_counts.items():
+                # v4: venue=POLYMARKET, data_type=underlying (e.g. BTC)
+                parts = shard_name.split(":", 1)
+                _venue = parts[0]
+                dt_val = parts[1] if len(parts) > 1 else ""  # BTC, FOOTBALL, OTHER
                 writer.add(
                     processing_date=date_type.fromisoformat(date_str),
                     row_count=count,
-                    venue=shard_name,
+                    venue=shard_name,  # Keep full name for backward compat
+                    data_type=dt_val,
                 )
             total_shards += len(shard_counts)
 

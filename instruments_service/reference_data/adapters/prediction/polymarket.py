@@ -220,7 +220,6 @@ def _extract_series_slug(raw: dict[str, object]) -> str | None:
 _GAMMA_BASE = "https://gamma-api.polymarket.com"
 _PAGE_LIMIT = 100
 _MAX_PAGES_ACTIVE = 20  # cap for active-only mode (live)
-_MAX_PAGES_HISTORICAL = 200  # cap for per-date historical mode (batch) — ~20k markets
 _MAPPER = PredictionMarketMapper()
 
 
@@ -261,10 +260,44 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         self._api_football_key = api_football_api_key
         self._fixture_cache: dict[str, str] = {}  # "LEAGUE:HOME:AWAY:DATE" → fixture_id
         self._last_raw_page_size: int = 0
+        # Captured during get_instruments() — available via get_market_metadata()
+        self._last_markets: list[PolymarketGammaMarket] = []
 
     @property
     def venue(self) -> str:
         return "POLYMARKET"
+
+    def get_market_metadata_df(self) -> "pd.DataFrame":  # noqa: F821
+        """Return captured market metadata from the last ``get_instruments()`` call.
+
+        Returns a DataFrame with key metadata fields from every
+        PolymarketGammaMarket seen during the most recent fetch.
+        """
+        import pandas as pd  # noqa: qg-inside-import
+
+        if not self._last_markets:
+            return pd.DataFrame()
+        rows: list[dict[str, object]] = []
+        for m in self._last_markets:
+            rows.append(
+                {
+                    "condition_id": m.condition_id,
+                    "question_id": m.question_id,
+                    "question": m.question,
+                    "description": m.description,
+                    "market_slug": m.market_slug,
+                    "outcomes": ",".join(m.outcomes) if m.outcomes else None,
+                    "end_date_iso": m.end_date_iso,
+                    "active": m.active,
+                    "closed": m.closed,
+                    "volume": str(m.volume) if m.volume else None,
+                    "liquidity": str(m.liquidity) if m.liquidity else None,
+                    "category": m.tags[0].slug if m.tags else None,
+                    "series_slug": m.series_slug,
+                    "event_title": m.event_title,
+                }
+            )
+        return pd.DataFrame(rows)
 
     async def get_instruments(
         self,
@@ -281,25 +314,26 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         """
         if instrument_type is not None and instrument_type != "PREDICTION_MARKET":
             return []
-        results: list[InstrumentRecord] = []
+        self._last_markets = []  # Reset for new fetch
         now = datetime.now(UTC)
-        max_pages = _MAX_PAGES_HISTORICAL if date else _MAX_PAGES_ACTIVE
-        self._last_raw_page_size = 0
-        async with self._make_session() as session:
-            for page in range(max_pages):
-                offset = page * _PAGE_LIMIT
-                batch = await self._fetch_page(session, offset, now, date=date)
-                results.extend(batch)
-                # Use raw API page size for pagination (not filtered count)
-                if self._last_raw_page_size < _PAGE_LIMIT:
-                    break
-                if page > 0 and page % 20 == 0:
-                    logger.info(
-                        "Polymarket fetch: %d instruments so far (offset=%d, date=%s)",
-                        len(results),
-                        offset,
-                        date,
-                    )
+
+        if date:
+            # Historical mode: use CLOB API directly — Gamma prunes old
+            # resolved markets so end_date_min/max returns 0 for most dates.
+            # CLOB has the full 863K+ market history with no pruning.
+            results = await self._fetch_clob_markets(date, now)
+        else:
+            # Live mode: Gamma API for active markets (fast, sorted by volume)
+            results = []
+            self._last_raw_page_size = 0
+            async with self._make_session() as session:
+                for page in range(_MAX_PAGES_ACTIVE):
+                    offset = page * _PAGE_LIMIT
+                    batch = await self._fetch_page(session, offset, now, date=None)
+                    results.extend(batch)
+                    if self._last_raw_page_size < _PAGE_LIMIT:
+                        break
+
         logger.info("Polymarket: fetched %d instruments (date=%s)", len(results), date or "active")
         return results
 
@@ -426,6 +460,98 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
             if (ref := self._parse_clob_point(point_raw, symbol, interval)) is not None
         ]
 
+    _CLOB_BASE = "https://clob.polymarket.com"
+    _CLOB_PAGE_LIMIT = 1000
+    _CLOB_MAX_PAGES = 1000  # safety cap — CLOB has 863K+ markets
+
+    @staticmethod
+    def _enrich_clob_outcomes(raw_item: dict[str, object]) -> None:
+        """Enrich CLOB market dict for PolymarketGammaMarket compatibility.
+
+        Fixes two CLOB→Gamma incompatibilities:
+        1. CLOB has tokens[].outcome, not top-level outcomes list
+        2. CLOB has tags as list of strings, Gamma has list of tag objects
+        """
+        # Extract outcomes from tokens
+        if "outcomes" not in raw_item:
+            tokens = raw_item.get("tokens")
+            if isinstance(tokens, list):
+                outcomes: list[str] = []
+                for t in tokens:
+                    if isinstance(t, dict) and "outcome" in t:
+                        outcomes.append(str(t["outcome"]))
+                if outcomes:
+                    raw_item["outcomes"] = outcomes
+
+        # Convert string tags to PolymarketGammaTag-compatible dicts
+        tags = raw_item.get("tags")
+        if isinstance(tags, list) and tags and isinstance(tags[0], str):
+            raw_item["tags"] = [{"slug": str(t).lower().replace(" ", "-"), "label": str(t)} for t in tags]
+
+    async def _fetch_clob_markets(
+        self,
+        date: str,
+        now: datetime,
+    ) -> list[InstrumentRecord]:
+        """Fetch markets from CLOB API for a historical date.
+
+        CLOB /markets returns all markets (including resolved) with cursor
+        pagination.  Slower than Gamma but has full history.  Filters by
+        ``end_date_iso`` matching the target date.
+        """
+        target_prefix = f"{date}T"
+        results: list[InstrumentRecord] = []
+        cursor = ""
+        async with self._make_session() as session:
+            for page in range(self._CLOB_MAX_PAGES):
+                params: dict[str, str] = {"limit": str(self._CLOB_PAGE_LIMIT)}
+                if cursor:
+                    params["next_cursor"] = cursor
+                try:
+                    async with session.get(f"{self._CLOB_BASE}/markets", params=params) as resp:
+                        resp.raise_for_status()
+                        data = cast(dict[str, object], await resp.json())
+                except aiohttp.ClientError as exc:
+                    logger.warning("CLOB markets page %d failed: %s", page, exc)
+                    break
+
+                raw_markets = data.get("data")
+                if not isinstance(raw_markets, list) or not raw_markets:
+                    break
+
+                for raw_item in raw_markets:
+                    if not isinstance(raw_item, dict):
+                        continue
+                    end_date = str(raw_item.get("end_date_iso", ""))
+                    if not end_date.startswith(target_prefix):
+                        continue
+                    # CLOB market matches target date — enrich with
+                    # outcomes from tokens[] and event fields
+                    self._enrich_clob_outcomes(raw_item)
+                    _enrich_raw_event_fields(raw_item)
+                    try:
+                        market = PolymarketGammaMarket.model_validate(raw_item)
+                    except (ValueError, TypeError):
+                        continue
+                    self._last_markets.append(market)
+                    record = self._parse_market(market, now)
+                    if record is not None:
+                        results.append(record)
+
+                cursor = str(data.get("next_cursor", ""))
+                # CLOB signals end with cursor "-1" (base64: "LTE=")
+                if not cursor or cursor == "LTE=":
+                    break
+                if page > 0 and page % 100 == 0:
+                    logger.info(
+                        "CLOB scan: page %d, %d matches so far (date=%s)",
+                        page,
+                        len(results),
+                        date,
+                    )
+        logger.info("CLOB: %d instruments for date=%s (%d pages scanned)", len(results), date, page + 1)
+        return results
+
     async def _fetch_page(
         self,
         session: aiohttp.ClientSession,
@@ -433,24 +559,15 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         now: datetime,
         date: str | None = None,
     ) -> list[InstrumentRecord]:
-        if date:
-            # Historical mode: fetch ALL markets ending on this UTC date
-            params: dict[str, str] = {
-                "limit": str(_PAGE_LIMIT),
-                "offset": str(offset),
-                "end_date_min": f"{date}T00:00:00Z",
-                "end_date_max": f"{date}T23:59:59Z",
-            }
-        else:
-            # Live mode: active markets sorted by volume
-            params = {
-                "closed": "false",
-                "active": "true",
-                "limit": str(_PAGE_LIMIT),
-                "offset": str(offset),
-                "order": "volume24hr",
-                "ascending": "false",
-            }
+        # Live mode only — historical uses _fetch_clob_markets() directly
+        params: dict[str, str] = {
+            "closed": "false",
+            "active": "true",
+            "limit": str(_PAGE_LIMIT),
+            "offset": str(offset),
+            "order": "volume24hr",
+            "ascending": "false",
+        }
         url = f"{_GAMMA_BASE}/markets"
         try:
             async with session.get(url, params=params) as resp:
@@ -484,6 +601,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
 
         raw_list = cast(list[object], raw_json)
         results: list[InstrumentRecord] = []
+        markets: list[PolymarketGammaMarket] = []
         for raw_item in raw_list:
             _enrich_raw_event_fields(raw_item)
             try:
@@ -493,9 +611,11 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
                 slug = raw_item.get("market_slug", "?") if isinstance(raw_item, dict) else "?"
                 logger.debug("Polymarket: skipping market %s — validation error: %s", slug, exc)
                 continue
+            markets.append(market)
             record = self._parse_market(market, now)
             if record is not None:
                 results.append(record)
+        self._last_markets.extend(markets)
         # Store raw page size so caller can paginate correctly even when
         # many markets are filtered out (e.g. non-prediction-league sports).
         self._last_raw_page_size = len(raw_list)
