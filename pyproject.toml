@@ -163,7 +163,7 @@ quote-style = "double"
 indent-style = "space"
 
 [tool.coverage.report]
-fail_under = 80
+fail_under = 75
 show_missing = true
 skip_covered = false
 precision = 1

@@ -97,7 +97,13 @@ def _parse_team_item(
     team_data: dict[str, object],
     venue_data: object,
 ) -> CanonicalTeam:
-    """Build a CanonicalTeam from an API-Football teams response item."""
+    """Build a CanonicalTeam from an API-Football teams response item.
+
+    Extracts venue metadata (name, city, capacity, surface) from the API
+    Football /teams response and enriches with geographic coordinates from
+    the UAC static venue coordinates registry (SSOT for weather data).
+    """
+    from unified_api_contracts import get_venue_coordinates
     from unified_api_contracts.canonical.domain.sports import (
         CanonicalVenue,
         build_team_id,
@@ -108,9 +114,21 @@ def _parse_team_item(
     if isinstance(venue_data, dict):
         venue_name = str(venue_data.get("name", "")) if venue_data.get("name") else None
         if venue_name:
+            vid = build_venue_id(venue_name)
+            coords = get_venue_coordinates(vid)
+            _city = venue_data.get("city")
+            _country = venue_data.get("country")
+            _capacity = venue_data.get("capacity")
+            _surface = venue_data.get("surface")
             venue_obj = CanonicalVenue(
-                venue_id=build_venue_id(venue_name),
+                venue_id=vid,
                 name=venue_name,
+                city=str(_city) if _city is not None else None,
+                country=str(_country) if _country is not None else None,
+                capacity=int(_capacity) if isinstance(_capacity, (int, float)) else None,
+                surface=str(_surface) if _surface is not None else None,
+                latitude=coords.latitude if coords is not None else None,
+                longitude=coords.longitude if coords is not None else None,
             )
     display_name = str(team_data.get("name", ""))
     return CanonicalTeam(

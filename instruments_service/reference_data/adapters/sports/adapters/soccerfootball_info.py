@@ -1,4 +1,4 @@
-"""SoccerFootball.info adapter — league standings and tables.
+"""SoccerFootball.info adapter — league standings, tables, and progressive stats.
 
 Auth: service must fetch soccer-football-info-api-key from Secret Manager
 and pass it via the ``api_key`` constructor parameter. Uses RapidAPI.
@@ -13,6 +13,7 @@ from unified_api_contracts.sports import (
     CanonicalFixture,
     CanonicalLeague,
     CanonicalOdds,
+    CanonicalProgressiveStats,
     CanonicalStanding,
     CanonicalTeam,
 )
@@ -181,6 +182,99 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
         logger.info("Fetched %d teams for league=%s", len(teams), league_id)
         return teams
 
+    async def get_match_ids_for_date(
+        self,
+        date: str,
+    ) -> list[str]:
+        """Fetch SFI match IDs for a given date.
+
+        API endpoint: GET /matches/date/{date}
+        Returns a list of SFI match ID strings for completed matches.
+
+        Args:
+            date: Date string in YYYY-MM-DD format.
+
+        Returns:
+            List of SFI match ID strings.
+        """
+        url = f"{_BASE_URL}/matches/date/{date}"
+
+        try:
+            async with self._make_session() as session:
+                raw_response = await self._get_with_retry(
+                    session,
+                    url,
+                    headers=self._headers(),
+                )
+        except Exception as exc:
+            error_code = self._classify_error(exc)
+            self._emit_fetch_failed(error_code, exc)
+            raise
+
+        raw_rows = _extract_data(raw_response)
+        match_ids: list[str] = []
+        for item in raw_rows:
+            match_id = item.get("id") or item.get("match_id")
+            status = str(item.get("status", "")).upper()
+            # Only include completed matches (finished/full-time)
+            if match_id and status in ("FT", "AET", "PEN", "FINISHED", "FULL_TIME"):
+                match_ids.append(str(match_id))
+        logger.info(
+            "SFI match IDs for date=%s: %d completed matches",
+            date,
+            len(match_ids),
+        )
+        return match_ids
+
+    async def get_progressive_stats(
+        self,
+        match_id: str,
+    ) -> list[CanonicalProgressiveStats]:
+        """Fetch progressive (30-second interval) match stats from SFI.
+
+        API endpoint: GET /matches/{match_id}/progressive
+        Returns minute-by-minute team-level stats for halftime features:
+        goals, possession, shots, corners, fouls, cards, dangerous attacks.
+
+        Args:
+            match_id: SoccerFootball.info match ID.
+
+        Returns:
+            List of canonical progressive stats (one per team per 30s tick).
+        """
+        url = f"{_BASE_URL}/matches/{match_id}/progressive"
+
+        try:
+            async with self._make_session() as session:
+                raw_response = await self._get_with_retry(
+                    session,
+                    url,
+                    headers=self._headers(),
+                )
+        except Exception as exc:
+            error_code = self._classify_error(exc)
+            self._emit_fetch_failed(error_code, exc)
+            raise
+
+        raw_rows = _extract_data(raw_response)
+        results: list[CanonicalProgressiveStats] = []
+        for item in raw_rows:
+            try:
+                results.append(_normalize_sfi_progressive_stat(item, match_id))
+            except Exception as exc:
+                logger.warning(
+                    "Failed to normalize SFI progressive stat for match=%s: %s",
+                    match_id,
+                    exc,
+                )
+                continue
+        logger.info(
+            "Fetched %d progressive stat rows for match=%s",
+            len(results),
+            match_id,
+        )
+        return results
+
     async def get_odds(
         self,
         sport: str,
@@ -241,3 +335,53 @@ def _safe_int(val: object) -> int | None:
         return int(str(val))
     except (ValueError, TypeError):
         return None
+
+
+def _parse_timer_to_seconds(timer: str) -> int:
+    """Parse SFI timer string "MM:SS" to total seconds.
+
+    Examples: "00:30" -> 30, "45:00" -> 2700, "90:00" -> 5400.
+    Falls back to 0 on parse errors.
+    """
+    parts = timer.split(":")
+    if len(parts) == 2:
+        try:
+            return int(parts[0]) * 60 + int(parts[1])
+        except (ValueError, TypeError):
+            return 0
+    return 0
+
+
+def _normalize_sfi_progressive_stat(
+    item: dict[str, object],
+    match_id: str,
+) -> CanonicalProgressiveStats:
+    """Map an SFI progressive stats row to CanonicalProgressiveStats.
+
+    SFI progressive data includes per-team stats at 30-second intervals:
+    goals, possession, shots, corners, fouls, cards, dangerous attacks.
+    """
+    timer = str(item.get("timer", "00:00"))
+    timer_seconds = _parse_timer_to_seconds(timer)
+    team = str(item.get("team", ""))
+
+    possession_raw = item.get("possession")
+    possession_pct = float(str(possession_raw)) if possession_raw is not None else None
+
+    return CanonicalProgressiveStats(
+        fixture_id=match_id,
+        timer_seconds=timer_seconds,
+        team=team,
+        goals=_safe_int(item.get("goals")),
+        possession_pct=possession_pct,
+        dangerous_attacks=_safe_int(item.get("dangerous_attacks")),
+        attacks=_safe_int(item.get("attacks")),
+        shots_on_target=_safe_int(item.get("shots_on_target")),
+        shots_off_target=_safe_int(item.get("shots_off_target")),
+        corners=_safe_int(item.get("corners")),
+        fouls=_safe_int(item.get("fouls")),
+        yellow_cards=_safe_int(item.get("yellow_cards")),
+        red_cards=_safe_int(item.get("red_cards")),
+        substitutions=_safe_int(item.get("substitutions")),
+        dominance_pct=float(str(item.get("dominance"))) if item.get("dominance") is not None else None,
+    )

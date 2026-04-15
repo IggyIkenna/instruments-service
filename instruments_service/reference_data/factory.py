@@ -249,6 +249,9 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "spark": "thegraph",
     "api_football": "api_football",
     "betfair": "betfair",
+    # EigenLayer / EtherFi governance — on-chain, no API key needed
+    "eigenlayer": "",
+    "ethfi_governance": "",
     # Solana adapters use public REST APIs (no API key needed)
     "drift": "",
     "kamino": "",
