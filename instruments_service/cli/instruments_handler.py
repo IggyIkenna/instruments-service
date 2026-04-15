@@ -9,7 +9,9 @@ In CLOUD_MOCK_MODE, key validation is skipped (no real Secret Manager available)
 
 from __future__ import annotations
 
+import contextlib
 import logging
+from datetime import UTC, datetime
 
 from unified_trading_library import (
     ApiKeyReloader,
@@ -19,6 +21,7 @@ from unified_trading_library import (
     UnifiedServiceHandler,
     classify_and_emit_error,
 )
+from unified_trading_library.events_interface import publish_coordination_event
 
 from instruments_service.engine import orchestrator as engine_orchestrator
 from instruments_service.engine.orchestrator import (
@@ -46,6 +49,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
         self._key_reloader: ApiKeyReloader | None = None
         self._venue_override: list[str] | None = None  # set in preflight() when --venues is used
         self._sports_entity_filter: str | None = None  # set in preflight() when --sports-entity is used
+        self._sports_provider: str | None = None  # set in preflight() when --sports-provider is used
         self._league_filter: list[str] | None = None  # set in preflight() when --league is used
         self._season_override: int | None = None  # set in preflight() when --season is used
 
@@ -76,6 +80,12 @@ class InstrumentsHandler(UnifiedServiceHandler):
             logger.info(
                 "Sports entity filter from CLI: %s (only this entity will be checked/fetched)", sports_entity_arg
             )
+
+        # Wire --sports-provider filter (per-provider VM: one VM per data provider)
+        sports_provider_arg: str | None = getattr(self.args, "sports_provider", None) if self.args else None
+        if sports_provider_arg:
+            self._sports_provider = sports_provider_arg.upper()
+            logger.info("Sports provider filter from CLI: %s (only this provider will run)", self._sports_provider)
 
         # Wire --league filter (league-scoped VM: only process specified leagues)
         league_arg: str | None = getattr(self.args, "league", None) if self.args else None
@@ -140,6 +150,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
             venue_override=self._venue_override,
             mode=str(self.runtime.mode),
             sports_entity_filter=self._sports_entity_filter,
+            sports_provider=self._sports_provider,
             league_filter=self._league_filter,
             season_override=self._season_override,
         )
@@ -160,3 +171,17 @@ class InstrumentsHandler(UnifiedServiceHandler):
                 logger.warning("ManifestWriter final flush failed for %s: %s", category, exc)
         if flushed:
             logger.info("ManifestWriter cleanup: flushed buffers for %s", flushed)
+
+        # Publish DATA_READY coordination event so downstream services
+        # (e.g. market-tick-data-service) know instrument data is available.
+        # Only fires in live mode; publish_coordination_event raises ValueError
+        # in batch mode so we guard with suppress.
+        with contextlib.suppress(RuntimeError, ValueError):
+            publish_coordination_event(
+                "DATA_READY",
+                payload={
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "data_type": "instruments",
+                    "service": "instruments-service",
+                },
+            )

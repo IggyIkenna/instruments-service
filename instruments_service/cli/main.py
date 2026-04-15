@@ -54,6 +54,26 @@ def _add_instruments_extra_args(parser: argparse.ArgumentParser) -> None:  # pra
             "Used for historical backfill of player values."
         ),
     )
+    parser.add_argument(
+        "--sports-provider",
+        type=str,
+        default=None,
+        help=(
+            "Restrict SPORTS runs to a single data provider. "
+            "Prevents wasting API credits on other providers. "
+            "Values: API_FOOTBALL, API_FOOTBALL_ENRICHMENT, OPEN_METEO, "
+            "TRANSFERMARKT, SOCCER_FOOTBALL_INFO, UNDERSTAT, FOOTYSTATS. "
+            "Used for per-provider VMs."
+        ),
+    )
+    parser.add_argument(
+        "--run-tag",
+        type=str,
+        default="batch",
+        help=(
+            "GCS output prefix tag (default: batch; use 'live' for live partition, 't1-recon' for T+1 reconciliation)"
+        ),
+    )
 
 
 def main_service_cli() -> None:  # pragma: no cover
