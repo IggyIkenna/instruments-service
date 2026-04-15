@@ -30,6 +30,7 @@ class TestApiFootballAdapter:
         mock_resp = AsyncMock()
         mock_resp.status = 200
         mock_resp.raise_for_status = MagicMock()
+        mock_resp.headers = {}
         mock_resp.json = AsyncMock(
             return_value={
                 "response": [
@@ -64,6 +65,7 @@ class TestApiFootballAdapter:
         mock_resp = AsyncMock()
         mock_resp.status = 200
         mock_resp.raise_for_status = MagicMock()
+        mock_resp.headers = {}
         mock_resp.json = AsyncMock(
             return_value={
                 "response": [
@@ -92,6 +94,7 @@ class TestApiFootballAdapter:
         mock_resp = AsyncMock()
         mock_resp.status = 200
         mock_resp.raise_for_status = MagicMock()
+        mock_resp.headers = {}
         mock_resp.json = AsyncMock(
             return_value={
                 "response": [

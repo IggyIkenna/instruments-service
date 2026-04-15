@@ -354,6 +354,7 @@ def _group_apify_players_into_clubs(
                     "nationality": player.get("nationality", ""),
                     "marketValue": player.get("marketValue"),
                     "market_value_eur": player.get("marketValue"),
+                    "valuation_date": datetime.now(UTC).strftime("%Y-%m-%d"),
                     "age": player.get("age"),
                     "contractUntil": player.get("contractExpiry"),
                     "image": player.get("profileUrl"),
@@ -400,6 +401,9 @@ def _parse_squad(item: dict[str, object]) -> TransfermarktTeamSquad | None:
                         nationality=str(p.get("nationality", "")) if p.get("nationality") else None,
                         market_value_eur=_parse_market_value(p.get("marketValue") or p.get("market_value_eur")),
                         market_value_currency="EUR",
+                        valuation_date=str(p.get("valuation_date", ""))
+                        if p.get("valuation_date")
+                        else datetime.now(UTC).strftime("%Y-%m-%d"),
                         club=str(item.get("name", "")),
                         age=_safe_int(p.get("age")),
                         contract_until=str(p.get("contractUntil", "")) if p.get("contractUntil") else None,
