@@ -657,6 +657,17 @@ def earliest_venue_date(venues: list[str]) -> str | None:
     return min(dates) if dates else None
 
 
+_SPORTS_PROVIDER_VENUES: dict[str, list[str]] = {
+    "API_FOOTBALL": ["API_FOOTBALL"],
+    "API_FOOTBALL_ENRICHMENT": ["API_FOOTBALL"],
+    "OPEN_METEO": ["OPEN_METEO"],
+    "TRANSFERMARKT": ["TRANSFERMARKT"],
+    "SOCCER_FOOTBALL_INFO": ["SOCCER_FOOTBALL_INFO"],
+    "UNDERSTAT": ["UNDERSTAT"],
+    "FOOTYSTATS": ["FOOTYSTATS"],
+}
+
+
 async def process_instruments(
     date: str | datetime,
     categories: list[str],
@@ -665,12 +676,15 @@ async def process_instruments(
     venue_override: list[str] | None = None,
     mode: str = "batch",
     sports_entity_filter: str | None = None,
+    sports_provider: str | None = None,
     league_filter: list[str] | None = None,
     season_override: int | None = None,
 ) -> dict[str, int]:
     """Process instruments for a single date and set of market categories.
 
     Args:
+        sports_provider: When set, only run this data provider (e.g. OPEN_METEO,
+            API_FOOTBALL, TRANSFERMARKT). Maps to venue filter + entity scope.
         league_filter: When set, only process these canonical league IDs
             (e.g. ["EPL", "BUNDESLIGA"]). Default None = all prediction leagues.
 
@@ -696,6 +710,16 @@ async def process_instruments(
 
     # 1. Skip venues not yet launched
     active_venues = [v for v in venues if is_venue_available(v, date)]
+
+    # --sports-provider: restrict to only this provider's venues
+    if sports_provider:
+        provider_venues = _SPORTS_PROVIDER_VENUES.get(sports_provider)
+        if provider_venues is None:
+            logger.error("Unknown --sports-provider: %s. Valid: %s", sports_provider, list(_SPORTS_PROVIDER_VENUES))
+            return {}
+        active_venues = [v for v in active_venues if v in provider_venues]
+        logger.info("Sports provider filter: %s → venues %s", sports_provider, active_venues)
+
     if not active_venues:
         logger.info("No active venues for date=%s categories=%s", date, categories)
         return {}
@@ -1560,8 +1584,11 @@ async def process_instruments(
     # alongside fixtures. These are slow-moving entities that don't change per-date
     # but are re-fetched to capture transfers, promotions, new seasons.
     is_sports = any(c.upper() in ("SPORTS", "ALL") for c in categories)
-    if is_sports and api_keys:
-        api_football_key = api_keys.get("api_football")
+    # OPEN_METEO doesn't need API keys — allow sports enrichment even with empty api_keys
+    _needs_api_keys = sports_provider not in ("OPEN_METEO",) if sports_provider else True
+    if is_sports and (api_keys or not _needs_api_keys):
+        _keys = api_keys or {}
+        api_football_key = _keys.get("api_football")
         if not api_football_key:
             logger.warning("api_football key missing from api_keys — skipping sports reference data")
         else:
@@ -1737,7 +1764,9 @@ async def process_instruments(
                     shard=date,
                 )
 
-        if _entity_wanted("WEATHER") and ("OPEN_METEO" in _active_venues_set or sports_entity_filter == "WEATHER"):
+        if _entity_wanted("WEATHER") and (
+            "OPEN_METEO" in _active_venues_set or sports_entity_filter == "WEATHER" or sports_provider == "OPEN_METEO"
+        ):
             try:
                 weather_counts = await _fetch_weather_data(date=date, bucket=bucket)
                 for k, v in weather_counts.items():
