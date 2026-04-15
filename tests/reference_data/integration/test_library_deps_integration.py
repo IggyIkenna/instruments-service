@@ -250,14 +250,12 @@ def test_urdi_factory_creates_adapter_with_correct_venue() -> None:
     """create_reference_data_adapter creates adapters that return correct venue property."""
     from instruments_service.reference_data import create_reference_data_adapter
 
-    # Venue names are now canonical uppercase
+    # Venue names are now canonical uppercase (CeFi exchanges removed — use tardis adapter)
     expected_venues = {
-        "binance": "BINANCE-SPOT",
-        "bybit": "BYBIT-SPOT",
-        "okx": "OKX-SPOT",
-        "deribit": "DERIBIT",
-        "coinbase": "coinbase",
         "hyperliquid": "HYPERLIQUID",
+        "tardis": "tardis",
+        "polygon": "polygon",
+        "api_football": "API_FOOTBALL",
     }
     for factory_key, expected_venue in expected_venues.items():
         adapter = create_reference_data_adapter(factory_key)

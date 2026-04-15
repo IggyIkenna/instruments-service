@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from instruments_service.reference_data.utils.block_resolver import (
+    _block_cache,
     _resolve_alchemy_key,
     date_to_block,
 )
@@ -36,6 +37,10 @@ class TestResolveAlchemyKey:
 
 
 class TestDateToBlock:
+    def setup_method(self) -> None:
+        """Clear block cache between tests to avoid cross-test contamination."""
+        _block_cache.clear()
+
     @pytest.mark.asyncio
     async def test_non_ethereum_returns_none(self) -> None:
         result = await date_to_block("2024-01-01", chain="SOLANA")

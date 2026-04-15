@@ -49,6 +49,7 @@ from unified_api_contracts.sports import (
     FOOTYSTATS_HISTORICAL_SEASON_IDS,
     FOOTYSTATS_SEASON_IDS,
     get_all_prediction_league_ids,
+    get_entity_league_coverage,
     get_leagues_needing_refresh,
     get_provider_league_id,
     is_any_league_refresh_date,
@@ -742,14 +743,38 @@ async def process_instruments(
             ("PLAYER_VALUES", "TRANSFERMARKT"),
             ("SFI_LEAGUES", "SOCCER_FOOTBALL_INFO"),
             ("SFI_STANDINGS", "SOCCER_FOOTBALL_INFO"),
+            ("SFI_PROGRESSIVE_STATS", "SOCCER_FOOTBALL_INFO"),
             ("WEATHER", "OPEN_METEO"),
         ]
         if is_sports_run:
             expected.extend(_sports_core_entities)
             expected.extend(_sports_per_fixture_entities)
-            expected.extend(
-                entity for entity, venue in _enrichment_entity_venues if venue in _active_venues_set_freshness
-            )
+
+            # League-aware enrichment: only expect an enrichment entity if
+            # the leagues it covers have fixtures on this date.  Read the
+            # manifest index once to get leagues with FIXTURES on this date.
+            _date_fixture_leagues: set[str] = set()
+            _index_df = read_availability_index(bucket)
+            if not _index_df.empty and "league_id" in _index_df.columns:
+                _fix_mask = (_index_df["date"] == date) & (_index_df["data_type"] == "FIXTURES")
+                _lid_series = _index_df.loc[_fix_mask, "league_id"].dropna()
+                _date_fixture_leagues = {str(lid).upper() for lid in _lid_series.unique() if str(lid).strip()}
+
+            for entity, venue in _enrichment_entity_venues:
+                if venue not in _active_venues_set_freshness:
+                    continue
+                # Check league coverage — skip entity if its covered leagues
+                # have no fixtures on this date.
+                coverage = get_entity_league_coverage(entity)
+                if coverage is not None and _date_fixture_leagues and not coverage & _date_fixture_leagues:
+                    logger.debug(
+                        "date=%s: skipping %s from expected — no fixture from covered leagues %s",
+                        date,
+                        entity,
+                        sorted(coverage),
+                    )
+                    continue
+                expected.append(entity)
 
         # Entity-scoped VM: when --sports-entity is set, restrict expected[] to just
         # that one entity. This makes the freshness check and all fetches single-entity,
@@ -826,11 +851,15 @@ async def process_instruments(
     # Both skip the expensive URDI fetch and go straight to _fetch_sports_reference_data.
     if _sports_missing_entities and api_keys:
         missing_set = set(_sports_missing_entities)
-        core_missing = missing_set & set(_sports_core_entities)
-        pf_missing_set = missing_set & set(_sports_per_fixture_entities)
-        instruments_missing = missing_set - set(_sports_core_entities) - set(_sports_per_fixture_entities)
-        # Fast path fires when no non-sports instrument records are missing
-        if not instruments_missing and (not core_missing or not pf_missing_set):
+        # Enrichment entities (XG, Transfermarkt, FootyStats, SFI, Weather) can
+        # read existing fixtures from GCS — they don't need a URDI fetch.
+        _enrichment_entity_names = {e for e, _ in _enrichment_entity_venues}
+        instruments_missing = (
+            missing_set - set(_sports_core_entities) - set(_sports_per_fixture_entities) - _enrichment_entity_names
+        )
+        # Fast path fires when only core/per-fixture/enrichment entities are missing
+        # (no actual instrument records to fetch from URDI)
+        if not instruments_missing:
             api_football_key = api_keys.get("api_football")
             if api_football_key:
                 primary_category = categories[0] if categories else None
@@ -843,24 +872,36 @@ async def process_instruments(
                     len(gcs_fixture_ids),
                     _sports_missing_entities,
                 )
+                # Create manifest writer so _fetch_sports_reference_data can write
+                # per-league manifest entries for injuries and per-fixture entities.
+                sports_manifest = ManifestWriter(
+                    service_name="instruments-service",
+                    catalogue_bucket=bucket,
+                )
                 sports_ref_counts = await _fetch_sports_reference_data(
                     date=date,
                     api_key=api_football_key,
                     bucket=bucket,
                     entities_to_fetch=_sports_missing_entities,
                     fixture_ids_override=gcs_fixture_ids,
+                    manifest=sports_manifest,
                 )
-                # Write manifest for newly fetched entities
-                sports_manifest = ManifestWriter(
-                    service_name="instruments-service",
-                    catalogue_bucket=bucket,
-                )
+                # Write manifest for entities that did NOT write their own
+                # manifest entries inside _fetch_sports_reference_data.
+                _self_manifested_enr = {
+                    "injuries",
+                    "fixture_stats",
+                    "fixture_events",
+                    "fixture_lineups",
+                    "player_stats",
+                }
                 for entity_name, row_count in sports_ref_counts.items():
-                    sports_manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=row_count,
-                        data_type=entity_name.upper(),
-                    )
+                    if entity_name not in _self_manifested_enr:
+                        sports_manifest.add(
+                            processing_date=date_type.fromisoformat(date),
+                            row_count=row_count,
+                            data_type=entity_name.upper(),
+                        )
                 # Write blank entries for per-fixture entities that had 0 fixtures
                 if not gcs_fixture_ids:
                     for pf_entity in _sports_per_fixture_entities:
@@ -1135,25 +1176,36 @@ async def process_instruments(
             if api_keys:
                 api_football_key = api_keys.get("api_football")
                 if api_football_key:
-                    # Only fetch entities that are actually missing from the manifest
+                    # Only fetch entities that are actually missing from the manifest.
+                    # Create manifest writer so _fetch_sports_reference_data can write
+                    # per-league manifest entries for injuries and per-fixture entities.
+                    sports_manifest = ManifestWriter(
+                        service_name="instruments-service",
+                        catalogue_bucket=bucket,
+                    )
                     sports_ref_counts = await _fetch_sports_reference_data(
                         date=date,
                         api_key=api_football_key,
                         bucket=bucket,
                         entities_to_fetch=_sports_missing_entities if _sports_missing_entities else None,
                         fixture_ids_override=[],  # zero-fixture date — skip 33-league API re-fetch
+                        manifest=sports_manifest,
                     )
                     if sports_ref_counts:
-                        sports_manifest = ManifestWriter(
-                            service_name="instruments-service",
-                            catalogue_bucket=bucket,
-                        )
+                        _self_manifested_zf = {
+                            "injuries",
+                            "fixture_stats",
+                            "fixture_events",
+                            "fixture_lineups",
+                            "player_stats",
+                        }
                         for entity_name, row_count in sports_ref_counts.items():
-                            sports_manifest.add(
-                                processing_date=date_type.fromisoformat(date),
-                                row_count=row_count,
-                                data_type=entity_name.upper(),
-                            )
+                            if entity_name not in _self_manifested_zf:
+                                sports_manifest.add(
+                                    processing_date=date_type.fromisoformat(date),
+                                    row_count=row_count,
+                                    data_type=entity_name.upper(),
+                                )
                         # Write blank entries for ALL per-fixture entities on zero-fixture dates
                         # so manifest marks them as "done" and won't re-fetch.
                         for pf_entity in _sports_per_fixture_entities:
@@ -1263,7 +1315,11 @@ async def process_instruments(
                     "SOCCER_FOOTBALL_INFO is active but no API key found — skipping for date=%s.",
                     date,
                 )
-            if sfi_key and (_entity_wanted_zf("SFI_LEAGUES") or _entity_wanted_zf("SFI_STANDINGS")):
+            if sfi_key and (
+                _entity_wanted_zf("SFI_LEAGUES")
+                or _entity_wanted_zf("SFI_STANDINGS")
+                or _entity_wanted_zf("SFI_PROGRESSIVE_STATS")
+            ):
                 try:
                     sfi_counts = await _fetch_sfi_data(
                         date=date,
@@ -1512,27 +1568,34 @@ async def process_instruments(
             # (saves 33 API calls per date). _urdi_completed_fixture_ids is populated
             # during the URDI instruments fetch above.
             # Only fetch entities that are actually missing from the manifest.
+            # Create manifest writer so _fetch_sports_reference_data can write
+            # per-league manifest entries for injuries and per-fixture entities.
+            sports_manifest = ManifestWriter(
+                service_name="instruments-service",
+                catalogue_bucket=bucket,
+            )
             sports_ref_counts = await _fetch_sports_reference_data(
                 date=date,
                 api_key=api_football_key,
                 bucket=bucket,
                 entities_to_fetch=_sports_missing_entities if _sports_missing_entities else None,
                 fixture_ids_override=list(_urdi_completed_fixture_ids),
+                manifest=sports_manifest,
             )
             for k, v in sports_ref_counts.items():
                 counts[k] = counts.get(k, 0) + v
 
-            # Write manifest for sports reference entities
-            sports_manifest = ManifestWriter(
-                service_name="instruments-service",
-                catalogue_bucket=bucket,
-            )
+            # Write manifest for sports reference entities that did NOT write
+            # their own manifest entries inside _fetch_sports_reference_data
+            # (injuries and per-fixture entities write per-league entries directly).
+            _self_manifested = {"injuries", "fixture_stats", "fixture_events", "fixture_lineups", "player_stats"}
             for entity_name, row_count in sports_ref_counts.items():
-                sports_manifest.add(
-                    processing_date=date_type.fromisoformat(date),
-                    row_count=row_count,
-                    data_type=entity_name.upper(),
-                )
+                if entity_name not in _self_manifested:
+                    sports_manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=row_count,
+                        data_type=entity_name.upper(),
+                    )
             sports_manifest.write()
             logger.info(
                 "Sports reference manifest: %d entities for %s",
@@ -1653,7 +1716,9 @@ async def process_instruments(
                 "SOCCER_FOOTBALL_INFO is active but no API key found — skipping SFI fetch for date=%s.",
                 date,
             )
-        if sfi_key and (_entity_wanted("SFI_LEAGUES") or _entity_wanted("SFI_STANDINGS")):
+        if sfi_key and (
+            _entity_wanted("SFI_LEAGUES") or _entity_wanted("SFI_STANDINGS") or _entity_wanted("SFI_PROGRESSIVE_STATS")
+        ):
             try:
                 sfi_counts = await _fetch_sfi_data(
                     date=date,
@@ -1985,6 +2050,63 @@ def _write_venue(
     # Programming errors (TypeError, KeyError, etc.) propagate — fail the shard
 
 
+def _write_venues_from_teams(teams_df: pd.DataFrame, bucket: str) -> None:
+    """Extract venue metadata from teams and write a global venues.parquet.
+
+    The features-sports-service reads venues from a flat path:
+        sports_reference/venues/venues.parquet
+    (not date-partitioned -- venues are slow-moving reference data).
+
+    Venue coordinates are enriched by the API Football adapter via the UAC
+    static venue coordinates registry. This function extracts the venue dict
+    from each team row and writes a deduplicated venues table.
+    """
+    if "venue" not in teams_df.columns:
+        logger.warning("No 'venue' column in teams_df — cannot extract venues")
+        return
+
+    venue_rows: list[dict[str, object]] = []
+    for _, row in teams_df.iterrows():
+        venue_data = row.get("venue")
+        if not isinstance(venue_data, dict):
+            continue
+        venue_id = venue_data.get("venue_id")
+        if not venue_id:
+            continue
+        venue_rows.append(
+            {
+                "venue_id": str(venue_id),
+                "name": venue_data.get("name", ""),
+                "city": venue_data.get("city"),
+                "country": venue_data.get("country"),
+                "capacity": venue_data.get("capacity"),
+                "surface": venue_data.get("surface"),
+                "latitude": venue_data.get("latitude"),
+                "longitude": venue_data.get("longitude"),
+            }
+        )
+
+    if not venue_rows:
+        logger.warning("No venue data extracted from teams — skipping venues.parquet")
+        return
+
+    venues_df = pd.DataFrame(venue_rows).drop_duplicates(subset=["venue_id"])
+
+    venues_sink = get_data_sink(bucket=bucket, prefix="sports_reference/venues")
+    venues_sink.write(
+        data=venues_df,
+        partition={},
+        format="parquet",
+        filename="venues.parquet",
+    )
+    coords_count = int(venues_df["latitude"].notna().sum())
+    logger.info(
+        "Venues: %d unique venues written (%d with coordinates)",
+        len(venues_df),
+        coords_count,
+    )
+
+
 def _read_fixture_ids_from_gcs(bucket: str, date: str) -> list[int]:
     """Read completed fixture IDs from existing GCS fixtures parquet.
 
@@ -2014,6 +2136,49 @@ def _read_fixture_ids_from_gcs(bucket: str, date: str) -> list[int]:
         return []
 
 
+def _build_fixture_league_map_from_gcs(bucket: str, date: str) -> dict[str, str]:
+    """Build a mapping from AF fixture_id (str) to canonical league_id.
+
+    Reads the fixtures parquet from GCS (sports_reference/by_date/day={date}/entity=fixtures/)
+    which contains af_fixture_id and league_id columns. Returns an empty dict if the
+    fixtures file is missing or lacks the required columns.
+    """
+    # Build reverse mapping from UAC: af_league_id -> canonical league_id
+    _af_league_to_canonical: dict[int, str] = {}
+    for league_def in get_prediction_leagues():
+        if league_def.api_football_id is not None:
+            _af_league_to_canonical[league_def.api_football_id] = league_def.league_id
+
+    prefix = f"sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
+    try:
+        storage_client = get_storage_client()
+        blob = storage_client.bucket(bucket).blob(prefix)
+        if not blob.exists():
+            logger.debug("No fixtures parquet at gs://%s/%s for league mapping", bucket, prefix)
+            return {}
+        local = f"/tmp/_fixture_league_map_{date}.parquet"
+        blob.download_to_filename(local)
+        df = pd.read_parquet(local)
+        result: dict[str, str] = {}
+        if "af_fixture_id" in df.columns:
+            # Prefer league_id column if present
+            if "league_id" in df.columns:
+                for _, row in df[["af_fixture_id", "league_id"]].dropna().iterrows():
+                    result[str(int(row["af_fixture_id"]))] = str(row["league_id"])
+            # Fallback: use af_league_id -> canonical mapping
+            elif "af_league_id" in df.columns:
+                for _, row in df[["af_fixture_id", "af_league_id"]].dropna().iterrows():
+                    af_lid = int(row["af_league_id"])
+                    canonical = _af_league_to_canonical.get(af_lid)
+                    if canonical:
+                        result[str(int(row["af_fixture_id"]))] = canonical
+        logger.info("Fixture league map: %d mappings built from GCS for date=%s", len(result), date)
+        return result
+    except Exception as exc:
+        logger.debug("Failed to build fixture league map for date=%s: %s", date, exc)
+        return {}
+
+
 async def _fetch_sports_reference_data(
     date: str,
     api_key: str,
@@ -2021,6 +2186,7 @@ async def _fetch_sports_reference_data(
     entities_to_fetch: list[str] | None = None,
     enrichment_only: bool = False,
     fixture_ids_override: list[int] | None = None,
+    manifest: ManifestWriter | None = None,
 ) -> dict[str, int]:
     """Fetch sports reference data (teams, leagues, standings, injuries, etc.).
 
@@ -2155,6 +2321,13 @@ async def _fetch_sports_reference_data(
                 )
             counts["teams"] = len(teams_df)
 
+            # Extract venues from teams and write a global venues.parquet.
+            # The features-sports-service reads this at:
+            #   sports_reference/venues/venues.parquet
+            # Venue coordinates come from the UAC static registry (enriched
+            # by _parse_team_item when get_teams() is called).
+            _write_venues_from_teams(teams_df, bucket)
+
         # Standings — for each prediction league (cached across dates)
         standings_df = _cached_standings_df
         if standings_df is None:
@@ -2206,14 +2379,91 @@ async def _fetch_sports_reference_data(
             injuries = await adapter.get_injuries(date)
             if injuries:
                 df = pd.DataFrame([inj.model_dump() for inj in injuries])
+                counts["injuries"] = len(df)
+
+                # Determine league column — prefer league_id, fallback to fixture_id prefix
+                _inj_league_col: str | None = None
+                if "league_id" in df.columns and df["league_id"].notna().any():
+                    _inj_league_col = "league_id"
+                elif "fixture_id" in df.columns and df["fixture_id"].notna().any():
+                    # Try canonical fixture_id format (LEAGUE:HOME_v_AWAY:DATE)
+                    _sample = df["fixture_id"].dropna().iloc[0] if not df["fixture_id"].dropna().empty else ""
+                    if ":" in str(_sample):
+                        df["_inj_league"] = df["fixture_id"].str.split(":").str[0]
+                        _inj_league_col = "_inj_league"
+
+                if _inj_league_col is not None:
+                    _has_league = df[_inj_league_col].notna() & (df[_inj_league_col] != "")
+                    _with_league = df[_has_league]
+                    _without_league = df[~_has_league]
+
+                    for _inj_lid, _inj_league_df in _with_league.groupby(_inj_league_col):
+                        _inj_lid_str = str(_inj_lid)
+                        _inj_clean = _inj_league_df.drop(columns=["_inj_league"], errors="ignore")
+                        sink.write(
+                            data=_inj_clean,
+                            partition={"day": date, "entity": "injuries", "league": _inj_lid_str},
+                            format="parquet",
+                            filename="injuries.parquet",
+                        )
+                        if manifest is not None:
+                            manifest.add(
+                                processing_date=date_type.fromisoformat(date),
+                                row_count=len(_inj_clean),
+                                data_type="INJURIES",
+                                league_id=_inj_lid_str,
+                            )
+
+                    if not _without_league.empty:
+                        _inj_unmapped = _without_league.drop(columns=["_inj_league"], errors="ignore")
+                        sink.write(
+                            data=_inj_unmapped,
+                            partition={"day": date, "entity": "injuries"},
+                            format="parquet",
+                            filename="injuries.parquet",
+                        )
+                        if manifest is not None:
+                            manifest.add(
+                                processing_date=date_type.fromisoformat(date),
+                                row_count=len(_inj_unmapped),
+                                data_type="INJURIES",
+                            )
+                else:
+                    # No league info — write single file
+                    sink.write(
+                        data=df,
+                        partition={"day": date, "entity": "injuries"},
+                        format="parquet",
+                        filename="injuries.parquet",
+                    )
+                    if manifest is not None:
+                        manifest.add(
+                            processing_date=date_type.fromisoformat(date),
+                            row_count=len(df),
+                            data_type="INJURIES",
+                        )
+
+                logger.info("Sports reference: %d injuries written", len(df))
+            else:
+                # Write empty parquet with correct schema so the date counts as
+                # "processed with 0 injuries" rather than "not processed".
+                _empty_injuries_df = pd.DataFrame(
+                    columns=["fixture_id", "team_id", "player_id", "player_name", "reason", "severity"],
+                )
                 sink.write(
-                    data=df,
+                    data=_empty_injuries_df,
                     partition={"day": date, "entity": "injuries"},
                     format="parquet",
                     filename="injuries.parquet",
                 )
-                counts["injuries"] = len(df)
-                logger.info("Sports reference: %d injuries written", len(df))
+                counts["injuries"] = 0
+                logger.info("Sports reference: 0 injuries written (empty parquet)")
+                if manifest is not None:
+                    manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=0,
+                        data_type="INJURIES",
+                    )
         except Exception as exc:
             classify_and_emit_error(
                 exc,
@@ -2227,25 +2477,39 @@ async def _fetch_sports_reference_data(
     # Use fixture_ids_override when available (from URDI fetch) to avoid redundant
     # 33-league re-fetch (saves 33 API calls per date).
     fixture_ids: list[int] = []
+    # Mapping from AF fixture ID (str) to canonical league_id for per-league writes.
+    _af_fid_to_league: dict[str, str] = {}
     if fixture_ids_override is not None:
         fixture_ids = fixture_ids_override
         logger.info("Sports reference: %d completed fixture IDs passed from URDI (0 extra API calls)", len(fixture_ids))
+        # Build AF fixture_id -> league mapping from GCS fixtures parquet
+        _af_fid_to_league = _build_fixture_league_map_from_gcs(bucket, date)
     else:
         # Fallback: fetch fixtures from API (33 calls for 33 leagues).
         # Only used when called from the zero-fixture early-return path
         # where URDI returned 0 instruments.
         completed_statuses = {"FT", "AET", "PEN"}
         fallback_league_ids: list[int] = []
+        _af_id_to_canonical_league: dict[int, str] = {}
         for league_def in get_prediction_leagues():
             if league_def.api_football_id is not None:
                 fallback_league_ids.append(league_def.api_football_id)
+                _af_id_to_canonical_league[league_def.api_football_id] = league_def.league_id
         try:
             fixtures = await adapter.get_fixtures(date, league_ids=fallback_league_ids)
             for fx in fixtures:
                 if fx.status in completed_statuses:
                     raw_id = fx.source_fixture_id or fx.fixture_id
                     with contextlib.suppress(ValueError, TypeError):
-                        fixture_ids.append(int(raw_id))
+                        fid_int = int(raw_id)
+                        fixture_ids.append(fid_int)
+                        # Map AF ID -> league from the fixture's league object
+                        if hasattr(fx, "league") and hasattr(fx.league, "league_id"):
+                            _af_fid_to_league[str(fid_int)] = str(fx.league.league_id)
+                        elif hasattr(fx, "league") and hasattr(fx.league, "api_football_id"):
+                            af_lid = fx.league.api_football_id
+                            if af_lid in _af_id_to_canonical_league:
+                                _af_fid_to_league[str(fid_int)] = _af_id_to_canonical_league[af_lid]
             logger.info("Sports reference: %d completed fixtures found for enrichment (API fetch)", len(fixture_ids))
         except Exception as exc:
             classify_and_emit_error(
@@ -2320,13 +2584,70 @@ async def _fetch_sports_reference_data(
             all_rows = entity_rows[entity_name]
             if all_rows:
                 df = pd.DataFrame(all_rows)
-                sink.write(
-                    data=df,
-                    partition={"day": date, "entity": entity_name},
-                    format="parquet",
-                    filename=f"{entity_name}.parquet",
-                )
                 counts[entity_name] = len(df)
+
+                # Write per-league partitioned files using AF fixture_id -> league mapping.
+                # Column name is "af_fixture_id" (not "fixture_id") in per-fixture entity data.
+                _fid_col = "af_fixture_id" if "af_fixture_id" in df.columns else "fixture_id"
+                if _fid_col in df.columns and _af_fid_to_league:
+                    # Ensure string type for map lookup (map keys are str(int(af_id)))
+                    df["_league_id"] = df[_fid_col].astype(str).str.split(".").str[0].map(_af_fid_to_league)
+                    _has_league = df["_league_id"].notna()
+                    _with_league = df[_has_league]
+                    _without_league = df[~_has_league]
+
+                    for _pf_lid, _pf_league_df in _with_league.groupby("_league_id"):
+                        _pf_lid_str = str(_pf_lid)
+                        _pf_clean = _pf_league_df.drop(columns=["_league_id"])
+                        sink.write(
+                            data=_pf_clean,
+                            partition={"day": date, "entity": entity_name, "league": _pf_lid_str},
+                            format="parquet",
+                            filename=f"{entity_name}.parquet",
+                        )
+                        if manifest is not None:
+                            manifest.add(
+                                processing_date=date_type.fromisoformat(date),
+                                row_count=len(_pf_clean),
+                                data_type=entity_name.upper(),
+                                league_id=_pf_lid_str,
+                            )
+
+                    # Write unmapped rows (if any) to a catch-all partition
+                    if not _without_league.empty:
+                        _unmapped_clean = _without_league.drop(columns=["_league_id"])
+                        sink.write(
+                            data=_unmapped_clean,
+                            partition={"day": date, "entity": entity_name},
+                            format="parquet",
+                            filename=f"{entity_name}.parquet",
+                        )
+                        logger.warning(
+                            "Sports reference: %d %s rows could not be mapped to a league",
+                            len(_unmapped_clean),
+                            entity_name,
+                        )
+                        if manifest is not None:
+                            manifest.add(
+                                processing_date=date_type.fromisoformat(date),
+                                row_count=len(_unmapped_clean),
+                                data_type=entity_name.upper(),
+                            )
+                else:
+                    # No league mapping available — write single file (legacy fallback)
+                    sink.write(
+                        data=df,
+                        partition={"day": date, "entity": entity_name},
+                        format="parquet",
+                        filename=f"{entity_name}.parquet",
+                    )
+                    if manifest is not None:
+                        manifest.add(
+                            processing_date=date_type.fromisoformat(date),
+                            row_count=len(df),
+                            data_type=entity_name.upper(),
+                        )
+
                 logger.info("Sports reference: %d %s rows written", len(df), entity_name)
 
     # Cross-provider mapping tables
@@ -2506,30 +2827,67 @@ async def _fetch_footystats_predictions(
                     date,
                     "; ".join(violations),
                 )
-            sink.write(
-                data=df,
-                partition={"day": date, "entity": "footystats_predictions"},
-                format="parquet",
-                filename="footystats_predictions.parquet",
-            )
             counts["footystats_predictions"] = len(df)
+
+            # Write per-league partitioned files when canonical_fixture_id is available.
+            pred_manifest = ManifestWriter(
+                service_name="instruments-service",
+                catalogue_bucket=bucket,
+            )
+            if "canonical_fixture_id" in df.columns:
+                df["_pred_league"] = df["canonical_fixture_id"].str.split(":").str[0]
+                _has_league = df["_pred_league"].notna() & (df["_pred_league"] != "")
+                _with_league = df[_has_league]
+                _without_league = df[~_has_league]
+
+                for _pred_lid, _pred_league_df in _with_league.groupby("_pred_league"):
+                    _pred_lid_str = str(_pred_lid)
+                    _pred_clean = _pred_league_df.drop(columns=["_pred_league"])
+                    sink.write(
+                        data=_pred_clean,
+                        partition={"day": date, "entity": "footystats_predictions", "league": _pred_lid_str},
+                        format="parquet",
+                        filename="footystats_predictions.parquet",
+                    )
+                    pred_manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=len(_pred_clean),
+                        data_type="PREDICTIONS",
+                        league_id=_pred_lid_str,
+                    )
+
+                if not _without_league.empty:
+                    _pred_unmapped = _without_league.drop(columns=["_pred_league"])
+                    sink.write(
+                        data=_pred_unmapped,
+                        partition={"day": date, "entity": "footystats_predictions"},
+                        format="parquet",
+                        filename="footystats_predictions.parquet",
+                    )
+                    pred_manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=len(_pred_unmapped),
+                        data_type="PREDICTIONS",
+                    )
+            else:
+                sink.write(
+                    data=df,
+                    partition={"day": date, "entity": "footystats_predictions"},
+                    format="parquet",
+                    filename="footystats_predictions.parquet",
+                )
+                pred_manifest.add(
+                    processing_date=date_type.fromisoformat(date),
+                    row_count=len(df),
+                    data_type="PREDICTIONS",
+                )
+            pred_manifest.write()
+
             logger.info(
                 "FootyStats predictions: %d rows written for date=%s",
                 len(df),
                 date,
             )
-
-            # Manifest entry
-            pred_manifest = ManifestWriter(
-                service_name="instruments-service",
-                catalogue_bucket=bucket,
-            )
-            pred_manifest.add(
-                processing_date=date_type.fromisoformat(date),
-                row_count=len(df),
-                data_type="PREDICTIONS",
-            )
-            pred_manifest.write()
         else:
             logger.info("FootyStats predictions: no predictive data for date=%s", date)
     except Exception as exc:
@@ -2654,23 +3012,59 @@ async def _fetch_footystats_matches(
                     )
                 flat_rows.append(flat)
             df = pd.DataFrame(flat_rows)
-            sink.write(
-                data=df,
-                partition={"day": date, "entity": "footystats_matches"},
-                format="parquet",
-                filename="footystats_matches.parquet",
-            )
             counts["footystats_matches"] = len(df)
-            logger.info("FootyStats matches: %d rows written for date=%s", len(df), date)
 
-            # Manifest entry
-            manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-            manifest.add(
-                processing_date=date_type.fromisoformat(date),
-                row_count=len(df),
-                data_type="MATCHES",
-            )
-            manifest.write()
+            # Write per-league partitioned files using canonical_fixture_id.
+            _ft_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+            if "canonical_fixture_id" in df.columns:
+                df["_ft_league"] = df["canonical_fixture_id"].str.split(":").str[0]
+                _has_league = df["_ft_league"].notna() & (df["_ft_league"] != "")
+                _with_league = df[_has_league]
+                _without_league = df[~_has_league]
+
+                for _ft_lid, _ft_league_df in _with_league.groupby("_ft_league"):
+                    _ft_lid_str = str(_ft_lid)
+                    _ft_clean = _ft_league_df.drop(columns=["_ft_league"])
+                    sink.write(
+                        data=_ft_clean,
+                        partition={"day": date, "entity": "footystats_matches", "league": _ft_lid_str},
+                        format="parquet",
+                        filename="footystats_matches.parquet",
+                    )
+                    _ft_manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=len(_ft_clean),
+                        data_type="MATCHES",
+                        league_id=_ft_lid_str,
+                    )
+
+                if not _without_league.empty:
+                    _ft_unmapped = _without_league.drop(columns=["_ft_league"])
+                    sink.write(
+                        data=_ft_unmapped,
+                        partition={"day": date, "entity": "footystats_matches"},
+                        format="parquet",
+                        filename="footystats_matches.parquet",
+                    )
+                    _ft_manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=len(_ft_unmapped),
+                        data_type="MATCHES",
+                    )
+            else:
+                sink.write(
+                    data=df,
+                    partition={"day": date, "entity": "footystats_matches"},
+                    format="parquet",
+                    filename="footystats_matches.parquet",
+                )
+                _ft_manifest.add(
+                    processing_date=date_type.fromisoformat(date),
+                    row_count=len(df),
+                    data_type="MATCHES",
+                )
+            _ft_manifest.write()
+            logger.info("FootyStats matches: %d rows written for date=%s", len(df), date)
         else:
             logger.info("FootyStats matches: no fixtures for date=%s", date)
             # Write 0-count manifest so date is marked as processed
@@ -2740,31 +3134,65 @@ async def _fetch_understat_xg(
                     )
                 flat_rows.append(flat)
             df = pd.DataFrame(flat_rows)
-            sink.write(
-                data=df,
-                partition={"day": date, "entity": "understat_xg"},
-                format="parquet",
-                filename="understat_xg.parquet",
-            )
             counts["understat_xg"] = len(df)
-            logger.info("Understat xG: %d rows written for date=%s", len(df), date)
 
-            manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-            manifest.add(
-                processing_date=date_type.fromisoformat(date),
-                row_count=len(df),
-                data_type="XG",
-            )
-            manifest.write()
+            xg_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+            # Write per-league partitioned files if league column exists
+            if "league" in df.columns:
+                _has_league = df["league"].notna() & (df["league"] != "")
+                _with_league = df[_has_league]
+                _without_league = df[~_has_league]
+
+                for _xg_lid, _xg_league_df in _with_league.groupby("league"):
+                    _xg_lid_str = str(_xg_lid)
+                    sink.write(
+                        data=_xg_league_df,
+                        partition={"day": date, "entity": "understat_xg", "league": _xg_lid_str},
+                        format="parquet",
+                        filename="understat_xg.parquet",
+                    )
+                    xg_manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=len(_xg_league_df),
+                        data_type="XG",
+                        league_id=_xg_lid_str,
+                    )
+
+                if not _without_league.empty:
+                    sink.write(
+                        data=_without_league,
+                        partition={"day": date, "entity": "understat_xg"},
+                        format="parquet",
+                        filename="understat_xg.parquet",
+                    )
+                    xg_manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=len(_without_league),
+                        data_type="XG",
+                    )
+            else:
+                sink.write(
+                    data=df,
+                    partition={"day": date, "entity": "understat_xg"},
+                    format="parquet",
+                    filename="understat_xg.parquet",
+                )
+                xg_manifest.add(
+                    processing_date=date_type.fromisoformat(date),
+                    row_count=len(df),
+                    data_type="XG",
+                )
+            xg_manifest.write()
+            logger.info("Understat xG: %d rows written for date=%s", len(df), date)
         else:
             logger.info("Understat xG: no fixtures for date=%s", date)
-            manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-            manifest.add(
+            xg_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+            xg_manifest.add(
                 processing_date=date_type.fromisoformat(date),
                 row_count=0,
                 data_type="XG",
             )
-            manifest.write()
+            xg_manifest.write()
     except Exception as exc:
         classify_and_emit_error(
             exc,
@@ -2906,19 +3334,22 @@ async def _fetch_sfi_data(
     bucket: str,
     entity_filter: str | None = None,
 ) -> dict[str, int]:
-    """Fetch SoccerFootball.info leagues and standings to GCS.
+    """Fetch SoccerFootball.info leagues, standings, and progressive stats to GCS.
 
-    entity_filter: when set to "SFI_LEAGUES" or "SFI_STANDINGS", only that entity
-        is written (entity-scoped VM mode). Note: SFI_STANDINGS always fetches
-        leagues first to get league IDs, but only writes the requested entity.
-
+    entity_filter: when set to "SFI_LEAGUES", "SFI_STANDINGS", or
+        "SFI_PROGRESSIVE_STATS", only that entity is written (entity-scoped
+        VM mode). Note: SFI_STANDINGS always fetches leagues first to get
+        league IDs, but only writes the requested entity.
 
     SFI provides league standings and tables from an independent source,
-    useful for cross-validation with API Football standings.
+    useful for cross-validation with API Football standings. Progressive
+    stats provide 30-second interval match time-series data for halftime
+    feature engineering.
 
     GCS paths:
         sports_reference/by_date/day={date}/entity=sfi_leagues/
         sports_reference/by_date/day={date}/entity=sfi_standings/
+        sports_reference/by_date/day={date}/entity=progressive_stats/
     """
     adapter = create_sports_reference_adapter("soccer_football_info", api_key=api_key)
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
@@ -2926,6 +3357,7 @@ async def _fetch_sfi_data(
 
     _want_sfi_leagues = entity_filter is None or entity_filter == "SFI_LEAGUES"
     _want_sfi_standings = entity_filter is None or entity_filter == "SFI_STANDINGS"
+    _want_sfi_progressive = entity_filter is None or entity_filter == "SFI_PROGRESSIVE_STATS"
 
     sfi_league_ids: list[str] = []
     try:
@@ -2986,6 +3418,48 @@ async def _fetch_sfi_data(
                 shard=date,
             )
 
+    # Progressive stats — per-match 30-second interval time-series.
+    # Requires SFI match IDs for the date, then fetches progressive data
+    # for each completed match. Written as entity=progressive_stats.
+    if _want_sfi_progressive:
+        try:
+            sfi_match_ids = await adapter.get_match_ids_for_date(date)
+            if sfi_match_ids:
+                all_progressive: list[dict[str, str | int | float | None]] = []
+                for mid in sfi_match_ids:
+                    try:
+                        stats = await adapter.get_progressive_stats(mid)
+                        for entry in stats:
+                            all_progressive.append(
+                                {k: str(v) if v is not None else None for k, v in entry.model_dump().items()}
+                            )
+                    except Exception as exc:
+                        classify_and_emit_error(
+                            exc,
+                            service_name="instruments-service",
+                            operation="sfi_progressive_stats_fetch",
+                            shard=mid,
+                        )
+                if all_progressive:
+                    df = pd.DataFrame(all_progressive)
+                    sink.write(
+                        data=df,
+                        partition={"day": date, "entity": "progressive_stats"},
+                        format="parquet",
+                        filename="progressive_stats.parquet",
+                    )
+                    counts["progressive_stats"] = len(df)
+                    logger.info("SFI progressive stats: %d rows written", len(df))
+            else:
+                logger.info("SFI progressive stats: no completed matches for date=%s", date)
+        except Exception as exc:
+            classify_and_emit_error(
+                exc,
+                service_name="instruments-service",
+                operation="sfi_progressive_stats_batch",
+                shard=date,
+            )
+
     manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
     if _want_sfi_leagues:
         manifest.add(
@@ -2999,9 +3473,95 @@ async def _fetch_sfi_data(
             row_count=counts.get("sfi_standings", 0),
             data_type="SFI_STANDINGS",
         )
+    if _want_sfi_progressive:
+        manifest.add(
+            processing_date=date_type.fromisoformat(date),
+            row_count=counts.get("progressive_stats", 0),
+            data_type="SFI_PROGRESSIVE_STATS",
+        )
     manifest.write()
 
     return counts
+
+
+def _load_venue_coordinates(bucket: str) -> dict[str, tuple[float, float]]:
+    """Load venue_id → (lat, lon) lookup from the global venues.parquet.
+
+    Returns an empty dict if the file does not exist or cannot be read.
+    The venues.parquet is written by ``_write_venues_from_teams`` at:
+        sports_reference/venues/venues.parquet
+    """
+    venues_path = "sports_reference/venues/venues.parquet"
+    try:
+        storage = get_storage_client()
+        blob = storage.bucket(bucket).blob(venues_path)
+        if not blob.exists():
+            logger.info("Weather: venues.parquet not found at gs://%s/%s", bucket, venues_path)
+            return {}
+        local = "/tmp/_weather_venues.parquet"
+        blob.download_to_filename(local)
+        venues_df = pd.read_parquet(local)
+        if "venue_id" not in venues_df.columns:
+            logger.warning("Weather: venues.parquet missing 'venue_id' column")
+            return {}
+        coords: dict[str, tuple[float, float]] = {}
+        has_lat = "latitude" in venues_df.columns
+        has_lon = "longitude" in venues_df.columns
+        if not has_lat or not has_lon:
+            logger.warning("Weather: venues.parquet missing latitude/longitude columns")
+            return {}
+        for _, row in venues_df.iterrows():
+            vid = str(row["venue_id"])
+            lat = row["latitude"]
+            lon = row["longitude"]
+            # pandas returns NaN for missing values, not None
+            if pd.notna(lat) and pd.notna(lon):
+                lat_f = float(lat)
+                lon_f = float(lon)
+                if lat_f != 0.0 and lon_f != 0.0:
+                    coords[vid] = (lat_f, lon_f)
+        return coords
+    except Exception as exc:
+        logger.debug("Weather: could not load venues.parquet: %s", exc)
+        return {}
+
+
+def _extract_fixture_venue_ids(bucket: str, date: str) -> list[str]:
+    """Extract venue_ids from the fixtures parquet for a given date.
+
+    Fixtures store the ``venue`` field as a dict with a ``venue_id`` key.
+    Returns deduplicated venue IDs for fixtures on the requested date.
+    """
+    prefix = f"sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
+    try:
+        storage = get_storage_client()
+        blob = storage.bucket(bucket).blob(prefix)
+        if not blob.exists():
+            logger.debug("Weather: no fixtures parquet at gs://%s/%s", bucket, prefix)
+            return []
+        local = f"/tmp/_weather_fixtures_{date}.parquet"
+        blob.download_to_filename(local)
+        df = pd.read_parquet(local)
+        venue_ids: list[str] = []
+        if "venue" in df.columns:
+            for venue_val in df["venue"].dropna():
+                if isinstance(venue_val, dict):
+                    vid = venue_val.get("venue_id")
+                    if vid:
+                        venue_ids.append(str(vid))
+                elif isinstance(venue_val, str):
+                    venue_ids.append(venue_val)
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        unique: list[str] = []
+        for vid in venue_ids:
+            if vid not in seen:
+                seen.add(vid)
+                unique.append(vid)
+        return unique
+    except Exception as exc:
+        logger.debug("Weather: could not read fixtures for date=%s: %s", date, exc)
+        return []
 
 
 async def _fetch_weather_data(
@@ -3011,44 +3571,76 @@ async def _fetch_weather_data(
     """Fetch Open-Meteo weather data for fixture venues and write to GCS.
 
     Weather (temperature, wind, rain, humidity) affects match outcomes —
-    particularly relevant for outdoor sports prediction models. Reads fixture
-    venues from existing GCS fixtures parquet (written by API Football) and
-    fetches weather for each unique lat/lon pair.
+    particularly relevant for outdoor sports prediction models.
 
-    GCS path: sports_reference/by_date/day={date}/entity=weather/
-              weather.parquet
+    Flow:
+      1. Read the global venues.parquet for venue_id → (lat, lon) lookup.
+      2. Read fixtures.parquet for the date to get venue_ids of fixtures.
+      3. For each fixture venue with coordinates, call Open-Meteo API.
+      4. Write results to sports_reference/by_date/day={date}/entity=weather/weather.parquet.
+
+    Fixtures without a venue or venues without coordinates are skipped
+    with a warning log (no raise — shard-level failure isolation).
     """
-    adapter = create_sports_reference_adapter("open_meteo")
+    from instruments_service.reference_data.adapters.sports.adapters.open_meteo import OpenMeteoAdapter
+
+    adapter = OpenMeteoAdapter()
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
 
-    # Read fixture venues from GCS (we need lat/lon)
+    # 1. Load venue coordinates from the global venues.parquet
+    coord_lookup = _load_venue_coordinates(bucket)
+    if not coord_lookup:
+        logger.info("Weather: no venue coordinates available — skipping date=%s", date)
+        manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+        manifest.add(
+            processing_date=date_type.fromisoformat(date),
+            row_count=0,
+            data_type="WEATHER",
+        )
+        manifest.write()
+        return counts
+
+    # 2. Get fixture venue_ids for this date.
+    # Try reading the fixtures entity parquet first. If it doesn't exist or
+    # lacks venue data, fall back to fetching weather for ALL venues with
+    # coordinates (Open-Meteo is free, so the cost is negligible).
+    fixture_venue_ids = _extract_fixture_venue_ids(bucket, date)
+
+    # 3. Resolve coordinates for each fixture venue (or all venues as fallback)
     venues_with_coords: list[tuple[float, float, str]] = []
-    try:
-        prefix = f"sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
-        storage = get_storage_client()
-        blob = storage.bucket(bucket).blob(prefix)
-        if blob.exists():
-            local = f"/tmp/_weather_fixtures_{date}.parquet"
-            blob.download_to_filename(local)
-            df = pd.read_parquet(local)
-            # Extract unique venue lat/lon from fixture data
-            lat_col = None
-            lon_col = None
-            for col in df.columns:
-                if "latitude" in col.lower() or col == "venue_latitude":
-                    lat_col = col
-                if "longitude" in col.lower() or col == "venue_longitude":
-                    lon_col = col
-            if lat_col and lon_col:
-                venue_df = df[[lat_col, lon_col]].dropna().drop_duplicates()
-                for _, row in venue_df.iterrows():
-                    lat_val = float(row[lat_col])
-                    lon_val = float(row[lon_col])
-                    if lat_val != 0.0 and lon_val != 0.0:
-                        venues_with_coords.append((lat_val, lon_val, f"{lat_val:.2f},{lon_val:.2f}"))
-    except Exception as exc:
-        logger.debug("Weather: could not read fixture venues for date=%s: %s", date, exc)
+    if fixture_venue_ids:
+        skipped_count = 0
+        for vid in fixture_venue_ids:
+            coords = coord_lookup.get(vid)
+            if coords is None:
+                skipped_count += 1
+                logger.warning(
+                    "Weather: venue_id=%s has no coordinates in venues.parquet — skipping",
+                    vid,
+                )
+                continue
+            lat, lon = coords
+            venues_with_coords.append((lat, lon, vid))
+
+        if skipped_count > 0:
+            logger.info(
+                "Weather: %d/%d fixture venues had no coordinates for date=%s",
+                skipped_count,
+                len(fixture_venue_ids),
+                date,
+            )
+    else:
+        # Fallback: no fixtures parquet or no venue data in it.
+        # Fetch weather for ALL venues with coordinates so downstream
+        # consumers can join by venue_id later.
+        logger.info(
+            "Weather: no fixture venue_ids found for date=%s — fetching for all %d venues with coordinates",
+            date,
+            len(coord_lookup),
+        )
+        for vid, (lat, lon) in coord_lookup.items():
+            venues_with_coords.append((lat, lon, vid))
 
     if not venues_with_coords:
         logger.info("Weather: no fixture venues with coordinates for date=%s — skipping", date)
@@ -3061,31 +3653,33 @@ async def _fetch_weather_data(
         manifest.write()
         return counts
 
-    # Fetch weather for each unique venue
+    # 4. Fetch weather for each unique venue location
     weather_rows: list[dict[str, object]] = []
-    for lat, lon, label in venues_with_coords:
+    for lat, lon, venue_id in venues_with_coords:
         try:
-            weather = await adapter.get_weather(lat, lon, date)  # type: ignore[attr-defined]
+            weather = await adapter.get_weather(lat, lon, date)
             if weather is not None:
-                weather_rows.append(weather.model_dump())
+                row = weather.model_dump()
+                row["venue_id"] = venue_id
+                weather_rows.append(row)
         except Exception as exc:
             classify_and_emit_error(
                 exc,
                 service_name="instruments-service",
                 operation="weather_fetch",
-                shard=label,
+                shard=venue_id,
             )
 
     if weather_rows:
-        df = pd.DataFrame(weather_rows)
+        weather_df = pd.DataFrame(weather_rows)
         sink.write(
-            data=df,
+            data=weather_df,
             partition={"day": date, "entity": "weather"},
             format="parquet",
             filename="weather.parquet",
         )
-        counts["weather"] = len(df)
-        logger.info("Weather: %d venue observations written for date=%s", len(df), date)
+        counts["weather"] = len(weather_df)
+        logger.info("Weather: %d venue observations written for date=%s", len(weather_df), date)
 
     # Manifest
     manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)

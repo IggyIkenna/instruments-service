@@ -199,18 +199,27 @@ class TestPolymarketGetInstrumentsDateMode:
 
     @pytest.mark.asyncio
     async def test_date_mode_uses_historical_params(self) -> None:
-        """When date is provided, uses end_date_min/max params."""
+        """When date is provided, uses CLOB API with cursor pagination."""
         adapter = PolymarketReferenceDataAdapter()
         mock_session = _make_aiohttp_mock(
-            [
-                {
-                    "conditionId": "0xabc",
-                    "marketSlug": "btc-100k",
-                    "question": "Will BTC reach $100K?",
-                    "active": False,
-                    "closed": True,
-                }
-            ]
+            {
+                "data": [
+                    {
+                        "condition_id": "0xabc",
+                        "question_id": "q1",
+                        "market_slug": "btc-100k",
+                        "question": "Will BTC reach $100K?",
+                        "active": False,
+                        "closed": True,
+                        "end_date_iso": "2026-03-22T23:59:00Z",
+                        "tokens": [
+                            {"token_id": "t1", "outcome": "Yes", "price": 0.75},
+                            {"token_id": "t2", "outcome": "No", "price": 0.25},
+                        ],
+                    }
+                ],
+                "next_cursor": "",
+            }
         )
         with patch("aiohttp.ClientSession", return_value=mock_session):
             results = await adapter.get_instruments(date="2026-03-22")

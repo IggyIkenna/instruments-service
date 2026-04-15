@@ -239,10 +239,10 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
                     continue
                 if league_ids and match.competition_id not in league_ids:
                     continue
-                pred = normalize_footystats_predictions(match)
+                pred_dict = normalize_footystats_predictions(match)
                 # Only include if at least one core predictive field is non-null
                 has_data = any(
-                    getattr(pred, k) is not None
+                    pred_dict.get(k) is not None
                     for k in (
                         "btts_potential",
                         "o25_potential",
@@ -253,6 +253,7 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
                     )
                 )
                 if has_data:
+                    pred = CanonicalPrediction.model_validate(pred_dict)
                     predictions.append(pred)
             except Exception as exc:
                 logger.warning(

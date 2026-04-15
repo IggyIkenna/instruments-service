@@ -124,35 +124,17 @@ class TestParseMatch:
     def test_parse_match_predictive_fields(self) -> None:
         match = _parse_match(_SAMPLE_MATCH_RAW)
         assert match is not None
-        # Core potentials
+        # Core potentials (fields that exist on FootyStatsMatch model)
         assert match.btts_potential == 65
-        assert match.btts_fhg_potential == 30
-        assert match.btts_2hg_potential == 45
-        assert match.o05_potential == 95
-        assert match.o15_potential == 80
         assert match.o25_potential == 72
         assert match.o35_potential == 40
         assert match.o45_potential == 18
-        assert match.u05_potential == 5
-        assert match.u15_potential == 20
-        assert match.u25_potential == 28
-        assert match.u35_potential == 60
-        assert match.u45_potential == 82
         assert match.xg_prematch_home == 1.6
         assert match.xg_prematch_away == 0.8
-        assert match.xg_prematch_total == 2.4
-        # Sparse + PPG
+        # Sparse
         assert match.corners_potential == 55
-        assert match.corners_o85_potential == 60
-        assert match.corners_o95_potential == 45
-        assert match.corners_o105_potential == 30
         assert match.cards_potential == 48
-        assert match.offsides_potential == 35
         assert match.avg_potential == 52
-        assert match.pre_match_home_ppg == 2.1
-        assert match.pre_match_away_ppg == 1.5
-        assert match.pre_match_home_overall_ppg == 1.9
-        assert match.pre_match_away_overall_ppg == 1.4
 
     def test_parse_match_no_id(self) -> None:
         result = _parse_match({"status": "complete"})
