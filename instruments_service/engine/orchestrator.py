@@ -1737,7 +1737,7 @@ async def process_instruments(
                     shard=date,
                 )
 
-        if "OPEN_METEO" in _active_venues_set and _entity_wanted("WEATHER"):
+        if _entity_wanted("WEATHER") and ("OPEN_METEO" in _active_venues_set or sports_entity_filter == "WEATHER"):
             try:
                 weather_counts = await _fetch_weather_data(date=date, bucket=bucket)
                 for k, v in weather_counts.items():
