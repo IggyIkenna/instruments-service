@@ -720,6 +720,25 @@ async def process_instruments(
         active_venues = [v for v in active_venues if v in provider_venues]
         logger.info("Sports provider filter: %s → venues %s", sports_provider, active_venues)
 
+        # OPEN_METEO short-circuit: skip ALL orchestrator logic (URDI, fixtures,
+        # enrichment, etc.) and go straight to weather fetch. Weather only needs
+        # venue coordinates (from GCS) and Open-Meteo API — no API keys, no URDI.
+        if sports_provider == "OPEN_METEO":
+            primary_category = categories[0] if categories else "SPORTS"
+            bucket = _get_instruments_bucket(primary_category)
+            try:
+                weather_counts = await _fetch_weather_data(date=date, bucket=bucket)
+                logger.info("Weather for date=%s: %s", date, weather_counts)
+                return weather_counts
+            except Exception as exc:
+                classify_and_emit_error(
+                    exc,
+                    service_name="instruments-service",
+                    operation="weather_data_fetch",
+                    shard=date,
+                )
+                return {}
+
     if not active_venues:
         logger.info("No active venues for date=%s categories=%s", date, categories)
         return {}
