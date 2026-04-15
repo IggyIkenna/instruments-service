@@ -1822,11 +1822,75 @@ async def process_instruments(
     #    before DBEQ.BASIC dataset starts, or CME on a holiday).
     #  - Validation rejected all records (validation_failed_venues) — data quality
     #    issue, not a missing-data issue. Already logged as SHARD FAILED above.
+    #  - [SPORTS] The venue doesn't cover any leagues with fixtures on this date.
+    #    Each league declares its data_sources in UAC LeagueDefinition. A venue
+    #    is only expected if at least one league with fixtures lists it.
     #
     # When venues are missing (typically due to API rate limits or transient errors),
     # retry just the missing venues with exponential backoff before failing.
     expected_venues = set(active_venues)
     written_venues = set(counts.keys())
+
+    # Sports: scope expected venues by league coverage.
+    # Understat covers ~6 leagues, FootyStats ~50, SFI varies.
+    # Only expect a venue if it covers leagues that had fixtures today.
+    if is_sports_run:
+        try:
+            from unified_api_contracts.canonical.domain.sports.league_data import get_league
+
+            # Get leagues with fixtures on this date from written data
+            _fixture_leagues: set[str] = set()
+            _sports_bucket = _get_instruments_bucket("SPORTS")
+            if _sports_bucket:
+                _idx = read_availability_index(_sports_bucket)
+                if not _idx.empty and "league_id" in _idx.columns:
+                    _fix_rows = _idx[(_idx["date"] == date) & (_idx["data_type"] == "FIXTURES")]
+                    _fixture_leagues = {
+                        str(lid).upper() for lid in _fix_rows["league_id"].dropna().unique() if str(lid).strip()
+                    }
+
+            if _fixture_leagues:
+                # Build set of data_sources that cover at least one fixture league
+                _active_sources: set[str] = set()
+                for lid in _fixture_leagues:
+                    league_def = get_league(lid)
+                    if league_def is not None:
+                        _active_sources |= league_def.data_sources
+                    else:
+                        # Unknown league — assume all sources needed
+                        _active_sources |= {
+                            "api_football",
+                            "footystats",
+                            "understat",
+                            "transfermarkt",
+                            "soccer_football_info",
+                            "open_meteo",
+                        }
+
+                # Map data_source names to venue names and remove uncovered venues
+                _sports_venues = {
+                    "API_FOOTBALL",
+                    "FOOTYSTATS",
+                    "UNDERSTAT",
+                    "TRANSFERMARKT",
+                    "SOCCER_FOOTBALL_INFO",
+                    "OPEN_METEO",
+                }
+                _uncovered = set()
+                for venue in expected_venues & _sports_venues:
+                    source_name = venue.lower()
+                    if source_name not in _active_sources:
+                        _uncovered.add(venue)
+
+                if _uncovered:
+                    logger.info(
+                        "Sports league scoping: removing %d venue(s) not covering any fixture leagues: %s",
+                        len(_uncovered),
+                        sorted(_uncovered),
+                    )
+                    expected_venues -= _uncovered
+        except Exception as _scope_exc:
+            logger.debug("Sports league scoping skipped: %s", _scope_exc)
 
     # Venues where the adapter succeeded but no records survived date/relevance filtering
     # are not "missing" — the data source simply had nothing for this date.
@@ -2644,6 +2708,21 @@ async def _fetch_sports_reference_data(
             all_rows = entity_rows[entity_name]
             if all_rows:
                 df = pd.DataFrame(all_rows)
+
+                # Drop columns containing nested structures (lists/dicts) that
+                # cannot be serialised to Parquet.  API Football player_stats
+                # responses may carry a raw "statistics" column with nested
+                # dicts even after normalisation.
+                _nested_cols = [c for c in df.columns if df[c].apply(lambda v: isinstance(v, (dict, list))).any()]
+                if _nested_cols:
+                    logger.info(
+                        "Dropping %d nested columns from %s: %s",
+                        len(_nested_cols),
+                        entity_name,
+                        _nested_cols,
+                    )
+                    df = df.drop(columns=_nested_cols)
+
                 counts[entity_name] = len(df)
 
                 # Write per-league partitioned files using AF fixture_id -> league mapping.
@@ -3724,8 +3803,38 @@ async def _fetch_weather_data(
         len(seen_venues),
     )
 
+    # 3. Check existing weather data — only fetch venues not already covered.
+    # Enables incremental runs: add more venue coords → re-run → only new venues fetched.
+    existing_venue_ids: set[str] = set()
+    try:
+        weather_prefix = f"sports_reference/by_date/day={date}/entity=weather/"
+        weather_blobs = list(storage_client.list_blobs(bucket=bucket, prefix=weather_prefix, max_results=10))
+        for wb in weather_blobs:
+            if wb.name.endswith(".parquet"):
+                wdata = storage_client.download_bytes(bucket=bucket, blob_path=wb.name)
+                wdf = pd.read_parquet(io.BytesIO(wdata))
+                if "venue_id" in wdf.columns:
+                    existing_venue_ids = set(wdf["venue_id"].dropna().astype(str).unique())
+    except Exception:
+        pass  # No existing weather — fetch everything
+
+    if existing_venue_ids:
+        new_venues = [(lat, lon, vid, ko) for lat, lon, vid, ko in venues_with_coords if vid not in existing_venue_ids]
+        if len(new_venues) < len(venues_with_coords):
+            logger.info(
+                "Weather: %d/%d venues already have data for date=%s — fetching %d new",
+                len(venues_with_coords) - len(new_venues),
+                len(venues_with_coords),
+                date,
+                len(new_venues),
+            )
+            venues_with_coords = new_venues
+
     if not venues_with_coords:
-        logger.info("Weather: no fixture venues with coordinates for date=%s — skipping", date)
+        if existing_venue_ids:
+            logger.info("Weather: all venues already covered for date=%s — skipping", date)
+        else:
+            logger.info("Weather: no fixture venues with coordinates for date=%s — skipping", date)
         manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
         manifest.add(
             processing_date=date_type.fromisoformat(date),
@@ -3759,15 +3868,36 @@ async def _fetch_weather_data(
             )
 
     if weather_rows:
-        weather_df = pd.DataFrame(weather_rows)
+        new_df = pd.DataFrame(weather_rows)
+
+        # Merge with existing weather data (append new venues to existing)
+        if existing_venue_ids:
+            try:
+                weather_prefix = f"sports_reference/by_date/day={date}/entity=weather/"
+                for wb in storage_client.list_blobs(bucket=bucket, prefix=weather_prefix, max_results=5):
+                    if wb.name.endswith(".parquet"):
+                        wdata = storage_client.download_bytes(bucket=bucket, blob_path=wb.name)
+                        existing_df = pd.read_parquet(io.BytesIO(wdata))
+                        new_df = pd.concat([existing_df, new_df], ignore_index=True)
+                        logger.info(
+                            "Weather: merged %d existing + %d new = %d total for date=%s",
+                            len(existing_df),
+                            len(weather_rows),
+                            len(new_df),
+                            date,
+                        )
+                        break
+            except Exception:
+                pass  # Write new data only if merge fails
+
         sink.write(
-            data=weather_df,
+            data=new_df,
             partition={"day": date, "entity": "weather"},
             format="parquet",
             filename="weather.parquet",
         )
-        counts["weather"] = len(weather_df)
-        logger.info("Weather: %d venue observations written for date=%s", len(weather_df), date)
+        counts["weather"] = len(new_df)
+        logger.info("Weather: %d venue observations written for date=%s", len(new_df), date)
 
     # Manifest
     manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
