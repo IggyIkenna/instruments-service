@@ -166,10 +166,13 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
                     "timezone": "UTC",
                 }
                 try:
+                    # 2 retries max — if Previous Runs API is down, skip forecasts
+                    # and still get actuals. Don't block 3+ min per venue on 500s.
                     prev_response = await self._get_with_retry(
                         session,
                         _PREV_RUNS_URL,
                         params=prev_params,
+                        max_retries=2,
                     )
                     if isinstance(prev_response, dict) and "hourly" in prev_response:
                         hourly = prev_response["hourly"]
