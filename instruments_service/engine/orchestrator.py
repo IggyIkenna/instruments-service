@@ -1779,6 +1779,21 @@ async def process_instruments(
                     shard=date,
                 )
 
+    # Weather: runs independently of API Football — no API key needed.
+    # Must be outside the api_football_key gate so --sports-provider OPEN_METEO works.
+    if is_sports and sports_provider == "OPEN_METEO":
+        try:
+            weather_counts = await _fetch_weather_data(date=date, bucket=bucket)
+            for k, v in weather_counts.items():
+                counts[k] = counts.get(k, 0) + v
+        except Exception as exc:
+            classify_and_emit_error(
+                exc,
+                service_name="instruments-service",
+                operation="weather_data_fetch",
+                shard=date,
+            )
+
     total = sum(counts.values())
 
     # 8. Shard completeness check + automatic retry for missing venues.
