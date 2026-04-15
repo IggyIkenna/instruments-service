@@ -48,6 +48,7 @@ from unified_api_contracts.registry import get_supported_chains_for_protocol
 from unified_api_contracts.sports import (
     FOOTYSTATS_HISTORICAL_SEASON_IDS,
     FOOTYSTATS_SEASON_IDS,
+    SOCCER_FOOTBALL_INFO_IDS,
     get_all_prediction_league_ids,
     get_entity_league_coverage,
     get_leagues_needing_refresh,
@@ -3383,11 +3384,22 @@ async def _fetch_sfi_data(
             shard=date,
         )
 
-    # Standings — for each SFI league
-    if sfi_league_ids and _want_sfi_standings:
+    # Standings — only for our mapped prediction leagues (not all 2800+ SFI championships).
+    # SOCCER_FOOTBALL_INFO_IDS maps canonical league → SFI hex ID. We only fetch standings
+    # for IDs in that set to avoid 404s on leagues SFI doesn't support for standings.
+    _mapped_sfi_ids = set(SOCCER_FOOTBALL_INFO_IDS.values())
+    _filtered_sfi_ids = [lid for lid in sfi_league_ids if lid in _mapped_sfi_ids]
+    if _filtered_sfi_ids != sfi_league_ids:
+        logger.info(
+            "SFI: filtered %d → %d leagues (only mapped prediction leagues)",
+            len(sfi_league_ids),
+            len(_filtered_sfi_ids),
+        )
+
+    if _filtered_sfi_ids and _want_sfi_standings:
         try:
             all_standings: list[dict[str, str | None]] = []
-            for lid in sfi_league_ids:
+            for lid in _filtered_sfi_ids:
                 try:
                     standings = await adapter.get_standings(lid)  # type: ignore[arg-type]
                     for entry in standings:
