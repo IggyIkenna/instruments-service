@@ -219,6 +219,7 @@ class BaseSportsReferenceAdapter(ABC):
         url: str,
         params: dict[str, str] | None = None,
         headers: dict[str, str] | None = None,
+        max_retries: int | None = None,
     ) -> object:
         """GET request with rate-limit-aware retry on transient errors.
 
@@ -231,7 +232,8 @@ class BaseSportsReferenceAdapter(ABC):
         on 429/5xx and connection errors.
         """
         last_exc: Exception | None = None
-        for attempt in range(_RETRY_ATTEMPTS):
+        _max = max_retries if max_retries is not None else _RETRY_ATTEMPTS
+        for attempt in range(_max):
             await self._throttle()
             try:
                 async with session.get(url, params=params, headers=headers) as resp:

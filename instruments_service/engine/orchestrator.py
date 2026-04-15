@@ -3653,65 +3653,76 @@ async def _fetch_weather_data(
     Fixtures without a venue or venues without coordinates are skipped
     with a warning log (no raise — shard-level failure isolation).
     """
+    import re
+
     from instruments_service.reference_data.adapters.sports.adapters.open_meteo import OpenMeteoAdapter
 
     adapter = OpenMeteoAdapter()
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
 
-    # 1. Load venue coordinates from the global venues.parquet
-    coord_lookup = _load_venue_coordinates(bucket)
-    if not coord_lookup:
-        logger.info("Weather: no venue coordinates available — skipping date=%s", date)
-        manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-        manifest.add(
-            processing_date=date_type.fromisoformat(date),
-            row_count=0,
-            data_type="WEATHER",
-        )
-        manifest.write()
+    # UAC venue coordinates: SCREAMING_SNAKE keys → (lat, lon)
+    from unified_api_contracts.registry.sports_venue_coordinates import VENUE_COORDINATES
+
+    # 1. Read fixtures for this date — get venue_name + kickoff hour
+    fixtures_df = None
+    try:
+        fixtures_prefix = f"sports_reference/by_date/day={date}/entity=fixtures/"
+        storage_client = get_storage_client()
+        blobs = list(storage_client.list_blobs(bucket=bucket, prefix=fixtures_prefix, max_results=50))
+        parquet_blobs = [b for b in blobs if b.name.endswith(".parquet")]
+        if parquet_blobs:
+            frames = []
+            for blob_meta in parquet_blobs:
+                data = storage_client.download_bytes(bucket=bucket, blob_path=blob_meta.name)
+                frames.append(pd.read_parquet(io.BytesIO(data)))
+            fixtures_df = pd.concat(frames, ignore_index=True) if frames else None
+    except Exception as exc:
+        logger.warning("Weather: could not read fixtures for date=%s: %s", date, exc)
+
+    if fixtures_df is None or fixtures_df.empty or "venue_name" not in fixtures_df.columns:
+        logger.info("Weather: no fixture venue_name data for date=%s — skipping", date)
         return counts
 
-    # 2. Get fixture venue_ids for this date.
-    # Try reading the fixtures entity parquet first. If it doesn't exist or
-    # lacks venue data, fall back to fetching weather for ALL venues with
-    # coordinates (Open-Meteo is free, so the cost is negligible).
-    fixture_venue_ids = _extract_fixture_venue_ids(bucket, date)
+    # 2. Match fixture venue_name → UAC coordinates via SCREAMING_SNAKE normalization
+    def _to_snake(name: str) -> str:
+        """Normalize venue name to SCREAMING_SNAKE: 'Anfield' → 'ANFIELD', 'Old Trafford' → 'OLD_TRAFFORD'."""
+        s = re.sub(r"[^A-Za-z0-9 ]", "", name)
+        return re.sub(r"\s+", "_", s.strip()).upper()
 
-    # 3. Resolve coordinates for each fixture venue (or all venues as fallback)
-    venues_with_coords: list[tuple[float, float, str]] = []
-    if fixture_venue_ids:
-        skipped_count = 0
-        for vid in fixture_venue_ids:
-            coords = coord_lookup.get(vid)
-            if coords is None:
-                skipped_count += 1
-                logger.warning(
-                    "Weather: venue_id=%s has no coordinates in venues.parquet — skipping",
-                    vid,
-                )
-                continue
-            lat, lon = coords
-            venues_with_coords.append((lat, lon, vid))
+    venues_with_coords: list[tuple[float, float, str, int]] = []
+    seen_venues: set[str] = set()
+    skipped = 0
+    for _, row in fixtures_df[["venue_name"]].drop_duplicates().dropna().iterrows():
+        vname = str(row["venue_name"])
+        snake = _to_snake(vname)
+        if snake in seen_venues:
+            continue
+        seen_venues.add(snake)
+        coords = VENUE_COORDINATES.get(snake)
+        if coords is None:
+            skipped += 1
+            continue
+        # Default kickoff hour = 15 UTC; override from fixture timestamp if available
+        ko_hour = 15
+        if "timestamp" in fixtures_df.columns:
+            ko_rows = fixtures_df[fixtures_df["venue_name"] == vname]["timestamp"].dropna()
+            if not ko_rows.empty:
+                try:
+                    ts = int(ko_rows.iloc[0])
+                    ko_hour = (ts // 3600) % 24
+                except (ValueError, TypeError):
+                    pass
+        venues_with_coords.append((coords.latitude, coords.longitude, snake, ko_hour))
 
-        if skipped_count > 0:
-            logger.info(
-                "Weather: %d/%d fixture venues had no coordinates for date=%s",
-                skipped_count,
-                len(fixture_venue_ids),
-                date,
-            )
-    else:
-        # Fallback: no fixtures parquet or no venue data in it.
-        # Fetch weather for ALL venues with coordinates so downstream
-        # consumers can join by venue_id later.
-        logger.info(
-            "Weather: no fixture venue_ids found for date=%s — fetching for all %d venues with coordinates",
-            date,
-            len(coord_lookup),
-        )
-        for vid, (lat, lon) in coord_lookup.items():
-            venues_with_coords.append((lat, lon, vid))
+    if skipped > 0:
+        logger.info("Weather: %d fixture venues not in UAC coordinates for date=%s", skipped, date)
+    logger.info(
+        "Weather: %d fixture venues matched to coordinates for date=%s (of %d unique)",
+        len(venues_with_coords),
+        date,
+        len(seen_venues),
+    )
 
     if not venues_with_coords:
         logger.info("Weather: no fixture venues with coordinates for date=%s — skipping", date)
@@ -3724,20 +3735,18 @@ async def _fetch_weather_data(
         manifest.write()
         return counts
 
-    # 4. Fetch weather match window for each unique venue location.
-    # Uses Previous Runs API for historical forecasts (T-24h prediction)
-    # plus archive/forecast API for actuals across the 3-hour match window.
-    # Each row has columns for forecast_t24h_ko_*, forecast_t0_1h_*, actual_2h_*, etc.
-    # plus aggregates: total_precip, rain_hours, wind_max, temp_range per lead time.
+    # 4. Fetch weather match window for each fixture venue.
+    # Each venue gets a 3-hour window (KO, KO+1h, KO+2h) at each lead time.
     weather_rows: list[dict[str, object]] = []
-    for lat, lon, venue_id in venues_with_coords:
+    for lat, lon, venue_key, ko_hour in venues_with_coords:
         try:
-            match_weather = await adapter.get_weather_match_window(lat, lon, date)
+            match_weather = await adapter.get_weather_match_window(lat, lon, date, kickoff_hour=ko_hour)
             row: dict[str, object] = {
-                "venue_id": venue_id,
+                "venue_id": venue_key,
                 "date": date,
                 "latitude": lat,
                 "longitude": lon,
+                "kickoff_hour": ko_hour,
             }
             row.update(match_weather)
             weather_rows.append(row)
@@ -3746,7 +3755,7 @@ async def _fetch_weather_data(
                 exc,
                 service_name="instruments-service",
                 operation="weather_fetch",
-                shard=venue_id,
+                shard=venue_key,
             )
 
     if weather_rows:
