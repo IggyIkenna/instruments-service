@@ -3665,25 +3665,22 @@ async def _fetch_weather_data(
         manifest.write()
         return counts
 
-    # 4. Fetch weather timeline for each unique venue location.
+    # 4. Fetch weather match window for each unique venue location.
     # Uses Previous Runs API for historical forecasts (T-24h prediction)
-    # plus archive/forecast API for actual kickoff + halftime weather.
-    # Each row has columns for forecast_t24h_*, forecast_t0_*, actual_kickoff_*, actual_ht_*.
+    # plus archive/forecast API for actuals across the 3-hour match window.
+    # Each row has columns for forecast_t24h_ko_*, forecast_t0_1h_*, actual_2h_*, etc.
+    # plus aggregates: total_precip, rain_hours, wind_max, temp_range per lead time.
     weather_rows: list[dict[str, object]] = []
     for lat, lon, venue_id in venues_with_coords:
         try:
-            # Use forecast timeline for richer data (T-24h, T-0, kickoff, HT)
-            timeline = await adapter.get_weather_forecast_timeline(lat, lon, date)
-            row: dict[str, object] = {"venue_id": venue_id, "date": date}
-            for lead_time, weather in timeline.items():
-                if weather is not None:
-                    dumped = weather.model_dump()
-                    for col, val in dumped.items():
-                        if col not in ("latitude", "longitude", "date"):
-                            row[f"{lead_time}_{col}"] = val
-                    # Also keep top-level fields from actual_kickoff for backward compat
-                    if lead_time == "actual_kickoff":
-                        row.update(dumped)
+            match_weather = await adapter.get_weather_match_window(lat, lon, date)
+            row: dict[str, object] = {
+                "venue_id": venue_id,
+                "date": date,
+                "latitude": lat,
+                "longitude": lon,
+            }
+            row.update(match_weather)
             weather_rows.append(row)
         except Exception as exc:
             classify_and_emit_error(

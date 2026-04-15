@@ -106,17 +106,20 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
             )
         return result
 
-    async def get_weather_forecast_timeline(
+    async def get_weather_match_window(
         self,
         venue_lat: float,
         venue_lon: float,
         date: str,
         kickoff_hour: int = 15,
-    ) -> dict[str, CanonicalWeather | None]:
-        """Fetch weather at multiple lead times for a fixture.
+    ) -> dict[str, float | int | str | None]:
+        """Fetch weather across the full match window at multiple lead times.
 
-        Uses Open-Meteo Previous Runs API to get what was predicted 1-2 days
-        before the match, plus the actual weather at kickoff and halftime.
+        Captures a 3-hour window (KO, KO+1h, KO+2h) for each lead time,
+        covering the full ~105 minutes of a fixture including extra time.
+
+        Uses Open-Meteo Previous Runs API for historical forecasts and
+        archive/forecast API for actuals.
 
         Args:
             venue_lat: Venue latitude.
@@ -125,26 +128,35 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
             kickoff_hour: Kickoff hour in UTC (0-23). Default 15 (3pm).
 
         Returns:
-            Dict with keys: forecast_t24h, forecast_t0, actual_kickoff, actual_ht.
-            Each value is a CanonicalWeather or None if unavailable.
-            - forecast_t24h: what models predicted 24h before kickoff
-            - forecast_t0: best forecast at match time (latest model run)
-            - actual_kickoff: observed weather at kickoff hour
-            - actual_ht: observed weather at kickoff + 1 hour (halftime)
+            Flat dict with prefixed columns for each lead_time x match_hour:
+              forecast_t24h_ko_temp, forecast_t24h_1h_temp, forecast_t24h_2h_temp,
+              forecast_t0_ko_temp, ...,
+              actual_ko_temp, actual_1h_temp, actual_2h_temp,
+              plus aggregates: total_precip, rain_hours, wind_max, temp_range
         """
-        results: dict[str, CanonicalWeather | None] = {
-            "forecast_t24h": None,
-            "forecast_t0": None,
-            "actual_kickoff": None,
-            "actual_ht": None,
-        }
+        results: dict[str, float | int | str | None] = {}
 
-        # Previous Runs API — historical forecasts (available from Jan 2024+)
+        # Match window: 3 consecutive hours from kickoff
+        match_hours = [kickoff_hour, kickoff_hour + 1, kickoff_hour + 2]
+        hour_labels = ["ko", "1h", "2h"]  # kickoff, ~halftime, ~fulltime
+
+        # Weather variables to extract per hour
+        weather_keys = [
+            "temperature_2m",
+            "precipitation",
+            "wind_speed_10m",
+            "relative_humidity_2m",
+            "cloud_cover",
+            "weather_code",
+        ]
+        # Short column names for output
+        col_names = ["temp", "precip_mm", "wind_kmh", "humidity_pct", "cloud_pct", "weather_code"]
+
         prev_day1_vars = ",".join(f"{v}_previous_day1" for v in _HOURLY_VARS.split(","))
 
         try:
             async with self._make_session() as session:
-                # 1. Previous Runs: get T-24h forecast + T-0 (latest) forecast
+                # 1. Previous Runs API: T-24h forecast + T-0 forecast for full match window
                 prev_params: dict[str, str] = {
                     "latitude": str(venue_lat),
                     "longitude": str(venue_lon),
@@ -162,27 +174,13 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
                     if isinstance(prev_response, dict) and "hourly" in prev_response:
                         hourly = prev_response["hourly"]
                         times = hourly.get("time", [])
-                        ko_idx = _find_hour_index(times, kickoff_hour)
-
-                        # T-0 forecast (latest model run — closest to actual)
-                        results["forecast_t0"] = _build_weather_from_hourly(
-                            hourly,
-                            ko_idx,
-                            venue_lat,
-                            venue_lon,
-                            date,
-                            var_prefix="",
-                        )
-
-                        # T-24h forecast (what was predicted 24h before)
-                        results["forecast_t24h"] = _build_weather_from_hourly(
-                            hourly,
-                            ko_idx,
-                            venue_lat,
-                            venue_lon,
-                            date,
-                            var_prefix="_previous_day1",
-                        )
+                        for lead, prefix_suffix in [("forecast_t24h", "_previous_day1"), ("forecast_t0", "")]:
+                            for hour, hlabel in zip(match_hours, hour_labels, strict=True):
+                                idx = _find_hour_index(times, hour)
+                                for wkey, cname in zip(weather_keys, col_names, strict=True):
+                                    data = hourly.get(f"{wkey}{prefix_suffix}")
+                                    val = data[idx] if data and idx < len(data) and data[idx] is not None else None
+                                    results[f"{lead}_{hlabel}_{cname}"] = val
                 except Exception as exc:
                     logger.warning(
                         "Previous Runs API failed for (%.2f, %.2f) on %s: %s",
@@ -192,7 +190,7 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
                         exc,
                     )
 
-                # 2. Actual weather at kickoff and halftime
+                # 2. Actual weather across match window (archive for >90d, forecast for recent)
                 cutoff = (datetime.now(UTC) - timedelta(days=90)).strftime("%Y-%m-%d")
                 actual_url = (
                     "https://archive-api.open-meteo.com/v1/archive" if date < cutoff else f"{_BASE_URL}/forecast"
@@ -214,24 +212,12 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
                     if isinstance(actual_response, dict) and "hourly" in actual_response:
                         hourly = actual_response["hourly"]
                         times = hourly.get("time", [])
-
-                        ko_idx = _find_hour_index(times, kickoff_hour)
-                        results["actual_kickoff"] = _build_weather_from_hourly(
-                            hourly,
-                            ko_idx,
-                            venue_lat,
-                            venue_lon,
-                            date,
-                        )
-
-                        ht_idx = _find_hour_index(times, kickoff_hour + 1)
-                        results["actual_ht"] = _build_weather_from_hourly(
-                            hourly,
-                            ht_idx,
-                            venue_lat,
-                            venue_lon,
-                            date,
-                        )
+                        for hour, hlabel in zip(match_hours, hour_labels, strict=True):
+                            idx = _find_hour_index(times, hour)
+                            for wkey, cname in zip(weather_keys, col_names, strict=True):
+                                data = hourly.get(wkey)
+                                val = data[idx] if data and idx < len(data) and data[idx] is not None else None
+                                results[f"actual_{hlabel}_{cname}"] = val
                 except Exception as exc:
                     logger.warning(
                         "Actual weather fetch failed for (%.2f, %.2f) on %s: %s",
@@ -245,9 +231,24 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
             error_code = self._classify_error(exc)
             self._emit_fetch_failed(error_code, exc)
 
+        # Compute aggregates across the 3-hour match window for each lead time
+        for lead in ["forecast_t24h", "forecast_t0", "actual"]:
+            precips = [results.get(f"{lead}_{h}_precip_mm") for h in hour_labels]
+            temps = [results.get(f"{lead}_{h}_temp") for h in hour_labels]
+            winds = [results.get(f"{lead}_{h}_wind_kmh") for h in hour_labels]
+
+            valid_precips = [p for p in precips if p is not None]
+            valid_temps = [t for t in temps if t is not None]
+            valid_winds = [w for w in winds if w is not None]
+
+            results[f"{lead}_total_precip_mm"] = sum(valid_precips) if valid_precips else None
+            results[f"{lead}_rain_hours"] = sum(1 for p in valid_precips if p > 0.5) if valid_precips else None
+            results[f"{lead}_wind_max_kmh"] = max(valid_winds) if valid_winds else None
+            results[f"{lead}_temp_range"] = max(valid_temps) - min(valid_temps) if len(valid_temps) >= 2 else None
+
         fetched = sum(1 for v in results.values() if v is not None)
         logger.info(
-            "Weather timeline for (%.2f, %.2f) on %s KO=%02d:00: %d/4 points",
+            "Weather match window for (%.2f, %.2f) on %s KO=%02d:00: %d columns populated",
             venue_lat,
             venue_lon,
             date,
