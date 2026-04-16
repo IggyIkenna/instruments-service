@@ -199,10 +199,11 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
         Returns:
             List of SFI match ID strings.
         """
-        # SFI uses /matches/day/basic/ with ?d= param, not /matches/date/{date}
+        # SFI uses /matches/day/basic/ with ?d= param in YYYYMMDD format
+        sfi_date = date.replace("-", "")  # 2025-03-01 → 20250301
         url = f"{_BASE_URL}/matches/day/basic/"
 
-        params: dict[str, str] = {"d": date, "l": "en_US"}
+        params: dict[str, str] = {"d": sfi_date, "l": "en_US"}
 
         try:
             async with self._make_session() as session:
