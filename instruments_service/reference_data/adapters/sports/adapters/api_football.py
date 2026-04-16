@@ -208,6 +208,26 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         logger.info("Fetched %d fixtures for date=%s", len(fixtures), date)
         return fixtures
 
+    async def get_live_fixtures(self) -> list[CanonicalFixture]:
+        """Fetch all currently live/in-play fixtures from API Football.
+
+        API endpoint: GET /fixtures?live=all
+        Returns fixtures with status 1H, HT, 2H, ET, including live scores.
+        """
+        url = f"{_BASE_URL}/fixtures"
+        params: dict[str, str] = {"live": "all"}
+        try:
+            async with self._make_session() as session:
+                raw_response = await self._get_with_retry(session, url, params=params, headers=self._headers())
+        except Exception as exc:
+            error_code = self._classify_error(exc)
+            self._emit_fetch_failed(error_code, exc)
+            return []
+
+        fixtures = _parse_fixture_list(_extract_response(raw_response))
+        logger.info("Fetched %d live fixtures", len(fixtures))
+        return fixtures
+
     async def _fetch_league_fixtures(self, date: str, league_id: int) -> list[CanonicalFixture]:
         """Fetch fixtures for a single league (used for multi-league queries)."""
         url = f"{_BASE_URL}/fixtures"
