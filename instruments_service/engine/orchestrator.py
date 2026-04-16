@@ -3632,7 +3632,9 @@ async def _fetch_sfi_data(
     counts: dict[str, int] = {}
 
     _want_sfi_leagues = entity_filter is None or entity_filter == "SFI_LEAGUES"
-    _want_sfi_standings = entity_filter is None or entity_filter == "SFI_STANDINGS"
+    # SFI does NOT have a standings endpoint (confirmed from archived service).
+    # Standings come from API Football. Remove SFI_STANDINGS from expected entities.
+    _want_sfi_standings = False  # SFI has no standings endpoint
     _want_sfi_progressive = entity_filter is None or entity_filter == "SFI_PROGRESSIVE_STATS"
 
     sfi_league_ids: list[str] = []
