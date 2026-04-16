@@ -755,7 +755,6 @@ async def process_instruments(
                     date=date,
                     api_key=tm_key,
                     bucket=bucket,
-                    season_override=season_override,
                 )
             elif sports_provider == "SOCCER_FOOTBALL_INFO":
                 sfi_key = _keys.get("soccer_football_info")
