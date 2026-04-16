@@ -2672,10 +2672,17 @@ async def _fetch_sports_reference_data(
         completed_statuses = {"FT", "AET", "PEN"}
         fallback_league_ids: list[int] = []
         _af_id_to_canonical_league: dict[int, str] = {}
-        for league_def in get_prediction_leagues():
-            if league_def.api_football_id is not None:
-                fallback_league_ids.append(league_def.api_football_id)
-                _af_id_to_canonical_league[league_def.api_football_id] = league_def.league_id
+        # Fetch fixtures for ALL football leagues (prediction + features + reference).
+        # Reference leagues (cups, continental) provide team workload context for
+        # fatigue/distance calculations. Features leagues (lower divisions) provide
+        # additional fixture data for cross-division team tracking.
+        from unified_api_contracts.canonical.domain.sports.league_data import get_leagues_by_classification
+
+        for cls in ("Prediction", "Features", "Reference"):
+            for league_def in get_leagues_by_classification(cls):
+                if league_def.api_football_id is not None:
+                    fallback_league_ids.append(league_def.api_football_id)
+                    _af_id_to_canonical_league[league_def.api_football_id] = league_def.league_id
         try:
             fixtures = await adapter.get_fixtures(date, league_ids=fallback_league_ids)
             for fx in fixtures:
