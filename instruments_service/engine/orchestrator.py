@@ -720,20 +720,54 @@ async def process_instruments(
         active_venues = [v for v in active_venues if v in provider_venues]
         logger.info("Sports provider filter: %s → venues %s", sports_provider, active_venues)
 
-        # OPEN_METEO short-circuit: skip ALL orchestrator logic (URDI, fixtures,
-        # enrichment, etc.) and go straight to weather fetch. Weather only needs
-        # venue coordinates (from GCS) and Open-Meteo API — no API keys, no URDI.
-        if sports_provider == "OPEN_METEO":
-            logger.info("OPEN_METEO short-circuit: skipping all orchestrator logic for date=%s", date)
+        # Enrichment provider short-circuits: skip ALL orchestrator logic
+        # (URDI, API Football fixture fetch, etc.) and go straight to the
+        # specific provider's fetch function. Each reads fixtures from GCS
+        # (already fetched by API_FOOTBALL runs) and calls only its own API.
+        _enrichment_providers = {"OPEN_METEO", "UNDERSTAT", "FOOTYSTATS", "TRANSFERMARKT", "SOCCER_FOOTBALL_INFO"}
+        if sports_provider in _enrichment_providers:
+            logger.info("%s short-circuit: skipping orchestrator for date=%s", sports_provider, date)
             primary_category = categories[0] if categories else "SPORTS"
             bucket = _get_instruments_bucket(primary_category)
             if not bucket:
-                logger.error("No bucket resolved for category=%s — cannot fetch weather", primary_category)
+                logger.error("No bucket resolved for category=%s", primary_category)
                 return {}
-            logger.info("Calling _fetch_weather_data for date=%s bucket=%s", date, bucket)
-            weather_counts = await _fetch_weather_data(date=date, bucket=bucket)
-            logger.info("Weather DONE for date=%s: %s", date, weather_counts)
-            return weather_counts
+            _keys = api_keys or {}
+
+            if sports_provider == "OPEN_METEO":
+                result = await _fetch_weather_data(date=date, bucket=bucket)
+            elif sports_provider == "UNDERSTAT":
+                result = await _fetch_understat_xg(date=date, bucket=bucket)
+            elif sports_provider == "FOOTYSTATS":
+                fs_key = _keys.get("footystats")
+                if not fs_key:
+                    logger.warning("No footystats API key — skipping date=%s", date)
+                    return {}
+                pred_result = await _fetch_footystats_predictions(date=date, api_key=fs_key, bucket=bucket)
+                match_result = await _fetch_footystats_matches(date=date, api_key=fs_key, bucket=bucket)
+                result = {**pred_result, **match_result}
+            elif sports_provider == "TRANSFERMARKT":
+                tm_key = _keys.get("transfermarkt")
+                if not tm_key:
+                    logger.warning("No transfermarkt API key — skipping date=%s", date)
+                    return {}
+                result = await _fetch_transfermarkt_data(
+                    date=date,
+                    api_key=tm_key,
+                    bucket=bucket,
+                    season_override=season_override,
+                )
+            elif sports_provider == "SOCCER_FOOTBALL_INFO":
+                sfi_key = _keys.get("soccer_football_info")
+                if not sfi_key:
+                    logger.warning("No soccer_football_info API key — skipping date=%s", date)
+                    return {}
+                result = await _fetch_sfi_data(date=date, api_key=sfi_key, bucket=bucket)
+            else:
+                result = {}
+
+            logger.info("%s DONE for date=%s: %s", sports_provider, date, result)
+            return result
 
     if not active_venues:
         logger.info("No active venues for date=%s categories=%s", date, categories)
@@ -1601,7 +1635,8 @@ async def process_instruments(
     # but are re-fetched to capture transfers, promotions, new seasons.
     is_sports = any(c.upper() in ("SPORTS", "ALL") for c in categories)
     # OPEN_METEO doesn't need API keys — allow sports enrichment even with empty api_keys
-    _needs_api_keys = sports_provider not in ("OPEN_METEO",) if sports_provider else True
+    # OPEN_METEO and UNDERSTAT don't need API keys (free, no auth)
+    _needs_api_keys = sports_provider not in ("OPEN_METEO", "UNDERSTAT") if sports_provider else True
     if is_sports and (api_keys or not _needs_api_keys):
         _keys = api_keys or {}
         api_football_key = _keys.get("api_football")
