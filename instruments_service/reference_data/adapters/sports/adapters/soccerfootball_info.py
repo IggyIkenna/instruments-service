@@ -224,7 +224,7 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
             match_id = item.get("id") or item.get("match_id")
             status = str(item.get("status", "")).upper()
             # Only include completed matches (finished/full-time)
-            if match_id and status in ("FT", "AET", "PEN", "FINISHED", "FULL_TIME"):
+            if match_id and status in ("FT", "AET", "PEN", "FINISHED", "FULL_TIME", "ENDED"):
                 match_ids.append(str(match_id))
         logger.info(
             "SFI match IDs for date=%s: %d completed matches",
