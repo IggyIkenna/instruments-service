@@ -1535,6 +1535,7 @@ async def process_instruments(
                             _league_df_clean,
                             filename_prefix=f"instruments_API_FOOTBALL_{_league_id_str}_{date}",
                         )
+
             elif venue_str == "POLYMARKET" and "base_asset" in venue_df.columns:
                 # PREDICTION: split by market (BTC, ETH, SPX, FOOTBALL, etc.)
                 # Each market gets its own partition and manifest entry.
@@ -2608,6 +2609,62 @@ async def _fetch_sports_reference_data(
         logger.info("Sports reference: %d completed fixture IDs passed from URDI (0 extra API calls)", len(fixture_ids))
         # Build AF fixture_id -> league mapping from GCS fixtures parquet
         _af_fid_to_league = _build_fixture_league_map_from_gcs(bucket, date)
+
+        # Ensure canonical fixtures exist at sports_reference/by_date/entity=fixtures/.
+        # The URDI phase writes instrument records, but features-sports needs the
+        # canonical fixture format (af_fixture_id, timestamp, home/away names, etc.).
+        # Read from the old path (sports_reference/fixtures/day=) or fetch from API.
+        _new_fixtures_path = f"sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
+        try:
+            _storage = get_storage_client()
+            _new_blob = _storage.bucket(bucket).blob(_new_fixtures_path)
+            # Check if new path already has canonical data (not instrument records)
+            _needs_write = True
+            if _new_blob.exists():
+                _existing = pd.read_parquet(
+                    io.BytesIO(_storage.download_bytes(bucket=bucket, blob_path=_new_fixtures_path))
+                )
+                if "af_fixture_id" in _existing.columns or "timestamp" in _existing.columns:
+                    _needs_write = False  # Already canonical format
+
+            if _needs_write:
+                # Try old path first (zero API calls)
+                _old_path = f"sports_reference/fixtures/day={date}/fixtures.parquet"
+                _old_blob = _storage.bucket(bucket).blob(_old_path)
+                if _old_blob.exists():
+                    _old_data = _storage.download_bytes(bucket=bucket, blob_path=_old_path)
+                    _old_df = pd.read_parquet(io.BytesIO(_old_data))
+                    _ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+                    _ref_sink.write(
+                        data=_old_df,
+                        partition={"day": date, "entity": "fixtures"},
+                        format="parquet",
+                        filename="fixtures.parquet",
+                    )
+                    logger.info(
+                        "Canonical fixtures copied from old path to entity=fixtures/ (%d rows)",
+                        len(_old_df),
+                    )
+                else:
+                    # No old path — fetch from API Football (costs 33 API calls)
+                    _adapter = create_sports_reference_adapter("api_football", api_key=api_key)
+                    _fx_list = await _adapter.get_fixtures(date)
+                    if _fx_list:
+                        _fx_dicts = [fx.model_dump() if hasattr(fx, "model_dump") else fx for fx in _fx_list]
+                        _fx_df = pd.DataFrame(_fx_dicts)
+                        _ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+                        _ref_sink.write(
+                            data=_fx_df,
+                            partition={"day": date, "entity": "fixtures"},
+                            format="parquet",
+                            filename="fixtures.parquet",
+                        )
+                        logger.info(
+                            "Canonical fixtures fetched from API and written to entity=fixtures/ (%d fixtures)",
+                            len(_fx_df),
+                        )
+        except Exception as _fx_exc:
+            logger.warning("Could not ensure canonical fixtures at entity=fixtures/: %s", _fx_exc)
     else:
         # Fallback: fetch fixtures from API (33 calls for 33 leagues).
         # Only used when called from the zero-fixture early-return path
@@ -2635,6 +2692,36 @@ async def _fetch_sports_reference_data(
                             if af_lid in _af_id_to_canonical_league:
                                 _af_fid_to_league[str(fid_int)] = _af_id_to_canonical_league[af_lid]
             logger.info("Sports reference: %d completed fixtures found for enrichment (API fetch)", len(fixture_ids))
+
+            # Write canonical fixtures to sports_reference/by_date/entity=fixtures/
+            # so features-sports-service and trigger scheduler can read them.
+            if fixtures:
+                try:
+                    fixture_dicts = [fx.model_dump() if hasattr(fx, "model_dump") else fx for fx in fixtures]
+                    fixture_df = pd.DataFrame(fixture_dicts)
+                    _fix_ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+                    _fix_ref_sink.write(
+                        data=fixture_df,
+                        partition={"day": date, "entity": "fixtures"},
+                        format="parquet",
+                        filename="fixtures.parquet",
+                    )
+                    # Per-league partitioned write
+                    if "league_id" in fixture_df.columns:
+                        for _lid, _ldf in fixture_df.groupby("league_id"):
+                            _fix_ref_sink.write(
+                                data=_ldf,
+                                partition={"day": date, "entity": "fixtures", "league": str(_lid)},
+                                format="parquet",
+                                filename="fixtures.parquet",
+                            )
+                    logger.info(
+                        "Canonical fixtures written to sports_reference/by_date/entity=fixtures/ (%d fixtures)",
+                        len(fixture_df),
+                    )
+                except Exception as _fx_write_exc:
+                    logger.warning("Failed to write canonical fixtures to reference path: %s", _fx_write_exc)
+
         except Exception as exc:
             classify_and_emit_error(
                 exc,
