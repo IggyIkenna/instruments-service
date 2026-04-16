@@ -185,3 +185,16 @@ class InstrumentsHandler(UnifiedServiceHandler):
                     "service": "instruments-service",
                 },
             )
+
+        # Publish sports live stats availability for WebSocket forwarding
+        cli_categories: list[str] | None = getattr(self.args, "category", None) if self.args else None
+        if cli_categories and any(c.upper() in ("SPORTS", "ALL") for c in cli_categories):
+            with contextlib.suppress(RuntimeError, ValueError):
+                publish_coordination_event(
+                    "SPORTS_LIVE_STATS",
+                    payload={
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "data_type": "live_stats",
+                        "service": "instruments-service",
+                    },
+                )
