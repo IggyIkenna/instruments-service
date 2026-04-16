@@ -751,10 +751,19 @@ async def process_instruments(
                 if not tm_key:
                     logger.warning("No transfermarkt API key — skipping date=%s", date)
                     return {}
+                # Transfermarkt teams are slow (33 leagues x 90s rate limit = ~50 min).
+                # Only fetch teams on trigger dates (transfer windows, season boundaries).
+                # Leagues are always fetched (fast, 1 API call).
+                _batch_dt = date_type.fromisoformat(date) if isinstance(date, str) else date
+                _is_trigger = is_any_league_refresh_date(_batch_dt)
+                entity_filter = None if _is_trigger else "TRANSFERMARKT_LEAGUES"
+                if not _is_trigger:
+                    logger.info("Transfermarkt: date=%s is not a refresh trigger — leagues only (skipping teams)", date)
                 result = await _fetch_transfermarkt_data(
                     date=date,
                     api_key=tm_key,
                     bucket=bucket,
+                    entity_filter=entity_filter,
                 )
             elif sports_provider == "SOCCER_FOOTBALL_INFO":
                 sfi_key = _keys.get("soccer_football_info")
