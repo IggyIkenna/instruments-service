@@ -103,10 +103,12 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
         Returns:
             List of validated CanonicalStanding models.
         """
-        url = f"{_BASE_URL}/leagues/{league_id}/standings"
-        params: dict[str, str] = {}
+        # SFI uses /championships/{id}/standings/ not /leagues/{id}/standings
+        # (confirmed from archived new-sports-batting-services client)
+        url = f"{_BASE_URL}/championships/standings/"
+        params: dict[str, str] = {"i": league_id, "l": "en_US"}
         if season:
-            params["season"] = season
+            params["s"] = season
 
         try:
             async with self._make_session() as session:
@@ -197,13 +199,17 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
         Returns:
             List of SFI match ID strings.
         """
-        url = f"{_BASE_URL}/matches/date/{date}"
+        # SFI uses /matches/day/basic/ with ?d= param, not /matches/date/{date}
+        url = f"{_BASE_URL}/matches/day/basic/"
+
+        params: dict[str, str] = {"d": date, "l": "en_US"}
 
         try:
             async with self._make_session() as session:
                 raw_response = await self._get_with_retry(
                     session,
                     url,
+                    params=params,
                     headers=self._headers(),
                 )
         except Exception as exc:
@@ -242,13 +248,17 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
         Returns:
             List of canonical progressive stats (one per team per 30s tick).
         """
-        url = f"{_BASE_URL}/matches/{match_id}/progressive"
+        # SFI uses /matches/view/progressive/ with ?i= param
+        url = f"{_BASE_URL}/matches/view/progressive/"
+
+        params: dict[str, str] = {"i": match_id, "l": "en_US"}
 
         try:
             async with self._make_session() as session:
                 raw_response = await self._get_with_retry(
                     session,
                     url,
+                    params=params,
                     headers=self._headers(),
                 )
         except Exception as exc:
