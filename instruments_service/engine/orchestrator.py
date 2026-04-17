@@ -51,7 +51,6 @@ from unified_api_contracts.sports import (
     SOCCER_FOOTBALL_INFO_IDS,
     get_all_prediction_league_ids,
     get_entity_league_coverage,
-    get_leagues_needing_refresh,
     get_provider_league_id,
     is_any_league_refresh_date,
 )
@@ -760,21 +759,29 @@ async def process_instruments(
                     logger.warning("No transfermarkt API key — skipping date=%s", date)
                     return {}
                 # Transfermarkt teams are slow (33 leagues x 90s rate limit = ~50 min).
-                # Only fetch teams on trigger dates (transfer windows, season boundaries).
-                # Leagues are always fetched (fast, 1 API call).
+                # Per-league triggers: only fetch teams for leagues whose trigger dates
+                # match TODAY (transfer windows, season boundaries) — not all 33 on
+                # every trigger. Leagues list (metadata) is fast (1 API call), always fetched.
                 _batch_dt = date_type.fromisoformat(date) if isinstance(date, str) else date
-                _is_trigger = is_any_league_refresh_date(_batch_dt)
-                # CLI entity filter takes precedence; otherwise trigger logic decides
+                from unified_api_contracts.sports import get_leagues_needing_refresh
+
+                _leagues_today = get_leagues_needing_refresh(_batch_dt)
+                # CLI entity filter takes precedence; otherwise per-league trigger logic decides
                 _tm_entity = sports_entity_filter
                 if not _tm_entity:
-                    _tm_entity = None if _is_trigger else "TRANSFERMARKT_LEAGUES"
-                if not _is_trigger and not sports_entity_filter:
-                    logger.info("Transfermarkt: date=%s is not a refresh trigger — leagues only (skipping teams)", date)
+                    _tm_entity = None if _leagues_today else "TRANSFERMARKT_LEAGUES"
+                if not _leagues_today and not sports_entity_filter:
+                    logger.info("Transfermarkt: date=%s has no league triggers — leagues only (skipping teams)", date)
+                elif _leagues_today and not sports_entity_filter:
+                    logger.info(
+                        "Transfermarkt: date=%s triggers %d leagues: %s", date, len(_leagues_today), _leagues_today
+                    )
                 result = await _fetch_transfermarkt_data(
                     date=date,
                     api_key=tm_key,
                     bucket=bucket,
                     entity_filter=_tm_entity,
+                    league_filter=_leagues_today if _leagues_today and _tm_entity != "TRANSFERMARKT_LEAGUES" else None,
                 )
             elif sports_provider == "SOCCER_FOOTBALL_INFO":
                 sfi_key = _keys.get("soccer_football_info")
@@ -2580,6 +2587,8 @@ async def _fetch_sports_reference_data(
             injuries = await adapter.get_injuries(date)
             if injuries:
                 df = pd.DataFrame([inj.model_dump() for inj in injuries])
+                # PIT safety: daily injuries published morning-of (date + 12:00 UTC)
+                df["data_available_at"] = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=12)
                 counts["injuries"] = len(df)
 
                 # Determine league column — prefer league_id, fallback to fixture_id prefix
@@ -2728,6 +2737,11 @@ async def _fetch_sports_reference_data(
                     if _fx_list:
                         _fx_dicts = [fx.model_dump() if hasattr(fx, "model_dump") else fx for fx in _fx_list]
                         _fx_df = pd.DataFrame(_fx_dicts)
+                        # PIT safety: scheduled fixtures published ~1 week before kickoff
+                        if "kickoff_utc" in _fx_df.columns:
+                            _fx_df["data_available_at"] = pd.to_datetime(
+                                _fx_df["kickoff_utc"], utc=True, errors="coerce"
+                            ) - pd.Timedelta(days=7)
                         _ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
                         _ref_sink.write(
                             data=_fx_df,
@@ -2782,6 +2796,11 @@ async def _fetch_sports_reference_data(
                 try:
                     fixture_dicts = [fx.model_dump() if hasattr(fx, "model_dump") else fx for fx in fixtures]
                     fixture_df = pd.DataFrame(fixture_dicts)
+                    # PIT safety: scheduled fixtures published ~1 week before kickoff
+                    if "kickoff_utc" in fixture_df.columns:
+                        fixture_df["data_available_at"] = pd.to_datetime(
+                            fixture_df["kickoff_utc"], utc=True, errors="coerce"
+                        ) - pd.Timedelta(days=7)
                     _fix_ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
                     _fix_ref_sink.write(
                         data=fixture_df,
@@ -2892,6 +2911,10 @@ async def _fetch_sports_reference_data(
                         _nested_cols,
                     )
                     df = df.drop(columns=_nested_cols)
+
+                # PIT safety: per-fixture stats/events/lineups/player_stats available ~2h after kickoff.
+                # No per-row kickoff here — approximate using date + 17:00 UTC (15:00 typical KO + 2h).
+                df["data_available_at"] = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=17)
 
                 counts[entity_name] = len(df)
 
@@ -3103,6 +3126,9 @@ async def _fetch_footystats_predictions(
         predictions = await adapter.get_fixture_predictions(date)  # type: ignore[attr-defined]
         if predictions:
             df = pd.DataFrame([p.model_dump() for p in predictions])
+            # PIT safety: predictions are published day-before kickoff
+            if "kickoff_utc" in df.columns:
+                df["data_available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True) - pd.Timedelta(hours=24)
             # Build canonical fixture_id for downstream join.
             # FootyStats fixture_id format: "{competition_id}:{HOME}_v_{AWAY}:{DATE}"
             # Use historical season ID map (covers ALL seasons, not just current).
@@ -3321,6 +3347,11 @@ async def _fetch_footystats_matches(
                     )
                 flat_rows.append(flat)
             df = pd.DataFrame(flat_rows)
+            # PIT safety: post-match stats available ~3h after kickoff when match complete
+            if "kickoff_utc" in df.columns:
+                df["data_available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True, errors="coerce") + pd.Timedelta(
+                    hours=3
+                )
             counts["footystats_matches"] = len(df)
 
             # Write per-league partitioned files using canonical_fixture_id.
@@ -3424,6 +3455,9 @@ async def _fetch_footystats_odds(
         odds_rows = await adapter.get_fixture_odds_snapshot(date)  # type: ignore[attr-defined]
         if odds_rows:
             df = pd.DataFrame(odds_rows)
+            # PIT safety: pre-match closing odds posted ~4h before kickoff
+            if "kickoff_utc" in df.columns:
+                df["data_available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True) - pd.Timedelta(hours=4)
             _ft_id_to_league = FOOTYSTATS_HISTORICAL_SEASON_IDS
 
             def _odds_canonical(row: pd.Series) -> str:
@@ -3569,6 +3603,11 @@ async def _fetch_understat_xg(
                     )
                 flat_rows.append(flat)
             df = pd.DataFrame(flat_rows)
+            # PIT safety: Understat xG scraped day after match
+            if "kickoff_utc" in df.columns:
+                df["data_available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True, errors="coerce") + pd.Timedelta(
+                    hours=24
+                )
             counts["understat_xg"] = len(df)
 
             xg_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
@@ -3645,6 +3684,7 @@ async def _fetch_transfermarkt_data(
     bucket: str,
     entity_filter: str | None = None,
     season: int | None = None,
+    league_filter: list[str] | None = None,
 ) -> dict[str, int]:
     """Fetch Transfermarkt leagues and teams (with player values) to GCS.
 
@@ -3693,7 +3733,10 @@ async def _fetch_transfermarkt_data(
     if _want_teams:
         try:
             all_teams: list[dict[str, str | None]] = []
+            _league_filter_set = set(league_filter) if league_filter else None
             for league_def in get_prediction_leagues():
+                if _league_filter_set is not None and league_def.league_id not in _league_filter_set:
+                    continue
                 tm_code = get_provider_league_id(league_def.league_id, "transfermarkt")
                 if tm_code is None:
                     continue
@@ -3890,6 +3933,13 @@ async def _fetch_sfi_data(
                         )
                 if all_progressive:
                     df = pd.DataFrame(all_progressive)
+                    # PIT safety: progressive stat tick became available at kickoff + timer_seconds.
+                    # Without per-match kickoff lookup, approximate using date at 15:00 UTC (common match hour).
+                    if "timer_seconds" in df.columns:
+                        _sfi_kickoff = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=15)
+                        df["data_available_at"] = _sfi_kickoff + pd.to_timedelta(
+                            pd.to_numeric(df["timer_seconds"], errors="coerce"), unit="s"
+                        )
                     sink.write(
                         data=df,
                         partition={"day": date, "entity": "progressive_stats"},
@@ -4167,6 +4217,14 @@ async def _fetch_weather_data(
 
     if weather_rows:
         new_df = pd.DataFrame(weather_rows)
+        # PIT safety: weather observation/forecast availability.
+        # Prefer existing observation_time/forecast_issue_time columns; otherwise fallback to date + 12:00 UTC.
+        if "observation_time" in new_df.columns:
+            new_df["data_available_at"] = pd.to_datetime(new_df["observation_time"], utc=True, errors="coerce")
+        elif "forecast_issue_time" in new_df.columns:
+            new_df["data_available_at"] = pd.to_datetime(new_df["forecast_issue_time"], utc=True, errors="coerce")
+        else:
+            new_df["data_available_at"] = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=12)
 
         # Merge with existing weather data (append new venues to existing)
         if existing_venue_ids:
