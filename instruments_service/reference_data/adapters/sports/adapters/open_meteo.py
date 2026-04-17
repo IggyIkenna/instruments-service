@@ -42,6 +42,10 @@ logger = logging.getLogger(__name__)
 
 _BASE_URL: str = "https://api.open-meteo.com/v1"
 _PREV_RUNS_URL: str = "https://previous-runs-api.open-meteo.com/v1/forecast"
+# Pro-tier customer endpoints — used when api_key is set
+_CUSTOMER_BASE_URL: str = "https://customer-api.open-meteo.com/v1"
+_CUSTOMER_ARCHIVE_URL: str = "https://customer-archive-api.open-meteo.com/v1/archive"
+_CUSTOMER_PREV_RUNS_URL: str = "https://customer-previous-runs-api.open-meteo.com/v1/forecast"
 _HOURLY_VARS: str = "temperature_2m,precipitation,wind_speed_10m,relative_humidity_2m,cloud_cover,weather_code"
 
 
@@ -75,9 +79,13 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
         Returns:
             WeatherData with temperature, wind, rain, humidity, or None on failure.
         """
-        # Use archive-api for historical dates (>3 months ago), forecast for recent/future
+        # Use archive-api for historical dates (>3 months ago), forecast for recent/future.
+        # If api_key is set, use Pro-tier customer-* endpoints (unlimited + faster).
         cutoff = (datetime.now(UTC) - timedelta(days=90)).strftime("%Y-%m-%d")
-        url = "https://archive-api.open-meteo.com/v1/archive" if date < cutoff else f"{_BASE_URL}/forecast"
+        if self._api_key:
+            url = _CUSTOMER_ARCHIVE_URL if date < cutoff else f"{_CUSTOMER_BASE_URL}/forecast"
+        else:
+            url = "https://archive-api.open-meteo.com/v1/archive" if date < cutoff else f"{_BASE_URL}/forecast"
         params: dict[str, str] = {
             "latitude": str(venue_lat),
             "longitude": str(venue_lon),
@@ -86,6 +94,8 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
             "end_date": date,
             "timezone": "UTC",
         }
+        if self._api_key:
+            params["apikey"] = self._api_key
 
         try:
             async with self._make_session() as session:
@@ -165,12 +175,15 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
                     "end_date": date,
                     "timezone": "UTC",
                 }
+                if self._api_key:
+                    prev_params["apikey"] = self._api_key
+                prev_runs_url = _CUSTOMER_PREV_RUNS_URL if self._api_key else _PREV_RUNS_URL
                 try:
                     # 2 retries max — if Previous Runs API is down, skip forecasts
                     # and still get actuals. Don't block 3+ min per venue on 500s.
                     prev_response = await self._get_with_retry(
                         session,
-                        _PREV_RUNS_URL,
+                        prev_runs_url,
                         params=prev_params,
                         max_retries=2,
                     )
@@ -195,9 +208,12 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
 
                 # 2. Actual weather across match window (archive for >90d, forecast for recent)
                 cutoff = (datetime.now(UTC) - timedelta(days=90)).strftime("%Y-%m-%d")
-                actual_url = (
-                    "https://archive-api.open-meteo.com/v1/archive" if date < cutoff else f"{_BASE_URL}/forecast"
-                )
+                if self._api_key:
+                    actual_url = _CUSTOMER_ARCHIVE_URL if date < cutoff else f"{_CUSTOMER_BASE_URL}/forecast"
+                else:
+                    actual_url = (
+                        "https://archive-api.open-meteo.com/v1/archive" if date < cutoff else f"{_BASE_URL}/forecast"
+                    )
                 actual_params: dict[str, str] = {
                     "latitude": str(venue_lat),
                     "longitude": str(venue_lon),
@@ -206,6 +222,8 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
                     "end_date": date,
                     "timezone": "UTC",
                 }
+                if self._api_key:
+                    actual_params["apikey"] = self._api_key
                 try:
                     actual_response = await self._get_with_retry(
                         session,
