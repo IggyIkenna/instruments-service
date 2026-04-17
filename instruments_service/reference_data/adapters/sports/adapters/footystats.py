@@ -16,6 +16,7 @@ from unified_api_contracts.external.footystats import (
 )
 from unified_api_contracts.external.footystats.normalize import (
     normalize_footystats_match,
+    normalize_footystats_odds_snapshot,
     normalize_footystats_predictions,
 )
 from unified_api_contracts.sports import (
@@ -266,17 +267,73 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
         logger.info("Extracted %d prediction rows for date=%s", len(predictions), date)
         return predictions
 
+    async def get_fixture_odds_snapshot(
+        self,
+        date: str,
+        league_ids: list[int] | None = None,
+    ) -> list[dict[str, object]]:
+        """Extract all 68 odds fields from FootyStats for a given date.
+
+        Uses the same ``/todays-matches`` endpoint. Returns flat dicts
+        suitable for writing to ``entity=footystats_odds`` in GCS.
+
+        Args:
+            date: Date string in YYYY-MM-DD format.
+            league_ids: Optional list of FootyStats league/competition IDs.
+
+        Returns:
+            List of odds snapshot dicts (one per match with odds data).
+        """
+        url = f"{_BASE_URL}/todays-matches"
+        params = self._params_with_key({"date": date})
+
+        try:
+            async with self._make_session() as session:
+                raw_response = await self._get_with_retry(session, url, params=params)
+        except Exception as exc:
+            error_code = self._classify_error(exc)
+            self._emit_fetch_failed(error_code, exc)
+            raise
+
+        odds_rows: list[dict[str, object]] = []
+        match_list = _extract_data(raw_response)
+        for item in match_list:
+            try:
+                match = _parse_match(item)
+                if match is None:
+                    continue
+                if league_ids and match.competition_id not in league_ids:
+                    continue
+                odds_dict = normalize_footystats_odds_snapshot(match)
+                # Only include if at least one odds field is non-null
+                has_odds = any(
+                    odds_dict.get(k) is not None
+                    for k in ("odds_ft_1", "odds_ft_x", "odds_ft_2", "odds_btts_yes", "odds_ft_over25")
+                )
+                if has_odds:
+                    odds_rows.append(odds_dict)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to extract FootyStats odds for match %s: %s",
+                    item.get("match_id", "unknown") if isinstance(item, dict) else "unknown",
+                    exc,
+                )
+                continue
+
+        logger.info("Extracted %d odds snapshot rows for date=%s", len(odds_rows), date)
+        return odds_rows
+
     async def get_odds(
         self,
         sport: str,
         regions: str = "uk",
         markets: str = "h2h",
     ) -> list[CanonicalOdds]:
-        """FootyStats does not provide odds data.
+        """FootyStats does not provide odds via the standard interface.
 
-        This adapter is for reference data only. Returns an empty list.
+        Use ``get_fixture_odds_snapshot()`` for pre-match odds (68 markets).
         """
-        logger.info("get_odds not supported on FootyStats adapter")
+        logger.info("get_odds not supported — use get_fixture_odds_snapshot() instead")
         return []
 
 
@@ -352,6 +409,75 @@ def _parse_match(item: dict[str, object]) -> FootyStatsMatch | None:
             pre_match_away_overall_ppg=_safe_float(
                 item.get("pre_match_team_b_overall_ppg"),
             ),
+            # Odds (all 68 fields — pass through from raw API response)
+            odds_ft_1=_safe_float(item.get("odds_ft_1")),
+            odds_ft_x=_safe_float(item.get("odds_ft_x")),
+            odds_ft_2=_safe_float(item.get("odds_ft_2")),
+            odds_ft_over05=_safe_float(item.get("odds_ft_over05")),
+            odds_ft_over15=_safe_float(item.get("odds_ft_over15")),
+            odds_ft_over25=_safe_float(item.get("odds_ft_over25")),
+            odds_ft_over35=_safe_float(item.get("odds_ft_over35")),
+            odds_ft_over45=_safe_float(item.get("odds_ft_over45")),
+            odds_ft_under05=_safe_float(item.get("odds_ft_under05")),
+            odds_ft_under15=_safe_float(item.get("odds_ft_under15")),
+            odds_ft_under25=_safe_float(item.get("odds_ft_under25")),
+            odds_ft_under35=_safe_float(item.get("odds_ft_under35")),
+            odds_ft_under45=_safe_float(item.get("odds_ft_under45")),
+            odds_btts_yes=_safe_float(item.get("odds_btts_yes")),
+            odds_btts_no=_safe_float(item.get("odds_btts_no")),
+            odds_btts_1st_half_yes=_safe_float(item.get("odds_btts_1st_half_yes")),
+            odds_btts_1st_half_no=_safe_float(item.get("odds_btts_1st_half_no")),
+            odds_btts_2nd_half_yes=_safe_float(item.get("odds_btts_2nd_half_yes")),
+            odds_btts_2nd_half_no=_safe_float(item.get("odds_btts_2nd_half_no")),
+            odds_doublechance_1x=_safe_float(item.get("odds_doublechance_1x")),
+            odds_doublechance_12=_safe_float(item.get("odds_doublechance_12")),
+            odds_doublechance_x2=_safe_float(item.get("odds_doublechance_x2")),
+            odds_dnb_1=_safe_float(item.get("odds_dnb_1")),
+            odds_dnb_2=_safe_float(item.get("odds_dnb_2")),
+            odds_1st_half_result_1=_safe_float(item.get("odds_1st_half_result_1")),
+            odds_1st_half_result_x=_safe_float(item.get("odds_1st_half_result_x")),
+            odds_1st_half_result_2=_safe_float(item.get("odds_1st_half_result_2")),
+            odds_1st_half_over05=_safe_float(item.get("odds_1st_half_over05")),
+            odds_1st_half_over15=_safe_float(item.get("odds_1st_half_over15")),
+            odds_1st_half_over25=_safe_float(item.get("odds_1st_half_over25")),
+            odds_1st_half_over35=_safe_float(item.get("odds_1st_half_over35")),
+            odds_1st_half_under05=_safe_float(item.get("odds_1st_half_under05")),
+            odds_1st_half_under15=_safe_float(item.get("odds_1st_half_under15")),
+            odds_1st_half_under25=_safe_float(item.get("odds_1st_half_under25")),
+            odds_1st_half_under35=_safe_float(item.get("odds_1st_half_under35")),
+            odds_2nd_half_result_1=_safe_float(item.get("odds_2nd_half_result_1")),
+            odds_2nd_half_result_x=_safe_float(item.get("odds_2nd_half_result_x")),
+            odds_2nd_half_result_2=_safe_float(item.get("odds_2nd_half_result_2")),
+            odds_2nd_half_over05=_safe_float(item.get("odds_2nd_half_over05")),
+            odds_2nd_half_over15=_safe_float(item.get("odds_2nd_half_over15")),
+            odds_2nd_half_over25=_safe_float(item.get("odds_2nd_half_over25")),
+            odds_2nd_half_over35=_safe_float(item.get("odds_2nd_half_over35")),
+            odds_2nd_half_under05=_safe_float(item.get("odds_2nd_half_under05")),
+            odds_2nd_half_under15=_safe_float(item.get("odds_2nd_half_under15")),
+            odds_2nd_half_under25=_safe_float(item.get("odds_2nd_half_under25")),
+            odds_2nd_half_under35=_safe_float(item.get("odds_2nd_half_under35")),
+            odds_corners_1=_safe_float(item.get("odds_corners_1")),
+            odds_corners_2=_safe_float(item.get("odds_corners_2")),
+            odds_corners_x=_safe_float(item.get("odds_corners_x")),
+            odds_corners_over_75=_safe_float(item.get("odds_corners_over_75")),
+            odds_corners_over_85=_safe_float(item.get("odds_corners_over_85")),
+            odds_corners_over_95=_safe_float(item.get("odds_corners_over_95")),
+            odds_corners_over_105=_safe_float(item.get("odds_corners_over_105")),
+            odds_corners_over_115=_safe_float(item.get("odds_corners_over_115")),
+            odds_corners_under_75=_safe_float(item.get("odds_corners_under_75")),
+            odds_corners_under_85=_safe_float(item.get("odds_corners_under_85")),
+            odds_corners_under_95=_safe_float(item.get("odds_corners_under_95")),
+            odds_corners_under_105=_safe_float(item.get("odds_corners_under_105")),
+            odds_corners_under_115=_safe_float(item.get("odds_corners_under_115")),
+            odds_team_a_cs_yes=_safe_float(item.get("odds_team_a_cs_yes")),
+            odds_team_a_cs_no=_safe_float(item.get("odds_team_a_cs_no")),
+            odds_team_b_cs_yes=_safe_float(item.get("odds_team_b_cs_yes")),
+            odds_team_b_cs_no=_safe_float(item.get("odds_team_b_cs_no")),
+            odds_team_to_score_first_1=_safe_float(item.get("odds_team_to_score_first_1")),
+            odds_team_to_score_first_2=_safe_float(item.get("odds_team_to_score_first_2")),
+            odds_team_to_score_first_x=_safe_float(item.get("odds_team_to_score_first_x")),
+            odds_win_to_nil_1=_safe_float(item.get("odds_win_to_nil_1")),
+            odds_win_to_nil_2=_safe_float(item.get("odds_win_to_nil_2")),
         )
     except Exception as exc:
         logger.warning("Failed to parse FootyStats match item: %s", exc)

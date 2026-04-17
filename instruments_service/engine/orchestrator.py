@@ -734,6 +734,7 @@ async def process_instruments(
                 return {}
             _keys = api_keys or {}
 
+            result: dict[str, int] = {}
             if sports_provider == "OPEN_METEO":
                 result = await _fetch_weather_data(date=date, bucket=bucket)
             elif sports_provider == "UNDERSTAT":
@@ -743,9 +744,16 @@ async def process_instruments(
                 if not fs_key:
                     logger.warning("No footystats API key — skipping date=%s", date)
                     return {}
-                pred_result = await _fetch_footystats_predictions(date=date, api_key=fs_key, bucket=bucket)
-                match_result = await _fetch_footystats_matches(date=date, api_key=fs_key, bucket=bucket)
-                result = {**pred_result, **match_result}
+                _ef = sports_entity_filter
+                if not _ef or _ef == "PREDICTIONS":
+                    pred_result = await _fetch_footystats_predictions(date=date, api_key=fs_key, bucket=bucket)
+                    result.update(pred_result)
+                if not _ef or _ef == "MATCHES":
+                    match_result = await _fetch_footystats_matches(date=date, api_key=fs_key, bucket=bucket)
+                    result.update(match_result)
+                if not _ef or _ef == "ODDS":
+                    odds_result = await _fetch_footystats_odds(date=date, api_key=fs_key, bucket=bucket)
+                    result.update(odds_result)
             elif sports_provider == "TRANSFERMARKT":
                 tm_key = _keys.get("transfermarkt")
                 if not tm_key:
@@ -756,21 +764,29 @@ async def process_instruments(
                 # Leagues are always fetched (fast, 1 API call).
                 _batch_dt = date_type.fromisoformat(date) if isinstance(date, str) else date
                 _is_trigger = is_any_league_refresh_date(_batch_dt)
-                entity_filter = None if _is_trigger else "TRANSFERMARKT_LEAGUES"
-                if not _is_trigger:
+                # CLI entity filter takes precedence; otherwise trigger logic decides
+                _tm_entity = sports_entity_filter
+                if not _tm_entity:
+                    _tm_entity = None if _is_trigger else "TRANSFERMARKT_LEAGUES"
+                if not _is_trigger and not sports_entity_filter:
                     logger.info("Transfermarkt: date=%s is not a refresh trigger — leagues only (skipping teams)", date)
                 result = await _fetch_transfermarkt_data(
                     date=date,
                     api_key=tm_key,
                     bucket=bucket,
-                    entity_filter=entity_filter,
+                    entity_filter=_tm_entity,
                 )
             elif sports_provider == "SOCCER_FOOTBALL_INFO":
                 sfi_key = _keys.get("soccer_football_info")
                 if not sfi_key:
                     logger.warning("No soccer_football_info API key — skipping date=%s", date)
                     return {}
-                result = await _fetch_sfi_data(date=date, api_key=sfi_key, bucket=bucket)
+                result = await _fetch_sfi_data(
+                    date=date,
+                    api_key=sfi_key,
+                    bucket=bucket,
+                    entity_filter=sports_entity_filter,
+                )
             else:
                 result = {}
 
@@ -1736,6 +1752,23 @@ async def process_instruments(
                         exc,
                         service_name="instruments-service",
                         operation="footystats_matches_fetch",
+                        shard=date,
+                    )
+
+            if _entity_wanted("ODDS"):
+                try:
+                    odds_counts = await _fetch_footystats_odds(
+                        date=date,
+                        api_key=footystats_key,
+                        bucket=bucket,
+                    )
+                    for k, v in odds_counts.items():
+                        counts[k] = counts.get(k, 0) + v
+                except Exception as exc:
+                    classify_and_emit_error(
+                        exc,
+                        service_name="instruments-service",
+                        operation="footystats_odds_fetch",
                         shard=date,
                     )
 
@@ -3356,6 +3389,132 @@ async def _fetch_footystats_matches(
             exc,
             service_name="instruments-service",
             operation="footystats_matches_fetch",
+            shard=date,
+        )
+
+    return counts
+
+
+async def _fetch_footystats_odds(
+    date: str,
+    api_key: str,
+    bucket: str,
+) -> dict[str, int]:
+    """Fetch FootyStats pre-match odds (68 markets) and write to GCS.
+
+    FootyStats provides comprehensive pre-match odds from aggregated
+    bookmakers: full-time 1X2, O/U 0.5-4.5, 1st/2nd half results and
+    O/U, BTTS (full/per-half), corners (result + O/U), clean sheet,
+    team to score first, win to nil, double chance, draw no bet.
+
+    Same ``/todays-matches`` endpoint as predictions and matches — no
+    extra API calls needed.
+
+    GCS path: sports_reference/by_date/day={date}/entity=footystats_odds/
+              league={league_id}/footystats_odds.parquet
+    """
+    adapter = create_sports_reference_adapter("footystats", api_key=api_key)
+    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    counts: dict[str, int] = {}
+
+    try:
+        from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
+        from unified_api_contracts.sports import resolve_footystats_team
+
+        odds_rows = await adapter.get_fixture_odds_snapshot(date)  # type: ignore[attr-defined]
+        if odds_rows:
+            df = pd.DataFrame(odds_rows)
+            _ft_id_to_league = FOOTYSTATS_HISTORICAL_SEASON_IDS
+
+            def _odds_canonical(row: pd.Series) -> str:
+                home = str(row.get("home_team", "") or "")
+                away = str(row.get("away_team", "") or "")
+                if not home or not away:
+                    return ""
+                fid = str(row.get("fixture_id", "") or "")
+                league = ""
+                if ":" in fid:
+                    comp_str = fid.split(":")[0]
+                    if comp_str.isdigit():
+                        league = _ft_id_to_league.get(int(comp_str), "")
+                return build_fixture_id(
+                    league_id=league,
+                    home_team_id=resolve_footystats_team(home),
+                    away_team_id=resolve_footystats_team(away),
+                    date_str=date,
+                )
+
+            if "home_team" in df.columns and "away_team" in df.columns:
+                df["canonical_fixture_id"] = df.apply(_odds_canonical, axis=1)
+            counts["footystats_odds"] = len(df)
+
+            odds_manifest = ManifestWriter(
+                service_name="instruments-service",
+                catalogue_bucket=bucket,
+            )
+            if "canonical_fixture_id" in df.columns:
+                df["_odds_league"] = df["canonical_fixture_id"].str.split(":").str[0]
+                _has_league = df["_odds_league"].notna() & (df["_odds_league"] != "")
+                _with_league = df[_has_league]
+                _without_league = df[~_has_league]
+
+                for _odds_lid, _odds_league_df in _with_league.groupby("_odds_league"):
+                    _odds_lid_str = str(_odds_lid)
+                    _odds_clean = _odds_league_df.drop(columns=["_odds_league"])
+                    sink.write(
+                        data=_odds_clean,
+                        partition={"day": date, "entity": "footystats_odds", "league": _odds_lid_str},
+                        format="parquet",
+                        filename="footystats_odds.parquet",
+                    )
+                    odds_manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=len(_odds_clean),
+                        data_type="ODDS",
+                        league_id=_odds_lid_str,
+                    )
+
+                if not _without_league.empty:
+                    _odds_unmapped = _without_league.drop(columns=["_odds_league"])
+                    sink.write(
+                        data=_odds_unmapped,
+                        partition={"day": date, "entity": "footystats_odds"},
+                        format="parquet",
+                        filename="footystats_odds.parquet",
+                    )
+                    odds_manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=len(_odds_unmapped),
+                        data_type="ODDS",
+                    )
+            else:
+                sink.write(
+                    data=df,
+                    partition={"day": date, "entity": "footystats_odds"},
+                    format="parquet",
+                    filename="footystats_odds.parquet",
+                )
+                odds_manifest.add(
+                    processing_date=date_type.fromisoformat(date),
+                    row_count=len(df),
+                    data_type="ODDS",
+                )
+            odds_manifest.write()
+            logger.info("FootyStats odds: %d rows written for date=%s", len(df), date)
+        else:
+            logger.info("FootyStats odds: no odds data for date=%s", date)
+            manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+            manifest.add(
+                processing_date=date_type.fromisoformat(date),
+                row_count=0,
+                data_type="ODDS",
+            )
+            manifest.write()
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="footystats_odds_fetch",
             shard=date,
         )
 

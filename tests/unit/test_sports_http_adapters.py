@@ -524,7 +524,15 @@ class TestApiFootballAdapterHttp:
         mock_session = _make_aiohttp_mock(
             {
                 "response": [
-                    {"team": {"name": "Liverpool"}, "players": [{"player": {"name": "Salah"}}]},
+                    {
+                        "team": {"id": 40, "name": "Liverpool"},
+                        "players": [
+                            {
+                                "player": {"id": 22, "name": "Salah"},
+                                "statistics": [{"games": {"minutes": 90, "position": "F"}}],
+                            }
+                        ],
+                    },
                 ]
             }
         )
