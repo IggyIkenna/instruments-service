@@ -734,7 +734,7 @@ async def process_instruments(
 
             result: dict[str, int] = {}
             if sports_provider == "OPEN_METEO":
-                result = await _fetch_weather_data(date=date, bucket=bucket)
+                result = await _fetch_weather_data(date=date, bucket=bucket, api_key=_keys.get("open_meteo"))
             elif sports_provider == "UNDERSTAT":
                 result = await _fetch_understat_xg(date=date, bucket=bucket)
             elif sports_provider == "FOOTYSTATS":
@@ -4077,6 +4077,7 @@ def _extract_fixture_venue_ids(bucket: str, date: str) -> list[str]:
 async def _fetch_weather_data(
     date: str,
     bucket: str,
+    api_key: str | None = None,
 ) -> dict[str, int]:
     """Fetch Open-Meteo weather data for fixture venues and write to GCS.
 
@@ -4096,7 +4097,7 @@ async def _fetch_weather_data(
 
     from instruments_service.reference_data.adapters.sports.adapters.open_meteo import OpenMeteoAdapter
 
-    adapter = OpenMeteoAdapter()
+    adapter = OpenMeteoAdapter(api_key=api_key) if api_key else OpenMeteoAdapter()
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
 
