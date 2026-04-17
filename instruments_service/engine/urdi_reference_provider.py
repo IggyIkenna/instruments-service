@@ -27,7 +27,7 @@ import logging
 
 from unified_api_contracts.internal import InstrumentRecord
 
-from instruments_service.reference_data import (
+from instruments_service.reference_data.factory import (
     ADAPTER_DATA_SOURCES,
     CANONICAL_VENUE_TO_ADAPTER,
     get_adapter_for_canonical_venue,

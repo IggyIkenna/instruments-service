@@ -3111,12 +3111,15 @@ async def _fetch_footystats_predictions(
     FootyStats-proprietary pre-match signals. Written separately from factual
     fixture data so FSS can consume them as third-party signal input.
 
-    GCS path: sports_reference/by_date/day={date}/entity=footystats_predictions/
-              footystats_predictions.parquet
+    GCS path (snapshots preserved per fetch for prediction-evolution tracking):
+      sports_reference/by_date/day={date}/entity=footystats_predictions/
+        fetched_at_hour={YYYY-MM-DDTHH}/league={league_id}/footystats_predictions.parquet
     """
     adapter = create_sports_reference_adapter("footystats", api_key=api_key)
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
+    fetched_at_ts = pd.Timestamp.now(tz="UTC")
+    fetched_at_hour = fetched_at_ts.strftime("%Y-%m-%dT%H")
 
     try:
         from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
@@ -3129,7 +3132,7 @@ async def _fetch_footystats_predictions(
             # (empirically verified 2026-04-17: 98% coverage at T-24h, 100% at T-72h).
             if "kickoff_utc" in df.columns:
                 df["data_available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True) - pd.Timedelta(hours=72)
-            df["fetched_at"] = pd.Timestamp.now(tz="UTC")
+            df["fetched_at"] = fetched_at_ts
             # Build canonical fixture_id for downstream join.
             # FootyStats fixture_id format: "{competition_id}:{HOME}_v_{AWAY}:{DATE}"
             # Use historical season ID map (covers ALL seasons, not just current).
@@ -3181,7 +3184,12 @@ async def _fetch_footystats_predictions(
                     _pred_clean = _pred_league_df.drop(columns=["_pred_league"])
                     sink.write(
                         data=_pred_clean,
-                        partition={"day": date, "entity": "footystats_predictions", "league": _pred_lid_str},
+                        partition={
+                            "day": date,
+                            "entity": "footystats_predictions",
+                            "fetched_at_hour": fetched_at_hour,
+                            "league": _pred_lid_str,
+                        },
                         format="parquet",
                         filename="footystats_predictions.parquet",
                     )
@@ -3196,7 +3204,11 @@ async def _fetch_footystats_predictions(
                     _pred_unmapped = _without_league.drop(columns=["_pred_league"])
                     sink.write(
                         data=_pred_unmapped,
-                        partition={"day": date, "entity": "footystats_predictions"},
+                        partition={
+                            "day": date,
+                            "entity": "footystats_predictions",
+                            "fetched_at_hour": fetched_at_hour,
+                        },
                         format="parquet",
                         filename="footystats_predictions.parquet",
                     )
@@ -3208,7 +3220,11 @@ async def _fetch_footystats_predictions(
             else:
                 sink.write(
                     data=df,
-                    partition={"day": date, "entity": "footystats_predictions"},
+                    partition={
+                        "day": date,
+                        "entity": "footystats_predictions",
+                        "fetched_at_hour": fetched_at_hour,
+                    },
                     format="parquet",
                     filename="footystats_predictions.parquet",
                 )
@@ -3449,12 +3465,18 @@ async def _fetch_footystats_odds(
     Same ``/todays-matches`` endpoint as predictions and matches — no
     extra API calls needed.
 
-    GCS path: sports_reference/by_date/day={date}/entity=footystats_odds/
-              league={league_id}/footystats_odds.parquet
+    GCS path (snapshots preserved per fetch for odds-evolution tracking):
+      sports_reference/by_date/day={date}/entity=footystats_odds/
+        fetched_at_hour={YYYY-MM-DDTHH}/league={league_id}/footystats_odds.parquet
+
+    Each fetch lands in its own `fetched_at_hour` partition so repeated polls
+    of the same future date accumulate snapshots instead of overwriting.
     """
     adapter = create_sports_reference_adapter("footystats", api_key=api_key)
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
+    fetched_at_ts = pd.Timestamp.now(tz="UTC")
+    fetched_at_hour = fetched_at_ts.strftime("%Y-%m-%dT%H")
 
     try:
         from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
@@ -3469,7 +3491,7 @@ async def _fetch_footystats_odds(
             if "kickoff_utc" in df.columns:
                 df["data_available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True) - pd.Timedelta(hours=72)
             # fetched_at = when we actually captured this snapshot (for odds movement tracking)
-            df["fetched_at"] = pd.Timestamp.now(tz="UTC")
+            df["fetched_at"] = fetched_at_ts
             _ft_id_to_league = FOOTYSTATS_HISTORICAL_SEASON_IDS
 
             def _odds_canonical(row: pd.Series) -> str:
@@ -3509,7 +3531,12 @@ async def _fetch_footystats_odds(
                     _odds_clean = _odds_league_df.drop(columns=["_odds_league"])
                     sink.write(
                         data=_odds_clean,
-                        partition={"day": date, "entity": "footystats_odds", "league": _odds_lid_str},
+                        partition={
+                            "day": date,
+                            "entity": "footystats_odds",
+                            "fetched_at_hour": fetched_at_hour,
+                            "league": _odds_lid_str,
+                        },
                         format="parquet",
                         filename="footystats_odds.parquet",
                     )
@@ -3524,7 +3551,11 @@ async def _fetch_footystats_odds(
                     _odds_unmapped = _without_league.drop(columns=["_odds_league"])
                     sink.write(
                         data=_odds_unmapped,
-                        partition={"day": date, "entity": "footystats_odds"},
+                        partition={
+                            "day": date,
+                            "entity": "footystats_odds",
+                            "fetched_at_hour": fetched_at_hour,
+                        },
                         format="parquet",
                         filename="footystats_odds.parquet",
                     )
@@ -3536,7 +3567,11 @@ async def _fetch_footystats_odds(
             else:
                 sink.write(
                     data=df,
-                    partition={"day": date, "entity": "footystats_odds"},
+                    partition={
+                        "day": date,
+                        "entity": "footystats_odds",
+                        "fetched_at_hour": fetched_at_hour,
+                    },
                     format="parquet",
                     filename="footystats_odds.parquet",
                 )
@@ -4435,3 +4470,32 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
             operation="manifest_writer",
             shard=path,
         )
+
+
+async def refresh_catalogue(
+    categories: list[str] | None = None,
+    api_keys: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Rebuild the canonical instrument catalogue for the requested categories.
+
+    For each category in :data:`CATALOGUE_SUPPORTED_CATEGORIES` this uses
+    :class:`CatalogueBuilder` to fetch instruments through URDI and writes
+    the result to ``reference_data/instruments/{category}/all.parquet``.
+
+    Returns a mapping of ``category -> written URI`` for observability.
+    """
+    from instruments_service.reference_data.catalogue import (
+        CATALOGUE_SUPPORTED_CATEGORIES,
+        CatalogueBuilder,
+    )
+
+    builder = CatalogueBuilder(api_keys=api_keys)
+    target = [c.upper() for c in (categories or list(CATALOGUE_SUPPORTED_CATEGORIES))]
+    written: dict[str, str] = {}
+    for category in target:
+        if category not in CATALOGUE_SUPPORTED_CATEGORIES:
+            logger.warning("refresh_catalogue: skipping unknown category=%s", category)
+            continue
+        records = await builder.build_category_async(category)
+        written[category] = builder.write_to_gcs(records, category)
+    return written

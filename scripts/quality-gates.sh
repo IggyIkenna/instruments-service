@@ -86,6 +86,7 @@ DEEP_IMPORT_EXCLUDE_GLOBS=(
     "!**/reference_data/utils/*.py"
     "!**/reference_data/intent_resolver.py"
     "!**/reference_data/adapters/sports/adapters/*.py"
+    "!**/reference_data/catalogue/*.py"
     "!**/engine/orchestrator.py"
 )
 
