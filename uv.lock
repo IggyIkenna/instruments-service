@@ -3071,6 +3071,39 @@ requires-dist = [
 ]
 
 [[package]]
+name = "unified-events-interface"
+version = "0.2.48"
+source = { directory = "../unified-events-interface" }
+dependencies = [
+    { name = "bandit" },
+    { name = "basedpyright" },
+    { name = "pip-audit" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-socket" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "bandit", specifier = ">=1.7.0,<2.0.0" },
+    { name = "basedpyright", specifier = "==1.38.2" },
+    { name = "pip-audit", specifier = ">=2.7.0,<3.0.0" },
+    { name = "pre-commit", specifier = ">=3.0,<4.0.0" },
+    { name = "pytest", specifier = ">=9.0.1,<10.0.0" },
+    { name = "pytest-asyncio", specifier = ">=0.25.0,<2.0.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0,<8.0.0" },
+    { name = "pytest-socket", specifier = ">=0.7.0,<1.0.0" },
+    { name = "pytest-timeout", specifier = ">=2.4.0,<3.0.0" },
+    { name = "pytest-xdist", specifier = ">=3.6.0,<4.0.0" },
+    { name = "ruff", specifier = "==0.15.0" },
+]
+
+[[package]]
 name = "unified-trading-library"
 version = "0.3.167"
 source = { editable = "../unified-trading-library" }
@@ -3129,6 +3162,7 @@ dependencies = [
     { name = "scipy" },
     { name = "starlette" },
     { name = "unified-api-contracts" },
+    { name = "unified-events-interface" },
     { name = "web3" },
 ]
 
@@ -3188,6 +3222,7 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.15.0,<2.0.0" },
     { name = "starlette", specifier = ">=0.46.3,<1.0.0" },
     { name = "unified-api-contracts", editable = "../unified-api-contracts" },
+    { name = "unified-events-interface", directory = "../unified-events-interface" },
     { name = "web3", specifier = ">=6.0.0,<7.0.0" },
 ]
 
