@@ -47,7 +47,6 @@ from unified_api_contracts.internal import InstrumentRecord, validate_instrument
 from unified_api_contracts.registry import get_supported_chains_for_protocol
 from unified_api_contracts.sports import (
     FOOTYSTATS_HISTORICAL_SEASON_IDS,
-    FOOTYSTATS_SEASON_IDS,
     SOCCER_FOOTBALL_INFO_IDS,
     get_all_prediction_league_ids,
     get_entity_league_coverage,
@@ -3311,8 +3310,9 @@ async def _fetch_footystats_matches(
         from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
         from unified_api_contracts.sports import resolve_footystats_team
 
-        # FootyStats league IDs are seasonal — use UAC SSOT
-        league_ids = list(FOOTYSTATS_SEASON_IDS.values())
+        # FootyStats league IDs are seasonal — use HISTORICAL map which covers
+        # all seasons 2019-2026 (not just current, so old backfill dates match).
+        league_ids = list(FOOTYSTATS_HISTORICAL_SEASON_IDS.keys())
         fixtures = await adapter.get_fixtures(date, league_ids=league_ids)
         if fixtures:
             rows = [fx.model_dump() for fx in fixtures]
@@ -3327,17 +3327,23 @@ async def _fetch_footystats_matches(
                     else:
                         flat[k] = str(v) if v is not None else None
                 # Build canonical fixture_id from team names + date.
-                # League comes from flattened league object (league_league_id)
-                # or reverse-map from fixture_id's competition_id prefix.
+                # Use the SAME resolution path as _fetch_footystats_odds: reverse-map
+                # competition_id (numeric FootyStats league ID) via FOOTYSTATS_HISTORICAL_SEASON_IDS
+                # so we get EPL, BUNDESLIGA, etc. (same keys as odds — essential for joins).
                 home_name = flat.get("home_team_name") or flat.get("home_team") or ""
                 away_name = flat.get("away_team_name") or flat.get("away_team") or ""
-                league = flat.get("league_league_id") or flat.get("league_name") or ""
+                league = ""
+                # 1. Try league_league_id (numeric from the flattened league sub-dict)
+                raw_league = flat.get("league_league_id") or flat.get("competition_id") or ""
+                if raw_league and str(raw_league).isdigit():
+                    league = FOOTYSTATS_HISTORICAL_SEASON_IDS.get(int(raw_league), "")
+                # 2. Fallback: parse from fixture_id prefix (same as odds path)
                 if not league:
-                    # Try reverse-mapping from fixture_id prefix (competition_id)
-                    _ft_rev = {str(k): v for k, v in FOOTYSTATS_HISTORICAL_SEASON_IDS.items()}
                     fid = flat.get("fixture_id") or flat.get("source_fixture_id") or ""
                     if ":" in fid:
-                        league = _ft_rev.get(fid.split(":")[0], "")
+                        comp_str = fid.split(":")[0]
+                        if comp_str.isdigit():
+                            league = FOOTYSTATS_HISTORICAL_SEASON_IDS.get(int(comp_str), "")
                 if home_name and away_name:
                     canonical_home = resolve_footystats_team(home_name)
                     canonical_away = resolve_footystats_team(away_name)
