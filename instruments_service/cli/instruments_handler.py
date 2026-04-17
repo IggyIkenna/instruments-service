@@ -20,8 +20,8 @@ from unified_trading_library import (
     ServiceRuntime,
     UnifiedServiceHandler,
     classify_and_emit_error,
+    publish_coordination_event,  # pyright: ignore[reportPrivateImportUsage]
 )
-from unified_trading_library.events import publish_coordination_event
 
 from instruments_service.engine import orchestrator as engine_orchestrator
 from instruments_service.engine.orchestrator import (
