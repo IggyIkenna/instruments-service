@@ -279,6 +279,8 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
                     exc,
                 )
                 continue
+        # Annotate halftime window on all rows
+        results = detect_halftime_window(results)
         logger.info(
             "Fetched %d progressive stat rows for match=%s",
             len(results),
@@ -363,36 +365,259 @@ def _parse_timer_to_seconds(timer: str) -> int:
     return 0
 
 
+def _safe_float(val: object) -> float | None:
+    """Safely convert to float, returning None on failure."""
+    if val is None:
+        return None
+    try:
+        return float(str(val))
+    except (ValueError, TypeError):
+        return None
+
+
+def _extract_team_stats(team_data: dict[str, object]) -> dict[str, object]:
+    """Extract flat stats from an SFI nested team object (teamA/teamB)."""
+    attacks_raw = team_data.get("attacks")
+    shoots_raw = team_data.get("shoots")
+    fouls_raw = team_data.get("fouls")
+    dominance_raw = team_data.get("dominance")
+
+    result: dict[str, object] = {
+        "goals": team_data.get("goal"),
+        "possession": team_data.get("possession"),
+        "corners": team_data.get("corners"),
+        "substitutions": team_data.get("substitutions"),
+        "penalties": team_data.get("penalties"),
+        "xg": team_data.get("xG"),
+    }
+
+    # Attacks: {"n": 45, "d": 17}
+    if isinstance(attacks_raw, dict):
+        result["attacks"] = attacks_raw.get("n")
+        result["dangerous_attacks"] = attacks_raw.get("d")
+
+    # Shoots: {"t": "6", "on": 4, "off": 2, "g_a": null}
+    if isinstance(shoots_raw, dict):
+        result["shoots_total"] = shoots_raw.get("t")
+        result["shoots_on_target"] = shoots_raw.get("on")
+        result["shoots_off_target"] = shoots_raw.get("off")
+
+    # Fouls: {"t": null, "y_c": 1, "y_t_r_c": null, "r_c": 0}
+    if isinstance(fouls_raw, dict):
+        result["fouls"] = fouls_raw.get("t")
+        result["yellow_cards"] = fouls_raw.get("y_c")
+        result["red_cards"] = fouls_raw.get("r_c")
+
+    # Dominance: {"index": "52.3", "avg_2_5": "48.1"}
+    if isinstance(dominance_raw, dict):
+        result["dominance_index"] = dominance_raw.get("index")
+        result["dominance_avg"] = dominance_raw.get("avg_2_5")
+
+    return result
+
+
+def _extract_odds(odds_data: dict[str, object]) -> dict[str, float | None]:
+    """Extract flat odds from an SFI nested odds object."""
+    result: dict[str, float | None] = {}
+
+    # 1X2: {"1": "1.181", "X": "6.000", "2": "13.000"}
+    x1x2 = odds_data.get("1X2")
+    if isinstance(x1x2, dict):
+        result["odds_1x2_home"] = _safe_float(x1x2.get("1"))
+        result["odds_1x2_draw"] = _safe_float(x1x2.get("X"))
+        result["odds_1x2_away"] = _safe_float(x1x2.get("2"))
+
+    # Over/Under: {"o": "1.850", "u": "1.950", "v": "4.5"}
+    ou = odds_data.get("over_under")
+    if isinstance(ou, dict):
+        result["odds_ou_over"] = _safe_float(ou.get("o"))
+        result["odds_ou_under"] = _safe_float(ou.get("u"))
+        result["odds_ou_line"] = _safe_float(ou.get("v"))
+
+    # Asian Handicap: {"1": "1.875", "2": "1.925", "v": "-0.5"}
+    ah = odds_data.get("asian_handicap")
+    if isinstance(ah, dict):
+        result["odds_ah_home"] = _safe_float(ah.get("1"))
+        result["odds_ah_away"] = _safe_float(ah.get("2"))
+        result["odds_ah_line"] = _safe_float(ah.get("v"))
+
+    # Asian Corner: {"o": "2.025", "u": "1.775", "v": "6.5"}
+    ac = odds_data.get("asian_corner")
+    if isinstance(ac, dict):
+        result["odds_asian_corner_over"] = _safe_float(ac.get("o"))
+        result["odds_asian_corner_under"] = _safe_float(ac.get("u"))
+        result["odds_asian_corner_line"] = _safe_float(ac.get("v"))
+
+    return result
+
+
 def _normalize_sfi_progressive_stat(
     item: dict[str, object],
     match_id: str,
 ) -> CanonicalProgressiveStats:
     """Map an SFI progressive stats row to CanonicalProgressiveStats.
 
+    Handles two formats:
+    1. Nested SFI format with teamA/teamB/odds sub-objects
+    2. Pre-flattened format with top-level stat fields
+
     SFI progressive data includes per-team stats at 30-second intervals:
-    goals, possession, shots, corners, fouls, cards, dangerous attacks.
+    goals, possession, shots, corners, fouls, cards, dangerous attacks,
+    xG, dominance index, and in-play odds.
     """
     timer = str(item.get("timer", "00:00"))
     timer_seconds = _parse_timer_to_seconds(timer)
     team = str(item.get("team", ""))
 
+    # --- Extract nested team data if present (SFI live format) ---
+    team_a_raw = item.get("teamA")
+    team_b_raw = item.get("teamB")
+    odds_raw = item.get("odds")
+
+    home_stats: dict[str, object] = {}
+    away_stats: dict[str, object] = {}
+    odds_fields: dict[str, float | None] = {}
+
+    if isinstance(team_a_raw, dict):
+        home_stats = _extract_team_stats(team_a_raw)
+    if isinstance(team_b_raw, dict):
+        away_stats = _extract_team_stats(team_b_raw)
+    if isinstance(odds_raw, dict):
+        odds_fields = _extract_odds(odds_raw)
+
+    # --- Flat fields (pre-flattened format or fallback) ---
     possession_raw = item.get("possession")
-    possession_pct = float(str(possession_raw)) if possession_raw is not None else None
+    possession_pct = _safe_float(possession_raw)
+
+    # Build shots from nested shoots data or flat fields
+    shots_on = _safe_int(item.get("shots_on_target"))
+    shots_off = _safe_int(item.get("shots_off_target"))
 
     return CanonicalProgressiveStats(
         fixture_id=match_id,
         timer_seconds=timer_seconds,
         team=team,
+        # --- Core stats (flat format fallback) ---
         goals=_safe_int(item.get("goals")),
         possession_pct=possession_pct,
         dangerous_attacks=_safe_int(item.get("dangerous_attacks")),
         attacks=_safe_int(item.get("attacks")),
-        shots_on_target=_safe_int(item.get("shots_on_target")),
-        shots_off_target=_safe_int(item.get("shots_off_target")),
+        shots_on_target=shots_on,
+        shots_off_target=shots_off,
         corners=_safe_int(item.get("corners")),
         fouls=_safe_int(item.get("fouls")),
         yellow_cards=_safe_int(item.get("yellow_cards")),
         red_cards=_safe_int(item.get("red_cards")),
         substitutions=_safe_int(item.get("substitutions")),
-        dominance_pct=float(str(item.get("dominance"))) if item.get("dominance") is not None else None,
+        dominance_pct=_safe_float(item.get("dominance")),
+        # --- Enhanced: xG per team ---
+        xg_home=_safe_float(home_stats.get("xg")),
+        xg_away=_safe_float(away_stats.get("xg")),
+        # --- Enhanced: Dominance per team ---
+        dominance_index_home=_safe_float(home_stats.get("dominance_index")),
+        dominance_index_away=_safe_float(away_stats.get("dominance_index")),
+        dominance_avg_home=_safe_float(home_stats.get("dominance_avg")),
+        dominance_avg_away=_safe_float(away_stats.get("dominance_avg")),
+        # --- Enhanced: Attacks split ---
+        attacks_normal=_safe_int(home_stats.get("attacks")),
+        attacks_dangerous=_safe_int(home_stats.get("dangerous_attacks")),
+        attacks_normal_away=_safe_int(away_stats.get("attacks")),
+        attacks_dangerous_away=_safe_int(away_stats.get("dangerous_attacks")),
+        # --- Enhanced: Shoots breakdown (from nested teamA) ---
+        shoots_total=_safe_int(home_stats.get("shoots_total")),
+        shoots_on_target=_safe_int(home_stats.get("shoots_on_target")),
+        shoots_off_target=_safe_int(home_stats.get("shoots_off_target")),
+        # --- Enhanced: In-play odds ---
+        odds_1x2_home=odds_fields.get("odds_1x2_home"),
+        odds_1x2_draw=odds_fields.get("odds_1x2_draw"),
+        odds_1x2_away=odds_fields.get("odds_1x2_away"),
+        odds_ou_over=odds_fields.get("odds_ou_over"),
+        odds_ou_under=odds_fields.get("odds_ou_under"),
+        odds_ou_line=odds_fields.get("odds_ou_line"),
+        odds_ah_home=odds_fields.get("odds_ah_home"),
+        odds_ah_away=odds_fields.get("odds_ah_away"),
+        odds_ah_line=odds_fields.get("odds_ah_line"),
+        odds_asian_corner_over=odds_fields.get("odds_asian_corner_over"),
+        odds_asian_corner_under=odds_fields.get("odds_asian_corner_under"),
+        odds_asian_corner_line=odds_fields.get("odds_asian_corner_line"),
+        # ht_start_timer / ht_end_timer are set post-hoc by detect_halftime_window()
     )
+
+
+def _stats_fingerprint(row: CanonicalProgressiveStats) -> tuple[object, ...]:
+    """Build a fingerprint from stats fields for halftime freeze detection."""
+    return (
+        row.goals,
+        row.shots_on_target,
+        row.shots_off_target,
+        row.corners,
+        row.attacks,
+        row.dangerous_attacks,
+    )
+
+
+_MIN_HALFTIME_RUN = 5
+_HALFTIME_SEARCH_START_SECONDS = 43 * 60  # 43:00
+
+
+def detect_halftime_window(
+    rows: list[CanonicalProgressiveStats],
+) -> list[CanonicalProgressiveStats]:
+    """Detect halftime freeze and annotate all rows with ht_start_timer / ht_end_timer.
+
+    Algorithm:
+    1. Sort rows by timer_seconds.
+    2. Build a stats fingerprint per entry (goals + shots + corners + attacks).
+    3. Find the first run of 5+ consecutive entries with identical fingerprints
+       after timer >= 43*60 seconds (43:00).
+    4. ht_start_timer = timer_seconds of the first entry in the run.
+    5. ht_end_timer = timer_seconds of the first entry after the run that changes.
+    6. Write these values on EVERY row (so downstream can filter easily).
+
+    Since CanonicalProgressiveStats is frozen, returns new instances with
+    ht_start_timer and ht_end_timer set.
+    """
+    if not rows:
+        return rows
+
+    sorted_rows = sorted(rows, key=lambda r: r.timer_seconds)
+
+    # Find halftime freeze
+    ht_start: int | None = None
+    ht_end: int | None = None
+
+    run_start_idx: int | None = None
+    run_length = 1
+    prev_fp: tuple[object, ...] | None = None
+
+    for idx, row in enumerate(sorted_rows):
+        if row.timer_seconds < _HALFTIME_SEARCH_START_SECONDS:
+            prev_fp = _stats_fingerprint(row)
+            run_start_idx = idx
+            run_length = 1
+            continue
+
+        fp = _stats_fingerprint(row)
+        if fp == prev_fp:
+            run_length += 1
+        else:
+            # Check if the just-ended run was long enough
+            if run_length >= _MIN_HALFTIME_RUN and run_start_idx is not None:
+                ht_start = sorted_rows[run_start_idx].timer_seconds
+                ht_end = row.timer_seconds
+                break
+            run_start_idx = idx
+            run_length = 1
+
+        prev_fp = fp
+
+    # Edge case: run extends to end of data (no change after freeze)
+    if ht_start is None and run_length >= _MIN_HALFTIME_RUN and run_start_idx is not None:
+        ht_start = sorted_rows[run_start_idx].timer_seconds
+        # ht_end remains None — halftime not yet ended in data
+
+    if ht_start is None:
+        return rows  # No halftime detected, return unchanged
+
+    # Rebuild all rows with halftime annotations
+    return [row.model_copy(update={"ht_start_timer": ht_start, "ht_end_timer": ht_end}) for row in rows]

@@ -102,6 +102,15 @@ _SAMPLE_MATCH_RAW: dict[str, object] = {
     "pre_match_away_ppg": 1.5,
     "pre_match_team_a_overall_ppg": 1.9,
     "pre_match_team_b_overall_ppg": 1.4,
+    # Odds fields (subset — real API has 68)
+    "odds_ft_1": 2.10,
+    "odds_ft_x": 3.40,
+    "odds_ft_2": 3.50,
+    "odds_ft_over25": 1.85,
+    "odds_ft_under25": 1.95,
+    "odds_btts_yes": 1.75,
+    "odds_btts_no": 2.05,
+    "odds_corners_over_95": 2.10,
 }
 
 
@@ -271,6 +280,60 @@ class TestFootystatsAdapterGetPredictions:
             preds = await adapter.get_fixture_predictions("2026-04-01", league_ids=[9999])
 
         assert preds == []
+
+
+class TestFootystatsAdapterOddsSnapshot:
+    """Test get_fixture_odds_snapshot method."""
+
+    @pytest.mark.asyncio
+    async def test_get_odds_snapshot_success(self) -> None:
+        adapter = FootystatsAdapter(api_key="test-key")
+        mock_session = _make_aiohttp_mock({"data": [_SAMPLE_MATCH_RAW]})
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            odds = await adapter.get_fixture_odds_snapshot("2026-04-01")
+
+        assert len(odds) == 1
+        row = odds[0]
+        assert row["odds_ft_1"] == 2.10
+        assert row["odds_ft_x"] == 3.40
+        assert row["odds_ft_2"] == 3.50
+        assert row["odds_btts_yes"] == 1.75
+        assert row["odds_ft_over25"] == 1.85
+        assert row["fixture_id"]
+        assert row["source"] == "footystats"
+        assert row["home_team"] == "Arsenal"
+        assert row["away_team"] == "Chelsea"
+
+    @pytest.mark.asyncio
+    async def test_get_odds_snapshot_empty_when_no_odds(self) -> None:
+        raw_no_odds = {
+            "id": 99,
+            "date_unix": 1711900800,
+            "competition_id": 1,
+            "season": "2025",
+            "homeID": 1,
+            "awayID": 2,
+            "home_name": "TeamA",
+            "away_name": "TeamB",
+        }
+        adapter = FootystatsAdapter(api_key="test-key")
+        mock_session = _make_aiohttp_mock({"data": [raw_no_odds]})
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            odds = await adapter.get_fixture_odds_snapshot("2026-04-01")
+
+        assert odds == []
+
+    @pytest.mark.asyncio
+    async def test_get_odds_snapshot_league_filter(self) -> None:
+        adapter = FootystatsAdapter(api_key="test-key")
+        mock_session = _make_aiohttp_mock({"data": [_SAMPLE_MATCH_RAW]})
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            odds = await adapter.get_fixture_odds_snapshot("2026-04-01", league_ids=[9999])
+
+        assert odds == []
 
 
 class TestFootystatsAdapterOther:
