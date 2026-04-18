@@ -13,7 +13,12 @@ from datetime import datetime
 from decimal import Decimal
 
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
-from unified_api_contracts.sports import CanonicalFixture
+from unified_api_contracts.sports import (
+    CanonicalFixture,
+    build_fixture_id,
+    build_league_id,
+    build_team_id,
+)
 
 from ....base_adapter import BaseReferenceDataAdapter
 from ....schemas import (
@@ -141,12 +146,6 @@ def _canonical_fixture_to_instrument(
     fixture: CanonicalFixture,
 ) -> InstrumentRecord | None:
     """Convert a CanonicalFixture from the sports adapter to an InstrumentRecord."""
-    from unified_api_contracts.canonical.domain.sports.canonical_ids import (
-        build_fixture_id,
-        build_league_id,
-        build_team_id,
-    )
-
     home_name = fixture.home_team.name if fixture.home_team and fixture.home_team.name else ""
     away_name = fixture.away_team.name if fixture.away_team and fixture.away_team.name else ""
     raw_symbol = f"{home_name} vs {away_name}" if home_name and away_name else f"fixture_{fixture.fixture_id}"
