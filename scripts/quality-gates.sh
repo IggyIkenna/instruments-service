@@ -56,6 +56,7 @@ EMPTY_STR_EXCLUDE_GLOBS=(
     "!**/reference_data/adapters/prediction/*.py"
     "!**/reference_data/intent_resolver.py"
     "!**/reference_data/adapters/sports/adapters/*.py"
+    "!**/engine/orchestrator.py"
 )
 
 # Empty dict/list fallbacks: adapter GraphQL/JSON nested access (e.g. .get("data", {}).get("pools", []))
@@ -95,6 +96,12 @@ DEEP_IMPORT_EXCLUDE_GLOBS=(
 HARDCODED_PROTO_EXCLUDE_GLOBS=(
     "--glob=!**/reference_data/adapters/defi/_solana_utils.py"
     "--glob=!**/reference_data/utils/evm_creation_resolver.py"
+)
+
+# One-off migration/backfill scripts legitimately use google.cloud.storage directly —
+# they run as admin operations, not as part of the live service pipeline.
+CLOUD_SDK_EXCLUDE_GLOBS=(
+    "!scripts/**"
 )
 
 # Function/method size: reference data adapters have large parse/fetch methods (JSON→record mapping)

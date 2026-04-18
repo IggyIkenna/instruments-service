@@ -544,7 +544,7 @@ def _normalize_sfi_progressive_stat(
     )
 
 
-def _stats_fingerprint(row: CanonicalProgressiveStats) -> tuple[object, ...]:
+def _stats_signature(row: CanonicalProgressiveStats) -> tuple[object, ...]:
     """Build a fingerprint from stats fields for halftime freeze detection."""
     return (
         row.goals,
@@ -592,12 +592,12 @@ def detect_halftime_window(
 
     for idx, row in enumerate(sorted_rows):
         if row.timer_seconds < _HALFTIME_SEARCH_START_SECONDS:
-            prev_fp = _stats_fingerprint(row)
+            prev_fp = _stats_signature(row)
             run_start_idx = idx
             run_length = 1
             continue
 
-        fp = _stats_fingerprint(row)
+        fp = _stats_signature(row)
         if fp == prev_fp:
             run_length += 1
         else:
