@@ -25,6 +25,7 @@ from unified_trading_library import (
 
 from instruments_service.engine import orchestrator as engine_orchestrator
 from instruments_service.engine.orchestrator import (
+    _get_instruments_bucket,
     clear_defi_universe_cache,
     earliest_venue_date,
     get_venues_for_categories,
@@ -157,8 +158,6 @@ class InstrumentsHandler(UnifiedServiceHandler):
 
     async def cleanup(self) -> None:
         """Flush any buffered manifest writes to GCS at end of batch."""
-        from instruments_service.engine.orchestrator import _get_instruments_bucket
-
         flushed: list[str] = []
         for category in ("SPORTS", "CEFI", "DEFI", "TRADFI"):
             try:

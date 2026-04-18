@@ -20,7 +20,7 @@ from instruments_service.reference_data.adapters.sports.adapters.soccerfootball_
     _parse_timer_to_seconds,
     _safe_float,
     _safe_int,
-    _stats_fingerprint,
+    _stats_signature,
     detect_halftime_window,
 )
 
@@ -513,7 +513,7 @@ class TestSFIHelpers:
         assert result.goals == 1
         assert result.possession_pct == 60.0
 
-    def test_stats_fingerprint(self) -> None:
+    def test_stats_signature(self) -> None:
         from unified_api_contracts.sports import CanonicalProgressiveStats
 
         row = CanonicalProgressiveStats(
@@ -527,7 +527,7 @@ class TestSFIHelpers:
             attacks=20,
             dangerous_attacks=10,
         )
-        fp = _stats_fingerprint(row)
+        fp = _stats_signature(row)
         assert fp == (1, 3, 2, 4, 20, 10)
 
 

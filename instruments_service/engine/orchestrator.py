@@ -29,6 +29,7 @@ import io
 import json
 import logging
 import re
+import tempfile
 from datetime import UTC, datetime, timedelta
 from datetime import date as date_type
 
@@ -2164,8 +2165,8 @@ def _write_venue(
     (1s, 2s) to avoid wasting the expensive fetch work that produced this data.
 
     If ``manifest`` is provided, adds the catalogue record to the shared writer
-    (caller flushes once after all venues). Otherwise falls back to per-venue
-    ``_write_catalogue_record`` for backward compatibility.
+    (caller flushes once after all venues). Otherwise uses the per-venue
+    ``_write_catalogue_record`` path.
     """
     import time as _time
 
@@ -2327,7 +2328,7 @@ def _read_fixture_ids_from_gcs(bucket: str, date: str) -> list[int]:
         if not blob.exists():
             logger.debug("No fixtures parquet at gs://%s/%s", bucket, prefix)
             return []
-        local = f"/tmp/_fixture_ids_{date}.parquet"
+        local = f"{tempfile.gettempdir()}/_fixture_ids_{date}.parquet"
         blob.download_to_filename(local)
         df = pd.read_parquet(local)
         completed = {"FT", "AET", "PEN"}
@@ -2363,7 +2364,7 @@ def _build_fixture_league_map_from_gcs(bucket: str, date: str) -> dict[str, str]
         if not blob.exists():
             logger.debug("No fixtures parquet at gs://%s/%s for league mapping", bucket, prefix)
             return {}
-        local = f"/tmp/_fixture_league_map_{date}.parquet"
+        local = f"{tempfile.gettempdir()}/_fixture_league_map_{date}.parquet"
         blob.download_to_filename(local)
         df = pd.read_parquet(local)
         result: dict[str, str] = {}
@@ -4043,7 +4044,7 @@ def _load_venue_coordinates(bucket: str) -> dict[str, tuple[float, float]]:
         if not blob.exists():
             logger.info("Weather: venues.parquet not found at gs://%s/%s", bucket, venues_path)
             return {}
-        local = "/tmp/_weather_venues.parquet"
+        local = f"{tempfile.gettempdir()}/_weather_venues.parquet"
         blob.download_to_filename(local)
         venues_df = pd.read_parquet(local)
         if "venue_id" not in venues_df.columns:
@@ -4084,7 +4085,7 @@ def _extract_fixture_venue_ids(bucket: str, date: str) -> list[str]:
         if not blob.exists():
             logger.debug("Weather: no fixtures parquet at gs://%s/%s", bucket, prefix)
             return []
-        local = f"/tmp/_weather_fixtures_{date}.parquet"
+        local = f"{tempfile.gettempdir()}/_weather_fixtures_{date}.parquet"
         blob.download_to_filename(local)
         df = pd.read_parquet(local)
         venue_ids: list[str] = []
