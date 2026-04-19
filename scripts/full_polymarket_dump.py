@@ -18,13 +18,54 @@ from __future__ import annotations
 import argparse
 import logging
 import time
+from datetime import UTC, datetime
 from datetime import date as date_type
 
 import pandas as pd
 import requests
+from unified_api_contracts import classify_venue_error
+from unified_trading_library import (
+    CaptureStatus,
+    ManifestRow,
+    ManifestWriter,
+    UnifiedCloudConfig,
+    get_storage_client,
+    log_event,
+    setup_events,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _should_skip_polymarket_shard(
+    manifest: ManifestWriter,
+    *,
+    end_date: str,
+    market: str,
+    force: bool,
+) -> bool:
+    """Honest-coverage pre-flight: skip if shard is captured / empty_confirmed.
+
+    See ``honest_coverage_metrics_2026_04_19`` plan + ``_should_skip_shard``
+    in ``instruments_service.engine.orchestrator``.
+    """
+    if force:
+        return False
+    prev: ManifestRow | None = manifest.lookup(
+        {
+            "date": end_date,
+            "venue": "POLYMARKET",
+            "data_type": market,
+        }
+    )
+    if prev is None:
+        return False
+    return prev.capture_status in (
+        CaptureStatus.CAPTURED.value,
+        CaptureStatus.EMPTY_CONFIRMED.value,
+    )
+
 
 _CLOB = "https://clob.polymarket.com"
 _BATCH_SIZE = 1000  # CLOB supports up to 1000 per page
@@ -69,7 +110,17 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Preview market counts without writing to GCS")
     parser.add_argument("--min-date", default="2025-03-01", help="Only include markets ending after this date")
     parser.add_argument("--max-pages", type=int, default=1000, help="Safety cap on number of pages to scan")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=(
+            "Re-attempt every (date, market) shard even if the manifest already "
+            "shows captured / empty_confirmed.  Default skips already-attempted "
+            "shards (honest-coverage pre-flight)."
+        ),
+    )
     args = parser.parse_args()
+    setup_events(service_name="instruments-service")
 
     logger.info("Scanning CLOB API (min_date=%s, max_pages=%d)...", args.min_date, args.max_pages)
 
@@ -166,7 +217,6 @@ def main() -> None:
 
     # Phase 3: Write per-date instrument files
     from unified_api_contracts import PolymarketGammaMarket
-    from unified_trading_library import ManifestWriter, UnifiedCloudConfig, get_storage_client
 
     client = get_storage_client()
     project_id = UnifiedCloudConfig().gcp_project_id
@@ -180,42 +230,91 @@ def main() -> None:
         if not end_date or end_date < args.min_date:
             continue
 
-        # Validate through PolymarketGammaMarket — same pipeline as the adapter
+        # Honest-coverage attempt-stamp for this (date, *) shard family.  We
+        # use a single timestamp for every per-market split below so they all
+        # share an attempt epoch.  Per-market pre-flight runs in the inner
+        # loop after we know the market shard label.
+        attempt_ts = datetime.now(UTC)
+
+        # Validate through PolymarketGammaMarket — same pipeline as the adapter.
+        # Per-shard isolation: catch validation errors per-row and continue;
+        # never raise out of the per-date loop.
         valid_rows: list[dict[str, object]] = []
         for _, row in group.iterrows():
             raw = row.to_dict()
             try:
                 market = PolymarketGammaMarket.model_validate(raw)
                 valid_rows.append(market.model_dump(by_alias=False))
-            except Exception:
+            except Exception as exc:
+                err_code = type(exc).__name__
+                classification = classify_venue_error("polymarket", err_code)
+                _err = classification.error_code if classification is not None else err_code
+                log_event(
+                    "ADAPTER_FETCH_FAILED",
+                    details={
+                        "venue": "POLYMARKET",
+                        "endpoint": "clob_market_validate",
+                        "date": end_date,
+                        "error_code": _err,
+                    },
+                )
                 continue
 
         if not valid_rows:
+            # Honest-coverage: every row failed validation OR the date had
+            # zero markets.  We attempted, so write empty_confirmed at the
+            # date level (no market shard known).  Operator can re-run with
+            # --force to retry.
+            manifest.record_empty(
+                row_key={
+                    "date": str(end_date),
+                    "venue": "POLYMARKET",
+                    "data_type": "ALL",
+                },
+                attempted_at=attempt_ts,
+            )
             dates_skipped += 1
             continue
 
         inst_df = pd.DataFrame(valid_rows)
 
-        # Write combined file
+        # Write per-market split using question text to identify market shard.
+        # Since CLOB doesn't have base_asset, derive market from question.
+        inst_df["_market"] = inst_df.apply(_classify_market_from_question, axis=1)
+
+        # Pre-flight per (date, market) shard so re-runs honour skip semantics.
+        # We compute the full set of markets for this date FIRST, then filter
+        # out already-attempted ones unless --force.
+        all_markets_today = sorted({str(m) for m in inst_df["_market"].unique()})
+        markets_to_write = [
+            m
+            for m in all_markets_today
+            if not _should_skip_polymarket_shard(manifest, end_date=str(end_date), market=m, force=args.force)
+        ]
+        if not markets_to_write:
+            dates_skipped += 1
+            continue
+
+        # Write combined file (always, since at least one market shard is being attempted)
         path = f"instrument_availability/by_date/day={end_date}/venue=POLYMARKET/instruments.parquet"
         buf = inst_df.to_parquet(index=False)
         client.upload_bytes(bucket, path, buf, content_type="application/octet-stream")
 
-        # Write per-market split using question text to identify market shard
-        # Since CLOB doesn't have base_asset, derive market from question
-        inst_df["_market"] = inst_df.apply(_classify_market_from_question, axis=1)
         for mkt, mkt_df in inst_df.groupby("_market"):
+            mkt_str = str(mkt)
+            if mkt_str not in markets_to_write:
+                continue
             mkt_path = (
-                f"instrument_availability/by_date/day={end_date}/venue=POLYMARKET/market={mkt}/instruments.parquet"
+                f"instrument_availability/by_date/day={end_date}/venue=POLYMARKET/market={mkt_str}/instruments.parquet"
             )
             mkt_buf = mkt_df.drop(columns=["_market"]).to_parquet(index=False)
             client.upload_bytes(bucket, mkt_path, mkt_buf, content_type="application/octet-stream")
 
             manifest.add(
-                processing_date=date_type.fromisoformat(end_date),
+                processing_date=date_type.fromisoformat(str(end_date)),
                 row_count=len(mkt_df),
                 venue="POLYMARKET",
-                data_type=str(mkt),
+                data_type=mkt_str,
             )
 
         dates_written += 1

@@ -9,7 +9,8 @@
 #   4. Add LOCAL_DEPS entries if your service has local editable deps (e.g. unified-trading-library)
 SERVICE_NAME="instruments-service"
 SOURCE_DIR="instruments_service"
-MIN_COVERAGE=75  # lowered: block resolver + sports orchestrator changes added untested branches (76.76% actual)
+# ratcheted 2026-04-19 from coverage.xml (was 75)
+MIN_COVERAGE=78
 RUN_INTEGRATION=false
 PYTEST_WORKERS=${PYTEST_WORKERS:-2}
 LOCAL_DEPS=()
