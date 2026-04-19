@@ -42,6 +42,7 @@ from unified_api_contracts import (
     DEX_VENUE_KEYWORDS,
     EPL_TEAM_ALIASES,
     VenueMapping,
+    classify_venue_error,
     get_prediction_leagues,
 )
 from unified_api_contracts.internal import InstrumentRecord, validate_instrument_records
@@ -55,8 +56,10 @@ from unified_api_contracts.sports import (
     is_any_league_refresh_date,
 )
 from unified_trading_library import (
+    CaptureStatus,
     DataSink,
     DomainValidationService,
+    ManifestRow,
     ManifestWriter,
     SamplingService,
     check_shard_freshness,
@@ -247,6 +250,54 @@ def _get_venue_epoch(venue: str) -> str | None:
         if venue.startswith(prefix):
             return epoch
     return None
+
+
+# ---------------------------------------------------------------------------
+# Honest-coverage helpers (Phase B, plan: honest_coverage_metrics_2026_04_19)
+# ---------------------------------------------------------------------------
+# Adapters that hit event-driven providers (Polymarket, Kalshi, FootyStats,
+# Understat, SFI fixtures) MUST distinguish "we never tried" from "we tried
+# and there was nothing".  These helpers wrap the pre-flight skip + venue
+# error classification so per-shard call sites stay compact.
+
+
+def _should_skip_shard(
+    manifest: ManifestWriter,
+    *,
+    row_key: dict[str, str],
+    force: bool,
+) -> bool:
+    """Return True if this shard already has a captured/empty_confirmed row.
+
+    ``attempted_failed`` rows are NOT skipped — operator can decide via
+    inspection whether the underlying error has been resolved.  ``force``
+    bypasses the skip entirely (re-attempt the shard).
+    """
+    if force:
+        return False
+    prev: ManifestRow | None = manifest.lookup(row_key)
+    if prev is None:
+        return False
+    return prev.capture_status in (
+        CaptureStatus.CAPTURED.value,
+        CaptureStatus.EMPTY_CONFIRMED.value,
+    )
+
+
+def _classify_adapter_failure(exc: Exception, venue: str) -> str:
+    """Return a stable category string for ``record_failed`` from an exception.
+
+    Honest-coverage manifest rows store a categorical failure code, not a
+    raw exception message.  We try UAC ``classify_venue_error`` first using
+    the exception's class name as the error code; if the venue/code pair is
+    not known to UAC, we fall back to the exception class name itself so
+    downstream dashboards can still group.
+    """
+    error_code = type(exc).__name__
+    classification = classify_venue_error(venue, error_code)
+    if classification is not None:
+        return classification.error_code
+    return error_code
 
 
 def _get_defi_manifest_high_watermarks() -> dict[str, int]:
@@ -737,7 +788,7 @@ async def process_instruments(
             if sports_provider == "OPEN_METEO":
                 result = await _fetch_weather_data(date=date, bucket=bucket, api_key=_keys.get("open_meteo"))
             elif sports_provider == "UNDERSTAT":
-                result = await _fetch_understat_xg(date=date, bucket=bucket)
+                result = await _fetch_understat_xg(date=date, bucket=bucket, force=redo_all)
             elif sports_provider == "FOOTYSTATS":
                 fs_key = _keys.get("footystats")
                 if not fs_key:
@@ -745,13 +796,17 @@ async def process_instruments(
                     return {}
                 _ef = sports_entity_filter
                 if not _ef or _ef == "PREDICTIONS":
-                    pred_result = await _fetch_footystats_predictions(date=date, api_key=fs_key, bucket=bucket)
+                    pred_result = await _fetch_footystats_predictions(
+                        date=date, api_key=fs_key, bucket=bucket, force=redo_all
+                    )
                     result.update(pred_result)
                 if not _ef or _ef == "MATCHES":
-                    match_result = await _fetch_footystats_matches(date=date, api_key=fs_key, bucket=bucket)
+                    match_result = await _fetch_footystats_matches(
+                        date=date, api_key=fs_key, bucket=bucket, force=redo_all
+                    )
                     result.update(match_result)
                 if not _ef or _ef == "ODDS":
-                    odds_result = await _fetch_footystats_odds(date=date, api_key=fs_key, bucket=bucket)
+                    odds_result = await _fetch_footystats_odds(date=date, api_key=fs_key, bucket=bucket, force=redo_all)
                     result.update(odds_result)
             elif sports_provider == "TRANSFERMARKT":
                 tm_key = _keys.get("transfermarkt")
@@ -1007,15 +1062,20 @@ async def process_instruments(
                             row_count=row_count,
                             data_type=entity_name.upper(),
                         )
-                # Write blank entries for per-fixture entities that had 0 fixtures
+                # Honest-coverage: per-fixture entities on a 0-fixture date are
+                # legitimately empty — record_empty so attempt_coverage_pct lifts
+                # while capture_coverage_pct stays accurate.
+                _enr_attempt_ts = datetime.now(UTC)
                 if not gcs_fixture_ids:
                     for pf_entity in _sports_per_fixture_entities:
                         entity_short = pf_entity.replace("API_FOOTBALL_", "").lower()
                         if entity_short not in sports_ref_counts:
-                            sports_manifest.add(
-                                processing_date=date_type.fromisoformat(date),
-                                row_count=0,
-                                data_type=pf_entity.replace("API_FOOTBALL_", "").upper(),
+                            sports_manifest.record_empty(
+                                row_key={
+                                    "date": date,
+                                    "data_type": pf_entity.replace("API_FOOTBALL_", "").upper(),
+                                },
+                                attempted_at=_enr_attempt_ts,
                             )
                 sports_manifest.write()
                 logger.info(
@@ -1734,6 +1794,7 @@ async def process_instruments(
                         date=date,
                         api_key=footystats_key,
                         bucket=bucket,
+                        force=redo_all,
                     )
                     for k, v in pred_counts.items():
                         counts[k] = counts.get(k, 0) + v
@@ -1751,6 +1812,7 @@ async def process_instruments(
                         date=date,
                         api_key=footystats_key,
                         bucket=bucket,
+                        force=redo_all,
                     )
                     for k, v in match_counts.items():
                         counts[k] = counts.get(k, 0) + v
@@ -1768,6 +1830,7 @@ async def process_instruments(
                         date=date,
                         api_key=footystats_key,
                         bucket=bucket,
+                        force=redo_all,
                     )
                     for k, v in odds_counts.items():
                         counts[k] = counts.get(k, 0) + v
@@ -1781,7 +1844,7 @@ async def process_instruments(
 
         if "UNDERSTAT" in _active_venues_set and _entity_wanted("XG"):
             try:
-                xg_counts = await _fetch_understat_xg(date=date, bucket=bucket)
+                xg_counts = await _fetch_understat_xg(date=date, bucket=bucket, force=redo_all)
                 for k, v in xg_counts.items():
                     counts[k] = counts.get(k, 0) + v
             except Exception as exc:
@@ -3105,6 +3168,8 @@ async def _fetch_footystats_predictions(
     date: str,
     api_key: str,
     bucket: str,
+    *,
+    force: bool = False,
 ) -> dict[str, int]:
     """Fetch FootyStats predictive data and write to GCS as a separate entity.
 
@@ -3121,6 +3186,17 @@ async def _fetch_footystats_predictions(
     counts: dict[str, int] = {}
     fetched_at_ts = pd.Timestamp.now(tz="UTC")
     fetched_at_hour = fetched_at_ts.strftime("%Y-%m-%dT%H")
+
+    # Honest-coverage pre-flight + attempt-stamp.  See module-level helpers.
+    pred_manifest = ManifestWriter(
+        service_name="instruments-service",
+        catalogue_bucket=bucket,
+    )
+    _row_key: dict[str, str] = {"date": date, "data_type": "PREDICTIONS"}
+    if _should_skip_shard(pred_manifest, row_key=_row_key, force=force):
+        logger.info("FootyStats predictions: skipping date=%s (manifest pre-flight)", date)
+        return counts
+    attempt_ts = datetime.now(UTC)
 
     try:
         from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
@@ -3170,10 +3246,6 @@ async def _fetch_footystats_predictions(
             counts["footystats_predictions"] = len(df)
 
             # Write per-league partitioned files when canonical_fixture_id is available.
-            pred_manifest = ManifestWriter(
-                service_name="instruments-service",
-                catalogue_bucket=bucket,
-            )
             if "canonical_fixture_id" in df.columns:
                 df["_pred_league"] = df["canonical_fixture_id"].str.split(":").str[0]
                 _has_league = df["_pred_league"].notna() & (df["_pred_league"] != "")
@@ -3243,6 +3315,9 @@ async def _fetch_footystats_predictions(
             )
         else:
             logger.info("FootyStats predictions: no predictive data for date=%s", date)
+            # Honest-coverage: legitimate empty (no predictions for this date).
+            pred_manifest.record_empty(row_key=_row_key, attempted_at=attempt_ts)
+            pred_manifest.write()
     except Exception as exc:
         classify_and_emit_error(
             exc,
@@ -3250,6 +3325,25 @@ async def _fetch_footystats_predictions(
             operation="footystats_predictions_fetch",
             shard=date,
         )
+        _err_code = _classify_adapter_failure(exc, "footystats")
+        log_event(
+            "ADAPTER_FETCH_FAILED",
+            details={
+                "venue": "footystats",
+                "endpoint": "get_fixture_predictions",
+                "date": date,
+                "error": str(exc),
+                "error_code": _err_code,
+            },
+        )
+        # Shard isolation: do not raise; record the failed attempt.
+        pred_manifest.record_failed(
+            row_key=_row_key,
+            error=_err_code,
+            attempted_at=attempt_ts,
+        )
+        with contextlib.suppress(Exception):
+            pred_manifest.write()
 
     return counts
 
@@ -3309,6 +3403,8 @@ async def _fetch_footystats_matches(
     date: str,
     api_key: str,
     bucket: str,
+    *,
+    force: bool = False,
 ) -> dict[str, int]:
     """Fetch FootyStats match data and write to GCS.
 
@@ -3322,6 +3418,14 @@ async def _fetch_footystats_matches(
     adapter = create_sports_reference_adapter("footystats", api_key=api_key)
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
+
+    # Honest-coverage pre-flight + attempt-stamp.
+    _ft_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+    _row_key: dict[str, str] = {"date": date, "data_type": "MATCHES"}
+    if _should_skip_shard(_ft_manifest, row_key=_row_key, force=force):
+        logger.info("FootyStats matches: skipping date=%s (manifest pre-flight)", date)
+        return counts
+    attempt_ts = datetime.now(UTC)
 
     try:
         from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
@@ -3380,7 +3484,6 @@ async def _fetch_footystats_matches(
             counts["footystats_matches"] = len(df)
 
             # Write per-league partitioned files using canonical_fixture_id.
-            _ft_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
             if "canonical_fixture_id" in df.columns:
                 df["_ft_league"] = df["canonical_fixture_id"].str.split(":").str[0]
                 _has_league = df["_ft_league"].notna() & (df["_ft_league"] != "")
@@ -3432,14 +3535,9 @@ async def _fetch_footystats_matches(
             logger.info("FootyStats matches: %d rows written for date=%s", len(df), date)
         else:
             logger.info("FootyStats matches: no fixtures for date=%s", date)
-            # Write 0-count manifest so date is marked as processed
-            manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-            manifest.add(
-                processing_date=date_type.fromisoformat(date),
-                row_count=0,
-                data_type="MATCHES",
-            )
-            manifest.write()
+            # Honest-coverage: legitimate empty (no fixtures on this date).
+            _ft_manifest.record_empty(row_key=_row_key, attempted_at=attempt_ts)
+            _ft_manifest.write()
     except Exception as exc:
         classify_and_emit_error(
             exc,
@@ -3447,6 +3545,25 @@ async def _fetch_footystats_matches(
             operation="footystats_matches_fetch",
             shard=date,
         )
+        _err_code = _classify_adapter_failure(exc, "footystats")
+        log_event(
+            "ADAPTER_FETCH_FAILED",
+            details={
+                "venue": "footystats",
+                "endpoint": "get_fixtures",
+                "date": date,
+                "error": str(exc),
+                "error_code": _err_code,
+            },
+        )
+        # Shard isolation: do not raise; record the failed attempt.
+        _ft_manifest.record_failed(
+            row_key=_row_key,
+            error=_err_code,
+            attempted_at=attempt_ts,
+        )
+        with contextlib.suppress(Exception):
+            _ft_manifest.write()
 
     return counts
 
@@ -3455,6 +3572,8 @@ async def _fetch_footystats_odds(
     date: str,
     api_key: str,
     bucket: str,
+    *,
+    force: bool = False,
 ) -> dict[str, int]:
     """Fetch FootyStats pre-match odds (68 markets) and write to GCS.
 
@@ -3478,6 +3597,17 @@ async def _fetch_footystats_odds(
     counts: dict[str, int] = {}
     fetched_at_ts = pd.Timestamp.now(tz="UTC")
     fetched_at_hour = fetched_at_ts.strftime("%Y-%m-%dT%H")
+
+    # Honest-coverage pre-flight + attempt-stamp.
+    odds_manifest = ManifestWriter(
+        service_name="instruments-service",
+        catalogue_bucket=bucket,
+    )
+    _row_key: dict[str, str] = {"date": date, "data_type": "ODDS"}
+    if _should_skip_shard(odds_manifest, row_key=_row_key, force=force):
+        logger.info("FootyStats odds: skipping date=%s (manifest pre-flight)", date)
+        return counts
+    attempt_ts = datetime.now(UTC)
 
     try:
         from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
@@ -3517,10 +3647,6 @@ async def _fetch_footystats_odds(
                 df["canonical_fixture_id"] = df.apply(_odds_canonical, axis=1)
             counts["footystats_odds"] = len(df)
 
-            odds_manifest = ManifestWriter(
-                service_name="instruments-service",
-                catalogue_bucket=bucket,
-            )
             if "canonical_fixture_id" in df.columns:
                 df["_odds_league"] = df["canonical_fixture_id"].str.split(":").str[0]
                 _has_league = df["_odds_league"].notna() & (df["_odds_league"] != "")
@@ -3585,13 +3711,9 @@ async def _fetch_footystats_odds(
             logger.info("FootyStats odds: %d rows written for date=%s", len(df), date)
         else:
             logger.info("FootyStats odds: no odds data for date=%s", date)
-            manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-            manifest.add(
-                processing_date=date_type.fromisoformat(date),
-                row_count=0,
-                data_type="ODDS",
-            )
-            manifest.write()
+            # Honest-coverage: legitimate empty (no odds for this date).
+            odds_manifest.record_empty(row_key=_row_key, attempted_at=attempt_ts)
+            odds_manifest.write()
     except Exception as exc:
         classify_and_emit_error(
             exc,
@@ -3599,6 +3721,25 @@ async def _fetch_footystats_odds(
             operation="footystats_odds_fetch",
             shard=date,
         )
+        _err_code = _classify_adapter_failure(exc, "footystats")
+        log_event(
+            "ADAPTER_FETCH_FAILED",
+            details={
+                "venue": "footystats",
+                "endpoint": "get_fixture_odds_snapshot",
+                "date": date,
+                "error": str(exc),
+                "error_code": _err_code,
+            },
+        )
+        # Shard isolation: do not raise; record the failed attempt.
+        odds_manifest.record_failed(
+            row_key=_row_key,
+            error=_err_code,
+            attempted_at=attempt_ts,
+        )
+        with contextlib.suppress(Exception):
+            odds_manifest.write()
 
     return counts
 
@@ -3606,6 +3747,8 @@ async def _fetch_footystats_odds(
 async def _fetch_understat_xg(
     date: str,
     bucket: str,
+    *,
+    force: bool = False,
 ) -> dict[str, int]:
     """Fetch Understat xG data and write to GCS.
 
@@ -3619,6 +3762,19 @@ async def _fetch_understat_xg(
     adapter = create_sports_reference_adapter("understat")
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
+
+    # Honest-coverage pre-flight: skip if a previous run already captured or
+    # confirmed-empty this shard.  ``attempted_failed`` rows fall through and
+    # are retried.  ``force=True`` bypasses the check.
+    xg_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+    _row_key: dict[str, str] = {"date": date, "data_type": "XG"}
+    if _should_skip_shard(xg_manifest, row_key=_row_key, force=force):
+        logger.info("Understat xG: skipping date=%s (manifest pre-flight)", date)
+        return counts
+
+    # Stamp attempt-start before the network call so record_empty / record_failed
+    # reflect the attempt time, not the manifest write time.
+    attempt_ts = datetime.now(UTC)
 
     try:
         from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
@@ -3658,7 +3814,6 @@ async def _fetch_understat_xg(
                 )
             counts["understat_xg"] = len(df)
 
-            xg_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
             # Write per-league partitioned files if league column exists
             if "league" in df.columns:
                 _has_league = df["league"].notna() & (df["league"] != "")
@@ -3708,12 +3863,9 @@ async def _fetch_understat_xg(
             logger.info("Understat xG: %d rows written for date=%s", len(df), date)
         else:
             logger.info("Understat xG: no fixtures for date=%s", date)
-            xg_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-            xg_manifest.add(
-                processing_date=date_type.fromisoformat(date),
-                row_count=0,
-                data_type="XG",
-            )
+            # Honest-coverage: record an attempt that legitimately produced zero
+            # rows (Understat covers 6 leagues, off-season days are empty).
+            xg_manifest.record_empty(row_key=_row_key, attempted_at=attempt_ts)
             xg_manifest.write()
     except Exception as exc:
         classify_and_emit_error(
@@ -3722,6 +3874,27 @@ async def _fetch_understat_xg(
             operation="understat_xg_fetch",
             shard=date,
         )
+        _err_code = _classify_adapter_failure(exc, "understat")
+        log_event(
+            "ADAPTER_FETCH_FAILED",
+            details={
+                "venue": "understat",
+                "endpoint": "get_fixtures",
+                "date": date,
+                "error": str(exc),
+                "error_code": _err_code,
+            },
+        )
+        # Shard isolation: do not raise; record the failed attempt so the
+        # manifest reflects honest attempt-vs-capture coverage and the next
+        # run can decide to retry.
+        xg_manifest.record_failed(
+            row_key=_row_key,
+            error=_err_code,
+            attempted_at=attempt_ts,
+        )
+        with contextlib.suppress(Exception):
+            xg_manifest.write()
 
     return counts
 
