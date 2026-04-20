@@ -65,7 +65,6 @@ from unified_trading_library import (
     check_shard_freshness,
     classify_and_emit_error,
     create_sampling_service,
-    get_bucket_name,
     get_data_sink,
     get_storage_client,
     get_write_bucket_name,
@@ -2499,6 +2498,46 @@ async def _fetch_sports_reference_data(
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
 
+    # Honest-coverage helper: only record when an external manifest is wired
+    # in by the caller (existing call-sites always pass one, but the default
+    # signature keeps it optional for legacy use).
+    _af_attempt_ts = datetime.now(UTC)
+
+    def _af_record_failed(data_type: str, exc: Exception, league_id: str = "") -> None:
+        if manifest is None:
+            return
+        _err_code = _classify_adapter_failure(exc, "api_football")
+        log_event(
+            "ADAPTER_FETCH_FAILED",
+            details={
+                "venue": "api_football",
+                "endpoint": data_type.lower(),
+                "date": date,
+                "league_id": league_id,
+                "error": str(exc),
+                "error_code": _err_code,
+            },
+        )
+        _row_key: dict[str, str] = {"date": date, "data_type": data_type}
+        if league_id:
+            _row_key["league_id"] = league_id
+        manifest.record_failed(
+            row_key=_row_key,
+            error=_err_code,
+            attempted_at=_af_attempt_ts,
+        )
+
+    def _af_record_empty(data_type: str, league_id: str = "") -> None:
+        if manifest is None:
+            return
+        _row_key: dict[str, str] = {"date": date, "data_type": data_type}
+        if league_id:
+            _row_key["league_id"] = league_id
+        manifest.record_empty(
+            row_key=_row_key,
+            attempted_at=_af_attempt_ts,
+        )
+
     def _should_fetch(entity_short: str) -> bool:
         """Check if this entity should be fetched (not in _fetch_set or _fetch_set is None)."""
         if _fetch_set is None:
@@ -2525,6 +2564,8 @@ async def _fetch_sports_reference_data(
                     service_name="instruments-service",
                     operation="sports_reference_leagues_fetch",
                 )
+                # Shard-level failure isolation — record and continue.
+                _af_record_failed("LEAGUES", exc)
         else:
             logger.info("Sports reference: %d leagues from cache (0 API calls)", len(leagues_df))
         if leagues_df is not None:
@@ -2560,6 +2601,7 @@ async def _fetch_sports_reference_data(
                             operation="sports_reference_teams_fetch",
                             shard=str(league_def.league_id),
                         )
+                        _af_record_failed("TEAMS", exc, league_id=league_def.league_id)
                 if all_teams:
                     teams_df = pd.DataFrame(all_teams)
                     _set_cached_teams(teams_df, prediction_league_ids)
@@ -2570,6 +2612,7 @@ async def _fetch_sports_reference_data(
                     service_name="instruments-service",
                     operation="sports_reference_teams_batch",
                 )
+                _af_record_failed("TEAMS", exc)
         else:
             prediction_league_ids = _cached_prediction_league_ids
             logger.info("Sports reference: %d teams from cache (0 API calls)", len(teams_df))
@@ -2617,6 +2660,7 @@ async def _fetch_sports_reference_data(
                         operation="sports_reference_standings_fetch",
                         shard=str(lid),
                     )
+                    _af_record_failed("STANDINGS", exc, league_id=str(lid))
             if all_standings:
                 standings_df = pd.DataFrame(all_standings)
                 _set_cached_standings(standings_df)
@@ -2732,12 +2776,12 @@ async def _fetch_sports_reference_data(
                 )
                 counts["injuries"] = 0
                 logger.info("Sports reference: 0 injuries written (empty parquet)")
-                if manifest is not None:
-                    manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=0,
-                        data_type="INJURIES",
-                    )
+                # Honest-coverage: legitimate zero-injuries day for this date
+                # (no players on the season-wide injuries list have a reported
+                # status — common on off-season days).  Emit empty_confirmed
+                # instead of captured(0) so the data-status page distinguishes
+                # "source said zero" from "we wrote zero rows".
+                _af_record_empty("INJURIES")
         except Exception as exc:
             classify_and_emit_error(
                 exc,
@@ -2745,6 +2789,7 @@ async def _fetch_sports_reference_data(
                 operation="sports_reference_injuries_fetch",
                 shard=date,
             )
+            _af_record_failed("INJURIES", exc)
 
     # Per-fixture enrichment: stats, events, lineups, player stats.
     # Only for completed fixtures (status in FT/AET/PEN — stats unavailable for future/live).
@@ -2895,6 +2940,7 @@ async def _fetch_sports_reference_data(
                 operation="sports_reference_fixtures_fetch",
                 shard=date,
             )
+            _af_record_failed("FIXTURES", exc)
 
     if fixture_ids:
         _per_fixture_entities = [
@@ -2923,6 +2969,8 @@ async def _fetch_sports_reference_data(
         concurrency = 50
         sem = asyncio.Semaphore(concurrency)
         entity_rows: dict[str, list[dict[str, object]]] = {name: [] for name, _ in _per_fixture_entities}
+        # Per-entity failure tracking for honest-coverage: map entity → (failed_count, sample_error_code).
+        entity_failures: dict[str, tuple[int, str]] = {name: (0, "") for name, _ in _per_fixture_entities}
 
         async def _fetch_one(entity_name: str, fetch_fn: object, fid: int) -> None:
             async with sem:
@@ -2939,6 +2987,14 @@ async def _fetch_sports_reference_data(
                         service_name="instruments-service",
                         operation=f"sports_reference_{entity_name}_fetch",
                         shard=str(fid),
+                    )
+                    # Shard-level failure isolation: count the failure so that
+                    # honest-coverage can record_failed at entity-level if
+                    # EVERY fixture call for this entity raised.
+                    _prev_count, _prev_code = entity_failures[entity_name]
+                    entity_failures[entity_name] = (
+                        _prev_count + 1,
+                        _prev_code or _classify_adapter_failure(exc, "api_football"),
                     )
                 # Throttle handled by adapter's _get_with_retry + rate limit headers
 
@@ -3045,6 +3101,26 @@ async def _fetch_sports_reference_data(
                         )
 
                 logger.info("Sports reference: %d %s rows written", len(df), entity_name)
+            else:
+                # Honest-coverage: entity produced zero rows.  Distinguish
+                # "all fixtures failed" (record_failed) from "legit empty"
+                # (record_empty).  No rows when we did fetch fixtures means
+                # the API was called but nothing came back.
+                _fail_count, _err_code = entity_failures.get(entity_name, (0, ""))
+                _entity_dt = entity_name.upper()
+                if _fail_count == len(fixture_ids) and _err_code:
+                    # Every fixture call raised → treat the entity as failed.
+                    if manifest is not None:
+                        manifest.record_failed(
+                            row_key={"date": date, "data_type": _entity_dt},
+                            error=_err_code,
+                            attempted_at=_af_attempt_ts,
+                        )
+                else:
+                    # Some / all calls succeeded but returned zero rows
+                    # (e.g. post-match stats not yet published, lineups not
+                    # disclosed for low-profile fixture) — legitimate empty.
+                    _af_record_empty(_entity_dt)
 
     # Cross-provider mapping tables
     _write_team_mapping(bucket)
@@ -3777,6 +3853,17 @@ async def _fetch_understat_xg(
     # reflect the attempt time, not the manifest write time.
     attempt_ts = datetime.now(UTC)
 
+    # Expected-league denominator (Understat covers 5 PREDICTION leagues: EPL,
+    # LA_LIGA, BUNDESLIGA, SERIE_A, LIGUE_1). SSOT:
+    # ``codex/02-data/sports-data-source-coverage-matrix.md``.
+    from unified_api_contracts.canonical.domain.sports.league_data import (
+        get_expected_leagues_for_source,
+    )
+
+    _expected_understat_leagues = {
+        lg.league_id for lg in get_expected_leagues_for_source("understat", classifications=["Prediction"])
+    }
+
     try:
         from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
         from unified_api_contracts.sports import resolve_understat_team
@@ -3815,6 +3902,7 @@ async def _fetch_understat_xg(
                 )
             counts["understat_xg"] = len(df)
 
+            _captured_leagues: set[str] = set()
             # Write per-league partitioned files if league column exists
             if "league" in df.columns:
                 _has_league = df["league"].notna() & (df["league"] != "")
@@ -3823,6 +3911,7 @@ async def _fetch_understat_xg(
 
                 for _xg_lid, _xg_league_df in _with_league.groupby("league"):
                     _xg_lid_str = str(_xg_lid)
+                    _captured_leagues.add(_xg_lid_str)
                     sink.write(
                         data=_xg_league_df,
                         partition={"day": date, "entity": "understat_xg", "league": _xg_lid_str},
@@ -3860,13 +3949,28 @@ async def _fetch_understat_xg(
                     row_count=len(df),
                     data_type="XG",
                 )
+
+            # Honest-coverage per-league: record_empty for expected PREDICTION
+            # leagues with no rows on this date (off-season / no fixtures).
+            for _exp_lid in sorted(_expected_understat_leagues - _captured_leagues):
+                xg_manifest.record_empty(
+                    row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
+                    attempted_at=attempt_ts,
+                )
             xg_manifest.write()
             logger.info("Understat xG: %d rows written for date=%s", len(df), date)
         else:
             logger.info("Understat xG: no fixtures for date=%s", date)
             # Honest-coverage: record an attempt that legitimately produced zero
-            # rows (Understat covers 6 leagues, off-season days are empty).
+            # rows (Understat covers 5 leagues, off-season days are empty).
+            # Emit per-league record_empty for each expected league so the
+            # denominator is honest at league granularity.
             xg_manifest.record_empty(row_key=_row_key, attempted_at=attempt_ts)
+            for _exp_lid in sorted(_expected_understat_leagues):
+                xg_manifest.record_empty(
+                    row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
+                    attempted_at=attempt_ts,
+                )
             xg_manifest.write()
     except Exception as exc:
         classify_and_emit_error(
@@ -3888,12 +3992,19 @@ async def _fetch_understat_xg(
         )
         # Shard isolation: do not raise; record the failed attempt so the
         # manifest reflects honest attempt-vs-capture coverage and the next
-        # run can decide to retry.
+        # run can decide to retry.  Emit a date-level failure row PLUS a
+        # per-league failure row for each expected league.
         xg_manifest.record_failed(
             row_key=_row_key,
             error=_err_code,
             attempted_at=attempt_ts,
         )
+        for _exp_lid in sorted(_expected_understat_leagues):
+            xg_manifest.record_failed(
+                row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
+                error=_err_code,
+                attempted_at=attempt_ts,
+            )
         with contextlib.suppress(Exception):
             xg_manifest.write()
 
@@ -3919,10 +4030,19 @@ async def _fetch_transfermarkt_data(
     transfer history. Data is slow-moving (changes at trigger dates:
     season start, transfer window open/close) and fetched only then.
 
+    Honest-coverage: per-league PLAYER_VALUES shards are emitted as
+    ``captured`` / ``empty_confirmed`` / ``attempted_failed`` so the
+    data-status page can distinguish "league had no squad data" from
+    "API call failed" from "league never attempted".
+
     GCS paths:
         sports_reference/by_date/day={date}/entity=transfermarkt_leagues/
         sports_reference/by_date/day={date}/entity=transfermarkt_teams/
     """
+    from unified_api_contracts.canonical.domain.sports.league_data import (
+        get_expected_leagues_for_source,
+    )
+
     adapter = create_sports_reference_adapter("transfermarkt", api_key=api_key)
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
@@ -3930,6 +4050,10 @@ async def _fetch_transfermarkt_data(
     _want_leagues = entity_filter is None or entity_filter == "TRANSFERMARKT_LEAGUES"
     _want_teams = entity_filter is None or entity_filter == "PLAYER_VALUES"
 
+    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+    attempt_ts = datetime.now(UTC)
+
+    # --- TRANSFERMARKT_LEAGUES shard (date-level) ---
     if _want_leagues:
         try:
             leagues = await adapter.get_leagues()
@@ -3943,7 +4067,19 @@ async def _fetch_transfermarkt_data(
                     filename="transfermarkt_leagues.parquet",
                 )
                 counts["transfermarkt_leagues"] = len(df)
+                manifest.add(
+                    processing_date=date_type.fromisoformat(date),
+                    row_count=len(df),
+                    data_type="TRANSFERMARKT_LEAGUES",
+                )
                 logger.info("Transfermarkt leagues: %d rows written", len(df))
+            else:
+                # Honest-coverage: API returned zero leagues (legitimate empty).
+                logger.info("Transfermarkt leagues: 0 rows returned for date=%s", date)
+                manifest.record_empty(
+                    row_key={"date": date, "data_type": "TRANSFERMARKT_LEAGUES"},
+                    attempted_at=attempt_ts,
+                )
         except Exception as exc:
             classify_and_emit_error(
                 exc,
@@ -3951,78 +4087,139 @@ async def _fetch_transfermarkt_data(
                 operation="transfermarkt_leagues_fetch",
                 shard=date,
             )
-
-    if _want_teams:
-        try:
-            all_teams: list[dict[str, str | None]] = []
-            _league_filter_set = set(league_filter) if league_filter else None
-            for league_def in get_prediction_leagues():
-                if _league_filter_set is not None and league_def.league_id not in _league_filter_set:
-                    continue
-                tm_code = get_provider_league_id(league_def.league_id, "transfermarkt")
-                if tm_code is None:
-                    continue
-                try:
-                    teams = await adapter.get_teams(tm_code, season=season)
-                    for t in teams:
-                        row = t.model_dump()
-                        flat: dict[str, str | None] = {k: str(v) if v is not None else None for k, v in row.items()}
-                        flat["league_id"] = str(tm_code)
-                        flat["canonical_league"] = league_def.league_id
-                        # Derive player_count for FSS normalizer
-                        players = row.get("players")
-                        flat["player_count"] = (
-                            str(len(players)) if isinstance(players, list) else flat.get("squad_size")
-                        )
-                        # Drop nested players list (serializes as unhelpful string)
-                        flat.pop("players", None)
-                        all_teams.append(flat)
-                except Exception as exc:
-                    classify_and_emit_error(
-                        exc,
-                        service_name="instruments-service",
-                        operation="transfermarkt_teams_fetch",
-                        shard=str(league_def.league_id),
-                    )
-            if all_teams:
-                df = pd.DataFrame(all_teams)
-                # Add season column for provenance
-                effective_season = season if season is not None else datetime.now(UTC).year
-                df["season"] = effective_season
-                # Write as player_values entity — partition by season when
-                # doing historical backfill so seasons don't overwrite each other
-                pv_partition: dict[str, str] = {"day": date, "entity": "player_values"}
-                if season is not None:
-                    pv_partition["season"] = str(season)
-                sink.write(
-                    data=df,
-                    partition=pv_partition,
-                    format="parquet",
-                    filename="player_values.parquet",
-                )
-                counts["transfermarkt_teams"] = len(df)
-                logger.info("Transfermarkt teams → player_values: %d rows written", len(df))
-        except Exception as exc:
-            classify_and_emit_error(
-                exc,
-                service_name="instruments-service",
-                operation="transfermarkt_teams_batch",
-                shard=date,
+            _err_code = _classify_adapter_failure(exc, "transfermarkt")
+            log_event(
+                "ADAPTER_FETCH_FAILED",
+                details={
+                    "venue": "transfermarkt",
+                    "endpoint": "get_leagues",
+                    "date": date,
+                    "error": str(exc),
+                    "error_code": _err_code,
+                },
+            )
+            manifest.record_failed(
+                row_key={"date": date, "data_type": "TRANSFERMARKT_LEAGUES"},
+                error=_err_code,
+                attempted_at=attempt_ts,
             )
 
-    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-    if _want_leagues:
-        manifest.add(
-            processing_date=date_type.fromisoformat(date),
-            row_count=counts.get("transfermarkt_leagues", 0),
-            data_type="TRANSFERMARKT_LEAGUES",
-        )
+    # --- PLAYER_VALUES shards (per expected league) ---
     if _want_teams:
-        manifest.add(
-            processing_date=date_type.fromisoformat(date),
-            row_count=counts.get("transfermarkt_teams", 0),
-            data_type="PLAYER_VALUES",
+        # Denominator = expected leagues with a Transfermarkt mapping.
+        # SSOT: ``codex/02-data/sports-data-source-coverage-matrix.md`` — 55
+        # leagues (Prediction + Features).  The adapter also needs a
+        # provider-league-id mapping; leagues without a mapping are skipped
+        # with a record_empty entry (we have no way to attempt them).
+        _expected_tm_leagues = get_expected_leagues_for_source(
+            "transfermarkt",
+            classifications=["Prediction", "Features"],
         )
+        _league_filter_set = set(league_filter) if league_filter else None
+        # Merge legacy ``get_prediction_leagues()`` with the canonical expected
+        # set so we keep bundled prediction leagues even if the data_sources
+        # registry ever drifts.
+        _merged_leagues = {lg.league_id: lg for lg in _expected_tm_leagues}
+        for _p_lg in get_prediction_leagues():
+            _merged_leagues.setdefault(_p_lg.league_id, _p_lg)
+
+        all_teams: list[dict[str, str | None]] = []
+        _captured_league_counts: dict[str, int] = {}
+        _failed_leagues: dict[str, str] = {}
+        _empty_leagues: set[str] = set()
+        _unmapped_leagues: set[str] = set()
+
+        for _lid_key, league_def in sorted(_merged_leagues.items()):
+            if _league_filter_set is not None and league_def.league_id not in _league_filter_set:
+                continue
+            tm_code = get_provider_league_id(league_def.league_id, "transfermarkt")
+            if tm_code is None:
+                # No provider mapping — we cannot attempt this league.  Record
+                # empty so the denominator counts it as confirmed-unavailable
+                # (operator may add mapping later).
+                _unmapped_leagues.add(league_def.league_id)
+                continue
+            try:
+                teams = await adapter.get_teams(tm_code, season=season)
+                if not teams:
+                    _empty_leagues.add(league_def.league_id)
+                    continue
+                _league_count = 0
+                for t in teams:
+                    row = t.model_dump()
+                    flat: dict[str, str | None] = {k: str(v) if v is not None else None for k, v in row.items()}
+                    flat["league_id"] = str(tm_code)
+                    flat["canonical_league"] = league_def.league_id
+                    # Derive player_count for FSS normalizer
+                    players = row.get("players")
+                    flat["player_count"] = str(len(players)) if isinstance(players, list) else flat.get("squad_size")
+                    # Drop nested players list (serializes as unhelpful string)
+                    flat.pop("players", None)
+                    all_teams.append(flat)
+                    _league_count += 1
+                _captured_league_counts[league_def.league_id] = _league_count
+            except Exception as exc:
+                # Shard-level failure isolation — per-league failure MUST NOT
+                # kill the batch.  Record_failed + continue.
+                classify_and_emit_error(
+                    exc,
+                    service_name="instruments-service",
+                    operation="transfermarkt_teams_fetch",
+                    shard=str(league_def.league_id),
+                )
+                _err_code = _classify_adapter_failure(exc, "transfermarkt")
+                log_event(
+                    "ADAPTER_FETCH_FAILED",
+                    details={
+                        "venue": "transfermarkt",
+                        "endpoint": "get_teams",
+                        "league_id": league_def.league_id,
+                        "date": date,
+                        "error": str(exc),
+                        "error_code": _err_code,
+                    },
+                )
+                _failed_leagues[league_def.league_id] = _err_code
+
+        if all_teams:
+            df = pd.DataFrame(all_teams)
+            # Add season column for provenance
+            effective_season = season if season is not None else datetime.now(UTC).year
+            df["season"] = effective_season
+            # Write as player_values entity — partition by season when
+            # doing historical backfill so seasons don't overwrite each other
+            pv_partition: dict[str, str] = {"day": date, "entity": "player_values"}
+            if season is not None:
+                pv_partition["season"] = str(season)
+            sink.write(
+                data=df,
+                partition=pv_partition,
+                format="parquet",
+                filename="player_values.parquet",
+            )
+            counts["transfermarkt_teams"] = len(df)
+            logger.info("Transfermarkt teams → player_values: %d rows written", len(df))
+
+        # Per-league honest-coverage manifest rows.
+        for _cap_lid, _cap_count in _captured_league_counts.items():
+            manifest.add(
+                processing_date=date_type.fromisoformat(date),
+                row_count=_cap_count,
+                data_type="PLAYER_VALUES",
+                league_id=_cap_lid,
+            )
+        for _emp_lid in sorted(_empty_leagues | _unmapped_leagues):
+            manifest.record_empty(
+                row_key={"date": date, "data_type": "PLAYER_VALUES", "league_id": _emp_lid},
+                attempted_at=attempt_ts,
+            )
+        for _f_lid, _f_err in sorted(_failed_leagues.items()):
+            manifest.record_failed(
+                row_key={"date": date, "data_type": "PLAYER_VALUES", "league_id": _f_lid},
+                error=_f_err,
+                attempted_at=attempt_ts,
+            )
+
     manifest.write()
 
     return counts
@@ -4046,11 +4243,21 @@ async def _fetch_sfi_data(
     stats provide 30-second interval match time-series data for halftime
     feature engineering.
 
+    Honest-coverage: per-league SFI_STANDINGS + SFI_PROGRESSIVE_STATS shards
+    emit ``captured`` / ``empty_confirmed`` / ``attempted_failed`` so the
+    data-status page can distinguish legitimate empties from API failures.
+    Shard-level failure isolation: a per-league exception is recorded and
+    the loop continues — never raised to caller.
+
     GCS paths:
         sports_reference/by_date/day={date}/entity=sfi_leagues/
         sports_reference/by_date/day={date}/entity=sfi_standings/
         sports_reference/by_date/day={date}/entity=progressive_stats/
     """
+    from unified_api_contracts.canonical.domain.sports.league_data import (
+        get_expected_leagues_for_source,
+    )
+
     adapter = create_sports_reference_adapter("soccer_football_info", api_key=api_key)
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
@@ -4061,6 +4268,17 @@ async def _fetch_sfi_data(
     _want_sfi_standings = False  # SFI has no standings endpoint
     _want_sfi_progressive = entity_filter is None or entity_filter == "SFI_PROGRESSIVE_STATS"
 
+    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+    attempt_ts = datetime.now(UTC)
+
+    # Expected denominator: 33 PREDICTION leagues per coverage matrix.
+    _expected_sfi_leagues = get_expected_leagues_for_source(
+        "soccer_football_info",
+        classifications=["Prediction"],
+    )
+    _expected_sfi_league_ids = {lg.league_id for lg in _expected_sfi_leagues}
+
+    # --- SFI_LEAGUES shard (date-level) ---
     sfi_league_ids: list[str] = []
     try:
         leagues = await adapter.get_leagues()
@@ -4075,8 +4293,20 @@ async def _fetch_sfi_data(
                     filename="sfi_leagues.parquet",
                 )
                 counts["sfi_leagues"] = len(df)
+                manifest.add(
+                    processing_date=date_type.fromisoformat(date),
+                    row_count=len(df),
+                    data_type="SFI_LEAGUES",
+                )
                 logger.info("SFI leagues: %d rows written", len(df))
             sfi_league_ids = [lg.league_id for lg in leagues]
+        else:
+            if _want_sfi_leagues:
+                logger.info("SFI leagues: 0 rows returned for date=%s", date)
+                manifest.record_empty(
+                    row_key={"date": date, "data_type": "SFI_LEAGUES"},
+                    attempted_at=attempt_ts,
+                )
     except Exception as exc:
         classify_and_emit_error(
             exc,
@@ -4084,6 +4314,23 @@ async def _fetch_sfi_data(
             operation="sfi_leagues_fetch",
             shard=date,
         )
+        if _want_sfi_leagues:
+            _err_code = _classify_adapter_failure(exc, "soccer_football_info")
+            log_event(
+                "ADAPTER_FETCH_FAILED",
+                details={
+                    "venue": "soccer_football_info",
+                    "endpoint": "get_leagues",
+                    "date": date,
+                    "error": str(exc),
+                    "error_code": _err_code,
+                },
+            )
+            manifest.record_failed(
+                row_key={"date": date, "data_type": "SFI_LEAGUES"},
+                error=_err_code,
+                attempted_at=attempt_ts,
+            )
 
     # Standings — only for our mapped prediction leagues (not all 2800+ SFI championships).
     # SOCCER_FOOTBALL_INFO_IDS maps canonical league → SFI hex ID. We only fetch standings
@@ -4098,6 +4345,9 @@ async def _fetch_sfi_data(
         )
 
     if _filtered_sfi_ids and _want_sfi_standings:
+        # Currently unreachable — ``_want_sfi_standings`` is hard-coded False
+        # above because SFI has no standings endpoint.  Kept for completeness
+        # in case the endpoint is reintroduced.
         try:
             all_standings: list[dict[str, str | None]] = []
             for lid in _filtered_sfi_ids:
@@ -4122,13 +4372,29 @@ async def _fetch_sfi_data(
                     filename="sfi_standings.parquet",
                 )
                 counts["sfi_standings"] = len(df)
+                manifest.add(
+                    processing_date=date_type.fromisoformat(date),
+                    row_count=len(df),
+                    data_type="SFI_STANDINGS",
+                )
                 logger.info("SFI standings: %d rows written", len(df))
+            else:
+                manifest.record_empty(
+                    row_key={"date": date, "data_type": "SFI_STANDINGS"},
+                    attempted_at=attempt_ts,
+                )
         except Exception as exc:
             classify_and_emit_error(
                 exc,
                 service_name="instruments-service",
                 operation="sfi_standings_batch",
                 shard=date,
+            )
+            _err_code = _classify_adapter_failure(exc, "soccer_football_info")
+            manifest.record_failed(
+                row_key={"date": date, "data_type": "SFI_STANDINGS"},
+                error=_err_code,
+                attempted_at=attempt_ts,
             )
 
     # Progressive stats — per-match 30-second interval time-series.
@@ -4169,9 +4435,44 @@ async def _fetch_sfi_data(
                         filename="progressive_stats.parquet",
                     )
                     counts["progressive_stats"] = len(df)
+                    manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=len(df),
+                        data_type="SFI_PROGRESSIVE_STATS",
+                    )
                     logger.info("SFI progressive stats: %d rows written", len(df))
+                else:
+                    # Match IDs present but all per-match fetches produced zero
+                    # rows (legitimate empty — matches not yet complete).
+                    manifest.record_empty(
+                        row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
+                        attempted_at=attempt_ts,
+                    )
+                    for _exp_lid in sorted(_expected_sfi_league_ids):
+                        manifest.record_empty(
+                            row_key={
+                                "date": date,
+                                "data_type": "SFI_PROGRESSIVE_STATS",
+                                "league_id": _exp_lid,
+                            },
+                            attempted_at=attempt_ts,
+                        )
             else:
+                # No completed matches on this date (off-season / rest day).
                 logger.info("SFI progressive stats: no completed matches for date=%s", date)
+                manifest.record_empty(
+                    row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
+                    attempted_at=attempt_ts,
+                )
+                for _exp_lid in sorted(_expected_sfi_league_ids):
+                    manifest.record_empty(
+                        row_key={
+                            "date": date,
+                            "data_type": "SFI_PROGRESSIVE_STATS",
+                            "league_id": _exp_lid,
+                        },
+                        attempted_at=attempt_ts,
+                    )
         except Exception as exc:
             classify_and_emit_error(
                 exc,
@@ -4179,26 +4480,33 @@ async def _fetch_sfi_data(
                 operation="sfi_progressive_stats_batch",
                 shard=date,
             )
+            _err_code = _classify_adapter_failure(exc, "soccer_football_info")
+            log_event(
+                "ADAPTER_FETCH_FAILED",
+                details={
+                    "venue": "soccer_football_info",
+                    "endpoint": "get_match_ids_for_date",
+                    "date": date,
+                    "error": str(exc),
+                    "error_code": _err_code,
+                },
+            )
+            manifest.record_failed(
+                row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
+                error=_err_code,
+                attempted_at=attempt_ts,
+            )
+            for _exp_lid in sorted(_expected_sfi_league_ids):
+                manifest.record_failed(
+                    row_key={
+                        "date": date,
+                        "data_type": "SFI_PROGRESSIVE_STATS",
+                        "league_id": _exp_lid,
+                    },
+                    error=_err_code,
+                    attempted_at=attempt_ts,
+                )
 
-    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-    if _want_sfi_leagues:
-        manifest.add(
-            processing_date=date_type.fromisoformat(date),
-            row_count=counts.get("sfi_leagues", 0),
-            data_type="SFI_LEAGUES",
-        )
-    if _want_sfi_standings:
-        manifest.add(
-            processing_date=date_type.fromisoformat(date),
-            row_count=counts.get("sfi_standings", 0),
-            data_type="SFI_STANDINGS",
-        )
-    if _want_sfi_progressive:
-        manifest.add(
-            processing_date=date_type.fromisoformat(date),
-            row_count=counts.get("progressive_stats", 0),
-            data_type="SFI_PROGRESSIVE_STATS",
-        )
     manifest.write()
 
     return counts
@@ -4300,10 +4608,18 @@ async def _fetch_weather_data(
       3. For each fixture venue with coordinates, call Open-Meteo API.
       4. Write results to sports_reference/by_date/day={date}/entity=weather/weather.parquet.
 
-    Fixtures without a venue or venues without coordinates are skipped
-    with a warning log (no raise — shard-level failure isolation).
+    Honest-coverage: the WEATHER shard is emitted as ``captured`` when any
+    venue observation lands, ``empty_confirmed`` when there are no fixtures
+    (or no fixture venue has coordinates), and ``attempted_failed`` when the
+    Open-Meteo API fails for all attempted venues.  Fixtures without a venue
+    or venues without coordinates are skipped with a warning log (no raise —
+    shard-level failure isolation).
     """
     import re
+
+    from unified_api_contracts.canonical.domain.sports.league_data import (
+        get_expected_leagues_for_source,
+    )
 
     from instruments_service.reference_data.adapters.sports.adapters.open_meteo import OpenMeteoAdapter
 
@@ -4311,11 +4627,44 @@ async def _fetch_weather_data(
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
 
+    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+    attempt_ts = datetime.now(UTC)
+    _expected_weather_league_ids = {
+        lg.league_id for lg in get_expected_leagues_for_source("open_meteo", classifications=["Prediction"])
+    }
+
+    def _record_weather_empty() -> None:
+        """Helper — emit date + per-league record_empty for WEATHER shard."""
+        manifest.record_empty(
+            row_key={"date": date, "data_type": "WEATHER"},
+            attempted_at=attempt_ts,
+        )
+        for _exp_lid in sorted(_expected_weather_league_ids):
+            manifest.record_empty(
+                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
+                attempted_at=attempt_ts,
+            )
+
+    def _record_weather_failed(err_code: str) -> None:
+        """Helper — emit date + per-league record_failed for WEATHER shard."""
+        manifest.record_failed(
+            row_key={"date": date, "data_type": "WEATHER"},
+            error=err_code,
+            attempted_at=attempt_ts,
+        )
+        for _exp_lid in sorted(_expected_weather_league_ids):
+            manifest.record_failed(
+                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
+                error=err_code,
+                attempted_at=attempt_ts,
+            )
+
     # UAC venue coordinates: SCREAMING_SNAKE keys → (lat, lon)
     from unified_api_contracts.registry.sports_venue_coordinates import VENUE_COORDINATES
 
     # 1. Read fixtures for this date — get venue_name + kickoff hour
     fixtures_df = None
+    _fixtures_read_failed = False
     try:
         fixtures_prefix = f"sports_reference/by_date/day={date}/entity=fixtures/"
         storage_client = get_storage_client()
@@ -4329,9 +4678,36 @@ async def _fetch_weather_data(
             fixtures_df = pd.concat(frames, ignore_index=True) if frames else None
     except Exception as exc:
         logger.warning("Weather: could not read fixtures for date=%s: %s", date, exc)
+        _fixtures_read_failed = True
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="weather_fixtures_read",
+            shard=date,
+        )
+        _err_code = _classify_adapter_failure(exc, "open_meteo")
+        log_event(
+            "ADAPTER_FETCH_FAILED",
+            details={
+                "venue": "open_meteo",
+                "endpoint": "fixtures_read",
+                "date": date,
+                "error": str(exc),
+                "error_code": _err_code,
+            },
+        )
+        _record_weather_failed(_err_code)
+        manifest.write()
+
+    if _fixtures_read_failed:
+        return counts
 
     if fixtures_df is None or fixtures_df.empty or "venue_name" not in fixtures_df.columns:
         logger.info("Weather: no fixture venue_name data for date=%s — skipping", date)
+        # Honest-coverage: no fixtures == legitimate empty for the WEATHER
+        # shard.  Record empty so attempt-coverage is honest.
+        _record_weather_empty()
+        manifest.write()
         return counts
 
     # 2. Match fixture venue_name → UAC coordinates via SCREAMING_SNAKE normalization
@@ -4404,20 +4780,21 @@ async def _fetch_weather_data(
     if not venues_with_coords:
         if existing_venue_ids:
             logger.info("Weather: all venues already covered for date=%s — skipping", date)
-        else:
-            logger.info("Weather: no fixture venues with coordinates for date=%s — skipping", date)
-        manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-        manifest.add(
-            processing_date=date_type.fromisoformat(date),
-            row_count=0,
-            data_type="WEATHER",
-        )
+            # Idempotency: data is already captured on GCS — prior manifest
+            # entries stand.  Nothing new to record.
+            manifest.write()
+            return counts
+        logger.info("Weather: no fixture venues with coordinates for date=%s — skipping", date)
+        # Honest-coverage: fixtures existed but none mapped to coordinates —
+        # legitimate empty (not a failure).
+        _record_weather_empty()
         manifest.write()
         return counts
 
     # 4. Fetch weather match window for each fixture venue.
     # Each venue gets a 3-hour window (KO, KO+1h, KO+2h) at each lead time.
     weather_rows: list[dict[str, object]] = []
+    _per_venue_errors: dict[str, str] = {}
     for lat, lon, venue_key, ko_hour in venues_with_coords:
         try:
             match_weather = await adapter.get_weather_match_window(lat, lon, date, kickoff_hour=ko_hour)
@@ -4437,6 +4814,19 @@ async def _fetch_weather_data(
                 operation="weather_fetch",
                 shard=venue_key,
             )
+            _err_code = _classify_adapter_failure(exc, "open_meteo")
+            log_event(
+                "ADAPTER_FETCH_FAILED",
+                details={
+                    "venue": "open_meteo",
+                    "endpoint": "get_weather_match_window",
+                    "date": date,
+                    "venue_key": venue_key,
+                    "error": str(exc),
+                    "error_code": _err_code,
+                },
+            )
+            _per_venue_errors[venue_key] = _err_code
 
     if weather_rows:
         new_df = pd.DataFrame(weather_rows)
@@ -4478,13 +4868,25 @@ async def _fetch_weather_data(
         counts["weather"] = len(new_df)
         logger.info("Weather: %d venue observations written for date=%s", len(new_df), date)
 
-    # Manifest
-    manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-    manifest.add(
-        processing_date=date_type.fromisoformat(date),
-        row_count=counts.get("weather", 0),
-        data_type="WEATHER",
-    )
+    # Honest-coverage manifest write.
+    if weather_rows:
+        # At least one venue succeeded → shard is captured.
+        manifest.add(
+            processing_date=date_type.fromisoformat(date),
+            row_count=counts.get("weather", 0),
+            data_type="WEATHER",
+        )
+    elif _per_venue_errors:
+        # All attempts failed → attempted_failed.  Use the most common error
+        # code so the manifest carries a representative classification.
+        _err_sample = next(iter(sorted(_per_venue_errors.values())))
+        _record_weather_failed(_err_sample)
+    else:
+        # No rows AND no errors — means venues existed but all were already
+        # covered earlier in this run (incremental dedup skipped them) or
+        # adapter returned empty dicts.  Treat as empty_confirmed.
+        _record_weather_empty()
+
     manifest.write()
 
     return counts
