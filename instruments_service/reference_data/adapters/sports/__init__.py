@@ -14,7 +14,20 @@ Usage:
 
     adapter = create_sports_reference_adapter("api_football", api_key=key)
     fixtures = await adapter.get_fixtures(date="2026-03-26")
+
+    # Enrichment adapter with api-football dep pre-flight (raises
+    # DependencyError if api-football reference data missing for the date):
+    adapter = create_sports_reference_adapter(
+        "footystats", api_key=key, date="2026-04-14"
+    )
 """
+
+from instruments_service.reference_data.sports_dependency import (
+    check_api_football_dependency as check_api_football_dependency,
+)
+from instruments_service.reference_data.sports_dependency import (
+    venue_requires_api_football as venue_requires_api_football,
+)
 
 from .adapters.api_football import (
     ApiFootballAdapter as ApiFootballAdapter,
