@@ -159,10 +159,10 @@ def test_classify_adapter_failure_returns_string() -> None:
 async def test_understat_xg_calls_record_empty_on_zero_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Adapter returns empty fixture list → record_empty (not silent skip)."""
+    """Adapter returns empty fixture list → record_empty at date + per-league."""
     from instruments_service.engine import orchestrator as orch
 
-    captured: dict[str, object] = {}
+    captured: dict[str, object] = {"record_empty_calls": []}
 
     class _MWStub:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
@@ -172,7 +172,9 @@ async def test_understat_xg_calls_record_empty_on_zero_rows(
             return None
 
         def record_empty(self, *, row_key: object, attempted_at: datetime) -> None:
-            captured["record_empty_args"] = {"row_key": row_key, "attempted_at": attempted_at}
+            cast(list[dict[str, object]], captured["record_empty_calls"]).append(
+                {"row_key": row_key, "attempted_at": attempted_at},
+            )
 
         def record_failed(self, **_kwargs: object) -> None:
             captured["record_failed_called"] = True
@@ -200,10 +202,18 @@ async def test_understat_xg_calls_record_empty_on_zero_rows(
     result = await orch._fetch_understat_xg(date="2026-04-19", bucket="test-bucket")
 
     assert result == {}
-    assert "record_empty_args" in captured, "record_empty must be called on legitimate empty"
     assert captured.get("record_failed_called") is None
-    rk = cast(dict[str, str], captured["record_empty_args"])["row_key"]
-    assert rk == {"date": "2026-04-19", "data_type": "XG"}
+    calls = cast(list[dict[str, object]], captured["record_empty_calls"])
+    assert len(calls) >= 1, "record_empty must be called on legitimate empty"
+    # Date-level row_key must be present.
+    row_keys = [cast(dict[str, str], c["row_key"]) for c in calls]
+    assert {"date": "2026-04-19", "data_type": "XG"} in row_keys
+    # All 5 expected PREDICTION leagues must have per-league record_empty rows.
+    _expected_leagues = {"EPL", "LA_LIGA", "BUNDESLIGA", "SERIE_A", "LIGUE_1"}
+    _seen_leagues = {cast(str, rk.get("league_id")) for rk in row_keys if "league_id" in rk}
+    assert _seen_leagues == _expected_leagues, (
+        f"Per-league record_empty must cover all expected leagues; got {_seen_leagues}"
+    )
     assert captured.get("write_called") is True
 
 
@@ -304,10 +314,10 @@ async def test_understat_xg_force_bypasses_captured_pre_flight(
 async def test_understat_xg_calls_record_failed_on_exception(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Adapter raises → record_failed with classified error code; no re-raise."""
+    """Adapter raises → record_failed at date + per-league; no re-raise."""
     from instruments_service.engine import orchestrator as orch
 
-    captured: dict[str, object] = {}
+    captured: dict[str, object] = {"record_failed_calls": []}
 
     class _MWStub:
         def __init__(self, *_a: object, **_kw: object) -> None:
@@ -320,11 +330,9 @@ async def test_understat_xg_calls_record_failed_on_exception(
             captured["record_empty_called"] = True
 
         def record_failed(self, *, row_key: object, error: str, attempted_at: datetime) -> None:
-            captured["record_failed_args"] = {
-                "row_key": row_key,
-                "error": error,
-                "attempted_at": attempted_at,
-            }
+            cast(list[dict[str, object]], captured["record_failed_calls"]).append(
+                {"row_key": row_key, "error": error, "attempted_at": attempted_at},
+            )
 
         def add(self, **_kw: object) -> None:
             return None
@@ -344,10 +352,20 @@ async def test_understat_xg_calls_record_failed_on_exception(
     result = await orch._fetch_understat_xg(date="2026-04-19", bucket="test-bucket")
 
     assert result == {}
-    assert "record_failed_args" in captured, "record_failed must be called on adapter exception"
-    args = cast(dict[str, object], captured["record_failed_args"])
-    assert args["row_key"] == {"date": "2026-04-19", "data_type": "XG"}
-    assert args["error"] == "RuntimeError"  # classify falls back to class name
-    assert isinstance(args["attempted_at"], datetime)
-    assert cast(datetime, args["attempted_at"]).tzinfo == UTC
+    calls = cast(list[dict[str, object]], captured["record_failed_calls"])
+    assert len(calls) >= 1, "record_failed must be called on adapter exception"
+    row_keys = [cast(dict[str, str], c["row_key"]) for c in calls]
+    # Date-level failure row.
+    assert {"date": "2026-04-19", "data_type": "XG"} in row_keys
+    # Per-league failure rows for every expected league (5 PREDICTION leagues).
+    _expected_leagues = {"EPL", "LA_LIGA", "BUNDESLIGA", "SERIE_A", "LIGUE_1"}
+    _seen_leagues = {cast(str, rk.get("league_id")) for rk in row_keys if "league_id" in rk}
+    assert _seen_leagues == _expected_leagues, (
+        f"Per-league record_failed must cover all expected leagues; got {_seen_leagues}"
+    )
+    # Every failure call must carry the classified error code.
+    for c in calls:
+        assert c["error"] == "RuntimeError"  # classify falls back to class name
+        assert isinstance(c["attempted_at"], datetime)
+        assert cast(datetime, c["attempted_at"]).tzinfo == UTC
     assert captured.get("record_empty_called") is None
