@@ -497,8 +497,8 @@ def test_get_instruments_bucket_test_run_appends_test_suffix():
 
     with (
         patch(
-            "instruments_service.engine.orchestrator.get_bucket_name",
-            return_value="instruments-store-defi-my-project",
+            "instruments_service.engine.orchestrator.get_write_bucket_name",
+            return_value="instruments-store-defi-test-my-project",
         ),
         patch("instruments_service.engine.orchestrator.get_config") as mock_cfg,
     ):
@@ -506,18 +506,20 @@ def test_get_instruments_bucket_test_run_appends_test_suffix():
         mock_cfg.return_value.gcp_project_id = "my-project"
         bucket = _get_instruments_bucket("DEFI")
 
-    assert bucket == "instruments-store-defi-my-project-test"
-    assert bucket.endswith("-test")
+    # Canonical convention: `-test-` INSERTED between category and project_id.
+    # SSOT: codex/02-data/per-category-bucket-layouts.md.
+    assert bucket == "instruments-store-defi-test-my-project"
 
 
 def test_get_instruments_bucket_normal_uses_utl():
-    """Without is_test_run, bucket comes from UTL get_bucket_name."""
+    """Without is_test_run, bucket comes from UTL get_write_bucket_name
+    (which delegates to get_bucket_name when IS_TEST_RUN is unset)."""
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
     with (
         patch("instruments_service.engine.orchestrator.get_config") as mock_cfg,
         patch(
-            "instruments_service.engine.orchestrator.get_bucket_name",
+            "instruments_service.engine.orchestrator.get_write_bucket_name",
             return_value="instruments-store-prod",
         ),
     ):
@@ -893,8 +895,8 @@ def test_bucket_test_run_appends_test_suffix():
 
     with (
         patch(
-            "instruments_service.engine.orchestrator.get_bucket_name",
-            return_value="instruments-store-defi-test-project",
+            "instruments_service.engine.orchestrator.get_write_bucket_name",
+            return_value="instruments-store-defi-test-test-project",
         ),
         patch("instruments_service.engine.orchestrator.get_config") as mock_cfg,
     ):
@@ -902,23 +904,27 @@ def test_bucket_test_run_appends_test_suffix():
         mock_cfg.return_value.gcp_project_id = "test-project"
         bucket = _get_instruments_bucket("DEFI")
 
-    assert bucket == "instruments-store-defi-test-project-test"
-    assert bucket.endswith("-test")
+    # Canonical convention: `-test-` INSERTED between category and project_id.
+    assert bucket == "instruments-store-defi-test-test-project"
 
 
 def test_bucket_no_category_uses_flat_bucket():
-    """Without a category, falls back to flat instruments-store-{project}."""
+    """Without a category, falls back to flat instruments-store-{project}.
+
+    After the 2026-04-20 test-bucket-naming fix, bucket resolution delegates
+    to UTL ``get_write_bucket_name`` which honours ``IS_TEST_RUN`` internally.
+    """
     from unittest.mock import patch
 
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
     with patch(
-        "instruments_service.engine.orchestrator.get_bucket_name",
+        "instruments_service.engine.orchestrator.get_write_bucket_name",
         return_value="instruments-store-test-project",
     ) as mock_gb:
         bucket = _get_instruments_bucket(None)
 
-    mock_gb.assert_called_once_with("instruments", None)
+    mock_gb.assert_called_once_with("instruments", None, mock_gb.call_args.args[2])
     assert "instruments-store" in bucket
 
 

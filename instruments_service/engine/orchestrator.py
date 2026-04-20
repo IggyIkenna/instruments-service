@@ -68,6 +68,7 @@ from unified_trading_library import (
     get_bucket_name,
     get_data_sink,
     get_storage_client,
+    get_write_bucket_name,
     log_event,
     read_availability_index,
 )
@@ -4542,24 +4543,31 @@ async def fill_solana_creation_cache(
 def _get_instruments_bucket(category: str | None = None) -> str:
     """Resolve the instruments write bucket for the given category.
 
-    Prod:  instruments-store-{category.lower()}-{project}
-    Test:  instruments-store-{category.lower()}-{project}-test
+    Prod:  instruments-store-{category.lower()}-{project_id}
+    Test:  instruments-store-{category.lower()}-test-{project_id}
 
-    Test buckets follow the same naming as prod with -test appended after
-    the project ID. IS_TEST_RUN=true writes to the test variant so prod
-    data is never touched during local dev / E2E runs.
+    When ``IS_TEST_RUN=true``, writes route to the canonical ``-test-`` variant
+    (``-test-`` inserted between category and project_id — matches the 77
+    buckets provisioned by
+    ``deployment-service/scripts/provision-test-buckets.sh``). SSOT:
+    ``codex/02-data/per-category-bucket-layouts.md``.
+
+    Delegates to UTL ``get_write_bucket_name`` which already handles the
+    ``IS_TEST_RUN`` gate via env var.
     """
     cfg = get_config()
     project = cfg.gcp_project_id or "test-project"
 
     try:
-        prod_bucket = get_bucket_name("instruments", category)
+        return get_write_bucket_name("instruments", category, project)
     except (ImportError, AttributeError):
+        # Dev-environment fallback when UTL cloud_constants is unavailable.
         cat_lower = category.lower() if category else None
         prefix = cfg.instruments_bucket_prefix
         prod_bucket = f"{prefix}-{cat_lower}-{project}" if cat_lower else f"{prefix}-{project}"
-
-    return f"{prod_bucket}-test" if cfg.is_test_run else prod_bucket
+        if not cfg.is_test_run:
+            return prod_bucket
+        return prod_bucket.replace(f"-{project}", f"-test-{project}", 1)
 
 
 def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int) -> None:

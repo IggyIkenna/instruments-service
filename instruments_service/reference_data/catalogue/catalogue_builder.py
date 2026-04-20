@@ -24,7 +24,7 @@ from typing import Literal
 import pandas as pd
 from unified_api_contracts import InstrumentType, build_instrument_id
 from unified_api_contracts.internal import InstrumentRecord, MarketCategory
-from unified_trading_library import DataSink, get_bucket_name, get_data_sink
+from unified_trading_library import DataSink, get_bucket_name, get_data_sink, get_write_bucket_name
 
 from instruments_service.config import get_config
 from instruments_service.engine.orchestrator import get_venues_for_categories
@@ -203,10 +203,10 @@ class CatalogueBuilder:
     def _resolve_bucket(self, category: str) -> str:
         """Look up the instruments bucket for a category.
 
-        Mirrors the orchestrator's bucket-resolution logic (UTL
-        ``get_bucket_name`` with an ``IS_TEST_RUN`` suffix) so catalogues are
-        written to the same bucket as the rest of instruments-service output.
-        A custom resolver can be injected via the constructor for tests.
+        Delegates to UTL ``get_write_bucket_name`` which honours ``IS_TEST_RUN``
+        by inserting ``-test-`` between category and project_id — canonical
+        SSOT per ``codex/02-data/per-category-bucket-layouts.md``. A custom
+        resolver can be injected via the constructor for tests.
         """
         if self._bucket_resolver is not None:
             return self._bucket_resolver(category)
@@ -214,12 +214,14 @@ class CatalogueBuilder:
         cfg = get_config()
         project = cfg.gcp_project_id or "test-project"
         try:
-            prod_bucket = get_bucket_name("instruments", category)
+            return get_write_bucket_name("instruments", category, project)
         except (ImportError, AttributeError):
             cat_lower = category.lower() if category else None
             prefix = cfg.instruments_bucket_prefix
             prod_bucket = f"{prefix}-{cat_lower}-{project}" if cat_lower else f"{prefix}-{project}"
-        return f"{prod_bucket}-test" if cfg.is_test_run else prod_bucket
+            if not cfg.is_test_run:
+                return prod_bucket
+            return prod_bucket.replace(f"-{project}", f"-test-{project}", 1)
 
 
 def _records_to_dataframe(records: list[InstrumentRecord]) -> pd.DataFrame:

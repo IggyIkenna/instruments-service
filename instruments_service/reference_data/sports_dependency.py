@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 
-from unified_trading_library import DependencyError, get_bucket_name, get_storage_client
+from unified_trading_library import DependencyError, get_bucket_name, get_storage_client, get_write_bucket_name
 
 from instruments_service.config import get_config
 
@@ -54,17 +54,22 @@ def _resolve_sports_bucket() -> str:
     """Resolve the sports-reference bucket honouring ``IS_TEST_RUN``.
 
     Mirrors ``instruments_service.engine.orchestrator._get_instruments_bucket``
-    for the SPORTS category so that the pre-flight check reads from the same
-    bucket the orchestrator writes to.
+    for the SPORTS category so the pre-flight check reads from the same bucket
+    the orchestrator writes to. TEST-mode uses the canonical ``-test-`` in
+    middle (inserted between category and project_id) — SSOT:
+    ``codex/02-data/per-category-bucket-layouts.md``. Delegates to UTL
+    ``get_write_bucket_name``.
     """
     cfg = get_config()
     project = cfg.gcp_project_id or "test-project"
     try:
-        prod_bucket = get_bucket_name("instruments", "SPORTS")
+        return get_write_bucket_name("instruments", "SPORTS", project)
     except (ImportError, AttributeError):
         prefix = cfg.instruments_bucket_prefix
         prod_bucket = f"{prefix}-sports-{project}"
-    return f"{prod_bucket}-test" if cfg.is_test_run else prod_bucket
+        if not cfg.is_test_run:
+            return prod_bucket
+        return prod_bucket.replace(f"-{project}", f"-test-{project}", 1)
 
 
 def _blob_exists(bucket: str, path: str) -> bool:
