@@ -3867,19 +3867,6 @@ async def _fetch_understat_xg(
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
 
-    # Honest-coverage pre-flight: skip if a previous run already captured or
-    # confirmed-empty this shard.  ``attempted_failed`` rows fall through and
-    # are retried.  ``force=True`` bypasses the check.
-    xg_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-    _row_key: dict[str, str] = {"date": date, "data_type": "XG"}
-    if _should_skip_shard(xg_manifest, row_key=_row_key, force=force):
-        logger.info("Understat xG: skipping date=%s (manifest pre-flight)", date)
-        return counts
-
-    # Stamp attempt-start before the network call so record_empty / record_failed
-    # reflect the attempt time, not the manifest write time.
-    attempt_ts = datetime.now(UTC)
-
     # Expected-league denominator (Understat covers 5 PREDICTION leagues: EPL,
     # LA_LIGA, BUNDESLIGA, SERIE_A, LIGUE_1). SSOT:
     # ``codex/02-data/sports-data-source-coverage-matrix.md``.
@@ -3887,9 +3874,37 @@ async def _fetch_understat_xg(
         get_expected_leagues_for_source,
     )
 
+    xg_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+    _row_key: dict[str, str] = {"date": date, "data_type": "XG"}
     _expected_understat_leagues = {
         lg.league_id for lg in get_expected_leagues_for_source("understat", classifications=["Prediction"])
     }
+
+    # Honest-coverage per-league pre-flight: only short-circuit if EVERY
+    # expected league already has its own captured/empty_confirmed row. The
+    # legacy date-aggregate row (row_key without league_id) is ignored so
+    # pre-sharding-era shards get back-filled per-league on the next run.
+    # ``attempted_failed`` per-league rows fall through and are retried.
+    # ``force=True`` bypasses the skip entirely.
+    _all_per_league_captured = bool(_expected_understat_leagues) and all(
+        _should_skip_shard(
+            xg_manifest,
+            row_key={"date": date, "data_type": "XG", "league_id": lid},
+            force=force,
+        )
+        for lid in _expected_understat_leagues
+    )
+    if _all_per_league_captured:
+        logger.info(
+            "Understat xG: skipping date=%s — all %d expected leagues per-league captured",
+            date,
+            len(_expected_understat_leagues),
+        )
+        return counts
+
+    # Stamp attempt-start before the network call so record_empty / record_failed
+    # reflect the attempt time, not the manifest write time.
+    attempt_ts = datetime.now(UTC)
 
     try:
         from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
@@ -4806,9 +4821,36 @@ async def _fetch_weather_data(
 
     if not venues_with_coords:
         if existing_venue_ids:
-            logger.info("Weather: all venues already covered for date=%s — skipping", date)
-            # Idempotency: data is already captured on GCS — prior manifest
-            # entries stand.  Nothing new to record.
+            # Data already on GCS, but the pre-sharding date-aggregate manifest
+            # row may be the only surviving trace. Emit per-league captured
+            # rows from fixtures_df so data-status UI can render per-league
+            # completion (instead of one row per day). Idempotent — if
+            # per-league rows exist, ManifestWriter dedup keeps them.
+            _captured_leagues_covered: set[str] = set()
+            if fixtures_df is not None and "league_id" in fixtures_df.columns:
+                for _lid_val in fixtures_df["league_id"].dropna().astype(str).unique():
+                    _lid_str = str(_lid_val).strip()
+                    if not _lid_str:
+                        continue
+                    _captured_leagues_covered.add(_lid_str)
+                    manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=1,
+                        data_type="WEATHER",
+                        league_id=_lid_str,
+                    )
+            for _exp_lid in sorted(_expected_weather_league_ids - _captured_leagues_covered):
+                manifest.record_empty(
+                    row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
+                    attempted_at=attempt_ts,
+                )
+            logger.info(
+                "Weather: all %d venues already covered for date=%s — back-filled per-league manifest (%d captured, %d empty)",
+                len(existing_venue_ids),
+                date,
+                len(_captured_leagues_covered),
+                len(_expected_weather_league_ids - _captured_leagues_covered),
+            )
             manifest.write()
             return counts
         logger.info("Weather: no fixture venues with coordinates for date=%s — skipping", date)
@@ -4895,9 +4937,43 @@ async def _fetch_weather_data(
         counts["weather"] = len(new_df)
         logger.info("Weather: %d venue observations written for date=%s", len(new_df), date)
 
-    # Honest-coverage manifest write.
+    # Honest-coverage manifest write — per-league sharding so data-status UI
+    # can render per-league WEATHER completion (not just one row per day).
     if weather_rows:
-        # At least one venue succeeded → shard is captured.
+        # Map venue_id → league_id(s) via fixtures_df so captured weather rows
+        # land in the right league bucket. A venue can host matches across
+        # leagues on the same date (cup + league doubles), so use set union.
+        _venue_to_leagues: dict[str, set[str]] = {}
+        if fixtures_df is not None and "league_id" in fixtures_df.columns and "venue_name" in fixtures_df.columns:
+            for _, _frow in fixtures_df[["venue_name", "league_id"]].dropna().iterrows():
+                _vname = str(_frow["venue_name"]).strip()
+                _lid_val = str(_frow["league_id"]).strip()
+                if not _vname or not _lid_val:
+                    continue
+                _vkey = _to_snake(_vname)
+                _venue_to_leagues.setdefault(_vkey, set()).add(_lid_val)
+        _captured_venues = {str(row.get("venue_id", "")) for row in weather_rows if row.get("venue_id")}
+        _captured_leagues: set[str] = set()
+        _league_venue_count: dict[str, int] = {}
+        for _v in _captured_venues:
+            for _lid_v in _venue_to_leagues.get(_v, set()):
+                _captured_leagues.add(_lid_v)
+                _league_venue_count[_lid_v] = _league_venue_count.get(_lid_v, 0) + 1
+        for _lid, _count in sorted(_league_venue_count.items()):
+            manifest.add(
+                processing_date=date_type.fromisoformat(date),
+                row_count=_count,
+                data_type="WEATHER",
+                league_id=_lid,
+            )
+        # Per-league empty_confirmed for in-season leagues with no captured weather
+        for _exp_lid in sorted(_expected_weather_league_ids - _captured_leagues):
+            manifest.record_empty(
+                row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
+                attempted_at=attempt_ts,
+            )
+        # Keep a date-level aggregate row for backwards-compat with any consumer
+        # that still queries the unsharded row.
         manifest.add(
             processing_date=date_type.fromisoformat(date),
             row_count=counts.get("weather", 0),
