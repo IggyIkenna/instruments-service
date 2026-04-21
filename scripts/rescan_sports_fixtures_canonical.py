@@ -111,23 +111,21 @@ Usage
 from __future__ import annotations
 
 import argparse
-import contextlib
 import io
 import logging
 import sys
-import tempfile
-from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
+from datetime import UTC, date, datetime
 
 import pandas as pd
-from google.cloud import storage
 from unified_api_contracts.sports import (
     get_expected_leagues_for_source,
     get_league_by_api_football_id,
     get_league_fixture_calendar,
 )
+from unified_trading_library.cloud_interface import StorageClient
+from unified_trading_library.core.client_factory import get_storage_client
+from unified_trading_library.manifest_migrations import ManifestMigrator, chunked_date_ranges
 
 logging.basicConfig(
     level=logging.INFO,
@@ -140,14 +138,8 @@ _NOW = datetime.now(UTC).isoformat()
 BUCKET_NAME = "instruments-store-sports-central-element-323112"
 FIXTURES_PREFIX = "sports_reference/by_date/"
 INDEX_BLOB = "_index/availability_index.parquet"
-PARTIAL_PREFIX = "_index/partial"
 
-# Leagues expected to have fixtures from api-football. Computed once per process
-# and reused across every blob — stable for the lifetime of the VM run because
-# the league registry is immutable at runtime.
 _AF_LEAGUES_CACHE: list[str] | None = None
-# Per-date in-season cache — season windows are cheap to compute but we call
-# this O(N_blobs x N_leagues) times otherwise.
 _IN_SEASON_CACHE: dict[str, frozenset[str]] = {}
 
 
@@ -160,14 +152,7 @@ def _af_league_ids() -> list[str]:
 
 
 def _leagues_in_season_on(date_str: str) -> frozenset[str]:
-    """Canonical league_ids that are in-season on ``date_str``.
-
-    Used to distinguish ``empty_confirmed`` (league active, zero fixtures that
-    day — e.g. mid-week gap between matches) from ``missing`` (league not
-    played that day at all, so the aggregator shouldn't count it in the
-    denominator either). The latter is already excluded by the aggregator's
-    season-calendar join.
-    """
+    """Canonical league_ids that are in-season on ``date_str``."""
     cached = _IN_SEASON_CACHE.get(date_str)
     if cached is not None:
         return cached
@@ -180,30 +165,31 @@ def _leagues_in_season_on(date_str: str) -> frozenset[str]:
     return frozen
 
 
-def _list_fixtures_blobs(
-    bucket: storage.Bucket,
+def _parse_date(blob_name: str) -> str | None:
+    for p in blob_name.split("/"):
+        if p.startswith("day="):
+            return p[4:]
+    return None
+
+
+def _list_fixtures_blob_paths(
+    storage: StorageClient,
+    bucket: str,
     date_str: str | None,
     date_start: str | None = None,
     date_end: str | None = None,
-) -> list[storage.Blob]:
-    """List every day=<D>/entity=fixtures/fixtures.parquet blob.
-
-    Optionally scoped to a single date (``date_str``) or a closed date range
-    (``date_start`` .. ``date_end`` inclusive). When a range is provided, the
-    prefix-scan still reads the whole ``sports_reference/by_date/`` tree and
-    filters in Python — GCS list is O(# of objects) either way.
-    """
+) -> list[str]:
     prefix = f"{FIXTURES_PREFIX}day={date_str}/entity=fixtures/" if date_str else FIXTURES_PREFIX
 
     start_d = date.fromisoformat(date_start) if date_start else None
     end_d = date.fromisoformat(date_end) if date_end else None
 
-    matches: list[storage.Blob] = []
-    for blob in bucket.list_blobs(prefix=prefix):
-        if not blob.name.endswith("/entity=fixtures/fixtures.parquet"):
+    matches: list[str] = []
+    for meta in storage.list_blobs(bucket, prefix=prefix):
+        if not meta.name.endswith("/entity=fixtures/fixtures.parquet"):
             continue
         if start_d is not None or end_d is not None:
-            parsed = _parse_date(blob.name)
+            parsed = _parse_date(meta.name)
             if parsed is None:
                 continue
             try:
@@ -214,15 +200,8 @@ def _list_fixtures_blobs(
                 continue
             if end_d is not None and d > end_d:
                 continue
-        matches.append(blob)
+        matches.append(meta.name)
     return matches
-
-
-def _parse_date(blob_name: str) -> str | None:
-    for p in blob_name.split("/"):
-        if p.startswith("day="):
-            return p[4:]
-    return None
 
 
 def _fixture_row(
@@ -253,34 +232,19 @@ def _fixture_row(
     }
 
 
-def _scan_blob(bucket: storage.Bucket, blob: storage.Blob) -> list[dict[str, object]]:
-    """Read one fixtures.parquet and emit per-canonical-league manifest rows.
-
-    Emits two row shapes for each blob we successfully read:
-
-    - ``captured`` — one per league that had ≥1 fixture on this date.
-    - ``empty_confirmed`` — one per league that is in-season on this date but
-      had zero fixtures. This is the signal the aggregator uses to turn the
-      per-league drilldown cell green ("we attempted, API returned zero")
-      rather than red ("no row exists, we don't know what happened"). The
-      in-season set comes from UAC ``get_league_fixture_calendar`` — only
-      leagues whose season window actually covers this date are claimed empty.
-    """
-    date_str = _parse_date(blob.name)
+def _scan_blob_path(storage: StorageClient, bucket: str, blob_path: str) -> list[dict[str, object]]:
+    """Read one fixtures.parquet and emit per-canonical-league manifest rows."""
+    date_str = _parse_date(blob_path)
     if date_str is None:
         return []
 
     try:
-        raw = blob.download_as_bytes()
+        raw = storage.download_bytes(bucket, blob_path)
         df = pd.read_parquet(io.BytesIO(raw))
     except Exception as exc:
-        logger.warning("Failed to read %s: %s", blob.name, exc)
+        logger.warning("Failed to read %s: %s", blob_path, exc)
         return []
 
-    # The blob exists (adapter ran that day) but may be structurally broken or
-    # schema-less. Treat missing af_league_id as "no captured rows" but still
-    # emit empty_confirmed for every in-season league — the adapter ran, the
-    # file exists, so zero-per-league is a legitimate claim.
     per_league: dict[str, int] = {}
     unmapped = 0
     if not df.empty and "af_league_id" in df.columns:
@@ -300,8 +264,6 @@ def _scan_blob(bucket: storage.Bucket, blob: storage.Blob) -> list[dict[str, obj
     for lid, count in per_league.items():
         entries.append(_fixture_row(date_str=date_str, league_id=lid, count=count, capture_status="captured"))
 
-    # empty_confirmed complement: in-season leagues with zero fixtures on this
-    # date. Parquet exists == adapter ran == we can legitimately claim empty.
     captured_lids = set(per_league.keys())
     in_season = _leagues_in_season_on(date_str)
     for lid in sorted(in_season - captured_lids):
@@ -314,184 +276,46 @@ def _scan_blob(bucket: storage.Bucket, blob: storage.Blob) -> list[dict[str, obj
 
 
 def _scan_range(
-    bucket: storage.Bucket,
-    blobs: list[storage.Blob],
+    storage: StorageClient,
+    bucket: str,
+    blob_paths: list[str],
     workers: int,
+    *,
+    migrator: ManifestMigrator | None = None,
+    run_id: str | None = None,
 ) -> list[dict[str, object]]:
     """Parallel-scan blobs. Shared helper for single-VM and worker modes."""
     all_entries: list[dict[str, object]] = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_scan_blob, bucket, b): b for b in blobs}
+        futures = {pool.submit(_scan_blob_path, storage, bucket, p): p for p in blob_paths}
         for done, future in enumerate(as_completed(futures), 1):
             try:
                 all_entries.extend(future.result())
             except Exception as exc:
                 logger.warning("scan failed: %s", exc)
             if done % 200 == 0:
-                logger.info("Progress: %d / %d", done, len(blobs))
+                logger.info("Progress: %d / %d", done, len(blob_paths))
+                if migrator is not None:
+                    migrator.notify_progress(done, len(blob_paths), run_id=run_id)
     return all_entries
 
 
-def _upload_parquet(bucket: storage.Bucket, blob_name: str, rows: Iterable[dict[str, object]]) -> int:
-    """Write rows to a GCS parquet via a tempfile (avoids Bandit B108)."""
-    df = pd.DataFrame(list(rows))
-    tmp_dir = Path(tempfile.gettempdir())
-    tmp_path = tmp_dir / f"rescan_{blob_name.replace('/', '_')}.parquet"
-    df.to_parquet(tmp_path, index=False)
-    bucket.blob(blob_name).upload_from_filename(str(tmp_path))
-    with contextlib.suppress(OSError):
-        tmp_path.unlink()
-    return len(df)
-
-
-def _merge_into_canonical(bucket: storage.Bucket, new_entries: list[dict[str, object]]) -> int:
-    """Read canonical, drop the FIXTURES-per-league rows we're replacing, union with new_entries, write back.
-
-    Returns the total row count of the written manifest.
-    """
-    index_blob = bucket.blob(INDEX_BLOB)
-    existing_entries: list[dict[str, object]] = []
-    if index_blob.exists():
-        logger.info("Reading existing manifest ...")
-        existing_df = pd.read_parquet(io.BytesIO(index_blob.download_as_bytes()))
-        # Keep everything except FIXTURES rows from instruments-service with non-empty league_id —
-        # those are the rows we're replacing. Preserve legacy empty-league_id FIXTURES rows
-        # (rescan_sports_manifest bootstrap output) so we don't lose sparse-entity entries.
-        mask_keep = ~(
-            (existing_df.get("data_type") == "FIXTURES")
-            & (existing_df.get("service_name") == "instruments-service")
-            & (existing_df.get("league_id", pd.Series(dtype=str)).astype(str) != "")
-        )
-        existing_entries = existing_df[mask_keep].to_dict("records")
-        logger.info(
-            "Preserving %d existing rows; replacing %d FIXTURES per-league rows",
-            len(existing_entries),
-            len(existing_df) - len(existing_entries),
-        )
-
-    combined = pd.DataFrame(new_entries + existing_entries)
-    count = _upload_parquet(bucket, INDEX_BLOB, combined.to_dict("records"))
-    logger.info("Wrote %d rows to gs://%s/%s", count, bucket.name, INDEX_BLOB)
-    return count
-
-
-def _worker_partial_blob(run_id: str, chunk_id: str) -> str:
-    safe_chunk = chunk_id.replace("/", "-")
-    return f"{PARTIAL_PREFIX}/{run_id}/{safe_chunk}.parquet"
-
-
-def _run_worker(
-    bucket: storage.Bucket,
-    run_id: str,
-    chunk_id: str,
-    date_start: str | None,
-    date_end: str | None,
-    date_single: str | None,
-    workers: int,
-    dry_run: bool,
-) -> None:
-    """Worker mode: scan a disjoint date range, write to _index/partial/<run-id>/<chunk-id>.parquet."""
-    logger.info(
-        "Worker %s | run-id=%s | date_start=%s date_end=%s date=%s",
-        chunk_id,
-        run_id,
-        date_start,
-        date_end,
-        date_single,
+def _drop_instruments_fixtures_per_league(row: pd.Series) -> bool:
+    """Rows removed from canonical before merging new FIXTURES per-league shards."""
+    lid = row.get("league_id", "")
+    lid_s = "" if lid is None or (isinstance(lid, float) and pd.isna(lid)) else str(lid)
+    return (
+        str(row.get("data_type", "")) == "FIXTURES"
+        and str(row.get("service_name", "")) == "instruments-service"
+        and lid_s != ""
     )
-    blobs = _list_fixtures_blobs(bucket, date_single, date_start, date_end)
-    logger.info("Worker %s: found %d fixtures.parquet files", chunk_id, len(blobs))
-    if not blobs:
-        logger.warning("Worker %s: nothing to scan", chunk_id)
-        return
-
-    entries = _scan_range(bucket, blobs, workers)
-    logger.info(
-        "Worker %s: produced %d per-(date, league_id) rows across %d blobs",
-        chunk_id,
-        len(entries),
-        len(blobs),
-    )
-    if dry_run:
-        logger.info("Worker %s: DRY RUN — not writing partial", chunk_id)
-        return
-
-    partial_blob = _worker_partial_blob(run_id, chunk_id)
-    _upload_parquet(bucket, partial_blob, entries)
-    logger.info("Worker %s: wrote %d rows to gs://%s/%s", chunk_id, len(entries), bucket.name, partial_blob)
 
 
-def _run_coordinator(bucket: storage.Bucket, run_id: str, dry_run: bool) -> None:
-    """Coordinator mode: read canonical, glob _index/partial/<run-id>/*.parquet, merge, write canonical, delete partials."""
-    logger.info("Coordinator | run-id=%s", run_id)
-    partial_prefix = f"{PARTIAL_PREFIX}/{run_id}/"
-    partials = list(bucket.list_blobs(prefix=partial_prefix))
-    if not partials:
-        logger.error("No partials found under gs://%s/%s — aborting", bucket.name, partial_prefix)
-        sys.exit(1)
-    logger.info("Found %d partial shards under gs://%s/%s", len(partials), bucket.name, partial_prefix)
-
-    all_entries: list[dict[str, object]] = []
-    for blob in partials:
-        if not blob.name.endswith(".parquet"):
-            continue
-        df = pd.read_parquet(io.BytesIO(blob.download_as_bytes()))
-        all_entries.extend(df.to_dict("records"))
-        logger.info("  loaded %d rows from %s", len(df), blob.name)
-
-    logger.info("Coordinator: %d partial rows total", len(all_entries))
-    if not all_entries:
-        logger.warning("No entries in partials; aborting coordinator merge")
-        sys.exit(1)
-
-    if dry_run:
-        logger.info("Coordinator: DRY RUN — not writing canonical or deleting partials")
-        return
-
-    _merge_into_canonical(bucket, all_entries)
-
-    logger.info("Coordinator: deleting %d partial shards ...", len(partials))
-    for blob in partials:
-        try:
-            blob.delete()
-        except Exception as exc:
-            logger.warning("failed to delete %s: %s", blob.name, exc)
-    logger.info("Coordinator: merge complete")
-
-
-def _run_single_vm(
-    bucket: storage.Bucket,
-    date_single: str | None,
-    workers: int,
-    dry_run: bool,
-) -> None:
-    """Single-VM mode: scan everything, write canonical directly (historical behaviour)."""
-    blobs = _list_fixtures_blobs(bucket, date_single)
-    logger.info("Found %d fixtures.parquet files", len(blobs))
-    if not blobs:
-        logger.warning("Nothing to do.")
-        return
-
-    entries = _scan_range(bucket, blobs, workers)
-    logger.info(
-        "Scan complete: %d per-(date, league_id) FIXTURES rows across %d blobs",
-        len(entries),
-        len(blobs),
-    )
-    if not entries:
-        logger.warning("No entries produced. Aborting.")
-        sys.exit(1)
-
+def _print_top_leagues(entries: list[dict[str, object]]) -> None:
     df = pd.DataFrame(entries)
     logger.info("Top-10 leagues by fixture count (Phase 5 target >= 200 per league/season):")
     top = df.groupby("league_id")["instrument_count"].sum().sort_values(ascending=False).head(10)
     print(top.to_string())
-
-    if dry_run:
-        logger.info("DRY RUN — not writing manifest.")
-        return
-
-    _merge_into_canonical(bucket, entries)
 
 
 def main() -> None:
@@ -500,12 +324,10 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=8, help="Parallel workers (thread pool for blob scan)")
     parser.add_argument("--bucket", type=str, default=BUCKET_NAME, help="GCS bucket")
 
-    # Date selection
     parser.add_argument("--date", type=str, help="Scan a single date (YYYY-MM-DD)")
     parser.add_argument("--date-start", type=str, help="Inclusive date lower bound (YYYY-MM-DD, worker mode)")
     parser.add_argument("--date-end", type=str, help="Inclusive date upper bound (YYYY-MM-DD, worker mode)")
 
-    # Chunk-safe mode flags (see module docstring)
     parser.add_argument("--chunk-id", type=str, help="Worker chunk label (e.g. '3-of-10'). Enables worker mode.")
     parser.add_argument(
         "--run-id",
@@ -526,7 +348,6 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Narrow argparse.Namespace -> typed locals (basedpyright strict mode)
     dry_run: bool = bool(args.dry_run)
     workers: int = int(args.workers)
     bucket_name: str = str(args.bucket)
@@ -540,18 +361,23 @@ def main() -> None:
         [str(x) for x in args.split_range] if args.split_range else None  # pyright: ignore[reportAny]
     )
 
-    # Utility mode: just print chunk boundaries (no GCS client required)
     if split_range is not None:
         s_start, s_end, s_n = split_range
-        for cs, ce in _split_date_range(s_start, s_end, int(s_n)):
+        for cs, ce in chunked_date_ranges(s_start, s_end, int(s_n)):
             print(f"{cs}\t{ce}")
         return
 
-    client = storage.Client()
-    bucket = client.bucket(bucket_name)
+    storage = get_storage_client()
     logger.info("Targeting bucket gs://%s", bucket_name)
 
-    # Validate mode selection
+    migrator = ManifestMigrator(
+        bucket_name,
+        "instruments-service",
+        _drop_instruments_fixtures_per_league,
+        storage=storage,
+        index_blob=INDEX_BLOB,
+    )
+
     worker_mode = chunk_id is not None
     coord_mode = coordinate
 
@@ -569,54 +395,60 @@ def main() -> None:
 
     if coord_mode:
         assert run_id is not None
-        _run_coordinator(bucket, run_id, dry_run)
+        migrator.run_coordinator(run_id, dry_run=dry_run)
         return
 
     if worker_mode:
         assert run_id is not None
         assert chunk_id is not None
-        _run_worker(
-            bucket,
-            run_id=run_id,
-            chunk_id=chunk_id,
-            date_start=date_start,
-            date_end=date_end,
-            date_single=date_single,
-            workers=workers,
-            dry_run=dry_run,
-        )
+
+        def scan_fn() -> list[dict[str, object]]:
+            paths = _list_fixtures_blob_paths(storage, bucket_name, date_single, date_start, date_end)
+            logger.info("Worker %s: found %d fixtures.parquet files", chunk_id, len(paths))
+            if not paths:
+                logger.warning("Worker %s: nothing to scan", chunk_id)
+                return []
+            return _scan_range(
+                storage,
+                bucket_name,
+                paths,
+                workers,
+                migrator=migrator,
+                run_id=run_id,
+            )
+
+        migrator.run_worker(run_id, chunk_id, scan_fn, dry_run=dry_run)
         return
 
-    # Default: single-VM mode
-    _run_single_vm(bucket, date_single, workers, dry_run)
+    paths = _list_fixtures_blob_paths(storage, bucket_name, date_single)
+    logger.info("Found %d fixtures.parquet files", len(paths))
+    if not paths:
+        logger.warning("Nothing to do.")
+        return
 
+    def scan_fn() -> list[dict[str, object]]:
+        entries_local = _scan_range(
+            storage,
+            bucket_name,
+            paths,
+            workers,
+            migrator=migrator,
+            run_id=None,
+        )
+        logger.info(
+            "Scan complete: %d per-(date, league_id) FIXTURES rows across %d blobs",
+            len(entries_local),
+            len(paths),
+        )
+        if entries_local:
+            _print_top_leagues(entries_local)
+        return entries_local
 
-def _split_date_range(start: str, end: str, chunks: int) -> list[tuple[str, str]]:
-    """Split a closed date range into N roughly-equal chunks.
-
-    Exposed as a helper so the launcher / tests / future migration scripts can
-    reuse the same slicing logic.
-    """
-    d0 = date.fromisoformat(start)
-    d1 = date.fromisoformat(end)
-    if d1 < d0:
-        raise ValueError("date-end must be >= date-start")
-    total_days = (d1 - d0).days + 1
-    if chunks <= 0:
-        raise ValueError("chunks must be >= 1")
-    if chunks > total_days:
-        chunks = total_days
-    size = total_days // chunks
-    remainder = total_days % chunks
-    out: list[tuple[str, str]] = []
-    cursor = d0
-    for i in range(chunks):
-        span = size + (1 if i < remainder else 0)
-        chunk_start = cursor
-        chunk_end = cursor + timedelta(days=span - 1)
-        out.append((chunk_start.isoformat(), chunk_end.isoformat()))
-        cursor = chunk_end + timedelta(days=1)
-    return out
+    try:
+        migrator.run_single_vm(scan_fn, dry_run=dry_run)
+    except RuntimeError as exc:
+        logger.warning("%s", exc)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
