@@ -325,7 +325,7 @@ def test_get_instruments_bucket_fallback():
     """Falls back to gcp_project_id if get_bucket_name unavailable."""
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
-    with patch("instruments_service.engine.orchestrator.get_bucket_name", side_effect=AttributeError):
+    with patch("instruments_service.engine.orchestrator.get_write_bucket_name", side_effect=AttributeError):
         bucket = _get_instruments_bucket()
 
     assert "test-project" in bucket or "instruments" in bucket.lower()
