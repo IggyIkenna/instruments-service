@@ -53,7 +53,6 @@ class InstrumentsHandler(UnifiedServiceHandler):
         self._sports_provider: str | None = None  # set in preflight() when --sports-provider is used
         self._league_filter: list[str] | None = None  # set in preflight() when --league is used
         self._season_override: int | None = None  # set in preflight() when --season is used
-        self._force_window: bool = False  # set in preflight() when --force-window is used
 
     async def preflight(self) -> None:
         """Start API key reloader. Date/category filtering happens in process()."""
@@ -102,10 +101,10 @@ class InstrumentsHandler(UnifiedServiceHandler):
             logger.info("Season override from CLI: %d", season_arg)
 
         # Wire --lookback-days / --lookahead-days / --force-window for visibility.
-        # Date resolution happens in cli/rolling_window.resolve_rolling_window_args
-        # before ServiceCLI parses argv, so by the time we get here --start-date /
-        # --end-date are already populated; the rolling flags survive on args for
-        # logging/audit purposes only.
+        # UTL's ServiceCLI resolves these into --start-date/--end-date/--force
+        # before argparse (see unified_trading_library.service_framework.rolling_window);
+        # the rolling flags survive on args for logging/audit, and --force-window
+        # flows through to redo_all=True via the injected --force → payload.force.
         lookback_arg: int | None = getattr(self.args, "lookback_days", None) if self.args else None
         lookahead_arg: int | None = getattr(self.args, "lookahead_days", None) if self.args else None
         force_window_arg: bool = bool(getattr(self.args, "force_window", False)) if self.args else False
@@ -119,8 +118,6 @@ class InstrumentsHandler(UnifiedServiceHandler):
                 getattr(self.args, "start_date", None),
                 getattr(self.args, "end_date", None),
             )
-        if force_window_arg:
-            self._force_window = True
 
         # Scope key validation to the requested categories only.
         # --category SPORTS only validates sports API keys (not CeFi/DeFi/TradFi).
@@ -161,7 +158,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
         # Normalize datetime to YYYY-MM-DD string (BatchIO yields datetime objects)
         if "T" in date or " " in date:
             date = date[:10]
-        redo_all = payload.force or bool(payload.extra.get("redo_all", False)) or self._force_window
+        redo_all = payload.force or bool(payload.extra.get("redo_all", False))
 
         categories: list[str] = list(payload.categories) if payload.categories else ["ALL"]
         api_keys = self._key_reloader.current_keys if self._key_reloader else {}
