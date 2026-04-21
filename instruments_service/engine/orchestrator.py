@@ -89,6 +89,20 @@ from instruments_service.reference_data.utils.evm_creation_resolver import EvmCa
 
 logger = logging.getLogger(__name__)
 
+
+def _coerce_adapter_output(item: object) -> dict[str, object]:
+    # UAC sports normalizers return dict[str, object]; some adapter return-type
+    # annotations still claim list[CanonicalX] (Pydantic). Coerce defensively so
+    # either shape works — prior assumption of Pydantic-only blew up INJURIES
+    # backfill 2026-04-21 with AttributeError on every date.
+    if isinstance(item, dict):
+        return dict(item)
+    dump = getattr(item, "model_dump", None)
+    if callable(dump):
+        return dump()
+    return {}
+
+
 # Venue launch dates SSOT: UAC VenueMapping.venue_start_dates (canonical PROTOCOL-CHAIN format).
 # No local copy — read from VenueMapping at module load.
 _VENUE_MAPPING = VenueMapping()
@@ -2594,7 +2608,7 @@ async def _fetch_sports_reference_data(
             try:
                 leagues = await adapter.get_leagues()
                 if leagues:
-                    leagues_df = pd.DataFrame([lg.model_dump() for lg in leagues])
+                    leagues_df = pd.DataFrame([_coerce_adapter_output(lg) for lg in leagues])
                     _set_cached_leagues(leagues_df)
                     logger.info("Sports reference: %d leagues fetched (API call — will cache)", len(leagues_df))
             except Exception as exc:
@@ -2629,7 +2643,7 @@ async def _fetch_sports_reference_data(
                     try:
                         teams = await adapter.get_teams(league_def.api_football_id)
                         for t in teams:
-                            row = t.model_dump()
+                            row = _coerce_adapter_output(t)
                             # Tag each team row with the league_id for per-league partitioning
                             row["league_id"] = league_def.league_id
                             all_teams.append(row)
@@ -2750,7 +2764,7 @@ async def _fetch_sports_reference_data(
         try:
             injuries = await adapter.get_injuries(date)
             if injuries:
-                df = pd.DataFrame([inj.model_dump() for inj in injuries])
+                df = pd.DataFrame([_coerce_adapter_output(inj) for inj in injuries])
                 # PIT safety: daily injuries published morning-of (date + 12:00 UTC)
                 df["data_available_at"] = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=12)
                 counts["injuries"] = len(df)
@@ -3365,7 +3379,7 @@ async def _fetch_footystats_predictions(
 
         predictions = await adapter.get_fixture_predictions(date)  # type: ignore[attr-defined]
         if predictions:
-            df = pd.DataFrame([p.model_dump() for p in predictions])
+            df = pd.DataFrame([_coerce_adapter_output(p) for p in predictions])
             # PIT safety: FootyStats predictions publish alongside odds ~3 days before kickoff
             # (empirically verified 2026-04-17: 98% coverage at T-24h, 100% at T-72h).
             if "kickoff_utc" in df.columns:
@@ -3597,7 +3611,7 @@ async def _fetch_footystats_matches(
         league_ids = list(FOOTYSTATS_HISTORICAL_SEASON_IDS.keys())
         fixtures = await adapter.get_fixtures(date, league_ids=league_ids)
         if fixtures:
-            rows = [fx.model_dump() for fx in fixtures]
+            rows = [_coerce_adapter_output(fx) for fx in fixtures]
             # Flatten nested models for parquet compatibility
             flat_rows: list[dict[str, str | None]] = []
             for row in rows:
@@ -3968,7 +3982,7 @@ async def _fetch_understat_xg(
 
         fixtures = await adapter.get_fixtures(date)
         if fixtures:
-            rows = [fx.model_dump() for fx in fixtures]
+            rows = [_coerce_adapter_output(fx) for fx in fixtures]
             flat_rows: list[dict[str, str | None]] = []
             for row in rows:
                 flat: dict[str, str | None] = {}
@@ -4151,7 +4165,7 @@ async def _fetch_transfermarkt_data(
         try:
             leagues = await adapter.get_leagues()
             if leagues:
-                rows = [lg.model_dump() for lg in leagues]
+                rows = [_coerce_adapter_output(lg) for lg in leagues]
                 df = pd.DataFrame([{k: str(v) if v is not None else None for k, v in r.items()} for r in rows])
                 sink.write(
                     data=df,
@@ -4239,7 +4253,7 @@ async def _fetch_transfermarkt_data(
                     continue
                 _league_count = 0
                 for t in teams:
-                    row = t.model_dump()
+                    row = _coerce_adapter_output(t)
                     flat: dict[str, str | None] = {k: str(v) if v is not None else None for k, v in row.items()}
                     flat["league_id"] = str(tm_code)
                     flat["canonical_league"] = league_def.league_id
@@ -4377,7 +4391,7 @@ async def _fetch_sfi_data(
         leagues = await adapter.get_leagues()
         if leagues:
             if _want_sfi_leagues:
-                rows = [lg.model_dump() for lg in leagues]
+                rows = [_coerce_adapter_output(lg) for lg in leagues]
                 df = pd.DataFrame([{k: str(v) if v is not None else None for k, v in r.items()} for r in rows])
                 sink.write(
                     data=df,
@@ -4503,7 +4517,7 @@ async def _fetch_sfi_data(
                         stats = await adapter.get_progressive_stats(mid)
                         for entry in stats:
                             all_progressive.append(
-                                {k: str(v) if v is not None else None for k, v in entry.model_dump().items()}
+                                {k: str(v) if v is not None else None for k, v in _coerce_adapter_output(entry).items()}
                             )
                     except Exception as exc:
                         classify_and_emit_error(
