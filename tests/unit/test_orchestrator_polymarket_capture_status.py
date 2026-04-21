@@ -205,14 +205,20 @@ async def test_understat_xg_calls_record_empty_on_zero_rows(
     assert captured.get("record_failed_called") is None
     calls = cast(list[dict[str, object]], captured["record_empty_calls"])
     assert len(calls) >= 1, "record_empty must be called on legitimate empty"
-    # Date-level row_key must be present.
     row_keys = [cast(dict[str, str], c["row_key"]) for c in calls]
-    assert {"date": "2026-04-19", "data_type": "XG"} in row_keys
+    # Phase 2 of sports_manifest_shard_migration_cleanup_2026_04_21 dropped
+    # the date-aggregate (``{"date", "data_type"}`` without ``league_id``)
+    # emission — only per-league rows are now written.
+    assert {"date": "2026-04-19", "data_type": "XG"} not in row_keys
     # All 5 expected PREDICTION leagues must have per-league record_empty rows.
     _expected_leagues = {"EPL", "LA_LIGA", "BUNDESLIGA", "SERIE_A", "LIGUE_1"}
     _seen_leagues = {cast(str, rk.get("league_id")) for rk in row_keys if "league_id" in rk}
     assert _seen_leagues == _expected_leagues, (
         f"Per-league record_empty must cover all expected leagues; got {_seen_leagues}"
+    )
+    # Every emitted row carries a league_id (no unsharded rows).
+    assert all("league_id" in rk and rk["league_id"] for rk in row_keys), (
+        f"All record_empty rows must be per-league; got {row_keys}"
     )
     assert captured.get("write_called") is True
 
@@ -314,7 +320,7 @@ async def test_understat_xg_force_bypasses_captured_pre_flight(
 async def test_understat_xg_calls_record_failed_on_exception(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Adapter raises → record_failed at date + per-league; no re-raise."""
+    """Adapter raises → record_failed per-league only; no re-raise; no unsharded row."""
     from instruments_service.engine import orchestrator as orch
 
     captured: dict[str, object] = {"record_failed_calls": []}
@@ -355,17 +361,20 @@ async def test_understat_xg_calls_record_failed_on_exception(
     calls = cast(list[dict[str, object]], captured["record_failed_calls"])
     assert len(calls) >= 1, "record_failed must be called on adapter exception"
     row_keys = [cast(dict[str, str], c["row_key"]) for c in calls]
-    # Date-level failure row.
-    assert {"date": "2026-04-19", "data_type": "XG"} in row_keys
+    # Phase 2 of sports_manifest_shard_migration_cleanup_2026_04_21 dropped the
+    # date-aggregate (``{"date", "data_type"}`` without ``league_id``) emission.
+    assert {"date": "2026-04-19", "data_type": "XG"} not in row_keys
     # Per-league failure rows for every expected league (5 PREDICTION leagues).
     _expected_leagues = {"EPL", "LA_LIGA", "BUNDESLIGA", "SERIE_A", "LIGUE_1"}
     _seen_leagues = {cast(str, rk.get("league_id")) for rk in row_keys if "league_id" in rk}
     assert _seen_leagues == _expected_leagues, (
         f"Per-league record_failed must cover all expected leagues; got {_seen_leagues}"
     )
-    # Every failure call must carry the classified error code.
+    # Every failure call must carry the classified error code + a league_id.
     for c in calls:
         assert c["error"] == "RuntimeError"  # classify falls back to class name
         assert isinstance(c["attempted_at"], datetime)
         assert cast(datetime, c["attempted_at"]).tzinfo == UTC
+        rk = cast(dict[str, str], c["row_key"])
+        assert rk.get("league_id"), f"All record_failed rows must be per-league; got {rk}"
     assert captured.get("record_empty_called") is None
