@@ -123,7 +123,11 @@ from pathlib import Path
 
 import pandas as pd
 from google.cloud import storage
-from unified_api_contracts.sports import get_league_by_api_football_id
+from unified_api_contracts.sports import (
+    get_expected_leagues_for_source,
+    get_league_by_api_football_id,
+    get_league_fixture_calendar,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -137,6 +141,43 @@ BUCKET_NAME = "instruments-store-sports-central-element-323112"
 FIXTURES_PREFIX = "sports_reference/by_date/"
 INDEX_BLOB = "_index/availability_index.parquet"
 PARTIAL_PREFIX = "_index/partial"
+
+# Leagues expected to have fixtures from api-football. Computed once per process
+# and reused across every blob — stable for the lifetime of the VM run because
+# the league registry is immutable at runtime.
+_AF_LEAGUES_CACHE: list[str] | None = None
+# Per-date in-season cache — season windows are cheap to compute but we call
+# this O(N_blobs x N_leagues) times otherwise.
+_IN_SEASON_CACHE: dict[str, frozenset[str]] = {}
+
+
+def _af_league_ids() -> list[str]:
+    """Canonical league_ids sourced from api-football (cached once per process)."""
+    global _AF_LEAGUES_CACHE
+    if _AF_LEAGUES_CACHE is None:
+        _AF_LEAGUES_CACHE = [league.league_id for league in get_expected_leagues_for_source("api_football")]
+    return _AF_LEAGUES_CACHE
+
+
+def _leagues_in_season_on(date_str: str) -> frozenset[str]:
+    """Canonical league_ids that are in-season on ``date_str``.
+
+    Used to distinguish ``empty_confirmed`` (league active, zero fixtures that
+    day — e.g. mid-week gap between matches) from ``missing`` (league not
+    played that day at all, so the aggregator shouldn't count it in the
+    denominator either). The latter is already excluded by the aggregator's
+    season-calendar join.
+    """
+    cached = _IN_SEASON_CACHE.get(date_str)
+    if cached is not None:
+        return cached
+    out: set[str] = set()
+    for lid in _af_league_ids():
+        if get_league_fixture_calendar(lid, date_str, date_str):
+            out.add(lid)
+    frozen = frozenset(out)
+    _IN_SEASON_CACHE[date_str] = frozen
+    return frozen
 
 
 def _list_fixtures_blobs(
@@ -184,8 +225,47 @@ def _parse_date(blob_name: str) -> str | None:
     return None
 
 
+def _fixture_row(
+    *,
+    date_str: str,
+    league_id: str,
+    count: int,
+    capture_status: str,
+) -> dict[str, object]:
+    """Build one v5 manifest row for a (date, league_id) FIXTURES shard."""
+    return {
+        "date": date_str,
+        "venue": "",
+        "data_type": "FIXTURES",
+        "service_name": "instruments-service",
+        "instrument_count": int(count),
+        "written_at": _NOW,
+        "schema_version": 5,
+        "timeframe": "",
+        "league_id": league_id,
+        "chain": "",
+        "instrument_type": "",
+        "capture_status": capture_status,
+        "error_reason": "",
+        "attempted_at": _NOW,
+        "expected": True,
+        "available": capture_status == "captured",
+    }
+
+
 def _scan_blob(bucket: storage.Bucket, blob: storage.Blob) -> list[dict[str, object]]:
-    """Read one fixtures.parquet and emit per-canonical-league manifest rows."""
+    """Read one fixtures.parquet and emit per-canonical-league manifest rows.
+
+    Emits two row shapes for each blob we successfully read:
+
+    - ``captured`` — one per league that had ≥1 fixture on this date.
+    - ``empty_confirmed`` — one per league that is in-season on this date but
+      had zero fixtures. This is the signal the aggregator uses to turn the
+      per-league drilldown cell green ("we attempted, API returned zero")
+      rather than red ("no row exists, we don't know what happened"). The
+      in-season set comes from UAC ``get_league_fixture_calendar`` — only
+      leagues whose season window actually covers this date are claimed empty.
+    """
     date_str = _parse_date(blob.name)
     if date_str is None:
         return []
@@ -197,45 +277,35 @@ def _scan_blob(bucket: storage.Bucket, blob: storage.Blob) -> list[dict[str, obj
         logger.warning("Failed to read %s: %s", blob.name, exc)
         return []
 
-    if df.empty or "af_league_id" not in df.columns:
-        return []
-
+    # The blob exists (adapter ran that day) but may be structurally broken or
+    # schema-less. Treat missing af_league_id as "no captured rows" but still
+    # emit empty_confirmed for every in-season league — the adapter ran, the
+    # file exists, so zero-per-league is a legitimate claim.
     per_league: dict[str, int] = {}
     unmapped = 0
-    for af_id, group in df.groupby("af_league_id"):
-        try:
-            af_id_int = int(af_id)
-        except (ValueError, TypeError):
-            unmapped += len(group)
-            continue
-        league = get_league_by_api_football_id(af_id_int)
-        if league is None:
-            unmapped += len(group)
-            continue
-        per_league[league.league_id] = per_league.get(league.league_id, 0) + len(group)
+    if not df.empty and "af_league_id" in df.columns:
+        for af_id, group in df.groupby("af_league_id"):
+            try:
+                af_id_int = int(af_id)
+            except (ValueError, TypeError):
+                unmapped += len(group)
+                continue
+            league = get_league_by_api_football_id(af_id_int)
+            if league is None:
+                unmapped += len(group)
+                continue
+            per_league[league.league_id] = per_league.get(league.league_id, 0) + len(group)
 
     entries: list[dict[str, object]] = []
     for lid, count in per_league.items():
-        entries.append(
-            {
-                "date": date_str,
-                "venue": "",
-                "data_type": "FIXTURES",
-                "service_name": "instruments-service",
-                "instrument_count": int(count),
-                "written_at": _NOW,
-                "schema_version": 5,
-                "timeframe": "",
-                "league_id": lid,
-                "chain": "",
-                "instrument_type": "",
-                "capture_status": "captured",
-                "error_reason": "",
-                "attempted_at": _NOW,
-                "expected": True,
-                "available": True,
-            }
-        )
+        entries.append(_fixture_row(date_str=date_str, league_id=lid, count=count, capture_status="captured"))
+
+    # empty_confirmed complement: in-season leagues with zero fixtures on this
+    # date. Parquet exists == adapter ran == we can legitimately claim empty.
+    captured_lids = set(per_league.keys())
+    in_season = _leagues_in_season_on(date_str)
+    for lid in sorted(in_season - captured_lids):
+        entries.append(_fixture_row(date_str=date_str, league_id=lid, count=0, capture_status="empty_confirmed"))
 
     if unmapped:
         logger.debug("%s: %d fixtures unmapped (af_league_id not in LEAGUE_REGISTRY)", date_str, unmapped)
