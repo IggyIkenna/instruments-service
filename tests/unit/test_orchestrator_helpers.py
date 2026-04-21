@@ -11,6 +11,7 @@ from instruments_service.engine.orchestrator import (
     _build_defi_venues,
     _get_instruments_bucket,
     _write_catalogue_record,
+    _write_fixture_mapping,
     filter_defi_instruments_by_relevance,
     filter_instruments_by_date,
     get_venues_for_categories,
@@ -269,13 +270,13 @@ class TestBuildDefiVenues:
 class TestGetInstrumentsBucket:
     def test_bucket_with_category(self) -> None:
         with patch(
-            "instruments_service.engine.orchestrator.get_bucket_name", return_value="instruments-store-defi-test"
+            "instruments_service.engine.orchestrator.get_write_bucket_name", return_value="instruments-store-defi-test"
         ):
             bucket = _get_instruments_bucket("DEFI")
         assert "instruments" in bucket.lower()
 
     def test_bucket_fallback(self) -> None:
-        with patch("instruments_service.engine.orchestrator.get_bucket_name", side_effect=AttributeError):
+        with patch("instruments_service.engine.orchestrator.get_write_bucket_name", side_effect=AttributeError):
             bucket = _get_instruments_bucket("CEFI")
         assert "instruments" in bucket.lower()
 
@@ -291,7 +292,7 @@ class TestGetInstrumentsBucket:
                 cfg.is_test_run = True
                 sc._config = cfg
                 with patch(
-                    "instruments_service.engine.orchestrator.get_bucket_name",
+                    "instruments_service.engine.orchestrator.get_write_bucket_name",
                     return_value="instruments-store-defi-test",
                 ):
                     bucket = _get_instruments_bucket("DEFI")
@@ -330,3 +331,91 @@ class TestWriteCatalogueRecord:
             )
         mock_writer.add.assert_called_once()
         mock_writer.write.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# _write_fixture_mapping
+# ---------------------------------------------------------------------------
+
+
+class TestWriteFixtureMapping:
+    def test_404_forward_poll_window_no_classify(self) -> None:
+        """Missing instruments parquet on a future date in the rolling window is expected (zero fixtures)."""
+        mock_storage = MagicMock()
+        mock_storage.download_bytes.side_effect = Exception(
+            "404 GET https://storage.googleapis.com/... No such object: .../instruments.parquet"
+        )
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator.datetime") as mock_datetime,
+            patch("instruments_service.engine.orchestrator.classify_and_emit_error") as mock_classify,
+        ):
+            mock_datetime.now.return_value = datetime(2026, 4, 21, 12, 0, 0, tzinfo=UTC)
+            _write_fixture_mapping("test-bucket", "2026-04-28")
+        mock_classify.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Bug 2 regression — UnboundLocalError on get_leagues_needing_refresh
+# ---------------------------------------------------------------------------
+
+
+class TestGetLeaguesNeedingRefreshImportScope:
+    """Regression for Bug 2 — forward-poll VM ``af-backfill-20260421-142640``.
+
+    A conditional ``from unified_api_contracts.sports import
+    get_leagues_needing_refresh`` inside the TRANSFERMARKT branch of
+    ``process_instruments`` made Python treat the name as a function-local,
+    so the second call site (zero-fixture fast path) raised
+    ``UnboundLocalError: cannot access local variable
+    'get_leagues_needing_refresh' where it is not associated with a value``
+    whenever the code path skipped the TRANSFERMARKT branch.
+
+    Fix: hoist the import to module scope (single source of truth at the
+    module top-level) and drop the local ``from`` statement. These tests
+    lock the fix in so no one re-adds a conditional import.
+    """
+
+    def test_imported_at_module_level(self) -> None:
+        """The symbol must be resolvable on the orchestrator module namespace."""
+        from instruments_service.engine import orchestrator
+
+        assert hasattr(orchestrator, "get_leagues_needing_refresh"), (
+            "get_leagues_needing_refresh must be imported at module scope — "
+            "a local import would re-introduce Bug 2 (UnboundLocalError)."
+        )
+        assert callable(orchestrator.get_leagues_needing_refresh)
+
+    def test_no_local_import_in_source(self) -> None:
+        """Source scan: no conditional ``import get_leagues_needing_refresh`` remains inside any function body.
+
+        Prevents regression: the pattern ``from ... import
+        get_leagues_needing_refresh`` inside ``process_instruments`` or
+        any helper would silently shadow the module-level name and trigger
+        UnboundLocalError on alternative code paths.
+        """
+        import inspect
+
+        from instruments_service.engine import orchestrator
+
+        src = inspect.getsource(orchestrator)
+        # Strip the single authoritative module-level import block before scanning.
+        # The module-level import lives in a ``from unified_api_contracts.sports import (`` block.
+        lines = src.splitlines()
+        in_module_import_block = False
+        filtered_lines: list[str] = []
+        for line in lines:
+            if line.startswith("from unified_api_contracts.sports import ("):
+                in_module_import_block = True
+                continue
+            if in_module_import_block:
+                if line.strip() == ")":
+                    in_module_import_block = False
+                continue
+            filtered_lines.append(line)
+        filtered_src = "\n".join(filtered_lines)
+        assert "import get_leagues_needing_refresh" not in filtered_src, (
+            "No function-local import of get_leagues_needing_refresh is "
+            "permitted — it caused Bug 2 UnboundLocalError. Keep the "
+            "symbol imported once at module scope."
+        )

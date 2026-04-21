@@ -157,6 +157,44 @@ class TestApiFootballHelpers:
         result = _parse_fixture_response(item)
         assert result is None
 
+    def test_parse_fixture_response_unplayed_null_goals(self) -> None:
+        """Bug 1: future/unplayed fixtures return ``goals.home=None / goals.away=None``.
+
+        Pydantic ``ApiFootballScore`` declares ``home/away: int | None`` so
+        Null-goal fixtures MUST parse without warning — previously the adapter
+        logged ``validation errors for ApiFootballFixture goals.home`` for every
+        forward-poll fixture (status=NS).
+        """
+        item = {
+            "fixture": {
+                "id": 999001,
+                "date": "2026-04-28T15:00:00+00:00",
+                "timestamp": 1777800000,
+                "timezone": "UTC",
+                "venue": {"name": "TBC"},
+                "status": {"long": "Not Started", "short": "NS"},
+            },
+            "league": {"id": 39, "name": "Premier League", "season": 2025},
+            "teams": {
+                "home": {"id": 40, "name": "Liverpool"},
+                "away": {"id": 33, "name": "Manchester United"},
+            },
+            # The two null fields that used to trigger Pydantic validation errors.
+            "goals": {"home": None, "away": None},
+            "score": {
+                "halftime": {"home": None, "away": None},
+                "fulltime": {"home": None, "away": None},
+                "extratime": {"home": None, "away": None},
+                "penalty": {"home": None, "away": None},
+            },
+        }
+        result = _parse_fixture_response(item)
+        assert result is not None, "Unplayed fixtures must parse — null goals are legitimate"
+        assert result.id == 999001
+        assert result.goals is not None
+        assert result.goals.home is None
+        assert result.goals.away is None
+
     def test_parse_teams_valid(self) -> None:
         teams_data = {
             "home": {"id": 40, "name": "Liverpool"},
