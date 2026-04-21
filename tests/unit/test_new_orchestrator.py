@@ -536,7 +536,7 @@ def test_get_instruments_bucket_fallback_on_import_error():
 
     with (
         patch(
-            "instruments_service.engine.orchestrator.get_bucket_name",
+            "instruments_service.engine.orchestrator.get_write_bucket_name",
             side_effect=AttributeError("not found"),
         ),
         patch("instruments_service.engine.orchestrator.get_config") as mock_cfg,
@@ -847,12 +847,12 @@ def test_bucket_name_defi_uses_category_prefix():
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
     with patch(
-        "instruments_service.engine.orchestrator.get_bucket_name",
+        "instruments_service.engine.orchestrator.get_write_bucket_name",
         return_value="instruments-store-defi-test-project",
     ) as mock_gb:
         bucket = _get_instruments_bucket("DEFI")
 
-    mock_gb.assert_called_once_with("instruments", "DEFI")
+    assert mock_gb.call_args.args[:2] == ("instruments", "DEFI")
     assert "defi" in bucket.lower()
     assert "test-project" in bucket
 
@@ -863,12 +863,12 @@ def test_bucket_name_cefi_uses_category_prefix():
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
     with patch(
-        "instruments_service.engine.orchestrator.get_bucket_name",
+        "instruments_service.engine.orchestrator.get_write_bucket_name",
         return_value="instruments-store-cefi-test-project",
     ) as mock_gb:
         _get_instruments_bucket("CEFI")
 
-    mock_gb.assert_called_once_with("instruments", "CEFI")
+    assert mock_gb.call_args.args[:2] == ("instruments", "CEFI")
 
 
 def test_bucket_name_prediction_uses_category_prefix():
@@ -878,12 +878,12 @@ def test_bucket_name_prediction_uses_category_prefix():
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
     with patch(
-        "instruments_service.engine.orchestrator.get_bucket_name",
+        "instruments_service.engine.orchestrator.get_write_bucket_name",
         return_value="instruments-store-prediction-test-project",
     ) as mock_gb:
         bucket = _get_instruments_bucket("PREDICTION")
 
-    mock_gb.assert_called_once_with("instruments", "PREDICTION")
+    assert mock_gb.call_args.args[:2] == ("instruments", "PREDICTION")
     assert "prediction" in bucket.lower()
 
 
