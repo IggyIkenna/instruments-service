@@ -3932,7 +3932,6 @@ async def _fetch_understat_xg(
     )
 
     xg_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
-    _row_key: dict[str, str] = {"date": date, "data_type": "XG"}
     _expected_understat_leagues = {
         lg.league_id for lg in get_expected_leagues_for_source("understat", classifications=["Prediction"])
     }
@@ -4031,11 +4030,11 @@ async def _fetch_understat_xg(
                         format="parquet",
                         filename="understat_xg.parquet",
                     )
-                    xg_manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=len(_without_league),
-                        data_type="XG",
-                    )
+                    # Parquet is still written for forensic inspection, but we
+                    # no longer emit an unsharded date-aggregate manifest row
+                    # for rows with missing league labels — it has no reachable
+                    # consumer and skewed per-league honest-coverage.
+                    # Phase 2 of sports_manifest_shard_migration_cleanup.
             else:
                 sink.write(
                     data=df,
@@ -4062,9 +4061,8 @@ async def _fetch_understat_xg(
             logger.info("Understat xG: no fixtures for date=%s", date)
             # Honest-coverage: record an attempt that legitimately produced zero
             # rows (Understat covers 5 leagues, off-season days are empty).
-            # Emit per-league record_empty for each expected league so the
-            # denominator is honest at league granularity.
-            xg_manifest.record_empty(row_key=_row_key, attempted_at=attempt_ts)
+            # Emit per-league record_empty ONLY — the date-aggregate row was
+            # deleted in Phase 2 of sports_manifest_shard_migration_cleanup.
             for _exp_lid in sorted(_expected_understat_leagues):
                 xg_manifest.record_empty(
                     row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
@@ -4091,13 +4089,9 @@ async def _fetch_understat_xg(
         )
         # Shard isolation: do not raise; record the failed attempt so the
         # manifest reflects honest attempt-vs-capture coverage and the next
-        # run can decide to retry.  Emit a date-level failure row PLUS a
-        # per-league failure row for each expected league.
-        xg_manifest.record_failed(
-            row_key=_row_key,
-            error=_err_code,
-            attempted_at=attempt_ts,
-        )
+        # run can decide to retry. Emit a per-league failure row for each
+        # expected league — the date-aggregate row was deleted in Phase 2 of
+        # sports_manifest_shard_migration_cleanup.
         for _exp_lid in sorted(_expected_understat_leagues):
             xg_manifest.record_failed(
                 row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
@@ -4733,11 +4727,15 @@ async def _fetch_weather_data(
     }
 
     def _record_weather_empty() -> None:
-        """Helper — emit date + per-league record_empty for WEATHER shard."""
-        manifest.record_empty(
-            row_key={"date": date, "data_type": "WEATHER"},
-            attempted_at=attempt_ts,
-        )
+        """Helper — emit per-league record_empty for WEATHER shard.
+
+        Historic versions also emitted a date-aggregate row (no ``league_id``)
+        alongside the per-league rows; the aggregator ignores it
+        (``_sports_honest_coverage`` keys by ``league_id``) so it was pure
+        data-entropy. Per Phase 2 of
+        ``sports_manifest_shard_migration_cleanup_2026_04_21`` we now emit
+        ONLY per-league rows.
+        """
         for _exp_lid in sorted(_expected_weather_league_ids):
             manifest.record_empty(
                 row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
@@ -4745,12 +4743,11 @@ async def _fetch_weather_data(
             )
 
     def _record_weather_failed(err_code: str) -> None:
-        """Helper — emit date + per-league record_failed for WEATHER shard."""
-        manifest.record_failed(
-            row_key={"date": date, "data_type": "WEATHER"},
-            error=err_code,
-            attempted_at=attempt_ts,
-        )
+        """Helper — emit per-league record_failed for WEATHER shard.
+
+        Same rationale as ``_record_weather_empty``: drop the unsharded
+        date-aggregate emission that nobody consumes.
+        """
         for _exp_lid in sorted(_expected_weather_league_ids):
             manifest.record_failed(
                 row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
@@ -5029,13 +5026,13 @@ async def _fetch_weather_data(
                 row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
                 attempted_at=attempt_ts,
             )
-        # Keep a date-level aggregate row for backwards-compat with any consumer
-        # that still queries the unsharded row.
-        manifest.add(
-            processing_date=date_type.fromisoformat(date),
-            row_count=counts.get("weather", 0),
-            data_type="WEATHER",
-        )
+        # NOTE: Previously we also emitted a date-level aggregate row
+        # (``manifest.add(data_type="WEATHER")`` with no ``league_id``) for
+        # "backwards-compat". No consumer reads it — the deployment-api
+        # aggregator (``_sports_honest_coverage``) groups manifest rows by
+        # ``league_id`` and silently drops the empty-league-id bucket. The
+        # aggregate row was pure data-entropy and is removed per
+        # ``sports_manifest_shard_migration_cleanup_2026_04_21`` Phase 2.
     elif _per_venue_errors:
         # All attempts failed → attempted_failed.  Use the most common error
         # code so the manifest carries a representative classification.
