@@ -54,6 +54,7 @@ from unified_api_contracts.sports import (
     get_entity_league_coverage,
     get_expected_leagues_for_source,
     get_league_fixture_calendar,
+    get_leagues_needing_refresh,
     get_provider_league_id,
     is_any_league_refresh_date,
 )
@@ -820,8 +821,6 @@ async def process_instruments(
                 # match TODAY (transfer windows, season boundaries) — not all 33 on
                 # every trigger. Leagues list (metadata) is fast (1 API call), always fetched.
                 _batch_dt = date_type.fromisoformat(date) if isinstance(date, str) else date
-                from unified_api_contracts.sports import get_leagues_needing_refresh
-
                 _leagues_today = get_leagues_needing_refresh(_batch_dt)
                 # CLI entity filter takes precedence; otherwise per-league trigger logic decides
                 _tm_entity = sports_entity_filter
@@ -2565,6 +2564,19 @@ async def _fetch_sports_reference_data(
             attempted_at=_af_attempt_ts,
         )
 
+    def _af_emit_empty_gaps_for_entity(data_type: str, captured_league_ids: set[str]) -> None:
+        """Emit empty_confirmed per expected league with no captured rows (same contract as FIXTURES)."""
+        if manifest is None:
+            return
+        _expected = {lg.league_id for lg in get_expected_leagues_for_source("api_football")}
+        for _exp_lid in sorted(_expected - captured_league_ids):
+            if not get_league_fixture_calendar(_exp_lid, date, date):
+                continue
+            manifest.record_empty(
+                row_key={"date": date, "data_type": data_type, "league_id": _exp_lid},
+                attempted_at=_af_attempt_ts,
+            )
+
     def _should_fetch(entity_short: str) -> bool:
         """Check if this entity should be fetched (not in _fetch_set or _fetch_set is None)."""
         if _fetch_set is None:
@@ -2695,16 +2707,27 @@ async def _fetch_sports_reference_data(
         else:
             logger.info("Sports reference: %d standings from cache (0 API calls)", len(standings_df))
         if standings_df is not None:
-            # Write per-league partitioned standings files
+            # Write per-league partitioned standings files + per-league manifest rows.
             if "league_id" in standings_df.columns:
+                _std_captured: set[str] = set()
                 for _s_lid, _s_league_df in standings_df.groupby("league_id"):
                     _s_lid_str = str(_s_lid)
+                    _std_captured.add(_s_lid_str)
                     sink.write(
                         data=_s_league_df,
                         partition={"day": date, "entity": "standings", "league": _s_lid_str},
                         format="parquet",
                         filename="standings.parquet",
                     )
+                    if manifest is not None:
+                        manifest.add(
+                            processing_date=date_type.fromisoformat(date),
+                            row_count=len(_s_league_df),
+                            data_type="STANDINGS",
+                            league_id=_s_lid_str,
+                        )
+                if manifest is not None:
+                    _af_emit_empty_gaps_for_entity("STANDINGS", _std_captured)
             else:
                 sink.write(
                     data=standings_df,
@@ -2712,6 +2735,12 @@ async def _fetch_sports_reference_data(
                     format="parquet",
                     filename="standings.parquet",
                 )
+                if manifest is not None:
+                    manifest.add(
+                        processing_date=date_type.fromisoformat(date),
+                        row_count=len(standings_df),
+                        data_type="STANDINGS",
+                    )
             counts["standings"] = len(standings_df)
 
     # Injuries — date-specific, always fetched fresh.
@@ -2741,9 +2770,11 @@ async def _fetch_sports_reference_data(
                     _has_league = df[_inj_league_col].notna() & (df[_inj_league_col] != "")
                     _with_league = df[_has_league]
                     _without_league = df[~_has_league]
+                    _inj_captured: set[str] = set()
 
                     for _inj_lid, _inj_league_df in _with_league.groupby(_inj_league_col):
                         _inj_lid_str = str(_inj_lid)
+                        _inj_captured.add(_inj_lid_str)
                         _inj_clean = _inj_league_df.drop(columns=["_inj_league"], errors="ignore")
                         sink.write(
                             data=_inj_clean,
@@ -2773,6 +2804,8 @@ async def _fetch_sports_reference_data(
                                 row_count=len(_inj_unmapped),
                                 data_type="INJURIES",
                             )
+                    if manifest is not None:
+                        _af_emit_empty_gaps_for_entity("INJURIES", _inj_captured)
                 else:
                     # No league info — write single file
                     sink.write(
@@ -2808,7 +2841,7 @@ async def _fetch_sports_reference_data(
                 # status — common on off-season days).  Emit empty_confirmed
                 # instead of captured(0) so the data-status page distinguishes
                 # "source said zero" from "we wrote zero rows".
-                _af_record_empty("INJURIES")
+                _af_emit_empty_gaps_for_entity("INJURIES", set())
         except Exception as exc:
             classify_and_emit_error(
                 exc,
@@ -3040,7 +3073,15 @@ async def _fetch_sports_reference_data(
         )
         await asyncio.gather(*tasks)
 
+        _entity_dt_by_short = {
+            "fixture_stats": "FIXTURE_STATS",
+            "fixture_events": "FIXTURE_EVENTS",
+            "fixture_lineups": "FIXTURE_LINEUPS",
+            "player_stats": "PLAYER_STATS",
+        }
+
         for entity_name, _ in _per_fixture_entities:
+            _af_entity_dt = _entity_dt_by_short[entity_name]
             all_rows = entity_rows[entity_name]
             if all_rows:
                 df = pd.DataFrame(all_rows)
@@ -3074,9 +3115,11 @@ async def _fetch_sports_reference_data(
                     _has_league = df["_league_id"].notna()
                     _with_league = df[_has_league]
                     _without_league = df[~_has_league]
+                    _pf_captured: set[str] = set()
 
                     for _pf_lid, _pf_league_df in _with_league.groupby("_league_id"):
                         _pf_lid_str = str(_pf_lid)
+                        _pf_captured.add(_pf_lid_str)
                         _pf_clean = _pf_league_df.drop(columns=["_league_id"])
                         sink.write(
                             data=_pf_clean,
@@ -3088,7 +3131,7 @@ async def _fetch_sports_reference_data(
                             manifest.add(
                                 processing_date=date_type.fromisoformat(date),
                                 row_count=len(_pf_clean),
-                                data_type=entity_name.upper(),
+                                data_type=_af_entity_dt,
                                 league_id=_pf_lid_str,
                             )
 
@@ -3110,8 +3153,10 @@ async def _fetch_sports_reference_data(
                             manifest.add(
                                 processing_date=date_type.fromisoformat(date),
                                 row_count=len(_unmapped_clean),
-                                data_type=entity_name.upper(),
+                                data_type=_af_entity_dt,
                             )
+                    if manifest is not None:
+                        _af_emit_empty_gaps_for_entity(_af_entity_dt, _pf_captured)
                 else:
                     # No league mapping available — write single file (legacy fallback)
                     sink.write(
@@ -3124,7 +3169,7 @@ async def _fetch_sports_reference_data(
                         manifest.add(
                             processing_date=date_type.fromisoformat(date),
                             row_count=len(df),
-                            data_type=entity_name.upper(),
+                            data_type=_af_entity_dt,
                         )
 
                 logger.info("Sports reference: %d %s rows written", len(df), entity_name)
@@ -3134,12 +3179,11 @@ async def _fetch_sports_reference_data(
                 # (record_empty).  No rows when we did fetch fixtures means
                 # the API was called but nothing came back.
                 _fail_count, _err_code = entity_failures.get(entity_name, (0, ""))
-                _entity_dt = entity_name.upper()
                 if _fail_count == len(fixture_ids) and _err_code:
                     # Every fixture call raised → treat the entity as failed.
                     if manifest is not None:
                         manifest.record_failed(
-                            row_key={"date": date, "data_type": _entity_dt},
+                            row_key={"date": date, "data_type": _af_entity_dt},
                             error=_err_code,
                             attempted_at=_af_attempt_ts,
                         )
@@ -3147,7 +3191,7 @@ async def _fetch_sports_reference_data(
                     # Some / all calls succeeded but returned zero rows
                     # (e.g. post-match stats not yet published, lineups not
                     # disclosed for low-profile fixture) — legitimate empty.
-                    _af_record_empty(_entity_dt)
+                    _af_emit_empty_gaps_for_entity(_af_entity_dt, set())
 
     # Cross-provider mapping tables
     _write_team_mapping(bucket)
@@ -3258,9 +3302,22 @@ def _write_fixture_mapping(bucket: str, date: str) -> None:
         mapping_sink = get_data_sink(bucket=bucket, prefix="sports_reference/mappings")
         mapping_sink.write(data=mapping_df, partition={}, format="parquet", filename="fixture_mapping.parquet")
         logger.info("Fixture mapping: %d entries written for %s", len(mapping_df), date)
-    except (FileNotFoundError, OSError) as exc:
-        logger.debug("Fixture mapping: could not read fixtures for %s: %s", date, exc)
     except Exception as exc:
+        _exc_name = type(exc).__name__
+        _msg = str(exc)
+        # GCS blob not found (404) — forward-poll dates with zero fixtures have no instruments parquet.
+        if _exc_name == "NotFound" or "404" in _msg or "No such object" in _msg:
+            _d = date_type.fromisoformat(date)
+            _today = datetime.now(UTC).date()
+            if _today <= _d <= _today + timedelta(days=7):
+                logger.info(
+                    "Fixture mapping: no API_FOOTBALL instruments parquet for %s — skipping (forward-poll window)",
+                    date,
+                )
+                return
+        if isinstance(exc, (FileNotFoundError, OSError)):
+            logger.debug("Fixture mapping: could not read fixtures for %s: %s", date, exc)
+            return
         classify_and_emit_error(
             exc,
             service_name="instruments-service",
