@@ -52,6 +52,8 @@ from unified_api_contracts.sports import (
     SOCCER_FOOTBALL_INFO_IDS,
     get_all_prediction_league_ids,
     get_entity_league_coverage,
+    get_expected_leagues_for_source,
+    get_league_fixture_calendar,
     get_provider_league_id,
     is_any_league_refresh_date,
 )
@@ -1639,8 +1641,10 @@ async def process_instruments(
                 # Apply league filter if set (--league CLI arg)
                 if league_filter:
                     _sports_df = _sports_df[_sports_df["_league_id"].isin(league_filter)]
+                _captured_lids: set[str] = set()
                 for _lid, _league_df in _sports_df.groupby("_league_id"):
                     _league_id_str = str(_lid)
+                    _captured_lids.add(_league_id_str)
                     _league_df_clean = _league_df.drop(columns=["_league_id"])
                     sink.write(
                         data=_league_df_clean,
@@ -1660,6 +1664,29 @@ async def process_instruments(
                             _league_df_clean,
                             filename_prefix=f"instruments_API_FOOTBALL_{_league_id_str}_{date}",
                         )
+
+                # Honest-coverage: every league that is in-season on this date
+                # but had zero fixtures gets a record_empty row. Without this,
+                # mid-week gaps render as red "missing" in the data-status
+                # drilldown even though the adapter ran and the API legitimately
+                # returned zero for that league. Season window comes from UAC
+                # get_league_fixture_calendar — only leagues whose season
+                # actually covers this date are claimed empty.
+                _fx_attempt_ts = datetime.now(UTC)
+                _expected_af_lids = {league.league_id for league in get_expected_leagues_for_source("api_football")}
+                if league_filter:
+                    _expected_af_lids &= set(league_filter)
+                for _exp_lid in sorted(_expected_af_lids - _captured_lids):
+                    if not get_league_fixture_calendar(_exp_lid, date, date):
+                        continue
+                    manifest.record_empty(
+                        row_key={
+                            "date": date,
+                            "data_type": "FIXTURES",
+                            "league_id": _exp_lid,
+                        },
+                        attempted_at=_fx_attempt_ts,
+                    )
 
             elif venue_str == "POLYMARKET" and "base_asset" in venue_df.columns:
                 # PREDICTION: split by market (BTC, ETH, SPX, FOOTBALL, etc.)
