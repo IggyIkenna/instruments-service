@@ -847,12 +847,25 @@ async def process_instruments(
                     logger.info(
                         "Transfermarkt: date=%s triggers %d leagues: %s", date, len(_leagues_today), _leagues_today
                     )
+                # Derive the European-football season from the batch date: a league
+                # season spans Aug-May by convention, so `season_year = d.year` when
+                # d.month >= 8 else `d.year - 1`. CLI `--season` (season_override)
+                # wins if explicitly set; otherwise we MUST derive here — passing
+                # `season=None` to the adapter defaults to `datetime.now(UTC).year`
+                # (= current year), which is a §5 data-crime for any historical
+                # backfill (writes today's roster onto a 2023 date partition).
+                _tm_season = (
+                    season_override
+                    if season_override is not None
+                    else (_batch_dt.year if _batch_dt.month >= 8 else _batch_dt.year - 1)
+                )
                 result = await _fetch_transfermarkt_data(
                     date=date,
                     api_key=tm_key,
                     bucket=bucket,
                     entity_filter=_tm_entity,
                     league_filter=_leagues_today if _leagues_today and _tm_entity != "TRANSFERMARKT_LEAGUES" else None,
+                    season=_tm_season,
                 )
             elif sports_provider == "SOCCER_FOOTBALL_INFO":
                 sfi_key = _keys.get("soccer_football_info")
@@ -3358,10 +3371,7 @@ _SFI_CACHE_STALENESS_HOURS = 24
 
 
 def _transfermarkt_mapping_blob_path(season: int) -> str:
-    return (
-        "sports_reference/mappings/transfermarkt_league_teams/"
-        f"season={season}/teams.parquet"
-    )
+    return f"sports_reference/mappings/transfermarkt_league_teams/season={season}/teams.parquet"
 
 
 def _sfi_mapping_blob_path() -> str:
@@ -4437,9 +4447,7 @@ async def _fetch_transfermarkt_data(
         # the short-circuit so per-league manifest rows are emitted from it.
         _cache_hit = False
         _cached_df = _read_transfermarkt_team_mapping(bucket, effective_season)
-        if _cached_df is not None and _cache_is_fresh(
-            _cached_df, timedelta(days=_TRANSFERMARKT_CACHE_STALENESS_DAYS)
-        ):
+        if _cached_df is not None and _cache_is_fresh(_cached_df, timedelta(days=_TRANSFERMARKT_CACHE_STALENESS_DAYS)):
             try:
                 _triggers_today = get_leagues_needing_refresh(date_type.fromisoformat(date))
             except Exception:
@@ -4495,9 +4503,7 @@ async def _fetch_transfermarkt_data(
                     _league_count = 0
                     for t in teams:
                         row = _coerce_adapter_output(t)
-                        flat: dict[str, str | None] = {
-                            k: str(v) if v is not None else None for k, v in row.items()
-                        }
+                        flat: dict[str, str | None] = {k: str(v) if v is not None else None for k, v in row.items()}
                         flat["league_id"] = str(tm_code)
                         flat["canonical_league"] = league_def.league_id
                         # Derive player_count for FSS normalizer
@@ -4519,9 +4525,7 @@ async def _fetch_transfermarkt_data(
                         date=date,
                         season=effective_season,
                         got_count=_league_count,
-                        expected_count=get_expected_team_count_for_league(
-                            league_def.league_id, effective_season
-                        ),
+                        expected_count=get_expected_team_count_for_league(league_def.league_id, effective_season),
                     )
                     _captured_league_counts[league_def.league_id] = _league_count
                 except Exception as exc:
@@ -4580,9 +4584,7 @@ async def _fetch_transfermarkt_data(
                     }
                     for _r in all_teams
                 ]
-                _write_transfermarkt_team_mapping(
-                    bucket, _cache_rows, effective_season
-                )
+                _write_transfermarkt_team_mapping(bucket, _cache_rows, effective_season)
 
         # Per-league honest-coverage manifest rows — identical between the
         # cache-hit and live-fetch branches.  ``cached=True`` is passed as a
@@ -4675,18 +4677,14 @@ async def _fetch_sfi_data(
     sfi_league_ids: list[str] = []
     _sfi_cache_hit = False
     _sfi_cached_df = _read_sfi_league_mapping(bucket)
-    if _sfi_cached_df is not None and _cache_is_fresh(
-        _sfi_cached_df, timedelta(hours=_SFI_CACHE_STALENESS_HOURS)
-    ):
+    if _sfi_cached_df is not None and _cache_is_fresh(_sfi_cached_df, timedelta(hours=_SFI_CACHE_STALENESS_HOURS)):
         try:
             _sfi_triggers_today = get_leagues_needing_refresh(date_type.fromisoformat(date))
         except Exception:
             _sfi_triggers_today = ["__fallback__"]
         if not _sfi_triggers_today and "sfi_league_hex" in _sfi_cached_df.columns:
             _sfi_cache_hit = True
-            sfi_league_ids = [
-                str(v) for v in _sfi_cached_df["sfi_league_hex"].dropna().tolist() if str(v)
-            ]
+            sfi_league_ids = [str(v) for v in _sfi_cached_df["sfi_league_hex"].dropna().tolist() if str(v)]
             logger.info(
                 "SFI league mapping cache hit for date=%s — skipping get_leagues API",
                 date,
@@ -4741,9 +4739,7 @@ async def _fetch_sfi_data(
             # and re-adds fringe leagues day-to-day.
             if _expected_sfi_league_ids:
                 _mapped_sfi_ids_check = set(SOCCER_FOOTBALL_INFO_IDS.values())
-                _got_mapped_count = sum(
-                    1 for lid in sfi_league_ids if lid in _mapped_sfi_ids_check
-                )
+                _got_mapped_count = sum(1 for lid in sfi_league_ids if lid in _mapped_sfi_ids_check)
                 _maybe_emit_drift_anomaly(
                     venue="soccer_football_info",
                     endpoint="get_leagues",
@@ -4757,9 +4753,7 @@ async def _fetch_sfi_data(
                 )
 
             # Persist SFI league-mapping cache for the next backfill iteration.
-            _sfi_hex_by_canonical = {
-                v: k for k, v in SOCCER_FOOTBALL_INFO_IDS.items()
-            }
+            _sfi_hex_by_canonical = {v: k for k, v in SOCCER_FOOTBALL_INFO_IDS.items()}
             _cache_rows: list[dict[str, str | None]] = []
             for _lg in leagues:
                 _raw = _coerce_adapter_output(_lg)

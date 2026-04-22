@@ -354,7 +354,11 @@ def _group_apify_players_into_clubs(
                     "nationality": player.get("nationality", ""),
                     "marketValue": player.get("marketValue"),
                     "market_value_eur": player.get("marketValue"),
-                    "valuation_date": datetime.now(UTC).strftime("%Y-%m-%d"),
+                    # Do NOT default valuation_date to wall-clock-now: propagating
+                    # today's date onto historical backfill rows creates a §5
+                    # data-crime (writing today's value onto a 2018 fixture).
+                    # Emit raw API field; downstream as-of joins handle missing.
+                    "valuation_date": player.get("valuation_date"),
                     "age": player.get("age"),
                     "contractUntil": player.get("contractExpiry"),
                     "image": player.get("profileUrl"),
@@ -401,9 +405,13 @@ def _parse_squad(item: dict[str, object]) -> TransfermarktTeamSquad | None:
                         nationality=str(p.get("nationality", "")) if p.get("nationality") else None,
                         market_value_eur=_parse_market_value(p.get("marketValue") or p.get("market_value_eur")),
                         market_value_currency="EUR",
-                        valuation_date=str(p.get("valuation_date", ""))
-                        if p.get("valuation_date")
-                        else datetime.now(UTC).strftime("%Y-%m-%d"),
+                        # `valuation_date` propagates the API-provided value when
+                        # present; None when absent. NEVER stamp wall-clock-now —
+                        # for historical backfill, today's date on a 2023 row
+                        # would be a §5 data-crime (downstream as-of join would
+                        # treat 2026-04-22 value as in-scope for a 2023-03-16
+                        # fixture). Let downstream NULL-propagation handle absent.
+                        valuation_date=str(p.get("valuation_date")) if p.get("valuation_date") else None,
                         club=str(item.get("name", "")),
                         age=_safe_int(p.get("age")),
                         contract_until=str(p.get("contractUntil", "")) if p.get("contractUntil") else None,
