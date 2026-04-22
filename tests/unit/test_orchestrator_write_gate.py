@@ -169,6 +169,188 @@ class TestGatedSinkWrite:
         assert len(sink.writes) == 1
 
 
+class TestVenueParityCases:
+    """Phase 3a — each wired venue's warn-mode incident shape passes through
+    the same ``_gated_sink_write`` helper and emits on wall-clock-on-historical.
+
+    The gate is venue-agnostic; these cases exist so any future adapter-side
+    wall-clock bug (like 2026-04-22 Transfermarkt) is caught at the FIRST
+    sink.write call regardless of provider. Failure to emit here = the gate
+    wasn't threaded into the caller's sink.write."""
+
+    _BATCH_DATE = "2023-03-16"  # historical backfill partition
+    _WALL_CLOCK_VIOLATION = "2026-04-22"  # today, per the 2026-04-22 session
+
+    def _run_incident(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        partition: dict[str, str],
+        filename: str,
+        venue: str,
+        entity: str,
+        column: str = "valuation_date",
+    ) -> tuple[_FakeSink, list[tuple[str, str, dict[str, object]]]]:
+        events: list[tuple[str, str, dict[str, object]]] = []
+
+        def fake_log(
+            event_name: str,
+            severity: str = "INFO",
+            details: dict[str, object] | None = None,
+            **_: object,
+        ) -> None:
+            events.append((event_name, severity, dict(details or {})))
+
+        monkeypatch.setattr(
+            "unified_trading_library.events.log_event",
+            fake_log,
+            raising=False,
+        )
+        sink = _FakeSink()
+        df = pd.DataFrame(
+            {
+                "row_id": ["r1", "r2"],
+                column: [self._WALL_CLOCK_VIOLATION, self._WALL_CLOCK_VIOLATION],
+            }
+        )
+        _gated_sink_write(
+            sink,
+            data=df,
+            partition=partition,
+            filename=filename,
+            venue=venue,
+            entity=entity,
+        )
+        return sink, events
+
+    def test_api_football_fixtures_warn_mode_emits(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sink, events = self._run_incident(
+            monkeypatch,
+            partition={"day": self._BATCH_DATE, "entity": "fixtures"},
+            filename="fixtures.parquet",
+            venue="api_football",
+            entity="fixtures",
+            column="kickoff_utc",
+        )
+        assert len(sink.writes) == 1  # warn mode writes
+        alignment = [e for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION"]
+        assert len(alignment) == 1
+        _, severity, details = alignment[0]
+        assert severity == "WARNING"
+        assert details["venue"] == "api_football"
+        assert details["entity"] == "fixtures"
+
+    def test_api_football_injuries_warn_mode_emits(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sink, events = self._run_incident(
+            monkeypatch,
+            partition={"day": self._BATCH_DATE, "entity": "injuries", "league": "epl"},
+            filename="injuries.parquet",
+            venue="api_football",
+            entity="injuries",
+            column="data_available_at",
+        )
+        assert len(sink.writes) == 1
+        assert any(e[0] == "DATA_ALIGNMENT_VIOLATION" for e in events)
+
+    def test_footystats_matches_warn_mode_emits(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sink, events = self._run_incident(
+            monkeypatch,
+            partition={"day": self._BATCH_DATE, "entity": "footystats_matches"},
+            filename="footystats_matches.parquet",
+            venue="footystats",
+            entity="footystats_matches",
+            column="kickoff_utc",
+        )
+        assert len(sink.writes) == 1
+        details = next(e[2] for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION")
+        assert details["venue"] == "footystats"
+
+    def test_footystats_odds_warn_mode_emits(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sink, events = self._run_incident(
+            monkeypatch,
+            partition={
+                "day": self._BATCH_DATE,
+                "entity": "footystats_odds",
+                "fetched_at_hour": "12",
+            },
+            filename="footystats_odds.parquet",
+            venue="footystats",
+            entity="footystats_odds",
+            column="data_available_at",
+        )
+        assert len(sink.writes) == 1
+        assert any(e[0] == "DATA_ALIGNMENT_VIOLATION" for e in events)
+
+    def test_understat_xg_warn_mode_emits(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sink, events = self._run_incident(
+            monkeypatch,
+            partition={"day": self._BATCH_DATE, "entity": "understat_xg"},
+            filename="understat_xg.parquet",
+            venue="understat",
+            entity="understat_xg",
+            column="event_time",
+        )
+        assert len(sink.writes) == 1
+        details = next(e[2] for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION")
+        assert details["venue"] == "understat"
+
+    def test_transfermarkt_leagues_warn_mode_emits(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        sink, events = self._run_incident(
+            monkeypatch,
+            partition={"day": self._BATCH_DATE, "entity": "transfermarkt_leagues"},
+            filename="transfermarkt_leagues.parquet",
+            venue="transfermarkt",
+            entity="transfermarkt_leagues",
+        )
+        assert len(sink.writes) == 1
+        assert any(e[0] == "DATA_ALIGNMENT_VIOLATION" for e in events)
+
+    def test_weather_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        sink, events = self._run_incident(
+            monkeypatch,
+            partition={"day": self._BATCH_DATE, "entity": "weather"},
+            filename="weather.parquet",
+            venue="open_meteo",
+            entity="weather",
+            column="data_available_at",
+        )
+        assert len(sink.writes) == 1
+        details = next(e[2] for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION")
+        assert details["venue"] == "open_meteo"
+
+    def test_instrument_universe_universe_warn_mode_emits(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """L1723/L2340 instrument-universe writes (DeFi/CeFi/TradFi/Prediction).
+        Production DataFrames don't carry DEFAULT_AS_OF_COLUMNS so the gate
+        no-ops; this test injects one to prove the gate fires if a future
+        schema addition lands that column."""
+        sink, events = self._run_incident(
+            monkeypatch,
+            partition={"day": self._BATCH_DATE, "venue": "HYPERLIQUID"},
+            filename="instruments.parquet",
+            venue="HYPERLIQUID",
+            entity="instruments",
+            column="computed_at",
+        )
+        assert len(sink.writes) == 1
+        details = next(e[2] for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION")
+        assert details["venue"] == "HYPERLIQUID"
+        assert details["entity"] == "instruments"
+
+
 class TestStrictModeEndToEnd:
     """Verify that flipping the gate to strict mode raises TimestampAlignmentError
     on incident-shape data — so Phase 3 of Plan 6 can flip the default safely."""
