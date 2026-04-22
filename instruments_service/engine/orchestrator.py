@@ -53,6 +53,7 @@ from unified_api_contracts.sports import (
     get_all_prediction_league_ids,
     get_entity_league_coverage,
     get_expected_leagues_for_source,
+    get_expected_team_count_for_league,
     get_league_fixture_calendar,
     get_leagues_needing_refresh,
     get_provider_league_id,
@@ -3339,6 +3340,205 @@ def _write_fixture_mapping(bucket: str, date: str) -> None:
         )
 
 
+# ---------------------------------------------------------------------------
+# Transfermarkt + SFI per-league mapping caches
+# (transfermarkt_sfi_team_mapping_cache_and_drift_detection_2026_04_22)
+#
+# Backfill VMs rerun ``_fetch_transfermarkt_data`` / ``_fetch_sfi_data`` for
+# every trigger date inside a window. Without these caches every re-fire hits
+# the paid APIs to re-fetch the same ``(league, season)`` roster.  Both helpers
+# write a slow-moving parquet under ``sports_reference/mappings/`` — reused by
+# features-sports-service's ``read_transfermarkt_team_mapping`` /
+# ``read_sfi_league_mapping`` readers.
+# ---------------------------------------------------------------------------
+
+
+_TRANSFERMARKT_CACHE_STALENESS_DAYS = 7
+_SFI_CACHE_STALENESS_HOURS = 24
+
+
+def _transfermarkt_mapping_blob_path(season: int) -> str:
+    return (
+        "sports_reference/mappings/transfermarkt_league_teams/"
+        f"season={season}/teams.parquet"
+    )
+
+
+def _sfi_mapping_blob_path() -> str:
+    return "sports_reference/mappings/sfi_league_mapping.parquet"
+
+
+def _write_transfermarkt_team_mapping(
+    bucket: str,
+    teams: list[dict[str, str | None]],
+    season: int,
+) -> None:
+    """Persist per-season Transfermarkt league → team roster to GCS.
+
+    Path: ``sports_reference/mappings/transfermarkt_league_teams/season={YYYY}/teams.parquet``
+
+    Columns: ``league_id, canonical_league, team_id, name, squad_size,
+    player_count, last_fetched_at``. Idempotent — overwrites on every
+    orchestrator run.
+    """
+    if not teams:
+        return
+    try:
+        df = pd.DataFrame(teams)
+        df["last_fetched_at"] = datetime.now(UTC).isoformat()
+        mapping_sink = get_data_sink(
+            bucket=bucket,
+            prefix="sports_reference/mappings",
+        )
+        mapping_sink.write(
+            data=df,
+            partition={"transfermarkt_league_teams": "", "season": str(season)},
+            format="parquet",
+            filename="teams.parquet",
+        )
+        logger.info(
+            "Transfermarkt team mapping cache: %d rows written for season=%d",
+            len(df),
+            season,
+        )
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="transfermarkt_team_mapping_write",
+        )
+
+
+def _read_transfermarkt_team_mapping(
+    bucket: str,
+    season: int,
+) -> pd.DataFrame | None:
+    """Return cached Transfermarkt roster parquet, or ``None`` when absent.
+
+    Returns ``None`` on 404 or any read error; callers MUST fall back to a
+    live fetch in that case. Cache-hit freshness is judged by the caller
+    using ``last_fetched_at``.
+    """
+    blob_path = _transfermarkt_mapping_blob_path(season)
+    try:
+        storage = get_storage_client()
+        raw = storage.download_bytes(bucket, blob_path)
+        if raw is None:
+            return None
+        return pd.read_parquet(io.BytesIO(raw))
+    except Exception as exc:
+        logger.debug(
+            "Transfermarkt team mapping cache miss for season=%d: %s",
+            season,
+            exc,
+        )
+        return None
+
+
+def _write_sfi_league_mapping(
+    bucket: str,
+    leagues: list[dict[str, str | None]],
+) -> None:
+    """Persist SFI league hex-id → canonical mapping to GCS.
+
+    Path: ``sports_reference/mappings/sfi_league_mapping.parquet``
+
+    SFI league hex IDs are long-lived (not season-scoped); a single flat
+    parquet is sufficient. Columns: ``canonical_league_id, sfi_league_hex,
+    name, last_fetched_at``.
+    """
+    if not leagues:
+        return
+    try:
+        df = pd.DataFrame(leagues)
+        df["last_fetched_at"] = datetime.now(UTC).isoformat()
+        mapping_sink = get_data_sink(
+            bucket=bucket,
+            prefix="sports_reference/mappings",
+        )
+        mapping_sink.write(
+            data=df,
+            partition={},
+            format="parquet",
+            filename="sfi_league_mapping.parquet",
+        )
+        logger.info("SFI league mapping cache: %d rows written", len(df))
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="sfi_league_mapping_write",
+        )
+
+
+def _read_sfi_league_mapping(bucket: str) -> pd.DataFrame | None:
+    """Return cached SFI league mapping parquet, or ``None`` when absent."""
+    try:
+        storage = get_storage_client()
+        raw = storage.download_bytes(bucket, _sfi_mapping_blob_path())
+        if raw is None:
+            return None
+        return pd.read_parquet(io.BytesIO(raw))
+    except Exception as exc:
+        logger.debug("SFI league mapping cache miss: %s", exc)
+        return None
+
+
+def _maybe_emit_drift_anomaly(
+    *,
+    venue: str,
+    endpoint: str,
+    league_id: str,
+    date: str,
+    season: int | None,
+    got_count: int,
+    expected_count: int | None,
+    threshold_pct: float = 10.0,
+    high_severity_pct: float = 25.0,
+) -> float | None:
+    """Emit ``ADAPTER_FETCH_ANOMALY`` when got vs expected deviates beyond
+    ``threshold_pct``.  Returns the deviation percentage on emit, else ``None``.
+
+    Shared by TM per-league drift + SFI league-denominator drift.  ``None``
+    expected count means "no seed" → silent skip (never emit).
+    """
+    if expected_count is None or expected_count <= 0:
+        return None
+    deviation_pct = abs(got_count - expected_count) / expected_count * 100.0
+    if deviation_pct <= threshold_pct:
+        return None
+    severity = "HIGH" if deviation_pct > high_severity_pct else "MEDIUM"
+    details: dict[str, object] = {
+        "venue": venue,
+        "endpoint": endpoint,
+        "league_id": league_id,
+        "date": date,
+        "expected_count": expected_count,
+        "got_count": got_count,
+        "deviation_pct": round(deviation_pct, 1),
+        "severity": severity,
+    }
+    if season is not None:
+        details["season"] = season
+    log_event("ADAPTER_FETCH_ANOMALY", details=details)
+    return deviation_pct
+
+
+def _cache_is_fresh(df: pd.DataFrame, ttl: timedelta) -> bool:
+    """Return True when every row in ``df`` was fetched within ``ttl``."""
+    if df.empty or "last_fetched_at" not in df.columns:
+        return False
+    try:
+        timestamps = pd.to_datetime(df["last_fetched_at"], utc=True, errors="coerce")
+        if timestamps.isna().any():
+            return False
+        now = datetime.now(UTC)
+        oldest = timestamps.min().to_pydatetime()
+        return (now - oldest) < ttl
+    except Exception:
+        return False
+
+
 async def _fetch_footystats_predictions(
     date: str,
     api_key: str,
@@ -4230,90 +4430,172 @@ async def _fetch_transfermarkt_data(
         for _p_lg in get_prediction_leagues():
             _merged_leagues.setdefault(_p_lg.league_id, _p_lg)
 
+        effective_season = season if season is not None else datetime.now(UTC).year
+
+        # Cache short-circuit: skip API calls on non-trigger dates when we
+        # already have a fresh roster for this season.  ``cached_rows`` survives
+        # the short-circuit so per-league manifest rows are emitted from it.
+        _cache_hit = False
+        _cached_df = _read_transfermarkt_team_mapping(bucket, effective_season)
+        if _cached_df is not None and _cache_is_fresh(
+            _cached_df, timedelta(days=_TRANSFERMARKT_CACHE_STALENESS_DAYS)
+        ):
+            try:
+                _triggers_today = get_leagues_needing_refresh(date_type.fromisoformat(date))
+            except Exception:
+                _triggers_today = ["__fallback__"]
+            if not _triggers_today:
+                _cache_hit = True
+                logger.info(
+                    "Transfermarkt cache hit for season=%d date=%s — skipping API loop",
+                    effective_season,
+                    date,
+                )
+
         all_teams: list[dict[str, str | None]] = []
         _captured_league_counts: dict[str, int] = {}
         _failed_leagues: dict[str, str] = {}
         _empty_leagues: set[str] = set()
         _unmapped_leagues: set[str] = set()
 
-        for _lid_key, league_def in sorted(_merged_leagues.items()):
-            if _league_filter_set is not None and league_def.league_id not in _league_filter_set:
-                continue
-            tm_code = get_provider_league_id(league_def.league_id, "transfermarkt")
-            if tm_code is None:
-                # No provider mapping — we cannot attempt this league.  Record
-                # empty so the denominator counts it as confirmed-unavailable
-                # (operator may add mapping later).
-                _unmapped_leagues.add(league_def.league_id)
-                continue
-            try:
-                teams = await adapter.get_teams(tm_code, season=season)
-                if not teams:
-                    _empty_leagues.add(league_def.league_id)
-                    continue
-                _league_count = 0
-                for t in teams:
-                    row = _coerce_adapter_output(t)
-                    flat: dict[str, str | None] = {k: str(v) if v is not None else None for k, v in row.items()}
-                    flat["league_id"] = str(tm_code)
-                    flat["canonical_league"] = league_def.league_id
-                    # Derive player_count for FSS normalizer
-                    players = row.get("players")
-                    flat["player_count"] = str(len(players)) if isinstance(players, list) else flat.get("squad_size")
-                    # Drop nested players list (serializes as unhelpful string)
-                    flat.pop("players", None)
-                    all_teams.append(flat)
-                    _league_count += 1
-                _captured_league_counts[league_def.league_id] = _league_count
-            except Exception as exc:
-                # Shard-level failure isolation — per-league failure MUST NOT
-                # kill the batch.  Record_failed + continue.
-                classify_and_emit_error(
-                    exc,
-                    service_name="instruments-service",
-                    operation="transfermarkt_teams_fetch",
-                    shard=str(league_def.league_id),
-                )
-                _err_code = _classify_adapter_failure(exc, "transfermarkt")
-                log_event(
-                    "ADAPTER_FETCH_FAILED",
-                    details={
-                        "venue": "transfermarkt",
-                        "endpoint": "get_teams",
-                        "league_id": league_def.league_id,
-                        "date": date,
-                        "error": str(exc),
-                        "error_code": _err_code,
-                    },
-                )
-                _failed_leagues[league_def.league_id] = _err_code
-
-        if all_teams:
-            df = pd.DataFrame(all_teams)
-            # Add season column for provenance
-            effective_season = season if season is not None else datetime.now(UTC).year
-            df["season"] = effective_season
-            # Write as player_values entity — partition by season when
-            # doing historical backfill so seasons don't overwrite each other
-            pv_partition: dict[str, str] = {"day": date, "entity": "player_values"}
-            if season is not None:
-                pv_partition["season"] = str(season)
-            sink.write(
-                data=df,
-                partition=pv_partition,
-                format="parquet",
-                filename="player_values.parquet",
+        if _cache_hit and _cached_df is not None:
+            # Populate ``_captured_league_counts`` from the cache so honest-
+            # coverage manifest rows + UPSTREAM_FETCH_COMPLETED events fire
+            # exactly as they would on a live fetch — minus the paid API calls.
+            if "canonical_league" in _cached_df.columns:
+                for _canon_league, _group_df in _cached_df.groupby("canonical_league"):
+                    _captured_league_counts[str(_canon_league)] = len(_group_df)
+            log_event(
+                "UPSTREAM_FETCH_COMPLETED",
+                details={
+                    "venue": "transfermarkt",
+                    "endpoint": "get_teams",
+                    "date": date,
+                    "season": effective_season,
+                    "cached": True,
+                    "league_count": len(_captured_league_counts),
+                },
             )
-            counts["transfermarkt_teams"] = len(df)
-            logger.info("Transfermarkt teams → player_values: %d rows written", len(df))
+        else:
+            for _lid_key, league_def in sorted(_merged_leagues.items()):
+                if _league_filter_set is not None and league_def.league_id not in _league_filter_set:
+                    continue
+                tm_code = get_provider_league_id(league_def.league_id, "transfermarkt")
+                if tm_code is None:
+                    # No provider mapping — we cannot attempt this league.
+                    # Record empty so the denominator counts it as
+                    # confirmed-unavailable (operator may add mapping later).
+                    _unmapped_leagues.add(league_def.league_id)
+                    continue
+                try:
+                    teams = await adapter.get_teams(tm_code, season=season)
+                    if not teams:
+                        _empty_leagues.add(league_def.league_id)
+                        continue
+                    _league_count = 0
+                    for t in teams:
+                        row = _coerce_adapter_output(t)
+                        flat: dict[str, str | None] = {
+                            k: str(v) if v is not None else None for k, v in row.items()
+                        }
+                        flat["league_id"] = str(tm_code)
+                        flat["canonical_league"] = league_def.league_id
+                        # Derive player_count for FSS normalizer
+                        players = row.get("players")
+                        flat["player_count"] = (
+                            str(len(players)) if isinstance(players, list) else flat.get("squad_size")
+                        )
+                        # Drop nested players list (serializes as unhelpful string)
+                        flat.pop("players", None)
+                        all_teams.append(flat)
+                        _league_count += 1
+                    # Drift detection — emit ADAPTER_FETCH_ANOMALY before the
+                    # manifest write so observability catches silent partial
+                    # responses (e.g. EPL returning 17 teams instead of 20).
+                    _maybe_emit_drift_anomaly(
+                        venue="transfermarkt",
+                        endpoint="get_teams",
+                        league_id=league_def.league_id,
+                        date=date,
+                        season=effective_season,
+                        got_count=_league_count,
+                        expected_count=get_expected_team_count_for_league(
+                            league_def.league_id, effective_season
+                        ),
+                    )
+                    _captured_league_counts[league_def.league_id] = _league_count
+                except Exception as exc:
+                    # Shard-level failure isolation — per-league failure MUST
+                    # NOT kill the batch.  Record_failed + continue.
+                    classify_and_emit_error(
+                        exc,
+                        service_name="instruments-service",
+                        operation="transfermarkt_teams_fetch",
+                        shard=str(league_def.league_id),
+                    )
+                    _err_code = _classify_adapter_failure(exc, "transfermarkt")
+                    log_event(
+                        "ADAPTER_FETCH_FAILED",
+                        details={
+                            "venue": "transfermarkt",
+                            "endpoint": "get_teams",
+                            "league_id": league_def.league_id,
+                            "date": date,
+                            "error": str(exc),
+                            "error_code": _err_code,
+                        },
+                    )
+                    _failed_leagues[league_def.league_id] = _err_code
 
-        # Per-league honest-coverage manifest rows.
+            if all_teams:
+                df = pd.DataFrame(all_teams)
+                # Add season column for provenance
+                df["season"] = effective_season
+                # Write as player_values entity — partition by season when
+                # doing historical backfill so seasons don't overwrite each other
+                pv_partition: dict[str, str] = {"day": date, "entity": "player_values"}
+                if season is not None:
+                    pv_partition["season"] = str(season)
+                sink.write(
+                    data=df,
+                    partition=pv_partition,
+                    format="parquet",
+                    filename="player_values.parquet",
+                )
+                counts["transfermarkt_teams"] = len(df)
+                logger.info(
+                    "Transfermarkt teams → player_values: %d rows written",
+                    len(df),
+                )
+
+                # Persist per-season cache for the next backfill iteration.
+                _cache_rows: list[dict[str, str | None]] = [
+                    {
+                        "league_id": str(_r.get("league_id", "")),
+                        "canonical_league": str(_r.get("canonical_league", "")),
+                        "team_id": str(_r.get("team_id", "") or _r.get("id", "")),
+                        "name": str(_r.get("name", "")),
+                        "squad_size": str(_r.get("squad_size", "") or ""),
+                        "player_count": str(_r.get("player_count", "") or ""),
+                    }
+                    for _r in all_teams
+                ]
+                _write_transfermarkt_team_mapping(
+                    bucket, _cache_rows, effective_season
+                )
+
+        # Per-league honest-coverage manifest rows — identical between the
+        # cache-hit and live-fetch branches.  ``cached=True`` is passed as a
+        # kwarg for future schema evolution (ManifestWriter v5 tolerates extra
+        # kwargs); the cache-hit path also emits an UPSTREAM_FETCH_COMPLETED
+        # event with ``cached=True`` so current observability can filter on it.
         for _cap_lid, _cap_count in _captured_league_counts.items():
             manifest.add(
                 processing_date=date_type.fromisoformat(date),
                 row_count=_cap_count,
                 data_type="PLAYER_VALUES",
                 league_id=_cap_lid,
+                cached=_cache_hit,
             )
         for _emp_lid in sorted(_empty_leagues | _unmapped_leagues):
             manifest.record_empty(
@@ -4385,10 +4667,53 @@ async def _fetch_sfi_data(
     )
     _expected_sfi_league_ids = {lg.league_id for lg in _expected_sfi_leagues}
 
-    # --- SFI_LEAGUES shard (date-level) ---
+    # --- SFI league mapping cache short-circuit (per-date, 24h TTL) ---
+    # Backfill VMs hit the SFI ``get_leagues`` endpoint once per trigger date.
+    # A fresh cache lets non-trigger dates reuse the canonical league-ID list
+    # without a paid API call.  ``sfi_league_ids`` is the list of SFI hex IDs
+    # used downstream by ``_filtered_sfi_ids`` for progressive-stats.
     sfi_league_ids: list[str] = []
+    _sfi_cache_hit = False
+    _sfi_cached_df = _read_sfi_league_mapping(bucket)
+    if _sfi_cached_df is not None and _cache_is_fresh(
+        _sfi_cached_df, timedelta(hours=_SFI_CACHE_STALENESS_HOURS)
+    ):
+        try:
+            _sfi_triggers_today = get_leagues_needing_refresh(date_type.fromisoformat(date))
+        except Exception:
+            _sfi_triggers_today = ["__fallback__"]
+        if not _sfi_triggers_today and "sfi_league_hex" in _sfi_cached_df.columns:
+            _sfi_cache_hit = True
+            sfi_league_ids = [
+                str(v) for v in _sfi_cached_df["sfi_league_hex"].dropna().tolist() if str(v)
+            ]
+            logger.info(
+                "SFI league mapping cache hit for date=%s — skipping get_leagues API",
+                date,
+            )
+            log_event(
+                "UPSTREAM_FETCH_COMPLETED",
+                details={
+                    "venue": "soccer_football_info",
+                    "endpoint": "get_leagues",
+                    "date": date,
+                    "cached": True,
+                    "league_count": len(sfi_league_ids),
+                },
+            )
+            if _want_sfi_leagues:
+                manifest.add(
+                    processing_date=date_type.fromisoformat(date),
+                    row_count=len(sfi_league_ids),
+                    data_type="SFI_LEAGUES",
+                    cached=True,
+                )
+
+    # --- SFI_LEAGUES shard (date-level) — live fetch path ---
+    leagues = [] if _sfi_cache_hit else None
     try:
-        leagues = await adapter.get_leagues()
+        if not _sfi_cache_hit:
+            leagues = await adapter.get_leagues()
         if leagues:
             if _want_sfi_leagues:
                 rows = [_coerce_adapter_output(lg) for lg in leagues]
@@ -4407,7 +4732,48 @@ async def _fetch_sfi_data(
                 )
                 logger.info("SFI leagues: %d rows written", len(df))
             sfi_league_ids = [lg.league_id for lg in leagues]
-        else:
+
+            # Drift detection — compare Prediction-classified league count the
+            # provider returned against the canonical denominator.  Fires an
+            # ADAPTER_FETCH_ANOMALY event (does not block the write) when we
+            # see fewer mapped leagues than expected.  SFI uses a wider 15/30%
+            # threshold than TM (10/25%) because the provider routinely drops
+            # and re-adds fringe leagues day-to-day.
+            if _expected_sfi_league_ids:
+                _mapped_sfi_ids_check = set(SOCCER_FOOTBALL_INFO_IDS.values())
+                _got_mapped_count = sum(
+                    1 for lid in sfi_league_ids if lid in _mapped_sfi_ids_check
+                )
+                _maybe_emit_drift_anomaly(
+                    venue="soccer_football_info",
+                    endpoint="get_leagues",
+                    league_id="__denominator__",
+                    date=date,
+                    season=None,
+                    got_count=_got_mapped_count,
+                    expected_count=len(_expected_sfi_league_ids),
+                    threshold_pct=15.0,
+                    high_severity_pct=30.0,
+                )
+
+            # Persist SFI league-mapping cache for the next backfill iteration.
+            _sfi_hex_by_canonical = {
+                v: k for k, v in SOCCER_FOOTBALL_INFO_IDS.items()
+            }
+            _cache_rows: list[dict[str, str | None]] = []
+            for _lg in leagues:
+                _raw = _coerce_adapter_output(_lg)
+                _hex = str(_raw.get("league_id", ""))
+                _canonical = _sfi_hex_by_canonical.get(_hex, "")
+                _cache_rows.append(
+                    {
+                        "canonical_league_id": _canonical,
+                        "sfi_league_hex": _hex,
+                        "name": str(_raw.get("name", "")),
+                    }
+                )
+            _write_sfi_league_mapping(bucket, _cache_rows)
+        elif not _sfi_cache_hit:
             if _want_sfi_leagues:
                 logger.info("SFI leagues: 0 rows returned for date=%s", date)
                 manifest.record_empty(
