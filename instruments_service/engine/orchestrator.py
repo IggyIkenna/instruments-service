@@ -76,6 +76,10 @@ from unified_trading_library import (
     read_availability_index,
 )
 from unified_trading_library import unified_config as _uc
+from unified_trading_library.instruments_write_gate import (
+    InstrumentsWriteGate,
+    TimestampAlignmentError,
+)
 
 from instruments_service.config import get_config
 from instruments_service.config_reloaders import get_defi_major_assets
@@ -102,6 +106,49 @@ def _coerce_adapter_output(item: object) -> dict[str, object]:
     if callable(dump):
         return dump()
     return {}
+
+
+# ---------------------------------------------------------------------------
+# Write-gate: fail-loud guard against §5 data-crimes at write time.
+# ``warn`` mode (default) emits DATA_ALIGNMENT_VIOLATION and proceeds; ``strict``
+# raises TimestampAlignmentError which per-shard try/except should catch and
+# route to manifest.record_failed. Flip to ``strict`` once warn-mode volume
+# baselines clean across sports adapters (see
+# ``plans/active/instruments_service_write_gate_validation_2026_04_22.plan.md``).
+# ---------------------------------------------------------------------------
+_WRITE_GATE = InstrumentsWriteGate(mode="warn")
+
+
+def _gated_sink_write(
+    sink: DataSink,
+    *,
+    data: pd.DataFrame,
+    partition: dict[str, str],
+    filename: str,
+    venue: str | None = None,
+    entity: str | None = None,
+    format: str = "parquet",  # noqa: A002 — matches sink API
+) -> None:
+    """Per-date sink write wrapped by ``InstrumentsWriteGate``.
+
+    Callers should invoke this in place of ``sink.write(...)`` for any write
+    whose partition carries ``day={D}`` so row-level timestamp misalignment
+    fails loud instead of landing silently in GCS.
+
+    In warn mode (current default) violations emit ``DATA_ALIGNMENT_VIOLATION``
+    and the write still proceeds. In strict mode, ``TimestampAlignmentError``
+    propagates and the caller's per-shard failure-isolation block records the
+    shard as ``attempted_failed`` on the manifest.
+    """
+    _WRITE_GATE.validate_and_write(
+        sink=sink,
+        data=data,
+        partition=partition,
+        format=format,
+        filename=filename,
+        venue=venue,
+        entity=entity,
+    )
 
 
 # Venue launch dates SSOT: UAC VenueMapping.venue_start_dates (canonical PROTOCOL-CHAIN format).
@@ -4560,11 +4607,13 @@ async def _fetch_transfermarkt_data(
                 pv_partition: dict[str, str] = {"day": date, "entity": "player_values"}
                 if season is not None:
                     pv_partition["season"] = str(season)
-                sink.write(
+                _gated_sink_write(
+                    sink,
                     data=df,
                     partition=pv_partition,
-                    format="parquet",
                     filename="player_values.parquet",
+                    venue="transfermarkt",
+                    entity="player_values",
                 )
                 counts["transfermarkt_teams"] = len(df)
                 logger.info(
@@ -4716,11 +4765,13 @@ async def _fetch_sfi_data(
             if _want_sfi_leagues:
                 rows = [_coerce_adapter_output(lg) for lg in leagues]
                 df = pd.DataFrame([{k: str(v) if v is not None else None for k, v in r.items()} for r in rows])
-                sink.write(
+                _gated_sink_write(
+                    sink,
                     data=df,
                     partition={"day": date, "entity": "sfi_leagues"},
-                    format="parquet",
                     filename="sfi_leagues.parquet",
+                    venue="soccer_football_info",
+                    entity="sfi_leagues",
                 )
                 counts["sfi_leagues"] = len(df)
                 manifest.add(
@@ -4832,11 +4883,13 @@ async def _fetch_sfi_data(
                     )
             if all_standings:
                 df = pd.DataFrame(all_standings)
-                sink.write(
+                _gated_sink_write(
+                    sink,
                     data=df,
                     partition={"day": date, "entity": "sfi_standings"},
-                    format="parquet",
                     filename="sfi_standings.parquet",
+                    venue="soccer_football_info",
+                    entity="sfi_standings",
                 )
                 counts["sfi_standings"] = len(df)
                 manifest.add(
@@ -4895,11 +4948,13 @@ async def _fetch_sfi_data(
                         df["data_available_at"] = _sfi_kickoff + pd.to_timedelta(
                             pd.to_numeric(df["timer_seconds"], errors="coerce"), unit="s"
                         )
-                    sink.write(
+                    _gated_sink_write(
+                        sink,
                         data=df,
                         partition={"day": date, "entity": "progressive_stats"},
-                        format="parquet",
                         filename="progressive_stats.parquet",
+                        venue="soccer_football_info",
+                        entity="progressive_stats",
                     )
                     counts["progressive_stats"] = len(df)
                     manifest.add(
