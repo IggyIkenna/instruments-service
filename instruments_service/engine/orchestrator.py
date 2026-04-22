@@ -1393,11 +1393,13 @@ async def process_instruments(
                 catalogue_bucket=bucket,
             )
             for _league_id in _empty_league_ids:
-                sink.write(
+                _gated_sink_write(
+                    sink,
                     data=empty_df,
                     partition={"day": date, "venue": "API_FOOTBALL_FIXTURES", "league": _league_id},
-                    format="parquet",
                     filename="instruments.parquet",
+                    venue="api_football_fixtures",
+                    entity="instruments",
                 )
                 _empty_manifest.add(
                     processing_date=date_type.fromisoformat(date),
@@ -1720,11 +1722,13 @@ async def process_instruments(
                     _league_id_str = str(_lid)
                     _captured_lids.add(_league_id_str)
                     _league_df_clean = _league_df.drop(columns=["_league_id"])
-                    sink.write(
+                    _gated_sink_write(
+                        sink,
                         data=_league_df_clean,
                         partition={"day": date, "venue": venue_str, "league": _league_id_str},
-                        format="parquet",
                         filename="instruments.parquet",
+                        venue=venue_str,
+                        entity="instruments",
                     )
                     manifest.add(
                         processing_date=date_type.fromisoformat(date),
@@ -1772,11 +1776,13 @@ async def process_instruments(
                 for _mkt, _mkt_df in _pred_df.groupby("_market"):
                     _mkt_str = str(_mkt)
                     _mkt_df_clean = _mkt_df.drop(columns=["_market"])
-                    sink.write(
+                    _gated_sink_write(
+                        sink,
                         data=_mkt_df_clean,
                         partition={"day": date, "venue": venue_str, "market": _mkt_str},
-                        format="parquet",
                         filename="instruments.parquet",
+                        venue=venue_str,
+                        entity="instruments",
                     )
                     manifest.add(
                         processing_date=date_type.fromisoformat(date),
@@ -2337,11 +2343,13 @@ def _write_venue(
     max_attempts = 3
     for attempt in range(max_attempts):
         try:
-            sink.write(
+            _gated_sink_write(
+                sink,
                 data=df,
                 partition={"day": date, "venue": venue_str},
-                format="parquet",
                 filename="instruments.parquet",
+                venue=venue_str,
+                entity="instruments",
             )
             # Add to batched manifest writer (flushed by caller) or legacy per-venue write
             # v4: Sports reference entities write data_type (not venue).
@@ -2683,11 +2691,13 @@ async def _fetch_sports_reference_data(
         else:
             logger.info("Sports reference: %d leagues from cache (0 API calls)", len(leagues_df))
         if leagues_df is not None:
-            sink.write(
+            _gated_sink_write(
+                sink,
                 data=leagues_df,
                 partition={"day": date, "entity": "leagues"},
-                format="parquet",
                 filename="leagues.parquet",
+                venue="api_football",
+                entity="leagues",
             )
             counts["leagues"] = len(leagues_df)
 
@@ -2735,18 +2745,22 @@ async def _fetch_sports_reference_data(
             if "league_id" in teams_df.columns:
                 for _t_lid, _t_league_df in teams_df.groupby("league_id"):
                     _t_lid_str = str(_t_lid)
-                    sink.write(
+                    _gated_sink_write(
+                        sink,
                         data=_t_league_df,
                         partition={"day": date, "entity": "teams", "league": _t_lid_str},
-                        format="parquet",
                         filename="teams.parquet",
+                        venue="api_football",
+                        entity="teams",
                     )
             else:
-                sink.write(
+                _gated_sink_write(
+                    sink,
                     data=teams_df,
                     partition={"day": date, "entity": "teams"},
-                    format="parquet",
                     filename="teams.parquet",
+                    venue="api_football",
+                    entity="teams",
                 )
             counts["teams"] = len(teams_df)
 
@@ -2788,11 +2802,13 @@ async def _fetch_sports_reference_data(
                 for _s_lid, _s_league_df in standings_df.groupby("league_id"):
                     _s_lid_str = str(_s_lid)
                     _std_captured.add(_s_lid_str)
-                    sink.write(
+                    _gated_sink_write(
+                        sink,
                         data=_s_league_df,
                         partition={"day": date, "entity": "standings", "league": _s_lid_str},
-                        format="parquet",
                         filename="standings.parquet",
+                        venue="api_football",
+                        entity="standings",
                     )
                     if manifest is not None:
                         manifest.add(
@@ -2804,11 +2820,13 @@ async def _fetch_sports_reference_data(
                 if manifest is not None:
                     _af_emit_empty_gaps_for_entity("STANDINGS", _std_captured)
             else:
-                sink.write(
+                _gated_sink_write(
+                    sink,
                     data=standings_df,
                     partition={"day": date, "entity": "standings"},
-                    format="parquet",
                     filename="standings.parquet",
+                    venue="api_football",
+                    entity="standings",
                 )
                 if manifest is not None:
                     manifest.add(
@@ -2851,11 +2869,13 @@ async def _fetch_sports_reference_data(
                         _inj_lid_str = str(_inj_lid)
                         _inj_captured.add(_inj_lid_str)
                         _inj_clean = _inj_league_df.drop(columns=["_inj_league"], errors="ignore")
-                        sink.write(
+                        _gated_sink_write(
+                            sink,
                             data=_inj_clean,
                             partition={"day": date, "entity": "injuries", "league": _inj_lid_str},
-                            format="parquet",
                             filename="injuries.parquet",
+                            venue="api_football",
+                            entity="injuries",
                         )
                         if manifest is not None:
                             manifest.add(
@@ -2867,11 +2887,13 @@ async def _fetch_sports_reference_data(
 
                     if not _without_league.empty:
                         _inj_unmapped = _without_league.drop(columns=["_inj_league"], errors="ignore")
-                        sink.write(
+                        _gated_sink_write(
+                            sink,
                             data=_inj_unmapped,
                             partition={"day": date, "entity": "injuries"},
-                            format="parquet",
                             filename="injuries.parquet",
+                            venue="api_football",
+                            entity="injuries",
                         )
                         if manifest is not None:
                             manifest.add(
@@ -2883,11 +2905,13 @@ async def _fetch_sports_reference_data(
                         _af_emit_empty_gaps_for_entity("INJURIES", _inj_captured)
                 else:
                     # No league info — write single file
-                    sink.write(
+                    _gated_sink_write(
+                        sink,
                         data=df,
                         partition={"day": date, "entity": "injuries"},
-                        format="parquet",
                         filename="injuries.parquet",
+                        venue="api_football",
+                        entity="injuries",
                     )
                     if manifest is not None:
                         manifest.add(
@@ -2903,11 +2927,13 @@ async def _fetch_sports_reference_data(
                 _empty_injuries_df = pd.DataFrame(
                     columns=["fixture_id", "team_id", "player_id", "player_name", "reason", "severity"],
                 )
-                sink.write(
+                _gated_sink_write(
+                    sink,
                     data=_empty_injuries_df,
                     partition={"day": date, "entity": "injuries"},
-                    format="parquet",
                     filename="injuries.parquet",
+                    venue="api_football",
+                    entity="injuries",
                 )
                 counts["injuries"] = 0
                 logger.info("Sports reference: 0 injuries written (empty parquet)")
@@ -2964,11 +2990,13 @@ async def _fetch_sports_reference_data(
                     _old_data = _storage.download_bytes(bucket=bucket, blob_path=_old_path)
                     _old_df = pd.read_parquet(io.BytesIO(_old_data))
                     _ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
-                    _ref_sink.write(
+                    _gated_sink_write(
+                        _ref_sink,
                         data=_old_df,
                         partition={"day": date, "entity": "fixtures"},
-                        format="parquet",
                         filename="fixtures.parquet",
+                        venue="api_football",
+                        entity="fixtures",
                     )
                     logger.info(
                         "Canonical fixtures copied from old path to entity=fixtures/ (%d rows)",
@@ -2987,11 +3015,13 @@ async def _fetch_sports_reference_data(
                                 _fx_df["kickoff_utc"], utc=True, errors="coerce"
                             ) - pd.Timedelta(days=7)
                         _ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
-                        _ref_sink.write(
+                        _gated_sink_write(
+                            _ref_sink,
                             data=_fx_df,
                             partition={"day": date, "entity": "fixtures"},
-                            format="parquet",
                             filename="fixtures.parquet",
+                            venue="api_football",
+                            entity="fixtures",
                         )
                         logger.info(
                             "Canonical fixtures fetched from API and written to entity=fixtures/ (%d fixtures)",
@@ -3046,20 +3076,24 @@ async def _fetch_sports_reference_data(
                             fixture_df["kickoff_utc"], utc=True, errors="coerce"
                         ) - pd.Timedelta(days=7)
                     _fix_ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
-                    _fix_ref_sink.write(
+                    _gated_sink_write(
+                        _fix_ref_sink,
                         data=fixture_df,
                         partition={"day": date, "entity": "fixtures"},
-                        format="parquet",
                         filename="fixtures.parquet",
+                        venue="api_football",
+                        entity="fixtures",
                     )
                     # Per-league partitioned write
                     if "league_id" in fixture_df.columns:
                         for _lid, _ldf in fixture_df.groupby("league_id"):
-                            _fix_ref_sink.write(
+                            _gated_sink_write(
+                                _fix_ref_sink,
                                 data=_ldf,
                                 partition={"day": date, "entity": "fixtures", "league": str(_lid)},
-                                format="parquet",
                                 filename="fixtures.parquet",
+                                venue="api_football",
+                                entity="fixtures",
                             )
                     logger.info(
                         "Canonical fixtures written to sports_reference/by_date/entity=fixtures/ (%d fixtures)",
@@ -3196,11 +3230,13 @@ async def _fetch_sports_reference_data(
                         _pf_lid_str = str(_pf_lid)
                         _pf_captured.add(_pf_lid_str)
                         _pf_clean = _pf_league_df.drop(columns=["_league_id"])
-                        sink.write(
+                        _gated_sink_write(
+                            sink,
                             data=_pf_clean,
                             partition={"day": date, "entity": entity_name, "league": _pf_lid_str},
-                            format="parquet",
                             filename=f"{entity_name}.parquet",
+                            venue="api_football",
+                            entity=entity_name,
                         )
                         if manifest is not None:
                             manifest.add(
@@ -3213,11 +3249,13 @@ async def _fetch_sports_reference_data(
                     # Write unmapped rows (if any) to a catch-all partition
                     if not _without_league.empty:
                         _unmapped_clean = _without_league.drop(columns=["_league_id"])
-                        sink.write(
+                        _gated_sink_write(
+                            sink,
                             data=_unmapped_clean,
                             partition={"day": date, "entity": entity_name},
-                            format="parquet",
                             filename=f"{entity_name}.parquet",
+                            venue="api_football",
+                            entity=entity_name,
                         )
                         logger.warning(
                             "Sports reference: %d %s rows could not be mapped to a league",
@@ -3234,11 +3272,13 @@ async def _fetch_sports_reference_data(
                         _af_emit_empty_gaps_for_entity(_af_entity_dt, _pf_captured)
                 else:
                     # No league mapping available — write single file (legacy fallback)
-                    sink.write(
+                    _gated_sink_write(
+                        sink,
                         data=df,
                         partition={"day": date, "entity": entity_name},
-                        format="parquet",
                         filename=f"{entity_name}.parquet",
+                        venue="api_football",
+                        entity=entity_name,
                     )
                     if manifest is not None:
                         manifest.add(
@@ -3687,7 +3727,8 @@ async def _fetch_footystats_predictions(
                 for _pred_lid, _pred_league_df in _with_league.groupby("_pred_league"):
                     _pred_lid_str = str(_pred_lid)
                     _pred_clean = _pred_league_df.drop(columns=["_pred_league"])
-                    sink.write(
+                    _gated_sink_write(
+                        sink,
                         data=_pred_clean,
                         partition={
                             "day": date,
@@ -3695,7 +3736,8 @@ async def _fetch_footystats_predictions(
                             "fetched_at_hour": fetched_at_hour,
                             "league": _pred_lid_str,
                         },
-                        format="parquet",
+                        venue="footystats",
+                        entity="footystats_predictions",
                         filename="footystats_predictions.parquet",
                     )
                     pred_manifest.add(
@@ -3707,14 +3749,16 @@ async def _fetch_footystats_predictions(
 
                 if not _without_league.empty:
                     _pred_unmapped = _without_league.drop(columns=["_pred_league"])
-                    sink.write(
+                    _gated_sink_write(
+                        sink,
                         data=_pred_unmapped,
                         partition={
                             "day": date,
                             "entity": "footystats_predictions",
                             "fetched_at_hour": fetched_at_hour,
                         },
-                        format="parquet",
+                        venue="footystats",
+                        entity="footystats_predictions",
                         filename="footystats_predictions.parquet",
                     )
                     pred_manifest.add(
@@ -3723,14 +3767,16 @@ async def _fetch_footystats_predictions(
                         data_type="PREDICTIONS",
                     )
             else:
-                sink.write(
+                _gated_sink_write(
+                    sink,
                     data=df,
                     partition={
                         "day": date,
                         "entity": "footystats_predictions",
                         "fetched_at_hour": fetched_at_hour,
                     },
-                    format="parquet",
+                    venue="footystats",
+                    entity="footystats_predictions",
                     filename="footystats_predictions.parquet",
                 )
                 pred_manifest.add(
@@ -3925,10 +3971,12 @@ async def _fetch_footystats_matches(
                 for _ft_lid, _ft_league_df in _with_league.groupby("_ft_league"):
                     _ft_lid_str = str(_ft_lid)
                     _ft_clean = _ft_league_df.drop(columns=["_ft_league"])
-                    sink.write(
+                    _gated_sink_write(
+                        sink,
                         data=_ft_clean,
                         partition={"day": date, "entity": "footystats_matches", "league": _ft_lid_str},
-                        format="parquet",
+                        venue="footystats",
+                        entity="footystats_matches",
                         filename="footystats_matches.parquet",
                     )
                     _ft_manifest.add(
@@ -3940,10 +3988,12 @@ async def _fetch_footystats_matches(
 
                 if not _without_league.empty:
                     _ft_unmapped = _without_league.drop(columns=["_ft_league"])
-                    sink.write(
+                    _gated_sink_write(
+                        sink,
                         data=_ft_unmapped,
                         partition={"day": date, "entity": "footystats_matches"},
-                        format="parquet",
+                        venue="footystats",
+                        entity="footystats_matches",
                         filename="footystats_matches.parquet",
                     )
                     _ft_manifest.add(
@@ -3952,10 +4002,12 @@ async def _fetch_footystats_matches(
                         data_type="MATCHES",
                     )
             else:
-                sink.write(
+                _gated_sink_write(
+                    sink,
                     data=df,
                     partition={"day": date, "entity": "footystats_matches"},
-                    format="parquet",
+                    venue="footystats",
+                    entity="footystats_matches",
                     filename="footystats_matches.parquet",
                 )
                 _ft_manifest.add(
@@ -4088,7 +4140,8 @@ async def _fetch_footystats_odds(
                 for _odds_lid, _odds_league_df in _with_league.groupby("_odds_league"):
                     _odds_lid_str = str(_odds_lid)
                     _odds_clean = _odds_league_df.drop(columns=["_odds_league"])
-                    sink.write(
+                    _gated_sink_write(
+                        sink,
                         data=_odds_clean,
                         partition={
                             "day": date,
@@ -4096,7 +4149,8 @@ async def _fetch_footystats_odds(
                             "fetched_at_hour": fetched_at_hour,
                             "league": _odds_lid_str,
                         },
-                        format="parquet",
+                        venue="footystats",
+                        entity="footystats_odds",
                         filename="footystats_odds.parquet",
                     )
                     odds_manifest.add(
@@ -4108,14 +4162,16 @@ async def _fetch_footystats_odds(
 
                 if not _without_league.empty:
                     _odds_unmapped = _without_league.drop(columns=["_odds_league"])
-                    sink.write(
+                    _gated_sink_write(
+                        sink,
                         data=_odds_unmapped,
                         partition={
                             "day": date,
                             "entity": "footystats_odds",
                             "fetched_at_hour": fetched_at_hour,
                         },
-                        format="parquet",
+                        venue="footystats",
+                        entity="footystats_odds",
                         filename="footystats_odds.parquet",
                     )
                     odds_manifest.add(
@@ -4124,14 +4180,16 @@ async def _fetch_footystats_odds(
                         data_type="ODDS",
                     )
             else:
-                sink.write(
+                _gated_sink_write(
+                    sink,
                     data=df,
                     partition={
                         "day": date,
                         "entity": "footystats_odds",
                         "fetched_at_hour": fetched_at_hour,
                     },
-                    format="parquet",
+                    venue="footystats",
+                    entity="footystats_odds",
                     filename="footystats_odds.parquet",
                 )
                 odds_manifest.add(
@@ -4281,11 +4339,13 @@ async def _fetch_understat_xg(
                 for _xg_lid, _xg_league_df in _with_league.groupby("league"):
                     _xg_lid_str = str(_xg_lid)
                     _captured_leagues.add(_xg_lid_str)
-                    sink.write(
+                    _gated_sink_write(
+                        sink,
                         data=_xg_league_df,
                         partition={"day": date, "entity": "understat_xg", "league": _xg_lid_str},
-                        format="parquet",
                         filename="understat_xg.parquet",
+                        venue="understat",
+                        entity="understat_xg",
                     )
                     xg_manifest.add(
                         processing_date=date_type.fromisoformat(date),
@@ -4295,11 +4355,13 @@ async def _fetch_understat_xg(
                     )
 
                 if not _without_league.empty:
-                    sink.write(
+                    _gated_sink_write(
+                        sink,
                         data=_without_league,
                         partition={"day": date, "entity": "understat_xg"},
-                        format="parquet",
                         filename="understat_xg.parquet",
+                        venue="understat",
+                        entity="understat_xg",
                     )
                     # Parquet is still written for forensic inspection, but we
                     # no longer emit an unsharded date-aggregate manifest row
@@ -4307,11 +4369,13 @@ async def _fetch_understat_xg(
                     # consumer and skewed per-league honest-coverage.
                     # Phase 2 of sports_manifest_shard_migration_cleanup.
             else:
-                sink.write(
+                _gated_sink_write(
+                    sink,
                     data=df,
                     partition={"day": date, "entity": "understat_xg"},
-                    format="parquet",
                     filename="understat_xg.parquet",
+                    venue="understat",
+                    entity="understat_xg",
                 )
                 xg_manifest.add(
                     processing_date=date_type.fromisoformat(date),
@@ -4424,11 +4488,13 @@ async def _fetch_transfermarkt_data(
             if leagues:
                 rows = [_coerce_adapter_output(lg) for lg in leagues]
                 df = pd.DataFrame([{k: str(v) if v is not None else None for k, v in r.items()} for r in rows])
-                sink.write(
+                _gated_sink_write(
+                    sink,
                     data=df,
                     partition={"day": date, "entity": "transfermarkt_leagues"},
-                    format="parquet",
                     filename="transfermarkt_leagues.parquet",
+                    venue="transfermarkt",
+                    entity="transfermarkt_leagues",
                 )
                 counts["transfermarkt_leagues"] = len(df)
                 manifest.add(
@@ -5411,11 +5477,13 @@ async def _fetch_weather_data(
             except Exception:
                 pass  # Write new data only if merge fails
 
-        sink.write(
+        _gated_sink_write(
+            sink,
             data=new_df,
             partition={"day": date, "entity": "weather"},
-            format="parquet",
             filename="weather.parquet",
+            venue="open_meteo",
+            entity="weather",
         )
         counts["weather"] = len(new_df)
         logger.info("Weather: %d venue observations written for date=%s", len(new_df), date)
