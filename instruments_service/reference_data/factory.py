@@ -13,6 +13,7 @@ from unified_api_contracts.registry import (
 
 from .adapters.cefi.aster import AsterReferenceDataAdapter
 from .adapters.cefi.ccxt_adapter import CCXTReferenceDataAdapter
+from .adapters.cefi.deribit_combo_adapter import DeribitComboReferenceDataAdapter
 from .adapters.cefi.hyperliquid import HyperliquidReferenceDataAdapter
 from .adapters.cefi.tardis import TardisReferenceDataAdapter
 from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
@@ -70,6 +71,9 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "OKX-SWAP": "tardis",
     "OKX-FUTURES": "tardis",
     "DERIBIT": "tardis",
+    # DERIBIT-COMBO: live multi-leg options strategy fetch via Deribit public REST API.
+    # Batch (historical) combo instruments come via the Tardis adapter (DERIBIT → tardis).
+    "DERIBIT-COMBO": "deribit_combo",
     "COINBASE-SPOT": "tardis",
     "UPBIT": "tardis",
     # Non-Tardis CeFi
@@ -183,6 +187,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "aave_v3": AaveV3ReferenceDataAdapter,
     "api_football": ApiFootballReferenceDataAdapter,
     "aster": AsterReferenceDataAdapter,
+    "deribit_combo": DeribitComboReferenceDataAdapter,
     "balancer": BalancerReferenceDataAdapter,
     "betfair": BetfairReferenceDataAdapter,
     "compound_v3": CompoundV3ReferenceDataAdapter,
@@ -249,6 +254,8 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "spark": "thegraph",
     "api_football": "api_football",
     "betfair": "betfair",
+    # Deribit combo: public REST endpoint, no API key needed
+    "deribit_combo": "",
     # EigenLayer / EtherFi governance — on-chain, no API key needed
     "eigenlayer": "",
     "ethfi_governance": "",
