@@ -10,6 +10,7 @@ from unified_api_contracts import (
     CEFI_BASE_ASSET_UNIVERSE,
     HyperliquidAssetInfo,
     HyperliquidMeta,
+    UnsupportedCapabilityError,
     classify_venue_error,
 )
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
@@ -55,6 +56,14 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
         self,
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
+        # OPTIONS: not supported — venue does not offer listed options contracts
+        # FUTURE: not supported — Hyperliquid only offers perpetual futures (no expiry)
+        if instrument_type in (InstrumentType.OPTION, InstrumentType.FUTURE):
+            raise UnsupportedCapabilityError(
+                venue="HYPERLIQUID",
+                capability=str(instrument_type),
+                message=(f"HYPERLIQUID does not support {instrument_type} instruments. Only PERPETUAL is available."),
+            )
         if instrument_type not in (None, InstrumentType.PERPETUAL):
             return []
         url = f"{_BASE}/info"

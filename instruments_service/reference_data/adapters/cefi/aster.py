@@ -15,6 +15,7 @@ from unified_api_contracts import (
     CEFI_ACCEPTED_QUOTE_ASSETS,
     CEFI_BASE_ASSET_UNIVERSE,
     AsterExchangeInfo,
+    UnsupportedCapabilityError,
     classify_venue_error,
 )
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
@@ -77,6 +78,14 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active perpetual instruments from Aster exchangeInfo."""
+        # OPTIONS: not supported — venue does not offer listed options contracts
+        # FUTURE: not supported — Aster only offers perpetual futures (CLOB, no expiry)
+        if instrument_type in (InstrumentType.OPTION, InstrumentType.FUTURE):
+            raise UnsupportedCapabilityError(
+                venue="ASTER",
+                capability=str(instrument_type),
+                message=(f"ASTER does not support {instrument_type} instruments. Only PERPETUAL is available."),
+            )
         if instrument_type not in (None, InstrumentType.PERPETUAL):
             return []
 
