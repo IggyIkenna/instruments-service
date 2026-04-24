@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 
-from unified_trading_library import DependencyError, get_bucket_name, get_storage_client, get_write_bucket_name
+from unified_trading_library import DependencyError, get_storage_client, get_write_bucket_name
 
 from instruments_service.config import get_config
 

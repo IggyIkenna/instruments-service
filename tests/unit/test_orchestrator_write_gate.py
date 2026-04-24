@@ -10,17 +10,16 @@ row-timestamps landing on a historical ``day=2023-03-16`` partition).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
+from unified_trading_library import InstrumentsWriteGate, TimestampAlignmentError
 
 from instruments_service.engine.orchestrator import (
-    TimestampAlignmentError,
     _WRITE_GATE,
     _gated_sink_write,
 )
-from unified_trading_library.instruments_write_gate import InstrumentsWriteGate
 
 
 @dataclass
@@ -32,7 +31,7 @@ class _FakeSink:
         *,
         data: pd.DataFrame,
         partition: dict[str, str],
-        format: str,  # noqa: A002
+        format: str,
         filename: str,
     ) -> None:
         self.writes.append(
@@ -76,9 +75,7 @@ class TestGatedSinkWrite:
             "entity": "player_values",
         }
 
-    def test_tm_incident_shape_warn_mode_writes_but_emits(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_tm_incident_shape_warn_mode_writes_but_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Replay 2026-04-22 Transfermarkt VM incident: wall-clock valuation_date
         on historical day=2023-03-16. Warn mode emits + proceeds.
 
@@ -138,9 +135,7 @@ class TestGatedSinkWrite:
             {
                 "match_id": ["m1", "m1", "m1"],
                 "timer_seconds": [0, 45, 90],
-                "data_available_at": [
-                    kickoff + pd.Timedelta(seconds=s) for s in [0, 45, 90]
-                ],
+                "data_available_at": [kickoff + pd.Timedelta(seconds=s) for s in [0, 45, 90]],
             }
         )
         _gated_sink_write(
@@ -223,9 +218,7 @@ class TestVenueParityCases:
         )
         return sink, events
 
-    def test_api_football_fixtures_warn_mode_emits(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_api_football_fixtures_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sink, events = self._run_incident(
             monkeypatch,
             partition={"day": self._BATCH_DATE, "entity": "fixtures"},
@@ -242,9 +235,7 @@ class TestVenueParityCases:
         assert details["venue"] == "api_football"
         assert details["entity"] == "fixtures"
 
-    def test_api_football_injuries_warn_mode_emits(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_api_football_injuries_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sink, events = self._run_incident(
             monkeypatch,
             partition={"day": self._BATCH_DATE, "entity": "injuries", "league": "epl"},
@@ -256,9 +247,7 @@ class TestVenueParityCases:
         assert len(sink.writes) == 1
         assert any(e[0] == "DATA_ALIGNMENT_VIOLATION" for e in events)
 
-    def test_footystats_matches_warn_mode_emits(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_footystats_matches_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sink, events = self._run_incident(
             monkeypatch,
             partition={"day": self._BATCH_DATE, "entity": "footystats_matches"},
@@ -271,9 +260,7 @@ class TestVenueParityCases:
         details = next(e[2] for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION")
         assert details["venue"] == "footystats"
 
-    def test_footystats_odds_warn_mode_emits(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_footystats_odds_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sink, events = self._run_incident(
             monkeypatch,
             partition={
@@ -289,9 +276,7 @@ class TestVenueParityCases:
         assert len(sink.writes) == 1
         assert any(e[0] == "DATA_ALIGNMENT_VIOLATION" for e in events)
 
-    def test_understat_xg_warn_mode_emits(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_understat_xg_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sink, events = self._run_incident(
             monkeypatch,
             partition={"day": self._BATCH_DATE, "entity": "understat_xg"},
@@ -304,9 +289,7 @@ class TestVenueParityCases:
         details = next(e[2] for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION")
         assert details["venue"] == "understat"
 
-    def test_transfermarkt_leagues_warn_mode_emits(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_transfermarkt_leagues_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         sink, events = self._run_incident(
             monkeypatch,
             partition={"day": self._BATCH_DATE, "entity": "transfermarkt_leagues"},
@@ -330,9 +313,7 @@ class TestVenueParityCases:
         details = next(e[2] for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION")
         assert details["venue"] == "open_meteo"
 
-    def test_instrument_universe_universe_warn_mode_emits(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_instrument_universe_universe_warn_mode_emits(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """L1723/L2340 instrument-universe writes (DeFi/CeFi/TradFi/Prediction).
         Production DataFrames don't carry DEFAULT_AS_OF_COLUMNS so the gate
         no-ops; this test injects one to prove the gate fires if a future
@@ -355,9 +336,7 @@ class TestStrictModeEndToEnd:
     """Verify that flipping the gate to strict mode raises TimestampAlignmentError
     on incident-shape data — so Phase 3 of Plan 6 can flip the default safely."""
 
-    def test_strict_mode_raises_and_skips_write(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_strict_mode_raises_and_skips_write(self, monkeypatch: pytest.MonkeyPatch) -> None:
         events: list[tuple[str, str]] = []
 
         def fake_log(
@@ -380,7 +359,7 @@ class TestStrictModeEndToEnd:
         df = pd.DataFrame(
             {
                 "valuation_date": [
-                    datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc),
+                    datetime(2026, 4, 22, 12, 0, tzinfo=UTC),
                 ],
             }
         )
