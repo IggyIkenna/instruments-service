@@ -30,15 +30,11 @@ from instruments_service.engine.orchestrator import (
 class TestCacheBlobPaths:
     def test_transfermarkt_path_partitioned_by_season(self) -> None:
         assert _transfermarkt_mapping_blob_path(2024) == (
-            "sports_reference/mappings/transfermarkt_league_teams/"
-            "season=2024/teams.parquet"
+            "sports_reference/mappings/transfermarkt_league_teams/season=2024/teams.parquet"
         )
 
     def test_sfi_path_flat(self) -> None:
-        assert (
-            _sfi_mapping_blob_path()
-            == "sports_reference/mappings/sfi_league_mapping.parquet"
-        )
+        assert _sfi_mapping_blob_path() == "sports_reference/mappings/sfi_league_mapping.parquet"
 
 
 # ---------------------------------------------------------------------------
@@ -95,9 +91,7 @@ class TestWriteTransfermarktTeamMapping:
                 "instruments_service.engine.orchestrator.get_data_sink",
                 return_value=mock_sink,
             ),
-            patch(
-                "instruments_service.engine.orchestrator.classify_and_emit_error"
-            ) as mock_classify,
+            patch("instruments_service.engine.orchestrator.classify_and_emit_error") as mock_classify,
         ):
             _write_transfermarkt_team_mapping(
                 "bucket",
@@ -124,9 +118,7 @@ class TestReadTransfermarktTeamMapping:
         assert result is None
 
     def test_returns_dataframe_on_hit(self) -> None:
-        df = pd.DataFrame(
-            [{"league_id": "EPL", "team_id": "ARSENAL", "name": "Arsenal"}]
-        )
+        df = pd.DataFrame([{"league_id": "EPL", "team_id": "ARSENAL", "name": "Arsenal"}])
         buf = BytesIO()
         df.to_parquet(buf)
         mock_storage = MagicMock()
@@ -140,8 +132,7 @@ class TestReadTransfermarktTeamMapping:
         assert len(result) == 1
         mock_storage.download_bytes.assert_called_once_with(
             "bucket",
-            "sports_reference/mappings/transfermarkt_league_teams/"
-            "season=2024/teams.parquet",
+            "sports_reference/mappings/transfermarkt_league_teams/season=2024/teams.parquet",
         )
 
     def test_returns_none_on_exception(self) -> None:
@@ -223,9 +214,7 @@ class TestCacheIsFresh:
 
     def test_stale_cache_outside_ttl(self) -> None:
         old = datetime.now(UTC) - timedelta(days=30)
-        df = pd.DataFrame(
-            [{"league_id": "EPL", "last_fetched_at": old.isoformat()}]
-        )
+        df = pd.DataFrame([{"league_id": "EPL", "last_fetched_at": old.isoformat()}])
         assert _cache_is_fresh(df, timedelta(days=7)) is False
 
     def test_missing_column_returns_false(self) -> None:
@@ -254,9 +243,7 @@ class TestCacheIsFresh:
 
 class TestDriftAnomaly:
     def test_exact_match_emits_nothing(self) -> None:
-        with patch(
-            "instruments_service.engine.orchestrator.log_event"
-        ) as mock_log:
+        with patch("instruments_service.engine.orchestrator.log_event") as mock_log:
             result = _maybe_emit_drift_anomaly(
                 venue="transfermarkt",
                 endpoint="get_teams",
@@ -271,9 +258,7 @@ class TestDriftAnomaly:
 
     def test_unknown_league_emits_nothing(self) -> None:
         """Absent expected-count is a silent skip, never an anomaly."""
-        with patch(
-            "instruments_service.engine.orchestrator.log_event"
-        ) as mock_log:
+        with patch("instruments_service.engine.orchestrator.log_event") as mock_log:
             result = _maybe_emit_drift_anomaly(
                 venue="transfermarkt",
                 endpoint="get_teams",
@@ -287,9 +272,7 @@ class TestDriftAnomaly:
         mock_log.assert_not_called()
 
     def test_zero_expected_silent_skip(self) -> None:
-        with patch(
-            "instruments_service.engine.orchestrator.log_event"
-        ) as mock_log:
+        with patch("instruments_service.engine.orchestrator.log_event") as mock_log:
             result = _maybe_emit_drift_anomaly(
                 venue="transfermarkt",
                 endpoint="get_teams",
@@ -303,9 +286,7 @@ class TestDriftAnomaly:
         mock_log.assert_not_called()
 
     def test_within_threshold_silent(self) -> None:
-        with patch(
-            "instruments_service.engine.orchestrator.log_event"
-        ) as mock_log:
+        with patch("instruments_service.engine.orchestrator.log_event") as mock_log:
             result = _maybe_emit_drift_anomaly(
                 venue="transfermarkt",
                 endpoint="get_teams",
@@ -320,9 +301,7 @@ class TestDriftAnomaly:
 
     def test_epl_17_teams_medium_severity(self) -> None:
         """Plan test case: EPL returns 17 vs expected 20 → 15.0% MEDIUM."""
-        with patch(
-            "instruments_service.engine.orchestrator.log_event"
-        ) as mock_log:
+        with patch("instruments_service.engine.orchestrator.log_event") as mock_log:
             result = _maybe_emit_drift_anomaly(
                 venue="transfermarkt",
                 endpoint="get_teams",
@@ -347,9 +326,7 @@ class TestDriftAnomaly:
 
     def test_epl_12_teams_high_severity(self) -> None:
         """Plan test case: EPL returns 12 teams → severity=HIGH (40% off)."""
-        with patch(
-            "instruments_service.engine.orchestrator.log_event"
-        ) as mock_log:
+        with patch("instruments_service.engine.orchestrator.log_event") as mock_log:
             result = _maybe_emit_drift_anomaly(
                 venue="transfermarkt",
                 endpoint="get_teams",
@@ -366,9 +343,7 @@ class TestDriftAnomaly:
 
     def test_sfi_wider_threshold(self) -> None:
         """SFI uses 15/30% threshold — 12% deviation should be silent."""
-        with patch(
-            "instruments_service.engine.orchestrator.log_event"
-        ) as mock_log:
+        with patch("instruments_service.engine.orchestrator.log_event") as mock_log:
             result = _maybe_emit_drift_anomaly(
                 venue="soccer_football_info",
                 endpoint="get_leagues",
@@ -384,9 +359,7 @@ class TestDriftAnomaly:
         mock_log.assert_not_called()
 
     def test_sfi_wider_threshold_triggers_beyond_15(self) -> None:
-        with patch(
-            "instruments_service.engine.orchestrator.log_event"
-        ) as mock_log:
+        with patch("instruments_service.engine.orchestrator.log_event") as mock_log:
             result = _maybe_emit_drift_anomaly(
                 venue="soccer_football_info",
                 endpoint="get_leagues",

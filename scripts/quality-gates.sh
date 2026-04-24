@@ -21,7 +21,8 @@ MIN_COVERAGE=77
 RUN_INTEGRATION=false
 PYTEST_WORKERS=${PYTEST_WORKERS:-2}
 LOCAL_DEPS=()
-MAX_DURATION=300
+# Type check + pytest + codex on a large tree often exceeds 300s locally.
+MAX_DURATION=600
 
 # ── Per-repo QG exclusions ──────────────────────────────────────────────────
 # Adapters parse raw JSON/GraphQL responses where empty-string/dict/list defaults
