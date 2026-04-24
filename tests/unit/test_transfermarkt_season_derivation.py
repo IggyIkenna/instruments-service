@@ -30,7 +30,6 @@ from instruments_service.reference_data.adapters.sports.adapters.transfermarkt i
     _parse_squad,
 )
 
-
 # ---------------------------------------------------------------------------
 # Bug 1: season-derivation heuristic (Aug-May cycle for European leagues)
 # ---------------------------------------------------------------------------

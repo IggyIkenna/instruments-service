@@ -24,7 +24,7 @@ from typing import Literal
 import pandas as pd
 from unified_api_contracts import InstrumentType, build_instrument_id
 from unified_api_contracts.internal import InstrumentRecord, MarketCategory
-from unified_trading_library import DataSink, get_bucket_name, get_data_sink, get_write_bucket_name
+from unified_trading_library import DataSink, get_data_sink, get_write_bucket_name
 
 from instruments_service.config import get_config
 from instruments_service.engine.orchestrator import get_venues_for_categories

@@ -1,6 +1,9 @@
 """instruments-service — FastAPI health API.
 
 Exposes /health and /readiness endpoints via UTL make_health_router.
+
+HTTP lifecycle (STARTED / STOPPED / FAILED) uses ``fastapi_uei_lifespan`` — same sink rules as
+``ServiceBootstrap`` for batch/live CLIs (see unified-trading-library ``http_lifecycle.py``).
 """
 
 from __future__ import annotations
@@ -10,10 +13,8 @@ from datetime import date
 
 from fastapi import FastAPI
 from unified_trading_library import (
-    close_events,
-    log_event,
+    fastapi_uei_lifespan,
     make_health_router,
-    setup_events,
 )
 
 _last_processed_date: date | None = None
@@ -32,17 +33,11 @@ def _data_freshness() -> dict[str, object]:
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    """Emit UEI lifecycle markers (STARTED / STOPPED / FAILED) — see codex lifecycle-events."""
-    setup_events("instruments-service", "test", sink=None)
-    try:
-        log_event("STARTED", details={"entrypoint": "instruments_service.api.main"})
+    async with fastapi_uei_lifespan(
+        "instruments-service",
+        entrypoint="instruments_service.api.main",
+    ):
         yield
-    except BaseException as exc:
-        log_event("FAILED", details={"entrypoint": "instruments_service.api.main", "error": repr(exc)[:240]})
-        raise
-    finally:
-        log_event("STOPPED", details={"entrypoint": "instruments_service.api.main"})
-        close_events()
 
 
 def create_app() -> FastAPI:

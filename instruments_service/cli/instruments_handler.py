@@ -56,16 +56,20 @@ class InstrumentsHandler(UnifiedServiceHandler):
 
     async def preflight(self) -> None:
         """Start API key reloader. Date/category filtering happens in process()."""
-        # Resolve CLI --category (e.g. ["SPORTS"]) to scope preflight work
         cli_categories: list[str] | None = getattr(self.args, "category", None) if self.args else None
         categories = cli_categories or ["ALL"]
 
-        # Only clear DeFi universe cache if DeFi categories are in scope
         is_all = any(c.upper() == "ALL" for c in categories)
         if is_all or any(c.upper() == "DEFI" for c in categories):
             clear_defi_universe_cache()
 
-        # Wire --venues CLI override to the handler
+        self._wire_cli_filters_from_args()
+
+        active_venues = get_venues_for_categories(categories)
+        self._start_key_reloader(active_venues)
+
+    def _wire_cli_filters_from_args(self) -> None:
+        """Map instruments CLI flags from parsed args onto handler fields."""
         venues_arg: list[str] | None = getattr(self.args, "venues", None) if self.args else None
         if venues_arg:
             self._venue_override = venues_arg
@@ -74,7 +78,6 @@ class InstrumentsHandler(UnifiedServiceHandler):
             if earliest:
                 logger.info("Earliest venue launch date: %s (dates before this will be skipped)", earliest)
 
-        # Wire --sports-entity filter (entity-scoped VM: one VM per manifest entity type)
         sports_entity_arg: str | None = getattr(self.args, "sports_entity", None) if self.args else None
         if sports_entity_arg:
             self._sports_entity_filter = sports_entity_arg
@@ -82,29 +85,21 @@ class InstrumentsHandler(UnifiedServiceHandler):
                 "Sports entity filter from CLI: %s (only this entity will be checked/fetched)", sports_entity_arg
             )
 
-        # Wire --sports-provider filter (per-provider VM: one VM per data provider)
         sports_provider_arg: str | None = getattr(self.args, "sports_provider", None) if self.args else None
         if sports_provider_arg:
             self._sports_provider = sports_provider_arg.upper()
             logger.info("Sports provider filter from CLI: %s (only this provider will run)", self._sports_provider)
 
-        # Wire --league filter (league-scoped VM: only process specified leagues)
         league_arg: str | None = getattr(self.args, "league", None) if self.args else None
         if league_arg:
             self._league_filter = [lid.strip() for lid in league_arg.split(",") if lid.strip()]
             logger.info("League filter from CLI: %s", self._league_filter)
 
-        # Wire --season override for historical Transfermarkt backfill
         season_arg: int | None = getattr(self.args, "season", None) if self.args else None
         if season_arg is not None:
             self._season_override = season_arg
             logger.info("Season override from CLI: %d", season_arg)
 
-        # Wire --lookback-days / --lookahead-days / --force-window for visibility.
-        # UTL's ServiceCLI resolves these into --start-date/--end-date/--force
-        # before argparse (see unified_trading_library.service_framework.rolling_window);
-        # the rolling flags survive on args for logging/audit, and --force-window
-        # flows through to redo_all=True via the injected --force → payload.force.
         lookback_arg: int | None = getattr(self.args, "lookback_days", None) if self.args else None
         lookahead_arg: int | None = getattr(self.args, "lookahead_days", None) if self.args else None
         force_window_arg: bool = bool(getattr(self.args, "force_window", False)) if self.args else False
@@ -118,11 +113,6 @@ class InstrumentsHandler(UnifiedServiceHandler):
                 getattr(self.args, "start_date", None),
                 getattr(self.args, "end_date", None),
             )
-
-        # Scope key validation to the requested categories only.
-        # --category SPORTS only validates sports API keys (not CeFi/DeFi/TradFi).
-        active_venues = get_venues_for_categories(categories)
-        self._start_key_reloader(active_venues)
 
     def _start_key_reloader(self, active_venues: list[str]) -> None:
         """Start API key reloader — fail-fast on missing keys, periodic refresh."""

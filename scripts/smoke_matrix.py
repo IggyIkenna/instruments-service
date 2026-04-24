@@ -40,6 +40,8 @@ date. The smoke matrix catches this and marks the cell ``skipped`` with
 ``reason=api_football_missing`` rather than ``attempted_failed``.
 """
 
+# SCHEMA_PROVENANCE_EXEMPT — smoke-matrix harness report structs, not domain contracts
+
 from __future__ import annotations
 
 import argparse
