@@ -63,6 +63,7 @@ from unified_trading_library import (
     CaptureStatus,
     DataSink,
     DomainValidationService,
+    InstrumentsWriteGate,
     ManifestRow,
     ManifestWriter,
     SamplingService,
@@ -76,10 +77,6 @@ from unified_trading_library import (
     read_availability_index,
 )
 from unified_trading_library import unified_config as _uc
-from unified_trading_library.instruments_write_gate import (
-    InstrumentsWriteGate,
-    TimestampAlignmentError,
-)
 
 from instruments_service.config import get_config
 from instruments_service.config_reloaders import get_defi_major_assets
@@ -127,7 +124,7 @@ def _gated_sink_write(
     filename: str,
     venue: str | None = None,
     entity: str | None = None,
-    format: str = "parquet",  # noqa: A002 — matches sink API
+    format: str = "parquet",
 ) -> None:
     """Per-date sink write wrapped by ``InstrumentsWriteGate``.
 
@@ -577,6 +574,10 @@ _CEFI_VENUES: list[str] = [
     "OKX-SWAP",
     "OKX-FUTURES",
     "DERIBIT",
+    # DERIBIT-COMBO: live multi-leg options strategies (straddles, strangles, spreads, condors).
+    # Historical combos are covered by DERIBIT → Tardis. This venue fetches LIVE active combos
+    # from the Deribit public REST API (kind=combo, expired=false).
+    "DERIBIT-COMBO",
     "COINBASE-SPOT",
     "HYPERLIQUID",
     "UPBIT",

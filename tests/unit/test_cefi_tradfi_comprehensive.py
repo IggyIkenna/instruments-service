@@ -2662,3 +2662,396 @@ class TestDatabentoAdapter:
         row.symbol = ""
         result = adapter._parse_row_to_record(row, "GLBX.MDP3", "CME")
         assert result is None
+
+
+# =============================================================================
+# Phase 2: UnsupportedCapabilityError guards — Hyperliquid and Aster
+# =============================================================================
+
+
+class TestHyperliquidUnsupportedCapabilityGuard:
+    """Hyperliquid.get_instruments raises UnsupportedCapabilityError for OPTION/FUTURE."""
+
+    @pytest.mark.asyncio
+    async def test_option_raises_unsupported(self) -> None:
+        from unified_api_contracts import UnsupportedCapabilityError
+
+        adapter = HyperliquidReferenceDataAdapter()
+        with pytest.raises(UnsupportedCapabilityError) as exc_info:
+            await adapter.get_instruments(instrument_type=InstrumentType.OPTION)
+        assert exc_info.value.venue == "HYPERLIQUID"
+        assert "OPTION" in exc_info.value.capability
+
+    @pytest.mark.asyncio
+    async def test_future_raises_unsupported(self) -> None:
+        from unified_api_contracts import UnsupportedCapabilityError
+
+        adapter = HyperliquidReferenceDataAdapter()
+        with pytest.raises(UnsupportedCapabilityError) as exc_info:
+            await adapter.get_instruments(instrument_type=InstrumentType.FUTURE)
+        assert exc_info.value.venue == "HYPERLIQUID"
+        assert "FUTURE" in exc_info.value.capability
+
+    @pytest.mark.asyncio
+    async def test_perpetual_does_not_raise(self) -> None:
+        """PERPETUAL is the only supported type — must not raise."""
+        adapter = HyperliquidReferenceDataAdapter()
+        mock_session = _make_aiohttp_session_mock(resp_json={"universe": []})
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            results = await adapter.get_instruments(instrument_type=InstrumentType.PERPETUAL)
+        assert isinstance(results, list)
+
+    @pytest.mark.asyncio
+    async def test_none_does_not_raise(self) -> None:
+        """instrument_type=None must not raise."""
+        adapter = HyperliquidReferenceDataAdapter()
+        mock_session = _make_aiohttp_session_mock(resp_json={"universe": []})
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            results = await adapter.get_instruments(instrument_type=None)
+        assert isinstance(results, list)
+
+    @pytest.mark.asyncio
+    async def test_spot_pair_returns_empty(self) -> None:
+        """SPOT_PAIR is not OPTION/FUTURE so no guard fires — falls through to return []."""
+        adapter = HyperliquidReferenceDataAdapter()
+        results = await adapter.get_instruments(instrument_type=InstrumentType.SPOT_PAIR)
+        assert results == []
+
+
+class TestAsterUnsupportedCapabilityGuard:
+    """Aster.get_instruments raises UnsupportedCapabilityError for OPTION/FUTURE."""
+
+    @pytest.mark.asyncio
+    async def test_option_raises_unsupported(self) -> None:
+        from unified_api_contracts import UnsupportedCapabilityError
+
+        adapter = AsterReferenceDataAdapter()
+        with pytest.raises(UnsupportedCapabilityError) as exc_info:
+            await adapter.get_instruments(instrument_type=InstrumentType.OPTION)
+        assert exc_info.value.venue == "ASTER"
+        assert "OPTION" in exc_info.value.capability
+
+    @pytest.mark.asyncio
+    async def test_future_raises_unsupported(self) -> None:
+        from unified_api_contracts import UnsupportedCapabilityError
+
+        adapter = AsterReferenceDataAdapter()
+        with pytest.raises(UnsupportedCapabilityError) as exc_info:
+            await adapter.get_instruments(instrument_type=InstrumentType.FUTURE)
+        assert exc_info.value.venue == "ASTER"
+        assert "FUTURE" in exc_info.value.capability
+
+    @pytest.mark.asyncio
+    async def test_perpetual_does_not_raise(self) -> None:
+        """PERPETUAL is the only supported type — must not raise."""
+        adapter = AsterReferenceDataAdapter()
+        mock_session = _make_aiohttp_session_mock(resp_json={"symbols": []})
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            results = await adapter.get_instruments(instrument_type=InstrumentType.PERPETUAL)
+        assert isinstance(results, list)
+
+    @pytest.mark.asyncio
+    async def test_none_does_not_raise(self) -> None:
+        """instrument_type=None must not raise."""
+        adapter = AsterReferenceDataAdapter()
+        mock_session = _make_aiohttp_session_mock(resp_json={"symbols": []})
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            results = await adapter.get_instruments(instrument_type=None)
+        assert isinstance(results, list)
+
+    @pytest.mark.asyncio
+    async def test_spot_pair_returns_empty(self) -> None:
+        """SPOT_PAIR is not OPTION/FUTURE so no guard fires — falls through to return []."""
+        adapter = AsterReferenceDataAdapter()
+        results = await adapter.get_instruments(instrument_type=InstrumentType.SPOT_PAIR)
+        assert results == []
+
+
+# =============================================================================
+# Phase 4: DeribitComboReferenceDataAdapter
+# =============================================================================
+
+
+class TestDeribitComboAdapter:
+    """Tests for DeribitComboReferenceDataAdapter."""
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_combo_success(self) -> None:
+        """Happy path: BTC combo returned from Deribit API.
+
+        The mock returns the same response for every currency call, so the
+        BTC-STRD combo is returned once per currency in _DERIBIT_COMBO_UNDERLYINGS.
+        We verify the first result has correct fields.
+        """
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            _DERIBIT_COMBO_UNDERLYINGS,
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        combo_instrument = {
+            "instrument_name": "BTC-STRD-25APR26-90000",
+            "creation_timestamp": 1700000000000,
+            "settlement_currency": "BTC",
+            "kind": "combo",
+        }
+        mock_session = _make_aiohttp_session_mock(resp_json={"result": [combo_instrument]})
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            results = await adapter.get_instruments(instrument_type=InstrumentType.COMBO)
+        # The mock returns the same combo for all currency calls → one result per currency
+        assert len(results) == len(_DERIBIT_COMBO_UNDERLYINGS)
+        rec = results[0]
+        assert rec.instrument_type == InstrumentType.COMBO
+        assert rec.venue == "DERIBIT"
+        assert rec.raw_symbol == "BTC-STRD-25APR26-90000"
+        assert rec.base_asset == "BTC"
+        assert rec.instrument_key == "DERIBIT:COMBO:BTC-STRD-25APR26-90000"
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_none_type_fetches_combo(self) -> None:
+        """instrument_type=None defaults to fetching COMBOs."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        mock_session = _make_aiohttp_session_mock(resp_json={"result": []})
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            # None should not raise
+            results = await adapter.get_instruments(instrument_type=None)
+        assert isinstance(results, list)
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_non_combo_raises(self) -> None:
+        """Non-COMBO instrument type raises UnsupportedCapabilityError."""
+        from unified_api_contracts import UnsupportedCapabilityError
+
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        with pytest.raises(UnsupportedCapabilityError) as exc_info:
+            await adapter.get_instruments(instrument_type=InstrumentType.OPTION)
+        assert exc_info.value.venue == "DERIBIT"
+        assert "OPTION" in exc_info.value.capability
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_future_raises(self) -> None:
+        """FUTURE instrument type raises UnsupportedCapabilityError."""
+        from unified_api_contracts import UnsupportedCapabilityError
+
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        with pytest.raises(UnsupportedCapabilityError) as exc_info:
+            await adapter.get_instruments(instrument_type=InstrumentType.FUTURE)
+        assert "FUTURE" in exc_info.value.capability
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_http_error_returns_partial(self) -> None:
+        """HTTP error for one currency is isolated — other currencies succeed (shard isolation)."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        # Simulate HTTP 500 from Deribit
+        mock_session = _make_aiohttp_session_mock(resp_status=500)
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            # Should NOT raise — shard-level failure isolation absorbs per-currency errors
+            results = await adapter.get_instruments(instrument_type=InstrumentType.COMBO)
+        assert isinstance(results, list)
+        # All currencies failed → empty result, but no exception raised
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_empty_result_list(self) -> None:
+        """Empty result list from Deribit returns empty instruments list."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        mock_session = _make_aiohttp_session_mock(resp_json={"result": []})
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            results = await adapter.get_instruments(instrument_type=InstrumentType.COMBO)
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_non_dict_result_item_skipped(self) -> None:
+        """Non-dict items in result list are skipped silently."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        mock_session = _make_aiohttp_session_mock(resp_json={"result": ["bad_item", None, 42]})
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            results = await adapter.get_instruments(instrument_type=InstrumentType.COMBO)
+        assert results == []
+
+    @pytest.mark.asyncio
+    async def test_get_instrument_found(self) -> None:
+        """get_instrument returns the matching record."""
+        from unified_api_contracts.internal import InstrumentRecord
+
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        inst = InstrumentRecord(
+            instrument_key="DERIBIT:COMBO:BTC-STRD-25APR26-90000",
+            venue="DERIBIT",
+            raw_symbol="BTC-STRD-25APR26-90000",
+            instrument_type=InstrumentType.COMBO,
+            base_asset="BTC",
+            quote_asset="USD",
+        )
+        with patch.object(adapter, "get_instruments", return_value=[inst]):
+            result = await adapter.get_instrument("BTC-STRD-25APR26-90000")
+        assert result is inst
+
+    @pytest.mark.asyncio
+    async def test_get_instrument_not_found(self) -> None:
+        """get_instrument returns None for unknown symbol."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        with patch.object(adapter, "get_instruments", return_value=[]):
+            result = await adapter.get_instrument("BTC-NONEXISTENT")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_get_options_chain_raises(self) -> None:
+        """get_options_chain raises UnsupportedCapabilityError."""
+        from unified_api_contracts import UnsupportedCapabilityError
+
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        with pytest.raises(UnsupportedCapabilityError):
+            await adapter.get_options_chain("BTC")
+
+    @pytest.mark.asyncio
+    async def test_get_expiry_calendar_raises(self) -> None:
+        """get_expiry_calendar raises UnsupportedCapabilityError."""
+        from unified_api_contracts import UnsupportedCapabilityError
+
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        with pytest.raises(UnsupportedCapabilityError):
+            await adapter.get_expiry_calendar("BTC")
+
+    @pytest.mark.asyncio
+    async def test_get_funding_rate_raises(self) -> None:
+        """get_funding_rate raises UnsupportedCapabilityError."""
+        from unified_api_contracts import UnsupportedCapabilityError
+
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        with pytest.raises(UnsupportedCapabilityError):
+            await adapter.get_funding_rate("BTC-STRD-25APR26-90000")
+
+    @pytest.mark.asyncio
+    async def test_get_ohlcv_raises(self) -> None:
+        """get_ohlcv raises UnsupportedCapabilityError."""
+        from unified_api_contracts import UnsupportedCapabilityError
+
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        with pytest.raises(UnsupportedCapabilityError):
+            await adapter.get_ohlcv("BTC-STRD-25APR26-90000")
+
+    def test_venue_property(self) -> None:
+        """venue property returns DERIBIT."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        assert adapter.venue == "DERIBIT"
+
+    def test_extract_structure_code(self) -> None:
+        """_extract_structure_code correctly identifies structure codes."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            _extract_structure_code,
+        )
+
+        assert _extract_structure_code("BTC-STRD-25APR26-90000") == "STRD"
+        assert _extract_structure_code("BTC-CS-25APR26-80000_90000") == "CS"
+        assert _extract_structure_code("BTC-ICOND-25APR26-70000_80000_90000_100000") == "ICOND"
+        assert _extract_structure_code("BTC-FS-25APR26_PERP") == "FS"
+        assert _extract_structure_code("ETH-CBUT-25APR26-3000_3500_4000") == "CBUT"
+        assert _extract_structure_code("UNKNOWN-FORMAT") == "UNKNOWN"
+
+    @pytest.mark.asyncio
+    async def test_parse_combo_instrument_bad_item_returns_none(self) -> None:
+        """_parse_combo_instrument returns None for non-dict input."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        now = datetime.now(UTC)
+        assert adapter._parse_combo_instrument("not_a_dict", now) is None
+        assert adapter._parse_combo_instrument(None, now) is None
+        assert adapter._parse_combo_instrument({"instrument_name": ""}, now) is None
+
+    @pytest.mark.asyncio
+    async def test_parse_combo_instrument_invalid_timestamp(self) -> None:
+        """Invalid creation_timestamp falls back to now."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        now = datetime.now(UTC)
+        item = {
+            "instrument_name": "BTC-STRD-25APR26-90000",
+            "creation_timestamp": "NOT_A_NUMBER",
+            "settlement_currency": "BTC",
+        }
+        result = adapter._parse_combo_instrument(item, now)
+        assert result is not None
+        assert result.instrument_type == InstrumentType.COMBO
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_response_non_dict_skipped(self) -> None:
+        """Non-dict top-level response is handled gracefully."""
+        from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
+            DeribitComboReferenceDataAdapter,
+        )
+
+        adapter = DeribitComboReferenceDataAdapter()
+        mock_session = _make_aiohttp_session_mock(resp_json=[])  # list instead of dict
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            results = await adapter.get_instruments(instrument_type=InstrumentType.COMBO)
+        assert results == []
+
+    def test_factory_contains_deribit_combo(self) -> None:
+        """DERIBIT-COMBO is registered in the factory adapter map."""
+        from instruments_service.reference_data.factory import (
+            _ADAPTERS,
+            CANONICAL_VENUE_TO_ADAPTER,
+        )
+
+        assert "DERIBIT-COMBO" in CANONICAL_VENUE_TO_ADAPTER
+        assert CANONICAL_VENUE_TO_ADAPTER["DERIBIT-COMBO"] == "deribit_combo"
+        assert "deribit_combo" in _ADAPTERS
