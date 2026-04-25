@@ -73,4 +73,4 @@ Tardis returns ALL instruments ever listed with `availableSince`/`availableTo` t
 
 ## Schema (22 fields)
 
-`asset_class` is always `crypto` for CeFi instruments. `margin_type` is set by the adapter when relevant (LINEAR for USDT-margined, INVERSE for coin-margined). Session metadata (`is_trading_day`, `regular_open_utc`, etc.) is always None — crypto markets are 24/7.
+`asset_group` is always `crypto` for CeFi instruments. `margin_type` is set by the adapter when relevant (LINEAR for USDT-margined, INVERSE for coin-margined). Session metadata (`is_trading_day`, `regular_open_utc`, etc.) is always None — crypto markets are 24/7.
