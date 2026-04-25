@@ -66,7 +66,7 @@ _SEC_TYPE_MAP: dict[str, InstrumentType] = {
 }
 
 # Map IBKR secType → canonical AssetClass
-_SEC_TYPE_ASSET_CLASS_MAP: dict[str, AssetClass] = {
+_SEC_TYPE_asset_group_MAP: dict[str, AssetClass] = {
     "STK": AssetClass.EQUITY,
     "FUT": AssetClass.COMMODITY,
     "OPT": AssetClass.EQUITY,
@@ -258,14 +258,14 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
         sec_type = uac.secType or "STK"
         instrument_type = _SEC_TYPE_MAP.get(sec_type, InstrumentType.SPOT_PAIR)
-        asset_class = _SEC_TYPE_ASSET_CLASS_MAP.get(sec_type, AssetClass.EQUITY)
+        asset_group = _SEC_TYPE_asset_group_MAP.get(sec_type, AssetClass.EQUITY)
         currency = uac.currency or "USD"
         tick_size = Decimal(str(uac.minTick)) if uac.minTick else Decimal("0.01")
         return InstrumentRecord(
             instrument_key=f"{symbol}:{sec_type}:{currency}",
             symbol=symbol,
             venue=self.venue,
-            asset_class=asset_class,
+            asset_group=asset_group,
             instrument_type=instrument_type,
             base=symbol,
             quote=currency,
@@ -563,7 +563,7 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
             instrument_key=symbol,
             raw_symbol=symbol,
             venue=self.venue,
-            asset_class=AssetClass.EQUITY,
+            asset_group=AssetClass.EQUITY,
             instrument_type=InstrumentType.SPOT_PAIR,
             base_asset=symbol,
             quote_asset="USD",

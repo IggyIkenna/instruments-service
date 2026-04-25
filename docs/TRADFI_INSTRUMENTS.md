@@ -18,9 +18,9 @@ TradFi instruments are fetched from **Databento** (CME, ICE, NYSE, NASDAQ) and *
 
 ## Curated Instrument Registry (UAC `tradfi_instrument_universe.py`)
 
-50 curated futures symbols across 5 product groups, each with explicit `asset_class`:
+50 curated futures symbols across 5 product groups, each with explicit `asset_group`:
 
-| Group             | Symbols                                                    | asset_class  | Count |
+| Group             | Symbols                                                    | asset_group  | Count |
 | ----------------- | ---------------------------------------------------------- | ------------ | ----- |
 | Index futures     | ES, NQ, RTY, YM, NKD                                       | equity       | 5     |
 | Sector futures    | XAF, XAK, XAY, XAP, XAV, XAI, XAB, XAU                     | equity       | 8     |
@@ -50,9 +50,9 @@ Databento `instrument_class = "S"` (calendar spreads, cracks, etc.) are excluded
 
 NYSE-listed tickers route to venue `NYSE`, NASDAQ-listed to `NASDAQ`. The split is driven by `TRADFI_TICKER_UNIVERSE["nasdaq_tickers"]` in UAC.
 
-## Per-Instrument asset_class Resolution
+## Per-Instrument asset_group Resolution
 
-`asset_class` is set per-instrument, not per-venue. CME hosts equity index futures (ES), commodity futures (CL), FX futures (6E), treasury futures (ZN), and crypto futures (BTC) — each gets its correct domain category. Resolution order:
+`asset_group` is set per-instrument, not per-venue. CME hosts equity index futures (ES), commodity futures (CL), FX futures (6E), treasury futures (ZN), and crypto futures (BTC) — each gets its correct domain category. Resolution order:
 
 1. Match `underlying` field from Databento against UAC registry exchange codes
 2. Match 3-char then 2-char prefix of `raw_symbol` against registry
@@ -70,7 +70,7 @@ CME Sunday-evening session is handled (open Sunday 5pm CT = Monday 22:00 UTC pre
 
 ## Instrument Counts (2026-03-23)
 
-| Venue     | Count   | asset_class breakdown                                            |
+| Venue     | Count   | asset_group breakdown                                            |
 | --------- | ------- | ---------------------------------------------------------------- |
 | CME       | 304     | commodity: 143, fx: 79, equity: 52, crypto: 16, fixed_income: 14 |
 | NYSE      | 212     | equity                                                           |
@@ -89,4 +89,4 @@ We use the **Streaming API** (`timeseries.get_range`) with `schema="definition"`
 
 ## FX Spot (Yahoo Finance)
 
-Static definitions — `KRW/USD` via `KRWUSD=X` ticker. No API call needed; the adapter creates InstrumentRecords from the `FX_SPOT_PAIRS` registry. FX spot is a category, not an exchange — `venue="FX"`, `asset_class="fx"`.
+Static definitions — `KRW/USD` via `KRWUSD=X` ticker. No API call needed; the adapter creates InstrumentRecords from the `FX_SPOT_PAIRS` registry. FX spot is a category, not an exchange — `venue="FX"`, `asset_group="fx"`.
