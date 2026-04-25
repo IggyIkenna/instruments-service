@@ -2468,13 +2468,13 @@ class TestDatabentoAdapter:
         result = DatabentoReferenceDataAdapter._estimate_available_since(InstrumentType.SPOT_PAIR, None, "NASDAQ")
         assert result.year >= 2015
 
-    def test_resolve_asset_class_from_underlying(self) -> None:
+    def test_resolve_asset_group_from_underlying(self) -> None:
         # Test with a known exchange code if available
-        result = DatabentoReferenceDataAdapter._resolve_asset_class("GLBX.MDP3", "ESM6", "ES")
+        result = DatabentoReferenceDataAdapter._resolve_asset_group("GLBX.MDP3", "ESM6", "ES")
         assert result is not None  # Should resolve to something
 
-    def test_resolve_asset_class_fallback_to_dataset(self) -> None:
-        result = DatabentoReferenceDataAdapter._resolve_asset_class("GLBX.MDP3", "UNKN", "")
+    def test_resolve_asset_group_fallback_to_dataset(self) -> None:
+        result = DatabentoReferenceDataAdapter._resolve_asset_group("GLBX.MDP3", "UNKN", "")
         assert result is not None
 
     def test_parse_tick_and_lot_valid(self) -> None:

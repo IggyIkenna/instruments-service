@@ -75,7 +75,7 @@ _DATASET_TO_VENUE: dict[str, str] = {
 }
 
 # Dataset → fallback asset class (used when no per-instrument match exists)
-_DATASET_TO_ASSET_CLASS: dict[str, AssetClass] = {
+_DATASET_TO_asset_group: dict[str, AssetClass] = {
     "GLBX.MDP3": AssetClass.COMMODITY,
     "XNAS.ITCH": AssetClass.EQUITY,
     "XNAS.BASIC": AssetClass.EQUITY,
@@ -88,17 +88,17 @@ _DATASET_TO_ASSET_CLASS: dict[str, AssetClass] = {
 }
 
 # Per-instrument asset class from UAC registry.
-# Maps exchange_code → asset_class (e.g. "ES" → equity, "CL" → commodity).
+# Maps exchange_code → asset_group (e.g. "ES" → equity, "CL" → commodity).
 # Build from both exchange_code AND the root symbol (part before ".FUT"/".OPT")
 # so that commodities like GC, CL, SI (which have exchange_code=None) are included.
-_EXCHANGE_CODE_ASSET_CLASS: dict[str, str] = {}
+_EXCHANGE_CODE_asset_group: dict[str, str] = {}
 for _inst in TRADFI_DATABENTO_INSTRUMENTS:
     if _inst.exchange_code:
-        _EXCHANGE_CODE_ASSET_CLASS[_inst.exchange_code] = _inst.asset_class
+        _EXCHANGE_CODE_asset_group[_inst.exchange_code] = _inst.asset_group
     # Also register the root symbol (e.g. "GC" from "GC.FUT", "BRN" from "BRN.FUT")
     _root = _inst.symbol.split(".")[0] if "." in _inst.symbol else ""
-    if _root and _root not in _EXCHANGE_CODE_ASSET_CLASS:
-        _EXCHANGE_CODE_ASSET_CLASS[_root] = _inst.asset_class
+    if _root and _root not in _EXCHANGE_CODE_asset_group:
+        _EXCHANGE_CODE_asset_group[_root] = _inst.asset_group
 
 _VENUE_MAPPING = VenueMapping()
 
@@ -118,7 +118,7 @@ _VENUE_FLOOR_DATES: dict[str, datetime] = {
 }
 
 # Sorted exchange codes longest-first for greedy prefix matching.
-_SORTED_EXCHANGE_CODES: list[str] = sorted(_EXCHANGE_CODE_ASSET_CLASS.keys(), key=len, reverse=True)
+_SORTED_EXCHANGE_CODES: list[str] = sorted(_EXCHANGE_CODE_asset_group.keys(), key=len, reverse=True)
 
 
 def _extract_underlying_from_symbol(raw_symbol: str) -> str:
@@ -813,7 +813,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                 InstrumentRecord(
                     instrument_key=f"FX:SPOT_PAIR:{symbol}",
                     venue="FX",
-                    asset_class=AssetClass.FX,
+                    asset_group=AssetClass.FX,
                     instrument_type=InstrumentType.SPOT_PAIR,
                     raw_symbol=fx.yahoo_ticker,
                     base_asset=fx.base,
@@ -841,7 +841,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                 InstrumentRecord(
                     instrument_key=f"{idx.venue}:INDEX:{idx.symbol}",
                     venue=idx.venue,
-                    asset_class=AssetClass(idx.asset_class),
+                    asset_group=AssetClass(idx.asset_group),
                     instrument_type=InstrumentType.INDEX,
                     raw_symbol=idx.yahoo_ticker,
                     base_asset=idx.base_asset,
@@ -959,8 +959,8 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             instrument_type = InstrumentType.COMBO
 
         # Determine asset class from the UAC registry per-instrument, not per-dataset.
-        # Build lookup: exchange_code → asset_class from the curated registry.
-        asset_class = self._resolve_asset_class(dataset, raw_symbol, underlying)
+        # Build lookup: exchange_code → asset_group from the curated registry.
+        asset_group = self._resolve_asset_group(dataset, raw_symbol, underlying)
         if dataset == "DBEQ.BASIC" and raw_symbol in KNOWN_ETFS:
             instrument_type = InstrumentType.ETF
 
@@ -1001,7 +1001,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         return InstrumentRecord(
             instrument_key=f"{canonical_venue}:{instrument_type.upper()}:{raw_symbol}",
             venue=canonical_venue,
-            asset_class=asset_class,
+            asset_group=asset_group,
             raw_symbol=raw_symbol,
             instrument_type=instrument_type,
             base_asset=underlying or raw_symbol,
@@ -1052,8 +1052,8 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         return _VENUE_FLOOR_DATES.get(canonical_venue, _DEFAULT_TRADFI_FLOOR)
 
     @staticmethod
-    def _resolve_asset_class(dataset: str, raw_symbol: str, underlying: str) -> AssetClass:
-        """Resolve asset_class per-instrument from the UAC registry.
+    def _resolve_asset_group(dataset: str, raw_symbol: str, underlying: str) -> AssetClass:
+        """Resolve asset_group per-instrument from the UAC registry.
 
         Checks the underlying (parent symbol from Databento, e.g. "ES", "CL", "6E")
         against the curated registry. Falls back to exchange code prefix extraction,
@@ -1061,7 +1061,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         """
         # 1. Try underlying directly (best match for parent-stype queries)
         if underlying:
-            ac = _EXCHANGE_CODE_ASSET_CLASS.get(underlying)
+            ac = _EXCHANGE_CODE_asset_group.get(underlying)
             if ac:
                 return AssetClass(ac)
 
@@ -1070,9 +1070,9 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         for length in (3, 2):
             if len(raw_symbol) >= length:
                 prefix = raw_symbol[:length]
-                ac = _EXCHANGE_CODE_ASSET_CLASS.get(prefix)
+                ac = _EXCHANGE_CODE_asset_group.get(prefix)
                 if ac:
                     return AssetClass(ac)
 
         # 3. Fallback to dataset-level mapping
-        return _DATASET_TO_ASSET_CLASS.get(dataset, AssetClass.EQUITY)
+        return _DATASET_TO_asset_group.get(dataset, AssetClass.EQUITY)

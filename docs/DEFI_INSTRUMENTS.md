@@ -105,7 +105,7 @@ Adapter TTL cache (1hr) + factory adapter pool. Each DeFi adapter (UniswapV3, Ba
 
 ## Schema (22 fields)
 
-`asset_class` is always `crypto`. `raw_symbol` is the pool/vault address (e.g. `0x88e6a0c2...`). `tick_size`, `lot_size`, `contract_size` are all None (DeFi uses continuous liquidity). Session metadata is all None (24/7 on-chain). `available_since` is populated from `createdAtTimestamp`.
+`asset_group` is always `crypto`. `raw_symbol` is the pool/vault address (e.g. `0x88e6a0c2...`). `tick_size`, `lot_size`, `contract_size` are all None (DeFi uses continuous liquidity). Session metadata is all None (24/7 on-chain). `available_since` is populated from `createdAtTimestamp`.
 
 ## Downstream: MTDS Integration
 

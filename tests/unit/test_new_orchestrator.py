@@ -49,7 +49,7 @@ def test_get_venues_for_categories_defi():
     assert "AAVEV3-ETHEREUM" in venues
 
 
-def test_get_venues_for_categories_all_includes_all_asset_classes():
+def test_get_venues_for_categories_all_includes_all_asset_groupes():
     from instruments_service.engine.orchestrator import get_venues_for_categories
 
     all_v = get_venues_for_categories(["ALL"])
