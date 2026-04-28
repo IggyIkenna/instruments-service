@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
 """Phase 0 audit: classify every sports_reference fixtures.parquet as LEGACY or NEW schema.
 
-Fast path: enumerates ``day=YYYY-MM-DD`` partitions via delimiter listing, then
-for each day lists the IMMEDIATE entity sub-prefixes (also delimiter listing,
-not recursive). Legacy days have only one ``entity=fixtures/`` partition under
-the day; new days additionally have ``entity=fixture_stats/`` (the split-out
-match-stats parquet that the new-schema writer added). This signal is cheap
-to derive — one delimiter listing per day — and matches the schema-split
-distinction we actually care about for Phase 3.
+Two-pass design:
+
+* **Pass 1 (entity-set signature, fast)** enumerates ``day=YYYY-MM-DD``
+  partitions via delimiter listing, then for each day lists the IMMEDIATE
+  entity sub-prefixes. Days with ``entity=fixture_stats/`` are conclusively
+  NEW; days without are LEGACY-candidates. ~2 min for 3,627 days.
+* **Pass 2 (parquet schema probe, slower)** runs only on LEGACY-candidates.
+  Reads the parquet footer (metadata only — no row data) to distinguish
+  the actual schema:
+    - has ``af_league_id`` column AND no ``league`` struct → ``ORPHAN_NEW``
+      (fixtures parquet is new flat schema; just no fixture_stats partition
+      yet — the live orchestrator post-Phase-0.5 produces this)
+    - has ``league`` struct AND no ``af_league_id`` → ``LEGACY`` (true legacy
+      nested-struct schema; needs the mapper in Phase 3)
+    - other → ``MALFORMED`` (rare; investigate manually)
 
 Output: ``instruments-service/scripts/sports_legacy_schema_audit.json`` keyed
-by ``day=YYYY-MM-DD`` with the schema variant + the entity inventory. Phase 3
-VM-shards consume this to know which days need the legacy-to-new mapper vs
+by ``day=YYYY-MM-DD`` with the resolved schema variant. Phase 3 VM-shards
+consume this to know which days need the legacy-to-new mapper vs
 pass-through copy.
 
 Plan: ``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.plan.md``.
@@ -21,7 +29,8 @@ Usage::
     cd instruments-service
     .venv/bin/python scripts/sports_legacy_schema_audit.py
 
-Run-time ~3-5 min depending on network. Idempotent — re-runs overwrite.
+Run-time ~3-7 min depending on network + how many LEGACY-candidates trigger
+Pass 2. Idempotent — re-runs overwrite.
 """
 
 from __future__ import annotations
@@ -34,6 +43,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+import pyarrow.parquet as pq
+import pyarrow.types as pat
+from google.api_core.exceptions import NotFound
 from google.cloud import storage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -48,7 +60,7 @@ OUT_PATH = Path(__file__).parent / "sports_legacy_schema_audit.json"
 @dataclass(frozen=True)
 class DayAudit:
     day: str
-    schema: str  # "NEW" | "LEGACY" | "MISSING"
+    schema: str  # "NEW" | "LEGACY" | "ORPHAN_NEW" | "MISSING" | "MALFORMED"
     entities: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -70,7 +82,7 @@ def _list_day_partitions(client: storage.Client) -> list[str]:
 
 
 def _classify(client: storage.Client, day: str) -> DayAudit:
-    """List entities under one day partition; classify by entity-set signature."""
+    """Pass 1: classify by entity-set signature; Pass 2 promotes LEGACY_CANDIDATE."""
     day_prefix = f"{PREFIX}day={day}/"
     iterator = client.list_blobs(BUCKET, prefix=day_prefix, delimiter="/")
     entities: list[str] = []
@@ -85,16 +97,47 @@ def _classify(client: storage.Client, day: str) -> DayAudit:
     if "fixtures" not in entity_set:
         return DayAudit(day=day, schema="MISSING", entities=tuple(sorted(entity_set)))
 
-    # Legacy days have only the pre-2024 entity set: fixtures + injuries +
-    # leagues + standings + teams + understat_xg. They lack the post-2024
-    # split-out fixture_stats / fixture_lineups / fixture_events / weather
-    # / footystats_* / player_stats partitions.
-    is_legacy = "fixture_stats" not in entity_set
-    return DayAudit(
-        day=day,
-        schema="LEGACY" if is_legacy else "NEW",
-        entities=tuple(sorted(entity_set)),
-    )
+    # Days WITH ``entity=fixture_stats`` are conclusively NEW (the post-2024
+    # split-out match-stats writer ran). Days WITHOUT need Pass 2 to
+    # disambiguate ORPHAN_NEW (post-Phase-0.5 live writer; flat schema; no
+    # stats yet) from LEGACY (pre-Phase-0.5 writer; nested struct schema).
+    if "fixture_stats" in entity_set:
+        return DayAudit(day=day, schema="NEW", entities=tuple(sorted(entity_set)))
+    return DayAudit(day=day, schema="LEGACY_CANDIDATE", entities=tuple(sorted(entity_set)))
+
+
+def _resolve_legacy_candidate(client: storage.Client, day: str) -> str:
+    """Pass 2: probe parquet header. Returns LEGACY / ORPHAN_NEW / MALFORMED.
+
+    Uses ``Blob.download_as_bytes()`` (better pooling than pyarrow's
+    ``gs://`` URI which hangs at scale) then parses metadata via
+    ``pq.read_metadata`` on a local BytesIO. Most fixtures parquets are
+    < 100KB so this is cheap.
+    """
+    import io as _io
+
+    blob_name = f"{PREFIX}day={day}/entity=fixtures/fixtures.parquet"
+    try:
+        blob = client.bucket(BUCKET).blob(blob_name)
+        raw = blob.download_as_bytes()
+    except (NotFound, FileNotFoundError):
+        return "MALFORMED"
+    except (OSError, RuntimeError, ValueError):
+        return "MALFORMED"
+
+    try:
+        meta = pq.read_metadata(_io.BytesIO(raw))
+        schema = meta.schema.to_arrow_schema()
+    except (OSError, RuntimeError, ValueError):
+        return "MALFORMED"
+    cols = frozenset(schema.names)
+    has_af = "af_league_id" in cols
+    has_legacy_struct = "league" in cols and any(f.name == "league" and pat.is_struct(f.type) for f in schema)
+    if has_af and not has_legacy_struct:
+        return "ORPHAN_NEW"
+    if has_legacy_struct and not has_af:
+        return "LEGACY"
+    return "MALFORMED"
 
 
 def main() -> int:
@@ -115,8 +158,24 @@ def main() -> int:
             day = futures[fut]
             audits[day] = fut.result()
             if i % 500 == 0:
-                logger.info("classified %d/%d in %.1fs", i, len(days), time.monotonic() - t0)
-    logger.info("classified %d in %.1fs total", len(audits), time.monotonic() - t0)
+                logger.info("Pass 1 (entity-set): %d/%d in %.1fs", i, len(days), time.monotonic() - t0)
+    logger.info("Pass 1 done: %d in %.1fs total", len(audits), time.monotonic() - t0)
+
+    # Pass 2: probe parquet header for any LEGACY_CANDIDATE day to distinguish
+    # ORPHAN_NEW (post-Phase-0.5 flat schema) from true LEGACY (nested struct).
+    candidates = [d for d, a in audits.items() if a.schema == "LEGACY_CANDIDATE"]
+    if candidates:
+        logger.info("Pass 2 (parquet probe) on %d LEGACY candidates", len(candidates))
+        t0 = time.monotonic()
+        with ThreadPoolExecutor(max_workers=32) as pool:
+            futures2 = {pool.submit(_resolve_legacy_candidate, client, d): d for d in candidates}
+            for i, fut in enumerate(as_completed(futures2), 1):
+                day = futures2[fut]
+                resolved = fut.result()
+                audits[day] = DayAudit(day=day, schema=resolved, entities=audits[day].entities)
+                if i % 100 == 0:
+                    logger.info("Pass 2: %d/%d in %.1fs", i, len(candidates), time.monotonic() - t0)
+        logger.info("Pass 2 done: %d in %.1fs", len(candidates), time.monotonic() - t0)
 
     summary: dict[str, int] = {}
     for a in audits.values():
@@ -127,7 +186,7 @@ def main() -> int:
         "_meta": {
             "bucket": BUCKET,
             "prefix": PREFIX,
-            "method": "entity-set signature (legacy = no entity=fixture_stats/)",
+            "method": "Pass 1: entity-set signature; Pass 2: parquet header probe on LEGACY candidates",
             "total_days": len(audits),
             "summary": summary,
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
