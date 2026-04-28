@@ -112,8 +112,13 @@ def _cutover_one_day(client: storage.Client, day: str, *, dry_run: bool, reverse
             _copy_blob(client, fixtures_archive, fixtures_canonical)
             _delete_blob(client, stats_canonical)
         else:
-            # Forward: canonical → archive; v2/fixtures → canonical/fixtures; v2/stats → canonical/stats.
-            _copy_blob(client, fixtures_canonical, fixtures_archive)
+            # Forward (idempotent): only archive if not already archived. The
+            # archive holds the ORIGINAL legacy parquet — once captured, never
+            # overwrite, so re-running the cutover after a partial completion
+            # doesn't replace the preserved legacy with a flat-schema parquet.
+            archive_blob = client.bucket(BUCKET).blob(fixtures_archive)
+            if not archive_blob.exists():
+                _copy_blob(client, fixtures_canonical, fixtures_archive)
             _copy_blob(client, fixtures_v2, fixtures_canonical)
             _copy_blob(client, stats_v2, stats_canonical)
     except (NotFound, OSError, RuntimeError, ValueError) as exc:

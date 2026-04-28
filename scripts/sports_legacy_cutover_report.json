@@ -1,0 +1,2007 @@
+{
+  "_meta": {
+    "bucket": "instruments-store-sports-central-element-323112",
+    "src_prefix": "sports_reference/by_date/",
+    "v2_prefix": "sports_reference_v2/by_date/",
+    "archive_prefix": "sports_reference_v1_archive/by_date/",
+    "direction": "FORWARD",
+    "dry_run": false,
+    "total_days": 398,
+    "summary": {
+      "succeeded": 398
+    },
+    "generated_at": "2026-04-28T14:06:52Z"
+  },
+  "days": {
+    "2018-01-02": {
+      "day": "2018-01-02",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-03": {
+      "day": "2018-01-03",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-04": {
+      "day": "2018-01-04",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-05": {
+      "day": "2018-01-05",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-06": {
+      "day": "2018-01-06",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-07": {
+      "day": "2018-01-07",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-08": {
+      "day": "2018-01-08",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-09": {
+      "day": "2018-01-09",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-10": {
+      "day": "2018-01-10",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-11": {
+      "day": "2018-01-11",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-12": {
+      "day": "2018-01-12",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-13": {
+      "day": "2018-01-13",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-14": {
+      "day": "2018-01-14",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-15": {
+      "day": "2018-01-15",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-16": {
+      "day": "2018-01-16",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-17": {
+      "day": "2018-01-17",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-18": {
+      "day": "2018-01-18",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-19": {
+      "day": "2018-01-19",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-20": {
+      "day": "2018-01-20",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-21": {
+      "day": "2018-01-21",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-22": {
+      "day": "2018-01-22",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-23": {
+      "day": "2018-01-23",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-24": {
+      "day": "2018-01-24",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-25": {
+      "day": "2018-01-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-26": {
+      "day": "2018-01-26",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-27": {
+      "day": "2018-01-27",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-28": {
+      "day": "2018-01-28",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-29": {
+      "day": "2018-01-29",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-30": {
+      "day": "2018-01-30",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-01-31": {
+      "day": "2018-01-31",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-01": {
+      "day": "2018-02-01",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-02": {
+      "day": "2018-02-02",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-03": {
+      "day": "2018-02-03",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-04": {
+      "day": "2018-02-04",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-05": {
+      "day": "2018-02-05",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-06": {
+      "day": "2018-02-06",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-07": {
+      "day": "2018-02-07",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-08": {
+      "day": "2018-02-08",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-09": {
+      "day": "2018-02-09",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-10": {
+      "day": "2018-02-10",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-11": {
+      "day": "2018-02-11",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-12": {
+      "day": "2018-02-12",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-13": {
+      "day": "2018-02-13",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-14": {
+      "day": "2018-02-14",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-15": {
+      "day": "2018-02-15",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-16": {
+      "day": "2018-02-16",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-17": {
+      "day": "2018-02-17",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-18": {
+      "day": "2018-02-18",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-19": {
+      "day": "2018-02-19",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-20": {
+      "day": "2018-02-20",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-21": {
+      "day": "2018-02-21",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-22": {
+      "day": "2018-02-22",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-23": {
+      "day": "2018-02-23",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-24": {
+      "day": "2018-02-24",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-25": {
+      "day": "2018-02-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-26": {
+      "day": "2018-02-26",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-27": {
+      "day": "2018-02-27",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-02-28": {
+      "day": "2018-02-28",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-01": {
+      "day": "2018-03-01",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-02": {
+      "day": "2018-03-02",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-03": {
+      "day": "2018-03-03",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-04": {
+      "day": "2018-03-04",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-05": {
+      "day": "2018-03-05",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-06": {
+      "day": "2018-03-06",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-07": {
+      "day": "2018-03-07",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-08": {
+      "day": "2018-03-08",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-09": {
+      "day": "2018-03-09",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-10": {
+      "day": "2018-03-10",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-11": {
+      "day": "2018-03-11",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-12": {
+      "day": "2018-03-12",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-13": {
+      "day": "2018-03-13",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-14": {
+      "day": "2018-03-14",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-15": {
+      "day": "2018-03-15",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-16": {
+      "day": "2018-03-16",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-17": {
+      "day": "2018-03-17",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-18": {
+      "day": "2018-03-18",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-19": {
+      "day": "2018-03-19",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-20": {
+      "day": "2018-03-20",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-21": {
+      "day": "2018-03-21",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-22": {
+      "day": "2018-03-22",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-23": {
+      "day": "2018-03-23",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-24": {
+      "day": "2018-03-24",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-25": {
+      "day": "2018-03-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-26": {
+      "day": "2018-03-26",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-27": {
+      "day": "2018-03-27",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-28": {
+      "day": "2018-03-28",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-29": {
+      "day": "2018-03-29",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-30": {
+      "day": "2018-03-30",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-03-31": {
+      "day": "2018-03-31",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-01": {
+      "day": "2018-04-01",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-02": {
+      "day": "2018-04-02",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-03": {
+      "day": "2018-04-03",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-04": {
+      "day": "2018-04-04",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-05": {
+      "day": "2018-04-05",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-06": {
+      "day": "2018-04-06",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-07": {
+      "day": "2018-04-07",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-08": {
+      "day": "2018-04-08",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-09": {
+      "day": "2018-04-09",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-10": {
+      "day": "2018-04-10",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-11": {
+      "day": "2018-04-11",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-12": {
+      "day": "2018-04-12",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-13": {
+      "day": "2018-04-13",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-14": {
+      "day": "2018-04-14",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-15": {
+      "day": "2018-04-15",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-16": {
+      "day": "2018-04-16",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-17": {
+      "day": "2018-04-17",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-18": {
+      "day": "2018-04-18",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-19": {
+      "day": "2018-04-19",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-20": {
+      "day": "2018-04-20",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-21": {
+      "day": "2018-04-21",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-22": {
+      "day": "2018-04-22",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-23": {
+      "day": "2018-04-23",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-24": {
+      "day": "2018-04-24",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-25": {
+      "day": "2018-04-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-26": {
+      "day": "2018-04-26",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-27": {
+      "day": "2018-04-27",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-28": {
+      "day": "2018-04-28",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-29": {
+      "day": "2018-04-29",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-04-30": {
+      "day": "2018-04-30",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-01": {
+      "day": "2018-05-01",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-02": {
+      "day": "2018-05-02",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-03": {
+      "day": "2018-05-03",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-04": {
+      "day": "2018-05-04",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-05": {
+      "day": "2018-05-05",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-06": {
+      "day": "2018-05-06",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-07": {
+      "day": "2018-05-07",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-08": {
+      "day": "2018-05-08",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-09": {
+      "day": "2018-05-09",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-10": {
+      "day": "2018-05-10",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-11": {
+      "day": "2018-05-11",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-12": {
+      "day": "2018-05-12",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-13": {
+      "day": "2018-05-13",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-14": {
+      "day": "2018-05-14",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-15": {
+      "day": "2018-05-15",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-16": {
+      "day": "2018-05-16",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-17": {
+      "day": "2018-05-17",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-18": {
+      "day": "2018-05-18",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-19": {
+      "day": "2018-05-19",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-20": {
+      "day": "2018-05-20",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-21": {
+      "day": "2018-05-21",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-22": {
+      "day": "2018-05-22",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-23": {
+      "day": "2018-05-23",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-24": {
+      "day": "2018-05-24",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-25": {
+      "day": "2018-05-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-26": {
+      "day": "2018-05-26",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-27": {
+      "day": "2018-05-27",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-28": {
+      "day": "2018-05-28",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-29": {
+      "day": "2018-05-29",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-30": {
+      "day": "2018-05-30",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-05-31": {
+      "day": "2018-05-31",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-01": {
+      "day": "2018-06-01",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-02": {
+      "day": "2018-06-02",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-03": {
+      "day": "2018-06-03",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-04": {
+      "day": "2018-06-04",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-05": {
+      "day": "2018-06-05",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-06": {
+      "day": "2018-06-06",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-07": {
+      "day": "2018-06-07",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-08": {
+      "day": "2018-06-08",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-09": {
+      "day": "2018-06-09",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-10": {
+      "day": "2018-06-10",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-11": {
+      "day": "2018-06-11",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-12": {
+      "day": "2018-06-12",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-13": {
+      "day": "2018-06-13",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-14": {
+      "day": "2018-06-14",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-15": {
+      "day": "2018-06-15",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-16": {
+      "day": "2018-06-16",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-17": {
+      "day": "2018-06-17",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-18": {
+      "day": "2018-06-18",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-19": {
+      "day": "2018-06-19",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-20": {
+      "day": "2018-06-20",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-21": {
+      "day": "2018-06-21",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-22": {
+      "day": "2018-06-22",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-23": {
+      "day": "2018-06-23",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-24": {
+      "day": "2018-06-24",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-25": {
+      "day": "2018-06-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-26": {
+      "day": "2018-06-26",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-27": {
+      "day": "2018-06-27",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-28": {
+      "day": "2018-06-28",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-29": {
+      "day": "2018-06-29",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-06-30": {
+      "day": "2018-06-30",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-01": {
+      "day": "2018-07-01",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-02": {
+      "day": "2018-07-02",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-03": {
+      "day": "2018-07-03",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-04": {
+      "day": "2018-07-04",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-05": {
+      "day": "2018-07-05",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-06": {
+      "day": "2018-07-06",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-07": {
+      "day": "2018-07-07",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-08": {
+      "day": "2018-07-08",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-09": {
+      "day": "2018-07-09",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-10": {
+      "day": "2018-07-10",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-11": {
+      "day": "2018-07-11",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-12": {
+      "day": "2018-07-12",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-13": {
+      "day": "2018-07-13",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-14": {
+      "day": "2018-07-14",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-15": {
+      "day": "2018-07-15",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-16": {
+      "day": "2018-07-16",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-17": {
+      "day": "2018-07-17",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-18": {
+      "day": "2018-07-18",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-19": {
+      "day": "2018-07-19",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-20": {
+      "day": "2018-07-20",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-21": {
+      "day": "2018-07-21",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-22": {
+      "day": "2018-07-22",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-23": {
+      "day": "2018-07-23",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-24": {
+      "day": "2018-07-24",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-25": {
+      "day": "2018-07-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-26": {
+      "day": "2018-07-26",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-27": {
+      "day": "2018-07-27",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-28": {
+      "day": "2018-07-28",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-29": {
+      "day": "2018-07-29",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-30": {
+      "day": "2018-07-30",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-07-31": {
+      "day": "2018-07-31",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-01": {
+      "day": "2018-08-01",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-02": {
+      "day": "2018-08-02",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-03": {
+      "day": "2018-08-03",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-04": {
+      "day": "2018-08-04",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-05": {
+      "day": "2018-08-05",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-06": {
+      "day": "2018-08-06",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-07": {
+      "day": "2018-08-07",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-08": {
+      "day": "2018-08-08",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-09": {
+      "day": "2018-08-09",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-10": {
+      "day": "2018-08-10",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-11": {
+      "day": "2018-08-11",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-12": {
+      "day": "2018-08-12",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-13": {
+      "day": "2018-08-13",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-14": {
+      "day": "2018-08-14",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-15": {
+      "day": "2018-08-15",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-16": {
+      "day": "2018-08-16",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-17": {
+      "day": "2018-08-17",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-18": {
+      "day": "2018-08-18",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-19": {
+      "day": "2018-08-19",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-20": {
+      "day": "2018-08-20",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-21": {
+      "day": "2018-08-21",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-22": {
+      "day": "2018-08-22",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-23": {
+      "day": "2018-08-23",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-24": {
+      "day": "2018-08-24",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-25": {
+      "day": "2018-08-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-26": {
+      "day": "2018-08-26",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-27": {
+      "day": "2018-08-27",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-28": {
+      "day": "2018-08-28",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-29": {
+      "day": "2018-08-29",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-30": {
+      "day": "2018-08-30",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-08-31": {
+      "day": "2018-08-31",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-01": {
+      "day": "2018-09-01",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-02": {
+      "day": "2018-09-02",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-03": {
+      "day": "2018-09-03",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-04": {
+      "day": "2018-09-04",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-05": {
+      "day": "2018-09-05",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-06": {
+      "day": "2018-09-06",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-07": {
+      "day": "2018-09-07",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-08": {
+      "day": "2018-09-08",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-09": {
+      "day": "2018-09-09",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-10": {
+      "day": "2018-09-10",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-11": {
+      "day": "2018-09-11",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-12": {
+      "day": "2018-09-12",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-13": {
+      "day": "2018-09-13",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-14": {
+      "day": "2018-09-14",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-15": {
+      "day": "2018-09-15",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-16": {
+      "day": "2018-09-16",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-17": {
+      "day": "2018-09-17",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-18": {
+      "day": "2018-09-18",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-19": {
+      "day": "2018-09-19",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-20": {
+      "day": "2018-09-20",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-21": {
+      "day": "2018-09-21",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-22": {
+      "day": "2018-09-22",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-23": {
+      "day": "2018-09-23",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-24": {
+      "day": "2018-09-24",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-25": {
+      "day": "2018-09-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-26": {
+      "day": "2018-09-26",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-27": {
+      "day": "2018-09-27",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-28": {
+      "day": "2018-09-28",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-29": {
+      "day": "2018-09-29",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-09-30": {
+      "day": "2018-09-30",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-01": {
+      "day": "2018-10-01",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-02": {
+      "day": "2018-10-02",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-03": {
+      "day": "2018-10-03",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-04": {
+      "day": "2018-10-04",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-05": {
+      "day": "2018-10-05",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-06": {
+      "day": "2018-10-06",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-07": {
+      "day": "2018-10-07",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-08": {
+      "day": "2018-10-08",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-09": {
+      "day": "2018-10-09",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-10": {
+      "day": "2018-10-10",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-11": {
+      "day": "2018-10-11",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-12": {
+      "day": "2018-10-12",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-13": {
+      "day": "2018-10-13",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-14": {
+      "day": "2018-10-14",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-15": {
+      "day": "2018-10-15",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-16": {
+      "day": "2018-10-16",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-17": {
+      "day": "2018-10-17",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-18": {
+      "day": "2018-10-18",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-19": {
+      "day": "2018-10-19",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-20": {
+      "day": "2018-10-20",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-21": {
+      "day": "2018-10-21",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-22": {
+      "day": "2018-10-22",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-23": {
+      "day": "2018-10-23",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-24": {
+      "day": "2018-10-24",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-25": {
+      "day": "2018-10-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-26": {
+      "day": "2018-10-26",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-27": {
+      "day": "2018-10-27",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-28": {
+      "day": "2018-10-28",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-29": {
+      "day": "2018-10-29",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-30": {
+      "day": "2018-10-30",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-10-31": {
+      "day": "2018-10-31",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-01": {
+      "day": "2018-11-01",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-02": {
+      "day": "2018-11-02",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-03": {
+      "day": "2018-11-03",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-04": {
+      "day": "2018-11-04",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-05": {
+      "day": "2018-11-05",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-06": {
+      "day": "2018-11-06",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-07": {
+      "day": "2018-11-07",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-08": {
+      "day": "2018-11-08",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-09": {
+      "day": "2018-11-09",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-10": {
+      "day": "2018-11-10",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-11": {
+      "day": "2018-11-11",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-12": {
+      "day": "2018-11-12",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-13": {
+      "day": "2018-11-13",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-14": {
+      "day": "2018-11-14",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-15": {
+      "day": "2018-11-15",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-16": {
+      "day": "2018-11-16",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-17": {
+      "day": "2018-11-17",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-18": {
+      "day": "2018-11-18",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-19": {
+      "day": "2018-11-19",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-20": {
+      "day": "2018-11-20",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-21": {
+      "day": "2018-11-21",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-22": {
+      "day": "2018-11-22",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-23": {
+      "day": "2018-11-23",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-24": {
+      "day": "2018-11-24",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-25": {
+      "day": "2018-11-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-26": {
+      "day": "2018-11-26",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-27": {
+      "day": "2018-11-27",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-28": {
+      "day": "2018-11-28",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-29": {
+      "day": "2018-11-29",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-11-30": {
+      "day": "2018-11-30",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-01": {
+      "day": "2018-12-01",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-02": {
+      "day": "2018-12-02",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-03": {
+      "day": "2018-12-03",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-04": {
+      "day": "2018-12-04",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-05": {
+      "day": "2018-12-05",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-06": {
+      "day": "2018-12-06",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-07": {
+      "day": "2018-12-07",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-08": {
+      "day": "2018-12-08",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-09": {
+      "day": "2018-12-09",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-10": {
+      "day": "2018-12-10",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-11": {
+      "day": "2018-12-11",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-12": {
+      "day": "2018-12-12",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-13": {
+      "day": "2018-12-13",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-14": {
+      "day": "2018-12-14",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-15": {
+      "day": "2018-12-15",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-16": {
+      "day": "2018-12-16",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-17": {
+      "day": "2018-12-17",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-18": {
+      "day": "2018-12-18",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-19": {
+      "day": "2018-12-19",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-20": {
+      "day": "2018-12-20",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-21": {
+      "day": "2018-12-21",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-22": {
+      "day": "2018-12-22",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-23": {
+      "day": "2018-12-23",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-24": {
+      "day": "2018-12-24",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-25": {
+      "day": "2018-12-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-26": {
+      "day": "2018-12-26",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-27": {
+      "day": "2018-12-27",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-28": {
+      "day": "2018-12-28",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-29": {
+      "day": "2018-12-29",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-30": {
+      "day": "2018-12-30",
+      "status": "succeeded",
+      "error": null
+    },
+    "2018-12-31": {
+      "day": "2018-12-31",
+      "status": "succeeded",
+      "error": null
+    },
+    "2019-01-04": {
+      "day": "2019-01-04",
+      "status": "succeeded",
+      "error": null
+    },
+    "2019-01-09": {
+      "day": "2019-01-09",
+      "status": "succeeded",
+      "error": null
+    },
+    "2019-12-24": {
+      "day": "2019-12-24",
+      "status": "succeeded",
+      "error": null
+    },
+    "2019-12-25": {
+      "day": "2019-12-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2020-03-19": {
+      "day": "2020-03-19",
+      "status": "succeeded",
+      "error": null
+    },
+    "2020-03-30": {
+      "day": "2020-03-30",
+      "status": "succeeded",
+      "error": null
+    },
+    "2020-04-02": {
+      "day": "2020-04-02",
+      "status": "succeeded",
+      "error": null
+    },
+    "2020-04-15": {
+      "day": "2020-04-15",
+      "status": "succeeded",
+      "error": null
+    },
+    "2020-04-16": {
+      "day": "2020-04-16",
+      "status": "succeeded",
+      "error": null
+    },
+    "2020-04-28": {
+      "day": "2020-04-28",
+      "status": "succeeded",
+      "error": null
+    },
+    "2020-04-29": {
+      "day": "2020-04-29",
+      "status": "succeeded",
+      "error": null
+    },
+    "2020-05-05": {
+      "day": "2020-05-05",
+      "status": "succeeded",
+      "error": null
+    },
+    "2020-05-12": {
+      "day": "2020-05-12",
+      "status": "succeeded",
+      "error": null
+    },
+    "2020-05-13": {
+      "day": "2020-05-13",
+      "status": "succeeded",
+      "error": null
+    },
+    "2020-05-19": {
+      "day": "2020-05-19",
+      "status": "succeeded",
+      "error": null
+    },
+    "2020-05-20": {
+      "day": "2020-05-20",
+      "status": "succeeded",
+      "error": null
+    },
+    "2020-05-21": {
+      "day": "2020-05-21",
+      "status": "succeeded",
+      "error": null
+    },
+    "2020-05-25": {
+      "day": "2020-05-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2024-12-24": {
+      "day": "2024-12-24",
+      "status": "succeeded",
+      "error": null
+    },
+    "2024-12-25": {
+      "day": "2024-12-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2025-12-25": {
+      "day": "2025-12-25",
+      "status": "succeeded",
+      "error": null
+    },
+    "2025-12-31": {
+      "day": "2025-12-31",
+      "status": "succeeded",
+      "error": null
+    },
+    "2026-02-19": {
+      "day": "2026-02-19",
+      "status": "succeeded",
+      "error": null
+    },
+    "2026-02-26": {
+      "day": "2026-02-26",
+      "status": "succeeded",
+      "error": null
+    },
+    "2026-03-18": {
+      "day": "2026-03-18",
+      "status": "succeeded",
+      "error": null
+    },
+    "2026-03-26": {
+      "day": "2026-03-26",
+      "status": "succeeded",
+      "error": null
+    },
+    "2026-03-30": {
+      "day": "2026-03-30",
+      "status": "succeeded",
+      "error": null
+    },
+    "2026-03-31": {
+      "day": "2026-03-31",
+      "status": "succeeded",
+      "error": null
+    },
+    "2026-04-02": {
+      "day": "2026-04-02",
+      "status": "succeeded",
+      "error": null
+    },
+    "2026-04-07": {
+      "day": "2026-04-07",
+      "status": "succeeded",
+      "error": null
+    },
+    "2026-04-09": {
+      "day": "2026-04-09",
+      "status": "succeeded",
+      "error": null
+    },
+    "2026-04-15": {
+      "day": "2026-04-15",
+      "status": "succeeded",
+      "error": null
+    },
+    "2026-04-16": {
+      "day": "2026-04-16",
+      "status": "succeeded",
+      "error": null
+    },
+    "2026-04-20": {
+      "day": "2026-04-20",
+      "status": "succeeded",
+      "error": null
+    }
+  }
+}
