@@ -116,6 +116,121 @@ def _coerce_adapter_output(item: object) -> dict[str, object]:
 _WRITE_GATE = InstrumentsWriteGate(mode="warn")
 
 
+# ---------------------------------------------------------------------------
+# CanonicalFixture → SPORTS_FIXTURES SchemaContract flattening
+# ---------------------------------------------------------------------------
+# CanonicalFixture (UAC) carries league / home_team / away_team / venue as
+# nested Pydantic structs. ``pd.DataFrame([fx.model_dump() for fx in …])``
+# preserves those structs as parquet struct cells — that's the LEGACY schema
+# scattered across pre-2024 partitions and (regression!) some 2026 days.
+#
+# The on-disk SSOT is ``SPORTS_FIXTURES`` in
+# ``unified_api_contracts.internal.schemas._sports_match_contracts``: 32
+# flat columns with ``af_*`` prefixed identifiers. ``_flatten_canonical_fixture_for_disk``
+# bridges the in-memory canonical model to the on-disk contract.
+#
+# Audit (2026-04-28): 594 LEGACY days remain on disk; 112 of them are 2026
+# dates produced by the legacy writer. Plan:
+# ``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.plan.md``.
+
+# Provider names → API-Football logo URL → numeric ID. CanonicalLeague /
+# CanonicalTeam / CanonicalVenue carry ``api_football_id`` directly when
+# available; we fall back to logo_url parsing for older normalizer outputs.
+_AF_LOGO_RE = re.compile(r"/(?:leagues|teams)/(\d+)\.png")
+
+
+def _af_id_from_canonical(obj: object) -> int | None:
+    """Extract API-Football numeric ID from a CanonicalLeague / CanonicalTeam / CanonicalVenue.
+
+    Tries ``api_football_id`` attribute first, falls back to ``logo_url``
+    pattern parsing (legacy normalizer output).
+    """
+    af_id = getattr(obj, "api_football_id", None)
+    if isinstance(af_id, int):
+        return af_id
+    if af_id is not None:
+        try:
+            return int(af_id)
+        except (TypeError, ValueError):
+            pass
+    logo_url = getattr(obj, "logo_url", None)
+    if isinstance(logo_url, str):
+        match = _AF_LOGO_RE.search(logo_url)
+        if match is not None:
+            return int(match.group(1))
+    return None
+
+
+def _flatten_canonical_fixture_for_disk(fx: object, day: str) -> dict[str, object]:
+    """Flatten a CanonicalFixture into a dict matching SPORTS_FIXTURES SchemaContract.
+
+    Returns 32 columns (matching the new flat schema). Defaults required-non-null
+    columns the canonical model doesn't carry (``round``, ``status_long``).
+    Sets all extratime / penalty / period fields to None — those are populated
+    by sibling writers (entity=fixture_stats / fixture_events).
+    """
+    home_team = getattr(fx, "home_team", None)
+    away_team = getattr(fx, "away_team", None)
+    league = getattr(fx, "league", None)
+    venue = getattr(fx, "venue", None)
+    referee = getattr(fx, "referee", None)
+    kickoff = getattr(fx, "kickoff_utc", None)
+    home_goals = getattr(fx, "home_goals", None)
+    away_goals = getattr(fx, "away_goals", None)
+    af_home_id = _af_id_from_canonical(home_team) if home_team is not None else None
+    af_away_id = _af_id_from_canonical(away_team) if away_team is not None else None
+    af_winner_id: int | None = None
+    if home_goals is not None and away_goals is not None and home_goals != away_goals:
+        af_winner_id = af_home_id if home_goals > away_goals else af_away_id
+
+    raw_fid = getattr(fx, "source_fixture_id", None) or getattr(fx, "fixture_id", None)
+    try:
+        af_fixture_id = int(raw_fid) if raw_fid is not None else None
+    except (TypeError, ValueError):
+        af_fixture_id = None
+
+    season_raw = getattr(fx, "season", None)
+    try:
+        season_int = int(str(season_raw).split("-")[0]) if season_raw is not None else None
+    except (TypeError, ValueError):
+        season_int = None
+
+    return {
+        "af_fixture_id": af_fixture_id,
+        "referee_name": getattr(referee, "name", None) if referee is not None else None,
+        "date": kickoff.date().isoformat() if kickoff is not None else day,
+        "timestamp": kickoff.isoformat() if kickoff is not None else None,
+        "periods_first": None,
+        "periods_second": None,
+        "venue_id": _af_id_from_canonical(venue) if venue is not None else None,
+        "venue_name": getattr(venue, "name", None) if venue is not None else None,
+        "venue_city": getattr(venue, "city", None) if venue is not None else None,
+        "status_long": getattr(fx, "status", None) or "Unknown",
+        "status_short": getattr(fx, "status", None) or "NS",
+        "status_elapsed_time": None,
+        "af_league_id": _af_id_from_canonical(league) if league is not None else None,
+        "season": season_int,
+        "round": getattr(fx, "round", "") or "",
+        "af_home_id": af_home_id,
+        "af_away_id": af_away_id,
+        "af_winner_id": af_winner_id,
+        "af_home_name": getattr(home_team, "name", "") if home_team is not None else "",
+        "af_away_name": getattr(away_team, "name", "") if away_team is not None else "",
+        "home_score": home_goals,
+        "away_score": away_goals,
+        "home_score_halftime": getattr(fx, "home_goals_halftime", None),
+        "away_score_halftime": getattr(fx, "away_goals_halftime", None),
+        "home_score_fulltime": home_goals,
+        "away_score_fulltime": away_goals,
+        "home_score_extratime": None,
+        "away_score_extratime": None,
+        "home_score_penalty": None,
+        "away_score_penalty": None,
+        "day": day,
+        "data_available_at": None,  # caller post-fills with kickoff_utc - 7 days
+    }
+
+
 def _gated_sink_write(
     sink: DataSink,
     *,
@@ -722,10 +837,10 @@ def filter_instruments_by_date(
     return result
 
 
-def get_venues_for_categories(categories: list[str]) -> list[str]:
-    """Return UAC canonical venue names for the requested market categories."""
+def get_venues_for_asset_groups(asset_groups: list[str]) -> list[str]:
+    """Return UAC canonical venue names for the requested asset groups (CEFI, DEFI, …)."""
     venues: list[str] = []
-    for cat in categories:
+    for cat in asset_groups:
         cat_upper = cat.upper()
         if cat_upper in ("CEFI", "ALL"):
             venues.extend(_CEFI_VENUES)
@@ -786,7 +901,7 @@ _SPORTS_PROVIDER_VENUES: dict[str, list[str]] = {
 
 async def process_instruments(
     date: str | datetime,
-    categories: list[str],
+    asset_groups: list[str],
     redo_all: bool = False,
     api_keys: dict[str, str] | None = None,
     venue_override: list[str] | None = None,
@@ -796,7 +911,7 @@ async def process_instruments(
     league_filter: list[str] | None = None,
     season_override: int | None = None,
 ) -> dict[str, int]:
-    """Process instruments for a single date and set of market categories.
+    """Process instruments for a single date and set of asset groups.
 
     Args:
         sports_provider: When set, only run this data provider (e.g. OPEN_METEO,
@@ -818,7 +933,7 @@ async def process_instruments(
         date = date.strftime("%Y-%m-%d")
 
     # venue_override bypasses category lookup when --venues filter is active (sharding)
-    venues = venue_override if venue_override is not None else get_venues_for_categories(categories)
+    venues = venue_override if venue_override is not None else get_venues_for_asset_groups(asset_groups)
 
     # Track which sports entities are missing (set in skip-if-exists check).
     # Empty = fetch everything; non-empty = only fetch these specific entities.
@@ -843,10 +958,10 @@ async def process_instruments(
         _enrichment_providers = {"OPEN_METEO", "UNDERSTAT", "FOOTYSTATS", "TRANSFERMARKT", "SOCCER_FOOTBALL_INFO"}
         if sports_provider in _enrichment_providers:
             logger.info("%s short-circuit: skipping orchestrator for date=%s", sports_provider, date)
-            primary_category = categories[0] if categories else "SPORTS"
-            bucket = _get_instruments_bucket(primary_category)
+            primary_asset_group = asset_groups[0] if asset_groups else "SPORTS"
+            bucket = _get_instruments_bucket(primary_asset_group)
             if not bucket:
-                logger.error("No bucket resolved for category=%s", primary_category)
+                logger.error("No bucket resolved for asset_group=%s", primary_asset_group)
                 return {}
             _keys = api_keys or {}
 
@@ -933,12 +1048,12 @@ async def process_instruments(
             return result
 
     if not active_venues:
-        logger.info("No active venues for date=%s categories=%s", date, categories)
+        logger.info("No active venues for date=%s asset_groups=%s", date, asset_groups)
         return {}
 
     # Sports entity lists — used by freshness check AND later fast-path logic,
     # so they must be defined unconditionally (not inside redo_all gate).
-    is_sports_run = any(c.upper() in ("SPORTS", "ALL") for c in categories)
+    is_sports_run = any(c.upper() in ("SPORTS", "ALL") for c in asset_groups)
     _sports_core_entities = [
         "LEAGUES",
         "TEAMS",
@@ -958,8 +1073,8 @@ async def process_instruments(
 
     # 1b. Skip-if-exists: check manifest for fresh data (unless --force)
     if not redo_all:
-        primary_category = categories[0] if categories else None
-        bucket = _get_instruments_bucket(primary_category)
+        primary_asset_group = asset_groups[0] if asset_groups else None
+        bucket = _get_instruments_bucket(primary_asset_group)
 
         # For SPORTS, require both core AND per-fixture reference entities.
         # Core: leagues/teams/standings/injuries (slow-moving, fetched every run).
@@ -1099,8 +1214,8 @@ async def process_instruments(
         if not instruments_missing:
             api_football_key = api_keys.get("api_football")
             if api_football_key:
-                primary_category = categories[0] if categories else None
-                bucket = _get_instruments_bucket(primary_category)
+                primary_asset_group = asset_groups[0] if asset_groups else None
+                bucket = _get_instruments_bucket(primary_asset_group)
                 # Resolve fixture IDs from existing GCS fixtures parquet (0 API calls)
                 gcs_fixture_ids = _read_fixture_ids_from_gcs(bucket, date)
                 logger.info(
@@ -1164,7 +1279,7 @@ async def process_instruments(
 
     log_event(
         "PROCESSING_STARTED",
-        details={"date": date, "categories": categories, "venue_count": len(active_venues)},
+        details={"date": date, "asset_groups": asset_groups, "venue_count": len(active_venues)},
     )
 
     # Enrichment-only entities don't need URDI at all — they fetch by date,
@@ -1279,8 +1394,8 @@ async def process_instruments(
     # Per-fixture URDI skip: read fixture IDs from GCS and jump to enrichment.
     # This avoids the URDI fetch + date filter which returns 0 for historical dates.
     if _skip_urdi and sports_entity_filter in _per_fixture_entities:
-        primary_category = categories[0] if categories else None
-        _pf_bucket = _get_instruments_bucket(primary_category)
+        primary_asset_group = asset_groups[0] if asset_groups else None
+        _pf_bucket = _get_instruments_bucket(primary_asset_group)
         gcs_fixture_ids = _read_fixture_ids_from_gcs(_pf_bucket, date)
         if not gcs_fixture_ids:
             logger.info("Per-fixture GCS skip: no fixtures in GCS for date=%s", date)
@@ -1316,7 +1431,7 @@ async def process_instruments(
     # URDI adapters return the full historical instrument universe; this reduces
     # it to only instruments tradeable on the requested day.
     # Pass the DeFi venue set so the filter can warn on missing available_from_datetime.
-    is_defi_run = any(c.upper() in ("DEFI", "ALL") for c in categories)
+    is_defi_run = any(c.upper() in ("DEFI", "ALL") for c in asset_groups)
     defi_venue_set: frozenset[str] | None = frozenset(_DEFI_VENUES) if is_defi_run else None
     date_dt = datetime.fromisoformat(date).replace(tzinfo=UTC)
     records = filter_instruments_by_date(records, date_dt, defi_venues=defi_venue_set)
@@ -1362,7 +1477,7 @@ async def process_instruments(
     # 3b. DEFI relevance filter: keep only instruments involving major liquid assets.
     # Whitelist is from config_reloaders.get_defi_major_assets() — defaults to
     # ETH/BTC/USDT/USDC and known derivatives; can be overridden via ConfigStore.
-    if any(c.upper() in ("DEFI", "ALL") for c in categories):
+    if any(c.upper() in ("DEFI", "ALL") for c in asset_groups):
         before = len(records)
         records = filter_defi_instruments_by_relevance(records)
         logger.info(
@@ -1380,10 +1495,10 @@ async def process_instruments(
     # before the first pool was created — skip silently (no GCS write, no error).
     # For CeFi/TradFi: zero records = something is broken → fail the shard.
     if not records:
-        is_sports_only = all(c.upper() == "SPORTS" for c in categories)
+        is_sports_only = all(c.upper() == "SPORTS" for c in asset_groups)
         if is_sports_only:
-            primary_category = categories[0] if categories else None
-            bucket = _get_instruments_bucket(primary_category)
+            primary_asset_group = asset_groups[0] if asset_groups else None
+            bucket = _get_instruments_bucket(primary_asset_group)
             sink = get_data_sink(bucket=bucket, prefix="instrument_availability/by_date")
             empty_df = pd.DataFrame(columns=["fixture_id", "venue", "league_id", "kickoff_utc", "status"])
             # Write one empty marker per prediction league so downstream
@@ -1581,11 +1696,11 @@ async def process_instruments(
                         shard=date,
                     )
 
-            log_event("PROCESSING_COMPLETED", details={"date": date, "categories": categories, "fixtures": 0})
+            log_event("PROCESSING_COMPLETED", details={"date": date, "asset_groups": asset_groups, "fixtures": 0})
             return counts
         # DeFi batch: zero records after date filter is normal for early dates
         # (venue exists in UAC but no pools created yet on-chain). Skip without error.
-        is_defi_only = all(c.upper() in ("DEFI",) for c in categories)
+        is_defi_only = all(c.upper() in ("DEFI",) for c in asset_groups)
         if is_defi_only and mode == "batch":
             logger.debug(
                 "DeFi batch: zero instruments after date filter for date=%s — "
@@ -1603,8 +1718,8 @@ async def process_instruments(
             target_dt = date_type.fromisoformat(date)
             non_trading_venues = [v for v in tradfi_active if is_non_trading_day(v, target_dt)]
             if non_trading_venues and len(non_trading_venues) == len(tradfi_active):
-                primary_category = categories[0] if categories else None
-                bucket = _get_instruments_bucket(primary_category)
+                primary_asset_group = asset_groups[0] if asset_groups else None
+                bucket = _get_instruments_bucket(primary_asset_group)
                 manifest = ManifestWriter(
                     service_name="instruments-service",
                     catalogue_bucket=bucket,
@@ -1623,12 +1738,16 @@ async def process_instruments(
                 )
                 log_event(
                     "PROCESSING_COMPLETED",
-                    details={"date": date, "categories": categories, "non_trading_venues": sorted(non_trading_venues)},
+                    details={
+                        "date": date,
+                        "asset_groups": asset_groups,
+                        "non_trading_venues": sorted(non_trading_venues),
+                    },
                 )
                 return dict.fromkeys(non_trading_venues, 0)
 
         msg = (
-            f"URDI returned zero records for date={date} categories={categories}. "
+            f"URDI returned zero records for date={date} asset_groups={asset_groups}. "
             f"Venues attempted: {active_venues}. "
             "Check URDI adapter coverage and network connectivity."
         )
@@ -1700,8 +1819,8 @@ async def process_instruments(
     # Use the first (primary) category to route to the correct category-specific bucket.
     # UCI naming: instruments-store-{category.lower()}-{project}
     # e.g. DEFI → instruments-store-defi-{gcp_project_id}
-    primary_category = categories[0] if categories else None
-    bucket = _get_instruments_bucket(primary_category)
+    primary_asset_group = asset_groups[0] if asset_groups else None
+    bucket = _get_instruments_bucket(primary_asset_group)
     # prefix ensures writes land at instrument_availability/by_date/{day=X}/{venue=Y}/
     sink = get_data_sink(bucket=bucket, prefix="instrument_availability/by_date")
 
@@ -1832,7 +1951,7 @@ async def process_instruments(
     # 7. SPORTS enrichment: fetch and write reference data (teams, leagues, etc.)
     # alongside fixtures. These are slow-moving entities that don't change per-date
     # but are re-fetched to capture transfers, promotions, new seasons.
-    is_sports = any(c.upper() in ("SPORTS", "ALL") for c in categories)
+    is_sports = any(c.upper() in ("SPORTS", "ALL") for c in asset_groups)
     # OPEN_METEO doesn't need API keys — allow sports enrichment even with empty api_keys
     # OPEN_METEO and UNDERSTAT don't need API keys (free, no auth)
     _needs_api_keys = sports_provider not in ("OPEN_METEO", "UNDERSTAT") if sports_provider else True
@@ -2209,7 +2328,7 @@ async def process_instruments(
 
         # Apply same pipeline: date filter → relevance filter → validation → write
         retry_records = filter_instruments_by_date(retry_records, date_dt, defi_venues=defi_venue_set)
-        if any(c.upper() in ("DEFI", "ALL") for c in categories):
+        if any(c.upper() in ("DEFI", "ALL") for c in asset_groups):
             retry_records = filter_defi_instruments_by_relevance(retry_records)
         if retry_records:
             valid_retry, _ = validate_instrument_records(retry_records)
@@ -2356,7 +2475,7 @@ def _write_venue(
             # v4: Sports reference entities write data_type (not venue).
             #     API_FOOTBALL → data_type=FIXTURES, venue=""
             #     API_FOOTBALL_INJURIES → data_type=INJURIES, venue=""
-            #     Other categories keep venue as-is.
+            #     Other asset groups keep venue as-is.
             _sports_prefixes = ("API_FOOTBALL", "TRANSFERMARKT", "FOOTYSTATS", "SFI", "UNDERSTAT", "WEATHER")
             is_sports_ref = venue_str.startswith(_sports_prefixes)
             if is_sports_ref:
@@ -3008,12 +3127,12 @@ async def _fetch_sports_reference_data(
                     _adapter = create_sports_reference_adapter("api_football", api_key=api_key)
                     _fx_list = await _adapter.get_fixtures(date)
                     if _fx_list:
-                        _fx_dicts = [fx.model_dump() if hasattr(fx, "model_dump") else fx for fx in _fx_list]
+                        _fx_dicts = [_flatten_canonical_fixture_for_disk(fx, date) for fx in _fx_list]
                         _fx_df = pd.DataFrame(_fx_dicts)
                         # PIT safety: scheduled fixtures published ~1 week before kickoff
-                        if "kickoff_utc" in _fx_df.columns:
+                        if "timestamp" in _fx_df.columns:
                             _fx_df["data_available_at"] = pd.to_datetime(
-                                _fx_df["kickoff_utc"], utc=True, errors="coerce"
+                                _fx_df["timestamp"], utc=True, errors="coerce"
                             ) - pd.Timedelta(days=7)
                         _ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
                         _gated_sink_write(
@@ -3069,12 +3188,12 @@ async def _fetch_sports_reference_data(
             # so features-sports-service and trigger scheduler can read them.
             if fixtures:
                 try:
-                    fixture_dicts = [fx.model_dump() if hasattr(fx, "model_dump") else fx for fx in fixtures]
+                    fixture_dicts = [_flatten_canonical_fixture_for_disk(fx, date) for fx in fixtures]
                     fixture_df = pd.DataFrame(fixture_dicts)
                     # PIT safety: scheduled fixtures published ~1 week before kickoff
-                    if "kickoff_utc" in fixture_df.columns:
+                    if "timestamp" in fixture_df.columns:
                         fixture_df["data_available_at"] = pd.to_datetime(
-                            fixture_df["kickoff_utc"], utc=True, errors="coerce"
+                            fixture_df["timestamp"], utc=True, errors="coerce"
                         ) - pd.Timedelta(days=7)
                     _fix_ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
                     _gated_sink_write(
@@ -3085,9 +3204,9 @@ async def _fetch_sports_reference_data(
                         venue="api_football",
                         entity="fixtures",
                     )
-                    # Per-league partitioned write
-                    if "league_id" in fixture_df.columns:
-                        for _lid, _ldf in fixture_df.groupby("league_id"):
+                    # Per-league partitioned write — group by canonical league via af_league_id.
+                    if "af_league_id" in fixture_df.columns:
+                        for _lid, _ldf in fixture_df.groupby("af_league_id"):
                             _gated_sink_write(
                                 _fix_ref_sink,
                                 data=_ldf,
@@ -5597,14 +5716,14 @@ async def fill_solana_creation_cache(
     return {"cached": cached_count, "new": cached_count, "unresolved": unresolved}
 
 
-def _get_instruments_bucket(category: str | None = None) -> str:
-    """Resolve the instruments write bucket for the given category.
+def _get_instruments_bucket(asset_group: str | None = None) -> str:
+    """Resolve the instruments write bucket for the given asset group.
 
-    Prod:  instruments-store-{category.lower()}-{project_id}
-    Test:  instruments-store-{category.lower()}-test-{project_id}
+    Prod:  instruments-store-{asset_group.lower()}-{project_id}
+    Test:  instruments-store-{asset_group.lower()}-test-{project_id}
 
     When ``IS_TEST_RUN=true``, writes route to the canonical ``-test-`` variant
-    (``-test-`` inserted between category and project_id — matches the 77
+    (``-test-`` inserted between asset group and project_id — matches the 77
     buckets provisioned by
     ``deployment-service/scripts/provision-test-buckets.sh``). SSOT:
     ``codex/02-data/per-category-bucket-layouts.md``.
@@ -5616,10 +5735,10 @@ def _get_instruments_bucket(category: str | None = None) -> str:
     project = cfg.gcp_project_id or "test-project"
 
     try:
-        return get_write_bucket_name("instruments", category, project)
+        return get_write_bucket_name("instruments", asset_group, project)
     except (ImportError, AttributeError):
         # Dev-environment fallback when UTL cloud_constants is unavailable.
-        cat_lower = category.lower() if category else None
+        cat_lower = asset_group.lower() if asset_group else None
         prefix = cfg.instruments_bucket_prefix
         prod_bucket = f"{prefix}-{cat_lower}-{project}" if cat_lower else f"{prefix}-{project}"
         if not cfg.is_test_run:
@@ -5712,29 +5831,29 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
 
 
 async def refresh_catalogue(
-    categories: list[str] | None = None,
+    asset_groups: list[str] | None = None,
     api_keys: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Rebuild the canonical instrument catalogue for the requested categories.
+    """Rebuild the canonical instrument catalogue for the requested asset groups.
 
-    For each category in :data:`CATALOGUE_SUPPORTED_CATEGORIES` this uses
+    For each group in :data:`CATALOGUE_SUPPORTED_ASSET_GROUPS` this uses
     :class:`CatalogueBuilder` to fetch instruments through URDI and writes
-    the result to ``reference_data/instruments/{category}/all.parquet``.
+    the result to ``reference_data/instruments/{asset_group}/all.parquet``.
 
-    Returns a mapping of ``category -> written URI`` for observability.
+    Returns a mapping of ``asset_group -> written URI`` for observability.
     """
     from instruments_service.reference_data.catalogue import (
-        CATALOGUE_SUPPORTED_CATEGORIES,
+        CATALOGUE_SUPPORTED_ASSET_GROUPS,
         CatalogueBuilder,
     )
 
     builder = CatalogueBuilder(api_keys=api_keys)
-    target = [c.upper() for c in (categories or list(CATALOGUE_SUPPORTED_CATEGORIES))]
+    target = [c.upper() for c in (asset_groups or list(CATALOGUE_SUPPORTED_ASSET_GROUPS))]
     written: dict[str, str] = {}
-    for category in target:
-        if category not in CATALOGUE_SUPPORTED_CATEGORIES:
-            logger.warning("refresh_catalogue: skipping unknown category=%s", category)
+    for ag in target:
+        if ag not in CATALOGUE_SUPPORTED_ASSET_GROUPS:
+            logger.warning("refresh_catalogue: skipping unknown asset_group=%s", ag)
             continue
-        records = await builder.build_category_async(category)
-        written[category] = builder.write_to_gcs(records, category)
+        records = await builder.build_asset_group_async(ag)
+        written[ag] = builder.write_to_gcs(records, ag)
     return written
