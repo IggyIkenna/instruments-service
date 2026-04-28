@@ -1,0 +1,3198 @@
+{
+  "_meta": {
+    "bucket": "instruments-store-sports-central-element-323112",
+    "src_prefix": "sports_reference/by_date/",
+    "dst_prefix": "sports_reference_v2/by_date/",
+    "total_days": 398,
+    "summary": {
+      "ok": 398
+    },
+    "generated_at": "2026-04-28T13:53:41Z"
+  },
+  "days": {
+    "2018-01-02": {
+      "day": "2018-01-02",
+      "status": "ok",
+      "legacy_rows": 31,
+      "v2_fixtures_rows": 31,
+      "v2_stats_rows": 31,
+      "error": null
+    },
+    "2018-01-03": {
+      "day": "2018-01-03",
+      "status": "ok",
+      "legacy_rows": 14,
+      "v2_fixtures_rows": 14,
+      "v2_stats_rows": 14,
+      "error": null
+    },
+    "2018-01-04": {
+      "day": "2018-01-04",
+      "status": "ok",
+      "legacy_rows": 17,
+      "v2_fixtures_rows": 17,
+      "v2_stats_rows": 17,
+      "error": null
+    },
+    "2018-01-05": {
+      "day": "2018-01-05",
+      "status": "ok",
+      "legacy_rows": 47,
+      "v2_fixtures_rows": 47,
+      "v2_stats_rows": 47,
+      "error": null
+    },
+    "2018-01-06": {
+      "day": "2018-01-06",
+      "status": "ok",
+      "legacy_rows": 183,
+      "v2_fixtures_rows": 183,
+      "v2_stats_rows": 183,
+      "error": null
+    },
+    "2018-01-07": {
+      "day": "2018-01-07",
+      "status": "ok",
+      "legacy_rows": 113,
+      "v2_fixtures_rows": 113,
+      "v2_stats_rows": 113,
+      "error": null
+    },
+    "2018-01-08": {
+      "day": "2018-01-08",
+      "status": "ok",
+      "legacy_rows": 20,
+      "v2_fixtures_rows": 20,
+      "v2_stats_rows": 20,
+      "error": null
+    },
+    "2018-01-09": {
+      "day": "2018-01-09",
+      "status": "ok",
+      "legacy_rows": 36,
+      "v2_fixtures_rows": 36,
+      "v2_stats_rows": 36,
+      "error": null
+    },
+    "2018-01-10": {
+      "day": "2018-01-10",
+      "status": "ok",
+      "legacy_rows": 26,
+      "v2_fixtures_rows": 26,
+      "v2_stats_rows": 26,
+      "error": null
+    },
+    "2018-01-11": {
+      "day": "2018-01-11",
+      "status": "ok",
+      "legacy_rows": 26,
+      "v2_fixtures_rows": 26,
+      "v2_stats_rows": 26,
+      "error": null
+    },
+    "2018-01-12": {
+      "day": "2018-01-12",
+      "status": "ok",
+      "legacy_rows": 70,
+      "v2_fixtures_rows": 70,
+      "v2_stats_rows": 70,
+      "error": null
+    },
+    "2018-01-13": {
+      "day": "2018-01-13",
+      "status": "ok",
+      "legacy_rows": 259,
+      "v2_fixtures_rows": 259,
+      "v2_stats_rows": 259,
+      "error": null
+    },
+    "2018-01-14": {
+      "day": "2018-01-14",
+      "status": "ok",
+      "legacy_rows": 156,
+      "v2_fixtures_rows": 156,
+      "v2_stats_rows": 156,
+      "error": null
+    },
+    "2018-01-15": {
+      "day": "2018-01-15",
+      "status": "ok",
+      "legacy_rows": 21,
+      "v2_fixtures_rows": 21,
+      "v2_stats_rows": 21,
+      "error": null
+    },
+    "2018-01-16": {
+      "day": "2018-01-16",
+      "status": "ok",
+      "legacy_rows": 46,
+      "v2_fixtures_rows": 46,
+      "v2_stats_rows": 46,
+      "error": null
+    },
+    "2018-01-17": {
+      "day": "2018-01-17",
+      "status": "ok",
+      "legacy_rows": 54,
+      "v2_fixtures_rows": 54,
+      "v2_stats_rows": 54,
+      "error": null
+    },
+    "2018-01-18": {
+      "day": "2018-01-18",
+      "status": "ok",
+      "legacy_rows": 23,
+      "v2_fixtures_rows": 23,
+      "v2_stats_rows": 23,
+      "error": null
+    },
+    "2018-01-19": {
+      "day": "2018-01-19",
+      "status": "ok",
+      "legacy_rows": 96,
+      "v2_fixtures_rows": 96,
+      "v2_stats_rows": 96,
+      "error": null
+    },
+    "2018-01-20": {
+      "day": "2018-01-20",
+      "status": "ok",
+      "legacy_rows": 275,
+      "v2_fixtures_rows": 275,
+      "v2_stats_rows": 275,
+      "error": null
+    },
+    "2018-01-21": {
+      "day": "2018-01-21",
+      "status": "ok",
+      "legacy_rows": 228,
+      "v2_fixtures_rows": 228,
+      "v2_stats_rows": 228,
+      "error": null
+    },
+    "2018-01-22": {
+      "day": "2018-01-22",
+      "status": "ok",
+      "legacy_rows": 36,
+      "v2_fixtures_rows": 36,
+      "v2_stats_rows": 36,
+      "error": null
+    },
+    "2018-01-23": {
+      "day": "2018-01-23",
+      "status": "ok",
+      "legacy_rows": 47,
+      "v2_fixtures_rows": 47,
+      "v2_stats_rows": 47,
+      "error": null
+    },
+    "2018-01-24": {
+      "day": "2018-01-24",
+      "status": "ok",
+      "legacy_rows": 78,
+      "v2_fixtures_rows": 78,
+      "v2_stats_rows": 78,
+      "error": null
+    },
+    "2018-01-25": {
+      "day": "2018-01-25",
+      "status": "ok",
+      "legacy_rows": 40,
+      "v2_fixtures_rows": 40,
+      "v2_stats_rows": 40,
+      "error": null
+    },
+    "2018-01-26": {
+      "day": "2018-01-26",
+      "status": "ok",
+      "legacy_rows": 115,
+      "v2_fixtures_rows": 115,
+      "v2_stats_rows": 115,
+      "error": null
+    },
+    "2018-01-27": {
+      "day": "2018-01-27",
+      "status": "ok",
+      "legacy_rows": 298,
+      "v2_fixtures_rows": 298,
+      "v2_stats_rows": 298,
+      "error": null
+    },
+    "2018-01-28": {
+      "day": "2018-01-28",
+      "status": "ok",
+      "legacy_rows": 266,
+      "v2_fixtures_rows": 266,
+      "v2_stats_rows": 266,
+      "error": null
+    },
+    "2018-01-29": {
+      "day": "2018-01-29",
+      "status": "ok",
+      "legacy_rows": 62,
+      "v2_fixtures_rows": 62,
+      "v2_stats_rows": 62,
+      "error": null
+    },
+    "2018-01-30": {
+      "day": "2018-01-30",
+      "status": "ok",
+      "legacy_rows": 77,
+      "v2_fixtures_rows": 77,
+      "v2_stats_rows": 77,
+      "error": null
+    },
+    "2018-01-31": {
+      "day": "2018-01-31",
+      "status": "ok",
+      "legacy_rows": 99,
+      "v2_fixtures_rows": 99,
+      "v2_stats_rows": 99,
+      "error": null
+    },
+    "2018-02-01": {
+      "day": "2018-02-01",
+      "status": "ok",
+      "legacy_rows": 40,
+      "v2_fixtures_rows": 40,
+      "v2_stats_rows": 40,
+      "error": null
+    },
+    "2018-02-02": {
+      "day": "2018-02-02",
+      "status": "ok",
+      "legacy_rows": 141,
+      "v2_fixtures_rows": 141,
+      "v2_stats_rows": 141,
+      "error": null
+    },
+    "2018-02-03": {
+      "day": "2018-02-03",
+      "status": "ok",
+      "legacy_rows": 400,
+      "v2_fixtures_rows": 400,
+      "v2_stats_rows": 400,
+      "error": null
+    },
+    "2018-02-04": {
+      "day": "2018-02-04",
+      "status": "ok",
+      "legacy_rows": 365,
+      "v2_fixtures_rows": 365,
+      "v2_stats_rows": 365,
+      "error": null
+    },
+    "2018-02-05": {
+      "day": "2018-02-05",
+      "status": "ok",
+      "legacy_rows": 45,
+      "v2_fixtures_rows": 45,
+      "v2_stats_rows": 45,
+      "error": null
+    },
+    "2018-02-06": {
+      "day": "2018-02-06",
+      "status": "ok",
+      "legacy_rows": 68,
+      "v2_fixtures_rows": 68,
+      "v2_stats_rows": 68,
+      "error": null
+    },
+    "2018-02-07": {
+      "day": "2018-02-07",
+      "status": "ok",
+      "legacy_rows": 89,
+      "v2_fixtures_rows": 89,
+      "v2_stats_rows": 89,
+      "error": null
+    },
+    "2018-02-08": {
+      "day": "2018-02-08",
+      "status": "ok",
+      "legacy_rows": 47,
+      "v2_fixtures_rows": 47,
+      "v2_stats_rows": 47,
+      "error": null
+    },
+    "2018-02-09": {
+      "day": "2018-02-09",
+      "status": "ok",
+      "legacy_rows": 161,
+      "v2_fixtures_rows": 161,
+      "v2_stats_rows": 161,
+      "error": null
+    },
+    "2018-02-10": {
+      "day": "2018-02-10",
+      "status": "ok",
+      "legacy_rows": 403,
+      "v2_fixtures_rows": 403,
+      "v2_stats_rows": 403,
+      "error": null
+    },
+    "2018-02-11": {
+      "day": "2018-02-11",
+      "status": "ok",
+      "legacy_rows": 329,
+      "v2_fixtures_rows": 329,
+      "v2_stats_rows": 329,
+      "error": null
+    },
+    "2018-02-12": {
+      "day": "2018-02-12",
+      "status": "ok",
+      "legacy_rows": 83,
+      "v2_fixtures_rows": 83,
+      "v2_stats_rows": 83,
+      "error": null
+    },
+    "2018-02-13": {
+      "day": "2018-02-13",
+      "status": "ok",
+      "legacy_rows": 87,
+      "v2_fixtures_rows": 87,
+      "v2_stats_rows": 87,
+      "error": null
+    },
+    "2018-02-14": {
+      "day": "2018-02-14",
+      "status": "ok",
+      "legacy_rows": 97,
+      "v2_fixtures_rows": 97,
+      "v2_stats_rows": 97,
+      "error": null
+    },
+    "2018-02-15": {
+      "day": "2018-02-15",
+      "status": "ok",
+      "legacy_rows": 91,
+      "v2_fixtures_rows": 91,
+      "v2_stats_rows": 91,
+      "error": null
+    },
+    "2018-02-16": {
+      "day": "2018-02-16",
+      "status": "ok",
+      "legacy_rows": 154,
+      "v2_fixtures_rows": 154,
+      "v2_stats_rows": 154,
+      "error": null
+    },
+    "2018-02-17": {
+      "day": "2018-02-17",
+      "status": "ok",
+      "legacy_rows": 400,
+      "v2_fixtures_rows": 400,
+      "v2_stats_rows": 400,
+      "error": null
+    },
+    "2018-02-18": {
+      "day": "2018-02-18",
+      "status": "ok",
+      "legacy_rows": 402,
+      "v2_fixtures_rows": 402,
+      "v2_stats_rows": 402,
+      "error": null
+    },
+    "2018-02-19": {
+      "day": "2018-02-19",
+      "status": "ok",
+      "legacy_rows": 69,
+      "v2_fixtures_rows": 69,
+      "v2_stats_rows": 69,
+      "error": null
+    },
+    "2018-02-20": {
+      "day": "2018-02-20",
+      "status": "ok",
+      "legacy_rows": 96,
+      "v2_fixtures_rows": 96,
+      "v2_stats_rows": 96,
+      "error": null
+    },
+    "2018-02-21": {
+      "day": "2018-02-21",
+      "status": "ok",
+      "legacy_rows": 85,
+      "v2_fixtures_rows": 85,
+      "v2_stats_rows": 85,
+      "error": null
+    },
+    "2018-02-22": {
+      "day": "2018-02-22",
+      "status": "ok",
+      "legacy_rows": 66,
+      "v2_fixtures_rows": 66,
+      "v2_stats_rows": 66,
+      "error": null
+    },
+    "2018-02-23": {
+      "day": "2018-02-23",
+      "status": "ok",
+      "legacy_rows": 165,
+      "v2_fixtures_rows": 165,
+      "v2_stats_rows": 165,
+      "error": null
+    },
+    "2018-02-24": {
+      "day": "2018-02-24",
+      "status": "ok",
+      "legacy_rows": 449,
+      "v2_fixtures_rows": 449,
+      "v2_stats_rows": 449,
+      "error": null
+    },
+    "2018-02-25": {
+      "day": "2018-02-25",
+      "status": "ok",
+      "legacy_rows": 448,
+      "v2_fixtures_rows": 448,
+      "v2_stats_rows": 448,
+      "error": null
+    },
+    "2018-02-26": {
+      "day": "2018-02-26",
+      "status": "ok",
+      "legacy_rows": 57,
+      "v2_fixtures_rows": 57,
+      "v2_stats_rows": 57,
+      "error": null
+    },
+    "2018-02-27": {
+      "day": "2018-02-27",
+      "status": "ok",
+      "legacy_rows": 66,
+      "v2_fixtures_rows": 66,
+      "v2_stats_rows": 66,
+      "error": null
+    },
+    "2018-02-28": {
+      "day": "2018-02-28",
+      "status": "ok",
+      "legacy_rows": 99,
+      "v2_fixtures_rows": 99,
+      "v2_stats_rows": 99,
+      "error": null
+    },
+    "2018-03-01": {
+      "day": "2018-03-01",
+      "status": "ok",
+      "legacy_rows": 76,
+      "v2_fixtures_rows": 76,
+      "v2_stats_rows": 76,
+      "error": null
+    },
+    "2018-03-02": {
+      "day": "2018-03-02",
+      "status": "ok",
+      "legacy_rows": 157,
+      "v2_fixtures_rows": 157,
+      "v2_stats_rows": 157,
+      "error": null
+    },
+    "2018-03-03": {
+      "day": "2018-03-03",
+      "status": "ok",
+      "legacy_rows": 402,
+      "v2_fixtures_rows": 402,
+      "v2_stats_rows": 402,
+      "error": null
+    },
+    "2018-03-04": {
+      "day": "2018-03-04",
+      "status": "ok",
+      "legacy_rows": 385,
+      "v2_fixtures_rows": 385,
+      "v2_stats_rows": 385,
+      "error": null
+    },
+    "2018-03-05": {
+      "day": "2018-03-05",
+      "status": "ok",
+      "legacy_rows": 72,
+      "v2_fixtures_rows": 72,
+      "v2_stats_rows": 72,
+      "error": null
+    },
+    "2018-03-06": {
+      "day": "2018-03-06",
+      "status": "ok",
+      "legacy_rows": 115,
+      "v2_fixtures_rows": 115,
+      "v2_stats_rows": 115,
+      "error": null
+    },
+    "2018-03-07": {
+      "day": "2018-03-07",
+      "status": "ok",
+      "legacy_rows": 159,
+      "v2_fixtures_rows": 159,
+      "v2_stats_rows": 159,
+      "error": null
+    },
+    "2018-03-08": {
+      "day": "2018-03-08",
+      "status": "ok",
+      "legacy_rows": 67,
+      "v2_fixtures_rows": 67,
+      "v2_stats_rows": 67,
+      "error": null
+    },
+    "2018-03-09": {
+      "day": "2018-03-09",
+      "status": "ok",
+      "legacy_rows": 162,
+      "v2_fixtures_rows": 162,
+      "v2_stats_rows": 162,
+      "error": null
+    },
+    "2018-03-10": {
+      "day": "2018-03-10",
+      "status": "ok",
+      "legacy_rows": 550,
+      "v2_fixtures_rows": 550,
+      "v2_stats_rows": 550,
+      "error": null
+    },
+    "2018-03-11": {
+      "day": "2018-03-11",
+      "status": "ok",
+      "legacy_rows": 507,
+      "v2_fixtures_rows": 507,
+      "v2_stats_rows": 507,
+      "error": null
+    },
+    "2018-03-12": {
+      "day": "2018-03-12",
+      "status": "ok",
+      "legacy_rows": 81,
+      "v2_fixtures_rows": 81,
+      "v2_stats_rows": 81,
+      "error": null
+    },
+    "2018-03-13": {
+      "day": "2018-03-13",
+      "status": "ok",
+      "legacy_rows": 102,
+      "v2_fixtures_rows": 102,
+      "v2_stats_rows": 102,
+      "error": null
+    },
+    "2018-03-14": {
+      "day": "2018-03-14",
+      "status": "ok",
+      "legacy_rows": 141,
+      "v2_fixtures_rows": 141,
+      "v2_stats_rows": 141,
+      "error": null
+    },
+    "2018-03-15": {
+      "day": "2018-03-15",
+      "status": "ok",
+      "legacy_rows": 47,
+      "v2_fixtures_rows": 47,
+      "v2_stats_rows": 47,
+      "error": null
+    },
+    "2018-03-16": {
+      "day": "2018-03-16",
+      "status": "ok",
+      "legacy_rows": 166,
+      "v2_fixtures_rows": 166,
+      "v2_stats_rows": 166,
+      "error": null
+    },
+    "2018-03-17": {
+      "day": "2018-03-17",
+      "status": "ok",
+      "legacy_rows": 603,
+      "v2_fixtures_rows": 603,
+      "v2_stats_rows": 603,
+      "error": null
+    },
+    "2018-03-18": {
+      "day": "2018-03-18",
+      "status": "ok",
+      "legacy_rows": 488,
+      "v2_fixtures_rows": 488,
+      "v2_stats_rows": 488,
+      "error": null
+    },
+    "2018-03-19": {
+      "day": "2018-03-19",
+      "status": "ok",
+      "legacy_rows": 63,
+      "v2_fixtures_rows": 63,
+      "v2_stats_rows": 63,
+      "error": null
+    },
+    "2018-03-20": {
+      "day": "2018-03-20",
+      "status": "ok",
+      "legacy_rows": 52,
+      "v2_fixtures_rows": 52,
+      "v2_stats_rows": 52,
+      "error": null
+    },
+    "2018-03-21": {
+      "day": "2018-03-21",
+      "status": "ok",
+      "legacy_rows": 123,
+      "v2_fixtures_rows": 123,
+      "v2_stats_rows": 123,
+      "error": null
+    },
+    "2018-03-22": {
+      "day": "2018-03-22",
+      "status": "ok",
+      "legacy_rows": 63,
+      "v2_fixtures_rows": 63,
+      "v2_stats_rows": 63,
+      "error": null
+    },
+    "2018-03-23": {
+      "day": "2018-03-23",
+      "status": "ok",
+      "legacy_rows": 103,
+      "v2_fixtures_rows": 103,
+      "v2_stats_rows": 103,
+      "error": null
+    },
+    "2018-03-24": {
+      "day": "2018-03-24",
+      "status": "ok",
+      "legacy_rows": 399,
+      "v2_fixtures_rows": 399,
+      "v2_stats_rows": 399,
+      "error": null
+    },
+    "2018-03-25": {
+      "day": "2018-03-25",
+      "status": "ok",
+      "legacy_rows": 347,
+      "v2_fixtures_rows": 347,
+      "v2_stats_rows": 347,
+      "error": null
+    },
+    "2018-03-26": {
+      "day": "2018-03-26",
+      "status": "ok",
+      "legacy_rows": 39,
+      "v2_fixtures_rows": 39,
+      "v2_stats_rows": 39,
+      "error": null
+    },
+    "2018-03-27": {
+      "day": "2018-03-27",
+      "status": "ok",
+      "legacy_rows": 112,
+      "v2_fixtures_rows": 112,
+      "v2_stats_rows": 112,
+      "error": null
+    },
+    "2018-03-28": {
+      "day": "2018-03-28",
+      "status": "ok",
+      "legacy_rows": 130,
+      "v2_fixtures_rows": 130,
+      "v2_stats_rows": 130,
+      "error": null
+    },
+    "2018-03-29": {
+      "day": "2018-03-29",
+      "status": "ok",
+      "legacy_rows": 126,
+      "v2_fixtures_rows": 126,
+      "v2_stats_rows": 126,
+      "error": null
+    },
+    "2018-03-30": {
+      "day": "2018-03-30",
+      "status": "ok",
+      "legacy_rows": 208,
+      "v2_fixtures_rows": 208,
+      "v2_stats_rows": 208,
+      "error": null
+    },
+    "2018-03-31": {
+      "day": "2018-03-31",
+      "status": "ok",
+      "legacy_rows": 554,
+      "v2_fixtures_rows": 554,
+      "v2_stats_rows": 554,
+      "error": null
+    },
+    "2018-04-01": {
+      "day": "2018-04-01",
+      "status": "ok",
+      "legacy_rows": 402,
+      "v2_fixtures_rows": 402,
+      "v2_stats_rows": 402,
+      "error": null
+    },
+    "2018-04-02": {
+      "day": "2018-04-02",
+      "status": "ok",
+      "legacy_rows": 186,
+      "v2_fixtures_rows": 186,
+      "v2_stats_rows": 186,
+      "error": null
+    },
+    "2018-04-03": {
+      "day": "2018-04-03",
+      "status": "ok",
+      "legacy_rows": 108,
+      "v2_fixtures_rows": 108,
+      "v2_stats_rows": 108,
+      "error": null
+    },
+    "2018-04-04": {
+      "day": "2018-04-04",
+      "status": "ok",
+      "legacy_rows": 227,
+      "v2_fixtures_rows": 227,
+      "v2_stats_rows": 227,
+      "error": null
+    },
+    "2018-04-05": {
+      "day": "2018-04-05",
+      "status": "ok",
+      "legacy_rows": 81,
+      "v2_fixtures_rows": 81,
+      "v2_stats_rows": 81,
+      "error": null
+    },
+    "2018-04-06": {
+      "day": "2018-04-06",
+      "status": "ok",
+      "legacy_rows": 182,
+      "v2_fixtures_rows": 182,
+      "v2_stats_rows": 182,
+      "error": null
+    },
+    "2018-04-07": {
+      "day": "2018-04-07",
+      "status": "ok",
+      "legacy_rows": 684,
+      "v2_fixtures_rows": 684,
+      "v2_stats_rows": 684,
+      "error": null
+    },
+    "2018-04-08": {
+      "day": "2018-04-08",
+      "status": "ok",
+      "legacy_rows": 531,
+      "v2_fixtures_rows": 531,
+      "v2_stats_rows": 531,
+      "error": null
+    },
+    "2018-04-09": {
+      "day": "2018-04-09",
+      "status": "ok",
+      "legacy_rows": 76,
+      "v2_fixtures_rows": 76,
+      "v2_stats_rows": 76,
+      "error": null
+    },
+    "2018-04-10": {
+      "day": "2018-04-10",
+      "status": "ok",
+      "legacy_rows": 103,
+      "v2_fixtures_rows": 103,
+      "v2_stats_rows": 103,
+      "error": null
+    },
+    "2018-04-11": {
+      "day": "2018-04-11",
+      "status": "ok",
+      "legacy_rows": 196,
+      "v2_fixtures_rows": 196,
+      "v2_stats_rows": 196,
+      "error": null
+    },
+    "2018-04-12": {
+      "day": "2018-04-12",
+      "status": "ok",
+      "legacy_rows": 78,
+      "v2_fixtures_rows": 78,
+      "v2_stats_rows": 78,
+      "error": null
+    },
+    "2018-04-13": {
+      "day": "2018-04-13",
+      "status": "ok",
+      "legacy_rows": 189,
+      "v2_fixtures_rows": 189,
+      "v2_stats_rows": 189,
+      "error": null
+    },
+    "2018-04-14": {
+      "day": "2018-04-14",
+      "status": "ok",
+      "legacy_rows": 707,
+      "v2_fixtures_rows": 707,
+      "v2_stats_rows": 707,
+      "error": null
+    },
+    "2018-04-15": {
+      "day": "2018-04-15",
+      "status": "ok",
+      "legacy_rows": 577,
+      "v2_fixtures_rows": 577,
+      "v2_stats_rows": 577,
+      "error": null
+    },
+    "2018-04-16": {
+      "day": "2018-04-16",
+      "status": "ok",
+      "legacy_rows": 81,
+      "v2_fixtures_rows": 81,
+      "v2_stats_rows": 81,
+      "error": null
+    },
+    "2018-04-17": {
+      "day": "2018-04-17",
+      "status": "ok",
+      "legacy_rows": 137,
+      "v2_fixtures_rows": 137,
+      "v2_stats_rows": 137,
+      "error": null
+    },
+    "2018-04-18": {
+      "day": "2018-04-18",
+      "status": "ok",
+      "legacy_rows": 195,
+      "v2_fixtures_rows": 195,
+      "v2_stats_rows": 195,
+      "error": null
+    },
+    "2018-04-19": {
+      "day": "2018-04-19",
+      "status": "ok",
+      "legacy_rows": 83,
+      "v2_fixtures_rows": 83,
+      "v2_stats_rows": 83,
+      "error": null
+    },
+    "2018-04-20": {
+      "day": "2018-04-20",
+      "status": "ok",
+      "legacy_rows": 200,
+      "v2_fixtures_rows": 200,
+      "v2_stats_rows": 200,
+      "error": null
+    },
+    "2018-04-21": {
+      "day": "2018-04-21",
+      "status": "ok",
+      "legacy_rows": 694,
+      "v2_fixtures_rows": 694,
+      "v2_stats_rows": 694,
+      "error": null
+    },
+    "2018-04-22": {
+      "day": "2018-04-22",
+      "status": "ok",
+      "legacy_rows": 607,
+      "v2_fixtures_rows": 607,
+      "v2_stats_rows": 607,
+      "error": null
+    },
+    "2018-04-23": {
+      "day": "2018-04-23",
+      "status": "ok",
+      "legacy_rows": 99,
+      "v2_fixtures_rows": 99,
+      "v2_stats_rows": 99,
+      "error": null
+    },
+    "2018-04-24": {
+      "day": "2018-04-24",
+      "status": "ok",
+      "legacy_rows": 126,
+      "v2_fixtures_rows": 126,
+      "v2_stats_rows": 126,
+      "error": null
+    },
+    "2018-04-25": {
+      "day": "2018-04-25",
+      "status": "ok",
+      "legacy_rows": 173,
+      "v2_fixtures_rows": 173,
+      "v2_stats_rows": 173,
+      "error": null
+    },
+    "2018-04-26": {
+      "day": "2018-04-26",
+      "status": "ok",
+      "legacy_rows": 59,
+      "v2_fixtures_rows": 59,
+      "v2_stats_rows": 59,
+      "error": null
+    },
+    "2018-04-27": {
+      "day": "2018-04-27",
+      "status": "ok",
+      "legacy_rows": 192,
+      "v2_fixtures_rows": 192,
+      "v2_stats_rows": 192,
+      "error": null
+    },
+    "2018-04-28": {
+      "day": "2018-04-28",
+      "status": "ok",
+      "legacy_rows": 744,
+      "v2_fixtures_rows": 744,
+      "v2_stats_rows": 744,
+      "error": null
+    },
+    "2018-04-29": {
+      "day": "2018-04-29",
+      "status": "ok",
+      "legacy_rows": 571,
+      "v2_fixtures_rows": 571,
+      "v2_stats_rows": 571,
+      "error": null
+    },
+    "2018-04-30": {
+      "day": "2018-04-30",
+      "status": "ok",
+      "legacy_rows": 81,
+      "v2_fixtures_rows": 81,
+      "v2_stats_rows": 81,
+      "error": null
+    },
+    "2018-05-01": {
+      "day": "2018-05-01",
+      "status": "ok",
+      "legacy_rows": 97,
+      "v2_fixtures_rows": 97,
+      "v2_stats_rows": 97,
+      "error": null
+    },
+    "2018-05-02": {
+      "day": "2018-05-02",
+      "status": "ok",
+      "legacy_rows": 184,
+      "v2_fixtures_rows": 184,
+      "v2_stats_rows": 184,
+      "error": null
+    },
+    "2018-05-03": {
+      "day": "2018-05-03",
+      "status": "ok",
+      "legacy_rows": 73,
+      "v2_fixtures_rows": 73,
+      "v2_stats_rows": 73,
+      "error": null
+    },
+    "2018-05-04": {
+      "day": "2018-05-04",
+      "status": "ok",
+      "legacy_rows": 140,
+      "v2_fixtures_rows": 140,
+      "v2_stats_rows": 140,
+      "error": null
+    },
+    "2018-05-05": {
+      "day": "2018-05-05",
+      "status": "ok",
+      "legacy_rows": 658,
+      "v2_fixtures_rows": 658,
+      "v2_stats_rows": 658,
+      "error": null
+    },
+    "2018-05-06": {
+      "day": "2018-05-06",
+      "status": "ok",
+      "legacy_rows": 562,
+      "v2_fixtures_rows": 562,
+      "v2_stats_rows": 562,
+      "error": null
+    },
+    "2018-05-07": {
+      "day": "2018-05-07",
+      "status": "ok",
+      "legacy_rows": 74,
+      "v2_fixtures_rows": 74,
+      "v2_stats_rows": 74,
+      "error": null
+    },
+    "2018-05-08": {
+      "day": "2018-05-08",
+      "status": "ok",
+      "legacy_rows": 53,
+      "v2_fixtures_rows": 53,
+      "v2_stats_rows": 53,
+      "error": null
+    },
+    "2018-05-09": {
+      "day": "2018-05-09",
+      "status": "ok",
+      "legacy_rows": 140,
+      "v2_fixtures_rows": 140,
+      "v2_stats_rows": 140,
+      "error": null
+    },
+    "2018-05-10": {
+      "day": "2018-05-10",
+      "status": "ok",
+      "legacy_rows": 113,
+      "v2_fixtures_rows": 113,
+      "v2_stats_rows": 113,
+      "error": null
+    },
+    "2018-05-11": {
+      "day": "2018-05-11",
+      "status": "ok",
+      "legacy_rows": 155,
+      "v2_fixtures_rows": 155,
+      "v2_stats_rows": 155,
+      "error": null
+    },
+    "2018-05-12": {
+      "day": "2018-05-12",
+      "status": "ok",
+      "legacy_rows": 568,
+      "v2_fixtures_rows": 568,
+      "v2_stats_rows": 568,
+      "error": null
+    },
+    "2018-05-13": {
+      "day": "2018-05-13",
+      "status": "ok",
+      "legacy_rows": 483,
+      "v2_fixtures_rows": 483,
+      "v2_stats_rows": 483,
+      "error": null
+    },
+    "2018-05-14": {
+      "day": "2018-05-14",
+      "status": "ok",
+      "legacy_rows": 71,
+      "v2_fixtures_rows": 71,
+      "v2_stats_rows": 71,
+      "error": null
+    },
+    "2018-05-15": {
+      "day": "2018-05-15",
+      "status": "ok",
+      "legacy_rows": 57,
+      "v2_fixtures_rows": 57,
+      "v2_stats_rows": 57,
+      "error": null
+    },
+    "2018-05-16": {
+      "day": "2018-05-16",
+      "status": "ok",
+      "legacy_rows": 147,
+      "v2_fixtures_rows": 147,
+      "v2_stats_rows": 147,
+      "error": null
+    },
+    "2018-05-17": {
+      "day": "2018-05-17",
+      "status": "ok",
+      "legacy_rows": 60,
+      "v2_fixtures_rows": 60,
+      "v2_stats_rows": 60,
+      "error": null
+    },
+    "2018-05-18": {
+      "day": "2018-05-18",
+      "status": "ok",
+      "legacy_rows": 137,
+      "v2_fixtures_rows": 137,
+      "v2_stats_rows": 137,
+      "error": null
+    },
+    "2018-05-19": {
+      "day": "2018-05-19",
+      "status": "ok",
+      "legacy_rows": 470,
+      "v2_fixtures_rows": 470,
+      "v2_stats_rows": 470,
+      "error": null
+    },
+    "2018-05-20": {
+      "day": "2018-05-20",
+      "status": "ok",
+      "legacy_rows": 371,
+      "v2_fixtures_rows": 371,
+      "v2_stats_rows": 371,
+      "error": null
+    },
+    "2018-05-21": {
+      "day": "2018-05-21",
+      "status": "ok",
+      "legacy_rows": 97,
+      "v2_fixtures_rows": 97,
+      "v2_stats_rows": 97,
+      "error": null
+    },
+    "2018-05-22": {
+      "day": "2018-05-22",
+      "status": "ok",
+      "legacy_rows": 62,
+      "v2_fixtures_rows": 62,
+      "v2_stats_rows": 62,
+      "error": null
+    },
+    "2018-05-23": {
+      "day": "2018-05-23",
+      "status": "ok",
+      "legacy_rows": 115,
+      "v2_fixtures_rows": 115,
+      "v2_stats_rows": 115,
+      "error": null
+    },
+    "2018-05-24": {
+      "day": "2018-05-24",
+      "status": "ok",
+      "legacy_rows": 51,
+      "v2_fixtures_rows": 51,
+      "v2_stats_rows": 51,
+      "error": null
+    },
+    "2018-05-25": {
+      "day": "2018-05-25",
+      "status": "ok",
+      "legacy_rows": 81,
+      "v2_fixtures_rows": 81,
+      "v2_stats_rows": 81,
+      "error": null
+    },
+    "2018-05-26": {
+      "day": "2018-05-26",
+      "status": "ok",
+      "legacy_rows": 306,
+      "v2_fixtures_rows": 306,
+      "v2_stats_rows": 306,
+      "error": null
+    },
+    "2018-05-27": {
+      "day": "2018-05-27",
+      "status": "ok",
+      "legacy_rows": 335,
+      "v2_fixtures_rows": 335,
+      "v2_stats_rows": 335,
+      "error": null
+    },
+    "2018-05-28": {
+      "day": "2018-05-28",
+      "status": "ok",
+      "legacy_rows": 60,
+      "v2_fixtures_rows": 60,
+      "v2_stats_rows": 60,
+      "error": null
+    },
+    "2018-05-29": {
+      "day": "2018-05-29",
+      "status": "ok",
+      "legacy_rows": 30,
+      "v2_fixtures_rows": 30,
+      "v2_stats_rows": 30,
+      "error": null
+    },
+    "2018-05-30": {
+      "day": "2018-05-30",
+      "status": "ok",
+      "legacy_rows": 77,
+      "v2_fixtures_rows": 77,
+      "v2_stats_rows": 77,
+      "error": null
+    },
+    "2018-05-31": {
+      "day": "2018-05-31",
+      "status": "ok",
+      "legacy_rows": 75,
+      "v2_fixtures_rows": 75,
+      "v2_stats_rows": 75,
+      "error": null
+    },
+    "2018-06-01": {
+      "day": "2018-06-01",
+      "status": "ok",
+      "legacy_rows": 54,
+      "v2_fixtures_rows": 54,
+      "v2_stats_rows": 54,
+      "error": null
+    },
+    "2018-06-02": {
+      "day": "2018-06-02",
+      "status": "ok",
+      "legacy_rows": 293,
+      "v2_fixtures_rows": 293,
+      "v2_stats_rows": 293,
+      "error": null
+    },
+    "2018-06-03": {
+      "day": "2018-06-03",
+      "status": "ok",
+      "legacy_rows": 224,
+      "v2_fixtures_rows": 224,
+      "v2_stats_rows": 224,
+      "error": null
+    },
+    "2018-06-04": {
+      "day": "2018-06-04",
+      "status": "ok",
+      "legacy_rows": 28,
+      "v2_fixtures_rows": 28,
+      "v2_stats_rows": 28,
+      "error": null
+    },
+    "2018-06-05": {
+      "day": "2018-06-05",
+      "status": "ok",
+      "legacy_rows": 39,
+      "v2_fixtures_rows": 39,
+      "v2_stats_rows": 39,
+      "error": null
+    },
+    "2018-06-06": {
+      "day": "2018-06-06",
+      "status": "ok",
+      "legacy_rows": 106,
+      "v2_fixtures_rows": 106,
+      "v2_stats_rows": 106,
+      "error": null
+    },
+    "2018-06-07": {
+      "day": "2018-06-07",
+      "status": "ok",
+      "legacy_rows": 37,
+      "v2_fixtures_rows": 37,
+      "v2_stats_rows": 37,
+      "error": null
+    },
+    "2018-06-08": {
+      "day": "2018-06-08",
+      "status": "ok",
+      "legacy_rows": 43,
+      "v2_fixtures_rows": 43,
+      "v2_stats_rows": 43,
+      "error": null
+    },
+    "2018-06-09": {
+      "day": "2018-06-09",
+      "status": "ok",
+      "legacy_rows": 218,
+      "v2_fixtures_rows": 218,
+      "v2_stats_rows": 218,
+      "error": null
+    },
+    "2018-06-10": {
+      "day": "2018-06-10",
+      "status": "ok",
+      "legacy_rows": 198,
+      "v2_fixtures_rows": 198,
+      "v2_stats_rows": 198,
+      "error": null
+    },
+    "2018-06-11": {
+      "day": "2018-06-11",
+      "status": "ok",
+      "legacy_rows": 29,
+      "v2_fixtures_rows": 29,
+      "v2_stats_rows": 29,
+      "error": null
+    },
+    "2018-06-12": {
+      "day": "2018-06-12",
+      "status": "ok",
+      "legacy_rows": 42,
+      "v2_fixtures_rows": 42,
+      "v2_stats_rows": 42,
+      "error": null
+    },
+    "2018-06-13": {
+      "day": "2018-06-13",
+      "status": "ok",
+      "legacy_rows": 79,
+      "v2_fixtures_rows": 79,
+      "v2_stats_rows": 79,
+      "error": null
+    },
+    "2018-06-14": {
+      "day": "2018-06-14",
+      "status": "ok",
+      "legacy_rows": 27,
+      "v2_fixtures_rows": 27,
+      "v2_stats_rows": 27,
+      "error": null
+    },
+    "2018-06-15": {
+      "day": "2018-06-15",
+      "status": "ok",
+      "legacy_rows": 28,
+      "v2_fixtures_rows": 28,
+      "v2_stats_rows": 28,
+      "error": null
+    },
+    "2018-06-16": {
+      "day": "2018-06-16",
+      "status": "ok",
+      "legacy_rows": 207,
+      "v2_fixtures_rows": 207,
+      "v2_stats_rows": 207,
+      "error": null
+    },
+    "2018-06-17": {
+      "day": "2018-06-17",
+      "status": "ok",
+      "legacy_rows": 149,
+      "v2_fixtures_rows": 149,
+      "v2_stats_rows": 149,
+      "error": null
+    },
+    "2018-06-18": {
+      "day": "2018-06-18",
+      "status": "ok",
+      "legacy_rows": 24,
+      "v2_fixtures_rows": 24,
+      "v2_stats_rows": 24,
+      "error": null
+    },
+    "2018-06-19": {
+      "day": "2018-06-19",
+      "status": "ok",
+      "legacy_rows": 17,
+      "v2_fixtures_rows": 17,
+      "v2_stats_rows": 17,
+      "error": null
+    },
+    "2018-06-20": {
+      "day": "2018-06-20",
+      "status": "ok",
+      "legacy_rows": 79,
+      "v2_fixtures_rows": 79,
+      "v2_stats_rows": 79,
+      "error": null
+    },
+    "2018-06-21": {
+      "day": "2018-06-21",
+      "status": "ok",
+      "legacy_rows": 43,
+      "v2_fixtures_rows": 43,
+      "v2_stats_rows": 43,
+      "error": null
+    },
+    "2018-06-22": {
+      "day": "2018-06-22",
+      "status": "ok",
+      "legacy_rows": 31,
+      "v2_fixtures_rows": 31,
+      "v2_stats_rows": 31,
+      "error": null
+    },
+    "2018-06-23": {
+      "day": "2018-06-23",
+      "status": "ok",
+      "legacy_rows": 128,
+      "v2_fixtures_rows": 128,
+      "v2_stats_rows": 128,
+      "error": null
+    },
+    "2018-06-24": {
+      "day": "2018-06-24",
+      "status": "ok",
+      "legacy_rows": 152,
+      "v2_fixtures_rows": 152,
+      "v2_stats_rows": 152,
+      "error": null
+    },
+    "2018-06-25": {
+      "day": "2018-06-25",
+      "status": "ok",
+      "legacy_rows": 20,
+      "v2_fixtures_rows": 20,
+      "v2_stats_rows": 20,
+      "error": null
+    },
+    "2018-06-26": {
+      "day": "2018-06-26",
+      "status": "ok",
+      "legacy_rows": 49,
+      "v2_fixtures_rows": 49,
+      "v2_stats_rows": 49,
+      "error": null
+    },
+    "2018-06-27": {
+      "day": "2018-06-27",
+      "status": "ok",
+      "legacy_rows": 89,
+      "v2_fixtures_rows": 89,
+      "v2_stats_rows": 89,
+      "error": null
+    },
+    "2018-06-28": {
+      "day": "2018-06-28",
+      "status": "ok",
+      "legacy_rows": 34,
+      "v2_fixtures_rows": 34,
+      "v2_stats_rows": 34,
+      "error": null
+    },
+    "2018-06-29": {
+      "day": "2018-06-29",
+      "status": "ok",
+      "legacy_rows": 40,
+      "v2_fixtures_rows": 40,
+      "v2_stats_rows": 40,
+      "error": null
+    },
+    "2018-06-30": {
+      "day": "2018-06-30",
+      "status": "ok",
+      "legacy_rows": 200,
+      "v2_fixtures_rows": 200,
+      "v2_stats_rows": 200,
+      "error": null
+    },
+    "2018-07-01": {
+      "day": "2018-07-01",
+      "status": "ok",
+      "legacy_rows": 170,
+      "v2_fixtures_rows": 170,
+      "v2_stats_rows": 170,
+      "error": null
+    },
+    "2018-07-02": {
+      "day": "2018-07-02",
+      "status": "ok",
+      "legacy_rows": 10,
+      "v2_fixtures_rows": 10,
+      "v2_stats_rows": 10,
+      "error": null
+    },
+    "2018-07-03": {
+      "day": "2018-07-03",
+      "status": "ok",
+      "legacy_rows": 20,
+      "v2_fixtures_rows": 20,
+      "v2_stats_rows": 20,
+      "error": null
+    },
+    "2018-07-04": {
+      "day": "2018-07-04",
+      "status": "ok",
+      "legacy_rows": 73,
+      "v2_fixtures_rows": 73,
+      "v2_stats_rows": 73,
+      "error": null
+    },
+    "2018-07-05": {
+      "day": "2018-07-05",
+      "status": "ok",
+      "legacy_rows": 41,
+      "v2_fixtures_rows": 41,
+      "v2_stats_rows": 41,
+      "error": null
+    },
+    "2018-07-06": {
+      "day": "2018-07-06",
+      "status": "ok",
+      "legacy_rows": 36,
+      "v2_fixtures_rows": 36,
+      "v2_stats_rows": 36,
+      "error": null
+    },
+    "2018-07-07": {
+      "day": "2018-07-07",
+      "status": "ok",
+      "legacy_rows": 173,
+      "v2_fixtures_rows": 173,
+      "v2_stats_rows": 173,
+      "error": null
+    },
+    "2018-07-08": {
+      "day": "2018-07-08",
+      "status": "ok",
+      "legacy_rows": 143,
+      "v2_fixtures_rows": 143,
+      "v2_stats_rows": 143,
+      "error": null
+    },
+    "2018-07-09": {
+      "day": "2018-07-09",
+      "status": "ok",
+      "legacy_rows": 22,
+      "v2_fixtures_rows": 22,
+      "v2_stats_rows": 22,
+      "error": null
+    },
+    "2018-07-10": {
+      "day": "2018-07-10",
+      "status": "ok",
+      "legacy_rows": 20,
+      "v2_fixtures_rows": 20,
+      "v2_stats_rows": 20,
+      "error": null
+    },
+    "2018-07-11": {
+      "day": "2018-07-11",
+      "status": "ok",
+      "legacy_rows": 76,
+      "v2_fixtures_rows": 76,
+      "v2_stats_rows": 76,
+      "error": null
+    },
+    "2018-07-12": {
+      "day": "2018-07-12",
+      "status": "ok",
+      "legacy_rows": 64,
+      "v2_fixtures_rows": 64,
+      "v2_stats_rows": 64,
+      "error": null
+    },
+    "2018-07-13": {
+      "day": "2018-07-13",
+      "status": "ok",
+      "legacy_rows": 38,
+      "v2_fixtures_rows": 38,
+      "v2_stats_rows": 38,
+      "error": null
+    },
+    "2018-07-14": {
+      "day": "2018-07-14",
+      "status": "ok",
+      "legacy_rows": 195,
+      "v2_fixtures_rows": 195,
+      "v2_stats_rows": 195,
+      "error": null
+    },
+    "2018-07-15": {
+      "day": "2018-07-15",
+      "status": "ok",
+      "legacy_rows": 142,
+      "v2_fixtures_rows": 142,
+      "v2_stats_rows": 142,
+      "error": null
+    },
+    "2018-07-16": {
+      "day": "2018-07-16",
+      "status": "ok",
+      "legacy_rows": 35,
+      "v2_fixtures_rows": 35,
+      "v2_stats_rows": 35,
+      "error": null
+    },
+    "2018-07-17": {
+      "day": "2018-07-17",
+      "status": "ok",
+      "legacy_rows": 71,
+      "v2_fixtures_rows": 71,
+      "v2_stats_rows": 71,
+      "error": null
+    },
+    "2018-07-18": {
+      "day": "2018-07-18",
+      "status": "ok",
+      "legacy_rows": 91,
+      "v2_fixtures_rows": 91,
+      "v2_stats_rows": 91,
+      "error": null
+    },
+    "2018-07-19": {
+      "day": "2018-07-19",
+      "status": "ok",
+      "legacy_rows": 75,
+      "v2_fixtures_rows": 75,
+      "v2_stats_rows": 75,
+      "error": null
+    },
+    "2018-07-20": {
+      "day": "2018-07-20",
+      "status": "ok",
+      "legacy_rows": 65,
+      "v2_fixtures_rows": 65,
+      "v2_stats_rows": 65,
+      "error": null
+    },
+    "2018-07-21": {
+      "day": "2018-07-21",
+      "status": "ok",
+      "legacy_rows": 294,
+      "v2_fixtures_rows": 294,
+      "v2_stats_rows": 294,
+      "error": null
+    },
+    "2018-07-22": {
+      "day": "2018-07-22",
+      "status": "ok",
+      "legacy_rows": 277,
+      "v2_fixtures_rows": 277,
+      "v2_stats_rows": 277,
+      "error": null
+    },
+    "2018-07-23": {
+      "day": "2018-07-23",
+      "status": "ok",
+      "legacy_rows": 35,
+      "v2_fixtures_rows": 35,
+      "v2_stats_rows": 35,
+      "error": null
+    },
+    "2018-07-24": {
+      "day": "2018-07-24",
+      "status": "ok",
+      "legacy_rows": 42,
+      "v2_fixtures_rows": 42,
+      "v2_stats_rows": 42,
+      "error": null
+    },
+    "2018-07-25": {
+      "day": "2018-07-25",
+      "status": "ok",
+      "legacy_rows": 71,
+      "v2_fixtures_rows": 71,
+      "v2_stats_rows": 71,
+      "error": null
+    },
+    "2018-07-26": {
+      "day": "2018-07-26",
+      "status": "ok",
+      "legacy_rows": 90,
+      "v2_fixtures_rows": 90,
+      "v2_stats_rows": 90,
+      "error": null
+    },
+    "2018-07-27": {
+      "day": "2018-07-27",
+      "status": "ok",
+      "legacy_rows": 83,
+      "v2_fixtures_rows": 83,
+      "v2_stats_rows": 83,
+      "error": null
+    },
+    "2018-07-28": {
+      "day": "2018-07-28",
+      "status": "ok",
+      "legacy_rows": 316,
+      "v2_fixtures_rows": 316,
+      "v2_stats_rows": 316,
+      "error": null
+    },
+    "2018-07-29": {
+      "day": "2018-07-29",
+      "status": "ok",
+      "legacy_rows": 327,
+      "v2_fixtures_rows": 327,
+      "v2_stats_rows": 327,
+      "error": null
+    },
+    "2018-07-30": {
+      "day": "2018-07-30",
+      "status": "ok",
+      "legacy_rows": 39,
+      "v2_fixtures_rows": 39,
+      "v2_stats_rows": 39,
+      "error": null
+    },
+    "2018-07-31": {
+      "day": "2018-07-31",
+      "status": "ok",
+      "legacy_rows": 26,
+      "v2_fixtures_rows": 26,
+      "v2_stats_rows": 26,
+      "error": null
+    },
+    "2018-08-01": {
+      "day": "2018-08-01",
+      "status": "ok",
+      "legacy_rows": 120,
+      "v2_fixtures_rows": 120,
+      "v2_stats_rows": 120,
+      "error": null
+    },
+    "2018-08-02": {
+      "day": "2018-08-02",
+      "status": "ok",
+      "legacy_rows": 78,
+      "v2_fixtures_rows": 78,
+      "v2_stats_rows": 78,
+      "error": null
+    },
+    "2018-08-03": {
+      "day": "2018-08-03",
+      "status": "ok",
+      "legacy_rows": 103,
+      "v2_fixtures_rows": 103,
+      "v2_stats_rows": 103,
+      "error": null
+    },
+    "2018-08-04": {
+      "day": "2018-08-04",
+      "status": "ok",
+      "legacy_rows": 502,
+      "v2_fixtures_rows": 502,
+      "v2_stats_rows": 502,
+      "error": null
+    },
+    "2018-08-05": {
+      "day": "2018-08-05",
+      "status": "ok",
+      "legacy_rows": 342,
+      "v2_fixtures_rows": 342,
+      "v2_stats_rows": 342,
+      "error": null
+    },
+    "2018-08-06": {
+      "day": "2018-08-06",
+      "status": "ok",
+      "legacy_rows": 53,
+      "v2_fixtures_rows": 53,
+      "v2_stats_rows": 53,
+      "error": null
+    },
+    "2018-08-07": {
+      "day": "2018-08-07",
+      "status": "ok",
+      "legacy_rows": 69,
+      "v2_fixtures_rows": 69,
+      "v2_stats_rows": 69,
+      "error": null
+    },
+    "2018-08-08": {
+      "day": "2018-08-08",
+      "status": "ok",
+      "legacy_rows": 94,
+      "v2_fixtures_rows": 94,
+      "v2_stats_rows": 94,
+      "error": null
+    },
+    "2018-08-09": {
+      "day": "2018-08-09",
+      "status": "ok",
+      "legacy_rows": 61,
+      "v2_fixtures_rows": 61,
+      "v2_stats_rows": 61,
+      "error": null
+    },
+    "2018-08-10": {
+      "day": "2018-08-10",
+      "status": "ok",
+      "legacy_rows": 148,
+      "v2_fixtures_rows": 148,
+      "v2_stats_rows": 148,
+      "error": null
+    },
+    "2018-08-11": {
+      "day": "2018-08-11",
+      "status": "ok",
+      "legacy_rows": 603,
+      "v2_fixtures_rows": 603,
+      "v2_stats_rows": 603,
+      "error": null
+    },
+    "2018-08-12": {
+      "day": "2018-08-12",
+      "status": "ok",
+      "legacy_rows": 421,
+      "v2_fixtures_rows": 421,
+      "v2_stats_rows": 421,
+      "error": null
+    },
+    "2018-08-13": {
+      "day": "2018-08-13",
+      "status": "ok",
+      "legacy_rows": 49,
+      "v2_fixtures_rows": 49,
+      "v2_stats_rows": 49,
+      "error": null
+    },
+    "2018-08-14": {
+      "day": "2018-08-14",
+      "status": "ok",
+      "legacy_rows": 112,
+      "v2_fixtures_rows": 112,
+      "v2_stats_rows": 112,
+      "error": null
+    },
+    "2018-08-15": {
+      "day": "2018-08-15",
+      "status": "ok",
+      "legacy_rows": 139,
+      "v2_fixtures_rows": 139,
+      "v2_stats_rows": 139,
+      "error": null
+    },
+    "2018-08-16": {
+      "day": "2018-08-16",
+      "status": "ok",
+      "legacy_rows": 82,
+      "v2_fixtures_rows": 82,
+      "v2_stats_rows": 82,
+      "error": null
+    },
+    "2018-08-17": {
+      "day": "2018-08-17",
+      "status": "ok",
+      "legacy_rows": 174,
+      "v2_fixtures_rows": 174,
+      "v2_stats_rows": 174,
+      "error": null
+    },
+    "2018-08-18": {
+      "day": "2018-08-18",
+      "status": "ok",
+      "legacy_rows": 673,
+      "v2_fixtures_rows": 673,
+      "v2_stats_rows": 673,
+      "error": null
+    },
+    "2018-08-19": {
+      "day": "2018-08-19",
+      "status": "ok",
+      "legacy_rows": 452,
+      "v2_fixtures_rows": 452,
+      "v2_stats_rows": 452,
+      "error": null
+    },
+    "2018-08-20": {
+      "day": "2018-08-20",
+      "status": "ok",
+      "legacy_rows": 79,
+      "v2_fixtures_rows": 79,
+      "v2_stats_rows": 79,
+      "error": null
+    },
+    "2018-08-21": {
+      "day": "2018-08-21",
+      "status": "ok",
+      "legacy_rows": 62,
+      "v2_fixtures_rows": 62,
+      "v2_stats_rows": 62,
+      "error": null
+    },
+    "2018-08-22": {
+      "day": "2018-08-22",
+      "status": "ok",
+      "legacy_rows": 174,
+      "v2_fixtures_rows": 174,
+      "v2_stats_rows": 174,
+      "error": null
+    },
+    "2018-08-23": {
+      "day": "2018-08-23",
+      "status": "ok",
+      "legacy_rows": 84,
+      "v2_fixtures_rows": 84,
+      "v2_stats_rows": 84,
+      "error": null
+    },
+    "2018-08-24": {
+      "day": "2018-08-24",
+      "status": "ok",
+      "legacy_rows": 165,
+      "v2_fixtures_rows": 165,
+      "v2_stats_rows": 165,
+      "error": null
+    },
+    "2018-08-25": {
+      "day": "2018-08-25",
+      "status": "ok",
+      "legacy_rows": 670,
+      "v2_fixtures_rows": 670,
+      "v2_stats_rows": 670,
+      "error": null
+    },
+    "2018-08-26": {
+      "day": "2018-08-26",
+      "status": "ok",
+      "legacy_rows": 526,
+      "v2_fixtures_rows": 526,
+      "v2_stats_rows": 526,
+      "error": null
+    },
+    "2018-08-27": {
+      "day": "2018-08-27",
+      "status": "ok",
+      "legacy_rows": 97,
+      "v2_fixtures_rows": 97,
+      "v2_stats_rows": 97,
+      "error": null
+    },
+    "2018-08-28": {
+      "day": "2018-08-28",
+      "status": "ok",
+      "legacy_rows": 118,
+      "v2_fixtures_rows": 118,
+      "v2_stats_rows": 118,
+      "error": null
+    },
+    "2018-08-29": {
+      "day": "2018-08-29",
+      "status": "ok",
+      "legacy_rows": 149,
+      "v2_fixtures_rows": 149,
+      "v2_stats_rows": 149,
+      "error": null
+    },
+    "2018-08-30": {
+      "day": "2018-08-30",
+      "status": "ok",
+      "legacy_rows": 86,
+      "v2_fixtures_rows": 86,
+      "v2_stats_rows": 86,
+      "error": null
+    },
+    "2018-08-31": {
+      "day": "2018-08-31",
+      "status": "ok",
+      "legacy_rows": 207,
+      "v2_fixtures_rows": 207,
+      "v2_stats_rows": 207,
+      "error": null
+    },
+    "2018-09-01": {
+      "day": "2018-09-01",
+      "status": "ok",
+      "legacy_rows": 725,
+      "v2_fixtures_rows": 725,
+      "v2_stats_rows": 725,
+      "error": null
+    },
+    "2018-09-02": {
+      "day": "2018-09-02",
+      "status": "ok",
+      "legacy_rows": 498,
+      "v2_fixtures_rows": 498,
+      "v2_stats_rows": 498,
+      "error": null
+    },
+    "2018-09-03": {
+      "day": "2018-09-03",
+      "status": "ok",
+      "legacy_rows": 45,
+      "v2_fixtures_rows": 45,
+      "v2_stats_rows": 45,
+      "error": null
+    },
+    "2018-09-04": {
+      "day": "2018-09-04",
+      "status": "ok",
+      "legacy_rows": 78,
+      "v2_fixtures_rows": 78,
+      "v2_stats_rows": 78,
+      "error": null
+    },
+    "2018-09-05": {
+      "day": "2018-09-05",
+      "status": "ok",
+      "legacy_rows": 103,
+      "v2_fixtures_rows": 103,
+      "v2_stats_rows": 103,
+      "error": null
+    },
+    "2018-09-06": {
+      "day": "2018-09-06",
+      "status": "ok",
+      "legacy_rows": 47,
+      "v2_fixtures_rows": 47,
+      "v2_stats_rows": 47,
+      "error": null
+    },
+    "2018-09-07": {
+      "day": "2018-09-07",
+      "status": "ok",
+      "legacy_rows": 129,
+      "v2_fixtures_rows": 129,
+      "v2_stats_rows": 129,
+      "error": null
+    },
+    "2018-09-08": {
+      "day": "2018-09-08",
+      "status": "ok",
+      "legacy_rows": 465,
+      "v2_fixtures_rows": 465,
+      "v2_stats_rows": 465,
+      "error": null
+    },
+    "2018-09-09": {
+      "day": "2018-09-09",
+      "status": "ok",
+      "legacy_rows": 381,
+      "v2_fixtures_rows": 381,
+      "v2_stats_rows": 381,
+      "error": null
+    },
+    "2018-09-10": {
+      "day": "2018-09-10",
+      "status": "ok",
+      "legacy_rows": 55,
+      "v2_fixtures_rows": 55,
+      "v2_stats_rows": 55,
+      "error": null
+    },
+    "2018-09-11": {
+      "day": "2018-09-11",
+      "status": "ok",
+      "legacy_rows": 69,
+      "v2_fixtures_rows": 69,
+      "v2_stats_rows": 69,
+      "error": null
+    },
+    "2018-09-12": {
+      "day": "2018-09-12",
+      "status": "ok",
+      "legacy_rows": 153,
+      "v2_fixtures_rows": 153,
+      "v2_stats_rows": 153,
+      "error": null
+    },
+    "2018-09-13": {
+      "day": "2018-09-13",
+      "status": "ok",
+      "legacy_rows": 60,
+      "v2_fixtures_rows": 60,
+      "v2_stats_rows": 60,
+      "error": null
+    },
+    "2018-09-14": {
+      "day": "2018-09-14",
+      "status": "ok",
+      "legacy_rows": 205,
+      "v2_fixtures_rows": 205,
+      "v2_stats_rows": 205,
+      "error": null
+    },
+    "2018-09-15": {
+      "day": "2018-09-15",
+      "status": "ok",
+      "legacy_rows": 834,
+      "v2_fixtures_rows": 834,
+      "v2_stats_rows": 834,
+      "error": null
+    },
+    "2018-09-16": {
+      "day": "2018-09-16",
+      "status": "ok",
+      "legacy_rows": 605,
+      "v2_fixtures_rows": 605,
+      "v2_stats_rows": 605,
+      "error": null
+    },
+    "2018-09-17": {
+      "day": "2018-09-17",
+      "status": "ok",
+      "legacy_rows": 99,
+      "v2_fixtures_rows": 99,
+      "v2_stats_rows": 99,
+      "error": null
+    },
+    "2018-09-18": {
+      "day": "2018-09-18",
+      "status": "ok",
+      "legacy_rows": 84,
+      "v2_fixtures_rows": 84,
+      "v2_stats_rows": 84,
+      "error": null
+    },
+    "2018-09-19": {
+      "day": "2018-09-19",
+      "status": "ok",
+      "legacy_rows": 181,
+      "v2_fixtures_rows": 181,
+      "v2_stats_rows": 181,
+      "error": null
+    },
+    "2018-09-20": {
+      "day": "2018-09-20",
+      "status": "ok",
+      "legacy_rows": 95,
+      "v2_fixtures_rows": 95,
+      "v2_stats_rows": 95,
+      "error": null
+    },
+    "2018-09-21": {
+      "day": "2018-09-21",
+      "status": "ok",
+      "legacy_rows": 212,
+      "v2_fixtures_rows": 212,
+      "v2_stats_rows": 212,
+      "error": null
+    },
+    "2018-09-22": {
+      "day": "2018-09-22",
+      "status": "ok",
+      "legacy_rows": 932,
+      "v2_fixtures_rows": 932,
+      "v2_stats_rows": 932,
+      "error": null
+    },
+    "2018-09-23": {
+      "day": "2018-09-23",
+      "status": "ok",
+      "legacy_rows": 607,
+      "v2_fixtures_rows": 607,
+      "v2_stats_rows": 607,
+      "error": null
+    },
+    "2018-09-24": {
+      "day": "2018-09-24",
+      "status": "ok",
+      "legacy_rows": 77,
+      "v2_fixtures_rows": 77,
+      "v2_stats_rows": 77,
+      "error": null
+    },
+    "2018-09-25": {
+      "day": "2018-09-25",
+      "status": "ok",
+      "legacy_rows": 198,
+      "v2_fixtures_rows": 198,
+      "v2_stats_rows": 198,
+      "error": null
+    },
+    "2018-09-26": {
+      "day": "2018-09-26",
+      "status": "ok",
+      "legacy_rows": 302,
+      "v2_fixtures_rows": 302,
+      "v2_stats_rows": 302,
+      "error": null
+    },
+    "2018-09-27": {
+      "day": "2018-09-27",
+      "status": "ok",
+      "legacy_rows": 97,
+      "v2_fixtures_rows": 97,
+      "v2_stats_rows": 97,
+      "error": null
+    },
+    "2018-09-28": {
+      "day": "2018-09-28",
+      "status": "ok",
+      "legacy_rows": 205,
+      "v2_fixtures_rows": 205,
+      "v2_stats_rows": 205,
+      "error": null
+    },
+    "2018-09-29": {
+      "day": "2018-09-29",
+      "status": "ok",
+      "legacy_rows": 720,
+      "v2_fixtures_rows": 720,
+      "v2_stats_rows": 720,
+      "error": null
+    },
+    "2018-09-30": {
+      "day": "2018-09-30",
+      "status": "ok",
+      "legacy_rows": 680,
+      "v2_fixtures_rows": 680,
+      "v2_stats_rows": 680,
+      "error": null
+    },
+    "2018-10-01": {
+      "day": "2018-10-01",
+      "status": "ok",
+      "legacy_rows": 66,
+      "v2_fixtures_rows": 66,
+      "v2_stats_rows": 66,
+      "error": null
+    },
+    "2018-10-02": {
+      "day": "2018-10-02",
+      "status": "ok",
+      "legacy_rows": 128,
+      "v2_fixtures_rows": 128,
+      "v2_stats_rows": 128,
+      "error": null
+    },
+    "2018-10-03": {
+      "day": "2018-10-03",
+      "status": "ok",
+      "legacy_rows": 163,
+      "v2_fixtures_rows": 163,
+      "v2_stats_rows": 163,
+      "error": null
+    },
+    "2018-10-04": {
+      "day": "2018-10-04",
+      "status": "ok",
+      "legacy_rows": 78,
+      "v2_fixtures_rows": 78,
+      "v2_stats_rows": 78,
+      "error": null
+    },
+    "2018-10-05": {
+      "day": "2018-10-05",
+      "status": "ok",
+      "legacy_rows": 197,
+      "v2_fixtures_rows": 197,
+      "v2_stats_rows": 197,
+      "error": null
+    },
+    "2018-10-06": {
+      "day": "2018-10-06",
+      "status": "ok",
+      "legacy_rows": 769,
+      "v2_fixtures_rows": 769,
+      "v2_stats_rows": 769,
+      "error": null
+    },
+    "2018-10-07": {
+      "day": "2018-10-07",
+      "status": "ok",
+      "legacy_rows": 538,
+      "v2_fixtures_rows": 538,
+      "v2_stats_rows": 538,
+      "error": null
+    },
+    "2018-10-08": {
+      "day": "2018-10-08",
+      "status": "ok",
+      "legacy_rows": 55,
+      "v2_fixtures_rows": 55,
+      "v2_stats_rows": 55,
+      "error": null
+    },
+    "2018-10-09": {
+      "day": "2018-10-09",
+      "status": "ok",
+      "legacy_rows": 66,
+      "v2_fixtures_rows": 66,
+      "v2_stats_rows": 66,
+      "error": null
+    },
+    "2018-10-10": {
+      "day": "2018-10-10",
+      "status": "ok",
+      "legacy_rows": 72,
+      "v2_fixtures_rows": 72,
+      "v2_stats_rows": 72,
+      "error": null
+    },
+    "2018-10-11": {
+      "day": "2018-10-11",
+      "status": "ok",
+      "legacy_rows": 53,
+      "v2_fixtures_rows": 53,
+      "v2_stats_rows": 53,
+      "error": null
+    },
+    "2018-10-12": {
+      "day": "2018-10-12",
+      "status": "ok",
+      "legacy_rows": 84,
+      "v2_fixtures_rows": 84,
+      "v2_stats_rows": 84,
+      "error": null
+    },
+    "2018-10-13": {
+      "day": "2018-10-13",
+      "status": "ok",
+      "legacy_rows": 537,
+      "v2_fixtures_rows": 537,
+      "v2_stats_rows": 537,
+      "error": null
+    },
+    "2018-10-14": {
+      "day": "2018-10-14",
+      "status": "ok",
+      "legacy_rows": 300,
+      "v2_fixtures_rows": 300,
+      "v2_stats_rows": 300,
+      "error": null
+    },
+    "2018-10-15": {
+      "day": "2018-10-15",
+      "status": "ok",
+      "legacy_rows": 68,
+      "v2_fixtures_rows": 68,
+      "v2_stats_rows": 68,
+      "error": null
+    },
+    "2018-10-16": {
+      "day": "2018-10-16",
+      "status": "ok",
+      "legacy_rows": 99,
+      "v2_fixtures_rows": 99,
+      "v2_stats_rows": 99,
+      "error": null
+    },
+    "2018-10-17": {
+      "day": "2018-10-17",
+      "status": "ok",
+      "legacy_rows": 121,
+      "v2_fixtures_rows": 121,
+      "v2_stats_rows": 121,
+      "error": null
+    },
+    "2018-10-18": {
+      "day": "2018-10-18",
+      "status": "ok",
+      "legacy_rows": 49,
+      "v2_fixtures_rows": 49,
+      "v2_stats_rows": 49,
+      "error": null
+    },
+    "2018-10-19": {
+      "day": "2018-10-19",
+      "status": "ok",
+      "legacy_rows": 229,
+      "v2_fixtures_rows": 229,
+      "v2_stats_rows": 229,
+      "error": null
+    },
+    "2018-10-20": {
+      "day": "2018-10-20",
+      "status": "ok",
+      "legacy_rows": 802,
+      "v2_fixtures_rows": 802,
+      "v2_stats_rows": 802,
+      "error": null
+    },
+    "2018-10-21": {
+      "day": "2018-10-21",
+      "status": "ok",
+      "legacy_rows": 640,
+      "v2_fixtures_rows": 640,
+      "v2_stats_rows": 640,
+      "error": null
+    },
+    "2018-10-22": {
+      "day": "2018-10-22",
+      "status": "ok",
+      "legacy_rows": 58,
+      "v2_fixtures_rows": 58,
+      "v2_stats_rows": 58,
+      "error": null
+    },
+    "2018-10-23": {
+      "day": "2018-10-23",
+      "status": "ok",
+      "legacy_rows": 105,
+      "v2_fixtures_rows": 105,
+      "v2_stats_rows": 105,
+      "error": null
+    },
+    "2018-10-24": {
+      "day": "2018-10-24",
+      "status": "ok",
+      "legacy_rows": 138,
+      "v2_fixtures_rows": 138,
+      "v2_stats_rows": 138,
+      "error": null
+    },
+    "2018-10-25": {
+      "day": "2018-10-25",
+      "status": "ok",
+      "legacy_rows": 84,
+      "v2_fixtures_rows": 84,
+      "v2_stats_rows": 84,
+      "error": null
+    },
+    "2018-10-26": {
+      "day": "2018-10-26",
+      "status": "ok",
+      "legacy_rows": 192,
+      "v2_fixtures_rows": 192,
+      "v2_stats_rows": 192,
+      "error": null
+    },
+    "2018-10-27": {
+      "day": "2018-10-27",
+      "status": "ok",
+      "legacy_rows": 808,
+      "v2_fixtures_rows": 808,
+      "v2_stats_rows": 808,
+      "error": null
+    },
+    "2018-10-28": {
+      "day": "2018-10-28",
+      "status": "ok",
+      "legacy_rows": 567,
+      "v2_fixtures_rows": 567,
+      "v2_stats_rows": 567,
+      "error": null
+    },
+    "2018-10-29": {
+      "day": "2018-10-29",
+      "status": "ok",
+      "legacy_rows": 70,
+      "v2_fixtures_rows": 70,
+      "v2_stats_rows": 70,
+      "error": null
+    },
+    "2018-10-30": {
+      "day": "2018-10-30",
+      "status": "ok",
+      "legacy_rows": 158,
+      "v2_fixtures_rows": 158,
+      "v2_stats_rows": 158,
+      "error": null
+    },
+    "2018-10-31": {
+      "day": "2018-10-31",
+      "status": "ok",
+      "legacy_rows": 262,
+      "v2_fixtures_rows": 262,
+      "v2_stats_rows": 262,
+      "error": null
+    },
+    "2018-11-01": {
+      "day": "2018-11-01",
+      "status": "ok",
+      "legacy_rows": 98,
+      "v2_fixtures_rows": 98,
+      "v2_stats_rows": 98,
+      "error": null
+    },
+    "2018-11-02": {
+      "day": "2018-11-02",
+      "status": "ok",
+      "legacy_rows": 199,
+      "v2_fixtures_rows": 199,
+      "v2_stats_rows": 199,
+      "error": null
+    },
+    "2018-11-03": {
+      "day": "2018-11-03",
+      "status": "ok",
+      "legacy_rows": 740,
+      "v2_fixtures_rows": 740,
+      "v2_stats_rows": 740,
+      "error": null
+    },
+    "2018-11-04": {
+      "day": "2018-11-04",
+      "status": "ok",
+      "legacy_rows": 637,
+      "v2_fixtures_rows": 637,
+      "v2_stats_rows": 637,
+      "error": null
+    },
+    "2018-11-05": {
+      "day": "2018-11-05",
+      "status": "ok",
+      "legacy_rows": 100,
+      "v2_fixtures_rows": 100,
+      "v2_stats_rows": 100,
+      "error": null
+    },
+    "2018-11-06": {
+      "day": "2018-11-06",
+      "status": "ok",
+      "legacy_rows": 110,
+      "v2_fixtures_rows": 110,
+      "v2_stats_rows": 110,
+      "error": null
+    },
+    "2018-11-07": {
+      "day": "2018-11-07",
+      "status": "ok",
+      "legacy_rows": 130,
+      "v2_fixtures_rows": 130,
+      "v2_stats_rows": 130,
+      "error": null
+    },
+    "2018-11-08": {
+      "day": "2018-11-08",
+      "status": "ok",
+      "legacy_rows": 100,
+      "v2_fixtures_rows": 100,
+      "v2_stats_rows": 100,
+      "error": null
+    },
+    "2018-11-09": {
+      "day": "2018-11-09",
+      "status": "ok",
+      "legacy_rows": 187,
+      "v2_fixtures_rows": 187,
+      "v2_stats_rows": 187,
+      "error": null
+    },
+    "2018-11-10": {
+      "day": "2018-11-10",
+      "status": "ok",
+      "legacy_rows": 743,
+      "v2_fixtures_rows": 743,
+      "v2_stats_rows": 743,
+      "error": null
+    },
+    "2018-11-11": {
+      "day": "2018-11-11",
+      "status": "ok",
+      "legacy_rows": 564,
+      "v2_fixtures_rows": 564,
+      "v2_stats_rows": 564,
+      "error": null
+    },
+    "2018-11-12": {
+      "day": "2018-11-12",
+      "status": "ok",
+      "legacy_rows": 63,
+      "v2_fixtures_rows": 63,
+      "v2_stats_rows": 63,
+      "error": null
+    },
+    "2018-11-13": {
+      "day": "2018-11-13",
+      "status": "ok",
+      "legacy_rows": 57,
+      "v2_fixtures_rows": 57,
+      "v2_stats_rows": 57,
+      "error": null
+    },
+    "2018-11-14": {
+      "day": "2018-11-14",
+      "status": "ok",
+      "legacy_rows": 49,
+      "v2_fixtures_rows": 49,
+      "v2_stats_rows": 49,
+      "error": null
+    },
+    "2018-11-15": {
+      "day": "2018-11-15",
+      "status": "ok",
+      "legacy_rows": 46,
+      "v2_fixtures_rows": 46,
+      "v2_stats_rows": 46,
+      "error": null
+    },
+    "2018-11-16": {
+      "day": "2018-11-16",
+      "status": "ok",
+      "legacy_rows": 90,
+      "v2_fixtures_rows": 90,
+      "v2_stats_rows": 90,
+      "error": null
+    },
+    "2018-11-17": {
+      "day": "2018-11-17",
+      "status": "ok",
+      "legacy_rows": 391,
+      "v2_fixtures_rows": 391,
+      "v2_stats_rows": 391,
+      "error": null
+    },
+    "2018-11-18": {
+      "day": "2018-11-18",
+      "status": "ok",
+      "legacy_rows": 356,
+      "v2_fixtures_rows": 356,
+      "v2_stats_rows": 356,
+      "error": null
+    },
+    "2018-11-19": {
+      "day": "2018-11-19",
+      "status": "ok",
+      "legacy_rows": 34,
+      "v2_fixtures_rows": 34,
+      "v2_stats_rows": 34,
+      "error": null
+    },
+    "2018-11-20": {
+      "day": "2018-11-20",
+      "status": "ok",
+      "legacy_rows": 75,
+      "v2_fixtures_rows": 75,
+      "v2_stats_rows": 75,
+      "error": null
+    },
+    "2018-11-21": {
+      "day": "2018-11-21",
+      "status": "ok",
+      "legacy_rows": 82,
+      "v2_fixtures_rows": 82,
+      "v2_stats_rows": 82,
+      "error": null
+    },
+    "2018-11-22": {
+      "day": "2018-11-22",
+      "status": "ok",
+      "legacy_rows": 56,
+      "v2_fixtures_rows": 56,
+      "v2_stats_rows": 56,
+      "error": null
+    },
+    "2018-11-23": {
+      "day": "2018-11-23",
+      "status": "ok",
+      "legacy_rows": 169,
+      "v2_fixtures_rows": 169,
+      "v2_stats_rows": 169,
+      "error": null
+    },
+    "2018-11-24": {
+      "day": "2018-11-24",
+      "status": "ok",
+      "legacy_rows": 624,
+      "v2_fixtures_rows": 624,
+      "v2_stats_rows": 624,
+      "error": null
+    },
+    "2018-11-25": {
+      "day": "2018-11-25",
+      "status": "ok",
+      "legacy_rows": 476,
+      "v2_fixtures_rows": 476,
+      "v2_stats_rows": 476,
+      "error": null
+    },
+    "2018-11-26": {
+      "day": "2018-11-26",
+      "status": "ok",
+      "legacy_rows": 54,
+      "v2_fixtures_rows": 54,
+      "v2_stats_rows": 54,
+      "error": null
+    },
+    "2018-11-27": {
+      "day": "2018-11-27",
+      "status": "ok",
+      "legacy_rows": 105,
+      "v2_fixtures_rows": 105,
+      "v2_stats_rows": 105,
+      "error": null
+    },
+    "2018-11-28": {
+      "day": "2018-11-28",
+      "status": "ok",
+      "legacy_rows": 121,
+      "v2_fixtures_rows": 121,
+      "v2_stats_rows": 121,
+      "error": null
+    },
+    "2018-11-29": {
+      "day": "2018-11-29",
+      "status": "ok",
+      "legacy_rows": 105,
+      "v2_fixtures_rows": 105,
+      "v2_stats_rows": 105,
+      "error": null
+    },
+    "2018-11-30": {
+      "day": "2018-11-30",
+      "status": "ok",
+      "legacy_rows": 183,
+      "v2_fixtures_rows": 183,
+      "v2_stats_rows": 183,
+      "error": null
+    },
+    "2018-12-01": {
+      "day": "2018-12-01",
+      "status": "ok",
+      "legacy_rows": 483,
+      "v2_fixtures_rows": 483,
+      "v2_stats_rows": 483,
+      "error": null
+    },
+    "2018-12-02": {
+      "day": "2018-12-02",
+      "status": "ok",
+      "legacy_rows": 439,
+      "v2_fixtures_rows": 439,
+      "v2_stats_rows": 439,
+      "error": null
+    },
+    "2018-12-03": {
+      "day": "2018-12-03",
+      "status": "ok",
+      "legacy_rows": 88,
+      "v2_fixtures_rows": 88,
+      "v2_stats_rows": 88,
+      "error": null
+    },
+    "2018-12-04": {
+      "day": "2018-12-04",
+      "status": "ok",
+      "legacy_rows": 98,
+      "v2_fixtures_rows": 98,
+      "v2_stats_rows": 98,
+      "error": null
+    },
+    "2018-12-05": {
+      "day": "2018-12-05",
+      "status": "ok",
+      "legacy_rows": 126,
+      "v2_fixtures_rows": 126,
+      "v2_stats_rows": 126,
+      "error": null
+    },
+    "2018-12-06": {
+      "day": "2018-12-06",
+      "status": "ok",
+      "legacy_rows": 70,
+      "v2_fixtures_rows": 70,
+      "v2_stats_rows": 70,
+      "error": null
+    },
+    "2018-12-07": {
+      "day": "2018-12-07",
+      "status": "ok",
+      "legacy_rows": 122,
+      "v2_fixtures_rows": 122,
+      "v2_stats_rows": 122,
+      "error": null
+    },
+    "2018-12-08": {
+      "day": "2018-12-08",
+      "status": "ok",
+      "legacy_rows": 486,
+      "v2_fixtures_rows": 486,
+      "v2_stats_rows": 486,
+      "error": null
+    },
+    "2018-12-09": {
+      "day": "2018-12-09",
+      "status": "ok",
+      "legacy_rows": 374,
+      "v2_fixtures_rows": 374,
+      "v2_stats_rows": 374,
+      "error": null
+    },
+    "2018-12-10": {
+      "day": "2018-12-10",
+      "status": "ok",
+      "legacy_rows": 79,
+      "v2_fixtures_rows": 79,
+      "v2_stats_rows": 79,
+      "error": null
+    },
+    "2018-12-11": {
+      "day": "2018-12-11",
+      "status": "ok",
+      "legacy_rows": 83,
+      "v2_fixtures_rows": 83,
+      "v2_stats_rows": 83,
+      "error": null
+    },
+    "2018-12-12": {
+      "day": "2018-12-12",
+      "status": "ok",
+      "legacy_rows": 75,
+      "v2_fixtures_rows": 75,
+      "v2_stats_rows": 75,
+      "error": null
+    },
+    "2018-12-13": {
+      "day": "2018-12-13",
+      "status": "ok",
+      "legacy_rows": 60,
+      "v2_fixtures_rows": 60,
+      "v2_stats_rows": 60,
+      "error": null
+    },
+    "2018-12-14": {
+      "day": "2018-12-14",
+      "status": "ok",
+      "legacy_rows": 125,
+      "v2_fixtures_rows": 125,
+      "v2_stats_rows": 125,
+      "error": null
+    },
+    "2018-12-15": {
+      "day": "2018-12-15",
+      "status": "ok",
+      "legacy_rows": 379,
+      "v2_fixtures_rows": 379,
+      "v2_stats_rows": 379,
+      "error": null
+    },
+    "2018-12-16": {
+      "day": "2018-12-16",
+      "status": "ok",
+      "legacy_rows": 297,
+      "v2_fixtures_rows": 297,
+      "v2_stats_rows": 297,
+      "error": null
+    },
+    "2018-12-17": {
+      "day": "2018-12-17",
+      "status": "ok",
+      "legacy_rows": 51,
+      "v2_fixtures_rows": 51,
+      "v2_stats_rows": 51,
+      "error": null
+    },
+    "2018-12-18": {
+      "day": "2018-12-18",
+      "status": "ok",
+      "legacy_rows": 70,
+      "v2_fixtures_rows": 70,
+      "v2_stats_rows": 70,
+      "error": null
+    },
+    "2018-12-19": {
+      "day": "2018-12-19",
+      "status": "ok",
+      "legacy_rows": 74,
+      "v2_fixtures_rows": 74,
+      "v2_stats_rows": 74,
+      "error": null
+    },
+    "2018-12-20": {
+      "day": "2018-12-20",
+      "status": "ok",
+      "legacy_rows": 57,
+      "v2_fixtures_rows": 57,
+      "v2_stats_rows": 57,
+      "error": null
+    },
+    "2018-12-21": {
+      "day": "2018-12-21",
+      "status": "ok",
+      "legacy_rows": 89,
+      "v2_fixtures_rows": 89,
+      "v2_stats_rows": 89,
+      "error": null
+    },
+    "2018-12-22": {
+      "day": "2018-12-22",
+      "status": "ok",
+      "legacy_rows": 309,
+      "v2_fixtures_rows": 309,
+      "v2_stats_rows": 309,
+      "error": null
+    },
+    "2018-12-23": {
+      "day": "2018-12-23",
+      "status": "ok",
+      "legacy_rows": 122,
+      "v2_fixtures_rows": 122,
+      "v2_stats_rows": 122,
+      "error": null
+    },
+    "2018-12-24": {
+      "day": "2018-12-24",
+      "status": "ok",
+      "legacy_rows": 9,
+      "v2_fixtures_rows": 9,
+      "v2_stats_rows": 9,
+      "error": null
+    },
+    "2018-12-25": {
+      "day": "2018-12-25",
+      "status": "ok",
+      "legacy_rows": 21,
+      "v2_fixtures_rows": 21,
+      "v2_stats_rows": 21,
+      "error": null
+    },
+    "2018-12-26": {
+      "day": "2018-12-26",
+      "status": "ok",
+      "legacy_rows": 145,
+      "v2_fixtures_rows": 145,
+      "v2_stats_rows": 145,
+      "error": null
+    },
+    "2018-12-27": {
+      "day": "2018-12-27",
+      "status": "ok",
+      "legacy_rows": 32,
+      "v2_fixtures_rows": 32,
+      "v2_stats_rows": 32,
+      "error": null
+    },
+    "2018-12-28": {
+      "day": "2018-12-28",
+      "status": "ok",
+      "legacy_rows": 59,
+      "v2_fixtures_rows": 59,
+      "v2_stats_rows": 59,
+      "error": null
+    },
+    "2018-12-29": {
+      "day": "2018-12-29",
+      "status": "ok",
+      "legacy_rows": 170,
+      "v2_fixtures_rows": 170,
+      "v2_stats_rows": 170,
+      "error": null
+    },
+    "2018-12-30": {
+      "day": "2018-12-30",
+      "status": "ok",
+      "legacy_rows": 83,
+      "v2_fixtures_rows": 83,
+      "v2_stats_rows": 83,
+      "error": null
+    },
+    "2018-12-31": {
+      "day": "2018-12-31",
+      "status": "ok",
+      "legacy_rows": 20,
+      "v2_fixtures_rows": 20,
+      "v2_stats_rows": 20,
+      "error": null
+    },
+    "2019-01-04": {
+      "day": "2019-01-04",
+      "status": "ok",
+      "legacy_rows": 71,
+      "v2_fixtures_rows": 71,
+      "v2_stats_rows": 71,
+      "error": null
+    },
+    "2019-01-09": {
+      "day": "2019-01-09",
+      "status": "ok",
+      "legacy_rows": 46,
+      "v2_fixtures_rows": 46,
+      "v2_stats_rows": 46,
+      "error": null
+    },
+    "2019-12-24": {
+      "day": "2019-12-24",
+      "status": "ok",
+      "legacy_rows": 33,
+      "v2_fixtures_rows": 33,
+      "v2_stats_rows": 33,
+      "error": null
+    },
+    "2019-12-25": {
+      "day": "2019-12-25",
+      "status": "ok",
+      "legacy_rows": 37,
+      "v2_fixtures_rows": 37,
+      "v2_stats_rows": 37,
+      "error": null
+    },
+    "2020-03-19": {
+      "day": "2020-03-19",
+      "status": "ok",
+      "legacy_rows": 80,
+      "v2_fixtures_rows": 80,
+      "v2_stats_rows": 80,
+      "error": null
+    },
+    "2020-03-30": {
+      "day": "2020-03-30",
+      "status": "ok",
+      "legacy_rows": 43,
+      "v2_fixtures_rows": 43,
+      "v2_stats_rows": 43,
+      "error": null
+    },
+    "2020-04-02": {
+      "day": "2020-04-02",
+      "status": "ok",
+      "legacy_rows": 21,
+      "v2_fixtures_rows": 21,
+      "v2_stats_rows": 21,
+      "error": null
+    },
+    "2020-04-15": {
+      "day": "2020-04-15",
+      "status": "ok",
+      "legacy_rows": 80,
+      "v2_fixtures_rows": 80,
+      "v2_stats_rows": 80,
+      "error": null
+    },
+    "2020-04-16": {
+      "day": "2020-04-16",
+      "status": "ok",
+      "legacy_rows": 39,
+      "v2_fixtures_rows": 39,
+      "v2_stats_rows": 39,
+      "error": null
+    },
+    "2020-04-28": {
+      "day": "2020-04-28",
+      "status": "ok",
+      "legacy_rows": 1,
+      "v2_fixtures_rows": 1,
+      "v2_stats_rows": 1,
+      "error": null
+    },
+    "2020-04-29": {
+      "day": "2020-04-29",
+      "status": "ok",
+      "legacy_rows": 5,
+      "v2_fixtures_rows": 5,
+      "v2_stats_rows": 5,
+      "error": null
+    },
+    "2020-05-05": {
+      "day": "2020-05-05",
+      "status": "ok",
+      "legacy_rows": 29,
+      "v2_fixtures_rows": 29,
+      "v2_stats_rows": 29,
+      "error": null
+    },
+    "2020-05-12": {
+      "day": "2020-05-12",
+      "status": "ok",
+      "legacy_rows": 28,
+      "v2_fixtures_rows": 28,
+      "v2_stats_rows": 28,
+      "error": null
+    },
+    "2020-05-13": {
+      "day": "2020-05-13",
+      "status": "ok",
+      "legacy_rows": 60,
+      "v2_fixtures_rows": 60,
+      "v2_stats_rows": 60,
+      "error": null
+    },
+    "2020-05-19": {
+      "day": "2020-05-19",
+      "status": "ok",
+      "legacy_rows": 26,
+      "v2_fixtures_rows": 26,
+      "v2_stats_rows": 26,
+      "error": null
+    },
+    "2020-05-20": {
+      "day": "2020-05-20",
+      "status": "ok",
+      "legacy_rows": 56,
+      "v2_fixtures_rows": 56,
+      "v2_stats_rows": 56,
+      "error": null
+    },
+    "2020-05-21": {
+      "day": "2020-05-21",
+      "status": "ok",
+      "legacy_rows": 8,
+      "v2_fixtures_rows": 8,
+      "v2_stats_rows": 8,
+      "error": null
+    },
+    "2020-05-25": {
+      "day": "2020-05-25",
+      "status": "ok",
+      "legacy_rows": 24,
+      "v2_fixtures_rows": 24,
+      "v2_stats_rows": 24,
+      "error": null
+    },
+    "2024-12-24": {
+      "day": "2024-12-24",
+      "status": "ok",
+      "legacy_rows": 43,
+      "v2_fixtures_rows": 43,
+      "v2_stats_rows": 43,
+      "error": null
+    },
+    "2024-12-25": {
+      "day": "2024-12-25",
+      "status": "ok",
+      "legacy_rows": 25,
+      "v2_fixtures_rows": 25,
+      "v2_stats_rows": 25,
+      "error": null
+    },
+    "2025-12-25": {
+      "day": "2025-12-25",
+      "status": "ok",
+      "legacy_rows": 38,
+      "v2_fixtures_rows": 38,
+      "v2_stats_rows": 38,
+      "error": null
+    },
+    "2025-12-31": {
+      "day": "2025-12-31",
+      "status": "ok",
+      "legacy_rows": 49,
+      "v2_fixtures_rows": 49,
+      "v2_stats_rows": 49,
+      "error": null
+    },
+    "2026-02-19": {
+      "day": "2026-02-19",
+      "status": "ok",
+      "legacy_rows": 134,
+      "v2_fixtures_rows": 134,
+      "v2_stats_rows": 134,
+      "error": null
+    },
+    "2026-02-26": {
+      "day": "2026-02-26",
+      "status": "ok",
+      "legacy_rows": 150,
+      "v2_fixtures_rows": 150,
+      "v2_stats_rows": 150,
+      "error": null
+    },
+    "2026-03-18": {
+      "day": "2026-03-18",
+      "status": "ok",
+      "legacy_rows": 348,
+      "v2_fixtures_rows": 348,
+      "v2_stats_rows": 348,
+      "error": null
+    },
+    "2026-03-26": {
+      "day": "2026-03-26",
+      "status": "ok",
+      "legacy_rows": 141,
+      "v2_fixtures_rows": 141,
+      "v2_stats_rows": 141,
+      "error": null
+    },
+    "2026-03-30": {
+      "day": "2026-03-30",
+      "status": "ok",
+      "legacy_rows": 110,
+      "v2_fixtures_rows": 110,
+      "v2_stats_rows": 110,
+      "error": null
+    },
+    "2026-03-31": {
+      "day": "2026-03-31",
+      "status": "ok",
+      "legacy_rows": 240,
+      "v2_fixtures_rows": 240,
+      "v2_stats_rows": 240,
+      "error": null
+    },
+    "2026-04-02": {
+      "day": "2026-04-02",
+      "status": "ok",
+      "legacy_rows": 397,
+      "v2_fixtures_rows": 397,
+      "v2_stats_rows": 397,
+      "error": null
+    },
+    "2026-04-07": {
+      "day": "2026-04-07",
+      "status": "ok",
+      "legacy_rows": 189,
+      "v2_fixtures_rows": 189,
+      "v2_stats_rows": 189,
+      "error": null
+    },
+    "2026-04-09": {
+      "day": "2026-04-09",
+      "status": "ok",
+      "legacy_rows": 188,
+      "v2_fixtures_rows": 188,
+      "v2_stats_rows": 188,
+      "error": null
+    },
+    "2026-04-15": {
+      "day": "2026-04-15",
+      "status": "ok",
+      "legacy_rows": 276,
+      "v2_fixtures_rows": 276,
+      "v2_stats_rows": 276,
+      "error": null
+    },
+    "2026-04-16": {
+      "day": "2026-04-16",
+      "status": "ok",
+      "legacy_rows": 162,
+      "v2_fixtures_rows": 162,
+      "v2_stats_rows": 162,
+      "error": null
+    },
+    "2026-04-20": {
+      "day": "2026-04-20",
+      "status": "ok",
+      "legacy_rows": 119,
+      "v2_fixtures_rows": 119,
+      "v2_stats_rows": 119,
+      "error": null
+    }
+  }
+}

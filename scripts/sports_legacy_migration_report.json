@@ -1,0 +1,3204 @@
+{
+  "_meta": {
+    "bucket": "instruments-store-sports-central-element-323112",
+    "src_prefix": "sports_reference/by_date/",
+    "dst_prefix": "sports_reference_v2/by_date/",
+    "dry_run": false,
+    "total_days": 398,
+    "summary": {
+      "succeeded": 398
+    },
+    "row_totals": {
+      "legacy_in": 72522,
+      "fixtures_out": 72522,
+      "fixture_stats_out": 72522
+    },
+    "generated_at": "2026-04-28T13:51:23Z"
+  },
+  "days": {
+    "2018-01-02": {
+      "day": "2018-01-02",
+      "status": "succeeded",
+      "legacy_rows": 31,
+      "fixtures_out_rows": 31,
+      "fixture_stats_out_rows": 31,
+      "error": null
+    },
+    "2018-01-03": {
+      "day": "2018-01-03",
+      "status": "succeeded",
+      "legacy_rows": 14,
+      "fixtures_out_rows": 14,
+      "fixture_stats_out_rows": 14,
+      "error": null
+    },
+    "2018-01-04": {
+      "day": "2018-01-04",
+      "status": "succeeded",
+      "legacy_rows": 17,
+      "fixtures_out_rows": 17,
+      "fixture_stats_out_rows": 17,
+      "error": null
+    },
+    "2018-01-05": {
+      "day": "2018-01-05",
+      "status": "succeeded",
+      "legacy_rows": 47,
+      "fixtures_out_rows": 47,
+      "fixture_stats_out_rows": 47,
+      "error": null
+    },
+    "2018-01-06": {
+      "day": "2018-01-06",
+      "status": "succeeded",
+      "legacy_rows": 183,
+      "fixtures_out_rows": 183,
+      "fixture_stats_out_rows": 183,
+      "error": null
+    },
+    "2018-01-07": {
+      "day": "2018-01-07",
+      "status": "succeeded",
+      "legacy_rows": 113,
+      "fixtures_out_rows": 113,
+      "fixture_stats_out_rows": 113,
+      "error": null
+    },
+    "2018-01-08": {
+      "day": "2018-01-08",
+      "status": "succeeded",
+      "legacy_rows": 20,
+      "fixtures_out_rows": 20,
+      "fixture_stats_out_rows": 20,
+      "error": null
+    },
+    "2018-01-09": {
+      "day": "2018-01-09",
+      "status": "succeeded",
+      "legacy_rows": 36,
+      "fixtures_out_rows": 36,
+      "fixture_stats_out_rows": 36,
+      "error": null
+    },
+    "2018-01-10": {
+      "day": "2018-01-10",
+      "status": "succeeded",
+      "legacy_rows": 26,
+      "fixtures_out_rows": 26,
+      "fixture_stats_out_rows": 26,
+      "error": null
+    },
+    "2018-01-11": {
+      "day": "2018-01-11",
+      "status": "succeeded",
+      "legacy_rows": 26,
+      "fixtures_out_rows": 26,
+      "fixture_stats_out_rows": 26,
+      "error": null
+    },
+    "2018-01-12": {
+      "day": "2018-01-12",
+      "status": "succeeded",
+      "legacy_rows": 70,
+      "fixtures_out_rows": 70,
+      "fixture_stats_out_rows": 70,
+      "error": null
+    },
+    "2018-01-13": {
+      "day": "2018-01-13",
+      "status": "succeeded",
+      "legacy_rows": 259,
+      "fixtures_out_rows": 259,
+      "fixture_stats_out_rows": 259,
+      "error": null
+    },
+    "2018-01-14": {
+      "day": "2018-01-14",
+      "status": "succeeded",
+      "legacy_rows": 156,
+      "fixtures_out_rows": 156,
+      "fixture_stats_out_rows": 156,
+      "error": null
+    },
+    "2018-01-15": {
+      "day": "2018-01-15",
+      "status": "succeeded",
+      "legacy_rows": 21,
+      "fixtures_out_rows": 21,
+      "fixture_stats_out_rows": 21,
+      "error": null
+    },
+    "2018-01-16": {
+      "day": "2018-01-16",
+      "status": "succeeded",
+      "legacy_rows": 46,
+      "fixtures_out_rows": 46,
+      "fixture_stats_out_rows": 46,
+      "error": null
+    },
+    "2018-01-17": {
+      "day": "2018-01-17",
+      "status": "succeeded",
+      "legacy_rows": 54,
+      "fixtures_out_rows": 54,
+      "fixture_stats_out_rows": 54,
+      "error": null
+    },
+    "2018-01-18": {
+      "day": "2018-01-18",
+      "status": "succeeded",
+      "legacy_rows": 23,
+      "fixtures_out_rows": 23,
+      "fixture_stats_out_rows": 23,
+      "error": null
+    },
+    "2018-01-19": {
+      "day": "2018-01-19",
+      "status": "succeeded",
+      "legacy_rows": 96,
+      "fixtures_out_rows": 96,
+      "fixture_stats_out_rows": 96,
+      "error": null
+    },
+    "2018-01-20": {
+      "day": "2018-01-20",
+      "status": "succeeded",
+      "legacy_rows": 275,
+      "fixtures_out_rows": 275,
+      "fixture_stats_out_rows": 275,
+      "error": null
+    },
+    "2018-01-21": {
+      "day": "2018-01-21",
+      "status": "succeeded",
+      "legacy_rows": 228,
+      "fixtures_out_rows": 228,
+      "fixture_stats_out_rows": 228,
+      "error": null
+    },
+    "2018-01-22": {
+      "day": "2018-01-22",
+      "status": "succeeded",
+      "legacy_rows": 36,
+      "fixtures_out_rows": 36,
+      "fixture_stats_out_rows": 36,
+      "error": null
+    },
+    "2018-01-23": {
+      "day": "2018-01-23",
+      "status": "succeeded",
+      "legacy_rows": 47,
+      "fixtures_out_rows": 47,
+      "fixture_stats_out_rows": 47,
+      "error": null
+    },
+    "2018-01-24": {
+      "day": "2018-01-24",
+      "status": "succeeded",
+      "legacy_rows": 78,
+      "fixtures_out_rows": 78,
+      "fixture_stats_out_rows": 78,
+      "error": null
+    },
+    "2018-01-25": {
+      "day": "2018-01-25",
+      "status": "succeeded",
+      "legacy_rows": 40,
+      "fixtures_out_rows": 40,
+      "fixture_stats_out_rows": 40,
+      "error": null
+    },
+    "2018-01-26": {
+      "day": "2018-01-26",
+      "status": "succeeded",
+      "legacy_rows": 115,
+      "fixtures_out_rows": 115,
+      "fixture_stats_out_rows": 115,
+      "error": null
+    },
+    "2018-01-27": {
+      "day": "2018-01-27",
+      "status": "succeeded",
+      "legacy_rows": 298,
+      "fixtures_out_rows": 298,
+      "fixture_stats_out_rows": 298,
+      "error": null
+    },
+    "2018-01-28": {
+      "day": "2018-01-28",
+      "status": "succeeded",
+      "legacy_rows": 266,
+      "fixtures_out_rows": 266,
+      "fixture_stats_out_rows": 266,
+      "error": null
+    },
+    "2018-01-29": {
+      "day": "2018-01-29",
+      "status": "succeeded",
+      "legacy_rows": 62,
+      "fixtures_out_rows": 62,
+      "fixture_stats_out_rows": 62,
+      "error": null
+    },
+    "2018-01-30": {
+      "day": "2018-01-30",
+      "status": "succeeded",
+      "legacy_rows": 77,
+      "fixtures_out_rows": 77,
+      "fixture_stats_out_rows": 77,
+      "error": null
+    },
+    "2018-01-31": {
+      "day": "2018-01-31",
+      "status": "succeeded",
+      "legacy_rows": 99,
+      "fixtures_out_rows": 99,
+      "fixture_stats_out_rows": 99,
+      "error": null
+    },
+    "2018-02-01": {
+      "day": "2018-02-01",
+      "status": "succeeded",
+      "legacy_rows": 40,
+      "fixtures_out_rows": 40,
+      "fixture_stats_out_rows": 40,
+      "error": null
+    },
+    "2018-02-02": {
+      "day": "2018-02-02",
+      "status": "succeeded",
+      "legacy_rows": 141,
+      "fixtures_out_rows": 141,
+      "fixture_stats_out_rows": 141,
+      "error": null
+    },
+    "2018-02-03": {
+      "day": "2018-02-03",
+      "status": "succeeded",
+      "legacy_rows": 400,
+      "fixtures_out_rows": 400,
+      "fixture_stats_out_rows": 400,
+      "error": null
+    },
+    "2018-02-04": {
+      "day": "2018-02-04",
+      "status": "succeeded",
+      "legacy_rows": 365,
+      "fixtures_out_rows": 365,
+      "fixture_stats_out_rows": 365,
+      "error": null
+    },
+    "2018-02-05": {
+      "day": "2018-02-05",
+      "status": "succeeded",
+      "legacy_rows": 45,
+      "fixtures_out_rows": 45,
+      "fixture_stats_out_rows": 45,
+      "error": null
+    },
+    "2018-02-06": {
+      "day": "2018-02-06",
+      "status": "succeeded",
+      "legacy_rows": 68,
+      "fixtures_out_rows": 68,
+      "fixture_stats_out_rows": 68,
+      "error": null
+    },
+    "2018-02-07": {
+      "day": "2018-02-07",
+      "status": "succeeded",
+      "legacy_rows": 89,
+      "fixtures_out_rows": 89,
+      "fixture_stats_out_rows": 89,
+      "error": null
+    },
+    "2018-02-08": {
+      "day": "2018-02-08",
+      "status": "succeeded",
+      "legacy_rows": 47,
+      "fixtures_out_rows": 47,
+      "fixture_stats_out_rows": 47,
+      "error": null
+    },
+    "2018-02-09": {
+      "day": "2018-02-09",
+      "status": "succeeded",
+      "legacy_rows": 161,
+      "fixtures_out_rows": 161,
+      "fixture_stats_out_rows": 161,
+      "error": null
+    },
+    "2018-02-10": {
+      "day": "2018-02-10",
+      "status": "succeeded",
+      "legacy_rows": 403,
+      "fixtures_out_rows": 403,
+      "fixture_stats_out_rows": 403,
+      "error": null
+    },
+    "2018-02-11": {
+      "day": "2018-02-11",
+      "status": "succeeded",
+      "legacy_rows": 329,
+      "fixtures_out_rows": 329,
+      "fixture_stats_out_rows": 329,
+      "error": null
+    },
+    "2018-02-12": {
+      "day": "2018-02-12",
+      "status": "succeeded",
+      "legacy_rows": 83,
+      "fixtures_out_rows": 83,
+      "fixture_stats_out_rows": 83,
+      "error": null
+    },
+    "2018-02-13": {
+      "day": "2018-02-13",
+      "status": "succeeded",
+      "legacy_rows": 87,
+      "fixtures_out_rows": 87,
+      "fixture_stats_out_rows": 87,
+      "error": null
+    },
+    "2018-02-14": {
+      "day": "2018-02-14",
+      "status": "succeeded",
+      "legacy_rows": 97,
+      "fixtures_out_rows": 97,
+      "fixture_stats_out_rows": 97,
+      "error": null
+    },
+    "2018-02-15": {
+      "day": "2018-02-15",
+      "status": "succeeded",
+      "legacy_rows": 91,
+      "fixtures_out_rows": 91,
+      "fixture_stats_out_rows": 91,
+      "error": null
+    },
+    "2018-02-16": {
+      "day": "2018-02-16",
+      "status": "succeeded",
+      "legacy_rows": 154,
+      "fixtures_out_rows": 154,
+      "fixture_stats_out_rows": 154,
+      "error": null
+    },
+    "2018-02-17": {
+      "day": "2018-02-17",
+      "status": "succeeded",
+      "legacy_rows": 400,
+      "fixtures_out_rows": 400,
+      "fixture_stats_out_rows": 400,
+      "error": null
+    },
+    "2018-02-18": {
+      "day": "2018-02-18",
+      "status": "succeeded",
+      "legacy_rows": 402,
+      "fixtures_out_rows": 402,
+      "fixture_stats_out_rows": 402,
+      "error": null
+    },
+    "2018-02-19": {
+      "day": "2018-02-19",
+      "status": "succeeded",
+      "legacy_rows": 69,
+      "fixtures_out_rows": 69,
+      "fixture_stats_out_rows": 69,
+      "error": null
+    },
+    "2018-02-20": {
+      "day": "2018-02-20",
+      "status": "succeeded",
+      "legacy_rows": 96,
+      "fixtures_out_rows": 96,
+      "fixture_stats_out_rows": 96,
+      "error": null
+    },
+    "2018-02-21": {
+      "day": "2018-02-21",
+      "status": "succeeded",
+      "legacy_rows": 85,
+      "fixtures_out_rows": 85,
+      "fixture_stats_out_rows": 85,
+      "error": null
+    },
+    "2018-02-22": {
+      "day": "2018-02-22",
+      "status": "succeeded",
+      "legacy_rows": 66,
+      "fixtures_out_rows": 66,
+      "fixture_stats_out_rows": 66,
+      "error": null
+    },
+    "2018-02-23": {
+      "day": "2018-02-23",
+      "status": "succeeded",
+      "legacy_rows": 165,
+      "fixtures_out_rows": 165,
+      "fixture_stats_out_rows": 165,
+      "error": null
+    },
+    "2018-02-24": {
+      "day": "2018-02-24",
+      "status": "succeeded",
+      "legacy_rows": 449,
+      "fixtures_out_rows": 449,
+      "fixture_stats_out_rows": 449,
+      "error": null
+    },
+    "2018-02-25": {
+      "day": "2018-02-25",
+      "status": "succeeded",
+      "legacy_rows": 448,
+      "fixtures_out_rows": 448,
+      "fixture_stats_out_rows": 448,
+      "error": null
+    },
+    "2018-02-26": {
+      "day": "2018-02-26",
+      "status": "succeeded",
+      "legacy_rows": 57,
+      "fixtures_out_rows": 57,
+      "fixture_stats_out_rows": 57,
+      "error": null
+    },
+    "2018-02-27": {
+      "day": "2018-02-27",
+      "status": "succeeded",
+      "legacy_rows": 66,
+      "fixtures_out_rows": 66,
+      "fixture_stats_out_rows": 66,
+      "error": null
+    },
+    "2018-02-28": {
+      "day": "2018-02-28",
+      "status": "succeeded",
+      "legacy_rows": 99,
+      "fixtures_out_rows": 99,
+      "fixture_stats_out_rows": 99,
+      "error": null
+    },
+    "2018-03-01": {
+      "day": "2018-03-01",
+      "status": "succeeded",
+      "legacy_rows": 76,
+      "fixtures_out_rows": 76,
+      "fixture_stats_out_rows": 76,
+      "error": null
+    },
+    "2018-03-02": {
+      "day": "2018-03-02",
+      "status": "succeeded",
+      "legacy_rows": 157,
+      "fixtures_out_rows": 157,
+      "fixture_stats_out_rows": 157,
+      "error": null
+    },
+    "2018-03-03": {
+      "day": "2018-03-03",
+      "status": "succeeded",
+      "legacy_rows": 402,
+      "fixtures_out_rows": 402,
+      "fixture_stats_out_rows": 402,
+      "error": null
+    },
+    "2018-03-04": {
+      "day": "2018-03-04",
+      "status": "succeeded",
+      "legacy_rows": 385,
+      "fixtures_out_rows": 385,
+      "fixture_stats_out_rows": 385,
+      "error": null
+    },
+    "2018-03-05": {
+      "day": "2018-03-05",
+      "status": "succeeded",
+      "legacy_rows": 72,
+      "fixtures_out_rows": 72,
+      "fixture_stats_out_rows": 72,
+      "error": null
+    },
+    "2018-03-06": {
+      "day": "2018-03-06",
+      "status": "succeeded",
+      "legacy_rows": 115,
+      "fixtures_out_rows": 115,
+      "fixture_stats_out_rows": 115,
+      "error": null
+    },
+    "2018-03-07": {
+      "day": "2018-03-07",
+      "status": "succeeded",
+      "legacy_rows": 159,
+      "fixtures_out_rows": 159,
+      "fixture_stats_out_rows": 159,
+      "error": null
+    },
+    "2018-03-08": {
+      "day": "2018-03-08",
+      "status": "succeeded",
+      "legacy_rows": 67,
+      "fixtures_out_rows": 67,
+      "fixture_stats_out_rows": 67,
+      "error": null
+    },
+    "2018-03-09": {
+      "day": "2018-03-09",
+      "status": "succeeded",
+      "legacy_rows": 162,
+      "fixtures_out_rows": 162,
+      "fixture_stats_out_rows": 162,
+      "error": null
+    },
+    "2018-03-10": {
+      "day": "2018-03-10",
+      "status": "succeeded",
+      "legacy_rows": 550,
+      "fixtures_out_rows": 550,
+      "fixture_stats_out_rows": 550,
+      "error": null
+    },
+    "2018-03-11": {
+      "day": "2018-03-11",
+      "status": "succeeded",
+      "legacy_rows": 507,
+      "fixtures_out_rows": 507,
+      "fixture_stats_out_rows": 507,
+      "error": null
+    },
+    "2018-03-12": {
+      "day": "2018-03-12",
+      "status": "succeeded",
+      "legacy_rows": 81,
+      "fixtures_out_rows": 81,
+      "fixture_stats_out_rows": 81,
+      "error": null
+    },
+    "2018-03-13": {
+      "day": "2018-03-13",
+      "status": "succeeded",
+      "legacy_rows": 102,
+      "fixtures_out_rows": 102,
+      "fixture_stats_out_rows": 102,
+      "error": null
+    },
+    "2018-03-14": {
+      "day": "2018-03-14",
+      "status": "succeeded",
+      "legacy_rows": 141,
+      "fixtures_out_rows": 141,
+      "fixture_stats_out_rows": 141,
+      "error": null
+    },
+    "2018-03-15": {
+      "day": "2018-03-15",
+      "status": "succeeded",
+      "legacy_rows": 47,
+      "fixtures_out_rows": 47,
+      "fixture_stats_out_rows": 47,
+      "error": null
+    },
+    "2018-03-16": {
+      "day": "2018-03-16",
+      "status": "succeeded",
+      "legacy_rows": 166,
+      "fixtures_out_rows": 166,
+      "fixture_stats_out_rows": 166,
+      "error": null
+    },
+    "2018-03-17": {
+      "day": "2018-03-17",
+      "status": "succeeded",
+      "legacy_rows": 603,
+      "fixtures_out_rows": 603,
+      "fixture_stats_out_rows": 603,
+      "error": null
+    },
+    "2018-03-18": {
+      "day": "2018-03-18",
+      "status": "succeeded",
+      "legacy_rows": 488,
+      "fixtures_out_rows": 488,
+      "fixture_stats_out_rows": 488,
+      "error": null
+    },
+    "2018-03-19": {
+      "day": "2018-03-19",
+      "status": "succeeded",
+      "legacy_rows": 63,
+      "fixtures_out_rows": 63,
+      "fixture_stats_out_rows": 63,
+      "error": null
+    },
+    "2018-03-20": {
+      "day": "2018-03-20",
+      "status": "succeeded",
+      "legacy_rows": 52,
+      "fixtures_out_rows": 52,
+      "fixture_stats_out_rows": 52,
+      "error": null
+    },
+    "2018-03-21": {
+      "day": "2018-03-21",
+      "status": "succeeded",
+      "legacy_rows": 123,
+      "fixtures_out_rows": 123,
+      "fixture_stats_out_rows": 123,
+      "error": null
+    },
+    "2018-03-22": {
+      "day": "2018-03-22",
+      "status": "succeeded",
+      "legacy_rows": 63,
+      "fixtures_out_rows": 63,
+      "fixture_stats_out_rows": 63,
+      "error": null
+    },
+    "2018-03-23": {
+      "day": "2018-03-23",
+      "status": "succeeded",
+      "legacy_rows": 103,
+      "fixtures_out_rows": 103,
+      "fixture_stats_out_rows": 103,
+      "error": null
+    },
+    "2018-03-24": {
+      "day": "2018-03-24",
+      "status": "succeeded",
+      "legacy_rows": 399,
+      "fixtures_out_rows": 399,
+      "fixture_stats_out_rows": 399,
+      "error": null
+    },
+    "2018-03-25": {
+      "day": "2018-03-25",
+      "status": "succeeded",
+      "legacy_rows": 347,
+      "fixtures_out_rows": 347,
+      "fixture_stats_out_rows": 347,
+      "error": null
+    },
+    "2018-03-26": {
+      "day": "2018-03-26",
+      "status": "succeeded",
+      "legacy_rows": 39,
+      "fixtures_out_rows": 39,
+      "fixture_stats_out_rows": 39,
+      "error": null
+    },
+    "2018-03-27": {
+      "day": "2018-03-27",
+      "status": "succeeded",
+      "legacy_rows": 112,
+      "fixtures_out_rows": 112,
+      "fixture_stats_out_rows": 112,
+      "error": null
+    },
+    "2018-03-28": {
+      "day": "2018-03-28",
+      "status": "succeeded",
+      "legacy_rows": 130,
+      "fixtures_out_rows": 130,
+      "fixture_stats_out_rows": 130,
+      "error": null
+    },
+    "2018-03-29": {
+      "day": "2018-03-29",
+      "status": "succeeded",
+      "legacy_rows": 126,
+      "fixtures_out_rows": 126,
+      "fixture_stats_out_rows": 126,
+      "error": null
+    },
+    "2018-03-30": {
+      "day": "2018-03-30",
+      "status": "succeeded",
+      "legacy_rows": 208,
+      "fixtures_out_rows": 208,
+      "fixture_stats_out_rows": 208,
+      "error": null
+    },
+    "2018-03-31": {
+      "day": "2018-03-31",
+      "status": "succeeded",
+      "legacy_rows": 554,
+      "fixtures_out_rows": 554,
+      "fixture_stats_out_rows": 554,
+      "error": null
+    },
+    "2018-04-01": {
+      "day": "2018-04-01",
+      "status": "succeeded",
+      "legacy_rows": 402,
+      "fixtures_out_rows": 402,
+      "fixture_stats_out_rows": 402,
+      "error": null
+    },
+    "2018-04-02": {
+      "day": "2018-04-02",
+      "status": "succeeded",
+      "legacy_rows": 186,
+      "fixtures_out_rows": 186,
+      "fixture_stats_out_rows": 186,
+      "error": null
+    },
+    "2018-04-03": {
+      "day": "2018-04-03",
+      "status": "succeeded",
+      "legacy_rows": 108,
+      "fixtures_out_rows": 108,
+      "fixture_stats_out_rows": 108,
+      "error": null
+    },
+    "2018-04-04": {
+      "day": "2018-04-04",
+      "status": "succeeded",
+      "legacy_rows": 227,
+      "fixtures_out_rows": 227,
+      "fixture_stats_out_rows": 227,
+      "error": null
+    },
+    "2018-04-05": {
+      "day": "2018-04-05",
+      "status": "succeeded",
+      "legacy_rows": 81,
+      "fixtures_out_rows": 81,
+      "fixture_stats_out_rows": 81,
+      "error": null
+    },
+    "2018-04-06": {
+      "day": "2018-04-06",
+      "status": "succeeded",
+      "legacy_rows": 182,
+      "fixtures_out_rows": 182,
+      "fixture_stats_out_rows": 182,
+      "error": null
+    },
+    "2018-04-07": {
+      "day": "2018-04-07",
+      "status": "succeeded",
+      "legacy_rows": 684,
+      "fixtures_out_rows": 684,
+      "fixture_stats_out_rows": 684,
+      "error": null
+    },
+    "2018-04-08": {
+      "day": "2018-04-08",
+      "status": "succeeded",
+      "legacy_rows": 531,
+      "fixtures_out_rows": 531,
+      "fixture_stats_out_rows": 531,
+      "error": null
+    },
+    "2018-04-09": {
+      "day": "2018-04-09",
+      "status": "succeeded",
+      "legacy_rows": 76,
+      "fixtures_out_rows": 76,
+      "fixture_stats_out_rows": 76,
+      "error": null
+    },
+    "2018-04-10": {
+      "day": "2018-04-10",
+      "status": "succeeded",
+      "legacy_rows": 103,
+      "fixtures_out_rows": 103,
+      "fixture_stats_out_rows": 103,
+      "error": null
+    },
+    "2018-04-11": {
+      "day": "2018-04-11",
+      "status": "succeeded",
+      "legacy_rows": 196,
+      "fixtures_out_rows": 196,
+      "fixture_stats_out_rows": 196,
+      "error": null
+    },
+    "2018-04-12": {
+      "day": "2018-04-12",
+      "status": "succeeded",
+      "legacy_rows": 78,
+      "fixtures_out_rows": 78,
+      "fixture_stats_out_rows": 78,
+      "error": null
+    },
+    "2018-04-13": {
+      "day": "2018-04-13",
+      "status": "succeeded",
+      "legacy_rows": 189,
+      "fixtures_out_rows": 189,
+      "fixture_stats_out_rows": 189,
+      "error": null
+    },
+    "2018-04-14": {
+      "day": "2018-04-14",
+      "status": "succeeded",
+      "legacy_rows": 707,
+      "fixtures_out_rows": 707,
+      "fixture_stats_out_rows": 707,
+      "error": null
+    },
+    "2018-04-15": {
+      "day": "2018-04-15",
+      "status": "succeeded",
+      "legacy_rows": 577,
+      "fixtures_out_rows": 577,
+      "fixture_stats_out_rows": 577,
+      "error": null
+    },
+    "2018-04-16": {
+      "day": "2018-04-16",
+      "status": "succeeded",
+      "legacy_rows": 81,
+      "fixtures_out_rows": 81,
+      "fixture_stats_out_rows": 81,
+      "error": null
+    },
+    "2018-04-17": {
+      "day": "2018-04-17",
+      "status": "succeeded",
+      "legacy_rows": 137,
+      "fixtures_out_rows": 137,
+      "fixture_stats_out_rows": 137,
+      "error": null
+    },
+    "2018-04-18": {
+      "day": "2018-04-18",
+      "status": "succeeded",
+      "legacy_rows": 195,
+      "fixtures_out_rows": 195,
+      "fixture_stats_out_rows": 195,
+      "error": null
+    },
+    "2018-04-19": {
+      "day": "2018-04-19",
+      "status": "succeeded",
+      "legacy_rows": 83,
+      "fixtures_out_rows": 83,
+      "fixture_stats_out_rows": 83,
+      "error": null
+    },
+    "2018-04-20": {
+      "day": "2018-04-20",
+      "status": "succeeded",
+      "legacy_rows": 200,
+      "fixtures_out_rows": 200,
+      "fixture_stats_out_rows": 200,
+      "error": null
+    },
+    "2018-04-21": {
+      "day": "2018-04-21",
+      "status": "succeeded",
+      "legacy_rows": 694,
+      "fixtures_out_rows": 694,
+      "fixture_stats_out_rows": 694,
+      "error": null
+    },
+    "2018-04-22": {
+      "day": "2018-04-22",
+      "status": "succeeded",
+      "legacy_rows": 607,
+      "fixtures_out_rows": 607,
+      "fixture_stats_out_rows": 607,
+      "error": null
+    },
+    "2018-04-23": {
+      "day": "2018-04-23",
+      "status": "succeeded",
+      "legacy_rows": 99,
+      "fixtures_out_rows": 99,
+      "fixture_stats_out_rows": 99,
+      "error": null
+    },
+    "2018-04-24": {
+      "day": "2018-04-24",
+      "status": "succeeded",
+      "legacy_rows": 126,
+      "fixtures_out_rows": 126,
+      "fixture_stats_out_rows": 126,
+      "error": null
+    },
+    "2018-04-25": {
+      "day": "2018-04-25",
+      "status": "succeeded",
+      "legacy_rows": 173,
+      "fixtures_out_rows": 173,
+      "fixture_stats_out_rows": 173,
+      "error": null
+    },
+    "2018-04-26": {
+      "day": "2018-04-26",
+      "status": "succeeded",
+      "legacy_rows": 59,
+      "fixtures_out_rows": 59,
+      "fixture_stats_out_rows": 59,
+      "error": null
+    },
+    "2018-04-27": {
+      "day": "2018-04-27",
+      "status": "succeeded",
+      "legacy_rows": 192,
+      "fixtures_out_rows": 192,
+      "fixture_stats_out_rows": 192,
+      "error": null
+    },
+    "2018-04-28": {
+      "day": "2018-04-28",
+      "status": "succeeded",
+      "legacy_rows": 744,
+      "fixtures_out_rows": 744,
+      "fixture_stats_out_rows": 744,
+      "error": null
+    },
+    "2018-04-29": {
+      "day": "2018-04-29",
+      "status": "succeeded",
+      "legacy_rows": 571,
+      "fixtures_out_rows": 571,
+      "fixture_stats_out_rows": 571,
+      "error": null
+    },
+    "2018-04-30": {
+      "day": "2018-04-30",
+      "status": "succeeded",
+      "legacy_rows": 81,
+      "fixtures_out_rows": 81,
+      "fixture_stats_out_rows": 81,
+      "error": null
+    },
+    "2018-05-01": {
+      "day": "2018-05-01",
+      "status": "succeeded",
+      "legacy_rows": 97,
+      "fixtures_out_rows": 97,
+      "fixture_stats_out_rows": 97,
+      "error": null
+    },
+    "2018-05-02": {
+      "day": "2018-05-02",
+      "status": "succeeded",
+      "legacy_rows": 184,
+      "fixtures_out_rows": 184,
+      "fixture_stats_out_rows": 184,
+      "error": null
+    },
+    "2018-05-03": {
+      "day": "2018-05-03",
+      "status": "succeeded",
+      "legacy_rows": 73,
+      "fixtures_out_rows": 73,
+      "fixture_stats_out_rows": 73,
+      "error": null
+    },
+    "2018-05-04": {
+      "day": "2018-05-04",
+      "status": "succeeded",
+      "legacy_rows": 140,
+      "fixtures_out_rows": 140,
+      "fixture_stats_out_rows": 140,
+      "error": null
+    },
+    "2018-05-05": {
+      "day": "2018-05-05",
+      "status": "succeeded",
+      "legacy_rows": 658,
+      "fixtures_out_rows": 658,
+      "fixture_stats_out_rows": 658,
+      "error": null
+    },
+    "2018-05-06": {
+      "day": "2018-05-06",
+      "status": "succeeded",
+      "legacy_rows": 562,
+      "fixtures_out_rows": 562,
+      "fixture_stats_out_rows": 562,
+      "error": null
+    },
+    "2018-05-07": {
+      "day": "2018-05-07",
+      "status": "succeeded",
+      "legacy_rows": 74,
+      "fixtures_out_rows": 74,
+      "fixture_stats_out_rows": 74,
+      "error": null
+    },
+    "2018-05-08": {
+      "day": "2018-05-08",
+      "status": "succeeded",
+      "legacy_rows": 53,
+      "fixtures_out_rows": 53,
+      "fixture_stats_out_rows": 53,
+      "error": null
+    },
+    "2018-05-09": {
+      "day": "2018-05-09",
+      "status": "succeeded",
+      "legacy_rows": 140,
+      "fixtures_out_rows": 140,
+      "fixture_stats_out_rows": 140,
+      "error": null
+    },
+    "2018-05-10": {
+      "day": "2018-05-10",
+      "status": "succeeded",
+      "legacy_rows": 113,
+      "fixtures_out_rows": 113,
+      "fixture_stats_out_rows": 113,
+      "error": null
+    },
+    "2018-05-11": {
+      "day": "2018-05-11",
+      "status": "succeeded",
+      "legacy_rows": 155,
+      "fixtures_out_rows": 155,
+      "fixture_stats_out_rows": 155,
+      "error": null
+    },
+    "2018-05-12": {
+      "day": "2018-05-12",
+      "status": "succeeded",
+      "legacy_rows": 568,
+      "fixtures_out_rows": 568,
+      "fixture_stats_out_rows": 568,
+      "error": null
+    },
+    "2018-05-13": {
+      "day": "2018-05-13",
+      "status": "succeeded",
+      "legacy_rows": 483,
+      "fixtures_out_rows": 483,
+      "fixture_stats_out_rows": 483,
+      "error": null
+    },
+    "2018-05-14": {
+      "day": "2018-05-14",
+      "status": "succeeded",
+      "legacy_rows": 71,
+      "fixtures_out_rows": 71,
+      "fixture_stats_out_rows": 71,
+      "error": null
+    },
+    "2018-05-15": {
+      "day": "2018-05-15",
+      "status": "succeeded",
+      "legacy_rows": 57,
+      "fixtures_out_rows": 57,
+      "fixture_stats_out_rows": 57,
+      "error": null
+    },
+    "2018-05-16": {
+      "day": "2018-05-16",
+      "status": "succeeded",
+      "legacy_rows": 147,
+      "fixtures_out_rows": 147,
+      "fixture_stats_out_rows": 147,
+      "error": null
+    },
+    "2018-05-17": {
+      "day": "2018-05-17",
+      "status": "succeeded",
+      "legacy_rows": 60,
+      "fixtures_out_rows": 60,
+      "fixture_stats_out_rows": 60,
+      "error": null
+    },
+    "2018-05-18": {
+      "day": "2018-05-18",
+      "status": "succeeded",
+      "legacy_rows": 137,
+      "fixtures_out_rows": 137,
+      "fixture_stats_out_rows": 137,
+      "error": null
+    },
+    "2018-05-19": {
+      "day": "2018-05-19",
+      "status": "succeeded",
+      "legacy_rows": 470,
+      "fixtures_out_rows": 470,
+      "fixture_stats_out_rows": 470,
+      "error": null
+    },
+    "2018-05-20": {
+      "day": "2018-05-20",
+      "status": "succeeded",
+      "legacy_rows": 371,
+      "fixtures_out_rows": 371,
+      "fixture_stats_out_rows": 371,
+      "error": null
+    },
+    "2018-05-21": {
+      "day": "2018-05-21",
+      "status": "succeeded",
+      "legacy_rows": 97,
+      "fixtures_out_rows": 97,
+      "fixture_stats_out_rows": 97,
+      "error": null
+    },
+    "2018-05-22": {
+      "day": "2018-05-22",
+      "status": "succeeded",
+      "legacy_rows": 62,
+      "fixtures_out_rows": 62,
+      "fixture_stats_out_rows": 62,
+      "error": null
+    },
+    "2018-05-23": {
+      "day": "2018-05-23",
+      "status": "succeeded",
+      "legacy_rows": 115,
+      "fixtures_out_rows": 115,
+      "fixture_stats_out_rows": 115,
+      "error": null
+    },
+    "2018-05-24": {
+      "day": "2018-05-24",
+      "status": "succeeded",
+      "legacy_rows": 51,
+      "fixtures_out_rows": 51,
+      "fixture_stats_out_rows": 51,
+      "error": null
+    },
+    "2018-05-25": {
+      "day": "2018-05-25",
+      "status": "succeeded",
+      "legacy_rows": 81,
+      "fixtures_out_rows": 81,
+      "fixture_stats_out_rows": 81,
+      "error": null
+    },
+    "2018-05-26": {
+      "day": "2018-05-26",
+      "status": "succeeded",
+      "legacy_rows": 306,
+      "fixtures_out_rows": 306,
+      "fixture_stats_out_rows": 306,
+      "error": null
+    },
+    "2018-05-27": {
+      "day": "2018-05-27",
+      "status": "succeeded",
+      "legacy_rows": 335,
+      "fixtures_out_rows": 335,
+      "fixture_stats_out_rows": 335,
+      "error": null
+    },
+    "2018-05-28": {
+      "day": "2018-05-28",
+      "status": "succeeded",
+      "legacy_rows": 60,
+      "fixtures_out_rows": 60,
+      "fixture_stats_out_rows": 60,
+      "error": null
+    },
+    "2018-05-29": {
+      "day": "2018-05-29",
+      "status": "succeeded",
+      "legacy_rows": 30,
+      "fixtures_out_rows": 30,
+      "fixture_stats_out_rows": 30,
+      "error": null
+    },
+    "2018-05-30": {
+      "day": "2018-05-30",
+      "status": "succeeded",
+      "legacy_rows": 77,
+      "fixtures_out_rows": 77,
+      "fixture_stats_out_rows": 77,
+      "error": null
+    },
+    "2018-05-31": {
+      "day": "2018-05-31",
+      "status": "succeeded",
+      "legacy_rows": 75,
+      "fixtures_out_rows": 75,
+      "fixture_stats_out_rows": 75,
+      "error": null
+    },
+    "2018-06-01": {
+      "day": "2018-06-01",
+      "status": "succeeded",
+      "legacy_rows": 54,
+      "fixtures_out_rows": 54,
+      "fixture_stats_out_rows": 54,
+      "error": null
+    },
+    "2018-06-02": {
+      "day": "2018-06-02",
+      "status": "succeeded",
+      "legacy_rows": 293,
+      "fixtures_out_rows": 293,
+      "fixture_stats_out_rows": 293,
+      "error": null
+    },
+    "2018-06-03": {
+      "day": "2018-06-03",
+      "status": "succeeded",
+      "legacy_rows": 224,
+      "fixtures_out_rows": 224,
+      "fixture_stats_out_rows": 224,
+      "error": null
+    },
+    "2018-06-04": {
+      "day": "2018-06-04",
+      "status": "succeeded",
+      "legacy_rows": 28,
+      "fixtures_out_rows": 28,
+      "fixture_stats_out_rows": 28,
+      "error": null
+    },
+    "2018-06-05": {
+      "day": "2018-06-05",
+      "status": "succeeded",
+      "legacy_rows": 39,
+      "fixtures_out_rows": 39,
+      "fixture_stats_out_rows": 39,
+      "error": null
+    },
+    "2018-06-06": {
+      "day": "2018-06-06",
+      "status": "succeeded",
+      "legacy_rows": 106,
+      "fixtures_out_rows": 106,
+      "fixture_stats_out_rows": 106,
+      "error": null
+    },
+    "2018-06-07": {
+      "day": "2018-06-07",
+      "status": "succeeded",
+      "legacy_rows": 37,
+      "fixtures_out_rows": 37,
+      "fixture_stats_out_rows": 37,
+      "error": null
+    },
+    "2018-06-08": {
+      "day": "2018-06-08",
+      "status": "succeeded",
+      "legacy_rows": 43,
+      "fixtures_out_rows": 43,
+      "fixture_stats_out_rows": 43,
+      "error": null
+    },
+    "2018-06-09": {
+      "day": "2018-06-09",
+      "status": "succeeded",
+      "legacy_rows": 218,
+      "fixtures_out_rows": 218,
+      "fixture_stats_out_rows": 218,
+      "error": null
+    },
+    "2018-06-10": {
+      "day": "2018-06-10",
+      "status": "succeeded",
+      "legacy_rows": 198,
+      "fixtures_out_rows": 198,
+      "fixture_stats_out_rows": 198,
+      "error": null
+    },
+    "2018-06-11": {
+      "day": "2018-06-11",
+      "status": "succeeded",
+      "legacy_rows": 29,
+      "fixtures_out_rows": 29,
+      "fixture_stats_out_rows": 29,
+      "error": null
+    },
+    "2018-06-12": {
+      "day": "2018-06-12",
+      "status": "succeeded",
+      "legacy_rows": 42,
+      "fixtures_out_rows": 42,
+      "fixture_stats_out_rows": 42,
+      "error": null
+    },
+    "2018-06-13": {
+      "day": "2018-06-13",
+      "status": "succeeded",
+      "legacy_rows": 79,
+      "fixtures_out_rows": 79,
+      "fixture_stats_out_rows": 79,
+      "error": null
+    },
+    "2018-06-14": {
+      "day": "2018-06-14",
+      "status": "succeeded",
+      "legacy_rows": 27,
+      "fixtures_out_rows": 27,
+      "fixture_stats_out_rows": 27,
+      "error": null
+    },
+    "2018-06-15": {
+      "day": "2018-06-15",
+      "status": "succeeded",
+      "legacy_rows": 28,
+      "fixtures_out_rows": 28,
+      "fixture_stats_out_rows": 28,
+      "error": null
+    },
+    "2018-06-16": {
+      "day": "2018-06-16",
+      "status": "succeeded",
+      "legacy_rows": 207,
+      "fixtures_out_rows": 207,
+      "fixture_stats_out_rows": 207,
+      "error": null
+    },
+    "2018-06-17": {
+      "day": "2018-06-17",
+      "status": "succeeded",
+      "legacy_rows": 149,
+      "fixtures_out_rows": 149,
+      "fixture_stats_out_rows": 149,
+      "error": null
+    },
+    "2018-06-18": {
+      "day": "2018-06-18",
+      "status": "succeeded",
+      "legacy_rows": 24,
+      "fixtures_out_rows": 24,
+      "fixture_stats_out_rows": 24,
+      "error": null
+    },
+    "2018-06-19": {
+      "day": "2018-06-19",
+      "status": "succeeded",
+      "legacy_rows": 17,
+      "fixtures_out_rows": 17,
+      "fixture_stats_out_rows": 17,
+      "error": null
+    },
+    "2018-06-20": {
+      "day": "2018-06-20",
+      "status": "succeeded",
+      "legacy_rows": 79,
+      "fixtures_out_rows": 79,
+      "fixture_stats_out_rows": 79,
+      "error": null
+    },
+    "2018-06-21": {
+      "day": "2018-06-21",
+      "status": "succeeded",
+      "legacy_rows": 43,
+      "fixtures_out_rows": 43,
+      "fixture_stats_out_rows": 43,
+      "error": null
+    },
+    "2018-06-22": {
+      "day": "2018-06-22",
+      "status": "succeeded",
+      "legacy_rows": 31,
+      "fixtures_out_rows": 31,
+      "fixture_stats_out_rows": 31,
+      "error": null
+    },
+    "2018-06-23": {
+      "day": "2018-06-23",
+      "status": "succeeded",
+      "legacy_rows": 128,
+      "fixtures_out_rows": 128,
+      "fixture_stats_out_rows": 128,
+      "error": null
+    },
+    "2018-06-24": {
+      "day": "2018-06-24",
+      "status": "succeeded",
+      "legacy_rows": 152,
+      "fixtures_out_rows": 152,
+      "fixture_stats_out_rows": 152,
+      "error": null
+    },
+    "2018-06-25": {
+      "day": "2018-06-25",
+      "status": "succeeded",
+      "legacy_rows": 20,
+      "fixtures_out_rows": 20,
+      "fixture_stats_out_rows": 20,
+      "error": null
+    },
+    "2018-06-26": {
+      "day": "2018-06-26",
+      "status": "succeeded",
+      "legacy_rows": 49,
+      "fixtures_out_rows": 49,
+      "fixture_stats_out_rows": 49,
+      "error": null
+    },
+    "2018-06-27": {
+      "day": "2018-06-27",
+      "status": "succeeded",
+      "legacy_rows": 89,
+      "fixtures_out_rows": 89,
+      "fixture_stats_out_rows": 89,
+      "error": null
+    },
+    "2018-06-28": {
+      "day": "2018-06-28",
+      "status": "succeeded",
+      "legacy_rows": 34,
+      "fixtures_out_rows": 34,
+      "fixture_stats_out_rows": 34,
+      "error": null
+    },
+    "2018-06-29": {
+      "day": "2018-06-29",
+      "status": "succeeded",
+      "legacy_rows": 40,
+      "fixtures_out_rows": 40,
+      "fixture_stats_out_rows": 40,
+      "error": null
+    },
+    "2018-06-30": {
+      "day": "2018-06-30",
+      "status": "succeeded",
+      "legacy_rows": 200,
+      "fixtures_out_rows": 200,
+      "fixture_stats_out_rows": 200,
+      "error": null
+    },
+    "2018-07-01": {
+      "day": "2018-07-01",
+      "status": "succeeded",
+      "legacy_rows": 170,
+      "fixtures_out_rows": 170,
+      "fixture_stats_out_rows": 170,
+      "error": null
+    },
+    "2018-07-02": {
+      "day": "2018-07-02",
+      "status": "succeeded",
+      "legacy_rows": 10,
+      "fixtures_out_rows": 10,
+      "fixture_stats_out_rows": 10,
+      "error": null
+    },
+    "2018-07-03": {
+      "day": "2018-07-03",
+      "status": "succeeded",
+      "legacy_rows": 20,
+      "fixtures_out_rows": 20,
+      "fixture_stats_out_rows": 20,
+      "error": null
+    },
+    "2018-07-04": {
+      "day": "2018-07-04",
+      "status": "succeeded",
+      "legacy_rows": 73,
+      "fixtures_out_rows": 73,
+      "fixture_stats_out_rows": 73,
+      "error": null
+    },
+    "2018-07-05": {
+      "day": "2018-07-05",
+      "status": "succeeded",
+      "legacy_rows": 41,
+      "fixtures_out_rows": 41,
+      "fixture_stats_out_rows": 41,
+      "error": null
+    },
+    "2018-07-06": {
+      "day": "2018-07-06",
+      "status": "succeeded",
+      "legacy_rows": 36,
+      "fixtures_out_rows": 36,
+      "fixture_stats_out_rows": 36,
+      "error": null
+    },
+    "2018-07-07": {
+      "day": "2018-07-07",
+      "status": "succeeded",
+      "legacy_rows": 173,
+      "fixtures_out_rows": 173,
+      "fixture_stats_out_rows": 173,
+      "error": null
+    },
+    "2018-07-08": {
+      "day": "2018-07-08",
+      "status": "succeeded",
+      "legacy_rows": 143,
+      "fixtures_out_rows": 143,
+      "fixture_stats_out_rows": 143,
+      "error": null
+    },
+    "2018-07-09": {
+      "day": "2018-07-09",
+      "status": "succeeded",
+      "legacy_rows": 22,
+      "fixtures_out_rows": 22,
+      "fixture_stats_out_rows": 22,
+      "error": null
+    },
+    "2018-07-10": {
+      "day": "2018-07-10",
+      "status": "succeeded",
+      "legacy_rows": 20,
+      "fixtures_out_rows": 20,
+      "fixture_stats_out_rows": 20,
+      "error": null
+    },
+    "2018-07-11": {
+      "day": "2018-07-11",
+      "status": "succeeded",
+      "legacy_rows": 76,
+      "fixtures_out_rows": 76,
+      "fixture_stats_out_rows": 76,
+      "error": null
+    },
+    "2018-07-12": {
+      "day": "2018-07-12",
+      "status": "succeeded",
+      "legacy_rows": 64,
+      "fixtures_out_rows": 64,
+      "fixture_stats_out_rows": 64,
+      "error": null
+    },
+    "2018-07-13": {
+      "day": "2018-07-13",
+      "status": "succeeded",
+      "legacy_rows": 38,
+      "fixtures_out_rows": 38,
+      "fixture_stats_out_rows": 38,
+      "error": null
+    },
+    "2018-07-14": {
+      "day": "2018-07-14",
+      "status": "succeeded",
+      "legacy_rows": 195,
+      "fixtures_out_rows": 195,
+      "fixture_stats_out_rows": 195,
+      "error": null
+    },
+    "2018-07-15": {
+      "day": "2018-07-15",
+      "status": "succeeded",
+      "legacy_rows": 142,
+      "fixtures_out_rows": 142,
+      "fixture_stats_out_rows": 142,
+      "error": null
+    },
+    "2018-07-16": {
+      "day": "2018-07-16",
+      "status": "succeeded",
+      "legacy_rows": 35,
+      "fixtures_out_rows": 35,
+      "fixture_stats_out_rows": 35,
+      "error": null
+    },
+    "2018-07-17": {
+      "day": "2018-07-17",
+      "status": "succeeded",
+      "legacy_rows": 71,
+      "fixtures_out_rows": 71,
+      "fixture_stats_out_rows": 71,
+      "error": null
+    },
+    "2018-07-18": {
+      "day": "2018-07-18",
+      "status": "succeeded",
+      "legacy_rows": 91,
+      "fixtures_out_rows": 91,
+      "fixture_stats_out_rows": 91,
+      "error": null
+    },
+    "2018-07-19": {
+      "day": "2018-07-19",
+      "status": "succeeded",
+      "legacy_rows": 75,
+      "fixtures_out_rows": 75,
+      "fixture_stats_out_rows": 75,
+      "error": null
+    },
+    "2018-07-20": {
+      "day": "2018-07-20",
+      "status": "succeeded",
+      "legacy_rows": 65,
+      "fixtures_out_rows": 65,
+      "fixture_stats_out_rows": 65,
+      "error": null
+    },
+    "2018-07-21": {
+      "day": "2018-07-21",
+      "status": "succeeded",
+      "legacy_rows": 294,
+      "fixtures_out_rows": 294,
+      "fixture_stats_out_rows": 294,
+      "error": null
+    },
+    "2018-07-22": {
+      "day": "2018-07-22",
+      "status": "succeeded",
+      "legacy_rows": 277,
+      "fixtures_out_rows": 277,
+      "fixture_stats_out_rows": 277,
+      "error": null
+    },
+    "2018-07-23": {
+      "day": "2018-07-23",
+      "status": "succeeded",
+      "legacy_rows": 35,
+      "fixtures_out_rows": 35,
+      "fixture_stats_out_rows": 35,
+      "error": null
+    },
+    "2018-07-24": {
+      "day": "2018-07-24",
+      "status": "succeeded",
+      "legacy_rows": 42,
+      "fixtures_out_rows": 42,
+      "fixture_stats_out_rows": 42,
+      "error": null
+    },
+    "2018-07-25": {
+      "day": "2018-07-25",
+      "status": "succeeded",
+      "legacy_rows": 71,
+      "fixtures_out_rows": 71,
+      "fixture_stats_out_rows": 71,
+      "error": null
+    },
+    "2018-07-26": {
+      "day": "2018-07-26",
+      "status": "succeeded",
+      "legacy_rows": 90,
+      "fixtures_out_rows": 90,
+      "fixture_stats_out_rows": 90,
+      "error": null
+    },
+    "2018-07-27": {
+      "day": "2018-07-27",
+      "status": "succeeded",
+      "legacy_rows": 83,
+      "fixtures_out_rows": 83,
+      "fixture_stats_out_rows": 83,
+      "error": null
+    },
+    "2018-07-28": {
+      "day": "2018-07-28",
+      "status": "succeeded",
+      "legacy_rows": 316,
+      "fixtures_out_rows": 316,
+      "fixture_stats_out_rows": 316,
+      "error": null
+    },
+    "2018-07-29": {
+      "day": "2018-07-29",
+      "status": "succeeded",
+      "legacy_rows": 327,
+      "fixtures_out_rows": 327,
+      "fixture_stats_out_rows": 327,
+      "error": null
+    },
+    "2018-07-30": {
+      "day": "2018-07-30",
+      "status": "succeeded",
+      "legacy_rows": 39,
+      "fixtures_out_rows": 39,
+      "fixture_stats_out_rows": 39,
+      "error": null
+    },
+    "2018-07-31": {
+      "day": "2018-07-31",
+      "status": "succeeded",
+      "legacy_rows": 26,
+      "fixtures_out_rows": 26,
+      "fixture_stats_out_rows": 26,
+      "error": null
+    },
+    "2018-08-01": {
+      "day": "2018-08-01",
+      "status": "succeeded",
+      "legacy_rows": 120,
+      "fixtures_out_rows": 120,
+      "fixture_stats_out_rows": 120,
+      "error": null
+    },
+    "2018-08-02": {
+      "day": "2018-08-02",
+      "status": "succeeded",
+      "legacy_rows": 78,
+      "fixtures_out_rows": 78,
+      "fixture_stats_out_rows": 78,
+      "error": null
+    },
+    "2018-08-03": {
+      "day": "2018-08-03",
+      "status": "succeeded",
+      "legacy_rows": 103,
+      "fixtures_out_rows": 103,
+      "fixture_stats_out_rows": 103,
+      "error": null
+    },
+    "2018-08-04": {
+      "day": "2018-08-04",
+      "status": "succeeded",
+      "legacy_rows": 502,
+      "fixtures_out_rows": 502,
+      "fixture_stats_out_rows": 502,
+      "error": null
+    },
+    "2018-08-05": {
+      "day": "2018-08-05",
+      "status": "succeeded",
+      "legacy_rows": 342,
+      "fixtures_out_rows": 342,
+      "fixture_stats_out_rows": 342,
+      "error": null
+    },
+    "2018-08-06": {
+      "day": "2018-08-06",
+      "status": "succeeded",
+      "legacy_rows": 53,
+      "fixtures_out_rows": 53,
+      "fixture_stats_out_rows": 53,
+      "error": null
+    },
+    "2018-08-07": {
+      "day": "2018-08-07",
+      "status": "succeeded",
+      "legacy_rows": 69,
+      "fixtures_out_rows": 69,
+      "fixture_stats_out_rows": 69,
+      "error": null
+    },
+    "2018-08-08": {
+      "day": "2018-08-08",
+      "status": "succeeded",
+      "legacy_rows": 94,
+      "fixtures_out_rows": 94,
+      "fixture_stats_out_rows": 94,
+      "error": null
+    },
+    "2018-08-09": {
+      "day": "2018-08-09",
+      "status": "succeeded",
+      "legacy_rows": 61,
+      "fixtures_out_rows": 61,
+      "fixture_stats_out_rows": 61,
+      "error": null
+    },
+    "2018-08-10": {
+      "day": "2018-08-10",
+      "status": "succeeded",
+      "legacy_rows": 148,
+      "fixtures_out_rows": 148,
+      "fixture_stats_out_rows": 148,
+      "error": null
+    },
+    "2018-08-11": {
+      "day": "2018-08-11",
+      "status": "succeeded",
+      "legacy_rows": 603,
+      "fixtures_out_rows": 603,
+      "fixture_stats_out_rows": 603,
+      "error": null
+    },
+    "2018-08-12": {
+      "day": "2018-08-12",
+      "status": "succeeded",
+      "legacy_rows": 421,
+      "fixtures_out_rows": 421,
+      "fixture_stats_out_rows": 421,
+      "error": null
+    },
+    "2018-08-13": {
+      "day": "2018-08-13",
+      "status": "succeeded",
+      "legacy_rows": 49,
+      "fixtures_out_rows": 49,
+      "fixture_stats_out_rows": 49,
+      "error": null
+    },
+    "2018-08-14": {
+      "day": "2018-08-14",
+      "status": "succeeded",
+      "legacy_rows": 112,
+      "fixtures_out_rows": 112,
+      "fixture_stats_out_rows": 112,
+      "error": null
+    },
+    "2018-08-15": {
+      "day": "2018-08-15",
+      "status": "succeeded",
+      "legacy_rows": 139,
+      "fixtures_out_rows": 139,
+      "fixture_stats_out_rows": 139,
+      "error": null
+    },
+    "2018-08-16": {
+      "day": "2018-08-16",
+      "status": "succeeded",
+      "legacy_rows": 82,
+      "fixtures_out_rows": 82,
+      "fixture_stats_out_rows": 82,
+      "error": null
+    },
+    "2018-08-17": {
+      "day": "2018-08-17",
+      "status": "succeeded",
+      "legacy_rows": 174,
+      "fixtures_out_rows": 174,
+      "fixture_stats_out_rows": 174,
+      "error": null
+    },
+    "2018-08-18": {
+      "day": "2018-08-18",
+      "status": "succeeded",
+      "legacy_rows": 673,
+      "fixtures_out_rows": 673,
+      "fixture_stats_out_rows": 673,
+      "error": null
+    },
+    "2018-08-19": {
+      "day": "2018-08-19",
+      "status": "succeeded",
+      "legacy_rows": 452,
+      "fixtures_out_rows": 452,
+      "fixture_stats_out_rows": 452,
+      "error": null
+    },
+    "2018-08-20": {
+      "day": "2018-08-20",
+      "status": "succeeded",
+      "legacy_rows": 79,
+      "fixtures_out_rows": 79,
+      "fixture_stats_out_rows": 79,
+      "error": null
+    },
+    "2018-08-21": {
+      "day": "2018-08-21",
+      "status": "succeeded",
+      "legacy_rows": 62,
+      "fixtures_out_rows": 62,
+      "fixture_stats_out_rows": 62,
+      "error": null
+    },
+    "2018-08-22": {
+      "day": "2018-08-22",
+      "status": "succeeded",
+      "legacy_rows": 174,
+      "fixtures_out_rows": 174,
+      "fixture_stats_out_rows": 174,
+      "error": null
+    },
+    "2018-08-23": {
+      "day": "2018-08-23",
+      "status": "succeeded",
+      "legacy_rows": 84,
+      "fixtures_out_rows": 84,
+      "fixture_stats_out_rows": 84,
+      "error": null
+    },
+    "2018-08-24": {
+      "day": "2018-08-24",
+      "status": "succeeded",
+      "legacy_rows": 165,
+      "fixtures_out_rows": 165,
+      "fixture_stats_out_rows": 165,
+      "error": null
+    },
+    "2018-08-25": {
+      "day": "2018-08-25",
+      "status": "succeeded",
+      "legacy_rows": 670,
+      "fixtures_out_rows": 670,
+      "fixture_stats_out_rows": 670,
+      "error": null
+    },
+    "2018-08-26": {
+      "day": "2018-08-26",
+      "status": "succeeded",
+      "legacy_rows": 526,
+      "fixtures_out_rows": 526,
+      "fixture_stats_out_rows": 526,
+      "error": null
+    },
+    "2018-08-27": {
+      "day": "2018-08-27",
+      "status": "succeeded",
+      "legacy_rows": 97,
+      "fixtures_out_rows": 97,
+      "fixture_stats_out_rows": 97,
+      "error": null
+    },
+    "2018-08-28": {
+      "day": "2018-08-28",
+      "status": "succeeded",
+      "legacy_rows": 118,
+      "fixtures_out_rows": 118,
+      "fixture_stats_out_rows": 118,
+      "error": null
+    },
+    "2018-08-29": {
+      "day": "2018-08-29",
+      "status": "succeeded",
+      "legacy_rows": 149,
+      "fixtures_out_rows": 149,
+      "fixture_stats_out_rows": 149,
+      "error": null
+    },
+    "2018-08-30": {
+      "day": "2018-08-30",
+      "status": "succeeded",
+      "legacy_rows": 86,
+      "fixtures_out_rows": 86,
+      "fixture_stats_out_rows": 86,
+      "error": null
+    },
+    "2018-08-31": {
+      "day": "2018-08-31",
+      "status": "succeeded",
+      "legacy_rows": 207,
+      "fixtures_out_rows": 207,
+      "fixture_stats_out_rows": 207,
+      "error": null
+    },
+    "2018-09-01": {
+      "day": "2018-09-01",
+      "status": "succeeded",
+      "legacy_rows": 725,
+      "fixtures_out_rows": 725,
+      "fixture_stats_out_rows": 725,
+      "error": null
+    },
+    "2018-09-02": {
+      "day": "2018-09-02",
+      "status": "succeeded",
+      "legacy_rows": 498,
+      "fixtures_out_rows": 498,
+      "fixture_stats_out_rows": 498,
+      "error": null
+    },
+    "2018-09-03": {
+      "day": "2018-09-03",
+      "status": "succeeded",
+      "legacy_rows": 45,
+      "fixtures_out_rows": 45,
+      "fixture_stats_out_rows": 45,
+      "error": null
+    },
+    "2018-09-04": {
+      "day": "2018-09-04",
+      "status": "succeeded",
+      "legacy_rows": 78,
+      "fixtures_out_rows": 78,
+      "fixture_stats_out_rows": 78,
+      "error": null
+    },
+    "2018-09-05": {
+      "day": "2018-09-05",
+      "status": "succeeded",
+      "legacy_rows": 103,
+      "fixtures_out_rows": 103,
+      "fixture_stats_out_rows": 103,
+      "error": null
+    },
+    "2018-09-06": {
+      "day": "2018-09-06",
+      "status": "succeeded",
+      "legacy_rows": 47,
+      "fixtures_out_rows": 47,
+      "fixture_stats_out_rows": 47,
+      "error": null
+    },
+    "2018-09-07": {
+      "day": "2018-09-07",
+      "status": "succeeded",
+      "legacy_rows": 129,
+      "fixtures_out_rows": 129,
+      "fixture_stats_out_rows": 129,
+      "error": null
+    },
+    "2018-09-08": {
+      "day": "2018-09-08",
+      "status": "succeeded",
+      "legacy_rows": 465,
+      "fixtures_out_rows": 465,
+      "fixture_stats_out_rows": 465,
+      "error": null
+    },
+    "2018-09-09": {
+      "day": "2018-09-09",
+      "status": "succeeded",
+      "legacy_rows": 381,
+      "fixtures_out_rows": 381,
+      "fixture_stats_out_rows": 381,
+      "error": null
+    },
+    "2018-09-10": {
+      "day": "2018-09-10",
+      "status": "succeeded",
+      "legacy_rows": 55,
+      "fixtures_out_rows": 55,
+      "fixture_stats_out_rows": 55,
+      "error": null
+    },
+    "2018-09-11": {
+      "day": "2018-09-11",
+      "status": "succeeded",
+      "legacy_rows": 69,
+      "fixtures_out_rows": 69,
+      "fixture_stats_out_rows": 69,
+      "error": null
+    },
+    "2018-09-12": {
+      "day": "2018-09-12",
+      "status": "succeeded",
+      "legacy_rows": 153,
+      "fixtures_out_rows": 153,
+      "fixture_stats_out_rows": 153,
+      "error": null
+    },
+    "2018-09-13": {
+      "day": "2018-09-13",
+      "status": "succeeded",
+      "legacy_rows": 60,
+      "fixtures_out_rows": 60,
+      "fixture_stats_out_rows": 60,
+      "error": null
+    },
+    "2018-09-14": {
+      "day": "2018-09-14",
+      "status": "succeeded",
+      "legacy_rows": 205,
+      "fixtures_out_rows": 205,
+      "fixture_stats_out_rows": 205,
+      "error": null
+    },
+    "2018-09-15": {
+      "day": "2018-09-15",
+      "status": "succeeded",
+      "legacy_rows": 834,
+      "fixtures_out_rows": 834,
+      "fixture_stats_out_rows": 834,
+      "error": null
+    },
+    "2018-09-16": {
+      "day": "2018-09-16",
+      "status": "succeeded",
+      "legacy_rows": 605,
+      "fixtures_out_rows": 605,
+      "fixture_stats_out_rows": 605,
+      "error": null
+    },
+    "2018-09-17": {
+      "day": "2018-09-17",
+      "status": "succeeded",
+      "legacy_rows": 99,
+      "fixtures_out_rows": 99,
+      "fixture_stats_out_rows": 99,
+      "error": null
+    },
+    "2018-09-18": {
+      "day": "2018-09-18",
+      "status": "succeeded",
+      "legacy_rows": 84,
+      "fixtures_out_rows": 84,
+      "fixture_stats_out_rows": 84,
+      "error": null
+    },
+    "2018-09-19": {
+      "day": "2018-09-19",
+      "status": "succeeded",
+      "legacy_rows": 181,
+      "fixtures_out_rows": 181,
+      "fixture_stats_out_rows": 181,
+      "error": null
+    },
+    "2018-09-20": {
+      "day": "2018-09-20",
+      "status": "succeeded",
+      "legacy_rows": 95,
+      "fixtures_out_rows": 95,
+      "fixture_stats_out_rows": 95,
+      "error": null
+    },
+    "2018-09-21": {
+      "day": "2018-09-21",
+      "status": "succeeded",
+      "legacy_rows": 212,
+      "fixtures_out_rows": 212,
+      "fixture_stats_out_rows": 212,
+      "error": null
+    },
+    "2018-09-22": {
+      "day": "2018-09-22",
+      "status": "succeeded",
+      "legacy_rows": 932,
+      "fixtures_out_rows": 932,
+      "fixture_stats_out_rows": 932,
+      "error": null
+    },
+    "2018-09-23": {
+      "day": "2018-09-23",
+      "status": "succeeded",
+      "legacy_rows": 607,
+      "fixtures_out_rows": 607,
+      "fixture_stats_out_rows": 607,
+      "error": null
+    },
+    "2018-09-24": {
+      "day": "2018-09-24",
+      "status": "succeeded",
+      "legacy_rows": 77,
+      "fixtures_out_rows": 77,
+      "fixture_stats_out_rows": 77,
+      "error": null
+    },
+    "2018-09-25": {
+      "day": "2018-09-25",
+      "status": "succeeded",
+      "legacy_rows": 198,
+      "fixtures_out_rows": 198,
+      "fixture_stats_out_rows": 198,
+      "error": null
+    },
+    "2018-09-26": {
+      "day": "2018-09-26",
+      "status": "succeeded",
+      "legacy_rows": 302,
+      "fixtures_out_rows": 302,
+      "fixture_stats_out_rows": 302,
+      "error": null
+    },
+    "2018-09-27": {
+      "day": "2018-09-27",
+      "status": "succeeded",
+      "legacy_rows": 97,
+      "fixtures_out_rows": 97,
+      "fixture_stats_out_rows": 97,
+      "error": null
+    },
+    "2018-09-28": {
+      "day": "2018-09-28",
+      "status": "succeeded",
+      "legacy_rows": 205,
+      "fixtures_out_rows": 205,
+      "fixture_stats_out_rows": 205,
+      "error": null
+    },
+    "2018-09-29": {
+      "day": "2018-09-29",
+      "status": "succeeded",
+      "legacy_rows": 720,
+      "fixtures_out_rows": 720,
+      "fixture_stats_out_rows": 720,
+      "error": null
+    },
+    "2018-09-30": {
+      "day": "2018-09-30",
+      "status": "succeeded",
+      "legacy_rows": 680,
+      "fixtures_out_rows": 680,
+      "fixture_stats_out_rows": 680,
+      "error": null
+    },
+    "2018-10-01": {
+      "day": "2018-10-01",
+      "status": "succeeded",
+      "legacy_rows": 66,
+      "fixtures_out_rows": 66,
+      "fixture_stats_out_rows": 66,
+      "error": null
+    },
+    "2018-10-02": {
+      "day": "2018-10-02",
+      "status": "succeeded",
+      "legacy_rows": 128,
+      "fixtures_out_rows": 128,
+      "fixture_stats_out_rows": 128,
+      "error": null
+    },
+    "2018-10-03": {
+      "day": "2018-10-03",
+      "status": "succeeded",
+      "legacy_rows": 163,
+      "fixtures_out_rows": 163,
+      "fixture_stats_out_rows": 163,
+      "error": null
+    },
+    "2018-10-04": {
+      "day": "2018-10-04",
+      "status": "succeeded",
+      "legacy_rows": 78,
+      "fixtures_out_rows": 78,
+      "fixture_stats_out_rows": 78,
+      "error": null
+    },
+    "2018-10-05": {
+      "day": "2018-10-05",
+      "status": "succeeded",
+      "legacy_rows": 197,
+      "fixtures_out_rows": 197,
+      "fixture_stats_out_rows": 197,
+      "error": null
+    },
+    "2018-10-06": {
+      "day": "2018-10-06",
+      "status": "succeeded",
+      "legacy_rows": 769,
+      "fixtures_out_rows": 769,
+      "fixture_stats_out_rows": 769,
+      "error": null
+    },
+    "2018-10-07": {
+      "day": "2018-10-07",
+      "status": "succeeded",
+      "legacy_rows": 538,
+      "fixtures_out_rows": 538,
+      "fixture_stats_out_rows": 538,
+      "error": null
+    },
+    "2018-10-08": {
+      "day": "2018-10-08",
+      "status": "succeeded",
+      "legacy_rows": 55,
+      "fixtures_out_rows": 55,
+      "fixture_stats_out_rows": 55,
+      "error": null
+    },
+    "2018-10-09": {
+      "day": "2018-10-09",
+      "status": "succeeded",
+      "legacy_rows": 66,
+      "fixtures_out_rows": 66,
+      "fixture_stats_out_rows": 66,
+      "error": null
+    },
+    "2018-10-10": {
+      "day": "2018-10-10",
+      "status": "succeeded",
+      "legacy_rows": 72,
+      "fixtures_out_rows": 72,
+      "fixture_stats_out_rows": 72,
+      "error": null
+    },
+    "2018-10-11": {
+      "day": "2018-10-11",
+      "status": "succeeded",
+      "legacy_rows": 53,
+      "fixtures_out_rows": 53,
+      "fixture_stats_out_rows": 53,
+      "error": null
+    },
+    "2018-10-12": {
+      "day": "2018-10-12",
+      "status": "succeeded",
+      "legacy_rows": 84,
+      "fixtures_out_rows": 84,
+      "fixture_stats_out_rows": 84,
+      "error": null
+    },
+    "2018-10-13": {
+      "day": "2018-10-13",
+      "status": "succeeded",
+      "legacy_rows": 537,
+      "fixtures_out_rows": 537,
+      "fixture_stats_out_rows": 537,
+      "error": null
+    },
+    "2018-10-14": {
+      "day": "2018-10-14",
+      "status": "succeeded",
+      "legacy_rows": 300,
+      "fixtures_out_rows": 300,
+      "fixture_stats_out_rows": 300,
+      "error": null
+    },
+    "2018-10-15": {
+      "day": "2018-10-15",
+      "status": "succeeded",
+      "legacy_rows": 68,
+      "fixtures_out_rows": 68,
+      "fixture_stats_out_rows": 68,
+      "error": null
+    },
+    "2018-10-16": {
+      "day": "2018-10-16",
+      "status": "succeeded",
+      "legacy_rows": 99,
+      "fixtures_out_rows": 99,
+      "fixture_stats_out_rows": 99,
+      "error": null
+    },
+    "2018-10-17": {
+      "day": "2018-10-17",
+      "status": "succeeded",
+      "legacy_rows": 121,
+      "fixtures_out_rows": 121,
+      "fixture_stats_out_rows": 121,
+      "error": null
+    },
+    "2018-10-18": {
+      "day": "2018-10-18",
+      "status": "succeeded",
+      "legacy_rows": 49,
+      "fixtures_out_rows": 49,
+      "fixture_stats_out_rows": 49,
+      "error": null
+    },
+    "2018-10-19": {
+      "day": "2018-10-19",
+      "status": "succeeded",
+      "legacy_rows": 229,
+      "fixtures_out_rows": 229,
+      "fixture_stats_out_rows": 229,
+      "error": null
+    },
+    "2018-10-20": {
+      "day": "2018-10-20",
+      "status": "succeeded",
+      "legacy_rows": 802,
+      "fixtures_out_rows": 802,
+      "fixture_stats_out_rows": 802,
+      "error": null
+    },
+    "2018-10-21": {
+      "day": "2018-10-21",
+      "status": "succeeded",
+      "legacy_rows": 640,
+      "fixtures_out_rows": 640,
+      "fixture_stats_out_rows": 640,
+      "error": null
+    },
+    "2018-10-22": {
+      "day": "2018-10-22",
+      "status": "succeeded",
+      "legacy_rows": 58,
+      "fixtures_out_rows": 58,
+      "fixture_stats_out_rows": 58,
+      "error": null
+    },
+    "2018-10-23": {
+      "day": "2018-10-23",
+      "status": "succeeded",
+      "legacy_rows": 105,
+      "fixtures_out_rows": 105,
+      "fixture_stats_out_rows": 105,
+      "error": null
+    },
+    "2018-10-24": {
+      "day": "2018-10-24",
+      "status": "succeeded",
+      "legacy_rows": 138,
+      "fixtures_out_rows": 138,
+      "fixture_stats_out_rows": 138,
+      "error": null
+    },
+    "2018-10-25": {
+      "day": "2018-10-25",
+      "status": "succeeded",
+      "legacy_rows": 84,
+      "fixtures_out_rows": 84,
+      "fixture_stats_out_rows": 84,
+      "error": null
+    },
+    "2018-10-26": {
+      "day": "2018-10-26",
+      "status": "succeeded",
+      "legacy_rows": 192,
+      "fixtures_out_rows": 192,
+      "fixture_stats_out_rows": 192,
+      "error": null
+    },
+    "2018-10-27": {
+      "day": "2018-10-27",
+      "status": "succeeded",
+      "legacy_rows": 808,
+      "fixtures_out_rows": 808,
+      "fixture_stats_out_rows": 808,
+      "error": null
+    },
+    "2018-10-28": {
+      "day": "2018-10-28",
+      "status": "succeeded",
+      "legacy_rows": 567,
+      "fixtures_out_rows": 567,
+      "fixture_stats_out_rows": 567,
+      "error": null
+    },
+    "2018-10-29": {
+      "day": "2018-10-29",
+      "status": "succeeded",
+      "legacy_rows": 70,
+      "fixtures_out_rows": 70,
+      "fixture_stats_out_rows": 70,
+      "error": null
+    },
+    "2018-10-30": {
+      "day": "2018-10-30",
+      "status": "succeeded",
+      "legacy_rows": 158,
+      "fixtures_out_rows": 158,
+      "fixture_stats_out_rows": 158,
+      "error": null
+    },
+    "2018-10-31": {
+      "day": "2018-10-31",
+      "status": "succeeded",
+      "legacy_rows": 262,
+      "fixtures_out_rows": 262,
+      "fixture_stats_out_rows": 262,
+      "error": null
+    },
+    "2018-11-01": {
+      "day": "2018-11-01",
+      "status": "succeeded",
+      "legacy_rows": 98,
+      "fixtures_out_rows": 98,
+      "fixture_stats_out_rows": 98,
+      "error": null
+    },
+    "2018-11-02": {
+      "day": "2018-11-02",
+      "status": "succeeded",
+      "legacy_rows": 199,
+      "fixtures_out_rows": 199,
+      "fixture_stats_out_rows": 199,
+      "error": null
+    },
+    "2018-11-03": {
+      "day": "2018-11-03",
+      "status": "succeeded",
+      "legacy_rows": 740,
+      "fixtures_out_rows": 740,
+      "fixture_stats_out_rows": 740,
+      "error": null
+    },
+    "2018-11-04": {
+      "day": "2018-11-04",
+      "status": "succeeded",
+      "legacy_rows": 637,
+      "fixtures_out_rows": 637,
+      "fixture_stats_out_rows": 637,
+      "error": null
+    },
+    "2018-11-05": {
+      "day": "2018-11-05",
+      "status": "succeeded",
+      "legacy_rows": 100,
+      "fixtures_out_rows": 100,
+      "fixture_stats_out_rows": 100,
+      "error": null
+    },
+    "2018-11-06": {
+      "day": "2018-11-06",
+      "status": "succeeded",
+      "legacy_rows": 110,
+      "fixtures_out_rows": 110,
+      "fixture_stats_out_rows": 110,
+      "error": null
+    },
+    "2018-11-07": {
+      "day": "2018-11-07",
+      "status": "succeeded",
+      "legacy_rows": 130,
+      "fixtures_out_rows": 130,
+      "fixture_stats_out_rows": 130,
+      "error": null
+    },
+    "2018-11-08": {
+      "day": "2018-11-08",
+      "status": "succeeded",
+      "legacy_rows": 100,
+      "fixtures_out_rows": 100,
+      "fixture_stats_out_rows": 100,
+      "error": null
+    },
+    "2018-11-09": {
+      "day": "2018-11-09",
+      "status": "succeeded",
+      "legacy_rows": 187,
+      "fixtures_out_rows": 187,
+      "fixture_stats_out_rows": 187,
+      "error": null
+    },
+    "2018-11-10": {
+      "day": "2018-11-10",
+      "status": "succeeded",
+      "legacy_rows": 743,
+      "fixtures_out_rows": 743,
+      "fixture_stats_out_rows": 743,
+      "error": null
+    },
+    "2018-11-11": {
+      "day": "2018-11-11",
+      "status": "succeeded",
+      "legacy_rows": 564,
+      "fixtures_out_rows": 564,
+      "fixture_stats_out_rows": 564,
+      "error": null
+    },
+    "2018-11-12": {
+      "day": "2018-11-12",
+      "status": "succeeded",
+      "legacy_rows": 63,
+      "fixtures_out_rows": 63,
+      "fixture_stats_out_rows": 63,
+      "error": null
+    },
+    "2018-11-13": {
+      "day": "2018-11-13",
+      "status": "succeeded",
+      "legacy_rows": 57,
+      "fixtures_out_rows": 57,
+      "fixture_stats_out_rows": 57,
+      "error": null
+    },
+    "2018-11-14": {
+      "day": "2018-11-14",
+      "status": "succeeded",
+      "legacy_rows": 49,
+      "fixtures_out_rows": 49,
+      "fixture_stats_out_rows": 49,
+      "error": null
+    },
+    "2018-11-15": {
+      "day": "2018-11-15",
+      "status": "succeeded",
+      "legacy_rows": 46,
+      "fixtures_out_rows": 46,
+      "fixture_stats_out_rows": 46,
+      "error": null
+    },
+    "2018-11-16": {
+      "day": "2018-11-16",
+      "status": "succeeded",
+      "legacy_rows": 90,
+      "fixtures_out_rows": 90,
+      "fixture_stats_out_rows": 90,
+      "error": null
+    },
+    "2018-11-17": {
+      "day": "2018-11-17",
+      "status": "succeeded",
+      "legacy_rows": 391,
+      "fixtures_out_rows": 391,
+      "fixture_stats_out_rows": 391,
+      "error": null
+    },
+    "2018-11-18": {
+      "day": "2018-11-18",
+      "status": "succeeded",
+      "legacy_rows": 356,
+      "fixtures_out_rows": 356,
+      "fixture_stats_out_rows": 356,
+      "error": null
+    },
+    "2018-11-19": {
+      "day": "2018-11-19",
+      "status": "succeeded",
+      "legacy_rows": 34,
+      "fixtures_out_rows": 34,
+      "fixture_stats_out_rows": 34,
+      "error": null
+    },
+    "2018-11-20": {
+      "day": "2018-11-20",
+      "status": "succeeded",
+      "legacy_rows": 75,
+      "fixtures_out_rows": 75,
+      "fixture_stats_out_rows": 75,
+      "error": null
+    },
+    "2018-11-21": {
+      "day": "2018-11-21",
+      "status": "succeeded",
+      "legacy_rows": 82,
+      "fixtures_out_rows": 82,
+      "fixture_stats_out_rows": 82,
+      "error": null
+    },
+    "2018-11-22": {
+      "day": "2018-11-22",
+      "status": "succeeded",
+      "legacy_rows": 56,
+      "fixtures_out_rows": 56,
+      "fixture_stats_out_rows": 56,
+      "error": null
+    },
+    "2018-11-23": {
+      "day": "2018-11-23",
+      "status": "succeeded",
+      "legacy_rows": 169,
+      "fixtures_out_rows": 169,
+      "fixture_stats_out_rows": 169,
+      "error": null
+    },
+    "2018-11-24": {
+      "day": "2018-11-24",
+      "status": "succeeded",
+      "legacy_rows": 624,
+      "fixtures_out_rows": 624,
+      "fixture_stats_out_rows": 624,
+      "error": null
+    },
+    "2018-11-25": {
+      "day": "2018-11-25",
+      "status": "succeeded",
+      "legacy_rows": 476,
+      "fixtures_out_rows": 476,
+      "fixture_stats_out_rows": 476,
+      "error": null
+    },
+    "2018-11-26": {
+      "day": "2018-11-26",
+      "status": "succeeded",
+      "legacy_rows": 54,
+      "fixtures_out_rows": 54,
+      "fixture_stats_out_rows": 54,
+      "error": null
+    },
+    "2018-11-27": {
+      "day": "2018-11-27",
+      "status": "succeeded",
+      "legacy_rows": 105,
+      "fixtures_out_rows": 105,
+      "fixture_stats_out_rows": 105,
+      "error": null
+    },
+    "2018-11-28": {
+      "day": "2018-11-28",
+      "status": "succeeded",
+      "legacy_rows": 121,
+      "fixtures_out_rows": 121,
+      "fixture_stats_out_rows": 121,
+      "error": null
+    },
+    "2018-11-29": {
+      "day": "2018-11-29",
+      "status": "succeeded",
+      "legacy_rows": 105,
+      "fixtures_out_rows": 105,
+      "fixture_stats_out_rows": 105,
+      "error": null
+    },
+    "2018-11-30": {
+      "day": "2018-11-30",
+      "status": "succeeded",
+      "legacy_rows": 183,
+      "fixtures_out_rows": 183,
+      "fixture_stats_out_rows": 183,
+      "error": null
+    },
+    "2018-12-01": {
+      "day": "2018-12-01",
+      "status": "succeeded",
+      "legacy_rows": 483,
+      "fixtures_out_rows": 483,
+      "fixture_stats_out_rows": 483,
+      "error": null
+    },
+    "2018-12-02": {
+      "day": "2018-12-02",
+      "status": "succeeded",
+      "legacy_rows": 439,
+      "fixtures_out_rows": 439,
+      "fixture_stats_out_rows": 439,
+      "error": null
+    },
+    "2018-12-03": {
+      "day": "2018-12-03",
+      "status": "succeeded",
+      "legacy_rows": 88,
+      "fixtures_out_rows": 88,
+      "fixture_stats_out_rows": 88,
+      "error": null
+    },
+    "2018-12-04": {
+      "day": "2018-12-04",
+      "status": "succeeded",
+      "legacy_rows": 98,
+      "fixtures_out_rows": 98,
+      "fixture_stats_out_rows": 98,
+      "error": null
+    },
+    "2018-12-05": {
+      "day": "2018-12-05",
+      "status": "succeeded",
+      "legacy_rows": 126,
+      "fixtures_out_rows": 126,
+      "fixture_stats_out_rows": 126,
+      "error": null
+    },
+    "2018-12-06": {
+      "day": "2018-12-06",
+      "status": "succeeded",
+      "legacy_rows": 70,
+      "fixtures_out_rows": 70,
+      "fixture_stats_out_rows": 70,
+      "error": null
+    },
+    "2018-12-07": {
+      "day": "2018-12-07",
+      "status": "succeeded",
+      "legacy_rows": 122,
+      "fixtures_out_rows": 122,
+      "fixture_stats_out_rows": 122,
+      "error": null
+    },
+    "2018-12-08": {
+      "day": "2018-12-08",
+      "status": "succeeded",
+      "legacy_rows": 486,
+      "fixtures_out_rows": 486,
+      "fixture_stats_out_rows": 486,
+      "error": null
+    },
+    "2018-12-09": {
+      "day": "2018-12-09",
+      "status": "succeeded",
+      "legacy_rows": 374,
+      "fixtures_out_rows": 374,
+      "fixture_stats_out_rows": 374,
+      "error": null
+    },
+    "2018-12-10": {
+      "day": "2018-12-10",
+      "status": "succeeded",
+      "legacy_rows": 79,
+      "fixtures_out_rows": 79,
+      "fixture_stats_out_rows": 79,
+      "error": null
+    },
+    "2018-12-11": {
+      "day": "2018-12-11",
+      "status": "succeeded",
+      "legacy_rows": 83,
+      "fixtures_out_rows": 83,
+      "fixture_stats_out_rows": 83,
+      "error": null
+    },
+    "2018-12-12": {
+      "day": "2018-12-12",
+      "status": "succeeded",
+      "legacy_rows": 75,
+      "fixtures_out_rows": 75,
+      "fixture_stats_out_rows": 75,
+      "error": null
+    },
+    "2018-12-13": {
+      "day": "2018-12-13",
+      "status": "succeeded",
+      "legacy_rows": 60,
+      "fixtures_out_rows": 60,
+      "fixture_stats_out_rows": 60,
+      "error": null
+    },
+    "2018-12-14": {
+      "day": "2018-12-14",
+      "status": "succeeded",
+      "legacy_rows": 125,
+      "fixtures_out_rows": 125,
+      "fixture_stats_out_rows": 125,
+      "error": null
+    },
+    "2018-12-15": {
+      "day": "2018-12-15",
+      "status": "succeeded",
+      "legacy_rows": 379,
+      "fixtures_out_rows": 379,
+      "fixture_stats_out_rows": 379,
+      "error": null
+    },
+    "2018-12-16": {
+      "day": "2018-12-16",
+      "status": "succeeded",
+      "legacy_rows": 297,
+      "fixtures_out_rows": 297,
+      "fixture_stats_out_rows": 297,
+      "error": null
+    },
+    "2018-12-17": {
+      "day": "2018-12-17",
+      "status": "succeeded",
+      "legacy_rows": 51,
+      "fixtures_out_rows": 51,
+      "fixture_stats_out_rows": 51,
+      "error": null
+    },
+    "2018-12-18": {
+      "day": "2018-12-18",
+      "status": "succeeded",
+      "legacy_rows": 70,
+      "fixtures_out_rows": 70,
+      "fixture_stats_out_rows": 70,
+      "error": null
+    },
+    "2018-12-19": {
+      "day": "2018-12-19",
+      "status": "succeeded",
+      "legacy_rows": 74,
+      "fixtures_out_rows": 74,
+      "fixture_stats_out_rows": 74,
+      "error": null
+    },
+    "2018-12-20": {
+      "day": "2018-12-20",
+      "status": "succeeded",
+      "legacy_rows": 57,
+      "fixtures_out_rows": 57,
+      "fixture_stats_out_rows": 57,
+      "error": null
+    },
+    "2018-12-21": {
+      "day": "2018-12-21",
+      "status": "succeeded",
+      "legacy_rows": 89,
+      "fixtures_out_rows": 89,
+      "fixture_stats_out_rows": 89,
+      "error": null
+    },
+    "2018-12-22": {
+      "day": "2018-12-22",
+      "status": "succeeded",
+      "legacy_rows": 309,
+      "fixtures_out_rows": 309,
+      "fixture_stats_out_rows": 309,
+      "error": null
+    },
+    "2018-12-23": {
+      "day": "2018-12-23",
+      "status": "succeeded",
+      "legacy_rows": 122,
+      "fixtures_out_rows": 122,
+      "fixture_stats_out_rows": 122,
+      "error": null
+    },
+    "2018-12-24": {
+      "day": "2018-12-24",
+      "status": "succeeded",
+      "legacy_rows": 9,
+      "fixtures_out_rows": 9,
+      "fixture_stats_out_rows": 9,
+      "error": null
+    },
+    "2018-12-25": {
+      "day": "2018-12-25",
+      "status": "succeeded",
+      "legacy_rows": 21,
+      "fixtures_out_rows": 21,
+      "fixture_stats_out_rows": 21,
+      "error": null
+    },
+    "2018-12-26": {
+      "day": "2018-12-26",
+      "status": "succeeded",
+      "legacy_rows": 145,
+      "fixtures_out_rows": 145,
+      "fixture_stats_out_rows": 145,
+      "error": null
+    },
+    "2018-12-27": {
+      "day": "2018-12-27",
+      "status": "succeeded",
+      "legacy_rows": 32,
+      "fixtures_out_rows": 32,
+      "fixture_stats_out_rows": 32,
+      "error": null
+    },
+    "2018-12-28": {
+      "day": "2018-12-28",
+      "status": "succeeded",
+      "legacy_rows": 59,
+      "fixtures_out_rows": 59,
+      "fixture_stats_out_rows": 59,
+      "error": null
+    },
+    "2018-12-29": {
+      "day": "2018-12-29",
+      "status": "succeeded",
+      "legacy_rows": 170,
+      "fixtures_out_rows": 170,
+      "fixture_stats_out_rows": 170,
+      "error": null
+    },
+    "2018-12-30": {
+      "day": "2018-12-30",
+      "status": "succeeded",
+      "legacy_rows": 83,
+      "fixtures_out_rows": 83,
+      "fixture_stats_out_rows": 83,
+      "error": null
+    },
+    "2018-12-31": {
+      "day": "2018-12-31",
+      "status": "succeeded",
+      "legacy_rows": 20,
+      "fixtures_out_rows": 20,
+      "fixture_stats_out_rows": 20,
+      "error": null
+    },
+    "2019-01-04": {
+      "day": "2019-01-04",
+      "status": "succeeded",
+      "legacy_rows": 71,
+      "fixtures_out_rows": 71,
+      "fixture_stats_out_rows": 71,
+      "error": null
+    },
+    "2019-01-09": {
+      "day": "2019-01-09",
+      "status": "succeeded",
+      "legacy_rows": 46,
+      "fixtures_out_rows": 46,
+      "fixture_stats_out_rows": 46,
+      "error": null
+    },
+    "2019-12-24": {
+      "day": "2019-12-24",
+      "status": "succeeded",
+      "legacy_rows": 33,
+      "fixtures_out_rows": 33,
+      "fixture_stats_out_rows": 33,
+      "error": null
+    },
+    "2019-12-25": {
+      "day": "2019-12-25",
+      "status": "succeeded",
+      "legacy_rows": 37,
+      "fixtures_out_rows": 37,
+      "fixture_stats_out_rows": 37,
+      "error": null
+    },
+    "2020-03-19": {
+      "day": "2020-03-19",
+      "status": "succeeded",
+      "legacy_rows": 80,
+      "fixtures_out_rows": 80,
+      "fixture_stats_out_rows": 80,
+      "error": null
+    },
+    "2020-03-30": {
+      "day": "2020-03-30",
+      "status": "succeeded",
+      "legacy_rows": 43,
+      "fixtures_out_rows": 43,
+      "fixture_stats_out_rows": 43,
+      "error": null
+    },
+    "2020-04-02": {
+      "day": "2020-04-02",
+      "status": "succeeded",
+      "legacy_rows": 21,
+      "fixtures_out_rows": 21,
+      "fixture_stats_out_rows": 21,
+      "error": null
+    },
+    "2020-04-15": {
+      "day": "2020-04-15",
+      "status": "succeeded",
+      "legacy_rows": 80,
+      "fixtures_out_rows": 80,
+      "fixture_stats_out_rows": 80,
+      "error": null
+    },
+    "2020-04-16": {
+      "day": "2020-04-16",
+      "status": "succeeded",
+      "legacy_rows": 39,
+      "fixtures_out_rows": 39,
+      "fixture_stats_out_rows": 39,
+      "error": null
+    },
+    "2020-04-28": {
+      "day": "2020-04-28",
+      "status": "succeeded",
+      "legacy_rows": 1,
+      "fixtures_out_rows": 1,
+      "fixture_stats_out_rows": 1,
+      "error": null
+    },
+    "2020-04-29": {
+      "day": "2020-04-29",
+      "status": "succeeded",
+      "legacy_rows": 5,
+      "fixtures_out_rows": 5,
+      "fixture_stats_out_rows": 5,
+      "error": null
+    },
+    "2020-05-05": {
+      "day": "2020-05-05",
+      "status": "succeeded",
+      "legacy_rows": 29,
+      "fixtures_out_rows": 29,
+      "fixture_stats_out_rows": 29,
+      "error": null
+    },
+    "2020-05-12": {
+      "day": "2020-05-12",
+      "status": "succeeded",
+      "legacy_rows": 28,
+      "fixtures_out_rows": 28,
+      "fixture_stats_out_rows": 28,
+      "error": null
+    },
+    "2020-05-13": {
+      "day": "2020-05-13",
+      "status": "succeeded",
+      "legacy_rows": 60,
+      "fixtures_out_rows": 60,
+      "fixture_stats_out_rows": 60,
+      "error": null
+    },
+    "2020-05-19": {
+      "day": "2020-05-19",
+      "status": "succeeded",
+      "legacy_rows": 26,
+      "fixtures_out_rows": 26,
+      "fixture_stats_out_rows": 26,
+      "error": null
+    },
+    "2020-05-20": {
+      "day": "2020-05-20",
+      "status": "succeeded",
+      "legacy_rows": 56,
+      "fixtures_out_rows": 56,
+      "fixture_stats_out_rows": 56,
+      "error": null
+    },
+    "2020-05-21": {
+      "day": "2020-05-21",
+      "status": "succeeded",
+      "legacy_rows": 8,
+      "fixtures_out_rows": 8,
+      "fixture_stats_out_rows": 8,
+      "error": null
+    },
+    "2020-05-25": {
+      "day": "2020-05-25",
+      "status": "succeeded",
+      "legacy_rows": 24,
+      "fixtures_out_rows": 24,
+      "fixture_stats_out_rows": 24,
+      "error": null
+    },
+    "2024-12-24": {
+      "day": "2024-12-24",
+      "status": "succeeded",
+      "legacy_rows": 43,
+      "fixtures_out_rows": 43,
+      "fixture_stats_out_rows": 43,
+      "error": null
+    },
+    "2024-12-25": {
+      "day": "2024-12-25",
+      "status": "succeeded",
+      "legacy_rows": 25,
+      "fixtures_out_rows": 25,
+      "fixture_stats_out_rows": 25,
+      "error": null
+    },
+    "2025-12-25": {
+      "day": "2025-12-25",
+      "status": "succeeded",
+      "legacy_rows": 38,
+      "fixtures_out_rows": 38,
+      "fixture_stats_out_rows": 38,
+      "error": null
+    },
+    "2025-12-31": {
+      "day": "2025-12-31",
+      "status": "succeeded",
+      "legacy_rows": 49,
+      "fixtures_out_rows": 49,
+      "fixture_stats_out_rows": 49,
+      "error": null
+    },
+    "2026-02-19": {
+      "day": "2026-02-19",
+      "status": "succeeded",
+      "legacy_rows": 134,
+      "fixtures_out_rows": 134,
+      "fixture_stats_out_rows": 134,
+      "error": null
+    },
+    "2026-02-26": {
+      "day": "2026-02-26",
+      "status": "succeeded",
+      "legacy_rows": 150,
+      "fixtures_out_rows": 150,
+      "fixture_stats_out_rows": 150,
+      "error": null
+    },
+    "2026-03-18": {
+      "day": "2026-03-18",
+      "status": "succeeded",
+      "legacy_rows": 348,
+      "fixtures_out_rows": 348,
+      "fixture_stats_out_rows": 348,
+      "error": null
+    },
+    "2026-03-26": {
+      "day": "2026-03-26",
+      "status": "succeeded",
+      "legacy_rows": 141,
+      "fixtures_out_rows": 141,
+      "fixture_stats_out_rows": 141,
+      "error": null
+    },
+    "2026-03-30": {
+      "day": "2026-03-30",
+      "status": "succeeded",
+      "legacy_rows": 110,
+      "fixtures_out_rows": 110,
+      "fixture_stats_out_rows": 110,
+      "error": null
+    },
+    "2026-03-31": {
+      "day": "2026-03-31",
+      "status": "succeeded",
+      "legacy_rows": 240,
+      "fixtures_out_rows": 240,
+      "fixture_stats_out_rows": 240,
+      "error": null
+    },
+    "2026-04-02": {
+      "day": "2026-04-02",
+      "status": "succeeded",
+      "legacy_rows": 397,
+      "fixtures_out_rows": 397,
+      "fixture_stats_out_rows": 397,
+      "error": null
+    },
+    "2026-04-07": {
+      "day": "2026-04-07",
+      "status": "succeeded",
+      "legacy_rows": 189,
+      "fixtures_out_rows": 189,
+      "fixture_stats_out_rows": 189,
+      "error": null
+    },
+    "2026-04-09": {
+      "day": "2026-04-09",
+      "status": "succeeded",
+      "legacy_rows": 188,
+      "fixtures_out_rows": 188,
+      "fixture_stats_out_rows": 188,
+      "error": null
+    },
+    "2026-04-15": {
+      "day": "2026-04-15",
+      "status": "succeeded",
+      "legacy_rows": 276,
+      "fixtures_out_rows": 276,
+      "fixture_stats_out_rows": 276,
+      "error": null
+    },
+    "2026-04-16": {
+      "day": "2026-04-16",
+      "status": "succeeded",
+      "legacy_rows": 162,
+      "fixtures_out_rows": 162,
+      "fixture_stats_out_rows": 162,
+      "error": null
+    },
+    "2026-04-20": {
+      "day": "2026-04-20",
+      "status": "succeeded",
+      "legacy_rows": 119,
+      "fixtures_out_rows": 119,
+      "fixture_stats_out_rows": 119,
+      "error": null
+    }
+  }
+}
