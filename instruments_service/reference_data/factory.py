@@ -33,6 +33,7 @@ from .adapters.defi.marinade import MarinadeReferenceDataAdapter
 from .adapters.defi.morpho import MorphoReferenceDataAdapter
 from .adapters.defi.orca import OrcaReferenceDataAdapter
 from .adapters.defi.raydium import RaydiumReferenceDataAdapter
+from .adapters.defi.spark import SparkReferenceDataAdapter
 from .adapters.defi.uniswap_v2 import UniswapV2ReferenceDataAdapter
 from .adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
 from .adapters.defi.uniswap_v4 import UniswapV4ReferenceDataAdapter
@@ -150,7 +151,6 @@ _PROTOCOL_TO_ADAPTER_KEY: dict[str, str] = {
     "trader_joe_v2": "uniswap_v3",
     "gmx": "uniswap_v3",
     "sushiswap": "uniswap_v3",
-    "spark": "aave_v3",
 }
 
 from unified_api_contracts.registry.capability_declarations._defi import (  # noqa: E402, qg-inside-import
@@ -211,6 +211,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "polygon": PolygonReferenceDataAdapter,
     "polymarket": PolymarketReferenceDataAdapter,
     "raydium": RaydiumReferenceDataAdapter,
+    "spark": SparkReferenceDataAdapter,
     "tardis": TardisReferenceDataAdapter,
     "uniswap_v2": UniswapV2ReferenceDataAdapter,
     "uniswap_v3": UniswapV3ReferenceDataAdapter,
@@ -376,6 +377,7 @@ def get_adapter_for_canonical_venue(
         "fluid",
         "balancer",
         "curve",
+        "spark",
         # Solana adapters
         "drift",
         "kamino",
@@ -399,7 +401,7 @@ def get_adapter_for_canonical_venue(
         venue_prefix = parts[0] if len(parts) >= 1 else canonical_venue
         resolved_protocol = _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL.get(venue_prefix, adapter_key)
         # Only some adapters accept date (aave_v3, uniswap_v2/v3/v4)
-        accepts_date = {"uniswap_v2", "uniswap_v3", "uniswap_v4", "aave_v3", "compound_v3"}
+        accepts_date = {"uniswap_v2", "uniswap_v3", "uniswap_v4", "aave_v3", "compound_v3", "spark"}
         # Pass protocol_slug for adapters that support it (UniV3, AaveV3)
         supports_protocol_slug = {"uniswap_v3", "aave_v3"}
         kwargs: dict[str, str | None] = {"project_id": project_id, "api_key": api_key, "chain": chain}
