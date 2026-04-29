@@ -32,6 +32,10 @@ _EIGEN_DEPLOY_DATE = datetime(2024, 9, 17, tzinfo=UTC)
 # EIGEN contract address on Ethereum mainnet
 _EIGEN_ADDRESS = "0xec53bF9167f50cDEB3Ae105f56099aaaB9061F83"
 
+# EIGEN is a standard ERC-20 governance token with 18 decimals — fixed contract metadata.
+_EIGEN_DECIMALS = 18
+_EIGEN_ONCHAIN_SYMBOL = "EIGEN"
+
 # EIGEN is also traded on Binance as a spot pair — defined here for cross-reference
 # Actual Binance spot pair instruments are produced by the BinanceReferenceDataAdapter.
 EIGEN_BINANCE_SYMBOLS = ["EIGENUSDT", "EIGENETH"]
@@ -100,6 +104,18 @@ class EigenLayerReferenceDataAdapter(BaseReferenceDataAdapter):
                     status=InstrumentStatus.ACTIVE,
                     underlying=underlying,
                     available_from_datetime=_EIGEN_DEPLOY_DATE,
+                    # DeFi metadata (Phase 2c of
+                    # instruments_service_metadata_refactor_2026_04_29). EIGEN
+                    # is a vanilla ERC-20 governance token — pool_address and
+                    # base_asset_contract_address both resolve to the EIGEN
+                    # contract itself (it IS the on-chain instrument). 18
+                    # decimals is the standard ERC-20 default declared by the
+                    # deployed contract. quote_asset/atoken/debt_token are
+                    # left None — EIGEN is single-asset and not Aave-shaped.
+                    pool_address=address,
+                    base_asset_contract_address=address,
+                    base_asset_decimals=_EIGEN_DECIMALS,
+                    base_asset_symbol_onchain=_EIGEN_ONCHAIN_SYMBOL,
                 )
             )
 
