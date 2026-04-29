@@ -51,6 +51,24 @@ query GetPairs($first: Int!, $minReserve: BigDecimal!) {{
 _FETCH_LIMIT = 1000
 
 
+def _parse_decimals(value: object) -> int | None:
+    """Parse The Graph decimals string ("18") into an int, or None if missing/invalid."""
+    if value is None:
+        return None
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_str(value: object) -> str | None:
+    """Return non-empty string or None for empty / missing values."""
+    if value is None:
+        return None
+    s = str(value)
+    return s or None
+
+
 class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
     """Uniswap V2 reference data: pair discovery from The Graph subgraph."""
 
@@ -180,6 +198,11 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         base, quote = order_base_quote(sym0, sym1)
+        # Map raw tokens onto canonical base / quote slots after order_base_quote.
+        if base == sym0:
+            base_token, quote_token = token0, token1
+        else:
+            base_token, quote_token = token1, token0
 
         symbol = f"{base}-{quote}"
         venue_tag = f"UNISWAPV2-{self._chain}"
@@ -187,6 +210,8 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         available_since = parse_created_timestamp(pair.get("createdAtTimestamp"))
 
+        # Uniswap V2 has a single hard-coded fee of 0.30% = 30 bps for every pair.
+        # Surface it explicitly so downstream consumers don't special-case V2.
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=venue_tag,
@@ -202,6 +227,14 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             status=InstrumentStatus.ACTIVE,
             available_from_datetime=available_since,
+            pool_address=str(pair_id),
+            pool_fee_tier=30,
+            base_asset_contract_address=_optional_str(base_token.get("id")),
+            base_asset_decimals=_parse_decimals(base_token.get("decimals")),
+            base_asset_symbol_onchain=_optional_str(base_token.get("symbol")),
+            quote_asset_contract_address=_optional_str(quote_token.get("id")),
+            quote_asset_decimals=_parse_decimals(quote_token.get("decimals")),
+            quote_asset_symbol_onchain=_optional_str(quote_token.get("symbol")),
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
