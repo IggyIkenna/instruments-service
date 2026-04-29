@@ -49,12 +49,14 @@ query GetPools($chain: [GqlChain!]!, $first: Int!, $skip: Int!) {
     chain
     protocolVersion
     createTime
+    dynamicData {
+      totalLiquidity
+      swapFee
+    }
     poolTokens {
       address
       symbol
-    }
-    dynamicData {
-      totalLiquidity
+      decimals
     }
   }
 }
@@ -72,6 +74,40 @@ _CHAIN_TO_GQL = {
     "GNOSIS": "GNOSIS",
     "AVALANCHE": "AVALANCHE",
 }
+
+
+def _parse_decimals(value: object) -> int | None:
+    """Parse decimals into an int, or None if missing/invalid."""
+    if value is None:
+        return None
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_str(value: object) -> str | None:
+    """Return a non-empty string or None."""
+    if value is None:
+        return None
+    s = str(value)
+    return s or None
+
+
+def _swap_fee_to_bps(swap_fee: object) -> int | None:
+    """Convert Balancer swapFee (decimal string e.g. "0.003") to basis points (30).
+
+    Returns None for missing or invalid values, and 0 for legitimate zero-fee pools.
+    """
+    if swap_fee is None:
+        return None
+    try:
+        fee = float(str(swap_fee))
+    except (TypeError, ValueError):
+        return None
+    if fee < 0:
+        return None
+    return round(fee * 10000)
 
 
 class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
@@ -169,14 +205,23 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
         if not pool_address or not isinstance(tokens, list) or len(tokens) < 2:
             return None
 
-        sym0 = str(tokens[0].get("symbol", "UNKNOWN")).upper()
-        sym1 = str(tokens[1].get("symbol", "UNKNOWN")).upper()
+        token0 = tokens[0] if isinstance(tokens[0], dict) else {}
+        token1 = tokens[1] if isinstance(tokens[1], dict) else {}
+        sym0 = str(token0.get("symbol", "UNKNOWN")).upper()
+        sym1 = str(token1.get("symbol", "UNKNOWN")).upper()
 
         symbol = f"{sym0}-{sym1}"
         venue_tag = f"BALANCER-{self._chain}"
         instrument_key = f"{venue_tag}:POOL:{symbol}"
 
         available_since = parse_created_timestamp(pool.get("createTime"))
+
+        # Balancer dynamicData.swapFee is a decimal string ("0.003" = 0.30%).
+        # Convert to basis points: 0.003 * 10000 = 30.
+        dynamic_data = pool.get("dynamicData")
+        swap_fee_bps: int | None = None
+        if isinstance(dynamic_data, dict):
+            swap_fee_bps = _swap_fee_to_bps(dynamic_data.get("swapFee"))
 
         return InstrumentRecord(
             instrument_key=instrument_key,
@@ -194,6 +239,14 @@ class BalancerReferenceDataAdapter(BaseReferenceDataAdapter):
             status=InstrumentStatus.ACTIVE,
             underlying=pool_name if pool_name else None,
             available_from_datetime=available_since,
+            pool_address=str(pool_address),
+            pool_fee_tier=swap_fee_bps,
+            base_asset_contract_address=_optional_str(token0.get("address")),
+            base_asset_decimals=_parse_decimals(token0.get("decimals")),
+            base_asset_symbol_onchain=_optional_str(token0.get("symbol")),
+            quote_asset_contract_address=_optional_str(token1.get("address")),
+            quote_asset_decimals=_parse_decimals(token1.get("decimals")),
+            quote_asset_symbol_onchain=_optional_str(token1.get("symbol")),
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
