@@ -189,6 +189,31 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
         symbol = f"{collateral_symbol}-{loan_symbol}"
         instrument_key = f"{venue_tag}:LENDING_MARKET:{symbol}:{market_key[:8]}"
 
+        # DeFi metadata: Morpho Blue uses the bytes32 uniqueKey as the
+        # canonical market identifier; surface that as pool_address along
+        # with collateral (base) and loan (quote) ERC-20 contract info.
+        # Phase 2a of instruments_service_metadata_refactor_2026_04_29.
+        coll_addr_obj = collateral_asset.get("address")
+        coll_addr: str | None = str(coll_addr_obj) if coll_addr_obj else None
+        loan_addr_obj = loan_asset.get("address")
+        loan_addr: str | None = str(loan_addr_obj) if loan_addr_obj else None
+        coll_decimals_raw = collateral_asset.get("decimals")
+        coll_decimals: int | None
+        if isinstance(coll_decimals_raw, int):
+            coll_decimals = coll_decimals_raw
+        elif isinstance(coll_decimals_raw, str) and coll_decimals_raw.isdigit():
+            coll_decimals = int(coll_decimals_raw)
+        else:
+            coll_decimals = None
+        loan_decimals_raw = loan_asset.get("decimals")
+        loan_decimals: int | None
+        if isinstance(loan_decimals_raw, int):
+            loan_decimals = loan_decimals_raw
+        elif isinstance(loan_decimals_raw, str) and loan_decimals_raw.isdigit():
+            loan_decimals = int(loan_decimals_raw)
+        else:
+            loan_decimals = None
+
         return InstrumentRecord(
             instrument_key=instrument_key,
             venue=venue_tag,
@@ -204,6 +229,14 @@ class MorphoReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             status=InstrumentStatus.ACTIVE,
             available_from_datetime=available_since or get_protocol_floor_date("morpho", "ETHEREUM"),
+            # DeFi metadata
+            pool_address=market_key,
+            base_asset_contract_address=coll_addr,
+            base_asset_decimals=coll_decimals,
+            base_asset_symbol_onchain=collateral_symbol or None,
+            quote_asset_contract_address=loan_addr,
+            quote_asset_decimals=loan_decimals,
+            quote_asset_symbol_onchain=loan_symbol or None,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:

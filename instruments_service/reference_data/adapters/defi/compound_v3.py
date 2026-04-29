@@ -212,6 +212,25 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             available_since = get_protocol_floor_date("compound_v3", self._chain)
 
         market_name = str(config.get("name", ""))
+
+        # DeFi metadata: surface Comet proxy + base token ERC-20 info on
+        # InstrumentRecord (Phase 2a of
+        # instruments_service_metadata_refactor_2026_04_29). pool_address =
+        # cometProxy (the deployment) so MTDS lending_indices handlers can
+        # call getSupplyRate / getBorrowRate without re-querying The Graph.
+        comet_proxy = market.get("cometProxy")
+        pool_address: str | None = str(comet_proxy) if comet_proxy else str(market_id) if market_id else None
+        underlying_addr_obj = token.get("id")
+        underlying_addr: str | None = str(underlying_addr_obj) if underlying_addr_obj else None
+        decimals_raw = token.get("decimals")
+        decimals_int: int | None
+        if isinstance(decimals_raw, int):
+            decimals_int = decimals_raw
+        elif isinstance(decimals_raw, str) and decimals_raw.isdigit():
+            decimals_int = int(decimals_raw)
+        else:
+            decimals_int = None
+
         base_kwargs = {
             "venue": venue_tag,
             "raw_symbol": market_name or str(market_id),
@@ -227,6 +246,11 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             "status": InstrumentStatus.ACTIVE,
             "underlying": sym_upper,
             "available_from_datetime": available_since,
+            # DeFi metadata
+            "pool_address": pool_address,
+            "base_asset_contract_address": underlying_addr,
+            "base_asset_decimals": decimals_int,
+            "base_asset_symbol_onchain": symbol or None,
         }
 
         # Supply instrument (lend base asset)
