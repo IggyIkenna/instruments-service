@@ -222,6 +222,29 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             available_since = get_protocol_floor_date("aave_v3", self._chain)
 
         sym_upper = symbol.upper()
+
+        # DeFi metadata: surface aToken / debtToken / underlying ERC-20
+        # information from the subgraph onto InstrumentRecord (Phase 2a of
+        # instruments_service_metadata_refactor_2026_04_29). Aave V3 reserves
+        # don't expose a separate poolAddress on the subgraph schema we query
+        # — the reserve.id IS the canonical reserve identifier (lower-cased
+        # encoded address pair); we set pool_address = reserve.id so MTDS
+        # liquidations / lending_indices handlers don't have to re-query.
+        atoken_obj = reserve.get("aToken")
+        atoken_addr = str(atoken_obj.get("id", "")) if isinstance(atoken_obj, dict) and atoken_obj.get("id") else None
+        decimals_raw = reserve.get("decimals")
+        decimals_int: int | None
+        if isinstance(decimals_raw, int):
+            decimals_int = decimals_raw
+        elif isinstance(decimals_raw, str) and decimals_raw.isdigit():
+            decimals_int = int(decimals_raw)
+        else:
+            decimals_int = None
+        reserve_id = str(reserve.get("id", "")) or None
+        # debt token address is not currently returned by the reserves query;
+        # set None for now (Phase 2a leaves room for future query expansion).
+        debt_token_addr: str | None = None
+
         base_kwargs = {
             "venue": venue_tag,
             "raw_symbol": underlying,
@@ -237,6 +260,13 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             "status": InstrumentStatus.ACTIVE,
             "underlying": sym_upper,
             "available_from_datetime": available_since,
+            # DeFi metadata
+            "pool_address": reserve_id,
+            "base_asset_contract_address": underlying,
+            "base_asset_decimals": decimals_int,
+            "base_asset_symbol_onchain": symbol or None,
+            "atoken_address": atoken_addr,
+            "debt_token_address": debt_token_addr,
         }
 
         a_symbol = f"A{sym_upper}"
