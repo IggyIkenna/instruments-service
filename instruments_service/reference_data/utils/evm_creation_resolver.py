@@ -63,6 +63,12 @@ LENDING_PROTOCOL_DEPLOY_DATES: dict[str, dict[str, datetime]] = {
     "fluid": {
         "ETHEREUM": datetime(2024, 3, 1, tzinfo=UTC),
     },
+    "spark": {
+        # Spark Protocol launched on Ethereum mainnet in early-May 2023
+        # (MakerDAO-fork; first wstETH market block 17192443 ≈ 2023-03-07,
+        # full liquidity-mining go-live 2023-05-09).
+        "ETHEREUM": datetime(2023, 5, 9, tzinfo=UTC),
+    },
 }
 
 
