@@ -362,11 +362,25 @@ def _parse_venues_filter(raw: str | None) -> set[str] | None:
 
 
 def _resolve_api_keys() -> dict[str, str]:
-    """Load API keys from Secret Manager (service-account auth via ADC)."""
+    """Load API keys from Secret Manager (service-account auth via ADC).
+
+    ``validate_api_keys_for_venues`` expects venue identifiers (e.g.
+    ``UNISWAPV3-ETHEREUM``), not data-source names — it routes through
+    UAC ``get_required_secrets()`` which only knows venue keys. We pass
+    a representative DeFi venue per data-source to drive the SM lookup;
+    the returned dict is keyed on data-source name (``thegraph`` /
+    ``balancer_api_v3``) which is what adapters expect.
+    """
     # Lazy import — the auth path probes SM on import in some configurations.
     from unified_trading_library import validate_api_keys_for_venues
 
-    keys = validate_api_keys_for_venues(["thegraph", "balancer_api_v3"])
+    keys = validate_api_keys_for_venues(
+        [
+            "UNISWAPV3-ETHEREUM",  # drives thegraph
+            "AAVEV3-ETHEREUM",  # also thegraph (idempotent)
+            "BALANCER-ETHEREUM",  # drives balancer_api_v3 if mapped
+        ]
+    )
     return {k: v for k, v in keys.items() if v}
 
 
