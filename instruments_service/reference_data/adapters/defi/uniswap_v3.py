@@ -415,6 +415,12 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         base, quote = order_base_quote(sym0, sym1)
+        # Determine which raw token corresponds to base vs quote after canonical
+        # ordering (order_base_quote may swap sym0 / sym1).
+        if base == sym0:
+            base_token, quote_token = token0, token1
+        else:
+            base_token, quote_token = token1, token0
 
         fee_str = str(fee_tier) if fee_tier else "0"
         symbol = f"{base}-{quote}:{fee_str}"
@@ -422,6 +428,16 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_key = f"{venue_tag}:POOL:{symbol}"
 
         available_since = parse_created_timestamp(pool.get("createdAtTimestamp"))
+
+        # Uniswap V3 feeTier is in hundredths-of-bps (e.g. 500 = 0.05%, 3000 = 0.3%).
+        # Plan asks for basis points: feeTier / 100 (e.g. 3000 → 30 bps).
+        pool_fee_tier_bps = self._parse_fee_tier_bps(fee_tier)
+        base_decimals = self._parse_decimals(base_token.get("decimals"))
+        quote_decimals = self._parse_decimals(quote_token.get("decimals"))
+        base_addr = self._parse_address(base_token.get("id"))
+        quote_addr = self._parse_address(quote_token.get("id"))
+        base_sym_onchain = self._parse_optional_str(base_token.get("symbol"))
+        quote_sym_onchain = self._parse_optional_str(quote_token.get("symbol"))
 
         return InstrumentRecord(
             instrument_key=instrument_key,
@@ -438,7 +454,51 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             status=InstrumentStatus.ACTIVE,
             available_from_datetime=available_since,
+            pool_address=str(pool_id),
+            pool_fee_tier=pool_fee_tier_bps,
+            base_asset_contract_address=base_addr,
+            base_asset_decimals=base_decimals,
+            base_asset_symbol_onchain=base_sym_onchain,
+            quote_asset_contract_address=quote_addr,
+            quote_asset_decimals=quote_decimals,
+            quote_asset_symbol_onchain=quote_sym_onchain,
         )
+
+    @staticmethod
+    def _parse_fee_tier_bps(fee_tier: object) -> int | None:
+        """Convert subgraph feeTier (hundredths-of-bps) to bps. None for missing/zero."""
+        if fee_tier is None:
+            return None
+        try:
+            raw = int(str(fee_tier))
+        except (TypeError, ValueError):
+            return None
+        if raw <= 0:
+            return None
+        return raw // 100
+
+    @staticmethod
+    def _parse_decimals(value: object) -> int | None:
+        if value is None:
+            return None
+        try:
+            return int(str(value))
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _parse_address(value: object) -> str | None:
+        if value is None:
+            return None
+        addr = str(value)
+        return addr or None
+
+    @staticmethod
+    def _parse_optional_str(value: object) -> str | None:
+        if value is None:
+            return None
+        s = str(value)
+        return s or None
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         instruments = await self.get_instruments()

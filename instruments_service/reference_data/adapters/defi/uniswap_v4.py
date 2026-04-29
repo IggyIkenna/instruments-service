@@ -52,6 +52,35 @@ _FETCH_LIMIT = 1000
 _MAX_SKIP = 5000
 
 
+def _parse_fee_tier_bps(fee_tier: object) -> int | None:
+    """Convert subgraph feeTier (hundredths-of-bps) to bps (e.g. 3000 -> 30)."""
+    if fee_tier is None:
+        return None
+    try:
+        raw = int(str(fee_tier))
+    except (TypeError, ValueError):
+        return None
+    if raw <= 0:
+        return None
+    return raw // 100
+
+
+def _parse_decimals(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    s = str(value)
+    return s or None
+
+
 class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
     """Uniswap V4 reference data: pool discovery from The Graph subgraph.
 
@@ -197,6 +226,11 @@ class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
             return None
 
         base, quote = order_base_quote(sym0, sym1)
+        # Map raw tokens onto canonical base / quote slots after order_base_quote.
+        if base == sym0:
+            base_token, quote_token = token0, token1
+        else:
+            base_token, quote_token = token1, token0
 
         fee_str = str(fee_tier) if fee_tier else "0"
         symbol = f"{base}-{quote}:{fee_str}"
@@ -220,6 +254,14 @@ class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             status=InstrumentStatus.ACTIVE,
             available_from_datetime=available_since,
+            pool_address=str(pool_id),
+            pool_fee_tier=_parse_fee_tier_bps(fee_tier),
+            base_asset_contract_address=_optional_str(base_token.get("id")),
+            base_asset_decimals=_parse_decimals(base_token.get("decimals")),
+            base_asset_symbol_onchain=_optional_str(base_token.get("symbol")),
+            quote_asset_contract_address=_optional_str(quote_token.get("id")),
+            quote_asset_decimals=_parse_decimals(quote_token.get("decimals")),
+            quote_asset_symbol_onchain=_optional_str(quote_token.get("symbol")),
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:

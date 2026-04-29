@@ -50,6 +50,24 @@ _CURVE_DEPLOY_DATES: dict[str, datetime] = {
 }
 
 
+def _parse_decimals(value: object) -> int | None:
+    """Parse Curve API decimals (string or int) into an int, or None."""
+    if value is None:
+        return None
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_str(value: object) -> str | None:
+    """Return non-empty string or None."""
+    if value is None:
+        return None
+    s = str(value)
+    return s or None
+
+
 class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
     """Curve reference data: pool discovery from Curve REST API.
 
@@ -136,6 +154,9 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
             venue_tag = f"CURVE-{self._chain}"
             instrument_key = f"{venue_tag}:POOL:{symbol}"
 
+            # Curve does not advertise a pool-level fee tier in the public
+            # REST envelope (per-pool fees vary; require on-chain fee()
+            # / future API surfacing). Leave pool_fee_tier=None.
             results.append(
                 InstrumentRecord(
                     instrument_key=instrument_key,
@@ -153,6 +174,14 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
                     status=InstrumentStatus.ACTIVE,
                     underlying=pool_name if pool_name else None,
                     available_from_datetime=deploy_date,
+                    pool_address=str(pool_address),
+                    pool_fee_tier=None,
+                    base_asset_contract_address=_optional_str(coin0.get("address")),
+                    base_asset_decimals=_parse_decimals(coin0.get("decimals")),
+                    base_asset_symbol_onchain=_optional_str(coin0.get("symbol")),
+                    quote_asset_contract_address=_optional_str(coin1.get("address")),
+                    quote_asset_decimals=_parse_decimals(coin1.get("decimals")),
+                    quote_asset_symbol_onchain=_optional_str(coin1.get("symbol")),
                 )
             )
 
