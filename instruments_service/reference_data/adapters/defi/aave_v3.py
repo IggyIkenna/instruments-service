@@ -134,7 +134,22 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             self._log_fetch_error(exc)
             raise ConnectionError(str(exc)) from exc
 
-        reserves: list[dict[str, object]] = data.get("data", {}).get("reserves", [])
+        # Defensive: subgraph occasionally returns ``{"errors": [...]}`` (no
+        # "data" key) on rate-limit / transient indexing issues. Handle the
+        # None case rather than crashing the migration / collector. Also
+        # covers Spark (MakerDAO fork using same schema) which has been the
+        # main offender — sustained errors there should not take down the
+        # whole adapter run.
+        data_field = data.get("data") if isinstance(data, dict) else None
+        if not isinstance(data_field, dict):
+            logger.warning(
+                "%s: subgraph response missing 'data' field for chain=%s; treating as empty (response: %s)",
+                self._venue_prefix,
+                self._chain,
+                str(data)[:200],
+            )
+            return []
+        reserves: list[dict[str, object]] = data_field.get("reserves", [])
         venue_tag = f"{self._venue_prefix}-{self._chain}"
 
         # Collect aToken addresses for creation timestamp resolution
