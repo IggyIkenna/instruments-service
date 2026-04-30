@@ -157,9 +157,40 @@ class CatalogueBuilder:
             date=None,
             mode="batch",
         )
+        # Dedupe by canonical instrument_key. The URDI Tardis adapter emits
+        # one record per exchange listing, but listings that share a canonical
+        # quote (e.g. OKX-SPOT BTC-TRY and BTC-AUD both stamped quoteCurrency=
+        # USD by Tardis → both build_instrument_id() to OKX-SPOT:SPOT_PAIR:
+        # BTC-USD) collapse to the same canonical key. Without dedupe, the
+        # parquet has multiple rows per key and downstream consumers
+        # (UI watchlist React keys, MDPS shard keys, feature caches) hit
+        # uniqueness assumptions and emit warnings or drop rows.
+        # First record wins — they share the same canonical exposure
+        # semantically, and the raw_symbol divergence is preserved on the
+        # winning row. Filed as a follow-up: URDI Tardis adapter should
+        # filter the multi-fiat-rail variants before emit.
         enriched: list[InstrumentRecord] = []
+        seen_keys: set[str] = set()
+        dups_dropped = 0
         for rec in result.records:
-            enriched.append(_populate_availability(_ensure_canonical_id(rec)))
+            normalized = _populate_availability(_ensure_canonical_id(rec))
+            key = normalized.instrument_key
+            if not key:
+                # Defensive — _ensure_canonical_id should always populate it.
+                enriched.append(normalized)
+                continue
+            if key in seen_keys:
+                dups_dropped += 1
+                continue
+            seen_keys.add(key)
+            enriched.append(normalized)
+        if dups_dropped:
+            logger.warning(
+                "CatalogueBuilder[%s]: dropped %d duplicate-key records "
+                "(URDI Tardis multi-fiat-rail collapse — root fix in URDI adapter)",
+                category,
+                dups_dropped,
+            )
         logger.info(
             "CatalogueBuilder[%s]: built %d records across %d venues",
             category,
