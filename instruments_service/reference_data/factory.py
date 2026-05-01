@@ -77,6 +77,13 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "DERIBIT-COMBO": "deribit_combo",
     "COINBASE-SPOT": "tardis",
     "UPBIT": "tardis",
+    # Tier-3 CeFi (added 2026-05-01) — Tardis archives spot + perp/dated futures.
+    "BITFINEX-SPOT": "tardis",
+    "BITFINEX-FUTURES": "tardis",
+    "BITGET-SPOT": "tardis",
+    "BITGET-FUTURES": "tardis",
+    "KRAKEN-SPOT": "tardis",
+    "KRAKEN-FUTURES": "tardis",
     # Non-Tardis CeFi
     "HYPERLIQUID": "hyperliquid",
     "ASTER": "aster",
