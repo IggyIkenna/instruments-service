@@ -10,7 +10,7 @@
 #
 # Usage:
 #   bash scripts/run_local.sh                         # DEFI, March 22nd 2026
-#   bash scripts/run_local.sh DEFI 2026-03-22         # explicit category + date
+#   bash scripts/run_local.sh DEFI 2026-03-22         # explicit asset group + date
 #   bash scripts/run_local.sh CEFI 2026-03-22
 #   bash scripts/run_local.sh ALL 2026-03-22 2026-03-22
 
@@ -24,11 +24,11 @@ if [[ -f ".env" ]]; then
     set -a && source .env && set +a
 fi
 
-CATEGORY="${1:-DEFI}"
+ASSET_GROUP="${1:-DEFI}"
 START_DATE="${2:-2026-03-22}"
 END_DATE="${3:-$START_DATE}"
 
-export _RUN_CATEGORY="$CATEGORY"
+export _RUN_ASSET_GROUP="$ASSET_GROUP"
 export _RUN_START="$START_DATE"
 export _RUN_END="$END_DATE"
 
@@ -42,7 +42,7 @@ export PROTOCOL_DATA_SINK_BACKEND="${PROTOCOL_DATA_SINK_BACKEND:-gcp}"
 
 echo "[run_local] Project: ${GCP_PROJECT_ID}"
 echo "[run_local] Mock mode: ${CLOUD_MOCK_MODE:-false}"
-echo "[run_local] Category: ${CATEGORY}  |  ${START_DATE} → ${END_DATE}"
+echo "[run_local] Asset group: ${ASSET_GROUP}  |  ${START_DATE} → ${END_DATE}"
 echo ""
 
 .venv/bin/python - << PYEOF
@@ -63,14 +63,14 @@ sink = GCSEventSink(
 )
 setup_events(service_name="instruments-service", mode="batch", sink=sink)
 
-from instruments_service.engine.orchestrator import process_instruments, get_venues_for_categories, is_venue_available
+from instruments_service.engine.orchestrator import process_instruments, get_venues_for_asset_groups, is_venue_available
 from unified_trading_library import validate_api_keys_for_venues
 
-category = os.environ.get("_RUN_CATEGORY", "DEFI")
+category = os.environ.get("_RUN_ASSET_GROUP", "DEFI")
 start_date = os.environ.get("_RUN_START", "2026-03-22")
 end_date = os.environ.get("_RUN_END", start_date)
 
-venues = get_venues_for_categories([category])
+venues = get_venues_for_asset_groups([category])
 active = [v for v in venues if is_venue_available(v, start_date)]
 print(f"Active venues for {category}: {len(active)}")
 

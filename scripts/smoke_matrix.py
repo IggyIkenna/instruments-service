@@ -28,7 +28,7 @@ Usage::
     python -m instruments_service.smoke --execute
 
     # Scoped smoke (single category)
-    python -m instruments_service.smoke --execute --category CEFI
+    python -m instruments_service.smoke --execute --asset-group CEFI
 
     # JSON report for CI parsing
     python -m instruments_service.smoke --execute --report /tmp/smoke.json
@@ -55,7 +55,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
-from unified_api_contracts import DATA_TYPES_BY_CATEGORY, VENUES_BY_CATEGORY
+from unified_api_contracts import DATA_TYPES_BY_ASSET_GROUP, VENUES_BY_ASSET_GROUP
 from unified_trading_library import (
     get_bucket_name,
     get_project_id,
@@ -75,15 +75,15 @@ _SERVICE_NAME: str = "instruments-service"
 
 @dataclass
 class SmokeCell:
-    """A single (service, category, venue, data_type) smoke cell."""
+    """A single (service, asset_group, venue, data_type) smoke cell."""
 
-    category: str
+    asset_group: str
     venue: str
     data_type: str
     sports_provider: str | None = None
 
     def label(self) -> str:
-        base = f"{self.category}:{self.venue}:{self.data_type}"
+        base = f"{self.asset_group}:{self.venue}:{self.data_type}"
         if self.sports_provider:
             base = f"{base}:{self.sports_provider}"
         return base
@@ -125,11 +125,11 @@ class SmokeReport:
 
 
 def enumerate_cells(
-    category_filter: str | None = None,
+    asset_group_filter: str | None = None,
     venue_filter: str | None = None,
     data_type_filter: str | None = None,
 ) -> list[SmokeCell]:
-    """Enumerate viable (category, venue, data_type) cells for instruments-service.
+    """Enumerate viable (asset_group, venue, data_type) cells for instruments-service.
 
     SPORTS cells are specialised: instruments-service drives SPORTS via
     ``--sports-provider`` rather than ``--venues`` + ``--data-types``. api-football
@@ -137,25 +137,25 @@ def enumerate_cells(
     ``codex/02-data/sports-adapter-dependency-order.md``.
     """
     cells: list[SmokeCell] = []
-    categories = [c.upper() for c in DATA_TYPES_BY_CATEGORY]
+    asset_groups = [c.upper() for c in DATA_TYPES_BY_ASSET_GROUP]
 
-    for category in categories:
-        if category_filter and category != category_filter.upper():
+    for ag in asset_groups:
+        if asset_group_filter and ag != asset_group_filter.upper():
             continue
 
-        if category == "SPORTS":
+        if ag == "SPORTS":
             cells.extend(_enumerate_sports_cells(data_type_filter, venue_filter))
             continue
 
-        venues = VENUES_BY_CATEGORY.get(category.lower(), [])
-        data_types = DATA_TYPES_BY_CATEGORY.get(category.lower(), [])
+        venues = VENUES_BY_ASSET_GROUP.get(ag.lower(), [])
+        data_types = DATA_TYPES_BY_ASSET_GROUP.get(ag.lower(), [])
         for venue in venues:
             if venue_filter and venue != venue_filter:
                 continue
             for data_type in data_types:
                 if data_type_filter and data_type != data_type_filter:
                     continue
-                cells.append(SmokeCell(category=category, venue=venue, data_type=data_type))
+                cells.append(SmokeCell(asset_group=ag, venue=venue, data_type=data_type))
 
     return cells
 
@@ -178,7 +178,7 @@ def _enumerate_sports_cells(
         "UNDERSTAT",
         "FOOTYSTATS",
     ]
-    sports_data_types = DATA_TYPES_BY_CATEGORY.get("sports", [])
+    sports_data_types = DATA_TYPES_BY_ASSET_GROUP.get("sports", [])
     cells: list[SmokeCell] = []
     for provider in providers_ordered:
         # SPORTS instruments-service writes reference data (fixtures, odds, etc.).
@@ -191,7 +191,7 @@ def _enumerate_sports_cells(
                 continue
             cells.append(
                 SmokeCell(
-                    category="SPORTS",
+                    asset_group="SPORTS",
                     venue=provider,  # model provider as the "venue" axis for SPORTS
                     data_type=data_type,
                     sports_provider=provider,
@@ -205,10 +205,10 @@ def _enumerate_sports_cells(
 # ---------------------------------------------------------------------------
 
 
-def resolve_test_bucket(category: str, project_id: str | None = None) -> str:
-    """Return the ``-test-`` bucket name for instruments-service + category."""
+def resolve_test_bucket(asset_group: str, project_id: str | None = None) -> str:
+    """Return the ``-test-`` bucket name for instruments-service + asset group."""
     pid = project_id or get_project_id()
-    prod = get_bucket_name("instruments", category, pid)
+    prod = get_bucket_name("instruments", asset_group, pid)
     return prod.replace(f"-{pid}", f"-test-{pid}")
 
 
@@ -218,7 +218,7 @@ def expected_write_prefix(cell: SmokeCell, smoke_date: str) -> str:
     SPORTS uses ``sports_reference/by_date/day=...`` (NOT ``instrument_availability/``).
     Other categories use ``instrument_availability/by_date/day={date}/venue={venue}/``.
     """
-    if cell.category == "SPORTS":
+    if cell.asset_group == "SPORTS":
         return f"sports_reference/by_date/day={smoke_date}/"
     return f"instrument_availability/by_date/day={smoke_date}/venue={cell.venue}/"
 
@@ -268,11 +268,13 @@ def verify_manifest_row(
     # Filter by the cell's shard tuple. SPORTS manifests key on
     # sports_provider/entity, others key on venue+data_type.
     mask = df.get("date", df.get("day")) == smoke_date
-    if "category" in df.columns:
-        mask = mask & (df["category"].astype(str).str.upper() == cell.category)
-    if "venue" in df.columns and cell.category != "SPORTS":
+    if "asset_group" in df.columns:
+        mask = mask & (df["asset_group"].astype(str).str.upper() == cell.asset_group)
+    elif "category" in df.columns:
+        mask = mask & (df["category"].astype(str).str.upper() == cell.asset_group)
+    if "venue" in df.columns and cell.asset_group != "SPORTS":
         mask = mask & (df["venue"] == cell.venue)
-    if "data_type" in df.columns and cell.category != "SPORTS":
+    if "data_type" in df.columns and cell.asset_group != "SPORTS":
         mask = mask & (df["data_type"] == cell.data_type)
 
     matching = df[mask]
@@ -291,7 +293,7 @@ def verify_manifest_row(
 
 
 def build_cli_args(cell: SmokeCell, smoke_date: str) -> list[str]:
-    """Build the subprocess argv for one cell. SSOT: cli-convention.md (--operation/--mode/--category)."""
+    """Build the subprocess argv for one cell. SSOT: cli-convention.md (--operation/--mode/--asset-group)."""
     argv: list[str] = [
         sys.executable,
         "-m",
@@ -300,14 +302,14 @@ def build_cli_args(cell: SmokeCell, smoke_date: str) -> list[str]:
         "instruments",
         "--mode",
         "batch",
-        "--category",
-        cell.category,
+        "--asset-group",
+        cell.asset_group,
         "--start-date",
         smoke_date,
         "--end-date",
         smoke_date,
     ]
-    if cell.category == "SPORTS":
+    if cell.asset_group == "SPORTS":
         # SPORTS is driven via --sports-provider, not --venues.
         if cell.sports_provider:
             argv.extend(["--sports-provider", cell.sports_provider])
@@ -333,7 +335,7 @@ def run_cell(
     started = datetime.now(UTC)
     result = CellResult(cell=cell, status="failed", attempt_ts=attempt_ts)
 
-    bucket = resolve_test_bucket(cell.category, project_id)
+    bucket = resolve_test_bucket(cell.asset_group, project_id)
     prefix = expected_write_prefix(cell, smoke_date)
     argv = build_cli_args(cell, smoke_date)
     env = dict(os.environ)
@@ -506,7 +508,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="instruments-service smoke matrix (TEST-bucket routed).",
     )
     parser.add_argument(
-        "--category", type=str, default=None, help="Restrict to one category (CEFI/TRADFI/DEFI/SPORTS/PREDICTION)"
+        "--asset-group", type=str, default=None, help="Restrict to one category (CEFI/TRADFI/DEFI/SPORTS/PREDICTION)"
     )
     parser.add_argument("--venue", type=str, default=None, help="Restrict to one venue (or sports provider)")
     parser.add_argument("--data-type", type=str, default=None, help="Restrict to one data_type")
@@ -528,14 +530,14 @@ def main(argv: list[str] | None = None) -> int:
 
     smoke_date = args.date or _default_smoke_date()
     cells = enumerate_cells(
-        category_filter=args.category,
+        asset_group_filter=args.asset_group,
         venue_filter=args.venue,
         data_type_filter=args.data_type,
     )
     logger.info(
-        "enumerated %d cells (category=%s venue=%s data_type=%s execute=%s)",
+        "enumerated %d cells (asset_group=%s venue=%s data_type=%s execute=%s)",
         len(cells),
-        args.category,
+        args.asset_group,
         args.venue,
         args.data_type,
         args.execute,

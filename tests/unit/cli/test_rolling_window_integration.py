@@ -39,7 +39,7 @@ def test_service_cli_parses_rolling_window_flags_end_to_end() -> None:
         "instruments",
         "--mode",
         "batch",
-        "--category",
+        "--asset-group",
         "SPORTS",
         "--lookback-days",
         "1",
@@ -66,7 +66,7 @@ def test_force_window_propagates_to_redo_all_via_payload_force(
 ) -> None:
     """--force-window → UTL injects --force → BatchIO sets payload.force → redo_all=True."""
     runtime = MagicMock()
-    runtime.category = []
+    runtime.asset_group = []
     runtime.start_date = "2026-04-20"
     runtime.end_date = "2026-04-28"
     runtime.gcp_project_id = "test-project"
@@ -74,7 +74,7 @@ def test_force_window_propagates_to_redo_all_via_payload_force(
 
     handler = InstrumentsHandler(runtime)
     handler.args = argparse.Namespace(
-        category=["SPORTS"],
+        asset_group=["SPORTS"],
         venues=None,
         sports_entity=None,
         sports_provider=None,
@@ -99,7 +99,7 @@ def test_force_window_propagates_to_redo_all_via_payload_force(
         _fake_process,
     )
     monkeypatch.setattr(
-        "instruments_service.cli.instruments_handler.get_venues_for_categories",
+        "instruments_service.cli.instruments_handler.get_venues_for_asset_groups",
         lambda _: ["API_FOOTBALL"],
     )
     monkeypatch.setattr(
@@ -111,7 +111,7 @@ def test_force_window_propagates_to_redo_all_via_payload_force(
 
     payload = BatchPayload(
         date="2026-04-21",
-        categories=["SPORTS"],
+        asset_groups=["SPORTS"],
         instruments=[],
         force=True,  # propagated by BatchIO from args.force
     )
@@ -124,13 +124,13 @@ def test_preflight_wires_all_custom_flags(monkeypatch: pytest.MonkeyPatch) -> No
     --venues` preflight branch in one go. Boosts handler coverage for the
     custom-args block (lines 70-101 + rolling-window log at ~110)."""
     runtime = MagicMock()
-    runtime.category = []
+    runtime.asset_group = []
     runtime.gcp_project_id = "test-project"
     runtime.mode = "batch"
 
     handler = InstrumentsHandler(runtime)
     handler.args = argparse.Namespace(
-        category=["SPORTS"],
+        asset_group=["SPORTS"],
         venues=["API_FOOTBALL"],
         sports_entity="FIXTURES",
         sports_provider="api_football",
@@ -145,7 +145,7 @@ def test_preflight_wires_all_custom_flags(monkeypatch: pytest.MonkeyPatch) -> No
     )
 
     monkeypatch.setattr(
-        "instruments_service.cli.instruments_handler.get_venues_for_categories",
+        "instruments_service.cli.instruments_handler.get_venues_for_asset_groups",
         lambda _: ["API_FOOTBALL"],
     )
     monkeypatch.setattr(
@@ -173,12 +173,12 @@ def test_cleanup_flushes_manifest_writers_and_emits_coordination_events(
     + DATA_READY / SPORTS_LIVE_STATS coordination events. Both publish calls
     are wrapped in suppress(RuntimeError, ValueError) for batch mode."""
     runtime = MagicMock()
-    runtime.category = ["SPORTS"]
+    runtime.asset_group = ["SPORTS"]
     runtime.gcp_project_id = "test-project"
     runtime.mode = "batch"
 
     handler = InstrumentsHandler(runtime)
-    handler.args = argparse.Namespace(category=["SPORTS"])
+    handler.args = argparse.Namespace(asset_group=["SPORTS"])
 
     flushed_buckets: list[str] = []
     published_events: list[str] = []
@@ -221,13 +221,13 @@ def test_cleanup_flushes_manifest_writers_and_emits_coordination_events(
 def test_no_rolling_flags_leaves_redo_all_false(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sanity: no --force / --force-window / redo_all in payload ⇒ redo_all=False."""
     runtime = MagicMock()
-    runtime.category = []
+    runtime.asset_group = []
     runtime.gcp_project_id = "test-project"
     runtime.mode = "batch"
 
     handler = InstrumentsHandler(runtime)
     handler.args = argparse.Namespace(
-        category=["SPORTS"],
+        asset_group=["SPORTS"],
         venues=None,
         sports_entity=None,
         sports_provider=None,
@@ -252,7 +252,7 @@ def test_no_rolling_flags_leaves_redo_all_false(monkeypatch: pytest.MonkeyPatch)
         _fake_process,
     )
     monkeypatch.setattr(
-        "instruments_service.cli.instruments_handler.get_venues_for_categories",
+        "instruments_service.cli.instruments_handler.get_venues_for_asset_groups",
         lambda _: ["API_FOOTBALL"],
     )
     monkeypatch.setattr(
@@ -263,7 +263,7 @@ def test_no_rolling_flags_leaves_redo_all_false(monkeypatch: pytest.MonkeyPatch)
     asyncio.run(handler.preflight())
     payload = BatchPayload(
         date="2026-04-21",
-        categories=["SPORTS"],
+        asset_groups=["SPORTS"],
         instruments=[],
         force=False,
     )

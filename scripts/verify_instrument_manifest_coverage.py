@@ -25,7 +25,7 @@ def _date_range(start: date, end: date) -> list[date]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify manifest coverage for venue/date range")
-    parser.add_argument("--category", required=True, help="Category (CEFI, TRADFI, DEFI, SPORTS, ...)")
+    parser.add_argument("--asset-group", required=True, help="Category (CEFI, TRADFI, DEFI, SPORTS, ...)")
     parser.add_argument("--venue", required=True, help="Venue name (e.g. DERIBIT, CBOE)")
     parser.add_argument("--start-date", required=True, help="Range start (YYYY-MM-DD)")
     parser.add_argument("--end-date", required=True, help="Range end (YYYY-MM-DD)")

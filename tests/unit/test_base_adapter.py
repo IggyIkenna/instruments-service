@@ -154,22 +154,22 @@ class TestBaseAdapter:
 
 class TestCCXTAdapter:
     def test_venue_name(self) -> None:
-        adapter = CCXTReferenceDataAdapter("kraken")
-        assert adapter.venue == "kraken"
+        adapter = CCXTReferenceDataAdapter("kucoin")
+        assert adapter.venue == "kucoin"
 
     def test_venue_name_custom(self) -> None:
         adapter = CCXTReferenceDataAdapter("ftx")
         assert adapter.venue == "ftx"
 
     def test_init_with_project_id(self) -> None:
-        adapter = CCXTReferenceDataAdapter("kraken", project_id="my-project")
-        assert adapter.venue == "kraken"
+        adapter = CCXTReferenceDataAdapter("kucoin", project_id="my-project")
+        assert adapter.venue == "kucoin"
         assert adapter._project_id == "my-project"
 
     @pytest.mark.asyncio
     async def test_get_instruments_mocked(self) -> None:
         """CCXT adapter delegates to ccxt — mock load_markets to verify mapping."""
-        adapter = CCXTReferenceDataAdapter("kraken")
+        adapter = CCXTReferenceDataAdapter("kucoin")
         mock_exchange = AsyncMock()
         mock_exchange.load_markets = AsyncMock(
             return_value={
@@ -196,7 +196,7 @@ class TestCCXTAdapter:
     @pytest.mark.asyncio
     async def test_get_instruments_with_type_filtered(self) -> None:
         """CCXT adapter filters by instrument_type correctly."""
-        adapter = CCXTReferenceDataAdapter("kraken")
+        adapter = CCXTReferenceDataAdapter("kucoin")
         mock_exchange = AsyncMock()
         mock_exchange.load_markets = AsyncMock(return_value={})
         mock_exchange.close = AsyncMock()
@@ -207,7 +207,7 @@ class TestCCXTAdapter:
     @pytest.mark.asyncio
     async def test_get_instrument_returns_none_on_empty(self) -> None:
         """CCXT get_instrument returns None when no match found."""
-        adapter = CCXTReferenceDataAdapter("kraken")
+        adapter = CCXTReferenceDataAdapter("kucoin")
         with patch.object(adapter, "get_instruments", AsyncMock(return_value=[])):
             result = await adapter.get_instrument("BTC/USD")
         assert result is None
@@ -215,25 +215,25 @@ class TestCCXTAdapter:
     @pytest.mark.asyncio
     async def test_get_options_chain_returns_empty(self) -> None:
         """CCXT get_options_chain returns empty chain when no options exist."""
-        adapter = CCXTReferenceDataAdapter("kraken")
+        adapter = CCXTReferenceDataAdapter("kucoin")
         with patch.object(adapter, "get_instruments", return_value=[]):
             chain = await adapter.get_options_chain("BTC")
-        assert chain.venue == "kraken"
+        assert chain.venue == "kucoin"
         assert chain.calls == []
 
     @pytest.mark.asyncio
     async def test_get_expiry_calendar_returns_empty(self) -> None:
         """CCXT get_expiry_calendar returns empty calendar when no futures exist."""
-        adapter = CCXTReferenceDataAdapter("kraken")
+        adapter = CCXTReferenceDataAdapter("kucoin")
         with patch.object(adapter, "get_instruments", return_value=[]):
             calendar = await adapter.get_expiry_calendar("BTC")
-        assert calendar.venue == "kraken"
+        assert calendar.venue == "kucoin"
         assert calendar.expiries == []
 
     @pytest.mark.asyncio
     async def test_get_funding_rate_mocked(self) -> None:
         """CCXT get_funding_rate delegates to ccxt fetch_funding_rate."""
-        adapter = CCXTReferenceDataAdapter("kraken")
+        adapter = CCXTReferenceDataAdapter("kucoin")
         mock_exchange = AsyncMock()
         mock_exchange.load_markets = AsyncMock(return_value={})
         mock_exchange.fetch_funding_rate = AsyncMock(
@@ -247,12 +247,12 @@ class TestCCXTAdapter:
         with patch.object(adapter, "_get_exchange", return_value=mock_exchange):
             result = await adapter.get_funding_rate("BTC/USD")
         assert result is not None
-        assert result.venue == "kraken"
+        assert result.venue == "kucoin"
 
     @pytest.mark.asyncio
     async def test_get_ohlcv_mocked(self) -> None:
         """CCXT get_ohlcv delegates to ccxt fetch_ohlcv."""
-        adapter = CCXTReferenceDataAdapter("kraken")
+        adapter = CCXTReferenceDataAdapter("kucoin")
         mock_exchange = AsyncMock()
         mock_exchange.load_markets = AsyncMock(return_value={})
         mock_exchange.fetch_ohlcv = AsyncMock(return_value=[])
@@ -264,7 +264,7 @@ class TestCCXTAdapter:
     @pytest.mark.asyncio
     async def test_get_ohlcv_with_bars(self) -> None:
         """CCXT get_ohlcv parses bar data into OHLCVRef list."""
-        adapter = CCXTReferenceDataAdapter("kraken")
+        adapter = CCXTReferenceDataAdapter("kucoin")
         ts_ms = 1700000000000
         mock_exchange = AsyncMock()
         mock_exchange.load_markets = AsyncMock(return_value={})
@@ -273,7 +273,7 @@ class TestCCXTAdapter:
         with patch.object(adapter, "_get_exchange", return_value=mock_exchange):
             result = await adapter.get_ohlcv("BTC/USD")
         assert len(result) == 1
-        assert result[0].venue == "kraken"
+        assert result[0].venue == "kucoin"
 
     def test_get_exchange_unsupported_raises(self) -> None:
         """_get_exchange raises RuntimeError for unknown venue names."""
@@ -305,7 +305,7 @@ class TestCCXTAdapter:
     @pytest.mark.asyncio
     async def test_get_instruments_inactive_market_skipped(self) -> None:
         """Markets with active=False are skipped."""
-        adapter = CCXTReferenceDataAdapter("kraken")
+        adapter = CCXTReferenceDataAdapter("kucoin")
         mock_exchange = AsyncMock()
         mock_exchange.load_markets = AsyncMock(
             return_value={

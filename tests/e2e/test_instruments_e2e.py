@@ -7,7 +7,7 @@ Run explicitly — NOT included in standard QG (too slow, requires real credenti
 
 What it tests:
     1. D5 (DeFi) + C5 (CeFi) + T5 (TradFi) instruments for one representative day.
-    2. URDI returns instruments for at least one venue per category.
+    2. URDI returns instruments for at least one venue per asset group.
     3. All records are written to the TEST bucket (not prod).
     4. Written parquet files are readable and schema-valid.
 
@@ -54,7 +54,7 @@ def test_defi_instruments_e2e():
     result = asyncio.run(
         process_instruments(
             date=_TEST_DATE,
-            categories=_DEFI_CATEGORY,
+            asset_groups=_DEFI_CATEGORY,
             redo_all=True,  # always reprocess in E2E
         )
     )
@@ -81,7 +81,7 @@ def test_tradfi_instruments_e2e():
     result = asyncio.run(
         process_instruments(
             date=_TEST_DATE,
-            categories=_TRADFI_CATEGORY,
+            asset_groups=_TRADFI_CATEGORY,
             redo_all=True,
         )
     )

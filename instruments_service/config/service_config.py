@@ -1,8 +1,8 @@
 """Service-level configuration for instruments-service.
 
 Four fields only. Everything else is resolved by UTL, UCI, or URDI:
-- Bucket names: UTL cloud_constants.get_bucket_name("instruments", category)
-  constructs instruments-store-{category}-{gcp_project_id} automatically.
+- Bucket names: UTL ``get_bucket_name("instruments", <segment>)`` builds
+  ``instruments-store-{asset_group}-{gcp_project_id}`` (``segment`` = asset group: cefi, defi, …).
 - DeFi/venue API URLs: URDI adapters read their own URLs from UCI provider
   manifest at startup — not service config.
 - Deployment state (deployment_id, shard_launched_at): UTL ServiceBootstrap.
@@ -48,7 +48,7 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
     instruments_bucket_prefix: str = Field(
         default="instruments-store",
         validation_alias=AliasChoices("INSTRUMENTS_BUCKET_PREFIX"),
-        description="Bucket name prefix; full name: {prefix}-{category}-{gcp_project_id}",
+        description="Bucket name prefix; full name: {prefix}-{asset_group}-{gcp_project_id}",
     )
 
     is_test_run: bool = Field(

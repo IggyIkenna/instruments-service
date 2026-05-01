@@ -97,7 +97,7 @@ def test_uic_instrument_record_constructable() -> None:
 
 
 @pytest.mark.integration
-def test_uic_market_category_values() -> None:
+def test_uic_asset_group_values() -> None:
     """MarketCategory is the canonical category enum. ServiceRuntime stores
     list[MarketCategory] and handler converts via .value. If values change, the
     CLI category args break silently.
@@ -129,15 +129,15 @@ def test_utl_service_framework_symbols_exist() -> None:
     from unified_trading_library import BatchPayload, ServiceRuntime, UnifiedServiceHandler
 
     # BatchPayload is the payload passed to process() — constructor must work
-    payload = BatchPayload(date="2026-03-22", categories=["DEFI"])
+    payload = BatchPayload(date="2026-03-22", asset_groups=["DEFI"])
     assert payload.date == "2026-03-22"
-    assert payload.categories == ["DEFI"]
+    assert payload.asset_groups == ["DEFI"]
     assert isinstance(payload.extra, dict)
 
     # ServiceRuntime must have the fields handler preflight() reads.
     # Use __dataclass_fields__ since ServiceRuntime is a @dataclass.
     field_names = set(ServiceRuntime.__dataclass_fields__)
-    assert "category" in field_names, "must have category field"
+    assert "asset_group" in field_names, "must have asset_group field"
     assert "gcp_project_id" in field_names, "must have gcp_project_id field"
     assert "operation" in field_names, "must have operation field"
     assert "mode" in field_names, "must have mode field"

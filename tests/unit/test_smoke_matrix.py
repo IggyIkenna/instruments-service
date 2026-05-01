@@ -443,7 +443,7 @@ def test_main_returns_zero_on_dry_run(
         "get_bucket_name",
         lambda domain, category, project_id: f"instruments-store-{category.lower()}-{project_id}",
     )
-    rc = smoke.main(["--category", "PREDICTION"])
+    rc = smoke.main(["--asset-group", "PREDICTION"])
     assert rc == 0
     out = capsys.readouterr().out
     assert "smoke matrix" in out

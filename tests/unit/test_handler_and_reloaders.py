@@ -11,11 +11,11 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-def _make_runtime(start: str = "2026-03-22", end: str = "2026-03-22", categories=None):
+def _make_runtime(start: str = "2026-03-22", end: str = "2026-03-22", asset_group=None):
     rt = MagicMock()
     rt.start_date = start
     rt.end_date = end
-    rt.categories = categories or ["DEFI"]
+    rt.asset_group = asset_group or ["DEFI"]
     rt.gcp_project_id = "test-project"
     return rt
 
@@ -49,7 +49,7 @@ async def test_handler_preflight_mock_mode_starts_reloader():
 
 @pytest.mark.asyncio
 async def test_handler_preflight_starts_reloader_for_all_categories():
-    """preflight() starts ApiKeyReloader with venues for ALL categories."""
+    """preflight() starts ApiKeyReloader with venues for ALL asset groups."""
     from instruments_service.cli.instruments_handler import InstrumentsHandler
 
     handler = InstrumentsHandler(_make_runtime("2026-03-22", "2026-03-22"))
@@ -61,7 +61,7 @@ async def test_handler_preflight_starts_reloader_for_all_categories():
     with (
         patch("instruments_service.cli.instruments_handler.ApiKeyReloader", return_value=mock_reloader),
         patch(
-            "instruments_service.cli.instruments_handler.get_venues_for_categories",
+            "instruments_service.cli.instruments_handler.get_venues_for_asset_groups",
             return_value=["BINANCE-FUTURES", "DERIBIT"],
         ),
     ):
@@ -82,7 +82,7 @@ async def test_handler_process_skips_completed_date():
     handler = InstrumentsHandler(_make_runtime())
 
     handler._completed_dates.add("2026-03-22")
-    payload = BatchPayload(date="2026-03-22", categories=["DEFI"])
+    payload = BatchPayload(date="2026-03-22", asset_groups=["DEFI"])
 
     # process() currently delegates to orchestrator regardless; skip logic is in orchestrator
     with patch("instruments_service.cli.instruments_handler.engine_orchestrator") as mock_orch:
@@ -102,7 +102,7 @@ async def test_handler_process_redo_all_bypasses_skip():
     handler = InstrumentsHandler(_make_runtime())
     handler._completed_dates = {"2026-03-22"}
 
-    payload = BatchPayload(date="2026-03-22", categories=["DEFI"], extra={"redo_all": True})
+    payload = BatchPayload(date="2026-03-22", asset_groups=["DEFI"], extra={"redo_all": True})
 
     with patch("instruments_service.cli.instruments_handler.engine_orchestrator") as mock_orch:
         mock_orch.process_instruments = AsyncMock(return_value={"MORPHO-ETHEREUM": 10})
@@ -113,14 +113,14 @@ async def test_handler_process_redo_all_bypasses_skip():
 
 @pytest.mark.asyncio
 async def test_handler_process_calls_orchestrator():
-    """process() calls engine_orchestrator.process_instruments with date and categories."""
+    """process() calls engine_orchestrator.process_instruments with date and asset groups."""
     from unified_trading_library import BatchPayload
 
     from instruments_service.cli.instruments_handler import InstrumentsHandler
 
     handler = InstrumentsHandler(_make_runtime())
 
-    payload = BatchPayload(date="2026-03-22", categories=["DEFI"])
+    payload = BatchPayload(date="2026-03-22", asset_groups=["DEFI"])
 
     with patch("instruments_service.cli.instruments_handler.engine_orchestrator") as mock_orch:
         mock_orch.process_instruments = AsyncMock(return_value={"CURVE-ETHEREUM": 49})
@@ -128,7 +128,7 @@ async def test_handler_process_calls_orchestrator():
 
     call_kwargs = mock_orch.process_instruments.call_args.kwargs
     assert call_kwargs["date"] == "2026-03-22"
-    assert call_kwargs["categories"] == ["DEFI"]
+    assert call_kwargs["asset_groups"] == ["DEFI"]
     assert call_kwargs["redo_all"] is False
     assert call_kwargs["api_keys"] == {}
     assert call_kwargs["venue_override"] is None
@@ -203,7 +203,7 @@ async def test_handler_process_reads_keys_from_reloader():
     mock_reloader.current_keys = {"tardis": "live-key"}
     handler._key_reloader = mock_reloader
 
-    payload = BatchPayload(date="2026-03-22", categories=["DEFI"])
+    payload = BatchPayload(date="2026-03-22", asset_groups=["DEFI"])
 
     with patch("instruments_service.cli.instruments_handler.engine_orchestrator") as mock_orch:
         mock_orch.process_instruments = AsyncMock(return_value={"CURVE-ETHEREUM": 49})
@@ -211,7 +211,7 @@ async def test_handler_process_reads_keys_from_reloader():
 
     call_kwargs = mock_orch.process_instruments.call_args.kwargs
     assert call_kwargs["date"] == "2026-03-22"
-    assert call_kwargs["categories"] == ["DEFI"]
+    assert call_kwargs["asset_groups"] == ["DEFI"]
     assert call_kwargs["api_keys"] == {"tardis": "live-key"}
     assert call_kwargs["venue_override"] is None
     assert "mode" in call_kwargs

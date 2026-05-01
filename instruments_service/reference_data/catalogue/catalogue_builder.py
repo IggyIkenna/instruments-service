@@ -1,4 +1,4 @@
-"""CatalogueBuilder — build per-category canonical instrument catalogues.
+"""CatalogueBuilder — build per-asset-group canonical instrument catalogues.
 
 Reads the existing URDI reference data for each venue (via
 ``fetch_instruments_for_all_venues``) and produces a list of
@@ -8,8 +8,8 @@ Reads the existing URDI reference data for each venue (via
 
 Output partition
 ----------------
-Catalogues are written as a single parquet per category to
-``reference_data/instruments/{category}/all.parquet`` inside the
+Catalogues are written as a single parquet per asset group to
+``reference_data/instruments/{asset_group}/all.parquet`` inside the
 instruments write bucket resolved through UTL's cloud sink.
 """
 
@@ -27,7 +27,7 @@ from unified_api_contracts.internal import InstrumentRecord, MarketCategory
 from unified_trading_library import DataSink, get_data_sink, get_write_bucket_name
 
 from instruments_service.config import get_config
-from instruments_service.engine.orchestrator import get_venues_for_categories
+from instruments_service.engine.orchestrator import get_venues_for_asset_groups
 from instruments_service.engine.urdi_reference_provider import fetch_instruments_for_all_venues
 
 logger = logging.getLogger(__name__)
@@ -38,9 +38,9 @@ _CATEGORY_MEMBERS: tuple[MarketCategory, ...] = (
     MarketCategory.DEFI,
 )
 
-#: Tuple of market-category strings the catalogue currently covers. Imported
+#: Tuple of asset-group strings the catalogue currently covers. Imported
 #: by ``engine.orchestrator`` to drive the ``refresh_catalogue`` CLI hook.
-CATALOGUE_SUPPORTED_CATEGORIES: tuple[str, ...] = tuple(c.value for c in _CATEGORY_MEMBERS)
+CATALOGUE_SUPPORTED_ASSET_GROUPS: tuple[str, ...] = tuple(c.value for c in _CATEGORY_MEMBERS)
 
 _DEFI_TYPES: frozenset[InstrumentType] = frozenset(
     {
@@ -111,7 +111,7 @@ def _populate_availability(record: InstrumentRecord) -> InstrumentRecord:
 
 
 class CatalogueBuilder:
-    """Build and persist per-category instrument catalogues.
+    """Build and persist per-asset-group instrument catalogues.
 
     The builder is intentionally thin — it delegates all instrument discovery
     to the existing URDI ``fetch_instruments_for_all_venues`` path and only
@@ -128,26 +128,26 @@ class CatalogueBuilder:
         self._bucket_resolver: Callable[[str], str] | None = bucket_resolver
 
     # ------------------------------------------------------------------
-    # Per-category builders (sync — convenient for CLI / tests)
+    # Per-asset-group builders (sync — convenient for CLI / tests)
     # ------------------------------------------------------------------
     def build_cefi(self) -> list[InstrumentRecord]:
-        return asyncio.run(self.build_category_async("CEFI"))
+        return asyncio.run(self.build_asset_group_async("CEFI"))
 
     def build_tradfi(self) -> list[InstrumentRecord]:
-        return asyncio.run(self.build_category_async("TRADFI"))
+        return asyncio.run(self.build_asset_group_async("TRADFI"))
 
     def build_defi(self) -> list[InstrumentRecord]:
-        return asyncio.run(self.build_category_async("DEFI"))
+        return asyncio.run(self.build_asset_group_async("DEFI"))
 
     def build_all(self) -> list[InstrumentRecord]:
         """Concatenate CEFI + TRADFI + DEFI catalogues."""
         out: list[InstrumentRecord] = []
-        for category in CATALOGUE_SUPPORTED_CATEGORIES:
-            out.extend(asyncio.run(self.build_category_async(category)))
+        for asset_group in CATALOGUE_SUPPORTED_ASSET_GROUPS:
+            out.extend(asyncio.run(self.build_asset_group_async(asset_group)))
         return out
 
-    async def build_category_async(self, category: str) -> list[InstrumentRecord]:
-        venues = get_venues_for_categories([category])
+    async def build_asset_group_async(self, asset_group: str) -> list[InstrumentRecord]:
+        venues = get_venues_for_asset_groups([asset_group])
         if not venues:
             return []
         result = await fetch_instruments_for_all_venues(
@@ -162,7 +162,7 @@ class CatalogueBuilder:
             enriched.append(_populate_availability(_ensure_canonical_id(rec)))
         logger.info(
             "CatalogueBuilder[%s]: built %d records across %d venues",
-            category,
+            asset_group,
             len(enriched),
             len(venues),
         )
@@ -171,21 +171,21 @@ class CatalogueBuilder:
     # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
-    def write_to_gcs(self, records: list[InstrumentRecord], category: str) -> str:
-        """Write ``records`` to ``reference_data/instruments/{category}/all.parquet``.
+    def write_to_gcs(self, records: list[InstrumentRecord], asset_group: str) -> str:
+        """Write ``records`` to ``reference_data/instruments/{asset_group}/all.parquet``.
 
         Returns the resolved partition identifier (a ``gs://``-style URI when
         a real sink is used, otherwise the local filesystem path returned by
         the sink).
         """
-        bucket = self._resolve_bucket(category)
+        bucket = self._resolve_bucket(asset_group)
         sink: DataSink = get_data_sink(
             bucket=bucket,
             prefix="reference_data/instruments",
         )
         df = _records_to_dataframe(records)
         written_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        partition = {"category": category.lower(), "written_at": written_at}
+        partition = {"asset_group": asset_group.lower(), "written_at": written_at}
         uri = sink.write(
             data=df,
             partition=partition,
@@ -193,30 +193,30 @@ class CatalogueBuilder:
             filename="all.parquet",
         )
         logger.info(
-            "CatalogueBuilder: wrote %d records to %s (category=%s)",
+            "CatalogueBuilder: wrote %d records to %s (asset_group=%s)",
             len(records),
             uri,
-            category,
+            asset_group,
         )
         return uri
 
-    def _resolve_bucket(self, category: str) -> str:
-        """Look up the instruments bucket for a category.
+    def _resolve_bucket(self, asset_group: str) -> str:
+        """Look up the instruments bucket for an asset group.
 
         Delegates to UTL ``get_write_bucket_name`` which honours ``IS_TEST_RUN``
-        by inserting ``-test-`` between category and project_id — canonical
+        by inserting ``-test-`` between segment and project_id — canonical
         SSOT per ``codex/02-data/per-category-bucket-layouts.md``. A custom
         resolver can be injected via the constructor for tests.
         """
         if self._bucket_resolver is not None:
-            return self._bucket_resolver(category)
+            return self._bucket_resolver(asset_group)
 
         cfg = get_config()
         project = cfg.gcp_project_id or "test-project"
         try:
-            return get_write_bucket_name("instruments", category, project)
+            return get_write_bucket_name("instruments", asset_group, project)
         except (ImportError, AttributeError):
-            cat_lower = category.lower() if category else None
+            cat_lower = asset_group.lower() if asset_group else None
             prefix = cfg.instruments_bucket_prefix
             prod_bucket = f"{prefix}-{cat_lower}-{project}" if cat_lower else f"{prefix}-{project}"
             if not cfg.is_test_run:

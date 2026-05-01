@@ -40,7 +40,7 @@ class TestProcessInstruments:
     async def test_no_active_venues_returns_empty(self) -> None:
         with (
             patch(
-                "instruments_service.engine.orchestrator.get_venues_for_categories",
+                "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
                 return_value=["TOTALLY_NEW_VENUE"],
             ),
             patch(
@@ -55,7 +55,7 @@ class TestProcessInstruments:
     async def test_zero_records_raises_runtime_error(self) -> None:
         with (
             patch(
-                "instruments_service.engine.orchestrator.get_venues_for_categories",
+                "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
                 return_value=["BINANCE-SPOT"],
             ),
             patch(
@@ -88,7 +88,7 @@ class TestProcessInstruments:
 
         with (
             patch(
-                "instruments_service.engine.orchestrator.get_venues_for_categories",
+                "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
                 return_value=["BINANCE-SPOT"],
             ),
             patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
@@ -125,7 +125,7 @@ class TestProcessInstruments:
 
         with (
             patch(
-                "instruments_service.engine.orchestrator.get_venues_for_categories",
+                "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
                 return_value=["BINANCE-SPOT"],
             ),
             patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),

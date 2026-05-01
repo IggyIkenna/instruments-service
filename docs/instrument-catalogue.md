@@ -57,7 +57,7 @@ Defined at `instruments_service/engine/orchestrator.py:4475`.
 python -m instruments_service \
     --operation refresh-catalogue \
     --mode batch \
-    --category cefi            # omit for CEFI + TRADFI + DEFI
+    --asset-group cefi            # omit for CEFI + TRADFI + DEFI
 ```
 
 Returns a `dict[str, str]` of `category -> written URI` for observability.
