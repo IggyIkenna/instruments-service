@@ -101,7 +101,7 @@ def _build_remediation_message(date: str, bucket: str, path: str) -> str:
         f"(expected gs://{bucket}/{path}).\n"
         f"Run this first:\n"
         f"  python -m instruments_service --operation instruments --mode batch \\\n"
-        f"    --category SPORTS --sports-provider API_FOOTBALL \\\n"
+        f"    --asset-group SPORTS --sports-provider API_FOOTBALL \\\n"
         f"    --start-date {date} --end-date {date}"
     )
 

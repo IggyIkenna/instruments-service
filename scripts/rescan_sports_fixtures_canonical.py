@@ -55,7 +55,7 @@ VM launch recipe
 
 1. Refresh the SPORTS tarball::
 
-    bash deployment-service/scripts/vm/create-code-tarballs.sh --category SPORTS
+    bash deployment-service/scripts/vm/create-code-tarballs.sh --asset-group SPORTS
 
 2. Launch a small-test VM first (single date)::
 

@@ -24,15 +24,15 @@ def _make_record(venue: str = "AAVEV3-ETHEREUM", itype: str = "A_TOKEN") -> Inst
 
 
 # ---------------------------------------------------------------------------
-# engine/orchestrator.py — get_venues_for_categories
+# engine/orchestrator.py — get_venues_for_asset_groups
 # ---------------------------------------------------------------------------
 
 
-def test_get_venues_for_categories_cefi_returns_canonical_names():
+def test_get_venues_for_asset_groups_cefi_returns_canonical_names():
     """CEFI category returns UAC canonical venue names (uppercase)."""
-    from instruments_service.engine.orchestrator import get_venues_for_categories
+    from instruments_service.engine.orchestrator import get_venues_for_asset_groups
 
-    venues = get_venues_for_categories(["CEFI"])
+    venues = get_venues_for_asset_groups(["CEFI"])
     assert len(venues) > 0
     # Canonical names are uppercase — not lowercase Tardis API names
     assert "BINANCE-SPOT" in venues or "BINANCE-FUTURES" in venues
@@ -40,42 +40,42 @@ def test_get_venues_for_categories_cefi_returns_canonical_names():
     assert "binance" not in venues
 
 
-def test_get_venues_for_categories_defi():
-    from instruments_service.engine.orchestrator import get_venues_for_categories
+def test_get_venues_for_asset_groups_defi():
+    from instruments_service.engine.orchestrator import get_venues_for_asset_groups
 
-    venues = get_venues_for_categories(["DEFI"])
+    venues = get_venues_for_asset_groups(["DEFI"])
     assert "UNISWAPV3-ETHEREUM" in venues
     assert "MORPHO-ETHEREUM" in venues
     assert "AAVEV3-ETHEREUM" in venues
 
 
-def test_get_venues_for_categories_all_includes_all_asset_groupes():
-    from instruments_service.engine.orchestrator import get_venues_for_categories
+def test_get_venues_for_asset_groups_all_includes_all_groups():
+    from instruments_service.engine.orchestrator import get_venues_for_asset_groups
 
-    all_v = get_venues_for_categories(["ALL"])
-    cefi_v = get_venues_for_categories(["CEFI"])
-    defi_v = get_venues_for_categories(["DEFI"])
-    tradfi_v = get_venues_for_categories(["TRADFI"])
+    all_v = get_venues_for_asset_groups(["ALL"])
+    cefi_v = get_venues_for_asset_groups(["CEFI"])
+    defi_v = get_venues_for_asset_groups(["DEFI"])
+    tradfi_v = get_venues_for_asset_groups(["TRADFI"])
     assert len(all_v) > len(cefi_v)
     assert "UNISWAPV3-ETHEREUM" in all_v
     assert "CME" in all_v
 
 
-def test_get_venues_for_categories_deduplicates():
-    from instruments_service.engine.orchestrator import get_venues_for_categories
+def test_get_venues_for_asset_groups_deduplicates():
+    from instruments_service.engine.orchestrator import get_venues_for_asset_groups
 
-    v1 = get_venues_for_categories(["DEFI"])
-    v2 = get_venues_for_categories(["DEFI", "DEFI"])
+    v1 = get_venues_for_asset_groups(["DEFI"])
+    v2 = get_venues_for_asset_groups(["DEFI", "DEFI"])
     assert len(v1) == len(v2)
 
 
-def test_get_venues_for_categories_sports():
+def test_get_venues_for_asset_groups_sports():
     """SPORTS returns only API_FOOTBALL for reference data.
     BETFAIR is for live odds (tick data) — it does NOT belong in instruments-service.
     """
-    from instruments_service.engine.orchestrator import get_venues_for_categories
+    from instruments_service.engine.orchestrator import get_venues_for_asset_groups
 
-    venues = get_venues_for_categories(["SPORTS"])
+    venues = get_venues_for_asset_groups(["SPORTS"])
     assert "API_FOOTBALL" in venues
     assert "BETFAIR" not in venues, "BETFAIR is tick-data (odds), not reference data"
 
@@ -1097,13 +1097,13 @@ def test_defi_filter_only_applies_to_defi_venues():
 
 
 def test_venue_filter_restricts_to_requested_venues():
-    """Preflight passes ALL venues from get_venues_for_categories to ApiKeyReloader."""
+    """Preflight passes ALL venues from get_venues_for_asset_groups to ApiKeyReloader."""
     from unittest.mock import MagicMock
 
     from instruments_service.cli.instruments_handler import InstrumentsHandler
 
     runtime = MagicMock()
-    runtime.category = []
+    runtime.asset_group = []
     runtime.start_date = ""
     runtime.gcp_project_id = "test-project"
 
@@ -1112,7 +1112,7 @@ def test_venue_filter_restricts_to_requested_venues():
 
     with (
         patch(
-            "instruments_service.cli.instruments_handler.get_venues_for_categories",
+            "instruments_service.cli.instruments_handler.get_venues_for_asset_groups",
             return_value=["BINANCE-FUTURES", "OKX", "DERIBIT"],
         ),
         patch("instruments_service.cli.instruments_handler.ApiKeyReloader") as mock_reloader,
@@ -1123,7 +1123,7 @@ def test_venue_filter_restricts_to_requested_venues():
 
         asyncio.run(handler.preflight())
 
-    # All venues from get_venues_for_categories should be passed to ApiKeyReloader
+    # All venues from get_venues_for_asset_groups should be passed to ApiKeyReloader
     call_venues = (
         mock_reloader.call_args.kwargs.get("venues") or mock_reloader.call_args.args[0]
         if mock_reloader.call_args
@@ -1141,7 +1141,7 @@ def test_venue_filter_is_case_insensitive():
     from instruments_service.cli.instruments_handler import InstrumentsHandler
 
     runtime = MagicMock()
-    runtime.category = []
+    runtime.asset_group = []
     runtime.start_date = ""
     runtime.gcp_project_id = "test-project"
     runtime.venue_filter = ["binance-futures"]  # lowercase
@@ -1151,7 +1151,7 @@ def test_venue_filter_is_case_insensitive():
 
     with (
         patch(
-            "instruments_service.cli.instruments_handler.get_venues_for_categories",
+            "instruments_service.cli.instruments_handler.get_venues_for_asset_groups",
             return_value=["BINANCE-FUTURES", "OKX"],
         ),
         patch("instruments_service.cli.instruments_handler.ApiKeyReloader") as mock_reloader,
@@ -1178,7 +1178,7 @@ def test_no_venue_filter_processes_all_venues():
     from instruments_service.cli.instruments_handler import InstrumentsHandler
 
     runtime = MagicMock()
-    runtime.category = []
+    runtime.asset_group = []
     runtime.start_date = ""
     runtime.gcp_project_id = "test-project"
     runtime.venue_filter = []  # empty = no filter
@@ -1189,7 +1189,7 @@ def test_no_venue_filter_processes_all_venues():
     all_venues = ["BINANCE-FUTURES", "OKX", "DERIBIT"]
     with (
         patch(
-            "instruments_service.cli.instruments_handler.get_venues_for_categories",
+            "instruments_service.cli.instruments_handler.get_venues_for_asset_groups",
             return_value=all_venues,
         ),
         patch("instruments_service.cli.instruments_handler.ApiKeyReloader") as mock_reloader,
@@ -1246,9 +1246,9 @@ def test_instrument_type_values_are_uppercase_canonical():
 @pytest.mark.asyncio
 async def test_process_instruments_cefi_venues_available():
     """CEFI includes Coinbase and Upbit — they should be in the venue list."""
-    from instruments_service.engine.orchestrator import get_venues_for_categories
+    from instruments_service.engine.orchestrator import get_venues_for_asset_groups
 
-    venues = get_venues_for_categories(["CEFI"])
+    venues = get_venues_for_asset_groups(["CEFI"])
     assert "COINBASE-SPOT" in venues, "Coinbase-SPOT should be in CEFI (via Tardis adapter)"
     assert "UPBIT" in venues, "Upbit should be in CEFI (via Tardis adapter)"
     assert "DERIBIT" in venues

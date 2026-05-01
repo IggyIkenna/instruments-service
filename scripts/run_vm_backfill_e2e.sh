@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 VENUE=""
-CATEGORY=""
+ASSET_GROUP=""
 START_DATE=""
 END_DATE=""
 CHUNK_DAYS=30
@@ -22,7 +22,7 @@ usage() {
 Usage:
   bash scripts/run_vm_backfill_e2e.sh \
     --venue DERIBIT \
-    --category CEFI \
+    --asset-group CEFI \
     --start-date 2019-03-30 \
     --end-date 2019-12-31 \
     --chunk-days 14 \
@@ -30,7 +30,7 @@ Usage:
 
 Options:
   --venue <VENUE>             Venue shard to backfill (required)
-  --category <CATEGORY>       Category (required)
+  --asset-group <ASSET_GROUP>       Category (required)
   --start-date <YYYY-MM-DD>   Start date inclusive (required)
   --end-date <YYYY-MM-DD>     End date inclusive (required)
   --chunk-days <N>            Chunk size in days (default: 30)
@@ -45,7 +45,7 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --venue) VENUE="$2"; shift 2 ;;
-    --category) CATEGORY="$2"; shift 2 ;;
+    --asset-group) ASSET_GROUP="$2"; shift 2 ;;
     --start-date) START_DATE="$2"; shift 2 ;;
     --end-date) END_DATE="$2"; shift 2 ;;
     --chunk-days) CHUNK_DAYS="$2"; shift 2 ;;
@@ -59,7 +59,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$VENUE" || -z "$CATEGORY" || -z "$START_DATE" || -z "$END_DATE" ]]; then
+if [[ -z "$VENUE" || -z "$ASSET_GROUP" || -z "$START_DATE" || -z "$END_DATE" ]]; then
   echo "Missing required arguments." >&2
   usage
   exit 1
@@ -81,8 +81,8 @@ if [[ -z "$LOG_DIR" ]]; then
 fi
 
 VENUE_UPPER="$(echo "$VENUE" | tr '[:lower:]' '[:upper:]')"
-CATEGORY_UPPER="$(echo "$CATEGORY" | tr '[:lower:]' '[:upper:]')"
-JOB_ID="${CATEGORY_UPPER}_${VENUE_UPPER}_${START_DATE}_${END_DATE}_chunk${CHUNK_DAYS}"
+ASSET_GROUP_UPPER="$(echo "$ASSET_GROUP" | tr '[:lower:]' '[:upper:]')"
+JOB_ID="${ASSET_GROUP_UPPER}_${VENUE_UPPER}_${START_DATE}_${END_DATE}_chunk${CHUNK_DAYS}"
 JOB_CHECKPOINT_DIR="$CHECKPOINT_DIR/$JOB_ID"
 JOB_LOG_DIR="$LOG_DIR/$JOB_ID"
 SUMMARY_LOG="$JOB_LOG_DIR/summary.log"
@@ -128,7 +128,7 @@ run_chunk() {
     return 0
   fi
 
-  local cmd=".venv/bin/instruments-service --operation instruments --mode batch --category \"$CATEGORY_UPPER\" --venues \"$VENUE_UPPER\" --start-date \"$chunk_start\" --end-date \"$chunk_end\""
+  local cmd=".venv/bin/instruments-service --operation instruments --mode batch --asset-group \"$ASSET_GROUP_UPPER\" --venues \"$VENUE_UPPER\" --start-date \"$chunk_start\" --end-date \"$chunk_end\""
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "[$(date '+%H:%M:%S')] PLAN  $cmd" | tee -a "$SUMMARY_LOG"
     return 0

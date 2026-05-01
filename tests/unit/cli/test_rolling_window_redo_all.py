@@ -27,7 +27,7 @@ def _run_process(redo_all: bool) -> dict[str, int]:
     async def _go() -> dict[str, int]:
         return await orchestrator.process_instruments(
             date="2026-04-21",
-            categories=["SPORTS"],
+            asset_groups=["SPORTS"],
             redo_all=redo_all,
             api_keys={},
             venue_override=["API_FOOTBALL"],
@@ -55,7 +55,7 @@ def test_redo_all_false_short_circuits_on_fresh_manifest() -> None:
             return_value=_empty_dataframe(),
         ),
         patch(
-            "instruments_service.engine.orchestrator.get_venues_for_categories",
+            "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
             return_value=["API_FOOTBALL"],
         ),
         patch(
@@ -103,7 +103,7 @@ def test_redo_all_true_bypasses_freshness_check_entirely() -> None:
             return_value=_empty_dataframe(),
         ),
         patch(
-            "instruments_service.engine.orchestrator.get_venues_for_categories",
+            "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
             return_value=["API_FOOTBALL"],
         ),
         patch(
@@ -149,7 +149,7 @@ def test_redo_all_false_reaches_freshness_check() -> None:
             return_value=_empty_dataframe(),
         ),
         patch(
-            "instruments_service.engine.orchestrator.get_venues_for_categories",
+            "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
             return_value=["API_FOOTBALL"],
         ),
         patch(

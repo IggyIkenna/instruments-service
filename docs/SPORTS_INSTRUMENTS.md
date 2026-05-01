@@ -87,7 +87,7 @@ Defined in UAC `LEAGUE_REGISTRY`. A league is "Prediction" only if Odds API cove
 | 7    | Venues (3,445, 95% geocoded)              | AF `/venues` + Nominatim   | Yearly            | `sports_reference/venues/venues.parquet`               |
 | 8    | Players, referees, injuries               | AF `/injuries`, `/lineups` | Daily/per-fixture | `sports_reference/by_date/day={date}/entity=injuries/` |
 
-**CLI**: `python -m instruments_service.cli.main --operation instruments --mode batch --category SPORTS --start-date {date} --end-date {date}`
+**CLI**: `python -m instruments_service.cli.main --operation instruments --mode batch --asset-group SPORTS --start-date {date} --end-date {date}`
 
 **Timing**: ~42 seconds per day (33 leagues, ~180 fixtures, ~900 injuries, ~690 standings).
 
@@ -117,7 +117,7 @@ market_key, outcome_name, price, point
 time_bucket, timestamp_utc, kickoff_utc, bm_time, m_time, source, date
 ```
 
-**CLI**: `python -m market_tick_data_service.cli.main --operation download --mode batch --category SPORTS --start-date {date} --end-date {date}`
+**CLI**: `python -m market_tick_data_service.cli.main --operation download --mode batch --asset-group SPORTS --start-date {date} --end-date {date}`
 
 ### Steps 10-11: Features (FSS -> GCS)
 

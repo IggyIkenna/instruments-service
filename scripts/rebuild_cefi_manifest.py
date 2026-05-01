@@ -9,9 +9,9 @@ Usage (on a VM with GCS credentials):
     python3 scripts/rebuild_cefi_manifest.py              # write
 
 Also supports other categories:
-    python3 scripts/rebuild_cefi_manifest.py --category DEFI
-    python3 scripts/rebuild_cefi_manifest.py --category TRADFI
-    python3 scripts/rebuild_cefi_manifest.py --category SPORTS
+    python3 scripts/rebuild_cefi_manifest.py --asset-group DEFI
+    python3 scripts/rebuild_cefi_manifest.py --asset-group TRADFI
+    python3 scripts/rebuild_cefi_manifest.py --asset-group SPORTS
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Rebuild manifest from GCS blobs")
-    parser.add_argument("--category", default="CEFI", help="Category (CEFI, DEFI, TRADFI, SPORTS)")
+    parser.add_argument("--asset-group", default="CEFI", help="Category (CEFI, DEFI, TRADFI, SPORTS)")
     parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     parser.add_argument("--prefix", default="instrument_availability/by_date", help="GCS data prefix")
     args = parser.parse_args()

@@ -5,8 +5,8 @@ Reads availability_index.parquet, upper-cases venue names, deduplicates
 (summing instrument_count for same date+venue), and overwrites the index.
 
 Usage:
-    python3 scripts/fix_manifest_venue_casing.py --category SPORTS --dry-run
-    python3 scripts/fix_manifest_venue_casing.py --category SPORTS
+    python3 scripts/fix_manifest_venue_casing.py --asset-group SPORTS --dry-run
+    python3 scripts/fix_manifest_venue_casing.py --asset-group SPORTS
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ _INDEX_PATH = "_index/availability_index.parquet"
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fix manifest venue casing")
-    parser.add_argument("--category", default="SPORTS", help="Category")
+    parser.add_argument("--asset-group", default="SPORTS", help="Category")
     parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
     args = parser.parse_args()
 

@@ -28,20 +28,20 @@ from instruments_service.engine.orchestrator import (
     _get_instruments_bucket,
     clear_defi_universe_cache,
     earliest_venue_date,
-    get_venues_for_categories,
+    get_venues_for_asset_groups,
 )
 
 logger = logging.getLogger(__name__)
 
 
 class InstrumentsHandler(UnifiedServiceHandler):
-    """Process canonical instrument records via URDI for a date/category set.
+    """Process canonical instrument records via URDI for a date and asset-group set.
 
     preflight():
       1. Starts ApiKeyReloader (fail-fast on missing keys, periodic refresh)
       2. Checks which dates already have complete data (skips those in process())
 
-    process(payload): calls engine orchestrator for the given date+categories
+    process(payload): calls engine orchestrator for the given date+asset groups
     """
 
     def __init__(self, runtime: ServiceRuntime) -> None:
@@ -55,17 +55,20 @@ class InstrumentsHandler(UnifiedServiceHandler):
         self._season_override: int | None = None  # set in preflight() when --season is used
 
     async def preflight(self) -> None:
-        """Start API key reloader. Date/category filtering happens in process()."""
-        cli_categories: list[str] | None = getattr(self.args, "category", None) if self.args else None
-        categories = cli_categories or ["ALL"]
+        """Start API key reloader. Date/asset-group filtering happens in process()."""
+        _args = self.args
+        cli_asset_groups: list[str] | None = None
+        if _args is not None:
+            cli_asset_groups = getattr(_args, "asset_group", None) or getattr(_args, "category", None)
+        asset_groups = cli_asset_groups or ["ALL"]
 
-        is_all = any(c.upper() == "ALL" for c in categories)
-        if is_all or any(c.upper() == "DEFI" for c in categories):
+        is_all = any(c.upper() == "ALL" for c in asset_groups)
+        if is_all or any(c.upper() == "DEFI" for c in asset_groups):
             clear_defi_universe_cache()
 
         self._wire_cli_filters_from_args()
 
-        active_venues = get_venues_for_categories(categories)
+        active_venues = get_venues_for_asset_groups(asset_groups)
         self._start_key_reloader(active_venues)
 
     def _wire_cli_filters_from_args(self) -> None:
@@ -142,7 +145,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
 
         Reads API keys from the hot-reloader (always fresh after rotation).
         Skip-if-exists is handled by the orchestrator's check_shard_freshness()
-        which uses the manifest with per-category buckets (correct bucket resolution).
+        which uses the manifest with per-asset-group buckets (correct bucket resolution).
         """
         date = str(payload.date) if not isinstance(payload.date, str) else payload.date
         # Normalize datetime to YYYY-MM-DD string (BatchIO yields datetime objects)
@@ -150,11 +153,11 @@ class InstrumentsHandler(UnifiedServiceHandler):
             date = date[:10]
         redo_all = payload.force or bool(payload.extra.get("redo_all", False))
 
-        categories: list[str] = list(payload.categories) if payload.categories else ["ALL"]
+        asset_groups: list[str] = list(payload.asset_groups) if payload.asset_groups else ["ALL"]
         api_keys = self._key_reloader.current_keys if self._key_reloader else {}
         return await engine_orchestrator.process_instruments(
             date=date,
-            categories=categories,
+            asset_groups=asset_groups,
             redo_all=redo_all,
             api_keys=api_keys,
             venue_override=self._venue_override,
@@ -168,15 +171,15 @@ class InstrumentsHandler(UnifiedServiceHandler):
     async def cleanup(self) -> None:
         """Flush any buffered manifest writes to GCS at end of batch."""
         flushed: list[str] = []
-        for category in ("SPORTS", "CEFI", "DEFI", "TRADFI"):
+        for asset_group in ("SPORTS", "CEFI", "DEFI", "TRADFI"):
             try:
-                bucket = _get_instruments_bucket(category)
+                bucket = _get_instruments_bucket(asset_group)
                 if bucket:
                     writer = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
                     writer.flush()
                     flushed.append(bucket)
             except Exception as exc:
-                logger.warning("ManifestWriter final flush failed for %s: %s", category, exc)
+                logger.warning("ManifestWriter final flush failed for %s: %s", asset_group, exc)
         if flushed:
             logger.info("ManifestWriter cleanup: flushed buffers for %s", flushed)
 
@@ -195,8 +198,11 @@ class InstrumentsHandler(UnifiedServiceHandler):
             )
 
         # Publish sports live stats availability for WebSocket forwarding
-        cli_categories: list[str] | None = getattr(self.args, "category", None) if self.args else None
-        if cli_categories and any(c.upper() in ("SPORTS", "ALL") for c in cli_categories):
+        _args2 = self.args
+        cli_asset_groups_cleanup: list[str] | None = None
+        if _args2 is not None:
+            cli_asset_groups_cleanup = getattr(_args2, "asset_group", None) or getattr(_args2, "category", None)
+        if cli_asset_groups_cleanup and any(c.upper() in ("SPORTS", "ALL") for c in cli_asset_groups_cleanup):
             with contextlib.suppress(RuntimeError, ValueError):
                 publish_coordination_event(
                     "SPORTS_LIVE_STATS",

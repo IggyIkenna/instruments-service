@@ -270,7 +270,7 @@ class TestOrchestratorSportsLeaguePartitioning:
 
         with (
             patch(
-                "instruments_service.engine.orchestrator.get_venues_for_categories",
+                "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
                 return_value=["API_FOOTBALL"],
             ),
             patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
@@ -317,7 +317,7 @@ class TestOrchestratorSportsLeaguePartitioning:
 
         with (
             patch(
-                "instruments_service.engine.orchestrator.get_venues_for_categories",
+                "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
                 return_value=["API_FOOTBALL"],
             ),
             patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
@@ -360,7 +360,7 @@ class TestOrchestratorSportsLeaguePartitioning:
 
         with (
             patch(
-                "instruments_service.engine.orchestrator.get_venues_for_categories",
+                "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
                 return_value=["API_FOOTBALL"],
             ),
             patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),
@@ -415,7 +415,7 @@ class TestOrchestratorSportsLeaguePartitioning:
 
         with (
             patch(
-                "instruments_service.engine.orchestrator.get_venues_for_categories",
+                "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
                 return_value=["API_FOOTBALL"],
             ),
             patch("instruments_service.engine.orchestrator.is_venue_available", return_value=True),

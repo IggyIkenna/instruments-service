@@ -5,7 +5,7 @@ ServiceBootstrap handles all infrastructure:
   --mode live   → UTL ScheduledIO (wall-clock aligned, live_trigger="scheduled")
 
 Standard args provided by ServiceCLI (no service code needed):
-  --mode, --category, --start-date, --end-date, --log-level, --venues, --force,
+  --mode, --asset-group, --start-date, --end-date, --log-level, --venues, --force,
   --lookback-days, --lookahead-days, --force-window
     (rolling-window flags are registered by UTL's ServiceCLI when
     add_date_args=True; SSOT for resolution logic is

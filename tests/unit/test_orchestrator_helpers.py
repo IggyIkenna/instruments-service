@@ -14,7 +14,7 @@ from instruments_service.engine.orchestrator import (
     _write_fixture_mapping,
     filter_defi_instruments_by_relevance,
     filter_instruments_by_date,
-    get_venues_for_categories,
+    get_venues_for_asset_groups,
     is_venue_available,
 )
 
@@ -40,38 +40,38 @@ def _make_record(
 
 
 # ---------------------------------------------------------------------------
-# get_venues_for_categories
+# get_venues_for_asset_groups
 # ---------------------------------------------------------------------------
 
 
 class TestGetVenuesForCategories:
     def test_cefi_returns_cefi_venues(self) -> None:
-        venues = get_venues_for_categories(["CEFI"])
+        venues = get_venues_for_asset_groups(["CEFI"])
         assert "BINANCE-SPOT" in venues
         assert "DERIBIT" in venues
         assert "HYPERLIQUID" in venues
 
     def test_defi_returns_defi_venues(self) -> None:
-        venues = get_venues_for_categories(["DEFI"])
+        venues = get_venues_for_asset_groups(["DEFI"])
         assert any("AAVEV3" in v for v in venues)
         assert any("UNISWAPV3" in v for v in venues)
 
     def test_tradfi_returns_tradfi_venues(self) -> None:
-        venues = get_venues_for_categories(["TRADFI"])
+        venues = get_venues_for_asset_groups(["TRADFI"])
         assert "CME" in venues
         assert "NASDAQ" in venues
 
     def test_sports_returns_api_football(self) -> None:
-        venues = get_venues_for_categories(["SPORTS"])
+        venues = get_venues_for_asset_groups(["SPORTS"])
         assert "API_FOOTBALL" in venues
 
     def test_prediction_returns_polymarket_kalshi(self) -> None:
-        venues = get_venues_for_categories(["PREDICTION"])
+        venues = get_venues_for_asset_groups(["PREDICTION"])
         assert "POLYMARKET" in venues
         assert "KALSHI" in venues
 
     def test_all_includes_all_categories(self) -> None:
-        venues = get_venues_for_categories(["ALL"])
+        venues = get_venues_for_asset_groups(["ALL"])
         assert "BINANCE-SPOT" in venues
         assert "CME" in venues
         assert "API_FOOTBALL" in venues
@@ -79,17 +79,17 @@ class TestGetVenuesForCategories:
         assert any("AAVEV3" in v for v in venues)
 
     def test_empty_categories_returns_empty(self) -> None:
-        venues = get_venues_for_categories([])
+        venues = get_venues_for_asset_groups([])
         assert venues == []
 
     def test_deduplication(self) -> None:
-        venues = get_venues_for_categories(["CEFI", "CEFI"])
+        venues = get_venues_for_asset_groups(["CEFI", "CEFI"])
         # Should not have duplicates
         assert len(venues) == len(set(venues))
 
     def test_case_insensitive(self) -> None:
-        venues_upper = get_venues_for_categories(["CEFI"])
-        venues_lower = get_venues_for_categories(["cefi"])
+        venues_upper = get_venues_for_asset_groups(["CEFI"])
+        venues_lower = get_venues_for_asset_groups(["cefi"])
         assert venues_upper == venues_lower
 
 

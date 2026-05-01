@@ -54,10 +54,13 @@ from unified_api_contracts.sports import (
     get_entity_league_coverage,
     get_expected_leagues_for_source,
     get_expected_team_count_for_league,
+    get_league_by_api_football_id,
     get_league_fixture_calendar,
     get_leagues_needing_refresh,
     get_provider_league_id,
+    get_source_coverage_start,
     is_any_league_refresh_date,
+    is_in_known_gap,
 )
 from unified_trading_library import (
     CaptureStatus,
@@ -90,6 +93,26 @@ from instruments_service.reference_data.adapters.tradfi.databento import is_non_
 from instruments_service.reference_data.utils.evm_creation_resolver import EvmCacheSession
 
 logger = logging.getLogger(__name__)
+
+
+def _canonical_league_id(lid_raw: object) -> str:
+    """Normalize a league_id at write time to canonical form.
+
+    Used at every per-league GCS partition write so legacy numeric
+    af_league_ids (39, 78, 140, ...) get rewritten to canonical strings
+    (EPL, BUNDESLIGA, LA_LIGA, ...) before they hit disk. Without this
+    normalization, mixed numeric/canonical paths accumulate and per-league
+    downstream readers (FSS, ML feature joins) miss data.
+
+    - all-digits string → look up via UAC ``get_league_by_api_football_id``
+    - already-canonical → pass through unchanged
+    - unknown numeric → leave as-is (operator can debug)
+    """
+    s = str(lid_raw).strip()
+    if not s or not s.isdigit():
+        return s
+    league = get_league_by_api_football_id(int(s))
+    return league.league_id if league is not None else s
 
 
 def _coerce_adapter_output(item: object) -> dict[str, object]:
@@ -1512,7 +1535,11 @@ async def process_instruments(
                 _gated_sink_write(
                     sink,
                     data=empty_df,
-                    partition={"day": date, "venue": "API_FOOTBALL_FIXTURES", "league": _league_id},
+                    partition={
+                        "day": date,
+                        "venue": "API_FOOTBALL_FIXTURES",
+                        "league": _canonical_league_id(_league_id),
+                    },
                     filename="instruments.parquet",
                     venue="api_football_fixtures",
                     entity="instruments",
@@ -1845,7 +1872,7 @@ async def process_instruments(
                     _gated_sink_write(
                         sink,
                         data=_league_df_clean,
-                        partition={"day": date, "venue": venue_str, "league": _league_id_str},
+                        partition={"day": date, "venue": venue_str, "league": _canonical_league_id(_league_id_str)},
                         filename="instruments.parquet",
                         venue=venue_str,
                         entity="instruments",
@@ -2636,6 +2663,96 @@ def _read_fixture_ids_from_gcs(bucket: str, date: str) -> list[int]:
         return []
 
 
+def _write_fixtures_per_league(
+    sink: DataSink,
+    fixture_df: pd.DataFrame,
+    date: str,
+    *,
+    source_label: str,
+) -> None:
+    """Write canonical fixtures parquet per league (single-SSOT, no bare fallback).
+
+    FIXTURES is a league-axis data type. We split the dataframe by league and
+    write one parquet per partition — the bare-path date-aggregate is dropped
+    per ``sports_manifest_single_ssot_2026_04_30``. When the dataframe is
+    missing both ``league_id`` and ``af_league_id`` (or all rows lack a
+    league assignment), the call logs a warning and skips the write to keep
+    the manifest honest. Caller is responsible for emitting empty/failure
+    manifest rows.
+    """
+    if fixture_df.empty:
+        return
+
+    # Prefer canonical league_id if it's already on the frame; otherwise
+    # derive from af_league_id via the prediction-league reverse mapping.
+    if "league_id" in fixture_df.columns and fixture_df["league_id"].notna().any():
+        _league_col = "league_id"
+        # Stringify, then blank-out empties so .notna() below treats them
+        # as missing (matching the af_league_id branch's behaviour).
+        _stringified = fixture_df["league_id"].astype(str)
+        _league_series = _stringified.mask(_stringified.str.strip() == "")
+    elif "af_league_id" in fixture_df.columns and fixture_df["af_league_id"].notna().any():
+        _af_to_canonical: dict[int, str] = {}
+        for _league_def in get_prediction_leagues():
+            if _league_def.api_football_id is not None:
+                _af_to_canonical[_league_def.api_football_id] = _league_def.league_id
+        # af_league_id may be float-typed in pandas after read_parquet; coerce.
+        _af_int_series = pd.to_numeric(fixture_df["af_league_id"], errors="coerce").astype("Int64")
+        _league_col = "_canonical_league_id"
+        fixture_df = fixture_df.copy()
+        fixture_df[_league_col] = _af_int_series.map(lambda v: _af_to_canonical.get(int(v)) if pd.notna(v) else None)
+        # Fallback for unmapped leagues — partition by stringified af_league_id.
+        _missing_canonical = fixture_df[_league_col].isna() & _af_int_series.notna()
+        if _missing_canonical.any():
+            fixture_df.loc[_missing_canonical, _league_col] = _af_int_series[_missing_canonical].astype(str)
+        _league_series = fixture_df[_league_col]
+    else:
+        logger.warning(
+            "FIXTURES bare-path fallback triggered for date=%s (source=%s) — data shape regression: "
+            "fixture_df missing both league_id and af_league_id columns (rows=%d). "
+            "Skipping write to keep manifest honest.",
+            date,
+            source_label,
+            len(fixture_df),
+        )
+        return
+
+    _has_league = _league_series.notna() & (_league_series.astype(str).str.strip() != "")
+    _with_league = fixture_df[_has_league]
+    _without_league = fixture_df[~_has_league]
+
+    if _with_league.empty:
+        logger.warning(
+            "FIXTURES bare-path fallback triggered for date=%s (source=%s) — data shape regression: "
+            "no rows had a derivable league (rows=%d). Skipping write to keep manifest honest.",
+            date,
+            source_label,
+            len(fixture_df),
+        )
+        return
+
+    for _lid, _ldf in _with_league.groupby(_league_col):
+        _lid_str = str(_lid)
+        _ldf_clean = _ldf.drop(columns=["_canonical_league_id"], errors="ignore")
+        _gated_sink_write(
+            sink,
+            data=_ldf_clean,
+            partition={"day": date, "entity": "fixtures", "league": _canonical_league_id(_lid_str)},
+            filename="fixtures.parquet",
+            venue="api_football",
+            entity="fixtures",
+        )
+
+    if not _without_league.empty:
+        logger.warning(
+            "FIXTURES bare-path fallback triggered for date=%s (source=%s) — data shape regression: "
+            "%d rows missing league assignment. Skipping bare write to keep manifest honest.",
+            date,
+            source_label,
+            len(_without_league),
+        )
+
+
 def _build_fixture_league_map_from_gcs(bucket: str, date: str) -> dict[str, str]:
     """Build a mapping from AF fixture_id (str) to canonical league_id.
 
@@ -2861,26 +2978,26 @@ async def _fetch_sports_reference_data(
             prediction_league_ids = _cached_prediction_league_ids
             logger.info("Sports reference: %d teams from cache (0 API calls)", len(teams_df))
         if teams_df is not None:
-            # Write per-league partitioned team files
+            # Write per-league partitioned team files. The bare-path fallback
+            # was retired in sports_manifest_single_ssot_2026_04_30 — TEAMS is
+            # a league-axis data type and MUST always carry league_id.
             if "league_id" in teams_df.columns:
                 for _t_lid, _t_league_df in teams_df.groupby("league_id"):
                     _t_lid_str = str(_t_lid)
                     _gated_sink_write(
                         sink,
                         data=_t_league_df,
-                        partition={"day": date, "entity": "teams", "league": _t_lid_str},
+                        partition={"day": date, "entity": "teams", "league": _canonical_league_id(_t_lid_str)},
                         filename="teams.parquet",
                         venue="api_football",
                         entity="teams",
                     )
             else:
-                _gated_sink_write(
-                    sink,
-                    data=teams_df,
-                    partition={"day": date, "entity": "teams"},
-                    filename="teams.parquet",
-                    venue="api_football",
-                    entity="teams",
+                logger.warning(
+                    "TEAMS bare-path fallback triggered for date=%s — data shape regression: "
+                    "teams_df missing league_id column (rows=%d). Skipping write to keep manifest honest.",
+                    date,
+                    len(teams_df),
                 )
             counts["teams"] = len(teams_df)
 
@@ -2925,7 +3042,7 @@ async def _fetch_sports_reference_data(
                     _gated_sink_write(
                         sink,
                         data=_s_league_df,
-                        partition={"day": date, "entity": "standings", "league": _s_lid_str},
+                        partition={"day": date, "entity": "standings", "league": _canonical_league_id(_s_lid_str)},
                         filename="standings.parquet",
                         venue="api_football",
                         entity="standings",
@@ -2940,20 +3057,12 @@ async def _fetch_sports_reference_data(
                 if manifest is not None:
                     _af_emit_empty_gaps_for_entity("STANDINGS", _std_captured)
             else:
-                _gated_sink_write(
-                    sink,
-                    data=standings_df,
-                    partition={"day": date, "entity": "standings"},
-                    filename="standings.parquet",
-                    venue="api_football",
-                    entity="standings",
+                logger.warning(
+                    "STANDINGS bare-path fallback triggered for date=%s — data shape regression: "
+                    "standings_df missing league_id column (rows=%d). Skipping write to keep manifest honest.",
+                    date,
+                    len(standings_df),
                 )
-                if manifest is not None:
-                    manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=len(standings_df),
-                        data_type="STANDINGS",
-                    )
             counts["standings"] = len(standings_df)
 
     # Injuries — date-specific, always fetched fresh.
@@ -2992,7 +3101,7 @@ async def _fetch_sports_reference_data(
                         _gated_sink_write(
                             sink,
                             data=_inj_clean,
-                            partition={"day": date, "entity": "injuries", "league": _inj_lid_str},
+                            partition={"day": date, "entity": "injuries", "league": _canonical_league_id(_inj_lid_str)},
                             filename="injuries.parquet",
                             venue="api_football",
                             entity="injuries",
@@ -3006,57 +3115,34 @@ async def _fetch_sports_reference_data(
                             )
 
                     if not _without_league.empty:
-                        _inj_unmapped = _without_league.drop(columns=["_inj_league"], errors="ignore")
-                        _gated_sink_write(
-                            sink,
-                            data=_inj_unmapped,
-                            partition={"day": date, "entity": "injuries"},
-                            filename="injuries.parquet",
-                            venue="api_football",
-                            entity="injuries",
+                        logger.warning(
+                            "INJURIES bare-path fallback triggered for date=%s — data shape regression: "
+                            "%d rows missing league_id (could not derive from fixture_id prefix). "
+                            "Skipping bare write to keep manifest honest.",
+                            date,
+                            len(_without_league),
                         )
-                        if manifest is not None:
-                            manifest.add(
-                                processing_date=date_type.fromisoformat(date),
-                                row_count=len(_inj_unmapped),
-                                data_type="INJURIES",
-                            )
                     if manifest is not None:
                         _af_emit_empty_gaps_for_entity("INJURIES", _inj_captured)
                 else:
-                    # No league info — write single file
-                    _gated_sink_write(
-                        sink,
-                        data=df,
-                        partition={"day": date, "entity": "injuries"},
-                        filename="injuries.parquet",
-                        venue="api_football",
-                        entity="injuries",
+                    logger.warning(
+                        "INJURIES bare-path fallback triggered for date=%s — data shape regression: "
+                        "no league_id column AND no fixture_id-prefix-derivable league (rows=%d). "
+                        "Skipping bare write to keep manifest honest.",
+                        date,
+                        len(df),
                     )
-                    if manifest is not None:
-                        manifest.add(
-                            processing_date=date_type.fromisoformat(date),
-                            row_count=len(df),
-                            data_type="INJURIES",
-                        )
 
                 logger.info("Sports reference: %d injuries written", len(df))
             else:
-                # Write empty parquet with correct schema so the date counts as
-                # "processed with 0 injuries" rather than "not processed".
-                _empty_injuries_df = pd.DataFrame(
-                    columns=["fixture_id", "team_id", "player_id", "player_name", "reason", "severity"],
-                )
-                _gated_sink_write(
-                    sink,
-                    data=_empty_injuries_df,
-                    partition={"day": date, "entity": "injuries"},
-                    filename="injuries.parquet",
-                    venue="api_football",
-                    entity="injuries",
-                )
+                # Honest-coverage: legitimate zero-injuries day for this date
+                # (no players on the season-wide injuries list have a reported
+                # status — common on off-season days).  Per
+                # ``sports_manifest_single_ssot_2026_04_30`` we no longer write
+                # an empty bare parquet — record_empty per league (handled by
+                # the _af_emit_empty_gaps_for_entity call below) is sufficient.
                 counts["injuries"] = 0
-                logger.info("Sports reference: 0 injuries written (empty parquet)")
+                logger.info("Sports reference: 0 injuries returned by API")
                 # Honest-coverage: legitimate zero-injuries day for this date
                 # (no players on the season-wide injuries list have a reported
                 # status — common on off-season days).  Emit empty_confirmed
@@ -3110,14 +3196,7 @@ async def _fetch_sports_reference_data(
                     _old_data = _storage.download_bytes(bucket=bucket, blob_path=_old_path)
                     _old_df = pd.read_parquet(io.BytesIO(_old_data))
                     _ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
-                    _gated_sink_write(
-                        _ref_sink,
-                        data=_old_df,
-                        partition={"day": date, "entity": "fixtures"},
-                        filename="fixtures.parquet",
-                        venue="api_football",
-                        entity="fixtures",
-                    )
+                    _write_fixtures_per_league(_ref_sink, _old_df, date, source_label="old-path-copy")
                     logger.info(
                         "Canonical fixtures copied from old path to entity=fixtures/ (%d rows)",
                         len(_old_df),
@@ -3135,14 +3214,7 @@ async def _fetch_sports_reference_data(
                                 _fx_df["timestamp"], utc=True, errors="coerce"
                             ) - pd.Timedelta(days=7)
                         _ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
-                        _gated_sink_write(
-                            _ref_sink,
-                            data=_fx_df,
-                            partition={"day": date, "entity": "fixtures"},
-                            filename="fixtures.parquet",
-                            venue="api_football",
-                            entity="fixtures",
-                        )
+                        _write_fixtures_per_league(_ref_sink, _fx_df, date, source_label="api-fetch-override")
                         logger.info(
                             "Canonical fixtures fetched from API and written to entity=fixtures/ (%d fixtures)",
                             len(_fx_df),
@@ -3196,25 +3268,7 @@ async def _fetch_sports_reference_data(
                             fixture_df["timestamp"], utc=True, errors="coerce"
                         ) - pd.Timedelta(days=7)
                     _fix_ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
-                    _gated_sink_write(
-                        _fix_ref_sink,
-                        data=fixture_df,
-                        partition={"day": date, "entity": "fixtures"},
-                        filename="fixtures.parquet",
-                        venue="api_football",
-                        entity="fixtures",
-                    )
-                    # Per-league partitioned write — group by canonical league via af_league_id.
-                    if "af_league_id" in fixture_df.columns:
-                        for _lid, _ldf in fixture_df.groupby("af_league_id"):
-                            _gated_sink_write(
-                                _fix_ref_sink,
-                                data=_ldf,
-                                partition={"day": date, "entity": "fixtures", "league": str(_lid)},
-                                filename="fixtures.parquet",
-                                venue="api_football",
-                                entity="fixtures",
-                            )
+                    _write_fixtures_per_league(_fix_ref_sink, fixture_df, date, source_label="api-fetch-fallback")
                     logger.info(
                         "Canonical fixtures written to sports_reference/by_date/entity=fixtures/ (%d fixtures)",
                         len(fixture_df),
@@ -3353,7 +3407,7 @@ async def _fetch_sports_reference_data(
                         _gated_sink_write(
                             sink,
                             data=_pf_clean,
-                            partition={"day": date, "entity": entity_name, "league": _pf_lid_str},
+                            partition={"day": date, "entity": entity_name, "league": _canonical_league_id(_pf_lid_str)},
                             filename=f"{entity_name}.parquet",
                             venue="api_football",
                             entity=entity_name,
@@ -3366,46 +3420,33 @@ async def _fetch_sports_reference_data(
                                 league_id=_pf_lid_str,
                             )
 
-                    # Write unmapped rows (if any) to a catch-all partition
+                    # Drop unmapped rows — single-SSOT means bare writes are
+                    # forbidden for league-axis data types. Surface as a
+                    # warning so we can spot upstream league-mapping
+                    # regressions in logs.
                     if not _without_league.empty:
-                        _unmapped_clean = _without_league.drop(columns=["_league_id"])
-                        _gated_sink_write(
-                            sink,
-                            data=_unmapped_clean,
-                            partition={"day": date, "entity": entity_name},
-                            filename=f"{entity_name}.parquet",
-                            venue="api_football",
-                            entity=entity_name,
-                        )
                         logger.warning(
-                            "Sports reference: %d %s rows could not be mapped to a league",
-                            len(_unmapped_clean),
-                            entity_name,
+                            "%s bare-path fallback triggered for date=%s — data shape regression: "
+                            "%d rows could not be mapped to a league. Skipping bare write to keep manifest honest.",
+                            _af_entity_dt,
+                            date,
+                            len(_without_league),
                         )
-                        if manifest is not None:
-                            manifest.add(
-                                processing_date=date_type.fromisoformat(date),
-                                row_count=len(_unmapped_clean),
-                                data_type=_af_entity_dt,
-                            )
                     if manifest is not None:
                         _af_emit_empty_gaps_for_entity(_af_entity_dt, _pf_captured)
                 else:
-                    # No league mapping available — write single file (legacy fallback)
-                    _gated_sink_write(
-                        sink,
-                        data=df,
-                        partition={"day": date, "entity": entity_name},
-                        filename=f"{entity_name}.parquet",
-                        venue="api_football",
-                        entity=entity_name,
+                    # Single-SSOT: bare manifest row + bare parquet write are
+                    # both suppressed; writing one would create a phantom
+                    # captured shard with no parquet on disk.  Surface the
+                    # upstream regression in logs so it can be diagnosed.
+                    logger.warning(
+                        "%s bare-path fallback triggered for date=%s — data shape regression: "
+                        "no fixture-id column or empty af_fid->league map (rows=%d). "
+                        "Skipping bare write + manifest row to keep manifest honest.",
+                        _af_entity_dt,
+                        date,
+                        len(df),
                     )
-                    if manifest is not None:
-                        manifest.add(
-                            processing_date=date_type.fromisoformat(date),
-                            row_count=len(df),
-                            data_type=_af_entity_dt,
-                        )
 
                 logger.info("Sports reference: %d %s rows written", len(df), entity_name)
             else:
@@ -4094,7 +4135,11 @@ async def _fetch_footystats_matches(
                     _gated_sink_write(
                         sink,
                         data=_ft_clean,
-                        partition={"day": date, "entity": "footystats_matches", "league": _ft_lid_str},
+                        partition={
+                            "day": date,
+                            "entity": "footystats_matches",
+                            "league": _canonical_league_id(_ft_lid_str),
+                        },
                         venue="footystats",
                         entity="footystats_matches",
                         filename="footystats_matches.parquet",
@@ -4107,33 +4152,20 @@ async def _fetch_footystats_matches(
                     )
 
                 if not _without_league.empty:
-                    _ft_unmapped = _without_league.drop(columns=["_ft_league"])
-                    _gated_sink_write(
-                        sink,
-                        data=_ft_unmapped,
-                        partition={"day": date, "entity": "footystats_matches"},
-                        venue="footystats",
-                        entity="footystats_matches",
-                        filename="footystats_matches.parquet",
-                    )
-                    _ft_manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=len(_ft_unmapped),
-                        data_type="MATCHES",
+                    logger.warning(
+                        "MATCHES bare-path fallback triggered for date=%s — data shape regression: "
+                        "%d footystats rows could not derive a league from canonical_fixture_id. "
+                        "Skipping bare write + manifest row to keep manifest honest.",
+                        date,
+                        len(_without_league),
                     )
             else:
-                _gated_sink_write(
-                    sink,
-                    data=df,
-                    partition={"day": date, "entity": "footystats_matches"},
-                    venue="footystats",
-                    entity="footystats_matches",
-                    filename="footystats_matches.parquet",
-                )
-                _ft_manifest.add(
-                    processing_date=date_type.fromisoformat(date),
-                    row_count=len(df),
-                    data_type="MATCHES",
+                logger.warning(
+                    "MATCHES bare-path fallback triggered for date=%s — data shape regression: "
+                    "footystats df missing canonical_fixture_id column (rows=%d). "
+                    "Skipping bare write + manifest row to keep manifest honest.",
+                    date,
+                    len(df),
                 )
             _ft_manifest.write()
             logger.info("FootyStats matches: %d rows written for date=%s", len(df), date)
@@ -4462,7 +4494,7 @@ async def _fetch_understat_xg(
                     _gated_sink_write(
                         sink,
                         data=_xg_league_df,
-                        partition={"day": date, "entity": "understat_xg", "league": _xg_lid_str},
+                        partition={"day": date, "entity": "understat_xg", "league": _canonical_league_id(_xg_lid_str)},
                         filename="understat_xg.parquet",
                         venue="understat",
                         entity="understat_xg",
@@ -4475,32 +4507,19 @@ async def _fetch_understat_xg(
                     )
 
                 if not _without_league.empty:
-                    _gated_sink_write(
-                        sink,
-                        data=_without_league,
-                        partition={"day": date, "entity": "understat_xg"},
-                        filename="understat_xg.parquet",
-                        venue="understat",
-                        entity="understat_xg",
+                    logger.warning(
+                        "XG bare-path fallback triggered for date=%s — data shape regression: "
+                        "%d understat rows missing league label. Skipping bare write to keep manifest honest.",
+                        date,
+                        len(_without_league),
                     )
-                    # Parquet is still written for forensic inspection, but we
-                    # no longer emit an unsharded date-aggregate manifest row
-                    # for rows with missing league labels — it has no reachable
-                    # consumer and skewed per-league honest-coverage.
-                    # Phase 2 of sports_manifest_shard_migration_cleanup.
             else:
-                _gated_sink_write(
-                    sink,
-                    data=df,
-                    partition={"day": date, "entity": "understat_xg"},
-                    filename="understat_xg.parquet",
-                    venue="understat",
-                    entity="understat_xg",
-                )
-                xg_manifest.add(
-                    processing_date=date_type.fromisoformat(date),
-                    row_count=len(df),
-                    data_type="XG",
+                logger.warning(
+                    "XG bare-path fallback triggered for date=%s — data shape regression: "
+                    "understat df missing league column (rows=%d). "
+                    "Skipping bare write + manifest row to keep manifest honest.",
+                    date,
+                    len(df),
                 )
 
             # Honest-coverage per-league: record_empty for expected PREDICTION
@@ -5106,18 +5125,85 @@ async def _fetch_sfi_data(
     # Progressive stats — per-match 30-second interval time-series.
     # Requires SFI match IDs for the date, then fetches progressive data
     # for each completed match. Written as entity=progressive_stats.
+    #
+    # Pre-cutoff / known-gap skip: SFI's progressive endpoint has a hard
+    # historical floor (probed live 2026-04-30: pre-2020-01-01 returns
+    # empty for every match). Honour the per-(source, data_type) coverage
+    # start in UAC + any registered known-gap windows so the VM doesn't
+    # burn rate-limit quota grinding through dead range.
+    _sfi_pp_floor = get_source_coverage_start("soccer_football_info", data_type="SFI_PROGRESSIVE_STATS")
+    _sfi_pp_pre_cutoff = bool(_sfi_pp_floor) and date < _sfi_pp_floor.isoformat()
+    _sfi_pp_in_known_gap = is_in_known_gap("soccer_football_info", "SFI_PROGRESSIVE_STATS", date)
+    if _want_sfi_progressive and (_sfi_pp_pre_cutoff or _sfi_pp_in_known_gap):
+        logger.info(
+            "SFI progressive stats: skipping date=%s (%s)",
+            date,
+            "pre-coverage-start" if _sfi_pp_pre_cutoff else "known-gap",
+        )
+        manifest.record_empty(
+            row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
+            attempted_at=attempt_ts,
+        )
+        for _exp_lid in sorted(_expected_sfi_league_ids):
+            manifest.record_empty(
+                row_key={
+                    "date": date,
+                    "data_type": "SFI_PROGRESSIVE_STATS",
+                    "league_id": _exp_lid,
+                },
+                attempted_at=attempt_ts,
+            )
+        _want_sfi_progressive = False
     if _want_sfi_progressive:
         try:
-            sfi_match_ids = await adapter.get_match_ids_for_date(date)
+            # League-scoped fetch: SFI's day-list returns ~50 championships'
+            # worth of matches but our prediction set is ~4 leagues. Filter
+            # match descriptors by championship_id BEFORE the per-match
+            # progressive call so we don't burn ~10x RapidAPI quota on
+            # leagues we'll never use as features.
+            _sfi_descriptors = await adapter.get_match_descriptors_for_date(date)
+            _expected_sfi_hex_ids = {
+                get_provider_league_id(_canonical, "soccer_football_info") for _canonical in _expected_sfi_league_ids
+            }
+            _expected_sfi_hex_ids.discard(None)
+            _expected_sfi_hex_ids.discard("")
+            # Build match_id -> canonical league_id map BEFORE the per-match
+            # loop so each progressive-stats entry can be tagged with its
+            # league for per-league partitioning.  SOCCER_FOOTBALL_INFO_IDS
+            # is canonical->hex; reverse it for hex->canonical lookup.
+            _sfi_canonical_by_hex: dict[str, str] = {
+                _hex: _canonical for _canonical, _hex in SOCCER_FOOTBALL_INFO_IDS.items()
+            }
+            _match_to_canonical: dict[str, str] = {}
+            sfi_match_ids: list[str] = []
+            for _d in _sfi_descriptors:
+                _hex = _d["championship_id"]
+                if _hex not in _expected_sfi_hex_ids:
+                    continue
+                _mid = _d["match_id"]
+                _canonical_lid = _sfi_canonical_by_hex.get(str(_hex), "")
+                if _canonical_lid:
+                    _match_to_canonical[str(_mid)] = _canonical_lid
+                sfi_match_ids.append(_mid)
+            logger.info(
+                "SFI progressive: %d/%d matches in mapped prediction leagues for date=%s",
+                len(sfi_match_ids),
+                len(_sfi_descriptors),
+                date,
+            )
             if sfi_match_ids:
                 all_progressive: list[dict[str, str | int | float | None]] = []
                 for mid in sfi_match_ids:
                     try:
                         stats = await adapter.get_progressive_stats(mid)
+                        _canonical_for_match = _match_to_canonical.get(str(mid), "")
                         for entry in stats:
-                            all_progressive.append(
-                                {k: str(v) if v is not None else None for k, v in _coerce_adapter_output(entry).items()}
-                            )
+                            _row: dict[str, str | int | float | None] = {
+                                k: str(v) if v is not None else None for k, v in _coerce_adapter_output(entry).items()
+                            }
+                            # Tag for per-league partitioning at write time.
+                            _row["league_id"] = _canonical_for_match or None
+                            all_progressive.append(_row)
                     except Exception as exc:
                         classify_and_emit_error(
                             exc,
@@ -5134,20 +5220,64 @@ async def _fetch_sfi_data(
                         df["data_available_at"] = _sfi_kickoff + pd.to_timedelta(
                             pd.to_numeric(df["timer_seconds"], errors="coerce"), unit="s"
                         )
-                    _gated_sink_write(
-                        sink,
-                        data=df,
-                        partition={"day": date, "entity": "progressive_stats"},
-                        filename="progressive_stats.parquet",
-                        venue="soccer_football_info",
-                        entity="progressive_stats",
-                    )
+                    # Per-league partitioned write — single SSOT, no bare write.
+                    _sfi_pp_captured: set[str] = set()
+                    if "league_id" in df.columns:
+                        _has_league = df["league_id"].notna() & (df["league_id"].astype(str).str.strip() != "")
+                        _with_league = df[_has_league]
+                        _without_league = df[~_has_league]
+
+                        for _pp_lid, _pp_league_df in _with_league.groupby("league_id"):
+                            _pp_lid_str = str(_pp_lid)
+                            _sfi_pp_captured.add(_pp_lid_str)
+                            _gated_sink_write(
+                                sink,
+                                data=_pp_league_df,
+                                partition={
+                                    "day": date,
+                                    "entity": "progressive_stats",
+                                    "league": _pp_lid_str,
+                                },
+                                filename="progressive_stats.parquet",
+                                venue="soccer_football_info",
+                                entity="progressive_stats",
+                            )
+                            manifest.add(
+                                processing_date=date_type.fromisoformat(date),
+                                row_count=len(_pp_league_df),
+                                data_type="SFI_PROGRESSIVE_STATS",
+                                league_id=_pp_lid_str,
+                            )
+
+                        if not _without_league.empty:
+                            logger.warning(
+                                "SFI_PROGRESSIVE_STATS bare-path fallback triggered for date=%s — data shape regression: "
+                                "%d rows missing league_id (championship_id->canonical mapping returned empty). "
+                                "Skipping bare write to keep manifest honest.",
+                                date,
+                                len(_without_league),
+                            )
+                    else:
+                        logger.warning(
+                            "SFI_PROGRESSIVE_STATS bare-path fallback triggered for date=%s — data shape regression: "
+                            "df missing league_id column entirely (rows=%d). "
+                            "Skipping bare write + manifest row to keep manifest honest.",
+                            date,
+                            len(df),
+                        )
                     counts["progressive_stats"] = len(df)
-                    manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=len(df),
-                        data_type="SFI_PROGRESSIVE_STATS",
-                    )
+                    # Per-league empty_confirmed for in-season leagues that
+                    # had no captured rows (mirrors WEATHER / per-fixture
+                    # honest-coverage pattern).
+                    for _exp_lid in sorted(_expected_sfi_league_ids - _sfi_pp_captured):
+                        manifest.record_empty(
+                            row_key={
+                                "date": date,
+                                "data_type": "SFI_PROGRESSIVE_STATS",
+                                "league_id": _exp_lid,
+                            },
+                            attempted_at=attempt_ts,
+                        )
                     logger.info("SFI progressive stats: %d rows written", len(df))
                 else:
                     # Match IDs present but all per-match fetches produced zero
@@ -5566,6 +5696,20 @@ async def _fetch_weather_data(
             )
             _per_venue_errors[venue_key] = _err_code
 
+    # Build venue->league(s) map up front — needed both for per-league
+    # partitioning and per-league manifest sharding. A single venue can host
+    # matches in multiple leagues on the same date (cup + league doubles), so
+    # the value is a set.
+    _venue_to_leagues: dict[str, set[str]] = {}
+    if fixtures_df is not None and "league_id" in fixtures_df.columns and "venue_name" in fixtures_df.columns:
+        for _, _frow in fixtures_df[["venue_name", "league_id"]].dropna().iterrows():
+            _vname = str(_frow["venue_name"]).strip()
+            _lid_val = str(_frow["league_id"]).strip()
+            if not _vname or not _lid_val:
+                continue
+            _vkey = _to_snake(_vname)
+            _venue_to_leagues.setdefault(_vkey, set()).add(_lid_val)
+
     if weather_rows:
         new_df = pd.DataFrame(weather_rows)
         # PIT safety: weather observation/forecast availability.
@@ -5577,59 +5721,100 @@ async def _fetch_weather_data(
         else:
             new_df["data_available_at"] = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=12)
 
-        # Merge with existing weather data (append new venues to existing)
+        # Merge with existing weather data (append new venues to existing).
+        # Note: existing parquet may live at the bare or per-league path; we
+        # walk the prefix and concatenate everything we find — the per-league
+        # write loop below dedups by (venue_id, league_id) implicitly because
+        # group-by partitions are mutually exclusive on league_id.
         if existing_venue_ids:
             try:
                 weather_prefix = f"sports_reference/by_date/day={date}/entity=weather/"
-                for wb in storage_client.list_blobs(bucket=bucket, prefix=weather_prefix, max_results=5):
+                for wb in storage_client.list_blobs(bucket=bucket, prefix=weather_prefix, max_results=20):
                     if wb.name.endswith(".parquet"):
                         wdata = storage_client.download_bytes(bucket=bucket, blob_path=wb.name)
                         existing_df = pd.read_parquet(io.BytesIO(wdata))
                         new_df = pd.concat([existing_df, new_df], ignore_index=True)
                         logger.info(
-                            "Weather: merged %d existing + %d new = %d total for date=%s",
+                            "Weather: merged %d existing + %d new = %d total for date=%s (blob=%s)",
                             len(existing_df),
                             len(weather_rows),
                             len(new_df),
                             date,
+                            wb.name,
                         )
-                        break
             except Exception:
                 pass  # Write new data only if merge fails
 
-        _gated_sink_write(
-            sink,
-            data=new_df,
-            partition={"day": date, "entity": "weather"},
-            filename="weather.parquet",
-            venue="open_meteo",
-            entity="weather",
-        )
+        # Per-league partitioned write — single SSOT, no bare write.  WEATHER
+        # is per-fixture (lat/lon/temp at kickoff); each row is tied to a
+        # venue, which we map to its hosting league(s) via _venue_to_leagues.
+        # When a venue hosts fixtures across multiple leagues on the same
+        # date, we duplicate the row into each league's parquet — downstream
+        # readers join on (date, league_id) so duplication is correct.
+        _captured_leagues: set[str] = set()
+        _league_venue_count: dict[str, int] = {}
+        _orphan_count = 0
+
+        if _venue_to_leagues:
+            # Build per-league dataframes by expanding each row into one row
+            # per (venue, league) pair for venues hosting in multiple leagues
+            # that date.  Track orphan rows separately for the warning log.
+            _per_league_frames: dict[str, list[pd.DataFrame]] = {}
+            for _, _wrow in new_df.iterrows():
+                _vid = str(_wrow.get("venue_id", "")).strip() if "venue_id" in new_df.columns else ""
+                _leagues_for_venue = _venue_to_leagues.get(_vid, set())
+                if not _leagues_for_venue:
+                    _orphan_count += 1
+                    continue
+                for _lid_v in _leagues_for_venue:
+                    _row_copy = _wrow.to_frame().T.copy()
+                    _row_copy["league_id"] = _lid_v
+                    _per_league_frames.setdefault(_lid_v, []).append(_row_copy)
+
+            for _lid_v, _frames in _per_league_frames.items():
+                _w_lid_df = pd.concat(_frames, ignore_index=True)
+                _captured_leagues.add(_lid_v)
+                _league_venue_count[_lid_v] = _league_venue_count.get(_lid_v, 0) + len(_w_lid_df)
+                _gated_sink_write(
+                    sink,
+                    data=_w_lid_df,
+                    partition={"day": date, "entity": "weather", "league": _canonical_league_id(_lid_v)},
+                    filename="weather.parquet",
+                    venue="open_meteo",
+                    entity="weather",
+                )
+
+            if _orphan_count > 0:
+                logger.warning(
+                    "WEATHER bare-path fallback triggered for date=%s — data shape regression: "
+                    "%d rows could not be mapped to a league via venue_id. "
+                    "Skipping bare write to keep manifest honest.",
+                    date,
+                    _orphan_count,
+                )
+        else:
+            logger.warning(
+                "WEATHER bare-path fallback triggered for date=%s — data shape regression: "
+                "no venue->league map (fixtures_df missing league_id/venue_name); rows=%d. "
+                "Skipping bare write to keep manifest honest.",
+                date,
+                len(new_df),
+            )
+
         counts["weather"] = len(new_df)
         logger.info("Weather: %d venue observations written for date=%s", len(new_df), date)
+    else:
+        # Initialise tracking vars so the manifest write block below is safe
+        # when no weather rows were captured this run.
+        _captured_leagues = set()
+        _league_venue_count = {}
 
     # Honest-coverage manifest write — per-league sharding so data-status UI
     # can render per-league WEATHER completion (not just one row per day).
     if weather_rows:
-        # Map venue_id → league_id(s) via fixtures_df so captured weather rows
-        # land in the right league bucket. A venue can host matches across
-        # leagues on the same date (cup + league doubles), so use set union.
-        _venue_to_leagues: dict[str, set[str]] = {}
-        if fixtures_df is not None and "league_id" in fixtures_df.columns and "venue_name" in fixtures_df.columns:
-            for _, _frow in fixtures_df[["venue_name", "league_id"]].dropna().iterrows():
-                _vname = str(_frow["venue_name"]).strip()
-                _lid_val = str(_frow["league_id"]).strip()
-                if not _vname or not _lid_val:
-                    continue
-                _vkey = _to_snake(_vname)
-                _venue_to_leagues.setdefault(_vkey, set()).add(_lid_val)
-        _captured_venues = {str(row.get("venue_id", "")) for row in weather_rows if row.get("venue_id")}
-        _captured_leagues: set[str] = set()
-        _league_venue_count: dict[str, int] = {}
-        for _v in _captured_venues:
-            for _lid_v in _venue_to_leagues.get(_v, set()):
-                _captured_leagues.add(_lid_v)
-                _league_venue_count[_lid_v] = _league_venue_count.get(_lid_v, 0) + 1
+        # Per-league captured rows mirror the per-league parquet partitions
+        # written above. _league_venue_count is populated only when the
+        # per-league write path executed.
         for _lid, _count in sorted(_league_venue_count.items()):
             manifest.add(
                 processing_date=date_type.fromisoformat(date),
