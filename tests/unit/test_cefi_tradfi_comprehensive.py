@@ -902,8 +902,8 @@ class TestCCXTAdapterComprehensive:
         assert adapter.venue == "BYBIT"
 
     def test_venue_default(self) -> None:
-        adapter = CCXTReferenceDataAdapter(venue="kraken")
-        assert adapter.venue == "kraken"
+        adapter = CCXTReferenceDataAdapter(venue="kucoin")
+        assert adapter.venue == "kucoin"
 
     def test_map_ccxt_type_spot(self) -> None:
         assert CCXTReferenceDataAdapter._map_ccxt_type("spot") == InstrumentType.SPOT_PAIR
@@ -1027,16 +1027,16 @@ class TestCCXTAdapterComprehensive:
 
     @pytest.mark.asyncio
     async def test_get_instruments_success(self) -> None:
-        adapter = CCXTReferenceDataAdapter(venue="kraken")
+        adapter = CCXTReferenceDataAdapter(venue="bybit")
         mock_exchange = MagicMock()
         mock_exchange.load_markets = AsyncMock(
             return_value={
-                "BTC/USD": {
+                "BTC/USDT": {
                     "type": "spot",
                     "active": True,
                     "base": "BTC",
-                    "quote": "USD",
-                    "id": "XBTCUSD",
+                    "quote": "USDT",
+                    "id": "BTCUSDT",
                     "precision": {},
                     "limits": {},
                 }
@@ -1050,7 +1050,7 @@ class TestCCXTAdapterComprehensive:
 
     @pytest.mark.asyncio
     async def test_get_instruments_closes_exchange_on_error(self) -> None:
-        adapter = CCXTReferenceDataAdapter(venue="kraken")
+        adapter = CCXTReferenceDataAdapter(venue="bybit")
         mock_exchange = MagicMock()
         mock_exchange.load_markets = AsyncMock(side_effect=Exception("timeout"))
         mock_exchange.close = AsyncMock()
@@ -1063,17 +1063,17 @@ class TestCCXTAdapterComprehensive:
 
     @pytest.mark.asyncio
     async def test_get_instrument_not_found(self) -> None:
-        adapter = CCXTReferenceDataAdapter(venue="kraken")
+        adapter = CCXTReferenceDataAdapter(venue="bybit")
         with patch.object(adapter, "get_instruments", return_value=[]):
             result = await adapter.get_instrument("UNKNOWN")
         assert result is None
 
     @pytest.mark.asyncio
     async def test_get_instrument_matches_instrument_key(self) -> None:
-        adapter = CCXTReferenceDataAdapter(venue="kraken")
-        inst = _make_instrument(raw_symbol="XBTCUSD", venue="kraken")
+        adapter = CCXTReferenceDataAdapter(venue="bybit")
+        inst = _make_instrument(raw_symbol="BTCUSDT", venue="bybit")
         with patch.object(adapter, "get_instruments", return_value=[inst]):
-            result = await adapter.get_instrument("XBTCUSD")
+            result = await adapter.get_instrument("BTCUSDT")
         assert result is inst
 
     @pytest.mark.asyncio
@@ -1091,7 +1091,7 @@ class TestCCXTAdapterComprehensive:
 
     @pytest.mark.asyncio
     async def test_get_ohlcv_success(self) -> None:
-        adapter = CCXTReferenceDataAdapter(venue="kraken")
+        adapter = CCXTReferenceDataAdapter(venue="bybit")
         ts_ms = int(datetime(2026, 1, 1, tzinfo=UTC).timestamp() * 1000)
         mock_exchange = MagicMock()
         mock_exchange.load_markets = AsyncMock(return_value={})
@@ -1102,7 +1102,7 @@ class TestCCXTAdapterComprehensive:
         )
         mock_exchange.close = AsyncMock()
         with patch.object(adapter, "_get_exchange", return_value=mock_exchange):
-            results = await adapter.get_ohlcv("BTC/USD", interval="1d", limit=1)
+            results = await adapter.get_ohlcv("BTC/USDT", interval="1d", limit=1)
         assert len(results) == 1
         assert results[0].open == Decimal("50000")
 

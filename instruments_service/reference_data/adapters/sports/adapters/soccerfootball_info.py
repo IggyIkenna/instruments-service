@@ -188,10 +188,14 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
         self,
         date: str,
     ) -> list[str]:
-        """Fetch SFI match IDs for a given date.
+        """Fetch SFI match IDs for a given date (id-only, all leagues).
 
-        API endpoint: GET /matches/date/{date}
-        Returns a list of SFI match ID strings for completed matches.
+        Returns a list of SFI match ID strings for completed matches across
+        every championship SFI tracks for that date. Use
+        ``get_match_descriptors_for_date`` instead when callers want to
+        filter by championship before paying per-match endpoint quota.
+
+        API endpoint: GET /matches/day/basic/?d=YYYYMMDD
 
         Args:
             date: Date string in YYYY-MM-DD format.
@@ -199,10 +203,26 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
         Returns:
             List of SFI match ID strings.
         """
-        # SFI uses /matches/day/basic/ with ?d= param in YYYYMMDD format
+        descriptors = await self.get_match_descriptors_for_date(date)
+        return [d["match_id"] for d in descriptors]
+
+    async def get_match_descriptors_for_date(
+        self,
+        date: str,
+    ) -> list[dict[str, str]]:
+        """Fetch SFI match descriptors (match_id + championship_id) for a date.
+
+        Returns one dict per completed match with the SFI match id and the
+        SFI championship (league) id. Lets the orchestrator filter the
+        per-match progressive loop down to mapped prediction leagues
+        BEFORE making the per-match API call — saves ~10x RapidAPI quota
+        because SFI's day-list returns ~50 leagues' worth of matches and we
+        only consume ~4.
+
+        API endpoint: GET /matches/day/basic/?d=YYYYMMDD
+        """
         sfi_date = date.replace("-", "")  # 2025-03-01 → 20250301
         url = f"{_BASE_URL}/matches/day/basic/"
-
         params: dict[str, str] = {"d": sfi_date, "l": "en_US"}
 
         try:
@@ -219,19 +239,23 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
             raise
 
         raw_rows = _extract_data(raw_response)
-        match_ids: list[str] = []
+        descriptors: list[dict[str, str]] = []
         for item in raw_rows:
             match_id = item.get("id") or item.get("match_id")
             status = str(item.get("status", "")).upper()
-            # Only include completed matches (finished/full-time)
-            if match_id and status in ("FT", "AET", "PEN", "FINISHED", "FULL_TIME", "ENDED"):
-                match_ids.append(str(match_id))
+            if not (match_id and status in ("FT", "AET", "PEN", "FINISHED", "FULL_TIME", "ENDED")):
+                continue
+            championship = item.get("championship") or {}
+            championship_id = ""
+            if isinstance(championship, dict):
+                championship_id = str(championship.get("id") or "")
+            descriptors.append({"match_id": str(match_id), "championship_id": championship_id})
         logger.info(
-            "SFI match IDs for date=%s: %d completed matches",
+            "SFI match descriptors for date=%s: %d completed matches",
             date,
-            len(match_ids),
+            len(descriptors),
         )
-        return match_ids
+        return descriptors
 
     async def get_progressive_stats(
         self,

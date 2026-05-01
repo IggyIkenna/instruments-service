@@ -56,7 +56,7 @@ echo "=== Backfill CBOE (TRADFI) ==="
 if [[ "$DRY_RUN" -eq 1 ]]; then
   bash "$SCRIPT_DIR/run_vm_backfill_e2e.sh" \
     --venue CBOE \
-    --category TRADFI \
+    --asset-group TRADFI \
     --start-date "$CBOE_START" \
     --end-date "$CBOE_END" \
     --chunk-days "$CHUNK_CBOE" \
@@ -65,7 +65,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 else
   bash "$SCRIPT_DIR/run_vm_backfill_e2e.sh" \
     --venue CBOE \
-    --category TRADFI \
+    --asset-group TRADFI \
     --start-date "$CBOE_START" \
     --end-date "$CBOE_END" \
     --chunk-days "$CHUNK_CBOE" \
@@ -76,7 +76,7 @@ echo "=== Backfill DERIBIT (CEFI 2019 range) ==="
 if [[ "$DRY_RUN" -eq 1 ]]; then
   bash "$SCRIPT_DIR/run_vm_backfill_e2e.sh" \
     --venue DERIBIT \
-    --category CEFI \
+    --asset-group CEFI \
     --start-date "$DERIBIT_2019_START" \
     --end-date "$DERIBIT_2019_END" \
     --chunk-days "$CHUNK_DERIBIT" \
@@ -85,7 +85,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 else
   bash "$SCRIPT_DIR/run_vm_backfill_e2e.sh" \
     --venue DERIBIT \
-    --category CEFI \
+    --asset-group CEFI \
     --start-date "$DERIBIT_2019_START" \
     --end-date "$DERIBIT_2019_END" \
     --chunk-days "$CHUNK_DERIBIT" \
@@ -96,7 +96,7 @@ echo "=== Backfill DERIBIT (single date gap) ==="
 if [[ "$DRY_RUN" -eq 1 ]]; then
   bash "$SCRIPT_DIR/run_vm_backfill_e2e.sh" \
     --venue DERIBIT \
-    --category CEFI \
+    --asset-group CEFI \
     --start-date "$DERIBIT_SINGLE_DATE" \
     --end-date "$DERIBIT_SINGLE_DATE" \
     --chunk-days 1 \
@@ -105,7 +105,7 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
 else
   bash "$SCRIPT_DIR/run_vm_backfill_e2e.sh" \
     --venue DERIBIT \
-    --category CEFI \
+    --asset-group CEFI \
     --start-date "$DERIBIT_SINGLE_DATE" \
     --end-date "$DERIBIT_SINGLE_DATE" \
     --chunk-days 1 \
@@ -119,7 +119,7 @@ fi
 
 echo "=== Verify CBOE coverage ==="
 .venv/bin/python "$SCRIPT_DIR/verify_instrument_manifest_coverage.py" \
-  --category TRADFI \
+  --asset-group TRADFI \
   --venue CBOE \
   --start-date "$CBOE_START" \
   --end-date "$CBOE_END" \
@@ -127,7 +127,7 @@ echo "=== Verify CBOE coverage ==="
 
 echo "=== Verify DERIBIT 2019 coverage ==="
 .venv/bin/python "$SCRIPT_DIR/verify_instrument_manifest_coverage.py" \
-  --category CEFI \
+  --asset-group CEFI \
   --venue DERIBIT \
   --start-date "$DERIBIT_2019_START" \
   --end-date "$DERIBIT_2019_END" \
@@ -135,7 +135,7 @@ echo "=== Verify DERIBIT 2019 coverage ==="
 
 echo "=== Verify DERIBIT single date coverage ==="
 .venv/bin/python "$SCRIPT_DIR/verify_instrument_manifest_coverage.py" \
-  --category CEFI \
+  --asset-group CEFI \
   --venue DERIBIT \
   --start-date "$DERIBIT_SINGLE_DATE" \
   --end-date "$DERIBIT_SINGLE_DATE" \

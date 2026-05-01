@@ -315,7 +315,7 @@ class TestOHLCVRef:
         from instruments_service.reference_data.schemas import OHLCVRef
 
         bar = OHLCVRef(
-            venue="kraken",
+            venue="kucoin",
             symbol="ETHUSD",
             timestamp=datetime(2024, 1, 14, tzinfo=UTC),
             open=Decimal("3000"),

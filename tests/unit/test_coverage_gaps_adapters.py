@@ -140,7 +140,7 @@ class TestCCXTCoverageGaps:
 
     def test_parse_ccxt_market_inactive_returns_none(self) -> None:
         """Line 104: active=False market → None."""
-        adapter = CCXTReferenceDataAdapter(venue="kraken")
+        adapter = CCXTReferenceDataAdapter(venue="kucoin")
         result = adapter._parse_ccxt_market(
             "BTC/USDT",
             {"type": "spot", "active": False, "base": "BTC", "quote": "USDT"},
@@ -150,7 +150,7 @@ class TestCCXTCoverageGaps:
 
     def test_parse_ccxt_market_wrong_type_returns_none(self) -> None:
         """Line 110: mapped_type != instrument_type filter → None."""
-        adapter = CCXTReferenceDataAdapter(venue="kraken")
+        adapter = CCXTReferenceDataAdapter(venue="kucoin")
         result = adapter._parse_ccxt_market(
             "BTC/USDT",
             {"type": "spot", "active": True, "base": "BTC", "quote": "USDT"},
@@ -160,7 +160,7 @@ class TestCCXTCoverageGaps:
 
     def test_parse_ccxt_market_non_dict_returns_none(self) -> None:
         """Line 103-104: market_raw not a dict → None."""
-        adapter = CCXTReferenceDataAdapter(venue="kraken")
+        adapter = CCXTReferenceDataAdapter(venue="kucoin")
         result = adapter._parse_ccxt_market("BTC/USDT", "not a dict", None)
         assert result is None
 
@@ -189,8 +189,8 @@ class TestCCXTCoverageGaps:
     @pytest.mark.asyncio
     async def test_get_instrument_found(self) -> None:
         """Lines 150-151: get_instrument returns matching instrument."""
-        adapter = CCXTReferenceDataAdapter(venue="kraken")
-        inst = _make_instrument(raw_symbol="BTCUSDT", venue="kraken")
+        adapter = CCXTReferenceDataAdapter(venue="kucoin")
+        inst = _make_instrument(raw_symbol="BTCUSDT", venue="kucoin")
         with patch.object(adapter, "get_instruments", return_value=[inst]):
             result = await adapter.get_instrument("BTCUSDT")
         assert result is inst
@@ -312,7 +312,7 @@ class TestCCXTCoverageGaps:
     @pytest.mark.asyncio
     async def test_get_ohlcv_skips_short_bars(self) -> None:
         """Line 263-264: bar with fewer than 6 elements is skipped."""
-        adapter = CCXTReferenceDataAdapter(venue="kraken")
+        adapter = CCXTReferenceDataAdapter(venue="kucoin")
         ts_ms = int(datetime(2026, 1, 1, tzinfo=UTC).timestamp() * 1000)
         mock_exchange = MagicMock()
         mock_exchange.load_markets = AsyncMock(return_value={})
