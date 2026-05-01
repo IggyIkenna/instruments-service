@@ -115,20 +115,20 @@ class _FakeCompleted:
 
 def test_enumerate_cells_produces_multiple_categories(smoke: ModuleType) -> None:
     cells = smoke.enumerate_cells()
-    categories = {c.category for c in cells}
+    asset_groups = {c.asset_group for c in cells}
     # Every major category should produce at least one cell.
-    assert {"CEFI", "TRADFI", "DEFI", "SPORTS", "PREDICTION"}.issubset(categories)
+    assert {"CEFI", "TRADFI", "DEFI", "SPORTS", "PREDICTION"}.issubset(asset_groups)
     assert len(cells) > 20, f"expected >20 cells from UAC SSOT, got {len(cells)}"
 
 
 def test_enumerate_cells_category_filter(smoke: ModuleType) -> None:
-    cells = smoke.enumerate_cells(category_filter="CEFI")
+    cells = smoke.enumerate_cells(asset_group_filter="CEFI")
     assert cells
-    assert {c.category for c in cells} == {"CEFI"}
+    assert {c.asset_group for c in cells} == {"CEFI"}
 
 
 def test_enumerate_cells_sports_emits_api_football_first(smoke: ModuleType) -> None:
-    cells = smoke.enumerate_cells(category_filter="SPORTS")
+    cells = smoke.enumerate_cells(asset_group_filter="SPORTS")
     assert cells
     # T0 (API_FOOTBALL) MUST appear before any T1 enrichment provider.
     providers_in_order = [c.sports_provider for c in cells if c.sports_provider]
@@ -152,13 +152,13 @@ def test_resolve_test_bucket_honours_category(smoke: ModuleType, monkeypatch: py
 
 
 def test_expected_write_prefix_sports_uses_sports_reference(smoke: ModuleType) -> None:
-    cell = smoke.SmokeCell(category="SPORTS", venue="API_FOOTBALL", data_type="odds")
+    cell = smoke.SmokeCell(asset_group="SPORTS", venue="API_FOOTBALL", data_type="odds")
     prefix = smoke.expected_write_prefix(cell, "2026-04-20")
     assert prefix.startswith("sports_reference/by_date/day=2026-04-20/")
 
 
 def test_expected_write_prefix_non_sports_uses_instrument_availability(smoke: ModuleType) -> None:
-    cell = smoke.SmokeCell(category="CEFI", venue="BINANCE-FUTURES", data_type="trades")
+    cell = smoke.SmokeCell(asset_group="CEFI", venue="BINANCE-FUTURES", data_type="trades")
     prefix = smoke.expected_write_prefix(cell, "2026-04-20")
     assert prefix == "instrument_availability/by_date/day=2026-04-20/venue=BINANCE-FUTURES/"
 
@@ -179,7 +179,7 @@ def test_run_cell_passes_when_all_three_steps_succeed(
         lambda domain, category, project_id: f"instruments-store-{category.lower()}-{project_id}",
     )
 
-    cell = smoke.SmokeCell(category="CEFI", venue="BINANCE-FUTURES", data_type="trades")
+    cell = smoke.SmokeCell(asset_group="CEFI", venue="BINANCE-FUTURES", data_type="trades")
     smoke_date = "2026-04-20"
 
     def fake_runner(argv: list[str], **kwargs: Any) -> _FakeCompleted:
@@ -221,7 +221,7 @@ def test_run_cell_empty_confirmed_is_pass(
         lambda domain, category, project_id: f"instruments-store-{category.lower()}-{project_id}",
     )
 
-    cell = smoke.SmokeCell(category="CEFI", venue="BINANCE-FUTURES", data_type="trades")
+    cell = smoke.SmokeCell(asset_group="CEFI", venue="BINANCE-FUTURES", data_type="trades")
     smoke_date = "2026-04-20"
 
     client = _FakeStorageClient(
@@ -259,7 +259,7 @@ def test_run_cell_fails_on_nonzero_rc(smoke: ModuleType, monkeypatch: pytest.Mon
         "get_bucket_name",
         lambda domain, category, project_id: f"instruments-store-{category.lower()}-{project_id}",
     )
-    cell = smoke.SmokeCell(category="CEFI", venue="BINANCE-FUTURES", data_type="trades")
+    cell = smoke.SmokeCell(asset_group="CEFI", venue="BINANCE-FUTURES", data_type="trades")
     result = smoke.run_cell(
         cell=cell,
         smoke_date="2026-04-20",
@@ -277,7 +277,7 @@ def test_run_cell_fails_when_no_parquet(smoke: ModuleType, monkeypatch: pytest.M
         "get_bucket_name",
         lambda domain, category, project_id: f"instruments-store-{category.lower()}-{project_id}",
     )
-    cell = smoke.SmokeCell(category="CEFI", venue="BINANCE-FUTURES", data_type="trades")
+    cell = smoke.SmokeCell(asset_group="CEFI", venue="BINANCE-FUTURES", data_type="trades")
     result = smoke.run_cell(
         cell=cell,
         smoke_date="2026-04-20",
@@ -298,7 +298,7 @@ def test_run_cell_fails_when_manifest_row_missing(
         "get_bucket_name",
         lambda domain, category, project_id: f"instruments-store-{category.lower()}-{project_id}",
     )
-    cell = smoke.SmokeCell(category="CEFI", venue="BINANCE-FUTURES", data_type="trades")
+    cell = smoke.SmokeCell(asset_group="CEFI", venue="BINANCE-FUTURES", data_type="trades")
     # Manifest has row for a DIFFERENT date — no matching row for our smoke_date.
     bad_manifest = _make_manifest_bytes("2000-01-01", "CEFI", "BINANCE-FUTURES", "trades")
     client = _FakeStorageClient(
@@ -326,7 +326,7 @@ def test_run_cell_skips_on_api_football_dependency_error(
         lambda domain, category, project_id: f"instruments-store-{category.lower()}-{project_id}",
     )
     cell = smoke.SmokeCell(
-        category="SPORTS",
+        asset_group="SPORTS",
         venue="FOOTYSTATS",
         data_type="odds",
         sports_provider="FOOTYSTATS",
@@ -362,8 +362,8 @@ def test_matrix_continues_after_single_cell_failure(
     )
 
     cells = [
-        smoke.SmokeCell(category="CEFI", venue="BINANCE-FUTURES", data_type="trades"),
-        smoke.SmokeCell(category="CEFI", venue="BYBIT", data_type="trades"),
+        smoke.SmokeCell(asset_group="CEFI", venue="BINANCE-FUTURES", data_type="trades"),
+        smoke.SmokeCell(asset_group="CEFI", venue="BYBIT", data_type="trades"),
     ]
 
     call_count = {"n": 0}
@@ -421,7 +421,7 @@ def test_dry_run_enumerates_without_invoking_subprocess(
 
     monkeypatch.setattr(smoke.subprocess, "run", fail_if_called)
 
-    cells = smoke.enumerate_cells(category_filter="PREDICTION")
+    cells = smoke.enumerate_cells(asset_group_filter="PREDICTION")
     assert cells, "PREDICTION should enumerate at least one cell"
     report = smoke.run_matrix(cells=cells, smoke_date="2026-04-20", execute=False)
 

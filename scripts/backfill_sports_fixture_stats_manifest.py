@@ -43,7 +43,7 @@ import pandas as pd
 from google.api_core.exceptions import NotFound
 from google.cloud import storage
 from unified_api_contracts.canonical.domain.sports.league_data import get_league_by_api_football_id
-from unified_trading_library.manifest_writer import ManifestWriter
+from unified_trading_library import ManifestWriter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)

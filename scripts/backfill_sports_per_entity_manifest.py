@@ -60,7 +60,7 @@ from unified_api_contracts.canonical.domain.sports.league_data import (
     get_league_fixture_calendar,
 )
 from unified_api_contracts.sports import get_expected_leagues_for_source
-from unified_trading_library.manifest_writer import ManifestWriter
+from unified_trading_library import ManifestWriter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)

@@ -239,6 +239,6 @@ def test_write_to_gcs_uses_resolved_bucket(monkeypatch: pytest.MonkeyPatch) -> N
     partition_seen.update(kwargs.get("partition") or {})
     assert kwargs.get("filename") == "all.parquet"
     assert kwargs.get("format") == "parquet"
-    assert partition_seen["category"] == "cefi"
+    assert partition_seen["asset_group"] == "cefi"
     assert "written_at" in partition_seen
     assert uri.startswith("gs://instruments-store-cefi-test-project")
