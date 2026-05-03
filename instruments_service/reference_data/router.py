@@ -78,15 +78,19 @@ from .adapters.cefi.hyperliquid import HyperliquidReferenceDataAdapter
 from .adapters.cefi.tardis import TardisReferenceDataAdapter
 from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
 from .adapters.defi.balancer import BalancerReferenceDataAdapter
+from .adapters.defi.benqi import BenqiReferenceDataAdapter
 from .adapters.defi.curve import CurveReferenceDataAdapter
 from .adapters.defi.ethena import EthenaReferenceDataAdapter
 from .adapters.defi.etherfi import EtherFiReferenceDataAdapter
+from .adapters.defi.euler_v2 import EulerV2ReferenceDataAdapter
 from .adapters.defi.fluid import FluidReferenceDataAdapter
 from .adapters.defi.lido import LidoReferenceDataAdapter
 from .adapters.defi.morpho import MorphoReferenceDataAdapter
+from .adapters.defi.radiant import RadiantReferenceDataAdapter
 from .adapters.defi.uniswap_v2 import UniswapV2ReferenceDataAdapter
 from .adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
 from .adapters.defi.uniswap_v4 import UniswapV4ReferenceDataAdapter
+from .adapters.defi.venus import VenusReferenceDataAdapter
 from .adapters.prediction.kalshi import KalshiReferenceDataAdapter
 from .adapters.prediction.polymarket import PolymarketReferenceDataAdapter
 from .adapters.sports.adapters.api_football_reference import ApiFootballReferenceDataAdapter
@@ -314,10 +318,12 @@ def _route_direct(
         "api_football": ApiFootballReferenceDataAdapter,
         "aster": AsterReferenceDataAdapter,
         "balancer": BalancerReferenceDataAdapter,
+        "benqi": BenqiReferenceDataAdapter,
         "betfair": BetfairReferenceDataAdapter,
         "curve": CurveReferenceDataAdapter,
         "ethena": EthenaReferenceDataAdapter,
         "etherfi": EtherFiReferenceDataAdapter,
+        "euler_v2": EulerV2ReferenceDataAdapter,
         "fluid": FluidReferenceDataAdapter,
         "hyperliquid": HyperliquidReferenceDataAdapter,
         "ibkr": IBKRReferenceDataAdapter,
@@ -326,9 +332,11 @@ def _route_direct(
         "morpho": MorphoReferenceDataAdapter,
         "polygon": PolygonReferenceDataAdapter,
         "polymarket": PolymarketReferenceDataAdapter,
+        "radiant": RadiantReferenceDataAdapter,
         "uniswap_v2": UniswapV2ReferenceDataAdapter,
         "uniswap_v3": UniswapV3ReferenceDataAdapter,
         "uniswap_v4": UniswapV4ReferenceDataAdapter,
+        "venus": VenusReferenceDataAdapter,
     }
     adapter_class = _direct_map.get(venue)
     if adapter_class is None:
