@@ -69,6 +69,31 @@ LENDING_PROTOCOL_DEPLOY_DATES: dict[str, dict[str, datetime]] = {
         # full liquidity-mining go-live 2023-05-09).
         "ETHEREUM": datetime(2023, 5, 9, tzinfo=UTC),
     },
+    "euler_v2": {
+        # Euler V2 (EVK + EVC) re-launched on Ethereum mainnet 2024-08-29
+        # after the V1 hack (March 2023) and full restitution.
+        "ETHEREUM": datetime(2024, 8, 29, tzinfo=UTC),
+        "ARBITRUM": datetime(2025, 1, 15, tzinfo=UTC),
+    },
+    "radiant": {
+        # Radiant Capital — omnichain LayerZero lending. V2 deploy on
+        # Arbitrum 2023-07-08; subsequent BSC + ETH releases.
+        "ETHEREUM": datetime(2024, 1, 17, tzinfo=UTC),
+        "ARBITRUM": datetime(2023, 7, 8, tzinfo=UTC),
+        "BSC": datetime(2023, 3, 22, tzinfo=UTC),
+    },
+    "venus": {
+        # Venus Protocol — first BSC lending market launched 2020-09-22
+        # (forked Compound). Ethereum mainnet IL Core Pool launched
+        # 2024-04-15; Sepolia testnet pre-dates that.
+        "BSC": datetime(2020, 9, 22, tzinfo=UTC),
+        "ETHEREUM": datetime(2024, 4, 15, tzinfo=UTC),
+    },
+    "benqi": {
+        # Benqi Liquid Markets on Avalanche — first Comptroller deploy
+        # 2021-08-19 (qiAVAX/qiUSDC.e markets).
+        "AVALANCHE": datetime(2021, 8, 19, tzinfo=UTC),
+    },
 }
 
 
