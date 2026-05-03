@@ -18,6 +18,7 @@ from .adapters.cefi.hyperliquid import HyperliquidReferenceDataAdapter
 from .adapters.cefi.tardis import TardisReferenceDataAdapter
 from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
 from .adapters.defi.balancer import BalancerReferenceDataAdapter
+from .adapters.defi.benqi import BenqiReferenceDataAdapter
 from .adapters.defi.compound_v3 import CompoundV3ReferenceDataAdapter
 from .adapters.defi.curve import CurveReferenceDataAdapter
 from .adapters.defi.drift import DriftReferenceDataAdapter
@@ -25,6 +26,7 @@ from .adapters.defi.eigenlayer import EigenLayerReferenceDataAdapter
 from .adapters.defi.ethena import EthenaReferenceDataAdapter
 from .adapters.defi.etherfi import EtherFiReferenceDataAdapter
 from .adapters.defi.ethfi import EthFiGovernanceReferenceDataAdapter
+from .adapters.defi.euler_v2 import EulerV2ReferenceDataAdapter
 from .adapters.defi.fluid import FluidReferenceDataAdapter
 from .adapters.defi.jito import JitoReferenceDataAdapter
 from .adapters.defi.kamino import KaminoReferenceDataAdapter
@@ -32,11 +34,13 @@ from .adapters.defi.lido import LidoReferenceDataAdapter
 from .adapters.defi.marinade import MarinadeReferenceDataAdapter
 from .adapters.defi.morpho import MorphoReferenceDataAdapter
 from .adapters.defi.orca import OrcaReferenceDataAdapter
+from .adapters.defi.radiant import RadiantReferenceDataAdapter
 from .adapters.defi.raydium import RaydiumReferenceDataAdapter
 from .adapters.defi.spark import SparkReferenceDataAdapter
 from .adapters.defi.uniswap_v2 import UniswapV2ReferenceDataAdapter
 from .adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
 from .adapters.defi.uniswap_v4 import UniswapV4ReferenceDataAdapter
+from .adapters.defi.venus import VenusReferenceDataAdapter
 from .adapters.prediction.kalshi import KalshiReferenceDataAdapter
 from .adapters.prediction.polymarket import PolymarketReferenceDataAdapter
 from .adapters.sports.adapters.api_football_reference import ApiFootballReferenceDataAdapter
@@ -146,6 +150,11 @@ _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL: dict[str, str] = {
     "SPARK": "spark",
     # SushiSwap V2 / Messari — use UniV3 adapter (Messari fallback query)
     "SUSHISWAP": "sushiswap",
+    # DeFi pipeline extension Phase 4 — 4 new lending protocols.
+    "EULER_V2": "euler_v2",
+    "RADIANT": "radiant",
+    "VENUS": "venus",
+    "BENQI": "benqi",
 }
 
 # Protocols that reuse another adapter class. If not listed, adapter_key == protocol_slug.
@@ -196,6 +205,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "aster": AsterReferenceDataAdapter,
     "deribit_combo": DeribitComboReferenceDataAdapter,
     "balancer": BalancerReferenceDataAdapter,
+    "benqi": BenqiReferenceDataAdapter,
     "betfair": BetfairReferenceDataAdapter,
     "compound_v3": CompoundV3ReferenceDataAdapter,
     "curve": CurveReferenceDataAdapter,
@@ -205,6 +215,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "ethena": EthenaReferenceDataAdapter,
     "ethfi_governance": EthFiGovernanceReferenceDataAdapter,
     "etherfi": EtherFiReferenceDataAdapter,
+    "euler_v2": EulerV2ReferenceDataAdapter,
     "fluid": FluidReferenceDataAdapter,
     "hyperliquid": HyperliquidReferenceDataAdapter,
     "jito": JitoReferenceDataAdapter,
@@ -217,12 +228,14 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "orca": OrcaReferenceDataAdapter,
     "polygon": PolygonReferenceDataAdapter,
     "polymarket": PolymarketReferenceDataAdapter,
+    "radiant": RadiantReferenceDataAdapter,
     "raydium": RaydiumReferenceDataAdapter,
     "spark": SparkReferenceDataAdapter,
     "tardis": TardisReferenceDataAdapter,
     "uniswap_v2": UniswapV2ReferenceDataAdapter,
     "uniswap_v3": UniswapV3ReferenceDataAdapter,
     "uniswap_v4": UniswapV4ReferenceDataAdapter,
+    "venus": VenusReferenceDataAdapter,
 }
 
 
@@ -274,6 +287,12 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "orca": "",
     "marinade": "",
     "jito": "",
+    # Phase-4 lending protocols. Curated registries — no live data source
+    # for instrument discovery (deploy dates resolved via direct RPC).
+    "euler_v2": "",
+    "radiant": "",
+    "venus": "",
+    "benqi": "",
 }
 
 
@@ -385,6 +404,11 @@ def get_adapter_for_canonical_venue(
         "balancer",
         "curve",
         "spark",
+        # Phase-4 lending protocols (multi-chain via curated registries).
+        "euler_v2",
+        "radiant",
+        "venus",
+        "benqi",
         # Solana adapters
         "drift",
         "kamino",
