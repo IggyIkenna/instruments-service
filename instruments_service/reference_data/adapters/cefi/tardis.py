@@ -275,6 +275,20 @@ def _resolve_base_quote(item: TardisInstrumentDetail, raw_id: str, exchange: str
         return base, quote
 
     upper_id = raw_id.upper()
+    # Bitfinex derivatives use ``<BASE>F0:<QUOTE>F0`` — ``F0`` is Bitfinex's
+    # "perpetual" marker, not a currency suffix. Examples:
+    #   BTCF0:USTF0  → base=BTC,  quote=USDT (USDT-margined linear perp)
+    #   ETHF0:BTCF0  → base=ETH,  quote=BTC  (BTC-margined inverse perp)
+    #   XAUTF0:BTCF0 → base=XAUT, quote=BTC
+    # Strip the F0 marker on both sides; map the Bitfinex pseudo-codes
+    # (``UST``→``USDT``) back to canonical currency tickers.
+    if exchange == "bitfinex-derivatives" and ":" in upper_id:
+        left, right = upper_id.split(":", 1)
+        base = left[:-2] if left.endswith("F0") else left
+        quote = right[:-2] if right.endswith("F0") else right
+        # Bitfinex pseudo-tickers → canonical
+        _BFX_QUOTE_ALIASES = {"UST": "USDT"}
+        return base, _BFX_QUOTE_ALIASES.get(quote, quote)
     if "-" in upper_id:
         parts = upper_id.split("-")
         # UPBIT uses QUOTE-BASE format: KRW-BTC, BTC-DOT, USDT-SOL
