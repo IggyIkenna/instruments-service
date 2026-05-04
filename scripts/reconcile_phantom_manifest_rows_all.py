@@ -43,6 +43,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 from google.cloud import storage
+from requests.adapters import HTTPAdapter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -134,13 +135,21 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
     "prediction": {
         "bucket": f"market-data-tick-prediction-{PROJECT_ID}",
         "index": "_index/availability_index.parquet",
+        # Polymarket parquets live under a 9-segment hive layout that puts
+        # ``data_source=POLYMARKET_CLOB`` BETWEEN ``category=prediction``
+        # and ``venue=``, with ``market_category`` / ``underlying`` /
+        # ``market_type`` / ``resolution_period`` segments between
+        # ``chain=`` and ``data_type=``.  ``instrument_type=prediction_market``
+        # is a manifest-row attribute, NOT a hive segment on disk.
+        # We list at the day-level prediction prefix; the substring-match
+        # logic below verifies ``venue={V}/`` + ``data_type={DT}/`` membership
+        # (instrument_type check is skipped for ``prediction_market`` rows
+        # because the segment doesn't exist on disk).
         "prefix_tpls": [
-            "raw_tick_data/by_date/day={date}/asset_group=prediction/venue={venue}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "raw_tick_data/by_date/day={date}/category=prediction/venue={venue}/"
-            "instrument_type={instrument_type}/data_type={data_type}/",
-            "day={date}/asset_group=prediction/venue={venue}/instrument_type={instrument_type}/data_type={data_type}/",
-            "day={date}/category=prediction/venue={venue}/instrument_type={instrument_type}/data_type={data_type}/",
+            "raw_tick_data/by_date/day={date}/asset_group=prediction/",
+            "raw_tick_data/by_date/day={date}/category=prediction/",
+            "day={date}/asset_group=prediction/",
+            "day={date}/category=prediction/",
         ],
     },
 }
@@ -167,6 +176,11 @@ def _venue_level_prefixes(asset_group: str, row: pd.Series) -> list[str]:
        orchestrator-direct writes used ``raw_tick_data/by_date/day={D}/...``.
        Both shapes coexist on disk; pre-2026-05-03 audits only probed the
        prefixed shape and false-positived 130k CeFi rows.
+    5. **Chain-bundle equivalence** (2026-05-04) — manifest holds
+       ``instrument_type=option`` / ``future`` (row-level) but the writer
+       bundles those rows into ``options_chain/`` / ``futures_chain/``
+       partitions on disk. The membership check accepts either form so
+       OPTION/FUTURE manifest rows match their bundled disk locations.
     """
     cfg = ASSET_GROUP_CONFIG[asset_group]
     base_fields = {
@@ -282,20 +296,53 @@ def _audit_generic(
                     (len(unique_prefixes) - completed) / max(0.01, rate),
                 )
 
+    # Chain-bundle equivalence: writers bundle OPTION rows into
+    # ``instrument_type=options_chain/`` partitions and FUTURE rows into
+    # ``instrument_type=futures_chain/`` (per
+    # ``market_tick_data_service/.../cefi/tardis_shared.finalise_rows_and_path``).
+    # Manifest holds the row-level type (``option`` / ``future``); disk has
+    # the chain form. Audit must accept either.
+    _IT_DISK_EQUIV: dict[str, list[str]] = {  # noqa: N806 — local constant table
+        "option": ["option", "options_chain"],
+        "future": ["future", "futures_chain"],
+    }
+
+    # instrument_type values that exist as manifest attributes but NOT as
+    # hive segments on disk. Skip the instrument_type substring check for
+    # rows with these values — they're identifier-only, not partitioning.
+    # ``prediction_market`` is the only example today (Polymarket layout
+    # uses ``market_type=binary/range_bracket/...`` instead).
+    _IT_NOT_ON_DISK: frozenset[str] = frozenset({"prediction_market"})  # noqa: N806 — local constant table
+
     real_or_phantom: dict[int, bool] = {}
     for idx, plist in prefixes_by_idx.items():
         row = df.loc[idx]
         data_type = str(row.get("data_type", "") or "")
         raw_it = str(row.get("instrument_type", "") or "")
+        venue = str(row.get("venue", "") or "")
         dt_needle = f"data_type={data_type}/"
+        # Venue substring needle — required when prefix templates truncate
+        # at category/asset_group level (e.g. prediction's Polymarket layout
+        # interposes ``data_source=`` between category and venue, so the
+        # prefix can't pin venue).  Empty venue → no needle (skip check).
+        venue_needle = f"venue={venue}/" if venue else ""
         # Case-insensitive instrument_type needle. Empty manifest value
-        # means "any instrument_type counts" (schema-4 rows).
-        it_needles_lower = [f"instrument_type={raw_it.lower()}/"] if raw_it else []
+        # means "any instrument_type counts" (schema-4 rows). Identifier-
+        # only types like ``prediction_market`` skip the segment check.
+        it_lower = raw_it.lower()
+        if it_lower in _IT_DISK_EQUIV:
+            it_needles_lower = [f"instrument_type={v}/" for v in _IT_DISK_EQUIV[it_lower]]
+        elif it_lower and it_lower not in _IT_NOT_ON_DISK:
+            it_needles_lower = [f"instrument_type={it_lower}/"]
+        else:
+            it_needles_lower = []
         is_real = False
         for prefix in plist:
             keys = prefix_keys.get(prefix, set())
             for k in keys:
                 if dt_needle not in k:
+                    continue
+                if venue_needle and venue_needle not in k:
                     continue
                 if it_needles_lower:
                     k_lower = k.lower()
@@ -319,16 +366,27 @@ def main() -> int:
     args = p.parse_args()
 
     cfg = ASSET_GROUP_CONFIG[args.asset_group]
+    # Bump GCS HTTP connection pool to match worker count; the default of 10
+    # silently truncates list_blobs() results under high concurrency. The
+    # 2026-05-04 CeFi audit produced 12k false-positive phantoms from this —
+    # connections were "discarded" mid-listing and partial results bubbled
+    # back as missing-key. Pattern from migrate_polymarket_canonical.py.
+    pool_size = max(args.workers * 2, 64)
     client = storage.Client(project=PROJECT_ID)
+    try:
+        adapter = HTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size, max_retries=3)
+        client._http.mount("https://", adapter)
+        client._http.mount("http://", adapter)
+        logger.info("GCS HTTP pool tuned: pool_size=%d (workers=%d)", pool_size, args.workers)
+    except (AttributeError, TypeError):
+        logger.warning("Could not tune GCS HTTP pool — falling back to default 10")
     bucket = client.bucket(cfg["bucket"])
     blob = bucket.blob(cfg["index"])
 
     logger.info("Loading manifest from gs://%s/%s", cfg["bucket"], cfg["index"])
     # Per-invocation temp file so concurrent runs (one per asset_group) don't
     # clobber each other's downloads. Bandit B108: use tempfile, not /tmp.
-    with tempfile.NamedTemporaryFile(
-        prefix=f"recon-{args.asset_group}-", suffix=".parquet", delete=False
-    ) as _tf:
+    with tempfile.NamedTemporaryFile(prefix=f"recon-{args.asset_group}-", suffix=".parquet", delete=False) as _tf:
         manifest_path = _tf.name
     try:
         blob.download_to_filename(manifest_path)
@@ -347,6 +405,26 @@ def main() -> int:
     if args.data_types:
         wanted_dts = {d.strip() for d in args.data_types.split(",") if d.strip()}
         captured_mask = captured_mask & df["data_type"].isin(wanted_dts)
+
+    # 2026-05-04: drop schema_v4 vestigial rows from audit scope. These are
+    # pre-v5 daily-manifest records with only ``venue`` populated (no
+    # ``data_type``, ``instrument_type``, etc.) and represent informational
+    # "this venue was touched on this date" markers, not real shards. The
+    # audit can't probe an empty ``data_type=`` substring, so these
+    # systematically false-positive as phantoms (9,757 rows on 2026-05-04
+    # CeFi). They're harmless legacy and should be filtered out, not flipped
+    # to attempted_failed (which would force VMs to retry venues that don't
+    # have a target data_type to retry against).
+    if "schema_version" in df.columns:
+        v4_empty_dt = (df["schema_version"] == 4) & (df["data_type"].fillna("").astype(str).str.len() == 0)
+        v4_in_scope = (captured_mask & v4_empty_dt).sum()
+        if v4_in_scope > 0:
+            logger.info(
+                "Dropping %d schema_v4 vestigial rows (empty data_type — "
+                "pre-v5 informational manifest records, not real shards)",
+                v4_in_scope,
+            )
+        captured_mask = captured_mask & ~v4_empty_dt
 
     captured_idx = df[captured_mask].index
     logger.info("Captured rows in scope: %d", len(captured_idx))
