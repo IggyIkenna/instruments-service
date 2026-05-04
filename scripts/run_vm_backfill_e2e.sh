@@ -128,13 +128,19 @@ run_chunk() {
     return 0
   fi
 
-  local cmd=".venv/bin/instruments-service --operation instruments --mode batch --asset-group \"$ASSET_GROUP_UPPER\" --venues \"$VENUE_UPPER\" --start-date \"$chunk_start\" --end-date \"$chunk_end\""
+  # Per-chunk VM_NAME + MANIFEST_PER_VM_SHARDS so each chunk worker writes to its OWN
+  # per-VM manifest shard. Without this, all local chunks share HOSTNAME=hk and race on
+  # the canonical _index/availability_index.parquet via CAS — after 15 retries an
+  # unconditional-write fallback can clobber peer manifest rows.
+  local vm_tag="hk_${ASSET_GROUP_UPPER,,}_${VENUE_UPPER,,}_${chunk_start//-/}_$(od -An -N3 -tx1 /dev/urandom | tr -d ' ')"
+
+  local cmd="VM_NAME='$vm_tag' MANIFEST_PER_VM_SHARDS=true .venv/bin/instruments-service --operation instruments --mode batch --asset-group \"$ASSET_GROUP_UPPER\" --venues \"$VENUE_UPPER\" --start-date \"$chunk_start\" --end-date \"$chunk_end\""
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "[$(date '+%H:%M:%S')] PLAN  $cmd" | tee -a "$SUMMARY_LOG"
     return 0
   fi
 
-  echo "[$(date '+%H:%M:%S')] START $chunk_start -> $chunk_end" | tee -a "$SUMMARY_LOG"
+  echo "[$(date '+%H:%M:%S')] START $chunk_start -> $chunk_end (vm_name=$vm_tag)" | tee -a "$SUMMARY_LOG"
   bash -lc "$cmd" >"$log_file" 2>&1
   local rc=$?
   if [[ "$rc" -ne 0 ]]; then
