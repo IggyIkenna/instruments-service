@@ -78,6 +78,36 @@ def _classify_pre_launch(df: pd.DataFrame) -> pd.Series:
     )
 
 
+def _classify_superseded_top_level(df: pd.DataFrame) -> pd.Series:
+    """Return a boolean Series — True for top-level no-league
+    ``attempted_failed`` rows that have been superseded by per-league
+    captures of the same ``(date, data_type)``.
+
+    Pattern: orchestrator records ``record_failed("INJURIES", exc)`` with
+    no ``league_id`` when an entity-level fetch errors. The next run
+    succeeds per-league and emits ``manifest.add(..., league_id=X)`` for
+    each league with data, but the original top-level failure row is
+    never retracted. Result: a stale top-level ``attempted_failed`` row
+    co-exists with per-league ``captured`` / ``empty_confirmed`` rows
+    indefinitely.
+
+    Verified 2026-05-04: 11,142 such superseded rows accumulated
+    in the sports manifest.
+    """
+    # Index of rows that are top-level no-league attempted_failed.
+    af_top_level = (
+        (df["capture_status"] == "attempted_failed")
+        & (df["league_id"].fillna("") == "")
+        & (df["data_type"].fillna("") != "")
+    )
+    # Build set of (date, data_type) keys that have AT LEAST ONE per-league
+    # captured / empty_confirmed row — these supersede the top-level failure.
+    per_league = df[df["capture_status"].isin(["captured", "empty_confirmed"]) & (df["league_id"].fillna("") != "")]
+    keys_per_league = set(zip(per_league["date"].astype(str), per_league["data_type"].astype(str), strict=True))
+    af_keys = list(zip(df["date"].astype(str), df["data_type"].astype(str), strict=True))
+    return af_top_level & pd.Series([k in keys_per_league for k in af_keys], index=df.index)
+
+
 def _summarise(df: pd.DataFrame, label: str) -> None:
     logger.info("%s: %d rows", label, len(df))
     if not df.empty:
@@ -129,11 +159,15 @@ def main() -> int:
     logger.info("Loaded manifest: %d rows from gs://%s/%s", len(df), bucket_name, INDEX_PATH)
 
     pre_launch_mask = _classify_pre_launch(df)
+    superseded_mask = _classify_superseded_top_level(df)
+    drop_mask = pre_launch_mask | superseded_mask
     pre_launch = df[pre_launch_mask]
-    keep = df[~pre_launch_mask]
+    superseded = df[superseded_mask]
+    keep = df[~drop_mask]
 
     logger.info("=" * 60)
     _summarise(pre_launch, "Pre-launch rows (would be DELETED)")
+    _summarise(superseded, "Superseded top-level no-league failure rows (would be DELETED)")
     logger.info("Keep rows: %d", len(keep))
     logger.info("=" * 60)
 
@@ -141,8 +175,8 @@ def main() -> int:
         logger.info("--dry-run: NOT writing manifest. Re-run without --dry-run to delete.")
         return 0
 
-    if len(pre_launch) == 0:
-        logger.info("No pre-launch rows to purge. Manifest is clean.")
+    if drop_mask.sum() == 0:
+        logger.info("No rows to purge. Manifest is clean.")
         return 0
 
     # Write the filtered manifest back via generation-match CAS so we don't
@@ -152,9 +186,10 @@ def main() -> int:
     blob.reload()
     generation = blob.generation
     logger.info(
-        "Uploading purged manifest (%d rows, %d pre-launch removed) with if_generation_match=%s",
+        "Uploading purged manifest (%d rows, %d pre-launch + %d superseded removed) with if_generation_match=%s",
         len(keep),
         len(pre_launch),
+        len(superseded),
         generation,
     )
     bucket.blob(INDEX_PATH).upload_from_string(
