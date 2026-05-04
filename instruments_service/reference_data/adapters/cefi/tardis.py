@@ -20,6 +20,7 @@ import contextlib
 import json
 import logging
 import re
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import cast
@@ -425,6 +426,12 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
     ) -> None:
         super().__init__(project_id=project_id, api_key=api_key)
         self._exchanges: list[str] = exchanges if exchanges is not None else _DEFAULT_EXCHANGES
+        # Tardis returns the full historical universe in one REST call —
+        # the result is date-independent. Bump cache TTL well past the longest
+        # plausible single-process backfill window (default 1h is too short for
+        # multi-year sweeps that take several hours). 24h cache keeps RSS flat
+        # for any realistic single-run.
+        self._cache_ttl = 86400.0
 
     @property
     def venue(self) -> str:
@@ -443,6 +450,31 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                     batch = [r for r in batch if r.instrument_type == instrument_type]
                 results.extend(batch)
         return results
+
+    async def get_instruments_cached(
+        self,
+        instrument_type: str | None = None,
+        date: str | None = None,
+    ) -> list[InstrumentRecord]:
+        """Tardis-specific cache: keyed on instrument_type only.
+
+        Tardis returns the full historical instrument universe in a single
+        REST call regardless of date — date filtering happens downstream in
+        URDI/orchestrator. Including date in the cache key would force a fresh
+        ~200K-instrument fetch per backfill date and accumulate ~40 GB of
+        pydantic objects across a multi-year sweep (OOM-killed cefi-instr-deribit
+        on 2026-05-04 at 25 dates in). Keying only on instrument_type means
+        the second date onward hits cache, RSS plateaus after the first fetch.
+        """
+        cache_key = instrument_type
+        cached = self._instruments_cache.get(cache_key)
+        if cached is not None:
+            records, ts = cached
+            if (time.monotonic() - ts) < self._cache_ttl:
+                return records
+        records = await self.get_instruments(instrument_type=instrument_type)
+        self._instruments_cache[cache_key] = (records, time.monotonic())
+        return records
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         instruments = await self.get_instruments()
