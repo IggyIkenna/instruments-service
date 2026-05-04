@@ -1,7 +1,7 @@
 {
   "pythonVersion": "3.13",
-  "venvPath": ".",
-  "venv": ".venv",
+  "venvPath": "../",
+  "venv": ".venv-workspace",
   "include": ["instruments_service"],
   "exclude": [
     "instruments_service/app/core/instruments_service_modular_attempt.py",
