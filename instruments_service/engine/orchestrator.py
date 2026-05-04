@@ -1548,7 +1548,7 @@ async def process_instruments(
                     processing_date=date_type.fromisoformat(date),
                     row_count=0,
                     data_type="FIXTURES",
-                    league_id=_league_id,
+                    league_id=_canonical_league_id(_league_id),
                 )
             _empty_manifest.write()
             logger.info(
@@ -1881,7 +1881,7 @@ async def process_instruments(
                         processing_date=date_type.fromisoformat(date),
                         row_count=len(_league_df_clean),
                         data_type="FIXTURES",
-                        league_id=_league_id_str,
+                        league_id=_canonical_league_id(_league_id_str),
                     )
                     counts[f"FIXTURES/{_league_id_str}"] = len(_league_df_clean)
                     if sampler.enable_sampling:
@@ -3052,7 +3052,7 @@ async def _fetch_sports_reference_data(
                             processing_date=date_type.fromisoformat(date),
                             row_count=len(_s_league_df),
                             data_type="STANDINGS",
-                            league_id=_s_lid_str,
+                            league_id=_canonical_league_id(_s_lid_str),
                         )
                 if manifest is not None:
                     _af_emit_empty_gaps_for_entity("STANDINGS", _std_captured)
@@ -3111,7 +3111,7 @@ async def _fetch_sports_reference_data(
                                 processing_date=date_type.fromisoformat(date),
                                 row_count=len(_inj_clean),
                                 data_type="INJURIES",
-                                league_id=_inj_lid_str,
+                                league_id=_canonical_league_id(_inj_lid_str),
                             )
 
                     if not _without_league.empty:
@@ -3417,7 +3417,7 @@ async def _fetch_sports_reference_data(
                                 processing_date=date_type.fromisoformat(date),
                                 row_count=len(_pf_clean),
                                 data_type=_af_entity_dt,
-                                league_id=_pf_lid_str,
+                                league_id=_canonical_league_id(_pf_lid_str),
                             )
 
                     # Drop unmapped rows — single-SSOT means bare writes are
@@ -3905,7 +3905,7 @@ async def _fetch_footystats_predictions(
                         processing_date=date_type.fromisoformat(date),
                         row_count=len(_pred_clean),
                         data_type="PREDICTIONS",
-                        league_id=_pred_lid_str,
+                        league_id=_canonical_league_id(_pred_lid_str),
                     )
 
                 if not _without_league.empty:
@@ -4148,7 +4148,7 @@ async def _fetch_footystats_matches(
                         processing_date=date_type.fromisoformat(date),
                         row_count=len(_ft_clean),
                         data_type="MATCHES",
-                        league_id=_ft_lid_str,
+                        league_id=_canonical_league_id(_ft_lid_str),
                     )
 
                 if not _without_league.empty:
@@ -4309,7 +4309,7 @@ async def _fetch_footystats_odds(
                         processing_date=date_type.fromisoformat(date),
                         row_count=len(_odds_clean),
                         data_type="ODDS",
-                        league_id=_odds_lid_str,
+                        league_id=_canonical_league_id(_odds_lid_str),
                     )
 
                 if not _without_league.empty:
@@ -4503,7 +4503,7 @@ async def _fetch_understat_xg(
                         processing_date=date_type.fromisoformat(date),
                         row_count=len(_xg_league_df),
                         data_type="XG",
-                        league_id=_xg_lid_str,
+                        league_id=_canonical_league_id(_xg_lid_str),
                     )
 
                 if not _without_league.empty:
@@ -4850,7 +4850,7 @@ async def _fetch_transfermarkt_data(
                 processing_date=date_type.fromisoformat(date),
                 row_count=_cap_count,
                 data_type="PLAYER_VALUES",
-                league_id=_cap_lid,
+                league_id=_canonical_league_id(_cap_lid),
                 cached=_cache_hit,
             )
         for _emp_lid in sorted(_empty_leagues | _unmapped_leagues):
@@ -5246,7 +5246,7 @@ async def _fetch_sfi_data(
                                 processing_date=date_type.fromisoformat(date),
                                 row_count=len(_pp_league_df),
                                 data_type="SFI_PROGRESSIVE_STATS",
-                                league_id=_pp_lid_str,
+                                league_id=_canonical_league_id(_pp_lid_str),
                             )
 
                         if not _without_league.empty:
@@ -5636,7 +5636,7 @@ async def _fetch_weather_data(
                         processing_date=date_type.fromisoformat(date),
                         row_count=1,
                         data_type="WEATHER",
-                        league_id=_lid_str,
+                        league_id=_canonical_league_id(_lid_str),
                     )
             for _exp_lid in sorted(_expected_weather_league_ids - _captured_leagues_covered):
                 manifest.record_empty(
@@ -5820,7 +5820,7 @@ async def _fetch_weather_data(
                 processing_date=date_type.fromisoformat(date),
                 row_count=_count,
                 data_type="WEATHER",
-                league_id=_lid,
+                league_id=_canonical_league_id(_lid),
             )
         # Per-league empty_confirmed for in-season leagues with no captured weather
         for _exp_lid in sorted(_expected_weather_league_ids - _captured_leagues):

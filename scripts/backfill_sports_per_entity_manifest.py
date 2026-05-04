@@ -460,7 +460,7 @@ def _backfill_weather_day(
     for vid_raw in weather_df["venue_id"].dropna().astype(str).unique():
         for lid in venue_to_leagues.get(vid_raw, set()):
             counts[lid] = counts.get(lid, 0) + 1
-    # Expected = open_meteo's UAC leagues × in-season-on-day filter.
+    # Expected = open_meteo's UAC leagues x in-season-on-day filter.
     expected = _expected_leagues_in_season("open_meteo", day)
     empty_leagues = expected - counts.keys()
 
@@ -772,7 +772,7 @@ def main(argv: list[str]) -> int:
                         r.leagues.update(counts.keys())
                         r.days_with_data.add(day)
             logger.info(
-                "league-direct %s done in %.1fs (%d rows across %d days × %d leagues)",
+                "league-direct %s done in %.1fs (%d rows across %d days x %d leagues)",
                 spec.data_type,
                 time.monotonic() - t1,
                 results[spec.data_type].rows_written,
@@ -888,23 +888,32 @@ def main(argv: list[str]) -> int:
         if not exists:
             logger.info("singleton %s: file absent", spec.data_type)
             continue
+        # Singleton — emit ONE manifest row at SINGLETON_SENTINEL_DATE.
+        # Pre-2026-05-04 we emitted one row per day in the data range as a
+        # workaround for date-window queries. That polluted the manifest
+        # with 3,627+ duplicate sentinel rows that the phantom audit kept
+        # flagging because its day-listing strategy can't see the flat
+        # singleton path. The audit was hardened to probe singleton flat
+        # paths directly via UAC's ``candidate_parquet_paths`` SSOT, so
+        # date-window matching is no longer the writer's concern — readers
+        # that need date-window filtering for singletons should use the
+        # SSOT probe, not the manifest row's date.
         if not args.dry_run and manifest is not None:
-            for d in days:
-                proc_date = date_type.fromisoformat(d)
-                manifest.add(
-                    processing_date=proc_date,
-                    row_count=1,
-                    data_type=spec.data_type,
-                    league_id="",
-                    venue="",
-                )
+            sentinel_date = date_type.fromisoformat(SINGLETON_SENTINEL_DATE)
+            manifest.add(
+                processing_date=sentinel_date,
+                row_count=1,
+                data_type=spec.data_type,
+                league_id="",
+                venue="",
+            )
         r = results[spec.data_type]
-        r.rows_written += len(days)
-        r.days_with_data.update(days)
+        r.rows_written += 1
+        r.days_with_data.add(SINGLETON_SENTINEL_DATE)
         logger.info(
-            "singleton %s: emitted %d rows (one per day for date-filter portability)",
+            "singleton %s: emitted 1 sentinel row at %s (was per-day; collapsed 2026-05-04)",
             spec.data_type,
-            len(days),
+            SINGLETON_SENTINEL_DATE,
         )
 
     if not args.dry_run and manifest is not None:

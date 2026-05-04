@@ -208,10 +208,19 @@ def _audit_sports(
     captured_idx: pd.Index,
     workers: int,
 ) -> dict[int, bool]:
-    """Sports uses per-league + bare path layout — delegate to UAC SSOT."""
+    """Sports uses per-league + bare path layout — delegate to UAC SSOT.
+
+    Day-partitioned candidates (``sports_reference/by_date/day={D}/...``)
+    are matched against a bulk listing per day.  Singleton flat-path
+    candidates (``sports_reference/{folder}/{folder}.parquet``, e.g.
+    VENUES) live OUTSIDE the day-partition tree and need direct
+    ``bucket.blob(c).exists()`` probes — without that step every
+    singleton row false-flags as phantom because it can't be in the
+    day-partition listing by construction.
+    """
     from unified_api_contracts.sports import candidate_parquet_paths
 
-    # Bulk-list per day (sports has shared sports_reference/by_date/day=*/ path).
+    # Bulk-list per day for all day-partitioned candidates.
     days = sorted({str(d) for d in df.loc[captured_idx, "date"].unique()})
     logger.info("sports phantom: listing %d unique days", len(days))
     day_blobs: dict[str, set[str]] = {}
@@ -225,6 +234,19 @@ def _audit_sports(
             day, blobs = fut.result()
             day_blobs[day] = blobs
 
+    # Per-singleton-path existence cache — populated lazily as rows are
+    # audited so we only probe each unique singleton path once.
+    day_partition_prefix = "sports_reference/by_date/day="
+    singleton_exists: dict[str, bool] = {}
+
+    def _singleton_real(path: str) -> bool:
+        if path not in singleton_exists:
+            try:
+                singleton_exists[path] = bucket.blob(path).exists()
+            except Exception:  # broad-except-ok: per-row failure isolation
+                singleton_exists[path] = False
+        return singleton_exists[path]
+
     # Probe each captured row.
     real_or_phantom: dict[int, bool] = {}  # idx -> True if real
     for idx in captured_idx:
@@ -234,7 +256,20 @@ def _audit_sports(
         league_id = str(row.get("league_id", "") or "")
         candidates = candidate_parquet_paths(data_type, date, league_id)
         blobs = day_blobs.get(date, set())
-        real_or_phantom[idx] = any(c in blobs for c in candidates)
+        is_real = False
+        for c in candidates:
+            if c.startswith(day_partition_prefix):
+                if c in blobs:
+                    is_real = True
+                    break
+            else:
+                # Singleton flat-path (VENUES, future single-file entities) —
+                # probe directly. The audit's day-listing strategy can't
+                # cover paths outside the by_date/day=*/ tree.
+                if _singleton_real(c):
+                    is_real = True
+                    break
+        real_or_phantom[idx] = is_real
     return real_or_phantom
 
 
