@@ -64,20 +64,28 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
     "cefi": {
         "bucket": f"market-data-tick-cefi-{PROJECT_ID}",
         "index": "_index/availability_index.parquet",
-        # Both hive keys live concurrently. instrument_type is part of the
-        # path; we slot venue + instrument_type from manifest columns.
+        # 4 path shapes coexist on disk; ALL must be probed:
+        #   (a) raw_tick_data/by_date prefix + asset_group= hive (canonical)
+        #   (b) raw_tick_data/by_date prefix + category= hive (legacy)
+        #   (c) top-level + asset_group= hive (Tardis adapter via build_partition_path)
+        #   (d) top-level + category= hive (older Tardis adapter)
+        # Earlier audit only probed (a) + (b) and false-positived 130k rows
+        # whose data lives at (c)/(d). 2026-05-03: extended to all 4 shapes.
         "prefix_tpls": [
             "raw_tick_data/by_date/day={date}/asset_group=cefi/venue={venue}/"
             "instrument_type={instrument_type}/data_type={data_type}/",
             "raw_tick_data/by_date/day={date}/category=cefi/venue={venue}/"
             "instrument_type={instrument_type}/data_type={data_type}/",
+            "day={date}/asset_group=cefi/venue={venue}/instrument_type={instrument_type}/data_type={data_type}/",
+            "day={date}/category=cefi/venue={venue}/instrument_type={instrument_type}/data_type={data_type}/",
         ],
     },
     "defi": {
         "bucket": f"market-data-tick-defi-{PROJECT_ID}",
         "index": "_index/availability_index.parquet",
         # DeFi layout has venue + chain (no instrument_type segment in older
-        # paths). Probe new + legacy hive keys + a no-asset-group variant.
+        # paths). Probe new + legacy hive keys + no-asset-group + top-level
+        # (no raw_tick_data/by_date/ prefix) variants.
         "prefix_tpls": [
             "raw_tick_data/by_date/day={date}/asset_group=defi/venue={venue}/"
             "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
@@ -85,6 +93,22 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
             "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
             # 2024-05-era DeFi paths skipped the asset-group hive segment.
             "raw_tick_data/by_date/day={date}/venue={venue}/chain={chain}/"
+            "instrument_type={instrument_type}/data_type={data_type}/",
+            "day={date}/asset_group=defi/venue={venue}/"
+            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
+            "day={date}/category=defi/venue={venue}/"
+            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
+            # Legacy ``venue=PROTOCOL-CHAIN`` overload — pre-2026-04-29
+            # EIGENLAYER restaking + a few other DeFi adapters wrote
+            # ``venue=EIGENLAYER-ETHEREUM`` (no separate ``chain=`` segment).
+            # ``rebuild_defi_manifest.py`` decomposes that back to
+            # ``(venue=EIGENLAYER, chain=ETHEREUM)`` in manifest rows; the
+            # audit must also probe the combined layout so those rows aren't
+            # false-flagged as phantoms.  Verified 2026-05-04: 597 EIGENLAYER
+            # restaking rewards live at this layout.
+            "raw_tick_data/by_date/day={date}/asset_group=defi/venue={venue}-{chain}/"
+            "instrument_type={instrument_type}/data_type={data_type}/",
+            "raw_tick_data/by_date/day={date}/category=defi/venue={venue}-{chain}/"
             "instrument_type={instrument_type}/data_type={data_type}/",
         ],
     },
@@ -103,6 +127,8 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
             "instrument_type={instrument_type}/data_type={data_type}/",
             "raw_tick_data/by_date/day={date}/category=tradfi/venue={venue}/"
             "instrument_type={instrument_type}/data_type={data_type}/",
+            "day={date}/asset_group=tradfi/venue={venue}/instrument_type={instrument_type}/data_type={data_type}/",
+            "day={date}/category=tradfi/venue={venue}/instrument_type={instrument_type}/data_type={data_type}/",
         ],
     },
     "prediction": {
@@ -113,6 +139,8 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
             "instrument_type={instrument_type}/data_type={data_type}/",
             "raw_tick_data/by_date/day={date}/category=prediction/venue={venue}/"
             "instrument_type={instrument_type}/data_type={data_type}/",
+            "day={date}/asset_group=prediction/venue={venue}/instrument_type={instrument_type}/data_type={data_type}/",
+            "day={date}/category=prediction/venue={venue}/instrument_type={instrument_type}/data_type={data_type}/",
         ],
     },
 }
@@ -134,6 +162,11 @@ def _venue_level_prefixes(asset_group: str, row: pd.Series) -> list[str]:
     3. **Empty ``instrument_type``** — schema-4 manifest rows omit the
        segment. We accept ANY parquet under
        ``venue/.../data_type={dt}/`` as evidence of capture.
+    4. **Path-prefix drift** (2026-05-03) — Tardis-adapter writes via
+       ``build_partition_path`` lived at top-level ``day={D}/...`` while
+       orchestrator-direct writes used ``raw_tick_data/by_date/day={D}/...``.
+       Both shapes coexist on disk; pre-2026-05-03 audits only probed the
+       prefixed shape and false-positived 130k CeFi rows.
     """
     cfg = ASSET_GROUP_CONFIG[asset_group]
     base_fields = {
