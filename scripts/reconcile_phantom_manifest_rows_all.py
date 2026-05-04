@@ -34,7 +34,9 @@ from __future__ import annotations
 import argparse
 import io
 import logging
+import os
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
@@ -289,8 +291,20 @@ def main() -> int:
     blob = bucket.blob(cfg["index"])
 
     logger.info("Loading manifest from gs://%s/%s", cfg["bucket"], cfg["index"])
-    blob.download_to_filename("/tmp/canon_audit.parquet")
-    df = pd.read_parquet("/tmp/canon_audit.parquet")
+    # Per-invocation temp file so concurrent runs (one per asset_group) don't
+    # clobber each other's downloads. Bandit B108: use tempfile, not /tmp.
+    with tempfile.NamedTemporaryFile(
+        prefix=f"recon-{args.asset_group}-", suffix=".parquet", delete=False
+    ) as _tf:
+        manifest_path = _tf.name
+    try:
+        blob.download_to_filename(manifest_path)
+        df = pd.read_parquet(manifest_path)
+    finally:
+        try:
+            os.unlink(manifest_path)
+        except OSError:
+            pass
     logger.info("Manifest rows: %d", len(df))
 
     captured_mask = df["capture_status"].fillna("") == "captured"
