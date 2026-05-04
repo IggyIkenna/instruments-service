@@ -392,10 +392,10 @@ def main() -> int:
         blob.download_to_filename(manifest_path)
         df = pd.read_parquet(manifest_path)
     finally:
-        try:
+        import contextlib
+
+        with contextlib.suppress(OSError):
             os.unlink(manifest_path)
-        except OSError:
-            pass
     logger.info("Manifest rows: %d", len(df))
 
     captured_mask = df["capture_status"].fillna("") == "captured"
