@@ -43,8 +43,17 @@ while [[ "$current" < "$END" || "$current" == "$END" ]]; do
   log="$LOG_DIR/chunk-${chunk_n}-${current}_${chunk_end}.log"
   echo "[$(date +%H:%M:%S)] chunk $chunk_n: $current → $chunk_end"
 
+  # Per-chunk VM_NAME + MANIFEST_PER_VM_SHARDS so each chunk worker writes to its OWN
+  # per-VM manifest shard (gs://{bucket}/_index/per_vm/{vm_name}.parquet), avoiding the
+  # CAS generation-conflict retry loop when many local procs share HOSTNAME=hk and all
+  # race on the canonical _index/availability_index.parquet. The unconditional-write
+  # fallback after 15 retries can clobber peer writes — this avoids it entirely.
+  # Tag = provider + chunk-start + short-random so it's stable per chunk but unique
+  # across providers/restarts/parallel chunks.
+  vm_tag="hk_${PROVIDER,,}_${current//-/}_$(od -An -N3 -tx1 /dev/urandom | tr -d ' ')"
+
   # 60 min hard cap per chunk; if it stalls (rare), kill and continue.
-  timeout 3600 .venv/bin/instruments-service \
+  VM_NAME="$vm_tag" MANIFEST_PER_VM_SHARDS=true timeout 3600 .venv/bin/instruments-service \
     --operation instruments --mode batch \
     --asset-group SPORTS --sports-provider "$PROVIDER" \
     --start-date "$current" --end-date "$chunk_end" \
