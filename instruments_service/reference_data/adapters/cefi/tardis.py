@@ -144,6 +144,19 @@ _QUOTE_CURRENCIES: list[str] = [
     "RON",
     "CNY",
     "HKD",
+    # 2026-05-03: extra fiats spotted on OKX-SPOT (Middle East, SE Asia, S Asia).
+    # Without these, BTC-{AED,SAR,MYR,...} fell through to USD and collided into
+    # the same instrument_key as BTC-USD.
+    "AED",
+    "SAR",
+    "MYR",
+    "SGD",
+    "IDR",
+    "PHP",
+    "THB",
+    "INR",
+    "VND",
+    "TWD",
 ]
 
 # Set version for O(1) lookup in _split_symbol
@@ -267,15 +280,12 @@ def _resolve_base_quote(item: TardisInstrumentDetail, raw_id: str, exchange: str
         # UPBIT uses QUOTE-BASE format: KRW-BTC, BTC-DOT, USDT-SOL
         if exchange == "upbit" and len(parts) >= 2:
             return parts[1], parts[0]
-        if len(parts) >= 2 and parts[1] in (
-            "USDT",
-            "USDC",
-            "USD",
-            "BUSD",
-            "EUR",
-            "GBP",
-            "KRW",
-        ):
+        # Use the full curated quote set (~50 currencies, fiat + crypto + stables)
+        # so spot pairs like BTC-TRY / BTC-BRL / BTC-AUD / BTC-AED keep their
+        # actual quote currency. Pre-2026-05-03 a hard-coded 7-currency subset
+        # collapsed every "exotic" fiat to USD via the derivative-fallback below
+        # → 4 distinct OKX-SPOT pairs all collided into BTC-USD.
+        if len(parts) >= 2 and parts[1] in _QUOTE_CURRENCIES_SET:
             return parts[0], parts[1]
         # Derivatives without explicit quote suffix — infer settlement currency.
         # Deribit USDC-denominated instruments contain "USDC" in the symbol.
