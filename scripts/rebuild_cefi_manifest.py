@@ -32,7 +32,7 @@ def main() -> None:
 
     from unified_trading_library import get_bucket_name, read_availability_index, rebuild_manifest
 
-    bucket = get_bucket_name("instruments", args.category)
+    bucket = get_bucket_name("instruments", args.asset_group)
     logger.info("Bucket: %s", bucket)
 
     # Show current state
