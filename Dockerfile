@@ -28,7 +28,14 @@ RUN useradd --create-home --shell /bin/bash appuser
 # Set working directory
 WORKDIR /app/instruments-service
 
-# Copy pip.conf for Artifact Registry access
+# Install uv package manager (bootstrap with pip - acceptable exception per quality gate)
+RUN pip install --no-cache-dir uv
+
+# Install keyring FIRST (before pip.conf) to avoid auth loop
+# keyring must be installed from PyPI, not Artifact Registry
+RUN uv pip install --system --no-cache-dir keyrings.google-artifactregistry-auth
+
+# NOW copy pip.conf - keyring is ready to handle Artifact Registry auth
 COPY pip.conf /etc/pip.conf
 
 # Copy service source code and lockfile
