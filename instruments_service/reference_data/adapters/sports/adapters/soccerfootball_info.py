@@ -32,7 +32,13 @@ class SoccerFootballInfoAdapter(BaseSportsReferenceAdapter):
     RapidAPI endpoint. Returns data as canonical types.
 
     Secret Manager key: ``soccer-football-info-api-key``
+
+    Plan: RapidAPI Ultra — 4 req/sec, 99,999 req/day. Throttle to 3 req/sec
+    (0.34s interval) to stay safely under the per-second cap and avoid 429s.
     """
+
+    # Override base default (0.1s = 10 req/sec). SFI plan is 4 req/sec hard cap.
+    _min_request_interval: float = 0.34
 
     @property
     def venue(self) -> str:

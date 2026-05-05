@@ -122,8 +122,9 @@ logs/
 # *.auto.tfvars
 
 # --- Optional: Jupyter (uncomment if repo has notebooks) ---
-# .ipynb_checkpoints/
+.ipynb_checkpoints/
 # profile_default/
+*.ipynb
 
 # --- Repo-specific: keep sp500 tickers on remote ---
 !instruments_service/
