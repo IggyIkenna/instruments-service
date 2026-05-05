@@ -4210,6 +4210,7 @@ async def _fetch_footystats_matches(
             counts["footystats_matches"] = len(df)
 
             # Write per-league partitioned files using canonical_fixture_id.
+            _captured_leagues: set[str] = set()
             if "canonical_fixture_id" in df.columns:
                 df["_ft_league"] = df["canonical_fixture_id"].str.split(":").str[0]
                 _has_league = df["_ft_league"].notna() & (df["_ft_league"] != "")
@@ -4218,6 +4219,7 @@ async def _fetch_footystats_matches(
 
                 for _ft_lid, _ft_league_df in _with_league.groupby("_ft_league"):
                     _ft_lid_str = str(_ft_lid)
+                    _ft_canonical = _canonical_league_id(_ft_lid_str)
                     _ft_clean = _ft_league_df.drop(columns=["_ft_league"])
                     _gated_sink_write(
                         sink,
@@ -4225,7 +4227,7 @@ async def _fetch_footystats_matches(
                         partition={
                             "day": date,
                             "entity": "footystats_matches",
-                            "league": _canonical_league_id(_ft_lid_str),
+                            "league": _ft_canonical,
                         },
                         venue="footystats",
                         entity="footystats_matches",
@@ -4235,8 +4237,9 @@ async def _fetch_footystats_matches(
                         processing_date=date_type.fromisoformat(date),
                         row_count=len(_ft_clean),
                         data_type="MATCHES",
-                        league_id=_canonical_league_id(_ft_lid_str),
+                        league_id=_ft_canonical,
                     )
+                    _captured_leagues.add(_ft_canonical)
 
                 if not _without_league.empty:
                     logger.warning(
@@ -4254,12 +4257,27 @@ async def _fetch_footystats_matches(
                     date,
                     len(df),
                 )
+
+            # Honest-coverage per-league: record_empty for expected footystats
+            # leagues with no matches on this date (off-season / no fixtures).
+            # Mirrors the XG adapter pattern at the understat block below.
+            for _exp_lid in sorted(set(_ft_expected) - _captured_leagues):
+                _ft_manifest.record_empty(
+                    row_key={"date": date, "data_type": "MATCHES", "league_id": _exp_lid},
+                    attempted_at=attempt_ts,
+                )
             _ft_manifest.write()
             logger.info("FootyStats matches: %d rows written for date=%s", len(df), date)
         else:
             logger.info("FootyStats matches: no fixtures for date=%s", date)
-            # Honest-coverage: legitimate empty (no fixtures on this date).
-            _ft_manifest.record_empty(row_key=_row_key, attempted_at=attempt_ts)
+            # Honest-coverage: emit per-league record_empty for ALL expected
+            # leagues — date-aggregate rows were retired in Phase 2 of the
+            # sports_manifest_shard_migration_cleanup, mirroring the XG pattern.
+            for _exp_lid in sorted(set(_ft_expected)):
+                _ft_manifest.record_empty(
+                    row_key={"date": date, "data_type": "MATCHES", "league_id": _exp_lid},
+                    attempted_at=attempt_ts,
+                )
             _ft_manifest.write()
     except Exception as exc:
         classify_and_emit_error(
@@ -4785,6 +4803,16 @@ async def _fetch_transfermarkt_data(
             if "canonical_league" in _cached_df.columns:
                 for _canon_league, _group_df in _cached_df.groupby("canonical_league"):
                     _captured_league_counts[str(_canon_league)] = len(_group_df)
+            # Honest-coverage: mark expected leagues missing from the cache as
+            # empty so the data-status denominator aligns with the orchestrator's
+            # attempt set. Without this the cache-hit branch only emits captured
+            # rows and leaves the (cadence-window x non-cached-league) cells as
+            # data-status "missing" even though the prior live fetch decided
+            # there was nothing to capture.
+            _expected_canonical = {lg.league_id for lg in _merged_leagues.values()}
+            if _league_filter_set is not None:
+                _expected_canonical &= _league_filter_set
+            _empty_leagues |= _expected_canonical - set(_captured_league_counts)
             log_event(
                 "UPSTREAM_FETCH_COMPLETED",
                 details={
