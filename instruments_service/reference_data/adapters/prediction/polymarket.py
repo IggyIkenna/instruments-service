@@ -496,12 +496,50 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch markets from CLOB API for a historical date.
 
         CLOB /markets returns all markets (including resolved) with cursor
-        pagination.  Slower than Gamma but has full history.  Filters by
+        pagination, sorted oldest-first by ``end_date_iso``.  Filters by
         ``end_date_iso`` matching the target date.
+
+        Cursor sharding via env vars (optional, for parallel backfill):
+            POLYMARKET_START_CURSOR — base64-encoded offset to start at
+                                      (e.g. "MTAwMDAw" = 100000 markets in)
+            POLYMARKET_END_CURSOR   — base64-encoded offset to stop at
+                                      (worker exits when cursor reaches this)
+        Both default unset → full scan from offset 0 (legacy behavior).
         """
+        import base64
+        import os
+
         target_prefix = f"{date}T"
         results: list[InstrumentRecord] = []
-        cursor = ""
+
+        start_cursor_b64 = os.environ.get("POLYMARKET_START_CURSOR", "").strip()
+        end_cursor_b64 = os.environ.get("POLYMARKET_END_CURSOR", "").strip()
+
+        # Decode end-cursor to integer offset for early-exit comparison.
+        # Cursor format observed 2026-05-05: base64-encoded ASCII offset
+        # ("MTAwMDAw" -> "100000"). If decoding fails we silently disable
+        # the end-cursor bound — full scan continues until natural EOF.
+        end_offset: int | None = None
+        if end_cursor_b64:
+            try:
+                end_offset = int(base64.b64decode(end_cursor_b64).decode("ascii"))
+            except (ValueError, UnicodeDecodeError):
+                logger.warning("POLYMARKET_END_CURSOR=%r is not a valid base64 int — ignoring", end_cursor_b64)
+
+        cursor = start_cursor_b64
+        if cursor:
+            try:
+                start_offset = int(base64.b64decode(cursor).decode("ascii"))
+                logger.info(
+                    "CLOB shard: starting at cursor offset %d (date=%s, end_offset=%s)",
+                    start_offset,
+                    date,
+                    end_offset if end_offset is not None else "unbounded",
+                )
+            except (ValueError, UnicodeDecodeError):
+                logger.warning("POLYMARKET_START_CURSOR=%r is not a valid base64 int — ignoring", cursor)
+                cursor = ""
+
         async with self._make_session() as session:
             for page in range(self._CLOB_MAX_PAGES):
                 params: dict[str, str] = {"limit": str(self._CLOB_PAGE_LIMIT)}
@@ -542,6 +580,23 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
                 # CLOB signals end with cursor "-1" (base64: "LTE=")
                 if not cursor or cursor == "LTE=":
                     break
+
+                # End-cursor bound: stop once next cursor reaches/passes the slice ceiling.
+                if end_offset is not None:
+                    try:
+                        next_offset = int(base64.b64decode(cursor).decode("ascii"))
+                        if next_offset >= end_offset:
+                            logger.info(
+                                "CLOB shard: reached end_offset=%d at page %d (date=%s, %d matches)",
+                                end_offset,
+                                page,
+                                date,
+                                len(results),
+                            )
+                            break
+                    except (ValueError, UnicodeDecodeError):
+                        pass  # cursor format changed upstream — let natural EOF handle it
+
                 if page > 0 and page % 100 == 0:
                     logger.info(
                         "CLOB scan: page %d, %d matches so far (date=%s)",
