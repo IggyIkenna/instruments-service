@@ -16,6 +16,7 @@ from unified_api_contracts import (
     CEFI_BASE_ASSET_UNIVERSE,
     AsterExchangeInfo,
     UnsupportedCapabilityError,
+    VenueMapping,
     classify_venue_error,
 )
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
@@ -32,7 +33,25 @@ from ...schemas import (
 logger = logging.getLogger(__name__)
 
 _BASE = "https://www.aster.exchange"
-_ASTER_LAUNCH_DATE = datetime(2024, 9, 1, tzinfo=UTC)
+# SSOT: UAC VenueMapping.get_instrument_discovery_start("ASTER"). Pre-2026-05-05
+# this was hardcoded as datetime(2024, 9, 1) and silently diverged from UAC's
+# venue_start_dates["ASTER"] = "2024-10-01" by one month. Investigation 2026-05-05:
+# (a) Aster's official api-docs GitHub repo (asterdex/api-docs) was created
+# 2025-03-27 — neither candidate date has authoritative provenance, both were
+# guesses from the original PR author. (b) Aster's exchangeInfo onboardDate
+# field is Binance-Futures-API-compatible and inherits Binance's listing dates
+# (BTCUSDT shows 2021-07-30) — not usable for venue-launch verification.
+# (c) GCS probe shows ZERO ASTER captures across both buckets
+# (market-data-tick-cefi + instruments-store-cefi) for any date in 2024-2025.
+# Resolution: pick the LATER (more conservative) of the two divergent values
+# — UAC's 2024-10-01 — and have the adapter consume it. Zero historical data
+# at risk; one-month conservatism cuts a small attempted_failed window. No
+# venue_instrument_discovery_overrides entry needed: UAC's value IS the
+# discovery start (no second timeline like HYPERLIQUID's market-data vs
+# discovery split).
+_ASTER_LAUNCH_DATE = datetime.fromisoformat(cast(str, VenueMapping().get_instrument_discovery_start("ASTER"))).replace(
+    tzinfo=UTC
+)
 
 
 def _classify_aster_error(exc: Exception, status: int | None = None) -> str:
