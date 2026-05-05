@@ -78,9 +78,24 @@ _MACRO_KEYWORDS: dict[str, str] = {
 }
 
 
+# Word-boundary patterns for crypto-ticker matching. Bare substring matching
+# was producing false positives where "abnb" (Airbnb stock) matched the BNB
+# bucket, "solar" matched SOL, "doge" matched questions about meme tweets,
+# etc. Compiling once at import keeps the per-question hot path cheap.
+#
+# 2026-05-05 audit: 30 of the 78 BNB-tagged dates in canonical were Airbnb
+# (ABNB) markets misclassified before this fix. HYPE/DOGE/SOL had similar
+# but smaller noise floors. The macro keywords ("crude oil", "s&p 500", etc.)
+# are multi-word phrases that don't suffer from this — left as substring.
+_CRYPTO_KEYWORD_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(rf"\b{re.escape(kw)}\b"), canonical)
+    for kw, canonical in _CRYPTO_KEYWORDS.items()
+]
+
+
 def _match_crypto_asset(q_lower: str) -> str | None:
-    for kw, canonical in _CRYPTO_KEYWORDS.items():
-        if kw in q_lower:
+    for pattern, canonical in _CRYPTO_KEYWORD_PATTERNS:
+        if pattern.search(q_lower):
             return canonical
     return None
 
