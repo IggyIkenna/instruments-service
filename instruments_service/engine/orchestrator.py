@@ -12,7 +12,7 @@ those libraries, it must come through UTL's re-exported surface.
 PROCESS FLOW
 ------------
 For each date:
-  1. Skip venues not yet launched on that date (startup dates in _VENUE_LAUNCH_DATES)
+  1. Skip venues whose discovery API has no data on that date (UAC VenueMapping.get_instrument_discovery_start)
   2. Fetch InstrumentRecord[] from URDI via urdi_reference_provider
   3. Filter to instruments active on the requested date (available_from_datetime ≤ date ≤ available_to_datetime)
   4. Fail shard if zero records after filtering
@@ -286,10 +286,13 @@ def _gated_sink_write(
     )
 
 
-# Venue launch dates SSOT: UAC VenueMapping.venue_start_dates (canonical PROTOCOL-CHAIN format).
-# No local copy — read from VenueMapping at module load.
+# Venue launch dates SSOT: UAC VenueMapping (canonical PROTOCOL-CHAIN format).
+# No local copy — read from VenueMapping at module load. We resolve via
+# ``get_instrument_discovery_start(venue)`` rather than reading
+# ``venue_start_dates`` directly so per-venue discovery-API coverage overrides
+# (HYPERLIQUID 2023-11-01 vs market-data 2023-04-15 — see UAC docstring) are
+# respected. Reference incident 2026-05-05: 200 phantom HYPERLIQUID dates.
 _VENUE_MAPPING = VenueMapping()
-_VENUE_LAUNCH_DATES: dict[str, str] = _VENUE_MAPPING.venue_start_dates
 
 # ---------------------------------------------------------------------------
 # DeFi venue list: dynamically built from UAC SUBGRAPH_IDS + static protocols
@@ -938,16 +941,25 @@ def get_venues_for_asset_groups(asset_groups: list[str]) -> list[str]:
 
 
 def is_venue_available(venue: str, date: str) -> bool:
-    """Return True if the venue was launched on or before this date."""
-    launch_date = _VENUE_LAUNCH_DATES.get(venue)
+    """Return True if the venue's discovery API can produce instruments on this date.
+
+    Uses ``get_instrument_discovery_start`` rather than raw ``venue_start_dates``
+    so HYPERLIQUID (and any future venue with a discovery-API gap narrower than
+    its market-data archive) gates on the date the discovery endpoint actually
+    has data — not the market-data archive earliest date. Pre-2026-05-05 this
+    used ``venue_start_dates["HYPERLIQUID"] = 2023-04-15`` and produced 200
+    phantom ``attempted_failed`` rows for the April-October 2023 window where
+    the discovery API legitimately returns nothing.
+    """
+    launch_date = _VENUE_MAPPING.get_instrument_discovery_start(venue)
     if launch_date is None:
         return True  # Unknown venue — assume always available
     return date >= launch_date
 
 
 def earliest_venue_date(venues: list[str]) -> str | None:
-    """Return the earliest launch date across the given venues, or None if unknown."""
-    dates = [_VENUE_LAUNCH_DATES[v] for v in venues if v in _VENUE_LAUNCH_DATES]
+    """Return the earliest discovery-start date across the given venues, or None."""
+    dates = [d for v in venues if (d := _VENUE_MAPPING.get_instrument_discovery_start(v)) is not None]
     return min(dates) if dates else None
 
 

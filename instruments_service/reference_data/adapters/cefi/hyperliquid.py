@@ -11,6 +11,7 @@ from unified_api_contracts import (
     HyperliquidAssetInfo,
     HyperliquidMeta,
     UnsupportedCapabilityError,
+    VenueMapping,
     classify_venue_error,
 )
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
@@ -27,7 +28,15 @@ from ...schemas import (
 logger = logging.getLogger(__name__)
 
 _BASE = "https://api.hyperliquid.xyz"
-_HYPERLIQUID_LAUNCH_DATE = datetime(2023, 11, 1, tzinfo=UTC)
+# SSOT: UAC VenueMapping.get_instrument_discovery_start("HYPERLIQUID"). Pre-2026-05-05
+# this was hardcoded as datetime(2023, 11, 1) and silently diverged from UAC's
+# venue_start_dates (2023-04-15) — the orchestrator's expected-window calc used
+# UAC's market-data start, the adapter wrote 2023-11-01 onto each instrument's
+# available_from_datetime. Result: 200 phantom attempted_failed rows per the
+# 2026-05-05 discovery. Now both consume the same UAC field.
+_HYPERLIQUID_LAUNCH_DATE = datetime.fromisoformat(
+    cast(str, VenueMapping().get_instrument_discovery_start("HYPERLIQUID"))
+).replace(tzinfo=UTC)
 
 
 def _classify_hyperliquid_error(exc: Exception, status: int | None = None) -> str:
