@@ -403,3 +403,102 @@ class TestTardisAdapterFundingAndOHLCV:
         assert TardisReferenceDataAdapter._resolve_bar_type("1h") == (3600, "trade_bar_1h")
         assert TardisReferenceDataAdapter._resolve_bar_type("1d") == (86400, "trade_bar_1d")
         assert TardisReferenceDataAdapter._resolve_bar_type("unknown") == (86400, "trade_bar_1d")
+
+
+class TestTardisInstrumentsCacheContract:
+    """Lock the cache-by-instrument-type-only contract from instruments-service@9d91465.
+
+    Pre-fix (base-adapter cache keyed on (instrument_type, date)): each new backfill
+    date fetched the full ~200K-instrument Tardis universe again, accumulating ~1.4 GB
+    of pydantic objects per date. DERIBIT VM at e2-standard-4 OOM-killed at 25 dates
+    into a 30-day chunk on 2026-05-04 (rc=137 silent kill, no EXIT_STATUS).
+
+    Post-fix: TardisReferenceDataAdapter overrides ``get_instruments_cached`` to key
+    on ``instrument_type`` only — second date onward returns the same list reference,
+    RSS plateaus after the first fetch, no leak across long backfill loops. TTL bumped
+    to 24h so multi-hour sweeps don't expire mid-run.
+
+    These tests enforce both invariants so the regression cannot return without QG
+    catching it. No live VM required — the contract IS the validation.
+    """
+
+    @pytest.mark.asyncio
+    async def test_cache_keyed_on_instrument_type_not_date(self) -> None:
+        """Different dates with same instrument_type return the SAME list reference.
+
+        This is the core memory-leak guard. Pre-fix: 100 dates → 100 fetches → ~140 GB.
+        Post-fix: 100 dates → 1 fetch → ~1.4 GB plateau.
+        """
+        adapter = TardisReferenceDataAdapter(exchanges=["deribit"])
+        fetch_count = 0
+        sentinel_list: list[InstrumentRecord] = []
+
+        async def _fake_get_instruments(instrument_type: str | None = None) -> list[InstrumentRecord]:
+            nonlocal fetch_count
+            fetch_count += 1
+            return sentinel_list
+
+        with patch.object(adapter, "get_instruments", _fake_get_instruments):
+            d1 = await adapter.get_instruments_cached(instrument_type="PERPETUAL", date="2024-01-01")
+            d2 = await adapter.get_instruments_cached(instrument_type="PERPETUAL", date="2024-06-15")
+            d3 = await adapter.get_instruments_cached(instrument_type="PERPETUAL", date="2024-12-31")
+            d4 = await adapter.get_instruments_cached(instrument_type="PERPETUAL", date=None)
+
+        # Exactly ONE upstream fetch across 4 distinct dates.
+        assert fetch_count == 1, f"Expected 1 fetch (cache by instrument_type), got {fetch_count}"
+        # Same list reference returned every time — proves no per-date pydantic alloc.
+        assert d1 is d2 is d3 is d4 is sentinel_list
+
+    @pytest.mark.asyncio
+    async def test_different_instrument_types_get_separate_cache_entries(self) -> None:
+        """instrument_type IS the cache key — different types fetch separately."""
+        adapter = TardisReferenceDataAdapter(exchanges=["deribit"])
+        fetch_calls: list[str | None] = []
+
+        async def _fake_get_instruments(instrument_type: str | None = None) -> list[InstrumentRecord]:
+            fetch_calls.append(instrument_type)
+            return []
+
+        with patch.object(adapter, "get_instruments", _fake_get_instruments):
+            await adapter.get_instruments_cached(instrument_type="PERPETUAL", date="2024-01-01")
+            await adapter.get_instruments_cached(instrument_type="OPTION", date="2024-01-01")
+            await adapter.get_instruments_cached(instrument_type="PERPETUAL", date="2024-06-15")
+
+        # PERPETUAL fetched once, OPTION fetched once, second PERPETUAL hits cache.
+        assert fetch_calls == ["PERPETUAL", "OPTION"], fetch_calls
+
+    def test_cache_ttl_is_24h(self) -> None:
+        """TTL must be 86400s (24h) — long enough for multi-hour backfill sweeps.
+
+        Default base-adapter TTL is 3600s (1h) which expires mid-run on multi-year
+        DERIBIT options-chain sweeps and forces a re-fetch + re-allocation. The 24h
+        bump is the second half of the 9d91465 fix; locking it here so a future
+        refactor can't silently regress.
+        """
+        adapter = TardisReferenceDataAdapter(exchanges=["deribit"])
+        assert adapter._cache_ttl == 86400.0
+
+    @pytest.mark.asyncio
+    async def test_cache_expires_after_ttl(self) -> None:
+        """After TTL elapses, a fresh fetch happens — not a permanent freeze.
+
+        Edge guard: cache is for memory + perf, not correctness. If a backfill VM
+        runs > 24h (rare but possible), cache MUST expire so a new universe is
+        picked up rather than serving stale data forever.
+        """
+        adapter = TardisReferenceDataAdapter(exchanges=["deribit"])
+        fetch_count = 0
+
+        async def _fake_get_instruments(instrument_type: str | None = None) -> list[InstrumentRecord]:
+            nonlocal fetch_count
+            fetch_count += 1
+            return []
+
+        with patch.object(adapter, "get_instruments", _fake_get_instruments):
+            await adapter.get_instruments_cached(instrument_type="PERPETUAL")
+            assert fetch_count == 1
+            # Force expiry by rewriting the cache entry's monotonic timestamp 25h ago.
+            records, _ts = adapter._instruments_cache["PERPETUAL"]
+            adapter._instruments_cache["PERPETUAL"] = (records, _ts - 90000.0)
+            await adapter.get_instruments_cached(instrument_type="PERPETUAL")
+            assert fetch_count == 2, "Cache should re-fetch after TTL expiry"
