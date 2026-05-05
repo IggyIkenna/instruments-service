@@ -66,11 +66,20 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 
-# Databento CME canonical option-id pattern.
+# Databento CME canonical option-id pattern + legacy migrated form.
 # Group 1 = full chain prefix incl. expiry (e.g. ESH4 / EWM4 / E1AN0)
 # Group 2 = C or P
 # Group 3 = strike (digits, possibly with dot — Databento uses ints for ES strikes)
-_OPTION_ID_RE = re.compile(r"^(?:CME:OPTION:)?([A-Z][A-Z0-9]{1,4}[FGHJKMNQUVXZ][0-9])-([CP])(\d+(?:\.\d+)?)$")
+#
+# Two forms accepted:
+# - canonical: ``ESH4-C5000`` / ``CME:OPTION:E1AN0-P3090``
+# - legacy:    ``E1AG4_C4765`` / ``E1AG4_C4765_migrated_20260419T132320Z`` —
+#   produced by the 2026-04-19 migration job that flat-aggregated raw ticks
+#   into per-strike candles. Optional ``_migrated_<UTC-TS>`` suffix tolerated.
+_OPTION_ID_RE = re.compile(
+    r"^(?:CME:OPTION:)?([A-Z][A-Z0-9]{1,4}[FGHJKMNQUVXZ][0-9])[-_]([CP])(\d+(?:\.\d+)?)"
+    r"(?:_migrated_[A-Z0-9]+)?$"
+)
 
 # Strip the trailing 2 chars (expiry letter + year digit) to get chain root.
 _EXPIRY_CHAR_LEN = 2
