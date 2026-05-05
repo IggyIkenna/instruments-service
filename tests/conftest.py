@@ -64,8 +64,8 @@ import logging
 from google.auth import default
 from google.auth.exceptions import DefaultCredentialsError
 from google.oauth2 import service_account
-from unified_cloud_interface import get_secret_client, get_storage_client
-from unified_trading_library import CloudTarget
+from unified_trading_library import get_secret_client, get_storage_client
+from unified_trading_library.domain_client.cloud_target import CloudTarget  # noqa: qg-deep-import
 
 from instruments_service.config import instruments_config
 
