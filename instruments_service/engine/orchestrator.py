@@ -484,6 +484,46 @@ def _should_skip_shard(
     )
 
 
+def _should_skip_date_for_per_league(
+    manifest: ManifestWriter,
+    *,
+    date: str,
+    data_type: str,
+    expected_canonical_leagues: list[str],
+    force: bool,
+) -> bool:
+    """Return True only when every expected canonical league is already
+    captured / empty_confirmed for this date.
+
+    The plain ``_should_skip_shard`` matches on ``(date, data_type)`` only
+    and returns True if ANY league has a row for this date — that's wrong
+    for per-league entities: if EPL was captured for date X but LA_LIGA
+    wasn't, the orchestrator would still skip and never re-fetch LA_LIGA.
+
+    Pre-fix incident (2026-05-05): MATCHES capped at 18% UI coverage even
+    after fs-backfill ran for hours, because most dates had at least one
+    league captured early on and the date-level skip prevented backfilling
+    the rest. PREDICTIONS / ODDS share the same pattern; ODDS happened to
+    look healthy because of dense empty_confirmed writes (the bulk
+    /todays-matches endpoint returns odds for many leagues; matches not
+    necessarily). Same pattern, same fix.
+
+    ``force`` bypasses the skip entirely.
+    """
+    if force or not expected_canonical_leagues:
+        return False
+    for lid in expected_canonical_leagues:
+        prev = manifest.lookup({"date": date, "data_type": data_type, "league_id": lid})
+        if prev is None:
+            return False
+        if prev.capture_status not in (
+            CaptureStatus.CAPTURED.value,
+            CaptureStatus.EMPTY_CONFIRMED.value,
+        ):
+            return False
+    return True
+
+
 def _classify_adapter_failure(exc: Exception, venue: str) -> str:
     """Return a stable category string for ``record_failed`` from an exception.
 
@@ -3832,8 +3872,24 @@ async def _fetch_footystats_predictions(
         catalogue_bucket=bucket,
     )
     _row_key: dict[str, str] = {"date": date, "data_type": "PREDICTIONS"}
-    if _should_skip_shard(pred_manifest, row_key=_row_key, force=force):
-        logger.info("FootyStats predictions: skipping date=%s (manifest pre-flight)", date)
+    # Per-league skip: only skip the date when every expected canonical
+    # footystats league has a (captured | empty_confirmed) row for it.
+    # See ``_should_skip_date_for_per_league`` for the bug this fixes.
+    from unified_api_contracts.canonical.domain.sports.league_data import (
+        get_expected_leagues_for_source,
+    )
+
+    _ft_expected = [
+        lg.league_id for lg in get_expected_leagues_for_source("footystats", classifications=["Prediction", "Features"])
+    ]
+    if _should_skip_date_for_per_league(
+        pred_manifest,
+        date=date,
+        data_type="PREDICTIONS",
+        expected_canonical_leagues=_ft_expected,
+        force=force,
+    ):
+        logger.info("FootyStats predictions: skipping date=%s (all canonical leagues captured)", date)
         return counts
     attempt_ts = datetime.now(UTC)
 
@@ -4067,8 +4123,21 @@ async def _fetch_footystats_matches(
     # Honest-coverage pre-flight + attempt-stamp.
     _ft_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
     _row_key: dict[str, str] = {"date": date, "data_type": "MATCHES"}
-    if _should_skip_shard(_ft_manifest, row_key=_row_key, force=force):
-        logger.info("FootyStats matches: skipping date=%s (manifest pre-flight)", date)
+    from unified_api_contracts.canonical.domain.sports.league_data import (
+        get_expected_leagues_for_source,
+    )
+
+    _ft_expected = [
+        lg.league_id for lg in get_expected_leagues_for_source("footystats", classifications=["Prediction", "Features"])
+    ]
+    if _should_skip_date_for_per_league(
+        _ft_manifest,
+        date=date,
+        data_type="MATCHES",
+        expected_canonical_leagues=_ft_expected,
+        force=force,
+    ):
+        logger.info("FootyStats matches: skipping date=%s (all canonical leagues captured)", date)
         return counts
     attempt_ts = datetime.now(UTC)
 
@@ -4246,8 +4315,21 @@ async def _fetch_footystats_odds(
         catalogue_bucket=bucket,
     )
     _row_key: dict[str, str] = {"date": date, "data_type": "ODDS"}
-    if _should_skip_shard(odds_manifest, row_key=_row_key, force=force):
-        logger.info("FootyStats odds: skipping date=%s (manifest pre-flight)", date)
+    from unified_api_contracts.canonical.domain.sports.league_data import (
+        get_expected_leagues_for_source,
+    )
+
+    _ft_expected = [
+        lg.league_id for lg in get_expected_leagues_for_source("footystats", classifications=["Prediction", "Features"])
+    ]
+    if _should_skip_date_for_per_league(
+        odds_manifest,
+        date=date,
+        data_type="ODDS",
+        expected_canonical_leagues=_ft_expected,
+        force=force,
+    ):
+        logger.info("FootyStats odds: skipping date=%s (all canonical leagues captured)", date)
         return counts
     attempt_ts = datetime.now(UTC)
 
