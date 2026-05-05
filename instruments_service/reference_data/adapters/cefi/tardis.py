@@ -288,8 +288,8 @@ def _resolve_base_quote(item: TardisInstrumentDetail, raw_id: str, exchange: str
         base = left[:-2] if left.endswith("F0") else left
         quote = right[:-2] if right.endswith("F0") else right
         # Bitfinex pseudo-tickers → canonical
-        _BFX_QUOTE_ALIASES = {"UST": "USDT"}
-        return base, _BFX_QUOTE_ALIASES.get(quote, quote)
+        bfx_quote_aliases = {"UST": "USDT"}
+        return base, bfx_quote_aliases.get(quote, quote)
     if "-" in upper_id:
         parts = upper_id.split("-")
         # UPBIT uses QUOTE-BASE format: KRW-BTC, BTC-DOT, USDT-SOL

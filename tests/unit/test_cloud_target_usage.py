@@ -5,7 +5,7 @@ unified-trading-services validates real API usage via its own integration tests.
 """
 
 import pytest
-from unified_trading_library import CloudTarget
+from unified_trading_library.domain_client.cloud_target import CloudTarget  # noqa: qg-deep-import
 
 from instruments_service.config import instruments_config
 
