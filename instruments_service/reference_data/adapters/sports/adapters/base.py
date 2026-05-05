@@ -27,9 +27,10 @@ logger = logging.getLogger(__name__)
 _RETRY_ATTEMPTS: int = 10
 _RETRY_BASE_DELAY: float = 3.0
 _RETRYABLE_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
-# Per-minute rate limiter: API Football Ultra allows ~100 req/min.
-# Throttle to 1 req/sec (60/min) for safety.
-_MIN_REQUEST_INTERVAL: float = 0.1  # 900 req/min limit = ~15 req/sec safe
+# Default throttle: 0.1s = 10 req/sec. Suitable for high-quota plans like
+# api_football Ultra (~900/min). Subclasses override `_min_request_interval`
+# class attribute when their plan is tighter (e.g. SFI = 4 req/sec).
+_MIN_REQUEST_INTERVAL: float = 0.1
 
 
 class BaseSportsReferenceAdapter(ABC):
@@ -44,6 +45,9 @@ class BaseSportsReferenceAdapter(ABC):
     """
 
     _last_request_time: float = 0.0
+    # Per-class throttle override. Defaults to module-level _MIN_REQUEST_INTERVAL (0.1s).
+    # Subclasses set this to their RapidAPI plan's per-second floor.
+    _min_request_interval: float = _MIN_REQUEST_INTERVAL
 
     def __init__(self, api_key: str | None = None) -> None:
         self._api_key = api_key
@@ -204,14 +208,21 @@ class BaseSportsReferenceAdapter(ABC):
         )
 
     async def _throttle(self) -> None:
-        """Enforce minimum interval between API requests."""
+        """Enforce minimum interval between API requests.
+
+        Uses per-class `_min_request_interval` so each adapter (SFI, api_football,
+        transfermarkt, etc.) paces against its own RapidAPI plan instead of
+        sharing a single 10 req/sec floor that overshoots tight plans.
+        """
         import time
 
+        cls = type(self)
+        interval = cls._min_request_interval
         now = time.monotonic()
-        elapsed = now - BaseSportsReferenceAdapter._last_request_time
-        if elapsed < _MIN_REQUEST_INTERVAL:
-            await asyncio.sleep(_MIN_REQUEST_INTERVAL - elapsed)
-        BaseSportsReferenceAdapter._last_request_time = time.monotonic()
+        elapsed = now - cls._last_request_time
+        if elapsed < interval:
+            await asyncio.sleep(interval - elapsed)
+        cls._last_request_time = time.monotonic()
 
     async def _get_with_retry(
         self,
