@@ -78,23 +78,60 @@ _MACRO_KEYWORDS: dict[str, str] = {
 }
 
 
-# Word-boundary patterns for crypto-ticker matching. Bare substring matching
-# was producing false positives where "abnb" (Airbnb stock) matched the BNB
-# bucket, "solar" matched SOL, "doge" matched questions about meme tweets,
-# etc. Compiling once at import keeps the per-question hot path cheap.
+# Crypto-ticker matching has two flavours:
 #
-# 2026-05-05 audit: 30 of the 78 BNB-tagged dates in canonical were Airbnb
-# (ABNB) markets misclassified before this fix. HYPE/DOGE/SOL had similar
-# but smaller noise floors. The macro keywords ("crude oil", "s&p 500", etc.)
-# are multi-word phrases that don't suffer from this — left as substring.
-_CRYPTO_KEYWORD_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(rf"\b{re.escape(kw)}\b"), canonical)
-    for kw, canonical in _CRYPTO_KEYWORDS.items()
+#   1. Long-form names (bitcoin, ethereum, solana, dogecoin, hyperliquid):
+#      these are unambiguous — substring match catches "archBitcoin",
+#      "BitcoinPriceTomorrow", "Bitcoin?", etc. all correctly.
+#
+#   2. Short tickers (btc, eth, sol, xrp, doge, bnb, hype): these are
+#      embedded in many unrelated words ("abnb" Airbnb, "solar", "etheriza",
+#      "hyped"...). They need word-boundary matching to avoid false
+#      positives. Pattern: `(?<![a-z])TICKER(?![a-z])` — preceding char
+#      must not be a letter, following char must not be a letter, but
+#      digits/punctuation/whitespace/start-end are fine.
+#
+# 2026-05-05 audit:
+#   - 30 of 78 BNB-tagged dates were Airbnb (ABNB) noise (substring match
+#     of "bnb" in "abnb"). New short-ticker rule rejects these.
+#   - 172 BTC / 36 ETH / 41 SOL / 25 XRP / 109 HYPE entries had questions
+#     with a generator-prefixed long-form ("archBitcoin", "archEthereum",
+#     etc.). These are LEGITIMATE markets that need to keep matching, so
+#     long-form names use plain substring.
+_CRYPTO_LONG_FORMS: dict[str, str] = {
+    "bitcoin": "BTC",
+    "ethereum": "ETH",
+    "solana": "SOL",
+    "dogecoin": "DOGE",
+    "hyperliquid": "HYPE",
+    # XRP has no long form — 3-letter ticker is the canonical word. The short
+    # tickers list catches "XRP" / "archXRP" / "xrp-something" via substring
+    # because no English word contains the trigram "xrp".
+    "xrp": "XRP",
+}
+
+_CRYPTO_SHORT_TICKERS: dict[str, str] = {
+    "btc": "BTC",
+    "eth": "ETH",
+    "sol": "SOL",
+    "doge": "DOGE",
+    "bnb": "BNB",
+    "hype": "HYPE",
+}
+
+_CRYPTO_SHORT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(rf"(?<![a-z]){re.escape(kw)}(?![a-z])"), canonical)
+    for kw, canonical in _CRYPTO_SHORT_TICKERS.items()
 ]
 
 
 def _match_crypto_asset(q_lower: str) -> str | None:
-    for pattern, canonical in _CRYPTO_KEYWORD_PATTERNS:
+    # Long forms first — unambiguous substring match
+    for kw, canonical in _CRYPTO_LONG_FORMS.items():
+        if kw in q_lower:
+            return canonical
+    # Short tickers — require non-letter boundaries to reject ABNB/Solar/Hyped/etc.
+    for pattern, canonical in _CRYPTO_SHORT_PATTERNS:
         if pattern.search(q_lower):
             return canonical
     return None
