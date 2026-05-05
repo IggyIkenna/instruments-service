@@ -398,6 +398,20 @@ def main() -> int:
     p.add_argument("--venues", type=str, default="", help="Comma-separated venues to scope (default: all)")
     p.add_argument("--data-types", type=str, default="", help="Comma-separated data_types to scope")
     p.add_argument("--workers", type=int, default=32)
+    p.add_argument(
+        "--unphantom",
+        action="store_true",
+        help=(
+            "Also re-validate rows previously flagged with "
+            "error_reason='phantom_captured_no_parquet_at_canonical_path'. If a "
+            "parquet now exists at any candidate path (UAC SSOT), flip the row "
+            "back to capture_status='captured' and clear error_reason. Self-heals "
+            "false-positives produced by earlier audit versions whose path probing "
+            "didn't cover the row's layout (e.g. the 2026-05-04 sports audit "
+            "missed FLAT-layout singletons like VENUES, leaving them stuck as "
+            "attempted_failed even after the singleton-fallback fix landed)."
+        ),
+    )
     args = p.parse_args()
 
     cfg = ASSET_GROUP_CONFIG[args.asset_group]
@@ -463,50 +477,99 @@ def main() -> int:
 
     captured_idx = df[captured_mask].index
     logger.info("Captured rows in scope: %d", len(captured_idx))
-    if len(captured_idx) == 0:
+    # Early exit only when there's no forward pass AND no reverse-unphantom pass to do.
+    # (--unphantom alone, with no captured rows in scope, is still meaningful.)
+    if len(captured_idx) == 0 and not args.unphantom:
         logger.info("Nothing to audit. Exiting.")
         return 0
 
-    if args.asset_group == "sports":
-        real_or_phantom = _audit_sports(bucket, df, captured_idx, args.workers)
-    else:
-        real_or_phantom = _audit_generic(args.asset_group, bucket, df, captured_idx, args.workers)
+    real_or_phantom: dict[int, bool] = {}
+    if len(captured_idx) > 0:
+        if args.asset_group == "sports":
+            real_or_phantom = _audit_sports(bucket, df, captured_idx, args.workers)
+        else:
+            real_or_phantom = _audit_generic(args.asset_group, bucket, df, captured_idx, args.workers)
 
     phantom_idx = [i for i, real in real_or_phantom.items() if not real]
     real_count = sum(1 for r in real_or_phantom.values() if r)
     logger.info("=" * 60)
-    logger.info("Audit summary:")
+    logger.info("Audit summary (forward — captured rows missing parquet):")
     logger.info("  Real captures:    %d", real_count)
     logger.info("  Phantom captures: %d  ← will flip to attempted_failed", len(phantom_idx))
     logger.info("=" * 60)
 
-    if not phantom_idx:
-        logger.info("No phantoms found. Manifest is clean.")
+    # Reverse pass: re-validate previously phantom-flagged rows. The forward
+    # audit can only ADD phantoms — it never UN-flags rows that earlier audit
+    # versions wrongly marked. With --unphantom we also probe the
+    # ``attempted_failed`` ∩ ``error_reason='phantom_*'`` subset and flip rows
+    # back to ``captured`` if a parquet now exists at any UAC candidate path.
+    unphantom_idx: list[int] = []
+    if args.unphantom:
+        phantom_flagged_mask = (df["capture_status"].fillna("") == "attempted_failed") & (
+            df["error_reason"].fillna("") == "phantom_captured_no_parquet_at_canonical_path"
+        )
+        if args.venues:
+            wanted_venues = {v.strip() for v in args.venues.split(",") if v.strip()}
+            phantom_flagged_mask = phantom_flagged_mask & df["venue"].isin(wanted_venues)
+        if args.data_types:
+            wanted_dts = {d.strip() for d in args.data_types.split(",") if d.strip()}
+            phantom_flagged_mask = phantom_flagged_mask & df["data_type"].isin(wanted_dts)
+        phantom_flagged_idx = df[phantom_flagged_mask].index
+        logger.info("Unphantom: re-validating %d previously phantom-flagged rows", len(phantom_flagged_idx))
+        if len(phantom_flagged_idx) > 0:
+            if args.asset_group == "sports":
+                rev = _audit_sports(bucket, df, phantom_flagged_idx, args.workers)
+            else:
+                rev = _audit_generic(args.asset_group, bucket, df, phantom_flagged_idx, args.workers)
+            unphantom_idx = [i for i, real in rev.items() if real]
+            logger.info(
+                "  Still phantom: %d  (parquet missing — leave as attempted_failed)",
+                len(phantom_flagged_idx) - len(unphantom_idx),
+            )
+            logger.info("  Unphantomed:   %d  ← will flip back to captured", len(unphantom_idx))
+            if unphantom_idx:
+                up_df = df.loc[unphantom_idx]
+                up_by_dt = up_df.groupby(["data_type"]).size().sort_values(ascending=False)
+                logger.info("Unphantom distribution by data_type (top 15):\n%s", up_by_dt.head(15).to_string())
+        logger.info("=" * 60)
+
+    if not phantom_idx and not unphantom_idx:
+        logger.info("No phantoms found and nothing to unphantom. Manifest is clean.")
         return 0
 
-    # Show phantom distribution
-    phantom_df = df.loc[phantom_idx]
-    by_dt = phantom_df.groupby(["data_type"]).size().sort_values(ascending=False)
-    logger.info("Phantom distribution by data_type (top 15):\n%s", by_dt.head(15).to_string())
-    if "venue" in phantom_df.columns:
-        by_v = phantom_df.groupby(["venue"]).size().sort_values(ascending=False)
-        logger.info("Phantom distribution by venue (top 15):\n%s", by_v.head(15).to_string())
+    # Show forward-phantom distribution
+    if phantom_idx:
+        phantom_df = df.loc[phantom_idx]
+        by_dt = phantom_df.groupby(["data_type"]).size().sort_values(ascending=False)
+        logger.info("Phantom distribution by data_type (top 15):\n%s", by_dt.head(15).to_string())
+        if "venue" in phantom_df.columns:
+            by_v = phantom_df.groupby(["venue"]).size().sort_values(ascending=False)
+            logger.info("Phantom distribution by venue (top 15):\n%s", by_v.head(15).to_string())
 
     if args.dry_run:
         logger.info("DRY RUN — manifest not modified.")
         return 0
 
-    # Flip phantoms in-place.
     now_iso = datetime.now(UTC).isoformat()
-    df.loc[phantom_idx, "capture_status"] = "attempted_failed"
-    df.loc[phantom_idx, "error_reason"] = "phantom_captured_no_parquet_at_canonical_path"
-    df.loc[phantom_idx, "attempted_at"] = now_iso
+    if phantom_idx:
+        df.loc[phantom_idx, "capture_status"] = "attempted_failed"
+        df.loc[phantom_idx, "error_reason"] = "phantom_captured_no_parquet_at_canonical_path"
+        df.loc[phantom_idx, "attempted_at"] = now_iso
+    if unphantom_idx:
+        df.loc[unphantom_idx, "capture_status"] = "captured"
+        df.loc[unphantom_idx, "error_reason"] = ""
+        df.loc[unphantom_idx, "attempted_at"] = now_iso
 
     # Write back.
     out = io.BytesIO()
     df.to_parquet(out, index=False)
     out.seek(0)
-    logger.info("Uploading reconciled manifest (%d rows, %d phantoms flipped)", len(df), len(phantom_idx))
+    logger.info(
+        "Uploading reconciled manifest (%d rows, %d phantoms flipped, %d unphantomed)",
+        len(df),
+        len(phantom_idx),
+        len(unphantom_idx),
+    )
     blob.upload_from_file(out, content_type="application/octet-stream")
     logger.info("Done.")
     return 0
