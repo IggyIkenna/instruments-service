@@ -4703,21 +4703,14 @@ async def _fetch_transfermarkt_data(
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
 
-    _want_leagues = entity_filter is None or entity_filter == "TRANSFERMARKT_LEAGUES"
+    # TRANSFERMARKT_LEAGUES retired 2026-05-05 — was a static provider-catalog
+    # mapping (provider_id -> canonical_name + country). Mappings now live in
+    # UAC (TRANSFERMARKT_IDS) as versioned config. Don't fetch + write to GCS.
     _want_teams = entity_filter is None or entity_filter == "PLAYER_VALUES"
 
     manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
     attempt_ts = datetime.now(UTC)
 
-    # Skip TRANSFERMARKT_LEAGUES if the manifest already records this (date,
-    # data_type) as captured/empty_confirmed — without this gate the daily
-    # backfill burns rate-limit quota re-fetching dates that are already done.
-    if _want_leagues and _should_skip_shard(
-        manifest,
-        row_key={"date": date, "data_type": "TRANSFERMARKT_LEAGUES"},
-        force=force,
-    ):
-        _want_leagues = False
     # PLAYER_VALUES is per-league: gate the *whole* date only if every expected
     # league already has a captured/empty/failed shard. Per-league skip happens
     # inside the loop below via the cache short-circuit + adapter behaviour.
@@ -4727,59 +4720,6 @@ async def _fetch_transfermarkt_data(
         force=force,
     ):
         _want_teams = False
-
-    # --- TRANSFERMARKT_LEAGUES shard (date-level) ---
-    if _want_leagues:
-        try:
-            leagues = await adapter.get_leagues()
-            if leagues:
-                rows = [_coerce_adapter_output(lg) for lg in leagues]
-                df = pd.DataFrame([{k: str(v) if v is not None else None for k, v in r.items()} for r in rows])
-                _gated_sink_write(
-                    sink,
-                    data=df,
-                    partition={"day": date, "entity": "transfermarkt_leagues"},
-                    filename="transfermarkt_leagues.parquet",
-                    venue="transfermarkt",
-                    entity="transfermarkt_leagues",
-                )
-                counts["transfermarkt_leagues"] = len(df)
-                manifest.add(
-                    processing_date=date_type.fromisoformat(date),
-                    row_count=len(df),
-                    data_type="TRANSFERMARKT_LEAGUES",
-                )
-                logger.info("Transfermarkt leagues: %d rows written", len(df))
-            else:
-                # Honest-coverage: API returned zero leagues (legitimate empty).
-                logger.info("Transfermarkt leagues: 0 rows returned for date=%s", date)
-                manifest.record_empty(
-                    row_key={"date": date, "data_type": "TRANSFERMARKT_LEAGUES"},
-                    attempted_at=attempt_ts,
-                )
-        except Exception as exc:
-            classify_and_emit_error(
-                exc,
-                service_name="instruments-service",
-                operation="transfermarkt_leagues_fetch",
-                shard=date,
-            )
-            _err_code = _classify_adapter_failure(exc, "transfermarkt")
-            log_event(
-                "ADAPTER_FETCH_FAILED",
-                details={
-                    "venue": "transfermarkt",
-                    "endpoint": "get_leagues",
-                    "date": date,
-                    "error": str(exc),
-                    "error_code": _err_code,
-                },
-            )
-            manifest.record_failed(
-                row_key={"date": date, "data_type": "TRANSFERMARKT_LEAGUES"},
-                error=_err_code,
-                attempted_at=attempt_ts,
-            )
 
     # --- PLAYER_VALUES shards (per expected league) ---
     if _want_teams:
@@ -5016,26 +4956,20 @@ async def _fetch_sfi_data(
     sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
     counts: dict[str, int] = {}
 
-    _want_sfi_leagues = entity_filter is None or entity_filter == "SFI_LEAGUES"
-    # SFI does NOT have a standings endpoint (confirmed from archived service).
-    # Standings come from API Football. Remove SFI_STANDINGS from expected entities.
-    _want_sfi_standings = False  # SFI has no standings endpoint
+    # SFI_LEAGUES retired 2026-05-05 — provider catalog mapping in UAC.
+    # adapter.get_leagues() still runs at runtime to build the prediction-tier
+    # filter for progressive_stats fetches, but no GCS write or manifest row.
+    # SFI_STANDINGS retired 2026-04-24 — SFI has no standings endpoint.
+    _want_sfi_standings = False
     _want_sfi_progressive = entity_filter is None or entity_filter == "SFI_PROGRESSIVE_STATS"
 
     manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
     attempt_ts = datetime.now(UTC)
 
-    # Skip already-captured (date, data_type) shards before any API call.
-    # Pre-fix incident (2026-05-05): the SFI VM ran 16+ hours re-fetching
-    # progressive_stats for dates already at 100% in the manifest because
-    # the per-date entry below had no skip-check (only the pre-2020 cutoff).
-    # 429 storms ensued; fix by gating each entity at the date level.
-    if _want_sfi_leagues and _should_skip_shard(
-        manifest,
-        row_key={"date": date, "data_type": "SFI_LEAGUES"},
-        force=force,
-    ):
-        _want_sfi_leagues = False
+    # Skip already-captured (date, SFI_PROGRESSIVE_STATS) shards before any
+    # API call. Pre-fix incident (2026-05-05): the SFI VM ran 16+ hours
+    # re-fetching progressive_stats for dates already at 100% in the
+    # manifest because the per-date entry below had no skip-check.
     if _want_sfi_progressive and _should_skip_shard(
         manifest,
         row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
@@ -5080,38 +5014,19 @@ async def _fetch_sfi_data(
                     "league_count": len(sfi_league_ids),
                 },
             )
-            if _want_sfi_leagues:
-                manifest.add(
-                    processing_date=date_type.fromisoformat(date),
-                    row_count=len(sfi_league_ids),
-                    data_type="SFI_LEAGUES",
-                    cached=True,
-                )
+            # SFI_LEAGUES retired 2026-05-05 — was a static catalog (provider
+            # hash -> canonical name); mappings now in UAC SOCCER_FOOTBALL_INFO_IDS.
+            # Cache hit: no manifest row, just keep sfi_league_ids for runtime.
 
-    # --- SFI_LEAGUES shard (date-level) — live fetch path ---
+    # --- SFI catalog runtime fetch (NOT a captured data type) ---
+    # adapter.get_leagues() returns the live SFI catalog; we use it to build
+    # the prediction-tier filter for downstream progressive_stats fetches.
+    # No GCS write, no manifest row — see retirement note above.
     leagues = [] if _sfi_cache_hit else None
     try:
         if not _sfi_cache_hit:
             leagues = await adapter.get_leagues()
         if leagues:
-            if _want_sfi_leagues:
-                rows = [_coerce_adapter_output(lg) for lg in leagues]
-                df = pd.DataFrame([{k: str(v) if v is not None else None for k, v in r.items()} for r in rows])
-                _gated_sink_write(
-                    sink,
-                    data=df,
-                    partition={"day": date, "entity": "sfi_leagues"},
-                    filename="sfi_leagues.parquet",
-                    venue="soccer_football_info",
-                    entity="sfi_leagues",
-                )
-                counts["sfi_leagues"] = len(df)
-                manifest.add(
-                    processing_date=date_type.fromisoformat(date),
-                    row_count=len(df),
-                    data_type="SFI_LEAGUES",
-                )
-                logger.info("SFI leagues: %d rows written", len(df))
             sfi_league_ids = [lg.league_id for lg in leagues]
 
             # Drift detection — compare Prediction-classified league count the
@@ -5151,36 +5066,17 @@ async def _fetch_sfi_data(
                 )
             _write_sfi_league_mapping(bucket, _cache_rows)
         elif not _sfi_cache_hit:
-            if _want_sfi_leagues:
-                logger.info("SFI leagues: 0 rows returned for date=%s", date)
-                manifest.record_empty(
-                    row_key={"date": date, "data_type": "SFI_LEAGUES"},
-                    attempted_at=attempt_ts,
-                )
+            logger.info("SFI leagues: 0 rows returned for date=%s (no manifest write — retired)", date)
     except Exception as exc:
+        # Retired entity — log + classify but don't write a manifest row.
+        # The downstream sfi_progressive_stats fetch will still run with
+        # whatever sfi_league_ids we managed to populate (possibly empty).
         classify_and_emit_error(
             exc,
             service_name="instruments-service",
             operation="sfi_leagues_fetch",
             shard=date,
         )
-        if _want_sfi_leagues:
-            _err_code = _classify_adapter_failure(exc, "soccer_football_info")
-            log_event(
-                "ADAPTER_FETCH_FAILED",
-                details={
-                    "venue": "soccer_football_info",
-                    "endpoint": "get_leagues",
-                    "date": date,
-                    "error": str(exc),
-                    "error_code": _err_code,
-                },
-            )
-            manifest.record_failed(
-                row_key={"date": date, "data_type": "SFI_LEAGUES"},
-                error=_err_code,
-                attempted_at=attempt_ts,
-            )
 
     # Standings — only for our mapped prediction leagues (not all 2800+ SFI championships).
     # SOCCER_FOOTBALL_INFO_IDS maps canonical league → SFI hex ID. We only fetch standings
