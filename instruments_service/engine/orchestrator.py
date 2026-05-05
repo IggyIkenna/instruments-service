@@ -1052,6 +1052,7 @@ async def process_instruments(
                     entity_filter=_tm_entity,
                     league_filter=_leagues_today if _leagues_today and _tm_entity != "TRANSFERMARKT_LEAGUES" else None,
                     season=_tm_season,
+                    force=redo_all,
                 )
             elif sports_provider == "SOCCER_FOOTBALL_INFO":
                 sfi_key = _keys.get("soccer_football_info")
@@ -1063,6 +1064,7 @@ async def process_instruments(
                     api_key=sfi_key,
                     bucket=bucket,
                     entity_filter=sports_entity_filter,
+                    force=redo_all,
                 )
             else:
                 result = {}
@@ -1680,6 +1682,7 @@ async def process_instruments(
                         bucket=bucket,
                         entity_filter=_ef,
                         season=season_override,
+                        force=redo_all,
                     )
                     for k, v in tm_counts.items():
                         counts[k] = counts.get(k, 0) + v
@@ -1712,6 +1715,7 @@ async def process_instruments(
                         api_key=sfi_key,
                         bucket=bucket,
                         entity_filter=_ef,
+                        force=redo_all,
                     )
                     for k, v in sfi_counts.items():
                         counts[k] = counts.get(k, 0) + v
@@ -2139,6 +2143,7 @@ async def process_instruments(
                     bucket=bucket,
                     entity_filter=_ef,
                     season=season_override,
+                    force=redo_all,
                 )
                 for k, v in tm_counts.items():
                     counts[k] = counts.get(k, 0) + v
@@ -2169,6 +2174,7 @@ async def process_instruments(
                     api_key=sfi_key,
                     bucket=bucket,
                     entity_filter=_ef,
+                    force=redo_all,
                 )
                 for k, v in sfi_counts.items():
                     counts[k] = counts.get(k, 0) + v
@@ -4585,6 +4591,7 @@ async def _fetch_transfermarkt_data(
     entity_filter: str | None = None,
     season: int | None = None,
     league_filter: list[str] | None = None,
+    force: bool = False,
 ) -> dict[str, int]:
     """Fetch Transfermarkt leagues and teams (with player values) to GCS.
 
@@ -4619,6 +4626,25 @@ async def _fetch_transfermarkt_data(
 
     manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
     attempt_ts = datetime.now(UTC)
+
+    # Skip TRANSFERMARKT_LEAGUES if the manifest already records this (date,
+    # data_type) as captured/empty_confirmed — without this gate the daily
+    # backfill burns rate-limit quota re-fetching dates that are already done.
+    if _want_leagues and _should_skip_shard(
+        manifest,
+        row_key={"date": date, "data_type": "TRANSFERMARKT_LEAGUES"},
+        force=force,
+    ):
+        _want_leagues = False
+    # PLAYER_VALUES is per-league: gate the *whole* date only if every expected
+    # league already has a captured/empty/failed shard. Per-league skip happens
+    # inside the loop below via the cache short-circuit + adapter behaviour.
+    if _want_teams and _should_skip_shard(
+        manifest,
+        row_key={"date": date, "data_type": "PLAYER_VALUES"},
+        force=force,
+    ):
+        _want_teams = False
 
     # --- TRANSFERMARKT_LEAGUES shard (date-level) ---
     if _want_leagues:
@@ -4875,6 +4901,7 @@ async def _fetch_sfi_data(
     api_key: str,
     bucket: str,
     entity_filter: str | None = None,
+    force: bool = False,
 ) -> dict[str, int]:
     """Fetch SoccerFootball.info leagues, standings, and progressive stats to GCS.
 
@@ -4915,6 +4942,24 @@ async def _fetch_sfi_data(
 
     manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
     attempt_ts = datetime.now(UTC)
+
+    # Skip already-captured (date, data_type) shards before any API call.
+    # Pre-fix incident (2026-05-05): the SFI VM ran 16+ hours re-fetching
+    # progressive_stats for dates already at 100% in the manifest because
+    # the per-date entry below had no skip-check (only the pre-2020 cutoff).
+    # 429 storms ensued; fix by gating each entity at the date level.
+    if _want_sfi_leagues and _should_skip_shard(
+        manifest,
+        row_key={"date": date, "data_type": "SFI_LEAGUES"},
+        force=force,
+    ):
+        _want_sfi_leagues = False
+    if _want_sfi_progressive and _should_skip_shard(
+        manifest,
+        row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
+        force=force,
+    ):
+        _want_sfi_progressive = False
 
     # Expected denominator: 33 PREDICTION leagues per coverage matrix.
     _expected_sfi_leagues = get_expected_leagues_for_source(
