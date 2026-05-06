@@ -1373,6 +1373,7 @@ async def process_instruments(
                     fixture_ids_override=gcs_fixture_ids,
                     manifest=sports_manifest,
                     recovery_fixture_ids=recovery_fixture_ids,
+                    redo_all=redo_all,
                 )
                 # Write manifest for entities that did NOT write their own
                 # manifest entries inside _fetch_sports_reference_data.
@@ -1553,6 +1554,7 @@ async def process_instruments(
             entities_to_fetch=[sports_entity_filter],
             fixture_ids_override=gcs_fixture_ids,
             recovery_fixture_ids=recovery_fixture_ids,
+            redo_all=redo_all,
         )
         pf_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=_pf_bucket)
         for entity_name, row_count in pf_counts.items():
@@ -1696,6 +1698,7 @@ async def process_instruments(
                         fixture_ids_override=[],  # zero-fixture date — skip 33-league API re-fetch
                         manifest=sports_manifest,
                         recovery_fixture_ids=recovery_fixture_ids,
+                        redo_all=redo_all,
                     )
                     if sports_ref_counts:
                         _self_manifested_zf = {
@@ -2158,6 +2161,7 @@ async def process_instruments(
                 fixture_ids_override=list(_urdi_completed_fixture_ids),
                 manifest=sports_manifest,
                 recovery_fixture_ids=recovery_fixture_ids,
+                redo_all=redo_all,
             )
             for k, v in sports_ref_counts.items():
                 counts[k] = counts.get(k, 0) + v
@@ -2930,6 +2934,48 @@ def _write_fixtures_per_league(
         )
 
 
+def _read_existing_per_league_fixture_ids(
+    bucket: str,
+    date: str,
+    entity_name: str,
+    canonical_league_id: str,
+) -> frozenset[int]:
+    """Return the set of af_fixture_ids already captured in a per-league parquet.
+
+    Reads ``sports_reference/by_date/day={date}/entity={entity}/league={L}/{entity}.parquet``
+    and returns ``frozenset({af_fixture_id, ...})`` of rows present. Used by the
+    per-fixture pre-fetch skip path to avoid wasting api_football calls on
+    fixtures whose data is already on disk.
+
+    Returns empty frozenset on any miss / read failure (the caller treats that
+    as "no captured fixtures known, fetch everything in scope"). Logs at debug
+    level so operators can confirm the skip path engaged.
+    """
+    blob_path = (
+        f"sports_reference/by_date/day={date}/entity={entity_name}/league={canonical_league_id}/{entity_name}.parquet"
+    )
+    try:
+        storage_client = get_storage_client()
+        blob = storage_client.bucket(bucket).blob(blob_path)
+        if not blob.exists():
+            return frozenset()
+        existing_bytes = storage_client.download_bytes(bucket=bucket, blob_path=blob_path)
+        existing = pd.read_parquet(io.BytesIO(existing_bytes))
+    except Exception as exc:
+        logger.debug(
+            "Pre-fetch skip read failed for gs://%s/%s — proceeding without skip: %s",
+            bucket,
+            blob_path,
+            exc,
+        )
+        return frozenset()
+    fid_col = "af_fixture_id" if "af_fixture_id" in existing.columns else "fixture_id"
+    if fid_col not in existing.columns:
+        return frozenset()
+    fids = pd.to_numeric(existing[fid_col], errors="coerce").dropna().astype(int)
+    return frozenset(int(x) for x in fids.tolist())
+
+
 def _merge_with_existing_per_league_parquet(
     bucket: str,
     date: str,
@@ -3059,6 +3105,7 @@ async def _fetch_sports_reference_data(
     fixture_ids_override: list[int] | None = None,
     manifest: ManifestWriter | None = None,
     recovery_fixture_ids: frozenset[int] | None = None,
+    redo_all: bool = False,
 ) -> dict[str, int]:
     """Fetch sports reference data (teams, leagues, standings, injuries, etc.).
 
@@ -3631,18 +3678,70 @@ async def _fetch_sports_reference_data(
                     )
                 # Throttle handled by adapter's _get_with_retry + rate limit headers
 
+        # Pre-fetch skip: read existing per-league parquet for each (entity, league)
+        # cell on this date, build the set of af_fixture_ids already captured, and
+        # skip api_football calls for those fixtures. Bypassed when ``redo_all`` is
+        # True (i.e. the operator passed --force, explicitly asking to re-fetch
+        # everything).
+        #
+        # Why this exists: today's manifest is keyed on (date, data_type, league_id)
+        # — it tracks "the cell is captured" but NOT which fixtures within the cell
+        # are captured. So the cell-level pre-flight (at orchestrator entry) can't
+        # tell "5 of 10 fixtures already done" from "all 10 already done." The fix:
+        # at fetch-time, read the per-league parquet (which IS keyed at
+        # af_fixture_id row granularity) and skip api calls for fixtures already
+        # represented. Generalises to any future per-fixture entity recovery —
+        # e.g. when downstream of recovered FIXTURES, only the genuinely-missing
+        # fixtures get re-fetched, not the entire cell.
+        captured_per_entity_league: dict[tuple[str, str], frozenset[int]] = {}
+        if not redo_all and _af_fid_to_league:
+            for entity_name, _ in _per_fixture_entities:
+                _entity_leagues_seen: set[str] = set()
+                for fid in fixture_ids:
+                    canonical_league = _af_fid_to_league.get(str(fid))
+                    if not canonical_league:
+                        continue
+                    canonical_league = _canonical_league_id(canonical_league)
+                    if canonical_league in _entity_leagues_seen:
+                        continue
+                    _entity_leagues_seen.add(canonical_league)
+                    captured_set = _read_existing_per_league_fixture_ids(
+                        bucket=bucket,
+                        date=date,
+                        entity_name=entity_name,
+                        canonical_league_id=canonical_league,
+                    )
+                    captured_per_entity_league[(entity_name, canonical_league)] = captured_set
+
         # Build all tasks: N entities x M fixtures (only missing entities)
         tasks: list[asyncio.Task[None]] = []
+        skipped_already_captured = 0
         for entity_name, fetch_fn in _per_fixture_entities:
             for fid in fixture_ids:
+                if not redo_all and captured_per_entity_league:
+                    canonical_league = _af_fid_to_league.get(str(fid))
+                    if canonical_league:
+                        canonical_league = _canonical_league_id(canonical_league)
+                        captured_set = captured_per_entity_league.get((entity_name, canonical_league), frozenset())
+                        if int(fid) in captured_set:
+                            skipped_already_captured += 1
+                            continue
                 tasks.append(asyncio.ensure_future(_fetch_one(entity_name, fetch_fn, fid)))
 
+        if skipped_already_captured:
+            logger.info(
+                "Per-fixture pre-fetch skip: %d (entity, fixture_id) pairs already in existing per-league "
+                "parquets — skipping api_football calls (pass --force to re-fetch regardless)",
+                skipped_already_captured,
+            )
         logger.info(
-            "Per-fixture enrichment: %d fixtures x %d entities = %d calls (concurrency=%d)",
+            "Per-fixture enrichment: %d fixtures x %d entities = %d calls queued (concurrency=%d, "
+            "skipped_already_captured=%d)",
             len(fixture_ids),
             len(_per_fixture_entities),
             len(tasks),
             concurrency,
+            skipped_already_captured,
         )
         await asyncio.gather(*tasks)
 
