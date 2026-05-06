@@ -1233,25 +1233,27 @@ async def process_instruments(
         # 2026-05-06: phantom-recovery DELETE of 100k per-(date, league)
         # FIXTURES rows still got skipped because legitimate captures for
         # OTHER leagues kept the date "fresh" at the coarse level.
-        _sports_per_league_entities: frozenset[str] = frozenset({
-            "FIXTURES",
-            "PREDICTIONS",
-            "MATCHES",
-            "ODDS",
-            "STANDINGS",
-            "TEAMS",
-            "INJURIES",
-            "FIXTURE_STATS",
-            "FIXTURE_EVENTS",
-            "FIXTURE_LINEUPS",
-            "PLAYER_STATS",
-            "XG",
-            "PLAYER_VALUES",
-            "TRANSFERMARKT_VALUES",
-            "SFI_PROGRESSIVE_STATS",
-            "WEATHER",
-            "ODDS_HORIZON_BUCKET",
-        })
+        _sports_per_league_entities: frozenset[str] = frozenset(
+            {
+                "FIXTURES",
+                "PREDICTIONS",
+                "MATCHES",
+                "ODDS",
+                "STANDINGS",
+                "TEAMS",
+                "INJURIES",
+                "FIXTURE_STATS",
+                "FIXTURE_EVENTS",
+                "FIXTURE_LINEUPS",
+                "PLAYER_STATS",
+                "XG",
+                "PLAYER_VALUES",
+                "TRANSFERMARKT_VALUES",
+                "SFI_PROGRESSIVE_STATS",
+                "WEATHER",
+                "ODDS_HORIZON_BUCKET",
+            }
+        )
         _has_sports_per_league_in_scope = bool(set(expected) & _sports_per_league_entities)
 
         if is_sports_run and _has_sports_per_league_in_scope:
@@ -1263,8 +1265,7 @@ async def process_instruments(
             stale = []
             missing = list(expected)
             logger.info(
-                "date=%s: deferring pre-flight to per-league entity handlers "
-                "(sports per-league mode; expected=%s)",
+                "date=%s: deferring pre-flight to per-league entity handlers (sports per-league mode; expected=%s)",
                 date,
                 expected,
             )
@@ -2664,6 +2665,27 @@ def _write_venue(
             else:
                 manifest_venue = venue_str
                 manifest_data_type = ""
+            # DeFi: split AAVEV3-ETHEREUM → venue=AAVEV3, chain=ETHEREUM per the
+            # canonical v5 shard-key matrix (DeFi axis is `chain`, not packed
+            # into venue). The path-based legacy writer at the bottom of this
+            # module already does this; the batched manifest writer used here
+            # was missing the split, so DeFi rows from the orchestrator landed
+            # as `venue=AAVEV3-ETHEREUM, chain=''` and were filtered out by the
+            # coverage-summary's legacy-row drop, hiding recent DeFi captures.
+            manifest_chain = ""
+            if not is_sports_ref and "-" in venue_str:
+                from unified_api_contracts.registry.capability_declarations._defi import (
+                    KNOWN_CHAINS,
+                    parse_defi_venue,
+                )
+
+                try:
+                    _protocol, _chain = parse_defi_venue(venue_str)
+                except ValueError:
+                    _protocol, _chain = "", ""
+                if _chain in KNOWN_CHAINS:
+                    manifest_venue = _protocol.upper()
+                    manifest_chain = _chain
             if manifest is not None:
                 if is_sports_ref:
                     manifest.add(
@@ -2676,6 +2698,7 @@ def _write_venue(
                         processing_date=date_type.fromisoformat(date),
                         row_count=len(df),
                         venue=manifest_venue,
+                        chain=manifest_chain,
                     )
             else:
                 path = f"instrument_availability/by_date/day={date}/venue={venue_str}/instruments.parquet"
@@ -4851,9 +4874,7 @@ async def _fetch_transfermarkt_data(
         # so any one captured league locks the whole date out from per-league
         # re-fetch.
         _expected_pv_league_ids = sorted(
-            lg_id
-            for lg_id in _merged_leagues
-            if _league_filter_set is None or lg_id in _league_filter_set
+            lg_id for lg_id in _merged_leagues if _league_filter_set is None or lg_id in _league_filter_set
         )
         if _should_skip_date_for_per_league(
             manifest,
