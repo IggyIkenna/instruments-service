@@ -1259,7 +1259,14 @@ async def test_process_instruments_cefi_venues_available():
 
 @pytest.mark.asyncio
 async def test_process_instruments_tradfi_non_trading_day_writes_manifest():
-    """TRADFI non-trading day (Saturday) writes 0-count manifest entries instead of raising."""
+    """TRADFI non-trading day (Saturday) writes ``record_empty`` per venue.
+
+    Honest-coverage rule (CLAUDE.md "4 pillars" #1): non-trading days emit
+    ``record_empty`` markers, NOT ``add(row_count=0)``. The latter creates
+    phantom ``captured`` rows that inflate coverage stats and mask honest
+    absence (reference: AUSTRIAN_BUNDESLIGA / GREEK_SUPER_LEAGUE phantom-row
+    incident 2026-05-06).
+    """
     from instruments_service.engine.orchestrator import process_instruments
 
     mock_manifest_cls = MagicMock()
@@ -1285,13 +1292,13 @@ async def test_process_instruments_tradfi_non_trading_day_writes_manifest():
         ),
         patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
     ):
-        # Saturday 2020-05-30 — should NOT raise, should write 0-count manifest
+        # Saturday 2020-05-30 — should NOT raise, should write record_empty
         result = await process_instruments("2020-05-30", ["TRADFI"])
 
-    # Verify manifest was written with 0-count entries for each TRADFI venue
-    assert mock_manifest_inst.add.call_count > 0
-    for call in mock_manifest_inst.add.call_args_list:
-        assert call.kwargs["row_count"] == 0
+    # record_empty called per non-trading venue with venue + date row_key.
+    assert mock_manifest_inst.record_empty.call_count > 0
+    venues_seen = {c.kwargs["row_key"]["venue"] for c in mock_manifest_inst.record_empty.call_args_list}
+    assert venues_seen, "record_empty must include per-venue row_key"
     mock_manifest_inst.write.assert_called_once()
-    # Result should map each venue to 0
+    # Result still maps each venue to 0 (counts dict carries the count for the caller).
     assert all(v == 0 for v in result.values())

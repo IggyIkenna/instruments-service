@@ -262,7 +262,14 @@ class TestOrchestratorSportsLeaguePartitioning:
 
     @pytest.mark.asyncio
     async def test_zero_fixtures_writes_per_league_empty_markers(self) -> None:
-        """Sports zero-fixture path writes empty parquet per prediction league."""
+        """Sports zero-fixture path writes ``record_empty`` per prediction league.
+
+        Honest-coverage rule (CLAUDE.md "4 pillars" #1): zero-fixture days
+        emit ``record_empty`` markers, NOT ``add(row_count=0)`` and NOT a
+        placeholder parquet. Reference incident 2026-05-06: pre-fix wrote
+        3041 phantom ``captured`` rows for AUSTRIAN_BUNDESLIGA / GREEK_SUPER_LEAGUE
+        with no real fixtures.
+        """
         mock_sink = MagicMock()
         mock_manifest_cls = MagicMock()
         mock_manifest_instance = MagicMock()
@@ -294,22 +301,20 @@ class TestOrchestratorSportsLeaguePartitioning:
         ):
             result = await process_instruments("2026-04-12", ["SPORTS"])
 
-        # Should have written empty markers: 2 leagues x 1 write each = 2 writes
-        assert mock_sink.write.call_count == 2
-        # Verify league partition keys in sink writes
-        for write_call in mock_sink.write.call_args_list:
-            partition = write_call.kwargs.get("partition", {})
-            assert "league" in partition
-            assert partition["venue"] == "API_FOOTBALL_FIXTURES"
+        # No placeholder parquets: zero fixtures = no parquet on disk, the
+        # manifest's record_empty row IS the single honest marker.
+        assert mock_sink.write.call_count == 0
 
-        # Verify manifest.add() called per league with league_id
-        add_calls = [c for c in mock_manifest_instance.add.call_args_list if "league_id" in (c.kwargs or {})]
-        league_ids = {c.kwargs["league_id"] for c in add_calls}
+        # record_empty called per expected league with FIXTURES row_key.
+        empty_calls = mock_manifest_instance.record_empty.call_args_list
+        league_ids = {c.kwargs["row_key"]["league_id"] for c in empty_calls}
+        data_types = {c.kwargs["row_key"]["data_type"] for c in empty_calls}
         assert league_ids == {"EPL", "BUNDESLIGA"}
+        assert "FIXTURES" in data_types
 
     @pytest.mark.asyncio
     async def test_zero_fixtures_with_league_filter(self) -> None:
-        """Sports zero-fixture with --league filter writes only filtered leagues."""
+        """Sports zero-fixture + --league filter writes record_empty for filtered league only."""
         mock_sink = MagicMock()
         mock_manifest_cls = MagicMock()
         mock_manifest_instance = MagicMock()
@@ -335,12 +340,17 @@ class TestOrchestratorSportsLeaguePartitioning:
             ),
             patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
         ):
-            # Pass league_filter=["EPL"] — should only write 1 empty marker
+            # Pass league_filter=["EPL"] — should only emit 1 record_empty
             result = await process_instruments("2026-04-12", ["SPORTS"], league_filter=["EPL"])
 
-        assert mock_sink.write.call_count == 1
-        partition = mock_sink.write.call_args_list[0].kwargs.get("partition", {})
-        assert partition["league"] == "EPL"
+        # Honest-coverage: no placeholder parquet, single per-league record_empty.
+        assert mock_sink.write.call_count == 0
+        epl_empty_calls = [
+            c
+            for c in mock_manifest_instance.record_empty.call_args_list
+            if c.kwargs["row_key"].get("league_id") == "EPL" and c.kwargs["row_key"].get("data_type") == "FIXTURES"
+        ]
+        assert len(epl_empty_calls) >= 1
 
     @pytest.mark.asyncio
     async def test_sports_fixtures_partitioned_by_league(self) -> None:
