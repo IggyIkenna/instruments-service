@@ -79,6 +79,21 @@ def _add_instruments_extra_args(parser: argparse.ArgumentParser) -> None:  # pra
             "GCS output prefix tag (default: batch; use 'live' for live partition, 't1-recon' for T+1 reconciliation)"
         ),
     )
+    parser.add_argument(
+        "--recovery-fixture-ids",
+        type=str,
+        default=None,
+        help=(
+            "Path to a parquet of (canonical_league_id, af_fixture_id, ...) rows describing the fixture-set "
+            "we want to recover per-fixture entities for. Accepts ``gs://...`` or a local path. When set, "
+            "the per-fixture entity loops (PLAYER_STATS / FIXTURE_STATS / FIXTURE_EVENTS / FIXTURE_LINEUPS) "
+            "filter fixture_ids to this allowlist BEFORE calling api_football, and the per-league parquet "
+            "writes do read-modify-write merges so existing fixtures' rows are preserved. Use this for "
+            "targeted recovery work (e.g. fix only the 39k fixtures from Phase 1's truth-set audit). "
+            "Bypasses the date-level pre-flight skip so already-captured (date, league) cells are still "
+            "drilled into for our specific fixture_ids."
+        ),
+    )
 
 
 def main_service_cli() -> None:  # pragma: no cover

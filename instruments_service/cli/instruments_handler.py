@@ -10,9 +10,11 @@ In CLOUD_MOCK_MODE, key validation is skipped (no real Secret Manager available)
 from __future__ import annotations
 
 import contextlib
+import io
 import logging
 from datetime import UTC, datetime
 
+import pandas as pd
 from unified_trading_library import (
     ApiKeyReloader,
     BatchPayload,
@@ -20,6 +22,7 @@ from unified_trading_library import (
     ServiceRuntime,
     UnifiedServiceHandler,
     classify_and_emit_error,
+    get_storage_client,
     publish_coordination_event,  # pyright: ignore[reportPrivateImportUsage]
 )
 
@@ -53,6 +56,12 @@ class InstrumentsHandler(UnifiedServiceHandler):
         self._sports_provider: str | None = None  # set in preflight() when --sports-provider is used
         self._league_filter: list[str] | None = None  # set in preflight() when --league is used
         self._season_override: int | None = None  # set in preflight() when --season is used
+        # Recovery-mode fixture allowlist (set in preflight() when
+        # --recovery-fixture-ids is used). When non-None, the orchestrator's
+        # per-fixture entity handlers filter fixture_ids to this set BEFORE
+        # calling api_football, and the per-league parquet writes use
+        # read-modify-write semantics to preserve existing fixtures' rows.
+        self._recovery_fixture_ids: frozenset[int] | None = None
 
     async def preflight(self) -> None:
         """Start API key reloader. Date/asset-group filtering happens in process()."""
@@ -103,6 +112,10 @@ class InstrumentsHandler(UnifiedServiceHandler):
             self._season_override = season_arg
             logger.info("Season override from CLI: %d", season_arg)
 
+        recovery_path_arg: str | None = getattr(self.args, "recovery_fixture_ids", None) if self.args else None
+        if recovery_path_arg:
+            self._recovery_fixture_ids = self._load_recovery_fixture_ids(recovery_path_arg)
+
         lookback_arg: int | None = getattr(self.args, "lookback_days", None) if self.args else None
         lookahead_arg: int | None = getattr(self.args, "lookahead_days", None) if self.args else None
         force_window_arg: bool = bool(getattr(self.args, "force_window", False)) if self.args else False
@@ -116,6 +129,50 @@ class InstrumentsHandler(UnifiedServiceHandler):
                 getattr(self.args, "start_date", None),
                 getattr(self.args, "end_date", None),
             )
+
+    def _load_recovery_fixture_ids(self, path: str) -> frozenset[int] | None:
+        """Load af_fixture_id allowlist from a parquet at GCS or local path.
+
+        The parquet must carry a column named ``af_fixture_id`` (the
+        recovery-set parquet emitted by Phase 1's audit script and consumed
+        by Phase 2's recovery script both have this column). Returns
+        ``None`` on any load failure — the caller treats None as "no
+        allowlist, run normally."
+        """
+        try:
+            if path.startswith("gs://"):
+                without_scheme = path[len("gs://") :]
+                bucket, _, blob = without_scheme.partition("/")
+                if not bucket or not blob:
+                    logger.error(
+                        "--recovery-fixture-ids: malformed gs:// path %r — expected gs://bucket/path/to.parquet",
+                        path,
+                    )
+                    return None
+                storage = get_storage_client()
+                raw_bytes = storage.download_bytes(bucket=bucket, blob_path=blob)
+                df = pd.read_parquet(io.BytesIO(raw_bytes))
+            else:
+                df = pd.read_parquet(path)
+        except Exception as exc:
+            logger.error("--recovery-fixture-ids: failed to read parquet at %r: %s", path, exc)
+            return None
+        if "af_fixture_id" not in df.columns:
+            logger.error(
+                "--recovery-fixture-ids: parquet at %r is missing required ``af_fixture_id`` column (found: %s)",
+                path,
+                list(df.columns),
+            )
+            return None
+        ids = pd.to_numeric(df["af_fixture_id"], errors="coerce").dropna().astype(int)
+        allowlist = frozenset(int(x) for x in ids.tolist() if int(x) > 0)
+        logger.info(
+            "Recovery fixture-id allowlist loaded from %s: %d unique af_fixture_ids — "
+            "per-fixture entity loops will filter to this set, date-level pre-flight bypassed",
+            path,
+            len(allowlist),
+        )
+        return allowlist if allowlist else None
 
     def _start_key_reloader(self, active_venues: list[str]) -> None:
         """Start API key reloader — fail-fast on missing keys, periodic refresh."""
@@ -166,6 +223,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
             sports_provider=self._sports_provider,
             league_filter=self._league_filter,
             season_override=self._season_override,
+            recovery_fixture_ids=self._recovery_fixture_ids,
         )
 
     async def cleanup(self) -> None:

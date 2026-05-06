@@ -985,6 +985,7 @@ async def process_instruments(
     sports_provider: str | None = None,
     league_filter: list[str] | None = None,
     season_override: int | None = None,
+    recovery_fixture_ids: frozenset[int] | None = None,
 ) -> dict[str, int]:
     """Process instruments for a single date and set of asset groups.
 
@@ -993,6 +994,14 @@ async def process_instruments(
             API_FOOTBALL, TRANSFERMARKT). Maps to venue filter + entity scope.
         league_filter: When set, only process these canonical league IDs
             (e.g. ["EPL", "BUNDESLIGA"]). Default None = all prediction leagues.
+        recovery_fixture_ids: af_fixture_id allowlist for targeted per-fixture
+            recovery. When set, the per-fixture entity handlers
+            (PLAYER_STATS / FIXTURE_STATS / FIXTURE_EVENTS / FIXTURE_LINEUPS)
+            filter fixture_ids to this set BEFORE calling api_football, and
+            the per-league parquet writes do read-modify-write merges so
+            existing fixtures' rows are preserved. Bypasses date-level
+            pre-flight skip — already-captured (date, league) cells are
+            still drilled into for these specific fixture_ids.
 
     Returns:
         Dict mapping venue → record count written.
@@ -1363,6 +1372,7 @@ async def process_instruments(
                     entities_to_fetch=_sports_missing_entities,
                     fixture_ids_override=gcs_fixture_ids,
                     manifest=sports_manifest,
+                    recovery_fixture_ids=recovery_fixture_ids,
                 )
                 # Write manifest for entities that did NOT write their own
                 # manifest entries inside _fetch_sports_reference_data.
@@ -1542,6 +1552,7 @@ async def process_instruments(
             bucket=_pf_bucket,
             entities_to_fetch=[sports_entity_filter],
             fixture_ids_override=gcs_fixture_ids,
+            recovery_fixture_ids=recovery_fixture_ids,
         )
         pf_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=_pf_bucket)
         for entity_name, row_count in pf_counts.items():
@@ -1684,6 +1695,7 @@ async def process_instruments(
                         entities_to_fetch=_sports_missing_entities if _sports_missing_entities else None,
                         fixture_ids_override=[],  # zero-fixture date — skip 33-league API re-fetch
                         manifest=sports_manifest,
+                        recovery_fixture_ids=recovery_fixture_ids,
                     )
                     if sports_ref_counts:
                         _self_manifested_zf = {
@@ -2145,6 +2157,7 @@ async def process_instruments(
                 entities_to_fetch=_sports_missing_entities if _sports_missing_entities else None,
                 fixture_ids_override=list(_urdi_completed_fixture_ids),
                 manifest=sports_manifest,
+                recovery_fixture_ids=recovery_fixture_ids,
             )
             for k, v in sports_ref_counts.items():
                 counts[k] = counts.get(k, 0) + v
@@ -2917,6 +2930,83 @@ def _write_fixtures_per_league(
         )
 
 
+def _merge_with_existing_per_league_parquet(
+    bucket: str,
+    date: str,
+    entity_name: str,
+    canonical_league_id: str,
+    new_rows: pd.DataFrame,
+    fid_col: str,
+) -> pd.DataFrame:
+    """Read-modify-write merge for recovery-mode per-league parquet writes.
+
+    The default per-fixture entity write path overwrites the per-league
+    parquet at ``sports_reference/by_date/day={date}/entity={entity}/league={L}/{entity}.parquet``.
+    That's correct when we always fetch ALL fixtures for the (date, league)
+    cell — but in recovery mode we only fetch a subset (the
+    ``--recovery-fixture-ids`` allowlist), so a plain overwrite would drop
+    the rest of the cell's previously-captured fixtures.
+
+    This helper reads the existing parquet (if any), drops rows whose
+    ``af_fixture_id`` matches our new_rows (we just refetched them, prefer
+    the fresh values), and concatenates new_rows. Result: existing fixtures
+    survive, our targeted re-fetches replace any stale rows for those
+    fixture_ids.
+
+    Returns the merged DataFrame ready for the standard sink write.
+    """
+    blob_path = (
+        f"sports_reference/by_date/day={date}/entity={entity_name}/league={canonical_league_id}/{entity_name}.parquet"
+    )
+    try:
+        storage_client = get_storage_client()
+        blob = storage_client.bucket(bucket).blob(blob_path)
+        if not blob.exists():
+            return new_rows
+        existing_bytes = storage_client.download_bytes(bucket=bucket, blob_path=blob_path)
+        existing = pd.read_parquet(io.BytesIO(existing_bytes))
+    except Exception as exc:
+        logger.warning(
+            "Recovery-mode merge: could not read existing parquet at gs://%s/%s — "
+            "proceeding with overwrite (existing fixture rows for this cell will be lost): %s",
+            bucket,
+            blob_path,
+            exc,
+        )
+        return new_rows
+
+    if fid_col not in existing.columns:
+        # Schema drift — existing parquet lacks the fixture_id column we'd dedup on.
+        # Safer to overwrite + log than to concat-with-mismatched-schema.
+        logger.warning(
+            "Recovery-mode merge: existing parquet at gs://%s/%s missing %r column "
+            "(found: %s) — overwriting rather than risk schema mismatch",
+            bucket,
+            blob_path,
+            fid_col,
+            list(existing.columns),
+        )
+        return new_rows
+
+    new_fids = set(pd.to_numeric(new_rows[fid_col], errors="coerce").dropna().astype(int).tolist())
+    existing_fid_int = pd.to_numeric(existing[fid_col], errors="coerce")
+    keep_mask = ~existing_fid_int.isin(new_fids)
+    survivors = existing[keep_mask]
+    merged = pd.concat([survivors, new_rows], ignore_index=True, sort=False)
+    logger.info(
+        "Recovery-mode merge for %s/league=%s on %s: %d existing rows + %d new = %d total "
+        "(replaced %d rows with same af_fixture_id)",
+        entity_name,
+        canonical_league_id,
+        date,
+        len(existing),
+        len(new_rows),
+        len(merged),
+        len(existing) - len(survivors),
+    )
+    return merged
+
+
 def _build_fixture_league_map_from_gcs(bucket: str, date: str) -> dict[str, str]:
     """Build a mapping from AF fixture_id (str) to canonical league_id.
 
@@ -2968,6 +3058,7 @@ async def _fetch_sports_reference_data(
     enrichment_only: bool = False,
     fixture_ids_override: list[int] | None = None,
     manifest: ManifestWriter | None = None,
+    recovery_fixture_ids: frozenset[int] | None = None,
 ) -> dict[str, int]:
     """Fetch sports reference data (teams, leagues, standings, injuries, etc.).
 
@@ -2991,6 +3082,12 @@ async def _fetch_sports_reference_data(
         fixture_ids_override: Pre-computed list of completed fixture IDs from the
             URDI instruments fetch or GCS lookup. When provided, skips the expensive
             33-league re-fetch (saves 33 API calls per date).
+        recovery_fixture_ids: af_fixture_id allowlist for targeted per-fixture
+            recovery. When set, the per-fixture entity loop (PLAYER_STATS /
+            FIXTURE_STATS / FIXTURE_EVENTS / FIXTURE_LINEUPS) intersects
+            ``fixture_ids`` with this set, and the per-league parquet writes
+            do read-modify-write merges so existing fixtures' rows are
+            preserved.
     """
     # Convert entities_to_fetch to a set of short entity names for easy lookup.
     # E.g. "FIXTURE_LINEUPS" → "fixture_lineups"
@@ -3449,6 +3546,35 @@ async def _fetch_sports_reference_data(
             )
             _af_record_failed("FIXTURES", exc)
 
+    # Recovery-mode fixture-id allowlist filter — runs BEFORE the per-fixture
+    # entity loop so we only call api_football for the targeted set. Lifts
+    # the per-fixture work from O(all_fixtures_on_day x 5 entities) to
+    # O(allowlist_intersection_with_day x N_requested_entities). Used for
+    # targeted recovery (e.g. Phase 2's truth-set audit produced a 39k
+    # fixture-id list; we feed it here so we don't re-burn ~560k api_football
+    # calls re-fetching already-captured fixtures' per-fixture entities).
+    if recovery_fixture_ids is not None and fixture_ids:
+        _pre_filter = len(fixture_ids)
+        fixture_ids = [fid for fid in fixture_ids if fid in recovery_fixture_ids]
+        logger.info(
+            "Recovery fixture-id filter applied for date=%s: %d → %d fixtures (%d skipped — not in allowlist)",
+            date,
+            _pre_filter,
+            len(fixture_ids),
+            _pre_filter - len(fixture_ids),
+        )
+        if not fixture_ids:
+            # Allowlist intersected to zero on this date — no per-fixture work
+            # to do. Return early so we don't write phantom empty manifest rows
+            # for entities we never attempted to fetch on this date.
+            logger.info(
+                "Recovery fixture-id filter: no targeted fixtures on date=%s — skipping per-fixture loop",
+                date,
+            )
+            # Cross-provider mapping tables can still be useful here, but skip
+            # them in recovery mode to keep the run cheap.
+            return counts
+
     if fixture_ids:
         _per_fixture_entities = [
             ("fixture_stats", adapter.get_fixture_statistics),
@@ -3568,6 +3694,25 @@ async def _fetch_sports_reference_data(
                         _pf_lid_str = str(_pf_lid)
                         _pf_captured.add(_pf_lid_str)
                         _pf_clean = _pf_league_df.drop(columns=["_league_id"])
+
+                        # Recovery mode: read existing per-league parquet (if
+                        # any) and merge our newly-fetched fixture rows so we
+                        # don't lose previously-captured fixtures' data. The
+                        # standard write path is overwrite-on-write, which is
+                        # safe when we always fetch ALL fixtures for the
+                        # (date, league) cell — but in recovery mode we only
+                        # fetched a subset, so a plain overwrite would drop
+                        # the rest of the cell.
+                        if recovery_fixture_ids is not None and _fid_col in _pf_clean.columns:
+                            _pf_clean = _merge_with_existing_per_league_parquet(
+                                bucket=bucket,
+                                date=date,
+                                entity_name=entity_name,
+                                canonical_league_id=_canonical_league_id(_pf_lid_str),
+                                new_rows=_pf_clean,
+                                fid_col=_fid_col,
+                            )
+
                         _gated_sink_write(
                             sink,
                             data=_pf_clean,
