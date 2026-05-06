@@ -120,8 +120,7 @@ _CRYPTO_SHORT_TICKERS: dict[str, str] = {
 }
 
 _CRYPTO_SHORT_PATTERNS: list[tuple[re.Pattern[str], str]] = [
-    (re.compile(rf"(?<![a-z]){re.escape(kw)}(?![a-z])"), canonical)
-    for kw, canonical in _CRYPTO_SHORT_TICKERS.items()
+    (re.compile(rf"(?<![a-z]){re.escape(kw)}(?![a-z])"), canonical) for kw, canonical in _CRYPTO_SHORT_TICKERS.items()
 ]
 
 
