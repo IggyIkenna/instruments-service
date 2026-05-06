@@ -1191,18 +1191,46 @@ async def process_instruments(
             # League-aware enrichment: only expect an enrichment entity if
             # the leagues it covers have fixtures on this date.  Read the
             # manifest index once to get leagues with FIXTURES on this date.
+            #
+            # Performance: the in-process index cache is invalidated after every
+            # ``manifest.write()`` call (manifest_writer.py:_invalidate_index_cache).
+            # In the per-date BatchIO loop the orchestrator writes manifest at
+            # the END of each date's work, so the next date's read_availability_index
+            # call here misses the cache → re-reads the full 25MB / 2.6M-row
+            # canonical → ~27s GCS pull. That dominates wall-clock for ALL
+            # multi-date sports backfills.
+            #
+            # Skip this read entirely when scope is already explicit:
+            #   * ``sports_entity_filter`` set → entity-scoped run, ``expected``
+            #     gets restricted to that one entity later anyway (line 1221)
+            #   * ``recovery_fixture_ids`` set → targeted recovery, the allowlist
+            #     IS the date-aware scope; no need to introspect the manifest.
+            # Both signals mean the league-aware enrichment expectations don't
+            # change the orchestration outcome — we already know what to fetch.
             _date_fixture_leagues: set[str] = set()
-            _index_df = read_availability_index(bucket)
-            if not _index_df.empty and "league_id" in _index_df.columns:
-                _fix_mask = (_index_df["date"] == date) & (_index_df["data_type"] == "FIXTURES")
-                _lid_series = _index_df.loc[_fix_mask, "league_id"].dropna()
-                _date_fixture_leagues = {str(lid).upper() for lid in _lid_series.unique() if str(lid).strip()}
+            _scope_is_explicit = bool(sports_entity_filter) or recovery_fixture_ids is not None
+            if not _scope_is_explicit:
+                _index_df = read_availability_index(bucket)
+                if not _index_df.empty and "league_id" in _index_df.columns:
+                    _fix_mask = (_index_df["date"] == date) & (_index_df["data_type"] == "FIXTURES")
+                    _lid_series = _index_df.loc[_fix_mask, "league_id"].dropna()
+                    _date_fixture_leagues = {str(lid).upper() for lid in _lid_series.unique() if str(lid).strip()}
+            else:
+                logger.debug(
+                    "date=%s: skipping per-date read_availability_index — scope is explicit "
+                    "(sports_entity_filter=%s, recovery_fixture_ids=%s)",
+                    date,
+                    sports_entity_filter,
+                    "set" if recovery_fixture_ids is not None else "unset",
+                )
 
             for entity, venue in _enrichment_entity_venues:
                 if venue not in _active_venues_set_freshness:
                     continue
                 # Check league coverage — skip entity if its covered leagues
-                # have no fixtures on this date.
+                # have no fixtures on this date. With explicit scope, we skip
+                # the league check (no fixture data loaded) and let the
+                # downstream sports_entity_filter restriction below scope us.
                 coverage = get_entity_league_coverage(entity)
                 if coverage is not None and _date_fixture_leagues and not coverage & _date_fixture_leagues:
                     logger.debug(
@@ -2394,7 +2422,15 @@ async def process_instruments(
     # Sports: scope expected venues by league coverage.
     # Understat covers ~6 leagues, FootyStats ~50, SFI varies.
     # Only expect a venue if it covers leagues that had fixtures today.
-    if is_sports_run:
+    #
+    # Performance: same 25MB / 2.6M-row manifest read as the upstream
+    # _date_fixture_leagues read (line ~1213) — invalidated by every
+    # manifest.write() so it misses cache on every date in BatchIO. Skip
+    # this read when scope is already explicit (sports_entity_filter or
+    # recovery_fixture_ids set) — the per-fixture entity loop has already
+    # decided what to fetch from the explicit scope; the venue-scoping
+    # is only needed for full-spectrum runs that haven't pre-decided.
+    if is_sports_run and not (sports_entity_filter or recovery_fixture_ids is not None):
         try:
             from unified_api_contracts.canonical.domain.sports.league_data import get_league
 
