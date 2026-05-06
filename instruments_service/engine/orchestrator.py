@@ -1221,13 +1221,61 @@ async def process_instruments(
         _date_cutoff = (datetime.now(UTC) - timedelta(days=7)).strftime("%Y-%m-%d")
         _freshness_max_age = 0.0 if date < _date_cutoff else 24.0
 
-        is_fresh, stale, missing = check_shard_freshness(
-            bucket=bucket,
-            date=date,
-            service_name="instruments-service",
-            expected_venues=expected,
-            max_age_hours=_freshness_max_age,
-        )
+        # Sports per-league entities (FIXTURES + PREDICTIONS + MATCHES + ODDS +
+        # 5 per-fixture downstreams + ...) write one manifest row per
+        # (date, data_type, league_id). The coarse `check_shard_freshness`
+        # only checks "is data_type present for this date" — once any league
+        # has e.g. FIXTURES for date X, the whole date is "fresh" and
+        # skipped, so other-league missing rows never get re-fetched.
+        # Per-league freshness lives in the entity handlers themselves
+        # (`_should_skip_date_for_per_league`); skip the coarse pre-flight
+        # for these so the per-entity handlers run. Reference incident
+        # 2026-05-06: phantom-recovery DELETE of 100k per-(date, league)
+        # FIXTURES rows still got skipped because legitimate captures for
+        # OTHER leagues kept the date "fresh" at the coarse level.
+        _sports_per_league_entities: frozenset[str] = frozenset({
+            "FIXTURES",
+            "PREDICTIONS",
+            "MATCHES",
+            "ODDS",
+            "STANDINGS",
+            "TEAMS",
+            "INJURIES",
+            "FIXTURE_STATS",
+            "FIXTURE_EVENTS",
+            "FIXTURE_LINEUPS",
+            "PLAYER_STATS",
+            "XG",
+            "PLAYER_VALUES",
+            "TRANSFERMARKT_VALUES",
+            "SFI_PROGRESSIVE_STATS",
+            "WEATHER",
+            "ODDS_HORIZON_BUCKET",
+        })
+        _has_sports_per_league_in_scope = bool(set(expected) & _sports_per_league_entities)
+
+        if is_sports_run and _has_sports_per_league_in_scope:
+            # Defer to per-league checks in the entity handlers. Treat all
+            # expected entities as "missing" at the date level so the
+            # downstream per-entity dispatch fires; each handler does its
+            # own per-league `_should_skip_date_for_per_league`.
+            is_fresh = False
+            stale = []
+            missing = list(expected)
+            logger.info(
+                "date=%s: deferring pre-flight to per-league entity handlers "
+                "(sports per-league mode; expected=%s)",
+                date,
+                expected,
+            )
+        else:
+            is_fresh, stale, missing = check_shard_freshness(
+                bucket=bucket,
+                date=date,
+                service_name="instruments-service",
+                expected_venues=expected,
+                max_age_hours=_freshness_max_age,
+            )
         if is_fresh:
             logger.info(
                 "SKIP date=%s: all %d venues/entities already fresh in manifest (use --force to re-fetch)",
