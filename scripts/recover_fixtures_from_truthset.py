@@ -218,11 +218,23 @@ def _flip_attempted_failed_to_empty_confirmed(
     run_ts: str,
     apply: bool,
 ) -> int:
-    """Flip ATTEMPTED_FAILED_NO_TRUTH rows in canonical manifest + per-VM mirror.
+    """Flip ATTEMPTED_FAILED_NO_TRUTH rows by writing a per-VM shard ONLY.
 
-    Same pattern as the prior phantom-recovery scripts: load canonical, mutate
-    the matching rows, upload backup + new canonical. Also writes a per-VM
-    shard mirror to handle the 120s reader-staleness gotcha.
+    Per the workspace rule that the consolidator owns canonical, this no longer
+    mutates ``_index/availability_index.parquet`` directly — it reads canonical
+    to identify the rows that need flipping, then writes the flipped rows to
+    ``_index/per_vm/recover-fixtures-flip-{run_ts}.parquet``. The next
+    consolidator cycle merges the shard with last-attempted-write-wins, which
+    works because we stamp the flipped rows' ``attempted_at`` with NOW.
+
+    Reference incident 2026-05-06: an earlier version of this function wrote
+    canonical directly. That bumped canonical's ``blob.updated`` mtime past
+    the recovery script's per-VM shard mtime, and the consolidator's
+    incremental-merge cutoff (which used ``blob.updated``) silently skipped
+    the recovery shard on every subsequent cycle. UTL ``manifest_consolidator``
+    now reads the ``consolidator_run_at`` metadata marker instead of
+    ``blob.updated`` (commit 0ab7432a), but the cleanest belt-and-braces fix
+    is to stop writing canonical out-of-band entirely.
     """
     af_no_truth = diff_df.loc[diff_df["classification"] == "ATTEMPTED_FAILED_NO_TRUTH"].copy()
     if af_no_truth.empty:
@@ -256,33 +268,36 @@ def _flip_attempted_failed_to_empty_confirmed(
     if n_flip == 0:
         return 0
     if not apply:
-        logger.info("[dry-run] Would flip %d rows: capture_status -> empty_confirmed", n_flip)
+        logger.info("[dry-run] Would write per-VM shard with %d flipped rows", n_flip)
         return 0
 
-    backup_blob = f"_index/availability_index.{run_ts}.flip_empty.bak.parquet"
-    storage.upload_bytes(bucket, backup_blob, raw)  # type: ignore[attr-defined]
-    logger.info("Backed up canonical to gs://%s/%s", bucket, backup_blob)
+    # Build the flipped subset (copy to avoid SettingWithCopyWarning).
+    now_iso = datetime.now(UTC).isoformat()
+    flipped = canonical.loc[mask].copy()
+    flipped["capture_status"] = "empty_confirmed"
+    flipped["error_reason"] = f"flipped_via_recover_fixtures_from_truthset_{run_ts}__truth_says_empty"
+    flipped["attempted_at"] = now_iso
+    # Bump written_at too so consolidator's last-write-wins picks our flipped
+    # rows over the original attempted_failed rows still in other shards.
+    if "written_at" in flipped.columns:
+        flipped["written_at"] = now_iso
 
-    canonical.loc[mask, "capture_status"] = "empty_confirmed"
-    canonical.loc[mask, "error_reason"] = f"flipped_via_recover_fixtures_from_truthset_{run_ts}__truth_says_empty"
-    canonical.loc[mask, "attempted_at"] = datetime.now(UTC).isoformat()
-
+    # Write per-VM shard. Consolidator merges this on next cycle with
+    # last-attempted-at wins → flipped rows replace the original
+    # attempted_failed rows in canonical without us touching canonical.
+    shard_blob = f"_index/per_vm/recover-fixtures-flip-{run_ts}.parquet"
     out = io.BytesIO()
-    canonical.to_parquet(out, index=False, engine="pyarrow")
+    flipped.to_parquet(out, index=False, engine="pyarrow")
     out.seek(0)
-    storage.upload_bytes(bucket, _INDEX_PATH, out.read())  # type: ignore[attr-defined]
-
-    # Per-VM mirror so readers in the next 120s see the flip.
-    flipped_subset = canonical.loc[mask].copy()
-    mirror = io.BytesIO()
-    flipped_subset.to_parquet(mirror, index=False, engine="pyarrow")
-    mirror.seek(0)
-    mirror_blob = f"_index/per_vm/recover-fixtures-flip-{run_ts}.parquet"
-    storage.upload_bytes(bucket, mirror_blob, mirror.read())  # type: ignore[attr-defined]
-    logger.info("Wrote per-VM mirror to gs://%s/%s", bucket, mirror_blob)
+    storage.upload_bytes(bucket, shard_blob, out.read())  # type: ignore[attr-defined]
+    logger.info("Wrote per-VM shard to gs://%s/%s (%d rows)", bucket, shard_blob, n_flip)
+    logger.info(
+        "Consolidator will merge this shard into canonical on next cycle "
+        "(last-attempted-at wins → flipped rows replace attempted_failed rows)"
+    )
 
     logger.info(
-        "Flipped %d ATTEMPTED_FAILED_NO_TRUTH FIXTURES rows -> empty_confirmed",
+        "Flipped %d ATTEMPTED_FAILED_NO_TRUTH FIXTURES rows -> empty_confirmed (via per-VM shard)",
         n_flip,
     )
     return n_flip
