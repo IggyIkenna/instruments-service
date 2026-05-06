@@ -4776,16 +4776,6 @@ async def _fetch_transfermarkt_data(
     manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
     attempt_ts = datetime.now(UTC)
 
-    # PLAYER_VALUES is per-league: gate the *whole* date only if every expected
-    # league already has a captured/empty/failed shard. Per-league skip happens
-    # inside the loop below via the cache short-circuit + adapter behaviour.
-    if _want_teams and _should_skip_shard(
-        manifest,
-        row_key={"date": date, "data_type": "PLAYER_VALUES"},
-        force=force,
-    ):
-        _want_teams = False
-
     # --- PLAYER_VALUES shards (per expected league) ---
     if _want_teams:
         # Denominator = expected leagues with a Transfermarkt mapping.
@@ -4804,6 +4794,28 @@ async def _fetch_transfermarkt_data(
         _merged_leagues = {lg.league_id: lg for lg in _expected_tm_leagues}
         for _p_lg in get_prediction_leagues():
             _merged_leagues.setdefault(_p_lg.league_id, _p_lg)
+
+        # Per-league skip: only skip the date when EVERY expected canonical
+        # league has a captured/empty_confirmed PLAYER_VALUES row. Coarse
+        # `_should_skip_shard` at (date, data_type) — the previous shape — is
+        # the 2026-05-05 MATCHES 18%-coverage bug pattern: writer emits per-
+        # league rows (e.g. lines 4946-4951) but skip is at the bundle level,
+        # so any one captured league locks the whole date out from per-league
+        # re-fetch.
+        _expected_pv_league_ids = sorted(
+            lg_id
+            for lg_id in _merged_leagues
+            if _league_filter_set is None or lg_id in _league_filter_set
+        )
+        if _should_skip_date_for_per_league(
+            manifest,
+            date=date,
+            data_type="PLAYER_VALUES",
+            expected_canonical_leagues=_expected_pv_league_ids,
+            force=force,
+        ):
+            logger.info("PLAYER_VALUES: skipping date=%s (all canonical leagues captured)", date)
+            return counts
 
         effective_season = season if season is not None else datetime.now(UTC).year
 
@@ -5041,23 +5053,27 @@ async def _fetch_sfi_data(
     manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
     attempt_ts = datetime.now(UTC)
 
-    # Skip already-captured (date, SFI_PROGRESSIVE_STATS) shards before any
-    # API call. Pre-fix incident (2026-05-05): the SFI VM ran 16+ hours
-    # re-fetching progressive_stats for dates already at 100% in the
-    # manifest because the per-date entry below had no skip-check.
-    if _want_sfi_progressive and _should_skip_shard(
-        manifest,
-        row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
-        force=force,
-    ):
-        _want_sfi_progressive = False
-
     # Expected denominator: 33 PREDICTION leagues per coverage matrix.
     _expected_sfi_leagues = get_expected_leagues_for_source(
         "soccer_football_info",
         classifications=["Prediction"],
     )
     _expected_sfi_league_ids = {lg.league_id for lg in _expected_sfi_leagues}
+
+    # Per-league skip: only skip the date when EVERY expected canonical league
+    # has a captured/empty_confirmed row for SFI_PROGRESSIVE_STATS. The plain
+    # `_should_skip_shard` matched on (date, data_type) only — that's the
+    # 2026-05-05 MATCHES 18%-coverage bug shape. SFI_PROGRESSIVE_STATS writes
+    # per-league rows at lines 5293-5313 / 5210-5218 / 5335-5343 / 5352-5360 /
+    # 5368-5376, so the skip MUST also be per-league.
+    if _want_sfi_progressive and _should_skip_date_for_per_league(
+        manifest,
+        date=date,
+        data_type="SFI_PROGRESSIVE_STATS",
+        expected_canonical_leagues=sorted(_expected_sfi_league_ids),
+        force=force,
+    ):
+        _want_sfi_progressive = False
 
     # --- SFI league mapping cache short-circuit (per-date, 24h TTL) ---
     # Backfill VMs hit the SFI ``get_leagues`` endpoint once per trigger date.
