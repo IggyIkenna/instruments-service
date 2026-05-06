@@ -1577,36 +1577,41 @@ async def process_instruments(
             primary_asset_group = asset_groups[0] if asset_groups else None
             bucket = _get_instruments_bucket(primary_asset_group)
             sink = get_data_sink(bucket=bucket, prefix="instrument_availability/by_date")
-            empty_df = pd.DataFrame(columns=["fixture_id", "venue", "league_id", "kickoff_utc", "status"])
             # Write one empty marker per prediction league so downstream
             # consumers see each league as "processed with 0 fixtures".
+            #
+            # Honest-coverage (CLAUDE.md "4 pillars" #1): we use
+            # ``record_empty`` here, NOT ``add(row_count=0)``. Marking
+            # zero-fixture days as ``captured`` with row_count=0 is the
+            # exact anti-pattern the rule was added for — it inflates the
+            # captured count and masks honest absence. Reference incident
+            # 2026-05-06: AUSTRIAN_BUNDESLIGA, GREEK_SUPER_LEAGUE et al.
+            # showed 3041 captured FIXTURES rows that were ALL phantoms
+            # (instrument_count=0, no parquet on disk) before this fix.
+            #
+            # We also DROP the empty placeholder parquet write — empty
+            # placeholders that look populated are worse than missing data
+            # because they evade detection. If a date has no fixtures, no
+            # parquet should exist; the manifest's ``empty_confirmed`` row
+            # is the single honest marker.
             _empty_league_ids = league_filter if league_filter else get_all_prediction_league_ids()
+            _empty_attempt_ts = datetime.now(UTC)
             _empty_manifest = ManifestWriter(
                 service_name="instruments-service",
                 catalogue_bucket=bucket,
             )
             for _league_id in _empty_league_ids:
-                _gated_sink_write(
-                    sink,
-                    data=empty_df,
-                    partition={
-                        "day": date,
-                        "venue": "API_FOOTBALL_FIXTURES",
-                        "league": _canonical_league_id(_league_id),
+                _empty_manifest.record_empty(
+                    row_key={
+                        "date": date,
+                        "data_type": "FIXTURES",
+                        "league_id": _canonical_league_id(_league_id),
                     },
-                    filename="instruments.parquet",
-                    venue="api_football_fixtures",
-                    entity="instruments",
-                )
-                _empty_manifest.add(
-                    processing_date=date_type.fromisoformat(date),
-                    row_count=0,
-                    data_type="FIXTURES",
-                    league_id=_canonical_league_id(_league_id),
+                    attempted_at=_empty_attempt_ts,
                 )
             _empty_manifest.write()
             logger.info(
-                "SPORTS: No fixtures for date=%s — wrote empty markers for %d leagues",
+                "SPORTS: No fixtures for date=%s — wrote empty_confirmed markers for %d leagues",
                 date,
                 len(_empty_league_ids),
             )
@@ -1641,21 +1646,38 @@ async def process_instruments(
                         }
                         for entity_name, row_count in sports_ref_counts.items():
                             if entity_name not in _self_manifested_zf:
-                                sports_manifest.add(
-                                    processing_date=date_type.fromisoformat(date),
-                                    row_count=row_count,
-                                    data_type=entity_name.upper(),
-                                )
-                        # Write blank entries for ALL per-fixture entities on zero-fixture dates
-                        # so manifest marks them as "done" and won't re-fetch.
+                                if row_count > 0:
+                                    sports_manifest.add(
+                                        processing_date=date_type.fromisoformat(date),
+                                        row_count=row_count,
+                                        data_type=entity_name.upper(),
+                                    )
+                                else:
+                                    # Honest-coverage: api returned 0 rows
+                                    # → empty_confirmed, not captured-with-0.
+                                    sports_manifest.record_empty(
+                                        row_key={
+                                            "date": date,
+                                            "data_type": entity_name.upper(),
+                                        },
+                                        attempted_at=datetime.now(UTC),
+                                    )
+                        # Per-fixture entities on zero-fixture dates: nothing
+                        # to fetch (no fixtures = no per-fixture data). Write
+                        # ``empty_confirmed`` markers so the orchestrator
+                        # knows we attempted and skip-on-rerun without
+                        # inflating the captured count (CLAUDE.md "4 pillars"
+                        # #1: row_count > 0 OR record_empty, never
+                        # ``captured`` with row_count=0).
                         for pf_entity in _sports_per_fixture_entities:
                             entity_short = pf_entity.lower()
                             if entity_short not in sports_ref_counts:
-                                dt_name = pf_entity
-                                sports_manifest.add(
-                                    processing_date=date_type.fromisoformat(date),
-                                    row_count=0,
-                                    data_type=dt_name,
+                                sports_manifest.record_empty(
+                                    row_key={
+                                        "date": date,
+                                        "data_type": pf_entity,
+                                    },
+                                    attempted_at=datetime.now(UTC),
                                 )
                         sports_manifest.write()
                 # Zero-fixture fast path: fixture-dependent enrichment entities get
@@ -1678,15 +1700,22 @@ async def process_instruments(
                         service_name="instruments-service",
                         catalogue_bucket=bucket,
                     )
+                    _enr_attempt_ts = datetime.now(UTC)
                     for _enr_entity in _enrichment_zero_entities:
-                        _enr_manifest.add(
-                            processing_date=date_type.fromisoformat(date),
-                            row_count=0,
-                            data_type=_enr_entity,
+                        # Honest-coverage: zero-fixture day → record_empty,
+                        # NOT add(row_count=0). See CLAUDE.md "4 pillars" #1
+                        # and AUSTRIAN_BUNDESLIGA phantom-row incident
+                        # 2026-05-06.
+                        _enr_manifest.record_empty(
+                            row_key={
+                                "date": date,
+                                "data_type": _enr_entity,
+                            },
+                            attempted_at=_enr_attempt_ts,
                         )
                     _enr_manifest.write()
                     logger.info(
-                        "Zero-fixture fast path: wrote 0 for %d fixture-dependent entities on date=%s",
+                        "Zero-fixture fast path: wrote empty_confirmed for %d fixture-dependent entities on date=%s",
                         len(_enrichment_zero_entities),
                         date,
                     )
@@ -1807,15 +1836,18 @@ async def process_instruments(
                     service_name="instruments-service",
                     catalogue_bucket=bucket,
                 )
+                _nt_attempt_ts = datetime.now(UTC)
                 for venue in non_trading_venues:
-                    manifest.add(
-                        processing_date=target_dt,
-                        row_count=0,
-                        venue=venue,
+                    # Honest-coverage: non-trading day = source legitimately
+                    # has zero data, not "captured with 0 rows". CLAUDE.md
+                    # "4 pillars" #1.
+                    manifest.record_empty(
+                        row_key={"date": date, "venue": venue},
+                        attempted_at=_nt_attempt_ts,
                     )
                 manifest.write()
                 logger.info(
-                    "TRADFI non-trading day: date=%s venues=%s — wrote 0-count manifest entries",
+                    "TRADFI non-trading day: date=%s venues=%s — wrote empty_confirmed manifest entries",
                     date,
                     sorted(non_trading_venues),
                 )
@@ -2014,15 +2046,18 @@ async def process_instruments(
         target_dt = date_type.fromisoformat(date)
         non_trading = {v for v in tradfi_empty if is_non_trading_day(v, target_dt)}
         if non_trading:
+            _nt_attempt_ts = datetime.now(UTC)
             for venue in sorted(non_trading):
-                manifest.add(
-                    processing_date=target_dt,
-                    row_count=0,
-                    venue=venue,
+                # Honest-coverage: non-trading day = source legitimately
+                # has zero data, not "captured with 0 rows". CLAUDE.md
+                # "4 pillars" #1.
+                manifest.record_empty(
+                    row_key={"date": date, "venue": venue},
+                    attempted_at=_nt_attempt_ts,
                 )
                 counts[venue] = 0
             logger.info(
-                "TRADFI non-trading day manifest: date=%s venues=%s — wrote 0-count entries",
+                "TRADFI non-trading day manifest: date=%s venues=%s — wrote empty_confirmed entries",
                 date,
                 sorted(non_trading),
             )
