@@ -1,8 +1,12 @@
-<!-- POST_PLAN_BANNER_2026_05_06 -->
-
-> **POST-PLAN REALITY (2026-05-06)** — read [`../../unified-trading-pm/codex/POST_PLAN_REALITY_2026_05_06.md`](../../unified-trading-pm/codex/POST_PLAN_REALITY_2026_05_06.md) BEFORE making code or doc changes informed by this doc. This doc is partially stale: may describe per-asset-group instrument shape that's evolving — predictions get per-market lifecycle timestamps (market_created_at / resolution_time / settlement_time) + canonical_question_group; sports per-fixture sharding for fixture-scoped data_types; CeFi/TradFi options/futures get cluster validation mandatory at record_captured. The post-plan-reality doc lists the 10 cross-cutting principles codified in workspace `CLAUDE.md` (live=batch, no double SSOT, three-category empty-output decision A/B/C, cluster validation mandatory at record_captured, per-row write-time `available_at`, prediction lifecycle timing, temporary state must have named successor, per-VM shard isolation, etc.) plus the active plans where the canonical post-plan reality is being implemented. If this doc and the active plans disagree, the plans win. If you find a contradiction the plans don't address, flag to user — don't decide unilaterally.
-
 # Instruments Service Architecture
+
+<!-- POST_PLAN_SECTION_2026_05_06 -->
+
+## Post-2026-05-06 additions
+
+**Post-2026-05-06 additions** — instruments-service captures per-market lifecycle for predictions (`market_created_at` / `resolution_time` / `settlement_time`) per Plan A Phase 2.A. Sports per-fixture sharding clarified per multi-axis plan: shard atom is `(asset_group=sports, source, data_type, league_id, day)` (NOT per-fixture); fixture_id is row-level in parquet for drill-down. v6 columns wired in canonical_writer for CeFi options/futures (`quote_asset` / `margin_type` / `combo_type` / `leg_weights`).
+
+**Workspace SSOTs**: [POST_PLAN_REALITY](../../unified-trading-pm/codex/POST_PLAN_REALITY_2026_05_06.md) (10 cross-cutting principles + active plans), [availability-manifest-and-data-status](../../unified-trading-pm/codex/02-data/availability-manifest-and-data-status.md), [deployment-clusters-live-vs-batch](../../unified-trading-pm/codex/05-infrastructure/deployment-clusters-live-vs-batch.md), [shard-level-failure-isolation](../../unified-trading-pm/codex/04-architecture/shard-level-failure-isolation.md), [error-handling](../../unified-trading-pm/codex/06-coding-standards/error-handling.md), [validation-patterns](../../unified-trading-pm/codex/06-coding-standards/validation-patterns.md).
 
 > **Related Documentation**:
 >
