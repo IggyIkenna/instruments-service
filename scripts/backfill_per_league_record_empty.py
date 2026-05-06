@@ -172,7 +172,11 @@ def _backfill_data_type(
             written += 1
 
     if not dry_run:
-        writer.write()
+        # ``flush()`` forces-write (bypasses the time-based throttle in
+        # ``write()`` that otherwise causes the second per-data_type call to
+        # buffer-and-defer-to-atexit, which can fail with
+        # "cannot schedule new futures after interpreter shutdown".
+        writer.flush()
 
     logger.info(
         "%s: would_write=%d  skipped_already_present=%d  skipped_no_date_attempted=%d",
