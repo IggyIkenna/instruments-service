@@ -631,11 +631,26 @@ def main() -> int:
 
         new_df = pd.DataFrame(new_rows_records)
         # Align columns with the canonical manifest where they overlap; fill
-        # any missing columns with empty values so the parquet schema lines up.
+        # any missing columns with type-appropriate nulls so the parquet schema
+        # lines up cleanly with the canonical (consolidator merge requires
+        # identical column types per pyarrow concat — empty-string defaults
+        # for int64/float64 columns caused the 2026-05-07 ArrowTypeError on
+        # instrument_count, see issues/manifest_consolidator_arrow_type_error_2026_05_07.md).
         manifest_cols = list(df.columns)
         for col in manifest_cols:
             if col not in new_df.columns:
-                new_df[col] = ""
+                canonical_dtype = df[col].dtype
+                if pd.api.types.is_integer_dtype(canonical_dtype):
+                    # Use pandas nullable Int64 — pyarrow writes it as int64 with nulls.
+                    new_df[col] = pd.array([pd.NA] * len(new_df), dtype="Int64")
+                elif pd.api.types.is_float_dtype(canonical_dtype):
+                    new_df[col] = pd.array([pd.NA] * len(new_df), dtype="Float64")
+                elif pd.api.types.is_bool_dtype(canonical_dtype):
+                    new_df[col] = pd.array([pd.NA] * len(new_df), dtype="boolean")
+                else:
+                    # string / object / datetime — empty string is a safe default
+                    # (the canonical's read path tolerates it for non-numeric cols).
+                    new_df[col] = ""
         # Reorder to match manifest column order.
         new_df = new_df.reindex(columns=manifest_cols + [c for c in new_df.columns if c not in manifest_cols])
 
