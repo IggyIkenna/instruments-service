@@ -151,6 +151,15 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
     Secret Manager key: ``api-football-api-key``
     """
 
+    # Mega tier rate limit: 900 req/min = 15 req/sec → 0.067s interval.
+    # Default base-class throttle (0.1s = 10/sec) wasted ~33% of plan
+    # capacity. The per-VM rate-limit-header backoff in
+    # ``_get_with_retry`` (line ~280, reads ``X-RateLimit-Remaining``) plus
+    # the 429 retry-with-exp-backoff handles overshoot defensively, so we
+    # can safely run closer to the plan ceiling. Subclasses can override
+    # this class attribute when running on a tighter plan.
+    _min_request_interval: float = 0.067
+
     @property
     def venue(self) -> str:
         return "api_football"
