@@ -634,23 +634,50 @@ def main() -> int:
         # any missing columns with type-appropriate nulls so the parquet schema
         # lines up cleanly with the canonical (consolidator merge requires
         # identical column types per pyarrow concat — empty-string defaults
-        # for int64/float64 columns caused the 2026-05-07 ArrowTypeError on
-        # instrument_count, see issues/manifest_consolidator_arrow_type_error_2026_05_07.md).
+        # for int64/float64/bool columns caused the 2026-05-07 ArrowTypeError on
+        # instrument_count + schema_version + expected + available, see
+        # issues/manifest_consolidator_arrow_type_error_2026_05_07.md).
+        #
+        # Two-stage detection:
+        # (a) literal pandas dtype (catches int64 / float64 / bool / datetime cleanly)
+        # (b) value-type sampling for object-dtype columns (canonical may store
+        #     bool/int values under dtype=object — pandas can't disambiguate
+        #     "object holding bools" from "object holding strings" at dtype level,
+        #     but pyarrow concat sees a real schema mismatch). Sample first
+        #     non-null value's python type to infer the right default.
         manifest_cols = list(df.columns)
         for col in manifest_cols:
             if col not in new_df.columns:
                 canonical_dtype = df[col].dtype
+                # (a) Direct dtype match
                 if pd.api.types.is_integer_dtype(canonical_dtype):
-                    # Use pandas nullable Int64 — pyarrow writes it as int64 with nulls.
                     new_df[col] = pd.array([pd.NA] * len(new_df), dtype="Int64")
-                elif pd.api.types.is_float_dtype(canonical_dtype):
+                    continue
+                if pd.api.types.is_float_dtype(canonical_dtype):
                     new_df[col] = pd.array([pd.NA] * len(new_df), dtype="Float64")
-                elif pd.api.types.is_bool_dtype(canonical_dtype):
+                    continue
+                if pd.api.types.is_bool_dtype(canonical_dtype):
                     new_df[col] = pd.array([pd.NA] * len(new_df), dtype="boolean")
-                else:
-                    # string / object / datetime — empty string is a safe default
-                    # (the canonical's read path tolerates it for non-numeric cols).
-                    new_df[col] = ""
+                    continue
+                if pd.api.types.is_datetime64_any_dtype(canonical_dtype):
+                    new_df[col] = pd.array([pd.NaT] * len(new_df), dtype="datetime64[ns]")
+                    continue
+                # (b) Object dtype — sample non-null values to detect actual python type
+                non_null = df[col].dropna()
+                if len(non_null) > 0:
+                    sample_type = type(non_null.iloc[0])
+                    if sample_type is bool:
+                        new_df[col] = pd.array([pd.NA] * len(new_df), dtype="boolean")
+                        continue
+                    if sample_type is int:
+                        new_df[col] = pd.array([pd.NA] * len(new_df), dtype="Int64")
+                        continue
+                    if sample_type is float:
+                        new_df[col] = pd.array([pd.NA] * len(new_df), dtype="Float64")
+                        continue
+                # Default: empty string (safe for actual string/object/datetime
+                # columns, and for all-null canonical columns where we can't infer).
+                new_df[col] = ""
         # Reorder to match manifest column order.
         new_df = new_df.reindex(columns=manifest_cols + [c for c in new_df.columns if c not in manifest_cols])
 
