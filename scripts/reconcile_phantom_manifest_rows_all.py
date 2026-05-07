@@ -35,6 +35,7 @@ import argparse
 import io
 import logging
 import os
+import re
 import sys
 import tempfile
 import time
@@ -155,6 +156,55 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
 }
 
 
+# Protocol-name underscore drift (added 2026-05-07 for AAVE_V3-ARBITRUM
+# C.9 audit per session_2026_05_07_data_status_audit_findings wrapper).
+# Pre-canonicalisation DeFi writers spelled the protocol with an underscore
+# between the protocol name and the version: ``AAVE_V3``, ``UNISWAP_V3``,
+# ``COMPOUND_V3``. The post-2026-04 canonical form drops the underscore:
+# ``AAVEV3``, ``UNISWAPV3``, ``COMPOUNDV3``. The migrate_mtds_defi_legacy_*
+# scripts left BOTH spellings on disk under different ``venue=`` segments;
+# the manifest carries only the canonical form. Without probing both
+# variants, the audit false-positives 100% of AAVEV3 / UNISWAPV3 etc.
+# rows as phantom (29,782 hits in the 2026-05-07 dry-run on AAVEV3 alone).
+_PROTOCOL_VERSION_UNDERSCORE_RE = re.compile(r"^([A-Z]+?)(V\d+)(.*)$")
+
+
+def _defi_protocol_variants(venue: str) -> list[str]:
+    """Return deduped list of venue spellings for DeFi.
+
+    Both the underscored and concatenated forms of ``PROTOCOL[_]V<digits>``
+    are returned. Works for plain venue (``AAVEV3``) and combined-venue
+    (``AAVEV3-ETHEREUM`` — the protocol part before the first ``-``
+    is transformed and the chain suffix preserved).
+
+    Examples:
+        AAVEV3            -> [AAVEV3, AAVE_V3]
+        AAVE_V3           -> [AAVE_V3, AAVEV3]
+        AAVEV3-ARBITRUM   -> [AAVEV3-ARBITRUM, AAVE_V3-ARBITRUM]
+        UNISWAPV3         -> [UNISWAPV3, UNISWAP_V3]
+        MORPHO            -> [MORPHO]                       (no version suffix)
+        EIGENLAYER-ETHEREUM -> [EIGENLAYER-ETHEREUM]        (no version suffix)
+    """
+    if not venue:
+        return [""]
+    if "-" in venue:
+        protocol, _sep, chain_suffix = venue.partition("-")
+        chain_suffix = "-" + chain_suffix
+    else:
+        protocol = venue
+        chain_suffix = ""
+    variants = {venue}
+    # Try removing underscore: AAVE_V3 -> AAVEV3
+    if "_" in protocol:
+        variants.add(protocol.replace("_", "") + chain_suffix)
+    # Try inserting underscore: AAVEV3 -> AAVE_V3
+    m = _PROTOCOL_VERSION_UNDERSCORE_RE.match(protocol)
+    if m:
+        head, ver, tail = m.groups()
+        variants.add(f"{head}_{ver}{tail}{chain_suffix}")
+    return list(variants)
+
+
 def _venue_level_prefixes(asset_group: str, row: pd.Series) -> list[str]:
     """Return one prefix per ``(date, venue[, chain], hive-vocab)`` for
     a manifest row.
@@ -181,24 +231,36 @@ def _venue_level_prefixes(asset_group: str, row: pd.Series) -> list[str]:
        bundles those rows into ``options_chain/`` / ``futures_chain/``
        partitions on disk. The membership check accepts either form so
        OPTION/FUTURE manifest rows match their bundled disk locations.
+    6. **DeFi protocol-name underscore drift** (2026-05-07) — manifest
+       holds ``venue=AAVEV3`` (canonical, no underscore) but pre-2026-04
+       writers used ``venue=AAVE_V3`` (underscored). Both spellings
+       coexist on disk; we probe both via ``_defi_protocol_variants``.
+       Without this, AAVEV3 / UNISWAPV3 / COMPOUNDV3 rows whose data
+       lives under the legacy underscored prefix false-positive 100%
+       as phantom (29,782 hits in the 2026-05-07 dry-run on AAVEV3 alone).
     """
     cfg = ASSET_GROUP_CONFIG[asset_group]
-    base_fields = {
-        "date": str(row["date"]),
-        "venue": str(row.get("venue", "") or ""),
-        "chain": str(row.get("chain", "") or ""),
-    }
+    raw_venue = str(row.get("venue", "") or "")
+    raw_chain = str(row.get("chain", "") or "")
+    # DeFi-only: probe BOTH protocol-name spellings (underscored + plain).
+    venue_variants = _defi_protocol_variants(raw_venue) if asset_group == "defi" else [raw_venue]
     tpls = cfg["prefix_tpls"]
     if isinstance(tpls, str):
         tpls = [tpls]
     out: list[str] = []
-    for t in tpls:
-        # Truncate template at the first hive segment AFTER venue (and
-        # after chain for DeFi). The remainder narrows to one venue-day.
-        stripped = t.split("instrument_type=")[0]
-        # ``stripped`` may contain ``{venue}`` / ``{chain}`` / ``{date}``
-        # placeholders only; safe to format with base_fields.
-        out.append(stripped.format(**base_fields))
+    for v in venue_variants:
+        base_fields = {
+            "date": str(row["date"]),
+            "venue": v,
+            "chain": raw_chain,
+        }
+        for t in tpls:
+            # Truncate template at the first hive segment AFTER venue (and
+            # after chain for DeFi). The remainder narrows to one venue-day.
+            stripped = t.split("instrument_type=")[0]
+            # ``stripped`` may contain ``{venue}`` / ``{chain}`` / ``{date}``
+            # placeholders only; safe to format with base_fields.
+            out.append(stripped.format(**base_fields))
     return out
 
 
@@ -349,12 +411,24 @@ def _audit_generic(
     # uses ``market_type=binary/range_bracket/...`` instead).
     _IT_NOT_ON_DISK: frozenset[str] = frozenset({"prediction_market"})  # noqa: N806 — local constant table
 
+    # DeFi migrated-bundle wildcard (added 2026-05-07 for C.9 audit) —
+    # ``migrate_mtds_defi_legacy_venue_underscore.py`` produced
+    # ``ticks_migrated_*.parquet`` bundle files that live at the
+    # combined-venue prefix (``raw_tick_data/by_date/day=*/asset_group=defi/
+    # venue=PROTOCOL-CHAIN/``) WITHOUT the trailing ``instrument_type=*/
+    # data_type=*/`` segments. The bundle pickle holds ALL data_types for
+    # that (date, protocol, chain) tuple. Without this wildcard the
+    # membership check fails because the path has no ``data_type={dt}/``
+    # substring and the audit false-positives every row whose data was
+    # migrated into a bundle.
+    migrated_bundle_needle = "/ticks_migrated_"
     real_or_phantom: dict[int, bool] = {}
     for idx, plist in prefixes_by_idx.items():
         row = df.loc[idx]
         data_type = str(row.get("data_type", "") or "")
         raw_it = str(row.get("instrument_type", "") or "")
         venue = str(row.get("venue", "") or "")
+        chain = str(row.get("chain", "") or "")
         dt_needle = f"data_type={data_type}/"
         # Venue substring needle — required when prefix templates truncate
         # at category/asset_group level (e.g. prediction's Polymarket layout
@@ -371,10 +445,29 @@ def _audit_generic(
             it_needles_lower = [f"instrument_type={it_lower}/"]
         else:
             it_needles_lower = []
+        # Combined-venue bundle needles: when probing ``venue=PROTOCOL-CHAIN/``
+        # accept ``ticks_migrated_*.parquet`` files as evidence of capture
+        # for ANY (data_type, instrument_type) under that protocol-chain
+        # combo. DeFi-only — the migration bundle pattern is not used by
+        # other asset_groups.
+        bundle_venue_needles: list[str] = []
+        if asset_group == "defi" and venue and chain:
+            for v in _defi_protocol_variants(venue):
+                # Take protocol-only part (strip pre-existing chain suffix
+                # if the variant was already combined-form).
+                proto = v.split("-", 1)[0] if "-" in v else v
+                bundle_venue_needles.append(f"venue={proto}-{chain}/")
         is_real = False
         for prefix in plist:
             keys = prefix_keys.get(prefix, set())
             for k in keys:
+                # Migrated-bundle wildcard: any ``ticks_migrated_*.parquet``
+                # at a combined-venue prefix matching one of our protocol
+                # spellings counts as capture for any data_type. Bundle
+                # files have no data_type/instrument_type segments.
+                if bundle_venue_needles and migrated_bundle_needle in k and any(b in k for b in bundle_venue_needles):
+                    is_real = True
+                    break
                 if dt_needle not in k:
                     continue
                 if venue_needle and venue_needle not in k:
