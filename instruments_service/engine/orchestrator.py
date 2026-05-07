@@ -89,7 +89,10 @@ from instruments_service.reference_data.adapters.sports import create_sports_ref
 from instruments_service.reference_data.adapters.sports.adapters.api_football_reference import (
     _last_completed_fixture_ids as _urdi_completed_fixture_ids,
 )
-from instruments_service.reference_data.adapters.tradfi.databento import is_non_trading_day
+from instruments_service.reference_data.adapters.tradfi.databento import (
+    is_non_trading_day,
+    non_trading_day_reason,
+)
 from instruments_service.reference_data.utils.evm_creation_resolver import EvmCacheSession
 
 logger = logging.getLogger(__name__)
@@ -1951,11 +1954,13 @@ async def process_instruments(
                 )
                 _nt_attempt_ts = datetime.now(UTC)
                 for venue in non_trading_venues:
-                    # Honest-coverage: non-trading day = source legitimately
-                    # has zero data, not "captured with 0 rows". CLAUDE.md
-                    # "4 pillars" #1.
-                    manifest.record_empty(
+                    # Honest-coverage Phase 2.E.2: discriminate weekend vs
+                    # holiday so the manifest carries an EXPECTED_* row per
+                    # (shard_key, day) instead of a bare empty_confirmed.
+                    _reason = non_trading_day_reason(venue, target_dt) or "EXPECTED_WEEKEND"
+                    manifest.record_expected_empty(
                         row_key={"date": date, "venue": venue},
+                        reason=_reason,
                         attempted_at=_nt_attempt_ts,
                     )
                 manifest.write()
@@ -2161,11 +2166,12 @@ async def process_instruments(
         if non_trading:
             _nt_attempt_ts = datetime.now(UTC)
             for venue in sorted(non_trading):
-                # Honest-coverage: non-trading day = source legitimately
-                # has zero data, not "captured with 0 rows". CLAUDE.md
-                # "4 pillars" #1.
-                manifest.record_empty(
+                # Honest-coverage Phase 2.E.2: discriminate weekend vs holiday
+                # so the manifest carries an EXPECTED_* row per (shard_key, day).
+                _reason = non_trading_day_reason(venue, target_dt) or "EXPECTED_WEEKEND"
+                manifest.record_expected_empty(
                     row_key={"date": date, "venue": venue},
+                    reason=_reason,
                     attempted_at=_nt_attempt_ts,
                 )
                 counts[venue] = 0
@@ -5624,17 +5630,23 @@ async def _fetch_sfi_data(
             date,
             "pre-coverage-start" if _sfi_pp_pre_cutoff else "known-gap",
         )
-        manifest.record_empty(
+        # Honest-coverage Phase 2.E.2: pre-source-coverage-start vs paused-league
+        # window get distinct EXPECTED_* reasons so downstream consumers can
+        # classify legacy null-reason rows without re-deriving the calendar.
+        _sfi_reason = "EXPECTED_PRE_SOURCE_COVERAGE_START" if _sfi_pp_pre_cutoff else "EXPECTED_PAUSED_LEAGUE"
+        manifest.record_expected_empty(
             row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
+            reason=_sfi_reason,
             attempted_at=attempt_ts,
         )
         for _exp_lid in sorted(_expected_sfi_league_ids):
-            manifest.record_empty(
+            manifest.record_expected_empty(
                 row_key={
                     "date": date,
                     "data_type": "SFI_PROGRESSIVE_STATS",
                     "league_id": _exp_lid,
                 },
+                reason=_sfi_reason,
                 attempted_at=attempt_ts,
             )
         _want_sfi_progressive = False
