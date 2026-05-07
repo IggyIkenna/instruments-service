@@ -6,9 +6,18 @@ Phase 3.D of the writegate honest-coverage umbrella plan
 
 Walks an asset-group manifest, finds ``empty_confirmed`` rows with NULL
 ``error_reason`` (legacy bare ``record_empty()`` writes from before Phase
-2.E.2 shipped 2026-05-07), classifies each via UAC SSOTs, and stamps a
-typed reason from the closed set
+2.E.2 shipped 2026-05-07), classifies each via the UTL
+:func:`unified_trading_library.classify_legacy_empty_row` helper, and
+stamps a typed reason from the closed set
 ``unified_api_contracts.canonical.crosscutting.honest_coverage.EMPTY_CONFIRMED_REASONS``.
+
+The classifier code is in UTL (lifted 2026-05-07 by Phase 3.D.2): the
+same per-asset-group dispatch is now used by both this reconciler and
+the read-side fallback in 8 consumer services
+(execution / ml-training / ml-inference / features-volatility /
+features-cross-instrument / features-onchain / strategy /
+deployment-api). Single SSOT — when the classifier evolves, both paths
+pick the new behaviour up for free.
 
 Why this matters: per the codex SSOT
 (``codex/02-data/honest-absence-downstream-handling.md`` §"Per-service
@@ -17,27 +26,6 @@ consumer-class audit"), downstream services MUST classify
 rolling-window denominator adjustment all branch on the reason. Legacy
 null-reason rows are unclassifiable; this reconciler backfills them in
 one pass per asset_group using the same SSOT helpers the writers use.
-
-Per-asset-group classifier dispatch:
-
-* **tradfi** — `non_trading_day_reason(venue, day)` returns
-  EXPECTED_HOLIDAY / EXPECTED_WEEKEND for venues registered as
-  weekday-only + US-market-holiday-bound. Trading days fall through to
-  SOURCE_RETURNED_ZERO.
-* **sports** — `is_in_known_gap(source, data_type, day)` returns
-  EXPECTED_PAUSED_LEAGUE; `get_source_coverage_start(source, data_type)`
-  + day-pre-cutoff check returns EXPECTED_PRE_SOURCE_COVERAGE_START.
-  Else SOURCE_RETURNED_ZERO.
-* **defi** — `get_chain_genesis_date(chain)` + day-pre-genesis check
-  returns EXPECTED_PRE_GENESIS_CHAIN. Else SOURCE_RETURNED_ZERO.
-* **cefi** — 24/7 markets; default SOURCE_RETURNED_ZERO unless the row
-  carries a venue available_from earlier than the day (then
-  EXPECTED_INSTRUMENT_NOT_LISTED).
-* **prediction** — per-canonical-question lifecycle SSOT not yet
-  populated (UAC ``PREDICTION_GROUPS = {}`` placeholder). Defer
-  classification — just stamp SOURCE_RETURNED_ZERO so the row is no
-  longer "unclassifiable", and flag the date-range for the predictions
-  lifecycle plan to revisit.
 
 **Default mode is SCAN-ONLY**: produces a CSV report of "would-stamp"
 rows. ``--apply-flips`` is the explicit flag to actually mutate the
@@ -81,12 +69,12 @@ import os
 import sys
 import tempfile
 import time
-from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
 from google.cloud import storage
+from unified_trading_library import classify_legacy_empty_row
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -110,96 +98,11 @@ def _emit_event(event: str, /, **details: object) -> None:
     logger.info("EVENT %s", payload)
 
 
-def _classify_tradfi(row: pd.Series) -> str:
-    """TradFi: weekend / US-market-holiday → EXPECTED_*; else SOURCE_RETURNED_ZERO."""
-    from unified_api_contracts.registry import non_trading_day_reason
-
-    venue = str(row.get("venue", "") or "").strip()
-    day = str(row.get("date", "") or "").strip()
-    if not venue or not day:
-        return "SOURCE_RETURNED_ZERO"
-    reason = non_trading_day_reason(venue, day)
-    return reason or "SOURCE_RETURNED_ZERO"
-
-
-def _classify_sports(row: pd.Series) -> str:
-    """Sports: in-known-gap → PAUSED_LEAGUE; pre-source-coverage-start → PRE_*; else ZERO."""
-    from unified_api_contracts.sports import (
-        get_source_coverage_start,
-        is_in_known_gap,
-    )
-
-    venue = str(row.get("venue", "") or "").strip().lower()
-    data_type = str(row.get("data_type", "") or "").strip()
-    day = str(row.get("date", "") or "").strip()
-    if not day:
-        return "SOURCE_RETURNED_ZERO"
-    # ``venue`` for sports manifest rows holds the source key
-    # (``api_football`` / ``footystats`` / ``soccer_football_info`` / etc.).
-    source = venue
-    if source and data_type and is_in_known_gap(source, data_type, day):
-        return "EXPECTED_PAUSED_LEAGUE"
-    if source:
-        floor = get_source_coverage_start(source, data_type=data_type or None)
-        if floor is not None and day < floor.isoformat():
-            return "EXPECTED_PRE_SOURCE_COVERAGE_START"
-    return "SOURCE_RETURNED_ZERO"
-
-
-def _classify_defi(row: pd.Series) -> str:
-    """DeFi: pre-chain-genesis → EXPECTED_PRE_GENESIS_CHAIN; else SOURCE_RETURNED_ZERO."""
-    from unified_api_contracts.registry.chain_env import (
-        get_chain_genesis_date,
-    )
-
-    chain = str(row.get("chain", "") or "").strip()
-    venue = str(row.get("venue", "") or "").strip()
-    day = str(row.get("date", "") or "").strip()
-    if not day:
-        return "SOURCE_RETURNED_ZERO"
-    # chain may be the explicit ``chain`` column OR the suffix of a
-    # legacy combined ``venue=PROTOCOL-CHAIN`` (pre-2026-04 DeFi paths).
-    candidate_chain = chain or (venue.rsplit("-", 1)[-1] if "-" in venue else "")
-    if candidate_chain:
-        genesis = get_chain_genesis_date(candidate_chain)
-        if genesis and day < genesis:
-            return "EXPECTED_PRE_GENESIS_CHAIN"
-    return "SOURCE_RETURNED_ZERO"
-
-
-def _classify_cefi(_row: pd.Series) -> str:
-    """CeFi: 24/7 markets, default SOURCE_RETURNED_ZERO.
-
-    Future enhancement: cross-reference with instruments-service
-    available_from_datetime per (venue, instrument_id) → emit
-    EXPECTED_INSTRUMENT_NOT_LISTED for pre-listing days. Skipped in
-    this initial pass to avoid an extra cross-bucket join; legacy CeFi
-    null-reason empties are bound below 1% of total rows per phantom
-    audit 2026-05-04, so SOURCE_RETURNED_ZERO is the safe default.
-    """
-    return "SOURCE_RETURNED_ZERO"
-
-
-def _classify_prediction(_row: pd.Series) -> str:
-    """Prediction: per-canonical-question lifecycle SSOT not yet populated.
-
-    UAC ``PREDICTION_GROUPS = {}`` placeholder until the predictions
-    canonical-question SSOT lands (predictions plan Phase 1A successor).
-    Stamp SOURCE_RETURNED_ZERO so legacy rows are no longer
-    unclassifiable, and the predictions plan can re-stamp
-    EXPECTED_INSTRUMENT_DELISTED / EXPECTED_PRE_SOURCE_COVERAGE_START
-    once the per-canonical-question lifecycle table lands.
-    """
-    return "SOURCE_RETURNED_ZERO"
-
-
-CLASSIFIERS: dict[str, Callable[[pd.Series], str]] = {
-    "tradfi": _classify_tradfi,
-    "sports": _classify_sports,
-    "defi": _classify_defi,
-    "cefi": _classify_cefi,
-    "prediction": _classify_prediction,
-}
+# Per-asset-group classifier dispatch lives in
+# ``unified_trading_library.legacy_reason_classifier`` so the same SSOT
+# is shared with the reader-side fallback in 8 consumer services.
+# This reconciler is thin glue: walk the manifest, call
+# ``classify_legacy_empty_row(asset_group, row)``, stamp the result.
 
 
 def _parse_args() -> argparse.Namespace:
@@ -272,7 +175,7 @@ def _build_null_reason_mask(df: pd.DataFrame) -> pd.Series:
 def main() -> int:
     args = _parse_args()
     bucket_name: str = args.bucket or ASSET_GROUP_BUCKETS[args.asset_group]
-    classifier = CLASSIFIERS[args.asset_group]
+    asset_group: str = args.asset_group
     run_ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     run_id = f"recon-reasons-{args.asset_group}-{run_ts}"
 
@@ -339,7 +242,7 @@ def main() -> int:
         for idx in candidate_idx:
             row = df.loc[idx]
             try:
-                reason = classifier(row)
+                reason = classify_legacy_empty_row(asset_group, row)
             except (ValueError, TypeError, KeyError, AttributeError) as exc:
                 logger.warning("Classifier failed for row %s: %s — defaulting to ZERO", idx, exc)
                 reason = "SOURCE_RETURNED_ZERO"
