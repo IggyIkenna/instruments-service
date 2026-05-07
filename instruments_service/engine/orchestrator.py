@@ -1165,7 +1165,13 @@ async def process_instruments(
     # so they must be defined unconditionally (not inside redo_all gate).
     is_sports_run = any(c.upper() in ("SPORTS", "ALL") for c in asset_groups)
     _sports_core_entities = [
-        "LEAGUES",
+        # LEAGUES retired 2026-05-07 (C.1 audit, manifest_migration_master_2026_05_07).
+        # UAC ``LeagueDefinition`` + ``provider_league_ids`` (FOOTYSTATS_SEASON_IDS,
+        # FOOTYSTATS_HISTORICAL_SEASON_IDS, etc.) canonicalise the league refdata via
+        # code commits — daily-cadence GCS dump was 3046 daily shards of identical
+        # static data. Existing manifest rows flipped to empty_confirmed with
+        # reason=EXPECTED_DEPRECATED_DATA_TYPE via the migration script in
+        # instruments-service/scripts/migrate_leagues_kill_2026_05_07.py.
         "TEAMS",
         "STANDINGS",
         "INJURIES",
@@ -3277,39 +3283,18 @@ async def _fetch_sports_reference_data(
     if enrichment_only:
         logger.info("Enrichment-only mode: skipping leagues/teams/standings/injuries for date=%s", date)
 
-    # Leagues/teams/standings are slow-moving (same within a season). Cache DataFrames
-    # across dates within the same batch run to save ~67 API calls per date.
-    if not enrichment_only and _should_fetch("leagues"):
-        leagues_df = _cached_leagues_df
-        if leagues_df is None:
-            try:
-                leagues = await adapter.get_leagues()
-                if leagues:
-                    leagues_df = pd.DataFrame([_coerce_adapter_output(lg) for lg in leagues])
-                    _set_cached_leagues(leagues_df)
-                    logger.info("Sports reference: %d leagues fetched (API call — will cache)", len(leagues_df))
-            except Exception as exc:
-                classify_and_emit_error(
-                    exc,
-                    service_name="instruments-service",
-                    operation="sports_reference_leagues_fetch",
-                )
-                # Shard-level failure isolation — record and continue.
-                _af_record_failed("LEAGUES", exc)
-        else:
-            logger.info("Sports reference: %d leagues from cache (0 API calls)", len(leagues_df))
-        if leagues_df is not None:
-            _gated_sink_write(
-                sink,
-                data=leagues_df,
-                partition={"day": date, "entity": "leagues"},
-                filename="leagues.parquet",
-                venue="api_football",
-                entity="leagues",
-            )
-            counts["leagues"] = len(leagues_df)
+    # LEAGUES write path retired 2026-05-07 (C.1 audit, manifest_migration_master).
+    # Replaced by UAC ``LeagueDefinition`` + ``provider_league_ids`` (FOOTYSTATS_SEASON_IDS,
+    # FOOTYSTATS_HISTORICAL_SEASON_IDS) which canonicalise the league refdata via code
+    # commits — no daily-cadence GCS dump needed. Downstream consumers were 100%
+    # schema-only declarations (features-sports LEAGUES_COLUMNS) — no actual feature
+    # consumed `logo_url` or other fields beyond what UAC already provides.
+    # The api_football `/leagues` endpoint is no longer called from the daily
+    # orchestrator path; teams fetch (below) reads `get_prediction_leagues()` from UAC
+    # instead of the freshly-fetched leagues_df.
 
-        # Teams — for each prediction league (cached across dates)
+    # Teams — for each prediction league (cached across dates)
+    if not enrichment_only and _should_fetch("leagues"):
         teams_df = _cached_teams_df
         prediction_league_ids: list[int] = []
         if teams_df is None:
