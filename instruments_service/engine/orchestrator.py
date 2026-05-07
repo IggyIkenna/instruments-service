@@ -1023,6 +1023,27 @@ async def process_instruments(
     # Empty = fetch everything; non-empty = only fetch these specific entities.
     _sports_missing_entities: list[str] = []
 
+    # Recovery-mode hint: when --recovery-fixture-ids is set, the per-provider
+    # fetches (footystats / understat / sfi / open_meteo) need to bypass their
+    # per-day/per-league pre-flight skip, because empty_confirmed phantom rows
+    # would otherwise mask the dates we're trying to recover. Each provider's
+    # fetch already has a ``force=...`` parameter that bypasses its skip; we
+    # promote redo_all when recovery is active so the existing dispatch
+    # ``force=redo_all`` propagates correctly.
+    #
+    # For api_football the orchestrator's per-fixture loop has its own
+    # explicit allowlist filter (further down in _fetch_sports_reference_data),
+    # so the redo_all promotion here is harmless — the allowlist is the
+    # finer-grained scope.
+    if recovery_fixture_ids is not None:
+        if not redo_all:
+            logger.info(
+                "Recovery mode: promoting redo_all=True so per-provider per-day skip "
+                "is bypassed (recovery_fixture_ids has %d af_fixture_ids)",
+                len(recovery_fixture_ids),
+            )
+        redo_all = True
+
     # 1. Skip venues not yet launched
     active_venues = [v for v in venues if is_venue_available(v, date)]
 
