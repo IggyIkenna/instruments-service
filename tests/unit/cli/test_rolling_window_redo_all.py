@@ -2,15 +2,22 @@
 
 Confirms the rolling-window contract (codex/02-data/
 sports-scheduling-and-sharding.md §4) at the orchestrator level: when
-`check_shard_freshness` reports a date is fresh (first run already wrote
-rows), the second run with `redo_all=True` re-enters the fetch path instead
+``check_shard_freshness`` reports a date is fresh (first run already wrote
+rows), the second run with ``redo_all=True`` re-enters the fetch path instead
 of short-circuiting via the SKIP branch.
 
-This is the code-read equivalent of "run `python -m instruments_service
---lookback-days 0 --lookahead-days 0 --force-window ... SPORTS` twice in
-sequence and verify the second run re-fetches". A full GCS-emulator test
-adds fidelity but not correctness — the invariant being verified is the
-`if not redo_all:` gate at `engine/orchestrator.py:885`.
+This is the code-read equivalent of "run ``python -m instruments_service
+--lookback-days 0 --lookahead-days 0 --force-window ...`` twice in sequence
+and verify the second run re-fetches". A full GCS-emulator test adds fidelity
+but not correctness — the invariant being verified is the ``if not redo_all:``
+gate at ``engine/orchestrator.py`` (currently ~line 1191).
+
+We use ``asset_groups=["CEFI"]`` rather than ``["SPORTS"]`` because the
+sports per-league entity bypass (`_has_sports_per_league_in_scope` branch
+at ~line 1326) deliberately skips ``check_shard_freshness`` and routes
+through per-entity handlers — that bypass is intentional and would mask
+a regression in the redo_all gate. CeFi runs the canonical
+``check_shard_freshness`` path so the gate is testable end-to-end here.
 """
 
 from __future__ import annotations
@@ -22,18 +29,16 @@ from instruments_service.engine import orchestrator
 
 
 def _run_process(redo_all: bool) -> dict[str, int]:
-    """Run process_instruments for a SPORTS date with a fresh manifest."""
+    """Run process_instruments for a CEFI date with a fresh manifest."""
 
     async def _go() -> dict[str, int]:
         return await orchestrator.process_instruments(
             date="2026-04-21",
-            asset_groups=["SPORTS"],
+            asset_groups=["CEFI"],
             redo_all=redo_all,
             api_keys={},
-            venue_override=["API_FOOTBALL"],
+            venue_override=["BINANCE-SPOT"],
             mode="batch",
-            sports_entity_filter="FIXTURES",
-            sports_provider="API_FOOTBALL",
         )
 
     return asyncio.run(_go())
@@ -48,7 +53,7 @@ def test_redo_all_false_short_circuits_on_fresh_manifest() -> None:
         ),
         patch(
             "instruments_service.engine.orchestrator._get_instruments_bucket",
-            return_value="test-bucket-sports",
+            return_value="test-bucket-cefi",
         ),
         patch(
             "instruments_service.engine.orchestrator.read_availability_index",
@@ -56,26 +61,26 @@ def test_redo_all_false_short_circuits_on_fresh_manifest() -> None:
         ),
         patch(
             "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
-            return_value=["API_FOOTBALL"],
+            return_value=["BINANCE-SPOT"],
+        ),
+        patch(
+            "instruments_service.engine.orchestrator.is_venue_available",
+            return_value=True,
         ),
         patch(
             "instruments_service.engine.orchestrator.earliest_venue_date",
             return_value=None,
         ),
-        patch(
-            "instruments_service.engine.orchestrator._fetch_sports_reference_data",
-        ) as mock_fetch,
     ):
         result = _run_process(redo_all=False)
 
-    assert result == {}
-    mock_fetch.assert_not_called()  # SKIP branch — no fetch
+    assert result == {}  # SKIP branch — orchestrator returned {} early.
 
 
 def test_redo_all_true_bypasses_freshness_check_entirely() -> None:
     """Sentinel pattern: with redo_all=True, check_shard_freshness must NOT
     be called. We wire it to raise a sentinel exception iff invoked — if the
-    gate at orchestrator.py:885 (`if not redo_all:`) works, the sentinel is
+    gate at orchestrator.py ``if not redo_all:`` works, the sentinel is
     never raised; if it regresses, the test fails loud. This is the invariant
     --force-window / rolling-window §4 re-fetch contract depends on.
     """
@@ -85,8 +90,7 @@ def test_redo_all_true_bypasses_freshness_check_entirely() -> None:
 
     def _sentinel(*_args: object, **_kwargs: object) -> tuple[bool, list[str], list[str]]:
         raise _FreshnessCheckReachedError(
-            "check_shard_freshness was called despite redo_all=True — "
-            "regression in orchestrator.py:885 `if not redo_all:` gate"
+            "check_shard_freshness was called despite redo_all=True — regression in `if not redo_all:` gate"
         )
 
     with (
@@ -96,7 +100,7 @@ def test_redo_all_true_bypasses_freshness_check_entirely() -> None:
         ),
         patch(
             "instruments_service.engine.orchestrator._get_instruments_bucket",
-            return_value="test-bucket-sports",
+            return_value="test-bucket-cefi",
         ),
         patch(
             "instruments_service.engine.orchestrator.read_availability_index",
@@ -104,7 +108,11 @@ def test_redo_all_true_bypasses_freshness_check_entirely() -> None:
         ),
         patch(
             "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
-            return_value=["API_FOOTBALL"],
+            return_value=["BINANCE-SPOT"],
+        ),
+        patch(
+            "instruments_service.engine.orchestrator.is_venue_available",
+            return_value=True,
         ),
         patch(
             "instruments_service.engine.orchestrator.earliest_venue_date",
@@ -142,7 +150,7 @@ def test_redo_all_false_reaches_freshness_check() -> None:
         ),
         patch(
             "instruments_service.engine.orchestrator._get_instruments_bucket",
-            return_value="test-bucket-sports",
+            return_value="test-bucket-cefi",
         ),
         patch(
             "instruments_service.engine.orchestrator.read_availability_index",
@@ -150,7 +158,11 @@ def test_redo_all_false_reaches_freshness_check() -> None:
         ),
         patch(
             "instruments_service.engine.orchestrator.get_venues_for_asset_groups",
-            return_value=["API_FOOTBALL"],
+            return_value=["BINANCE-SPOT"],
+        ),
+        patch(
+            "instruments_service.engine.orchestrator.is_venue_available",
+            return_value=True,
         ),
         patch(
             "instruments_service.engine.orchestrator.earliest_venue_date",

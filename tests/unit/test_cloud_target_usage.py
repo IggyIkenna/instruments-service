@@ -2,12 +2,19 @@
 
 IMPORTANT: These are UNIT TESTS ONLY (no real cloud APIs).
 unified-trading-services validates real API usage via its own integration tests.
+
+The canonical bucket helper is ``orchestrator._get_instruments_bucket(asset_group)``
+which delegates to UTL ``get_write_bucket_name`` and respects the ``IS_TEST_RUN``
+env-var gate. The retired ``config.get_bucket_for_category(...)`` helper is no
+longer present on InstrumentsServiceConfig (4-fields-only contract — see
+``config/service_config.py``).
 """
 
 import pytest
 from unified_trading_library.domain_client.cloud_target import CloudTarget  # noqa: qg-deep-import
 
 from instruments_service.config import instruments_config
+from instruments_service.engine.orchestrator import _get_instruments_bucket
 
 
 class TestCloudTargetInstantiations:
@@ -20,7 +27,7 @@ class TestCloudTargetInstantiations:
         # Pattern that all code should follow
         target = CloudTarget(
             project_id=config.gcp_project_id,
-            storage_bucket=config.get_bucket_for_category("cefi"),
+            storage_bucket=_get_instruments_bucket("CEFI"),
             analytics_dataset=config.bigquery_dataset,  # REQUIRED
         )
 
@@ -36,7 +43,7 @@ class TestCloudTargetInstantiations:
         with pytest.raises((TypeError, ValueError), match=r"analytics_dataset|required"):
             CloudTarget(
                 project_id=config.gcp_project_id,
-                storage_bucket=config.get_bucket_for_category("cefi"),
+                storage_bucket=_get_instruments_bucket("CEFI"),
                 # analytics_dataset missing - should fail!
             )
 

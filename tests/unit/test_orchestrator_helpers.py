@@ -103,20 +103,31 @@ class TestIsVenueAvailable:
         assert is_venue_available("TOTALLY_UNKNOWN_VENUE", "2020-01-01") is True
 
     def test_known_venue_before_launch_returns_false(self) -> None:
-        # If a venue has a launch date in 2020, checking 2010 should be False
-        from instruments_service.engine.orchestrator import _VENUE_LAUNCH_DATES
+        # If a venue has a launch date in 2020, checking 2010 should be False.
+        # SSOT: UAC VenueMapping.get_instrument_discovery_start (replaced the
+        # local _VENUE_LAUNCH_DATES dict in commit a3355f2).
+        from instruments_service.engine.orchestrator import _VENUE_MAPPING
 
-        for venue, _launch_date in _VENUE_LAUNCH_DATES.items():
-            if _launch_date > "2010-01-01":
+        for venue in ("BINANCE-SPOT", "DERIBIT", "HYPERLIQUID", "BYBIT", "OKX"):
+            launch_date = _VENUE_MAPPING.get_instrument_discovery_start(venue)
+            if launch_date is not None and launch_date > "2010-01-01":
                 assert is_venue_available(venue, "2010-01-01") is False
-                break
+                return
+        # If no known venue resolved (unexpected), fail loud — UAC drift signal.
+        raise AssertionError(
+            "No probed venue resolved a discovery-start date via VenueMapping — "
+            "either UAC venue_start_dates regressed or every probed venue launched pre-2010."
+        )
 
     def test_known_venue_after_launch_returns_true(self) -> None:
-        from instruments_service.engine.orchestrator import _VENUE_LAUNCH_DATES
+        # SSOT: UAC VenueMapping.get_instrument_discovery_start.
+        from instruments_service.engine.orchestrator import _VENUE_MAPPING
 
-        for venue, _launch_date in _VENUE_LAUNCH_DATES.items():
-            assert is_venue_available(venue, "2030-01-01") is True
-            break
+        for venue in ("BINANCE-SPOT", "DERIBIT", "HYPERLIQUID", "BYBIT", "OKX"):
+            if _VENUE_MAPPING.get_instrument_discovery_start(venue) is not None:
+                assert is_venue_available(venue, "2030-01-01") is True
+                return
+        raise AssertionError("No probed venue resolved a discovery-start date via VenueMapping — UAC drift.")
 
 
 # ---------------------------------------------------------------------------

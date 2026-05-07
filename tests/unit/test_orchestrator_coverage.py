@@ -218,13 +218,20 @@ class TestClearDefiUniverseCache:
 
 class TestEarliestVenueDate:
     def test_known_venues(self) -> None:
-        from instruments_service.engine.orchestrator import _VENUE_LAUNCH_DATES
+        # SSOT: UAC VenueMapping.get_instrument_discovery_start (replaced the
+        # local _VENUE_LAUNCH_DATES dict in commit a3355f2).
+        from instruments_service.engine.orchestrator import _VENUE_MAPPING
 
-        known = list(_VENUE_LAUNCH_DATES)[:3]
-        if known:
-            result = earliest_venue_date(known)
-            assert result is not None
-            assert isinstance(result, str)
+        known: list[str] = []
+        for venue in ("BINANCE-SPOT", "DERIBIT", "HYPERLIQUID", "BYBIT", "OKX"):
+            if _VENUE_MAPPING.get_instrument_discovery_start(venue) is not None:
+                known.append(venue)
+            if len(known) == 3:
+                break
+        assert known, "No probed venue resolved a discovery-start date via VenueMapping — UAC drift."
+        result = earliest_venue_date(known)
+        assert result is not None
+        assert isinstance(result, str)
 
     def test_unknown_venues_returns_none(self) -> None:
         result = earliest_venue_date(["UNKNOWN_A", "UNKNOWN_B"])
