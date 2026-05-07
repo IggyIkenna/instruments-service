@@ -47,6 +47,7 @@ Example::
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import logging
 import os
@@ -122,7 +123,7 @@ def _emit_event(event: str, /, **details: object) -> None:
 
 
 def _enumerate_tradfi(start: str, end: str) -> Iterator[ExpectedRow]:
-    """Calendar pre-skip days × (venue, data_type) cross-product.
+    """Calendar pre-skip days x (venue, data_type) cross-product.
 
     For each TradFi venue, for each calendar non-trading day in window,
     yield one row per data_type with reason = EXPECTED_HOLIDAY / WEEKEND.
@@ -156,7 +157,7 @@ def _enumerate_tradfi(start: str, end: str) -> Iterator[ExpectedRow]:
 
 
 def _enumerate_defi(start: str, end: str) -> Iterator[ExpectedRow]:
-    """Chain pre-genesis + protocol pre-launch days × data_types.
+    """Chain pre-genesis + protocol pre-launch days x data_types.
 
     For each (chain, protocol) in PROTOCOL_LAUNCH_DATES:
       * effective_start = max(chain_genesis, protocol_launch)
@@ -203,7 +204,7 @@ def _enumerate_defi(start: str, end: str) -> Iterator[ExpectedRow]:
 
 
 def _enumerate_sports(start: str, end: str) -> Iterator[ExpectedRow]:
-    """Pre-source-coverage-start days × data_types (per source).
+    """Pre-source-coverage-start days x data_types (per source).
 
     Per-league enumeration is deferred (v2 — needs sports leagues catalog).
     For now enumerates per-source pre-coverage dates which is the
@@ -241,7 +242,7 @@ def _enumerate_sports(start: str, end: str) -> Iterator[ExpectedRow]:
 
 
 def _enumerate_cefi(start: str, end: str) -> Iterator[ExpectedRow]:
-    """Pre-venue-launch days × data_types per CeFi venue.
+    """Pre-venue-launch days x data_types per CeFi venue.
 
     For each CeFi venue with a launch date in UAC ``CEFI_VENUE_LAUNCH_DATES``
     that is after the window start, yield rows for every
@@ -277,8 +278,7 @@ def _enumerate_cefi(start: str, end: str) -> Iterator[ExpectedRow]:
         launch_str = CEFI_VENUE_LAUNCH_DATES.get(venue_str)
         if launch_str is None:
             logger.info(
-                "CeFi venue %s: no launch date in UAC CEFI_VENUE_LAUNCH_DATES; "
-                "skipping pre-launch enumeration",
+                "CeFi venue %s: no launch date in UAC CEFI_VENUE_LAUNCH_DATES; skipping pre-launch enumeration",
                 venue_str,
             )
             continue
@@ -304,7 +304,7 @@ def _enumerate_cefi(start: str, end: str) -> Iterator[ExpectedRow]:
 
 
 def _enumerate_prediction(start: str, end: str) -> Iterator[ExpectedRow]:
-    """Pre-venue-launch days × data_types per Prediction venue.
+    """Pre-venue-launch days x data_types per Prediction venue.
 
     Same shape as the CeFi enumerator — for each Prediction venue with a
     launch date in UAC ``PREDICTION_VENUE_LAUNCH_DATES`` after the window
@@ -471,7 +471,38 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Override CSV report dir (default: tempfile.gettempdir()).",
     )
+    p.add_argument(
+        "--gcs-report-bucket",
+        default=None,
+        help=(
+            "If set, upload the CSV report to gs://<bucket>/enumerator-reports/"
+            "{vm_name_or_run_id}/<asset_group>-<ts>.csv before VM auto-shutdown. "
+            "Use this on backfill VMs where local disk dies on shutdown so row-by-row "
+            "inspection survives. Defaults to deployment-scripts-{PROJECT_ID} when "
+            "VM_NAME is set; pass empty string to opt out."
+        ),
+    )
     return p.parse_args()
+
+
+def _upload_csv_report_to_gcs(
+    *,
+    local_path: Path,
+    bucket_name: str,
+    vm_name_or_run_id: str,
+    asset_group: str,
+    run_ts: str,
+) -> str:
+    """Upload the CSV report to GCS so it survives VM auto-shutdown.
+
+    Returns the canonical ``gs://...`` URI of the uploaded blob.
+    """
+    blob_name = f"enumerator-reports/{vm_name_or_run_id}/{asset_group}-{run_ts}.csv"
+    client = storage.Client(project=PROJECT_ID)
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+    blob.upload_from_filename(str(local_path))
+    return f"gs://{bucket_name}/{blob_name}"
 
 
 def main() -> int:
@@ -582,6 +613,40 @@ def main() -> int:
             writer.writerows(asdict(r) for r in absent_rows)
         logger.info("Would-write report: %s (%d rows)", report_path, len(absent_rows))
 
+        # Upload CSV report to GCS so it survives VM auto-shutdown
+        # (Phase 3.D.4 follow-up [SCRIPT] P1). Default bucket is
+        # deployment-scripts-{PROJECT_ID} when VM_NAME is set; empty string
+        # opts out; explicit bucket name overrides.
+        gcs_report_uri: str | None = None
+        vm_name_env = os.environ.get("VM_NAME", "")
+        report_bucket: str | None
+        if args.gcs_report_bucket is None:
+            # Default: upload only if running on a VM (VM_NAME set).
+            report_bucket = f"deployment-scripts-{PROJECT_ID}" if vm_name_env else None
+        elif args.gcs_report_bucket == "":
+            # Operator opt-out.
+            report_bucket = None
+        else:
+            report_bucket = args.gcs_report_bucket
+        if report_bucket:
+            try:
+                gcs_report_uri = _upload_csv_report_to_gcs(
+                    local_path=report_path,
+                    bucket_name=report_bucket,
+                    vm_name_or_run_id=vm_name_env or run_id,
+                    asset_group=asset_group,
+                    run_ts=run_ts,
+                )
+                logger.info("Uploaded CSV report to %s", gcs_report_uri)
+            except Exception as exc:
+                logger.warning("CSV report GCS upload failed (best-effort): %s", exc)
+                _emit_event(
+                    "ENUMERATOR_REPORT_UPLOAD_FAILED",
+                    bucket=report_bucket,
+                    error=str(exc),
+                    run_id=run_id,
+                )
+
         if not args.apply_write:
             logger.info("Scan-only mode; not writing manifest. Pass --apply-write to commit.")
             _emit_event(
@@ -590,6 +655,7 @@ def main() -> int:
                 candidates=len(absent_rows),
                 written=0,
                 report_path=str(report_path),
+                gcs_report_uri=gcs_report_uri,
                 run_id=run_id,
             )
             return 0
@@ -695,10 +761,8 @@ def main() -> int:
             out_blob.upload_from_filename(out_path)
             logger.info("Uploaded per-VM shard to gs://%s/%s", bucket_name, per_vm_blob)
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(out_path)
-            except OSError:
-                pass
 
         elapsed = time.time() - start
         _emit_event(
@@ -708,6 +772,7 @@ def main() -> int:
             written=len(new_rows_records),
             elapsed_secs=round(elapsed, 1),
             report_path=str(report_path),
+            gcs_report_uri=gcs_report_uri,
             per_vm_blob=per_vm_blob,
             run_id=run_id,
         )
@@ -722,10 +787,8 @@ def main() -> int:
         )
         return 0
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(local_manifest)
-        except OSError:
-            pass
 
 
 if __name__ == "__main__":
