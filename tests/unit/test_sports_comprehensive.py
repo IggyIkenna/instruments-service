@@ -466,12 +466,22 @@ class TestBaseSportsAdapterThrottle:
 
     @pytest.mark.asyncio
     async def test_throttle_enforces_interval(self) -> None:
-        """Throttle sets _last_request_time."""
+        """Throttle sets the per-class _last_request_time.
+
+        Per the per-class throttle pattern (commit 04bc1bc — SFI = 0.34s under
+        a 4 req/sec plan), ``_throttle`` writes to ``cls._last_request_time``
+        where ``cls = type(self)``, NOT to the base class. Each adapter
+        sub-class therefore tracks its own pacing — so the assertion has to
+        read from the concrete subclass attribute, not the base.
+        """
         adapter = _ConcreteAdapter()
-        # Reset shared state
+        # Reset shared state on both base + subclass so we can detect a write
+        # from a clean baseline regardless of attribute resolution order.
         BaseSportsReferenceAdapter._last_request_time = 0.0
+        _ConcreteAdapter._last_request_time = 0.0
         await adapter._throttle()
-        assert BaseSportsReferenceAdapter._last_request_time > 0.0
+        # Per-class write — _ConcreteAdapter owns the throttle clock now.
+        assert _ConcreteAdapter._last_request_time > 0.0
 
     @pytest.mark.asyncio
     async def test_throttle_sleeps_when_too_fast(self) -> None:

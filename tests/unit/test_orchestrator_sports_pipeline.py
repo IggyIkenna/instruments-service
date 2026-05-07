@@ -158,11 +158,15 @@ class TestFetchSportsReferenceData:
     """Tests for the orchestrator _fetch_sports_reference_data function."""
 
     @pytest.mark.asyncio
-    async def test_fetches_leagues_teams_standings_injuries(self) -> None:
-        """Should fetch all reference data types and write to sink."""
+    async def test_fetches_teams_standings_injuries(self) -> None:
+        """Should fetch teams/standings/injuries (LEAGUES write path retired
+        2026-05-07 — see commit 93efebf — replaced by UAC ``LeagueDefinition``
+        SSOT). The api_football ``/leagues`` endpoint is NOT called from the
+        daily orchestrator path; teams now read ``get_prediction_leagues()``
+        from UAC instead of a freshly-fetched leagues_df.
+        """
         # Mock the sports adapter
         mock_adapter = AsyncMock()
-        mock_adapter.get_leagues.return_value = []  # empty is fine, tests the flow
         mock_adapter.get_teams.return_value = []
         mock_adapter.get_standings.return_value = []
         mock_adapter.get_injuries.return_value = []
@@ -181,12 +185,19 @@ class TestFetchSportsReferenceData:
             counts = await _fetch_sports_reference_data("2026-03-22", "test-key", "test-bucket")
 
         assert isinstance(counts, dict)
-        mock_adapter.get_leagues.assert_awaited_once()
+        # get_leagues retired — verify it is NOT called.
+        mock_adapter.get_leagues.assert_not_awaited()
         mock_adapter.get_injuries.assert_awaited_once_with("2026-03-22")
 
     @pytest.mark.asyncio
-    async def test_writes_leagues_when_available(self) -> None:
-        """Should write leagues parquet when leagues are returned."""
+    async def test_get_leagues_not_called(self) -> None:
+        """get_leagues was retired 2026-05-07 (commit 93efebf) — UAC
+        ``LeagueDefinition`` is now the SSOT for league refdata. The
+        orchestrator must NEVER call adapter.get_leagues from
+        _fetch_sports_reference_data, regardless of what the adapter would
+        return. Replaces the old test_writes_leagues_when_available test
+        whose contract no longer holds.
+        """
         from unittest.mock import MagicMock as MM
 
         mock_league = MM()
@@ -211,7 +222,10 @@ class TestFetchSportsReferenceData:
         ):
             counts = await _fetch_sports_reference_data("2026-03-22", "test-key", "test-bucket")
 
-        assert counts.get("leagues", 0) == 1
+        # No "leagues" count — the entry is no longer produced by the function.
+        assert "leagues" not in counts
+        # And critically: the adapter call must never have happened.
+        mock_adapter.get_leagues.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_writes_teams_for_prediction_leagues(self) -> None:
