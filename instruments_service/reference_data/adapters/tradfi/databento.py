@@ -298,6 +298,26 @@ def _non_trading_result(session_label: str, calendar_name: str) -> dict[str, str
     }
 
 
+def non_trading_day_reason(venue: str, target_date: date) -> str | None:
+    """Return the EXPECTED_* reason for a non-trading day, or None if trading.
+
+    Discriminates ``EXPECTED_WEEKEND`` (Sat/Sun for closed-on-weekends venues,
+    plus Sat for everyone) from ``EXPECTED_HOLIDAY`` (weekday session marked
+    closed by the venue's exchange_calendars). Sunday for CME/ICE futures is a
+    trading day (Sunday-evening open) and returns ``None``.
+
+    Used by orchestrator pre-skip sites to feed
+    ``ManifestWriter.record_expected_empty(reason=...)`` per writegate Phase
+    2.E.2 so the manifest carries an EXPECTED_* row for every (shard_key, day)
+    in the expected universe instead of a bare "no row at all."
+    """
+    if not is_non_trading_day(venue, target_date):
+        return None
+    if target_date.weekday() >= 5:  # Sat/Sun (Sunday for futures already filtered above)
+        return "EXPECTED_WEEKEND"
+    return "EXPECTED_HOLIDAY"
+
+
 def is_non_trading_day(venue: str, target_date: date) -> bool:
     """Check whether the given date is a non-trading day for a TradFi venue.
 

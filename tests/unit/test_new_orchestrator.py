@@ -1259,13 +1259,14 @@ async def test_process_instruments_cefi_venues_available():
 
 @pytest.mark.asyncio
 async def test_process_instruments_tradfi_non_trading_day_writes_manifest():
-    """TRADFI non-trading day (Saturday) writes ``record_empty`` per venue.
+    """TRADFI non-trading day writes ``record_expected_empty(reason=EXPECTED_*)``.
 
-    Honest-coverage rule (CLAUDE.md "4 pillars" #1): non-trading days emit
-    ``record_empty`` markers, NOT ``add(row_count=0)``. The latter creates
-    phantom ``captured`` rows that inflate coverage stats and mask honest
-    absence (reference: AUSTRIAN_BUNDESLIGA / GREEK_SUPER_LEAGUE phantom-row
-    incident 2026-05-06).
+    Phase 2.E.2 (writegate honest-coverage): non-trading days emit
+    ``record_expected_empty`` with ``EXPECTED_HOLIDAY`` / ``EXPECTED_WEEKEND``
+    so the manifest carries a typed EXPECTED_* row per (shard_key, day) instead
+    of a bare ``empty_confirmed``. This unblocks downstream classifier code
+    that needs to discriminate calendar-driven absence from
+    source-returned-zero.
     """
     from instruments_service.engine.orchestrator import process_instruments
 
@@ -1283,6 +1284,10 @@ async def test_process_instruments_tradfi_non_trading_day_writes_manifest():
             return_value=fetch_result,
         ),
         patch("instruments_service.engine.orchestrator.is_non_trading_day", return_value=True),
+        patch(
+            "instruments_service.engine.orchestrator.non_trading_day_reason",
+            return_value="EXPECTED_WEEKEND",
+        ),
         patch("instruments_service.engine.orchestrator.ManifestWriter", mock_manifest_cls),
         patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
         patch("instruments_service.engine.orchestrator.log_event"),
@@ -1292,13 +1297,19 @@ async def test_process_instruments_tradfi_non_trading_day_writes_manifest():
         ),
         patch("instruments_service.engine.orchestrator.read_availability_index", return_value=pd.DataFrame()),
     ):
-        # Saturday 2020-05-30 — should NOT raise, should write record_empty
+        # Saturday 2020-05-30 — should NOT raise, should write record_expected_empty.
         result = await process_instruments("2020-05-30", ["TRADFI"])
 
-    # record_empty called per non-trading venue with venue + date row_key.
-    assert mock_manifest_inst.record_empty.call_count > 0
-    venues_seen = {c.kwargs["row_key"]["venue"] for c in mock_manifest_inst.record_empty.call_args_list}
-    assert venues_seen, "record_empty must include per-venue row_key"
+    # record_expected_empty called per non-trading venue with venue + date row_key
+    # AND a typed EXPECTED_* reason.
+    assert mock_manifest_inst.record_expected_empty.call_count > 0
+    calls = mock_manifest_inst.record_expected_empty.call_args_list
+    venues_seen = {c.kwargs["row_key"]["venue"] for c in calls}
+    assert venues_seen, "record_expected_empty must include per-venue row_key"
+    reasons_seen = {c.kwargs["reason"] for c in calls}
+    assert reasons_seen <= {"EXPECTED_HOLIDAY", "EXPECTED_WEEKEND"}, (
+        f"non-trading day reason must be EXPECTED_HOLIDAY or EXPECTED_WEEKEND, got {reasons_seen}"
+    )
     mock_manifest_inst.write.assert_called_once()
     # Result still maps each venue to 0 (counts dict carries the count for the caller).
     assert all(v == 0 for v in result.values())
