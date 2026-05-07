@@ -65,6 +65,10 @@ from unified_api_contracts.registry.chain_env import (
     CHAIN_GENESIS_DATES,
     PROTOCOL_LAUNCH_DATES,
 )
+from unified_api_contracts.registry.venue_launch_dates import (
+    CEFI_VENUE_LAUNCH_DATES,
+    PREDICTION_VENUE_LAUNCH_DATES,
+)
 from unified_api_contracts.registry.venue_trading_calendar import (
     is_non_trading_day,
     non_trading_day_reason,
@@ -237,39 +241,122 @@ def _enumerate_sports(start: str, end: str) -> Iterator[ExpectedRow]:
 
 
 def _enumerate_cefi(start: str, end: str) -> Iterator[ExpectedRow]:
-    """STUB: requires instruments-service catalog with per-instrument lifecycle.
+    """Pre-venue-launch days × data_types per CeFi venue.
 
-    Production v2 needs:
-      * Read instruments-service CeFi catalog (~per-venue parquet)
-      * For each (venue, instrument_id): clip [start, available_from-1] +
-        [available_to+1, end] -> EXPECTED_INSTRUMENT_NOT_LISTED /
-        EXPECTED_INSTRUMENT_DELISTED
-    Tracked in writegate plan Phase 3.D.4 CeFi sub-task. For now no rows
-    are yielded; CeFi denominator gap remains until catalog access is wired.
+    For each CeFi venue with a launch date in UAC ``CEFI_VENUE_LAUNCH_DATES``
+    that is after the window start, yield rows for every
+    ``(venue, data_type, day)`` tuple where ``day < launch_date``. Reason:
+    ``EXPECTED_PRE_VENUE_LAUNCH``. Sister of the DeFi pre-genesis-chain branch
+    above (chain genesis vs venue launch — same shape, different SSOT).
+
+    **What this DOES NOT cover (deferred to v2 with a per-instrument catalog
+    read):** ``EXPECTED_INSTRUMENT_NOT_LISTED`` / ``EXPECTED_INSTRUMENT_DELISTED``
+    per-(venue, instrument_id, day) rows. Per-instrument lifecycle requires
+    a ``gs://instruments-store-cefi-…`` catalog walk that's not wired here.
+    Tracked as a P1 follow-up in writegate plan Phase 3.D.4 CeFi sub-task.
+
+    The shard-key matrix declares CeFi spot/perp shards as
+    ``(asset_group, venue, data_type, instrument_type, instrument_id, day)``.
+    For pre-venue-launch dates ALL instruments are absent (the venue did not
+    exist), so we use sentinel values ``instrument_type=""`` +
+    ``instrument_id=""`` — the ``(venue, data_type, day)`` tuple alone is the
+    correct atom for "no instruments existed yet" semantics. The reader-side
+    classifier treats these venue-level rows as covering all per-instrument
+    rows for that ``(venue, data_type, day)``.
     """
-    logger.warning(
-        "CeFi expected-universe enumeration is STUBBED — needs instruments-service "
-        "catalog read. See writegate plan Phase 3.D.4 CeFi sub-task. "
-        "Yielding 0 rows for now."
-    )
-    return
-    yield  # type: ignore[unreachable]
+    venues = VENUES_BY_ASSET_GROUP.get("cefi", [])
+    data_types = DATA_TYPES_BY_ASSET_GROUP.get("cefi", [])
+    if not venues or not data_types:
+        logger.warning("CeFi venues/data_types empty — nothing to enumerate")
+        return
+
+    end_ts = pd.Timestamp(end)
+    start_ts = pd.Timestamp(start)
+    for venue in venues:
+        venue_str = str(venue)
+        launch_str = CEFI_VENUE_LAUNCH_DATES.get(venue_str)
+        if launch_str is None:
+            logger.info(
+                "CeFi venue %s: no launch date in UAC CEFI_VENUE_LAUNCH_DATES; "
+                "skipping pre-launch enumeration",
+                venue_str,
+            )
+            continue
+        launch_ts = pd.Timestamp(launch_str)
+        if start_ts >= launch_ts:
+            continue  # entire window is post-launch — nothing to backfill
+        last_day = min(end_ts, launch_ts - pd.Timedelta(days=1))
+        days = pd.date_range(start_ts, last_day, freq="D")
+        for day in days:
+            iso = day.strftime("%Y-%m-%d")
+            for dt in data_types:
+                yield ExpectedRow(
+                    asset_group="cefi",
+                    venue=venue_str,
+                    chain="",
+                    data_type=str(dt),
+                    instrument_type="",
+                    instrument_id="",
+                    league_id="",
+                    date=iso,
+                    reason="EXPECTED_PRE_VENUE_LAUNCH",
+                )
 
 
 def _enumerate_prediction(start: str, end: str) -> Iterator[ExpectedRow]:
-    """STUB: blocked on UAC PREDICTION_GROUPS registry (currently empty).
+    """Pre-venue-launch days × data_types per Prediction venue.
 
-    Production v2 requires the canonical_question_group SSOT to land
-    (see ``predictions_master_2026_05_07.plan.md``). Until then we cannot
-    enumerate the expected (canonical_question_group, day) universe.
+    Same shape as the CeFi enumerator — for each Prediction venue with a
+    launch date in UAC ``PREDICTION_VENUE_LAUNCH_DATES`` after the window
+    start, yield rows for every ``(venue, data_type, day)`` tuple where
+    ``day < launch_date``. Reason: ``EXPECTED_PRE_VENUE_LAUNCH``.
+
+    **What this DOES NOT cover (deferred to v2 once UAC ``PREDICTION_GROUPS``
+    canonical_question_group registry lands per
+    ``predictions_master_2026_05_07.plan.md``):** per-canonical-group market
+    lifecycle bounds (``market_created_at`` / ``settlement_time``) which would
+    yield ``EXPECTED_INSTRUMENT_NOT_LISTED`` / ``EXPECTED_INSTRUMENT_DELISTED``
+    rows for individual canonical question groups. The pre-venue-launch slice
+    is the largest absent universe by date count and is independently useful;
+    per-canonical-group enumeration adds finer detail on top.
     """
-    logger.warning(
-        "Prediction expected-universe enumeration is BLOCKED on UAC "
-        "PREDICTION_GROUPS registry (empty pending canonical_question_group "
-        "SSOT). See predictions_master_2026_05_07.plan.md. Yielding 0 rows."
-    )
-    return
-    yield  # type: ignore[unreachable]
+    venues = VENUES_BY_ASSET_GROUP.get("prediction", [])
+    data_types = DATA_TYPES_BY_ASSET_GROUP.get("prediction", [])
+    if not venues or not data_types:
+        logger.warning("Prediction venues/data_types empty — nothing to enumerate")
+        return
+
+    end_ts = pd.Timestamp(end)
+    start_ts = pd.Timestamp(start)
+    for venue in venues:
+        venue_str = str(venue)
+        launch_str = PREDICTION_VENUE_LAUNCH_DATES.get(venue_str)
+        if launch_str is None:
+            logger.info(
+                "Prediction venue %s: no launch date in UAC PREDICTION_VENUE_LAUNCH_DATES; "
+                "skipping pre-launch enumeration",
+                venue_str,
+            )
+            continue
+        launch_ts = pd.Timestamp(launch_str)
+        if start_ts >= launch_ts:
+            continue
+        last_day = min(end_ts, launch_ts - pd.Timedelta(days=1))
+        days = pd.date_range(start_ts, last_day, freq="D")
+        for day in days:
+            iso = day.strftime("%Y-%m-%d")
+            for dt in data_types:
+                yield ExpectedRow(
+                    asset_group="prediction",
+                    venue=venue_str,
+                    chain="",
+                    data_type=str(dt),
+                    instrument_type="",
+                    instrument_id="",
+                    league_id="",
+                    date=iso,
+                    reason="EXPECTED_PRE_VENUE_LAUNCH",
+                )
 
 
 _ENUMERATORS: dict[str, object] = {
@@ -373,8 +460,11 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--max-writes-per-run",
         type=int,
-        default=100_000,
-        help="Halt-safety cap (default 100k). Aborts if scan finds more than this.",
+        default=1_000_000,
+        help=(
+            "Halt-safety cap (default 1M, bumped 2026-05-07 after defi scan-only run "
+            "exceeded the prior 100k default). Aborts if scan finds more than this."
+        ),
     )
     p.add_argument(
         "--report-dir",
