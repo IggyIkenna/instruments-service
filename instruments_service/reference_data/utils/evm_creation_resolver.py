@@ -21,6 +21,8 @@ from pathlib import Path
 
 import aiohttp
 import aiohttp.resolver
+from unified_api_contracts.registry import get_venue_prefix
+from unified_api_contracts.registry.chain_env import get_protocol_launch_date
 
 logger = logging.getLogger(__name__)
 
@@ -98,9 +100,29 @@ LENDING_PROTOCOL_DEPLOY_DATES: dict[str, dict[str, datetime]] = {
 
 
 def get_protocol_floor_date(protocol: str, chain: str) -> datetime:
-    """Return conservative floor date for a lending protocol on a given chain."""
+    """Return conservative floor date for a lending protocol on a given chain.
+
+    Lookup precedence:
+      1. UAC ``PROTOCOL_LAUNCH_DATES`` (canonical SSOT) keyed by
+         ``(chain_upper, venue_prefix_upper)`` — used for protocols UAC tracks.
+      2. Local ``LENDING_PROTOCOL_DEPLOY_DATES`` fallback for protocols UAC does
+         not yet track (morpho, fluid, spark, euler_v2, radiant, venus, benqi).
+      3. Generic 2020-01-01 floor when neither layer has the pair.
+
+    Reference: pre-2026-05-08 the local dict carried wrong dates for AAVE V3
+    (e.g. ETHEREUM=2023-01-27 vs actual 2022-03-14). That mismatch caused
+    ``filter_instruments_by_date`` to drop legitimate 2022 reserves, which
+    cascaded into MTDS lending-indices silent-zero rows. UAC's
+    ``PROTOCOL_LAUNCH_DATES`` is the workspace SSOT — consult it first.
+    """
+    chain_upper = chain.upper()
+    venue_prefix = get_venue_prefix(protocol)
+    if venue_prefix is not None:
+        uac_date = get_protocol_launch_date(chain_upper, venue_prefix)
+        if uac_date:
+            return datetime.fromisoformat(uac_date).replace(tzinfo=UTC)
     proto_dates = LENDING_PROTOCOL_DEPLOY_DATES.get(protocol, {})
-    floor = proto_dates.get(chain.upper())
+    floor = proto_dates.get(chain_upper)
     if floor:
         return floor
     # Generic fallback: 2020-01-01 (all modern DeFi protocols launched after this)
