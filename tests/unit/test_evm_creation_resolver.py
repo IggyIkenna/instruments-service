@@ -35,12 +35,15 @@ from instruments_service.reference_data.utils.evm_creation_resolver import (
 
 
 class TestGetProtocolFloorDate:
-    def test_known_protocol_and_chain(self) -> None:
+    def test_known_protocol_and_chain_uses_uac_ssot(self) -> None:
+        # UAC PROTOCOL_LAUNCH_DATES is the canonical SSOT — ETHEREUM AAVEV3
+        # mainnet deploy was 2022-03-14 (NOT the legacy 2023-01-27 fallback
+        # which silent-zeroed AAVEV3 ETHEREUM 2022 dates pre-2026-05-08).
         dt = get_protocol_floor_date("aave_v3", "ETHEREUM")
-        assert dt == datetime(2023, 1, 27, tzinfo=UTC)
+        assert dt == datetime(2022, 3, 14, tzinfo=UTC)
 
     def test_known_protocol_unknown_chain_returns_2020(self) -> None:
-        dt = get_protocol_floor_date("aave_v3", "SOLANA")
+        dt = get_protocol_floor_date("aave_v3", "FANTOM")
         assert dt == datetime(2020, 1, 1, tzinfo=UTC)
 
     def test_unknown_protocol_returns_2020(self) -> None:
@@ -49,7 +52,19 @@ class TestGetProtocolFloorDate:
 
     def test_case_insensitive_chain(self) -> None:
         dt = get_protocol_floor_date("aave_v3", "ethereum")
-        assert dt == datetime(2023, 1, 27, tzinfo=UTC)
+        assert dt == datetime(2022, 3, 14, tzinfo=UTC)
+
+    def test_compound_v3_arbitrum_uses_uac_ssot(self) -> None:
+        # UAC says ("ARBITRUM", "COMPOUNDV3") = 2023-04-13. The local fallback
+        # had 2023-06-28; UAC takes precedence.
+        dt = get_protocol_floor_date("compound_v3", "ARBITRUM")
+        assert dt == datetime(2023, 4, 13, tzinfo=UTC)
+
+    def test_protocol_unknown_to_uac_falls_back_to_local(self) -> None:
+        # Spark has no UAC PROTOCOL_LAUNCH_DATES entry — falls back to local
+        # LENDING_PROTOCOL_DEPLOY_DATES (2023-05-09 per Maker fork go-live).
+        dt = get_protocol_floor_date("spark", "ETHEREUM")
+        assert dt == datetime(2023, 5, 9, tzinfo=UTC)
 
     def test_all_aave_v3_chains_have_dates(self) -> None:
         for chain in LENDING_PROTOCOL_DEPLOY_DATES.get("aave_v3", {}):
