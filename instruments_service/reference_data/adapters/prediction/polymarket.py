@@ -40,6 +40,12 @@ from unified_api_contracts.external.polymarket import (
     get_canonical_team_for_polymarket,
 )
 from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.predictions import (
+    CANONICAL_GROUP_METADATA,
+    CanonicalQuestionGroup,
+    MarketLifecycle,
+    classify_polymarket_to_canonical_group,
+)
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -776,6 +782,16 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
             return None  # League not in prediction registry — skip
         _sub_category, base_asset = result
 
+        # Per CLAUDE.md "Prediction market lifecycle timing": every
+        # prediction instrument MUST carry market_created_at and
+        # settlement_time so MTDS CLOB capture + features-* compute can
+        # gate ticks within the lifecycle window. We hang these on
+        # InstrumentRecord.available_from_datetime / available_to_datetime
+        # (the canonical SSOT slots) — the dedicated MARKET_LIFECYCLE
+        # data_type carries the full lifecycle row including
+        # canonical_question_group + current_status.
+        lifecycle = self.classify_lifecycle(market)
+
         return InstrumentRecord(
             instrument_key=condition_id,
             venue=self.venue,
@@ -794,6 +810,8 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             is_active=is_active,
             updated_at=now,
+            available_from_datetime=lifecycle.market_created_at if lifecycle else None,
+            available_to_datetime=lifecycle.settlement_time if lifecycle else None,
         )
 
     def _build_instrument_id(
@@ -993,3 +1011,97 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
             return datetime.fromisoformat(end_date_raw.replace("Z", "+00:00")).astimezone(UTC)
         except ValueError:
             return None
+
+    def classify_lifecycle(self, market: PolymarketGammaMarket) -> MarketLifecycle | None:
+        """Build a :class:`MarketLifecycle` for a Polymarket Gamma market.
+
+        Returns ``None`` when ``condition_id`` is missing (we can't key the
+        lifecycle row without it) or when no ``market_created_at`` source is
+        available (Gamma's ``createdAt`` is the only reliable creation
+        timestamp; ``startDate`` is a scheduling hint that often disagrees
+        for resolved markets).
+
+        Lifecycle field derivation (per
+        :mod:`unified_api_contracts.canonical.domain.predictions.lifecycle`):
+
+        * ``market_created_at``: ``created_at`` (Gamma raw); falls back to
+          ``start_date`` if missing.
+        * ``resolution_time``: ``closed_time`` if available (the actual
+          UMA-resolution timestamp); else falls back to ``end_date_iso``
+          (the *scheduled* close — best-effort proxy for unresolved
+          markets).
+        * ``settlement_time``: ``resolution_time + canonical_group.settlement_lag``
+          per UAC :data:`CANONICAL_GROUP_METADATA` (Polymarket UMA
+          undisputed = +2h, disputed = +24-72h depending on group). When
+          the canonical group is :class:`CanonicalQuestionGroup.OTHER`
+          the +24h default lag applies.
+        * ``current_status``: derived from ``closed`` + ``accepting_orders``
+          flags — ``settled`` (closed=True), ``resolved`` (closed=True
+          but lag not elapsed), ``active`` (accepting_orders=True),
+          else ``created``.
+        """
+        condition_id = market.condition_id
+        if not condition_id:
+            return None
+
+        created_at = self._parse_end_date(market.created_at) or self._parse_end_date(market.start_date)
+        if created_at is None:
+            return None
+
+        resolution_time = self._parse_end_date(market.closed_time) or self._parse_end_date(market.end_date_iso)
+        if resolution_time is None:
+            return None
+
+        group = (
+            classify_polymarket_to_canonical_group(
+                title=market.question or "",
+                slug=market.market_slug or "",
+                event_slug=market.event_slug or "",
+                outcome=(market.outcomes or [""])[0] if market.outcomes else "",
+                condition_id=condition_id,
+            )
+            or CanonicalQuestionGroup.OTHER
+        )
+
+        settlement_lag = CANONICAL_GROUP_METADATA[group].settlement_lag
+        settlement_time = resolution_time + settlement_lag
+
+        if market.closed:
+            now = datetime.now(UTC)
+            current_status = "settled" if now >= settlement_time else "resolved"
+        elif market.accepting_orders:
+            current_status = "active"
+        else:
+            current_status = "created"
+
+        return MarketLifecycle(
+            market_id=condition_id,
+            venue=self.venue,
+            canonical_group=group,
+            market_created_at=created_at,
+            resolution_time=resolution_time,
+            settlement_time=settlement_time,
+            current_status=current_status,
+        )
+
+    def get_market_lifecycles(self) -> list[MarketLifecycle]:
+        """Return :class:`MarketLifecycle` rows for the markets captured by
+        the most-recent :meth:`get_instruments` call.
+
+        Used by the orchestrator's prediction writer path to emit the
+        ``MARKET_LIFECYCLE`` data_type parquet alongside per-instrument
+        records (per the
+        ``predictions_master_2026_05_07.plan.md`` Phase 1 critical path).
+
+        Markets that fail :meth:`classify_lifecycle` (missing condition_id
+        or unparseable created_at / resolution_time) are silently dropped
+        — they're already excluded from the InstrumentRecord output for
+        the same reasons. Returns an empty list before any
+        ``get_instruments()`` call.
+        """
+        out: list[MarketLifecycle] = []
+        for market in self._last_markets:
+            lifecycle = self.classify_lifecycle(market)
+            if lifecycle is not None:
+                out.append(lifecycle)
+        return out
