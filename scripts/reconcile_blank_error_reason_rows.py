@@ -54,7 +54,7 @@ for cefi/defi/tradfi). This script supersedes it for cefi/defi/tradfi
 produce the same outcome.
 
 Reference: writegate plan
-``writegate_honest_coverage_endtoend_2026_05_06.plan.md`` Phase 3.D.5
+``writegate_honest_coverage_endtoend_2026_05_06.md`` Phase 3.D.5
 Wave 2.M.
 """
 

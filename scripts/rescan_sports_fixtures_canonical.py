@@ -2,7 +2,7 @@
 """Rescan GCS sports parquets and emit per-(date, data_type, league_id) manifest rows.
 
 SSOT: ``codex/02-data/sports-data-source-coverage-matrix.md`` (Phase 5 fix)
-      ``unified-trading-pm/plans/active/sports_manifest_shard_migration_cleanup_2026_04_21.plan.md``
+      ``unified-trading-pm/plans/active/sports_manifest_shard_migration_cleanup_2026_04_21.md``
 
 **Why a new script?** ``rescan_sports_manifest.py`` (the existing rescan) dedups
 by entity and writes ``league_id=""`` — it can't produce per-league drilldown.

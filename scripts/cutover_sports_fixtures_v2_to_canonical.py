@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Phase 4 cutover: per-day in-place overwrite of legacy fixtures with v2 outputs.
 
-Plan: ``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.plan.md``.
+Plan: ``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.md``.
 
 Per-day GCS-internal copy from ``sports_reference_v2/by_date/day=D/...``
 to ``sports_reference/by_date/day=D/...`` for every day that

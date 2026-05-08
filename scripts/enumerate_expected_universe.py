@@ -31,7 +31,7 @@ Per-asset-group implementation status (2026-05-07):
   See plan Phase 3.D.4 CeFi sub-task.
 * Prediction: STUB — blocked on UAC ``PREDICTION_GROUPS`` registry which
   is empty pending the canonical_question_group SSOT
-  (``predictions_master_2026_05_07.plan.md``).
+  (``predictions_master_2026_05_07.md``).
 
 Example::
 
@@ -313,7 +313,7 @@ def _enumerate_prediction(start: str, end: str) -> Iterator[ExpectedRow]:
 
     **What this DOES NOT cover (deferred to v2 once UAC ``PREDICTION_GROUPS``
     canonical_question_group registry lands per
-    ``predictions_master_2026_05_07.plan.md``):** per-canonical-group market
+    ``predictions_master_2026_05_07.md``):** per-canonical-group market
     lifecycle bounds (``market_created_at`` / ``settlement_time``) which would
     yield ``EXPECTED_INSTRUMENT_NOT_LISTED`` / ``EXPECTED_INSTRUMENT_DELISTED``
     rows for individual canonical question groups. The pre-venue-launch slice

@@ -2,7 +2,7 @@
 rows for any (date, data_type, league_id) cell where we now have a real
 captured row with instrument_count > 0.
 
-Plan: ``unified-trading-pm/plans/active/sports_fixtures_truthset_recovery_2026_05_06.plan.md``.
+Plan: ``unified-trading-pm/plans/active/sports_fixtures_truthset_recovery_2026_05_06.md``.
 
 Why this script exists
 ----------------------

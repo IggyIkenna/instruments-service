@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Phase 4 parity validation: compare legacy ↔ rewritten fixtures parquets.
 
-Plan: ``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.plan.md``.
+Plan: ``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.md``.
 
 Reads each LEGACY day from ``sports_legacy_schema_audit.json``, downloads
 both the original legacy parquet (``sports_reference/by_date/...``) and
