@@ -77,7 +77,7 @@ from pathlib import Path
 import pandas as pd
 from unified_api_contracts.canonical.domain.sports.league_data import LEAGUE_REGISTRY
 from unified_trading_library import get_storage_client
-from unified_trading_library.startup_validation import validate_api_keys_for_venues
+from unified_trading_library import validate_api_keys_for_venues
 
 from instruments_service.reference_data.adapters.sports.adapters.api_football import (
     ApiFootballAdapter,
