@@ -37,10 +37,18 @@ from instruments_service.reference_data.utils.evm_creation_resolver import (
 class TestGetProtocolFloorDate:
     def test_known_protocol_and_chain_uses_uac_ssot(self) -> None:
         # UAC PROTOCOL_LAUNCH_DATES is the canonical SSOT — ETHEREUM AAVEV3
-        # mainnet deploy was 2022-03-14 (NOT the legacy 2023-01-27 fallback
-        # which silent-zeroed AAVEV3 ETHEREUM 2022 dates pre-2026-05-08).
+        # mainnet deploy was 2023-01-27 (not the L2 cohort 2022-03 launch).
+        # Verified 2026-05-08 via AAVE V3 ETH subgraph
+        # ``Cd2gEDVeqnjBn1hSeqFMitw8Q1iiyV9FYUZkLNRcL87g``: earliest
+        # ``reserveParamsHistoryItems`` event is 2023-01-27 08:00:11 UTC.
+        # The pre-2026-05-08 entry of 2022-03-14 caused 11 months of pre-
+        # deployment dates to be backfill-attempted and recorded as
+        # ``empty_confirmed[SOURCE_RETURNED_ZERO]``, mis-framed as Bug 1
+        # silent zero in
+        # ``plans/active/issues/lending_indices_handler_bugs_2026_05_07.md``
+        # — actually a UAC SSOT misdiagnosis, not a code bug.
         dt = get_protocol_floor_date("aave_v3", "ETHEREUM")
-        assert dt == datetime(2022, 3, 14, tzinfo=UTC)
+        assert dt == datetime(2023, 1, 27, tzinfo=UTC)
 
     def test_known_protocol_unknown_chain_returns_2020(self) -> None:
         dt = get_protocol_floor_date("aave_v3", "FANTOM")
@@ -52,7 +60,7 @@ class TestGetProtocolFloorDate:
 
     def test_case_insensitive_chain(self) -> None:
         dt = get_protocol_floor_date("aave_v3", "ethereum")
-        assert dt == datetime(2022, 3, 14, tzinfo=UTC)
+        assert dt == datetime(2023, 1, 27, tzinfo=UTC)
 
     def test_compound_v3_arbitrum_uses_uac_ssot(self) -> None:
         # UAC says ("ARBITRUM", "COMPOUNDV3") = 2023-04-13. The local fallback
