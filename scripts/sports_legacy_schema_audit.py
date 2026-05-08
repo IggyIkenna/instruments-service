@@ -22,7 +22,7 @@ by ``day=YYYY-MM-DD`` with the resolved schema variant. Phase 3 VM-shards
 consume this to know which days need the legacy-to-new mapper vs
 pass-through copy.
 
-Plan: ``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.plan.md``.
+Plan: ``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.md``.
 
 Usage::
 

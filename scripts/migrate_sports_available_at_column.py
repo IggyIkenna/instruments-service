@@ -12,7 +12,7 @@ UAC / UTL / instruments-service / features-sports ships separately, AFTER this
 migration completes (per workspace "manifest migration not fallback" rule).
 
 Reference plan:
-    unified-trading-pm/plans/active/sports_data_available_at_rename_2026_05_07.plan.md
+    unified-trading-pm/plans/active/sports_data_available_at_rename_2026_05_07.md
 
 Per-parquet behaviour (idempotent — rerun on already-migrated files is a no-op):
 
