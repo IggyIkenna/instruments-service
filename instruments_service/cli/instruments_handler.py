@@ -62,6 +62,15 @@ class InstrumentsHandler(UnifiedServiceHandler):
         # calling api_football, and the per-league parquet writes use
         # read-modify-write semantics to preserve existing fixtures' rows.
         self._recovery_fixture_ids: frozenset[int] | None = None
+        # Live-mode trigger name (Phase A.7 of instruments_live_master_2026_05_08).
+        # When set under --mode live, names which entity-type subset to refresh +
+        # which source adapter to invoke. Closed-set per-asset-group taxonomy lives
+        # in UAC (Phase A.6); until that lands the field accepts any string and the
+        # downstream dispatcher (Phase B.1+) validates the name fail-loud. Stored
+        # at handler-construction time so process() can route on it once the Phase
+        # B/C/D/E triggers wire in. None ⇒ batch-mode invocation OR live-mode call
+        # without an explicit trigger (legacy sports forward-poll launchers).
+        self._trigger_name: str | None = None
 
     async def preflight(self) -> None:
         """Start API key reloader. Date/asset-group filtering happens in process()."""
@@ -115,6 +124,14 @@ class InstrumentsHandler(UnifiedServiceHandler):
         recovery_path_arg: str | None = getattr(self.args, "recovery_fixture_ids", None) if self.args else None
         if recovery_path_arg:
             self._recovery_fixture_ids = self._load_recovery_fixture_ids(recovery_path_arg)
+
+        trigger_arg: str | None = getattr(self.args, "trigger", None) if self.args else None
+        if trigger_arg:
+            self._trigger_name = trigger_arg
+            logger.info(
+                "Live-mode trigger from CLI: %s (downstream dispatcher routes by name)",
+                trigger_arg,
+            )
 
         lookback_arg: int | None = getattr(self.args, "lookback_days", None) if self.args else None
         lookahead_arg: int | None = getattr(self.args, "lookahead_days", None) if self.args else None
