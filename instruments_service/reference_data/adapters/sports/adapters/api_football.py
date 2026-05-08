@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from datetime import date as date_
+from itertools import chain
 
 from unified_api_contracts.external.api_football import (
     ApiFootballFixture,
@@ -28,11 +29,7 @@ from unified_api_contracts.external.api_football.normalize import (
 from unified_api_contracts.registry.endpoints import BASE_URLS
 from unified_api_contracts.sports import (
     CanonicalFixture,
-    CanonicalFixtureEvent,
-    CanonicalFixtureStats,
-    CanonicalInjury,
     CanonicalLeague,
-    CanonicalLineupEntry,
     CanonicalOdds,
     CanonicalPlayerPerformance,
     CanonicalStanding,
@@ -409,10 +406,13 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
         )
         return results
 
-    async def get_injuries(self, date: str) -> list[CanonicalInjury]:
+    async def get_injuries(self, date: str) -> list[dict[str, object]]:
         """Fetch injuries for a given date from API Football.
 
         API endpoint: GET /injuries?date={YYYY-MM-DD}
+        Returns one flat dict per injury row — see UAC SPORTS_INJURIES
+        SchemaContract for the column shape (player_id/name/photo/type/
+        reason, team_id/name, fixture_id, league_id, league_season).
         """
         url = f"{_BASE_URL}/injuries"
         params: dict[str, str] = {"date": date}
@@ -424,15 +424,19 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             return []
 
         raw_rows = _extract_response(raw_response)
+        # INJURIES — single dict per row; no chain.from_iterable needed.
         results = [normalize_api_football_injury(row) for row in raw_rows]
         logger.info("Fetched %d injuries for date=%s", len(results), date)
         return results
 
-    async def get_fixture_statistics(self, fixture_id: int) -> list[CanonicalFixtureStats]:
+    async def get_fixture_statistics(self, fixture_id: int) -> list[dict[str, object]]:
         """Fetch match statistics for a completed fixture.
 
         API endpoint: GET /fixtures/statistics?fixture={id}
-        Returns shots, possession, corners, fouls, cards per team.
+        Returns one flat dict per (fixture, team) — typically 2 rows per
+        fixture, one for home and one for away. See UAC SPORTS_FIXTURE_STATS
+        for the full ~22-column schema (shots_on_target, expected_goals,
+        ball_possession_pct, …).
         """
         url = f"{_BASE_URL}/fixtures/statistics"
         params: dict[str, str] = {"fixture": str(fixture_id)}
@@ -444,14 +448,23 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             return []
 
         raw_rows = _extract_response(raw_response)
-        results = [normalize_api_football_fixture_stats(row, fixture_id=str(fixture_id)) for row in raw_rows]
-        logger.info("Fetched %d stat groups for fixture=%d", len(results), fixture_id)
+        # Each raw_rows item is one team-stats block; the normalizer returns
+        # list[dict] of length 1 per team. Flatten across all teams.
+        results = list(
+            chain.from_iterable(
+                normalize_api_football_fixture_stats(row, fixture_id=str(fixture_id)) for row in raw_rows
+            )
+        )
+        logger.info("Fetched %d stat rows for fixture=%d", len(results), fixture_id)
         return results
 
-    async def get_fixture_events(self, fixture_id: int) -> list[CanonicalFixtureEvent]:
+    async def get_fixture_events(self, fixture_id: int) -> list[dict[str, object]]:
         """Fetch match events (goals, cards, substitutions) for a fixture.
 
         API endpoint: GET /fixtures/events?fixture={id}
+        Returns one flat dict per event — see UAC SPORTS_FIXTURE_EVENTS
+        for the column shape (time_elapsed/extra, team/player/assist
+        IDs + names, event_type/detail/comments).
         """
         url = f"{_BASE_URL}/fixtures/events"
         params: dict[str, str] = {"fixture": str(fixture_id)}
@@ -463,15 +476,26 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             return []
 
         raw_rows = _extract_response(raw_response)
-        results = [normalize_api_football_fixture_event(row, fixture_id=str(fixture_id)) for row in raw_rows]
+        # Each raw_rows item is one event; the normalizer returns list[dict]
+        # of length 1. chain.from_iterable preserves caller symmetry with the
+        # other list-returning normalizers (stats, lineup).
+        results = list(
+            chain.from_iterable(
+                normalize_api_football_fixture_event(row, fixture_id=str(fixture_id)) for row in raw_rows
+            )
+        )
         logger.info("Fetched %d events for fixture=%d", len(results), fixture_id)
         return results
 
-    async def get_fixture_lineups(self, fixture_id: int) -> list[CanonicalLineupEntry]:
+    async def get_fixture_lineups(self, fixture_id: int) -> list[dict[str, object]]:
         """Fetch starting lineups for a fixture.
 
         API endpoint: GET /fixtures/lineups?fixture={id}
-        Returns starting XI, formation, coach per team.
+        Returns one flat dict per (fixture, team, player) — typically
+        ~36 rows per fixture (11 starters + ~7 subs per team). See UAC
+        SPORTS_FIXTURE_LINEUPS for the column shape (team_id/name,
+        formation, coach_id/name, player_id/name/number/pos/grid,
+        is_starter).
         """
         url = f"{_BASE_URL}/fixtures/lineups"
         params: dict[str, str] = {"fixture": str(fixture_id)}
@@ -483,10 +507,12 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
             return []
 
         raw_rows = _extract_response(raw_response)
-        results: list[CanonicalLineupEntry] = []
-        for row in raw_rows:
-            results.extend(normalize_api_football_lineup(row, fixture_id=str(fixture_id)))
-        logger.info("Fetched %d lineup entries for fixture=%d", len(results), fixture_id)
+        # Each raw_rows item is one team's lineup block; the normalizer
+        # returns list[dict] with ~18 rows (startXI + substitutes).
+        results = list(
+            chain.from_iterable(normalize_api_football_lineup(row, fixture_id=str(fixture_id)) for row in raw_rows)
+        )
+        logger.info("Fetched %d lineup rows for fixture=%d", len(results), fixture_id)
         return results
 
     async def get_fixture_player_stats(self, fixture_id: int) -> list[CanonicalPlayerPerformance]:
