@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Only run if API key is available — advisory job, never required
-    if: vars.md_ALIGNMENT_ENABLED != 'false'
+    if: vars.PLAN_ALIGNMENT_ENABLED != 'false'
 
     steps:
       - name: Checkout repo
