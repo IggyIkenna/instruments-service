@@ -8,7 +8,7 @@ window per asset_group and assert that yielded rows have the right shape
 + closed-set reasons. They DO NOT touch the network or GCS — pure
 generator-driven inspection.
 
-Plan: writegate_honest_coverage_endtoend_2026_05_06.plan.md § Phase 3.D.4
+Plan: writegate_honest_coverage_endtoend_2026_05_06.md § Phase 3.D.4
 [TEST] P0 todo.
 """
 

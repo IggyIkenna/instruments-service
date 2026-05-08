@@ -1,7 +1,7 @@
 """Tests for ``_flatten_canonical_fixture_for_disk``.
 
 Phase 0.5 of the sports fixtures legacy schema migration plan
-(``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.plan.md``).
+(``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.md``).
 
 Pre-fix, the orchestrator wrote raw ``CanonicalFixture.model_dump()``
 output to ``sports_reference/by_date/day=…/entity=fixtures/fixtures.parquet``,

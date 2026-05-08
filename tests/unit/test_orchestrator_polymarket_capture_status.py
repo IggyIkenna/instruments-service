@@ -1,6 +1,6 @@
 """Honest-coverage Phase B tests for instruments-service Polymarket-class paths.
 
-Plan: ``unified-trading-pm/plans/active/honest_coverage_metrics_2026_04_19.plan.md``
+Plan: ``unified-trading-pm/plans/active/honest_coverage_metrics_2026_04_19.plan``
 
 Covers the orchestrator helpers ``_should_skip_shard`` /
 ``_classify_adapter_failure`` and the per-shard wrap pattern

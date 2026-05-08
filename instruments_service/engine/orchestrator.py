@@ -137,7 +137,7 @@ def _coerce_adapter_output(item: object) -> dict[str, object]:
 # raises TimestampAlignmentError which per-shard try/except should catch and
 # route to manifest.record_failed. Flip to ``strict`` once warn-mode volume
 # baselines clean across sports adapters (see
-# ``plans/active/instruments_service_write_gate_validation_2026_04_22.plan.md``).
+# ``plans/active/instruments_service_write_gate_validation_2026_04_22.md``).
 # ---------------------------------------------------------------------------
 _WRITE_GATE = InstrumentsWriteGate(mode="warn")
 
@@ -157,7 +157,7 @@ _WRITE_GATE = InstrumentsWriteGate(mode="warn")
 #
 # Audit (2026-04-28): 594 LEGACY days remain on disk; 112 of them are 2026
 # dates produced by the legacy writer. Plan:
-# ``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.plan.md``.
+# ``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.md``.
 
 # Provider names → API-Football logo URL → numeric ID. CanonicalLeague /
 # CanonicalTeam / CanonicalVenue carry ``api_football_id`` directly when

@@ -1,6 +1,6 @@
 """Phase 1 — Smart audit: api_football per-(league, season) truth-set.
 
-Plan: ``unified-trading-pm/plans/active/sports_fixtures_truthset_recovery_2026_05_06.plan.md``.
+Plan: ``unified-trading-pm/plans/active/sports_fixtures_truthset_recovery_2026_05_06.md``.
 
 Why this exists
 ---------------

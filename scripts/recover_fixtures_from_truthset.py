@@ -1,6 +1,6 @@
 """Phase 2 — Targeted FIXTURES recovery using the Phase 1 truth-set.
 
-Plan: ``unified-trading-pm/plans/active/sports_fixtures_truthset_recovery_2026_05_06.plan.md``.
+Plan: ``unified-trading-pm/plans/active/sports_fixtures_truthset_recovery_2026_05_06.md``.
 
 Reads the Phase 1 recovery-set parquet (gs://.../_audits/fixtures_recovery_set_{run_ts}.parquet)
 and for every unique ``(canonical_league_id, season)`` pair represented in it:

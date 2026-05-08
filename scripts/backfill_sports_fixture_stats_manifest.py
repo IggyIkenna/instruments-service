@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Backfill the availability manifest for the 398 fixture_stats parquets created by Phase 3.
 
-Plan: ``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.plan.md``.
+Plan: ``unified-trading-pm/plans/active/sports_fixtures_legacy_schema_migration_2026_04_28.plan``.
 
 Phase 3's ``migrate_sports_fixtures_legacy_to_new.py`` wrote
 ``sports_reference/by_date/day=D/entity=fixture_stats/fixture_stats.parquet``

@@ -4,7 +4,7 @@
 SSOT
 ----
 
-* Plan: ``unified-trading-pm/plans/active/sports_manifest_shard_migration_cleanup_2026_04_21.plan.md``
+* Plan: ``unified-trading-pm/plans/active/sports_manifest_shard_migration_cleanup_2026_04_21.md``
   (Phase 3).
 * UTL primitive: ``unified_trading_library.manifest_migrations.LegacyRowPurger``.
 
@@ -65,7 +65,7 @@ INDEX_BLOB = "_index/availability_index.parquet"
 
 # Entity data_types that use per-league sharding in Phase-5 of the
 # sports-data-source-coverage-matrix + Phases 1-2 of
-# sports_manifest_shard_migration_cleanup_2026_04_21.plan.md.
+# sports_manifest_shard_migration_cleanup_2026_04_21.md.
 #
 # DEFAULT covers the entities whose per-league emission shipped at or before
 # this plan (FIXTURES + WEATHER + XG). Additional entities (FIXTURE_STATS,

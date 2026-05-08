@@ -2,7 +2,7 @@
 """reconcile_expected_absence_reasons.py — Layer 4 retrospective backfill.
 
 Phase 3.D of the writegate honest-coverage umbrella plan
-(``writegate_honest_coverage_endtoend_2026_05_06.plan.md``).
+(``writegate_honest_coverage_endtoend_2026_05_06.md``).
 
 Walks an asset-group manifest, finds ``empty_confirmed`` rows with NULL
 ``error_reason`` (legacy bare ``record_empty()`` writes from before Phase
