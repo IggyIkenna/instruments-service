@@ -11,7 +11,7 @@ Auth: API key passed as header (RSA key signing for production).
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import cast
+from typing import Literal, cast
 
 import aiohttp
 from unified_api_contracts import (
@@ -19,6 +19,12 @@ from unified_api_contracts import (
     classify_venue_error,
 )
 from unified_api_contracts.internal import InstrumentRecord, InstrumentType
+from unified_api_contracts.predictions import (
+    CANONICAL_GROUP_METADATA,
+    CanonicalQuestionGroup,
+    MarketLifecycle,
+    classify_kalshi_to_canonical_group,
+)
 from unified_trading_library import log_event
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -83,6 +89,11 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         project_id: str | None = None,
     ) -> None:
         super().__init__(project_id=project_id, api_key=api_key)
+        # Captured during get_instruments() — available via
+        # get_market_lifecycles() so the orchestrator can emit
+        # MARKET_LIFECYCLE rows alongside the InstrumentRecord shard
+        # without re-fetching from the Kalshi API.
+        self._last_markets: list[KalshiMarket] = []
 
     @property
     def venue(self) -> str:
@@ -110,6 +121,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         if instrument_type is not None and instrument_type != "PREDICTION_MARKET":
             return []
         results: list[InstrumentRecord] = []
+        self._last_markets = []
         now = datetime.now(UTC)
         cursor: str | None = None
         async with self._make_session() as session:
@@ -278,6 +290,10 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         ticker = market.ticker
         if not ticker:
             return None
+        # Cache for get_market_lifecycles() — populated even when the
+        # InstrumentRecord doesn't ship (predictions without resolvable
+        # close_time still have lifecycle metadata downstream).
+        self._last_markets.append(market)
         event_ticker = market.event_ticker or ticker
         series_ticker = getattr(market, "series_ticker", None) or event_ticker
         title = getattr(market, "title", None) or getattr(market, "subtitle", None) or ticker
@@ -289,6 +305,12 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         tick_size = Decimal(str(tick_raw)) if tick_raw else Decimal("0.01")
         min_order_raw = getattr(market, "min_order_size", None)
         min_order = Decimal(str(min_order_raw)) if min_order_raw else Decimal("1")
+        # Per CLAUDE.md "Prediction market lifecycle timing": carry
+        # market_created_at + settlement_time on the InstrumentRecord so
+        # MTDS CLOB capture + features-* compute can gate ticks. Full
+        # lifecycle row (with canonical_question_group + current_status)
+        # rides the MARKET_LIFECYCLE data_type alongside.
+        lifecycle = self.classify_lifecycle(market)
         return InstrumentRecord(
             instrument_key=ticker,
             venue=self.venue,
@@ -307,6 +329,8 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             is_active=is_active,
             updated_at=now,
+            available_from_datetime=lifecycle.market_created_at if lifecycle else None,
+            available_to_datetime=lifecycle.settlement_time if lifecycle else None,
         )
 
     def _parse_close_time(self, close_time_raw: str | None) -> datetime | None:
@@ -317,3 +341,113 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
             return datetime.fromisoformat(close_time_raw.replace("Z", "+00:00")).astimezone(UTC)
         except ValueError:
             return None
+
+    @staticmethod
+    def _kalshi_status_to_lifecycle_status(
+        status_raw: object,
+    ) -> Literal["created", "active", "resolved", "settled"]:
+        """Map Kalshi market.status enum to MarketLifecycle.current_status.
+
+        Kalshi statuses:
+          ``initialized``  → ``"created"``
+          ``inactive``     → ``"created"``
+          ``active``       → ``"active"``
+          ``closed``       → ``"resolved"`` (trading stopped, outcome pending)
+          ``determined``   → ``"resolved"``
+          ``disputed``     → ``"resolved"``
+          ``amended``      → ``"resolved"``
+          ``finalized``    → ``"settled"``
+          (anything else)  → ``"created"``
+        """
+        if not isinstance(status_raw, str):
+            return "created"
+        status = status_raw.lower()
+        if status == "active":
+            return "active"
+        if status in ("closed", "determined", "disputed", "amended"):
+            return "resolved"
+        if status == "finalized":
+            return "settled"
+        return "created"
+
+    def classify_lifecycle(self, market: KalshiMarket) -> MarketLifecycle | None:
+        """Build a :class:`MarketLifecycle` for a Kalshi market.
+
+        Returns ``None`` when ``ticker`` is missing or ``close_time`` is
+        unparseable — without a resolution timestamp the cluster gate
+        can't reason about whether the market overlaps a given day.
+
+        Lifecycle field derivation:
+
+        * ``market_created_at``: ``open_time`` (when trading opened);
+          falls back to ``expected_expiration_time - 30d`` when missing
+          (rare; older markets with no ``open_time`` field).
+        * ``resolution_time``: ``close_time`` (when trading stops and
+          UMA-equivalent resolution begins).
+        * ``settlement_time``: ``resolution_time + canonical_group.settlement_lag``
+          per UAC :data:`CANONICAL_GROUP_METADATA`. Kalshi finalisation
+          typically adds 1-24h to the close time.
+        * ``current_status``: derived from ``status`` enum via
+          :meth:`_kalshi_status_to_lifecycle_status`.
+
+        Currently the Kalshi rule classifier path is override-only
+        (:data:`unified_api_contracts.predictions.KALSHI_TICKER_TO_GROUP`);
+        unrecognised tickers route to
+        :class:`CanonicalQuestionGroup.OTHER` so the cluster gate can
+        still apply per-day market_id counts even before the rule
+        classifier lands.
+        """
+        ticker = market.ticker
+        if not ticker:
+            return None
+
+        resolution_time = self._parse_close_time(market.close_time)
+        if resolution_time is None:
+            return None
+
+        market_created_at = self._parse_close_time(market.open_time)
+        if market_created_at is None:
+            # Fallback: assume markets open 30 days before they resolve.
+            # Conservative — over-broadens the lifecycle window so ticks
+            # are never gated out for a missing open_time, but still
+            # gives feature compute a per-market created_at to enforce.
+            from datetime import timedelta as _td  # noqa: qg-inside-import
+
+            market_created_at = resolution_time - _td(days=30)
+
+        group = classify_kalshi_to_canonical_group(ticker=ticker) or CanonicalQuestionGroup.OTHER
+        settlement_lag = CANONICAL_GROUP_METADATA[group].settlement_lag
+        settlement_time = resolution_time + settlement_lag
+
+        current_status = self._kalshi_status_to_lifecycle_status(market.status)
+
+        return MarketLifecycle(
+            market_id=ticker,
+            venue=self.venue,
+            canonical_group=group,
+            market_created_at=market_created_at,
+            resolution_time=resolution_time,
+            settlement_time=settlement_time,
+            current_status=current_status,
+        )
+
+    def get_market_lifecycles(self) -> list[MarketLifecycle]:
+        """Return :class:`MarketLifecycle` rows for the markets captured by
+        the most-recent :meth:`get_instruments` call.
+
+        Used by the orchestrator's prediction writer path to emit the
+        ``MARKET_LIFECYCLE`` data_type parquet alongside per-instrument
+        records (per the
+        ``predictions_master_2026_05_07.plan.md`` Phase 1 critical path).
+
+        Markets that fail :meth:`classify_lifecycle` (missing ticker or
+        unparseable close_time) are silently dropped — they're already
+        excluded from the InstrumentRecord output for the same reasons.
+        Returns an empty list before any ``get_instruments()`` call.
+        """
+        out: list[MarketLifecycle] = []
+        for market in self._last_markets:
+            lifecycle = self.classify_lifecycle(market)
+            if lifecycle is not None:
+                out.append(lifecycle)
+        return out
