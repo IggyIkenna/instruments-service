@@ -46,6 +46,11 @@ from unified_api_contracts import (
     get_prediction_leagues,
 )
 from unified_api_contracts.internal import InstrumentRecord, validate_instrument_records
+from unified_api_contracts.predictions import (
+    CanonicalQuestionGroup,
+    classify_kalshi_to_canonical_group,
+    classify_polymarket_to_canonical_group,
+)
 from unified_api_contracts.registry import get_supported_chains_for_protocol
 from unified_api_contracts.sports import (
     FOOTYSTATS_HISTORICAL_SEASON_IDS,
@@ -2125,35 +2130,59 @@ async def process_instruments(
                         attempted_at=_fx_attempt_ts,
                     )
 
-            elif venue_str == "POLYMARKET" and "base_asset" in venue_df.columns:
-                # PREDICTION: split by market (BTC, ETH, SPX, FOOTBALL, etc.)
-                # Each market gets its own partition and manifest entry.
+            elif venue_str.upper() in ("POLYMARKET", "KALSHI") and "base_asset" in venue_df.columns:
+                # PREDICTION: bundle by canonical_question_group per the UAC
+                # SSOT (``BTC_UP_DOWN_HOURLY`` / ``BTC_UP_DOWN_DAILY`` /
+                # ``SPX_UP_DOWN_DAILY`` / ``ELECTION_PRESIDENT_2028`` /
+                # ``OTHER``, etc.). Recurring canonical groups cycle through
+                # multiple condition_ids over time — HOURLY = ~24/day,
+                # DAILY = 1/day — so the shard atom is per-(canonical_group,
+                # day), with all market_ids active on that day bundled into
+                # one parquet (analogous to options-chain bundling). Per
+                # ``predictions_master_2026_05_07.plan.md`` Phase 1
+                # critical-path + CLAUDE.md "Per-asset-group shard-key
+                # matrix → Prediction". Polymarket + Kalshi share this
+                # path: both prediction venues classify per the UAC
+                # ``classify_*_to_canonical_group`` SSOT and bundle on
+                # the same axis so MTDS reads + features compute apply
+                # identically.
                 _pred_df = venue_df.copy()
-                _pred_df["_market"] = _pred_df["base_asset"].apply(_extract_prediction_shard)
-                # Strip venue prefix: "POLYMARKET:BTC" → "BTC"
-                _pred_df["_market"] = _pred_df["_market"].str.replace("POLYMARKET:", "", regex=False)
-                for _mkt, _mkt_df in _pred_df.groupby("_market"):
-                    _mkt_str = str(_mkt)
-                    _mkt_df_clean = _mkt_df.drop(columns=["_market"])
+                _pred_df["_canonical_group"] = _pred_df.apply(
+                    _extract_prediction_canonical_group,
+                    axis=1,
+                )
+                _manifest_venue = venue_str.upper()
+                for _group_raw, _group_df in _pred_df.groupby("_canonical_group"):
+                    _group_str = str(_group_raw)
+                    _group_df_clean = _group_df.drop(columns=["_canonical_group"])
                     _gated_sink_write(
                         sink,
-                        data=_mkt_df_clean,
-                        partition={"day": date, "venue": venue_str, "market": _mkt_str},
+                        data=_group_df_clean,
+                        partition={
+                            "day": date,
+                            "venue": venue_str,
+                            "canonical_question_group": _group_str,
+                        },
                         filename="instruments.parquet",
                         venue=venue_str,
                         entity="instruments",
                     )
+                    # Manifest row: data_type=prediction_canonical_question_group
+                    # (the bundled data_type per UAC BUNDLED_DATA_TYPES SSOT),
+                    # underlying=<canonical_group> (the per-bundle cluster
+                    # identity, mirroring options_chain root-bucketing).
                     manifest.add(
                         processing_date=date_type.fromisoformat(date),
-                        row_count=len(_mkt_df_clean),
-                        venue="POLYMARKET",
-                        data_type=_mkt_str,
+                        row_count=len(_group_df_clean),
+                        venue=_manifest_venue,
+                        data_type="prediction_canonical_question_group",
+                        underlying=_group_str,
                     )
-                    counts[f"POLYMARKET/{_mkt_str}"] = len(_mkt_df_clean)
+                    counts[f"{_manifest_venue}/{_group_str}"] = len(_group_df_clean)
                     if sampler.enable_sampling:
                         sampler.generate_csv_sample(
-                            _mkt_df_clean,
-                            filename_prefix=f"instruments_POLYMARKET_{_mkt_str}_{date}",
+                            _group_df_clean,
+                            filename_prefix=f"instruments_{_manifest_venue}_{_group_str}_{date}",
                         )
             else:
                 _write_venue(venue_str, venue_df, date, bucket, sink, counts, sampler, manifest)
@@ -2664,33 +2693,84 @@ async def process_instruments(
     return counts
 
 
-def _extract_prediction_shard(base_asset: str) -> str:
-    """Extract the underlying shard name from a PREDICTION instrument's base_asset.
+def _extract_prediction_canonical_group(row: pd.Series) -> str:
+    """Map a PREDICTION instrument row onto a canonical-question-group name.
 
-    No allowlist — every UP_DOWN market's underlying IS the shard.  New
-    underlyings (CRUDE_OIL, GOLD, etc.) appear automatically without code
-    changes.
+    Per the
+    ``predictions_master_2026_05_07.plan.md`` Phase 1 critical-path
+    todo: replace the legacy per-base_asset shard with the UAC
+    canonical-question-group SSOT (``BTC_UP_DOWN_HOURLY``,
+    ``BTC_UP_DOWN_DAILY``, ``SPX_UP_DOWN_DAILY``,
+    ``ELECTION_PRESIDENT_2028``, etc.). Recurring market_ids cycle
+    through canonical groups over time — HOURLY = ~24/day, DAILY = 1/day,
+    macro-event = 1 over months. Bundling by canonical group is the
+    options-chain-equivalent shape per CLAUDE.md "Per-asset-group
+    shard-key matrix → Prediction".
 
-    Patterns:
-      PREDICTION:POLYMARKET:UP_DOWN:BTC:1D:2026-04-05 → POLYMARKET:BTC
-      PREDICTION:POLYMARKET:UP_DOWN:CRUDE_OIL:1D:...  → POLYMARKET:CRUDE_OIL
-      FOOTBALL:POLYMARKET:MATCH_ODDS:EPL:...          → POLYMARKET:FOOTBALL
-      anything without UP_DOWN pattern                 → POLYMARKET:OTHER
+    Polymarket: classifies via ``classify_polymarket_to_canonical_group``
+    (override-first per ``POLYMARKET_CONDITION_ID_TO_GROUP``, fallback to
+    rule-based slug-prefix path). Title + event_slug context isn't
+    plumbed through the writer DataFrame today — the slug-prefix rule
+    handles ~95% of real Polymarket slugs (``bitcoin-up-or-down-hour-*``,
+    ``oscars-best-picture-2026``, etc.) on ``raw_symbol`` alone, and the
+    ``OTHER`` catch-all bucket per UAC :class:`CanonicalQuestionGroup`
+    captures the remainder so the data-status drilldown stays honest
+    (per the predictions_master plan's C.12 "synthetic OTHER bucket"
+    todo).
+
+    Kalshi: classifies via ``classify_kalshi_to_canonical_group(ticker=...)``
+    using the override-only path
+    (:data:`unified_api_contracts.predictions.KALSHI_TICKER_TO_GROUP`).
+    Unrecognised tickers route to ``OTHER``.
+
+    Other venues route to ``OTHER`` defensively — should never trigger
+    in practice because the writer only invokes this on rows with
+    ``venue ∈ {POLYMARKET, kalshi}``.
+
+    Returns the canonical-question-group string value (the
+    ``CanonicalQuestionGroup`` enum's ``.value`` — used as the
+    ``underlying`` slot on the manifest row + as the partition key on
+    the GCS path).
     """
-    parts = base_asset.split(":")
-    if len(parts) >= 2 and parts[0] == "FOOTBALL":
-        return "POLYMARKET:FOOTBALL"
-    if len(parts) >= 4 and parts[2] == "UP_DOWN":
-        return f"POLYMARKET:{parts[3]}"
-    return "POLYMARKET:OTHER"
+    venue_raw = str(row.get("venue", "")).strip()
+    venue_upper = venue_raw.upper()
+    if venue_upper == "POLYMARKET":
+        condition_id = str(row.get("instrument_key", "") or "")
+        slug = str(row.get("raw_symbol", "") or "")
+        group = classify_polymarket_to_canonical_group(
+            title="",
+            slug=slug,
+            event_slug="",
+            outcome="",
+            condition_id=condition_id,
+        )
+        return (group or CanonicalQuestionGroup.OTHER).value
+    # Kalshi adapter ships venue as lowercase ``"kalshi"`` per
+    # ``KalshiReferenceDataAdapter.venue``.
+    if venue_upper == "KALSHI":
+        ticker = str(row.get("instrument_key", "") or "")
+        group = classify_kalshi_to_canonical_group(ticker=ticker)
+        return (group or CanonicalQuestionGroup.OTHER).value
+    return CanonicalQuestionGroup.OTHER.value
 
 
 def _compute_prediction_shards(df: pd.DataFrame) -> dict[str, int]:
-    """Group PREDICTION instruments by underlying shard, return {shard_venue: count}."""
+    """Group PREDICTION instruments by canonical-question-group, return
+    ``{venue/group: count}``.
+
+    Mirrors the per-row classifier output of
+    :func:`_extract_prediction_canonical_group` — shard counts are keyed
+    on the same string the manifest emits as ``underlying`` so the
+    data-status drilldown sums up cleanly across the writer atomicity
+    boundary + the manifest row key (per CLAUDE.md "Shard-granularity
+    SSOT" requirement that the same atom appears at every layer).
+    """
     shard_counts: dict[str, int] = {}
-    for ba in df["base_asset"]:
-        shard = _extract_prediction_shard(str(ba))
-        shard_counts[shard] = shard_counts.get(shard, 0) + 1
+    for _, row in df.iterrows():
+        group = _extract_prediction_canonical_group(row)
+        venue_raw = str(row.get("venue", "")).strip().upper()
+        key = f"{venue_raw}/{group}"
+        shard_counts[key] = shard_counts.get(key, 0) + 1
     return shard_counts
 
 
