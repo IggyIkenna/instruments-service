@@ -63,16 +63,24 @@ class TestGetProtocolFloorDate:
         assert dt == datetime(2023, 1, 27, tzinfo=UTC)
 
     def test_compound_v3_arbitrum_uses_uac_ssot(self) -> None:
-        # UAC says ("ARBITRUM", "COMPOUNDV3") = 2023-04-13. The local fallback
-        # had 2023-06-28; UAC takes precedence.
+        # UAC ``PROTOCOL_LAUNCH_DATES`` says ("ARBITRUM", "COMPOUNDV3") =
+        # 2023-05-04 (Tab 14 subgraph audit 2026-05-08: earliest
+        # ``dailyMarketAccountings`` event 2023-05-04 22:00:26 UTC; pre-fix
+        # 2023-04-13 was 21 days early). The local
+        # ``LENDING_PROTOCOL_DEPLOY_DATES`` fallback had 2023-06-28; UAC SSOT
+        # takes precedence.
         dt = get_protocol_floor_date("compound_v3", "ARBITRUM")
-        assert dt == datetime(2023, 4, 13, tzinfo=UTC)
+        assert dt == datetime(2023, 5, 4, tzinfo=UTC)
 
-    def test_protocol_unknown_to_uac_falls_back_to_local(self) -> None:
-        # Spark has no UAC PROTOCOL_LAUNCH_DATES entry — falls back to local
-        # LENDING_PROTOCOL_DEPLOY_DATES (2023-05-09 per Maker fork go-live).
+    def test_protocol_with_uac_entry_overrides_local_fallback(self) -> None:
+        # Spark gained a UAC ``PROTOCOL_LAUNCH_DATES`` entry 2026-05-08 (Tab 14
+        # audit: ("ETHEREUM", "SPARK") = 2023-03-07; earliest Messari
+        # ``marketDailySnapshots`` event 2023-03-07 04:31:11 UTC). The local
+        # ``LENDING_PROTOCOL_DEPLOY_DATES`` fallback was 2023-05-09 which
+        # over-clipped 63 days of legitimate Spark history; UAC SSOT now
+        # tightens the floor to subgraph reality.
         dt = get_protocol_floor_date("spark", "ETHEREUM")
-        assert dt == datetime(2023, 5, 9, tzinfo=UTC)
+        assert dt == datetime(2023, 3, 7, tzinfo=UTC)
 
     def test_all_aave_v3_chains_have_dates(self) -> None:
         for chain in LENDING_PROTOCOL_DEPLOY_DATES.get("aave_v3", {}):

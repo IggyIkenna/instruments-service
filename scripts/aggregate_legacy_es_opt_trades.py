@@ -50,8 +50,8 @@ from pathlib import Path
 import pandas as pd
 import pyarrow.parquet as pq
 from google.cloud import storage
-from unified_trading_library.events import log_event, setup_events
-from unified_trading_library.manifest_writer import ManifestWriter
+from unified_trading_library import log_event, setup_events
+from unified_trading_library import ManifestWriter
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)

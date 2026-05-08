@@ -69,7 +69,7 @@ from unified_api_contracts.external.api_football.normalize import (
     normalize_api_football_fixture,
 )
 from unified_trading_library import ManifestWriter, get_storage_client
-from unified_trading_library.startup_validation import validate_api_keys_for_venues
+from unified_trading_library import validate_api_keys_for_venues
 
 from instruments_service.engine.orchestrator import (
     _flatten_canonical_fixture_for_disk,
