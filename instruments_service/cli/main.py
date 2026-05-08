@@ -15,6 +15,15 @@ Standard args provided by ServiceCLI (no service code needed):
 Custom args (registered via extra_args_fn):
   --sports-entity  Restrict to a single sports manifest entity (e.g. API_FOOTBALL_INJURIES).
                    Used for entity-scoped parallel VMs where one VM handles one entity type.
+  --trigger        Live-mode trigger name selector (e.g. ``cefi.instruments.daily_refresh``,
+                   ``defi.token_lists.refresh``, ``sports.fixtures.daily_repoll``). Closed
+                   per-asset-group taxonomy lives in UAC (Phase A.6 of
+                   ``instruments_live_master_2026_05_08``); until the UAC enum lands the flag
+                   accepts any string and the downstream trigger dispatcher (Phase B.1+)
+                   validates the name. Pairs with ``--mode live`` — selects which entity-type
+                   subset to refresh + which source adapter to invoke. Same single CLI codepath
+                   as batch; no new entry-points; live-mode differs only in (a) source adapter
+                   pick and (b) lookback window (now-anchored vs historical date).
 """
 
 from __future__ import annotations
@@ -92,6 +101,21 @@ def _add_instruments_extra_args(parser: argparse.ArgumentParser) -> None:  # pra
             "targeted recovery work (e.g. fix only the 39k fixtures from Phase 1's truth-set audit). "
             "Bypasses the date-level pre-flight skip so already-captured (date, league) cells are still "
             "drilled into for our specific fixture_ids."
+        ),
+    )
+    parser.add_argument(
+        "--trigger",
+        type=str,
+        default=None,
+        help=(
+            "Live-mode trigger name (closed-set per-asset-group, UAC-defined). Pairs with "
+            "``--mode live``. Examples: ``cefi.instruments.daily_refresh``, "
+            "``defi.token_lists.refresh``, ``sports.fixtures.daily_repoll``, "
+            "``sports.lineups.pre_kickoff``, ``prediction.markets.discover``. The trigger name "
+            "selects which entity-type subset is refreshed + which source adapter is invoked; "
+            "downstream dispatch (Phase B.1+ of instruments_live_master_2026_05_08) validates "
+            "the name against the UAC trigger taxonomy. Until the UAC enum lands the flag is a "
+            "free-form string — the dispatcher fail-loud-rejects unknown names there, not here."
         ),
     )
 
