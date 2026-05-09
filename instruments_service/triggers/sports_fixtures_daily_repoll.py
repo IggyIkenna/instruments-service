@@ -65,7 +65,8 @@ References:
 from __future__ import annotations
 
 import logging
-from datetime import UTC, date as _date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from datetime import date as _date
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -209,8 +210,7 @@ async def run_sports_fixtures_daily_repoll(
     af_league_ids = _league_ids_for_repoll(league_filter)
     if not af_league_ids:
         logger.warning(
-            "sports.fixtures.daily_repoll: empty league set after resolution "
-            "(filter=%r) — nothing to do",
+            "sports.fixtures.daily_repoll: empty league set after resolution (filter=%r) — nothing to do",
             league_filter,
         )
         return {}
@@ -231,8 +231,7 @@ async def run_sports_fixtures_daily_repoll(
 
     counts: dict[str, int] = {}
     logger.info(
-        "sports.fixtures.daily_repoll START — today=%s window=[%s..%s] leagues=%d "
-        "bucket=%s correlation_id=%s",
+        "sports.fixtures.daily_repoll START — today=%s window=[%s..%s] leagues=%d bucket=%s correlation_id=%s",
         anchor.isoformat(),
         window[0].isoformat(),
         window[-1].isoformat(),
@@ -244,12 +243,12 @@ async def run_sports_fixtures_daily_repoll(
     for day in window:
         day_str = day.isoformat()
         # api-football allows passing multiple league_ids per call but the
-        # adapter loops internally if >1. Our window is 9 days × ~20-30
+        # adapter loops internally if >1. Our window is 9 days x ~20-30
         # leagues = ~200-300 calls; well within the 900 req/min mega-tier
         # quota the adapter throttles to. No fan-out needed here.
         try:
             fixtures = await adapter.get_fixtures(day_str, league_ids=af_league_ids)
-        except Exception as exc:  # noqa: BLE001 — shard-level isolation per CLAUDE.md
+        except Exception as exc:
             classify_and_emit_error(
                 exc,
                 service_name="instruments-service",
@@ -276,8 +275,7 @@ async def run_sports_fixtures_daily_repoll(
                 attempted_at=datetime.now(UTC),
             )
             logger.info(
-                "sports.fixtures.daily_repoll: empty fixture set for day=%s — "
-                "recorded SOURCE_RETURNED_ZERO",
+                "sports.fixtures.daily_repoll: empty fixture set for day=%s — recorded SOURCE_RETURNED_ZERO",
                 day_str,
             )
             continue
@@ -370,7 +368,7 @@ async def run_sports_fixtures_daily_repoll(
                     league_id=canonical_lid,
                 )
                 counts[f"{day_str}/{canonical_lid}"] = row_count
-            except Exception as exc:  # noqa: BLE001 — shard isolation
+            except Exception as exc:
                 classify_and_emit_error(
                     exc,
                     service_name="instruments-service",
@@ -380,8 +378,7 @@ async def run_sports_fixtures_daily_repoll(
 
     manifest.flush()
     logger.info(
-        "sports.fixtures.daily_repoll DONE — wrote %d (day, league) shards "
-        "spanning %d days; total rows=%d",
+        "sports.fixtures.daily_repoll DONE — wrote %d (day, league) shards spanning %d days; total rows=%d",
         len(counts),
         len(window),
         sum(counts.values()),

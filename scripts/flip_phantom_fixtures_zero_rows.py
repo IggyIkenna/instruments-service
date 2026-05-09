@@ -7,7 +7,7 @@ zero-row shards must be ``empty_confirmed``, never ``captured``).
 
 Root cause (already fixed, instruments-service ``f36651c``): the FIXTURES
 adapter was emitting ``manifest.add(row_count=0, ...)`` for every
-Prediction-tier league × date, creating phantom ``captured`` rows that
+Prediction-tier league x date, creating phantom ``captured`` rows that
 the orchestrator's ``_should_skip_shard`` then trusts — preventing
 re-attempt under the writer fix.
 

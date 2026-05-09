@@ -61,7 +61,7 @@ def _shard_key_columns(df: pd.DataFrame) -> list[str]:
 def _pick_canonical_vectorized(df: pd.DataFrame, key_cols: list[str]) -> pd.DataFrame:
     """Vectorized canonical-row picker — sorts once, drops dupes by first keep.
 
-    Equivalent to groupby(key).apply(pick_best) but ~50× faster on the full
+    Equivalent to groupby(key).apply(pick_best) but ~50x faster on the full
     2.3M-row CeFi manifest. Drops the temporary _status_rank column on the way
     out so the output schema matches the input exactly.
     """
@@ -157,10 +157,7 @@ def main() -> int:
     logger.info("Dedup result: %d rows (was %d in scope)", len(deduped), len(scope))
 
     # Recombine with the unscoped rest.
-    if len(rest):
-        out = pd.concat([deduped, rest], ignore_index=True)
-    else:
-        out = deduped.reset_index(drop=True)
+    out = pd.concat([deduped, rest], ignore_index=True) if len(rest) else deduped.reset_index(drop=True)
     n_out = len(out)
     logger.info("Total manifest rows after dedup: %d (was %d, removed %d)", n_out, n_in, n_in - n_out)
 

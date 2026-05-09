@@ -49,7 +49,7 @@ _oom_flag = False
 
 def _rss_sampler(pid: int, log_path: Path) -> None:
     """Append RSS / VMS to log_path every _rss_interval seconds."""
-    global _peak_rss  # noqa: PLW0603
+    global _peak_rss
     proc = psutil.Process(pid)
     with log_path.open("a") as f:
         f.write("ts_iso,rss_mb,vms_mb,num_threads\n")
@@ -70,7 +70,7 @@ def _rss_sampler(pid: int, log_path: Path) -> None:
 
 def _snapshot_scheduler() -> None:
     """Take a tracemalloc snapshot every _snapshot_interval seconds."""
-    global _snapshot_counter  # noqa: PLW0603
+    global _snapshot_counter
     assert _out_dir is not None
     while not _stop_event.wait(_snapshot_interval):
         snap = tracemalloc.take_snapshot()
@@ -83,7 +83,7 @@ def _snapshot_scheduler() -> None:
 
 def _take_final_snapshot() -> Path:
     """Force one last snapshot regardless of timer state."""
-    global _snapshot_counter  # noqa: PLW0603
+    global _snapshot_counter
     assert _out_dir is not None
     _snapshot_counter += 1
     snap = tracemalloc.take_snapshot()
@@ -102,9 +102,9 @@ def _diff_first_vs_last() -> str:
         return "ONLY_ONE_SNAPSHOT — cannot diff. RSS log shows growth shape; snapshot is point-in-time."
 
     with snaps[0].open("rb") as f:
-        first = pickle.load(f)  # noqa: S301
+        first = pickle.load(f)
     with snaps[-1].open("rb") as f:
-        last = pickle.load(f)  # noqa: S301
+        last = pickle.load(f)
 
     diffs = last.compare_to(first, "filename")
     lines = ["=== top 30 file-level growth (last - first) ==="]
@@ -131,7 +131,7 @@ def _diff_first_vs_last() -> str:
 
 def _signal_oom(_signum: int, _frame: object) -> None:
     """Handler for SIGTERM (often the OOM killer's first action)."""
-    global _oom_flag  # noqa: PLW0603
+    global _oom_flag
     _oom_flag = True
     logger.warning("SIGTERM received — likely OOM. Forcing final snapshot.")
     _stop_event.set()
@@ -140,7 +140,7 @@ def _signal_oom(_signum: int, _frame: object) -> None:
 
 
 def main() -> int:
-    global _out_dir, _snapshot_interval, _rss_interval  # noqa: PLW0603
+    global _out_dir, _snapshot_interval, _rss_interval
 
     parser = argparse.ArgumentParser(description="Profile DERIBIT instruments-service chunk")
     parser.add_argument("--start-date", required=True, help="YYYY-MM-DD chunk start")
@@ -221,7 +221,7 @@ def main() -> int:
     except SystemExit as e:
         rc = int(e.code) if isinstance(e.code, int) else 1
         logger.info("service exited with code %d", rc)
-    except Exception:  # noqa: BLE001 — top-level safety net
+    except Exception:
         logger.exception("service raised — capturing final snapshot")
         rc = 99
     finally:

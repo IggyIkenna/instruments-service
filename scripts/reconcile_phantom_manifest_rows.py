@@ -114,10 +114,8 @@ def _build_existing_set(
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(_list_day, d): d for d in days}
-        n = 0
-        for fut in as_completed(futures):
+        for n, fut in enumerate(as_completed(futures), start=1):
             out.update(fut.result())
-            n += 1
             if n % 200 == 0:
                 logger.info(
                     "list pass: %d/%d days in %.1fs (%d blobs cached)",
