@@ -120,19 +120,19 @@ def main() -> None:
                 covered = cap + emp
                 pct = (covered / expected_days * 100) if expected_days else 0
                 rows.append(
-                    dict(
-                        venue=venue,
-                        coin=coin,
-                        sym=sym,
-                        data_type=dt,
-                        start=str(start),
-                        expected=expected_days,
-                        captured=cap,
-                        empty=emp,
-                        failed=fail,
-                        missing=missing,
-                        covered_pct=round(pct, 1),
-                    )
+                    {
+                        "venue": venue,
+                        "coin": coin,
+                        "sym": sym,
+                        "data_type": dt,
+                        "start": str(start),
+                        "expected": expected_days,
+                        "captured": cap,
+                        "empty": emp,
+                        "failed": fail,
+                        "missing": missing,
+                        "covered_pct": round(pct, 1),
+                    }
                 )
 
     rep = pd.DataFrame(rows)

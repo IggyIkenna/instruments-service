@@ -34,7 +34,7 @@ def _make_fixture(
     af_league_id: int,
     kickoff: datetime,
     season: str = "2025-26",
-) -> Any:  # noqa: ANN401 — UAC type is per-test
+) -> Any:
     """Build a CanonicalFixture for the test mock.
 
     Keep the shape minimal — only fields ``_flatten_canonical_fixture_for_disk``
@@ -94,7 +94,7 @@ def mock_adapter() -> MagicMock:
 
 
 @pytest.fixture
-def patch_factory(mock_adapter: MagicMock) -> Any:  # noqa: ANN401
+def patch_factory(mock_adapter: MagicMock) -> Any:
     """Patch the trigger's adapter factory to return our mock."""
     with patch(
         "instruments_service.triggers.sports_fixtures_daily_repoll.create_sports_reference_adapter",
@@ -112,7 +112,7 @@ def patch_factory(mock_adapter: MagicMock) -> Any:  # noqa: ANN401
 @pytest.mark.unit
 async def test_run_sports_fixtures_daily_repoll_iterates_window(
     mock_adapter: MagicMock,
-    patch_factory: Any,  # noqa: ANN401
+    patch_factory: Any,
 ) -> None:
     """Trigger iterates today + 8 days (9 total) and calls get_fixtures per day."""
     from instruments_service.triggers.sports_fixtures_daily_repoll import (
@@ -120,15 +120,9 @@ async def test_run_sports_fixtures_daily_repoll_iterates_window(
     )
 
     with (
-        patch(
-            "instruments_service.triggers.sports_fixtures_daily_repoll.get_data_sink"
-        ) as _sink,
-        patch(
-            "instruments_service.triggers.sports_fixtures_daily_repoll.ManifestWriter"
-        ) as _mw,
-        patch(
-            "instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"
-        ),
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.get_data_sink") as _sink,
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.ManifestWriter") as _mw,
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"),
     ):
         _sink.return_value = MagicMock()
         _mw.return_value = MagicMock()
@@ -138,7 +132,7 @@ async def test_run_sports_fixtures_daily_repoll_iterates_window(
             bucket="test-sports-bucket",
             league_filter=["EPL"],
         )
-    # 9 days × 1 league = 9 calls
+    # 9 days x 1 league = 9 calls
     assert mock_adapter.get_fixtures.call_count == 9
     # 9 (day, league) shards written, 1 fixture each
     assert len(result) == 9
@@ -153,12 +147,12 @@ async def test_run_sports_fixtures_daily_repoll_iterates_window(
 @pytest.mark.unit
 async def test_run_sports_fixtures_daily_repoll_stamps_available_at(
     mock_adapter: MagicMock,
-    patch_factory: Any,  # noqa: ANN401
+    patch_factory: Any,
 ) -> None:
     """Each row carries `available_at = announced_at = kickoff_utc - 7d`."""
-    captured_dfs: list[Any] = []  # noqa: ANN401
+    captured_dfs: list[Any] = []
 
-    def _capture_write(sink, df, day, *, source_label) -> None:  # noqa: ANN001
+    def _capture_write(sink, df, day, *, source_label) -> None:
         captured_dfs.append(df.copy())
 
     from instruments_service.triggers.sports_fixtures_daily_repoll import (
@@ -166,12 +160,8 @@ async def test_run_sports_fixtures_daily_repoll_stamps_available_at(
     )
 
     with (
-        patch(
-            "instruments_service.triggers.sports_fixtures_daily_repoll.get_data_sink"
-        ) as _sink,
-        patch(
-            "instruments_service.triggers.sports_fixtures_daily_repoll.ManifestWriter"
-        ) as _mw,
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.get_data_sink") as _sink,
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.ManifestWriter") as _mw,
         patch(
             "instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league",
             side_effect=_capture_write,
@@ -203,7 +193,7 @@ async def test_run_sports_fixtures_daily_repoll_stamps_available_at(
 @pytest.mark.unit
 async def test_run_sports_fixtures_daily_repoll_record_captured_shape(
     mock_adapter: MagicMock,
-    patch_factory: Any,  # noqa: ANN401
+    patch_factory: Any,
 ) -> None:
     """ManifestWriter.record_captured called with canonical sports row_key."""
     from instruments_service.triggers.sports_fixtures_daily_repoll import (
@@ -220,9 +210,7 @@ async def test_run_sports_fixtures_daily_repoll_record_captured_shape(
             "instruments_service.triggers.sports_fixtures_daily_repoll.ManifestWriter",
             return_value=manifest_mock,
         ),
-        patch(
-            "instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"
-        ),
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"),
     ):
         await run_sports_fixtures_daily_repoll(
             today=date(2026, 5, 9),
@@ -250,7 +238,7 @@ async def test_run_sports_fixtures_daily_repoll_record_captured_shape(
 @pytest.mark.unit
 async def test_run_sports_fixtures_daily_repoll_idempotent(
     mock_adapter: MagicMock,
-    patch_factory: Any,  # noqa: ANN401
+    patch_factory: Any,
 ) -> None:
     """Re-running the same trigger same day → same shard keys (upsert semantics).
 
@@ -273,9 +261,7 @@ async def test_run_sports_fixtures_daily_repoll_idempotent(
             "instruments_service.triggers.sports_fixtures_daily_repoll.ManifestWriter",
             return_value=MagicMock(),
         ),
-        patch(
-            "instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"
-        ),
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"),
     ):
         first = await run_sports_fixtures_daily_repoll(
             today=date(2026, 5, 9),
@@ -297,7 +283,7 @@ async def test_run_sports_fixtures_daily_repoll_idempotent(
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_run_sports_fixtures_daily_repoll_empty_records_typed_reason(
-    patch_factory: Any,  # noqa: ANN401
+    patch_factory: Any,
 ) -> None:
     """Adapter returns 0 fixtures for the day → manifest record_empty with
     typed ``SOURCE_RETURNED_ZERO`` reason; no parquet write.
@@ -348,7 +334,7 @@ async def test_run_sports_fixtures_daily_repoll_empty_records_typed_reason(
 @pytest.mark.asyncio
 @pytest.mark.unit
 async def test_run_sports_fixtures_daily_repoll_per_day_isolation_on_fetch_error(
-    patch_factory: Any,  # noqa: ANN401
+    patch_factory: Any,
 ) -> None:
     """Adapter raises on day 1 → record_failed for day 1; days 2..9 still execute."""
     erratic_adapter = MagicMock()
@@ -362,9 +348,7 @@ async def test_run_sports_fixtures_daily_repoll_per_day_isolation_on_fetch_error
             kickoff=kickoff,
         )
     ]
-    erratic_adapter.get_fixtures = AsyncMock(
-        side_effect=[RuntimeError("boom")] + [good_fixture] * 8
-    )
+    erratic_adapter.get_fixtures = AsyncMock(side_effect=[RuntimeError("boom")] + [good_fixture] * 8)
     manifest_mock = MagicMock()
 
     from instruments_service.triggers.sports_fixtures_daily_repoll import (
@@ -384,9 +368,7 @@ async def test_run_sports_fixtures_daily_repoll_per_day_isolation_on_fetch_error
             "instruments_service.triggers.sports_fixtures_daily_repoll.ManifestWriter",
             return_value=manifest_mock,
         ),
-        patch(
-            "instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"
-        ),
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"),
     ):
         result = await run_sports_fixtures_daily_repoll(
             today=date(2026, 5, 9),
