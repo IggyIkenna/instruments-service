@@ -91,10 +91,7 @@ def _is_phantom(row: pd.Series) -> bool:
         return True
 
     # Signature 2: original phantom (older per-VM shards)
-    if capture_status == "captured" and instrument_count == 0:
-        return True
-
-    return False
+    return bool(capture_status == "captured" and instrument_count == 0)
 
 
 def _filter_shard(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
