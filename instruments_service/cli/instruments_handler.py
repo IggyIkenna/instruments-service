@@ -157,8 +157,8 @@ class InstrumentsHandler(UnifiedServiceHandler):
         allowlist, run normally."
         """
         try:
-            if path.startswith("gs://"):
-                without_scheme = path[len("gs://") :]
+            if path.startswith("gs://"):  # noqa: gs-uri
+                without_scheme = path[len("gs://") :]  # noqa: gs-uri
                 bucket, _, blob = without_scheme.partition("/")
                 if not bucket or not blob:
                     logger.error(

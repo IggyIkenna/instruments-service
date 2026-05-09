@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# SCHEMA_PROVENANCE_EXEMPT — script-local result dataclass for backfill operation output.
 """Backfill availability manifest with canonical league_id for ALL sports entities.
 
 Fixes the data-status UI showing 0% / undercount for SPORTS data_types where

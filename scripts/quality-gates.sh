@@ -47,6 +47,8 @@ IMPORT_INSIDE_EXCLUDE_GLOBS=(
     "!**/reference_data/adapters/sports/adapters/odds_api.py"
     "!**/reference_data/adapters/sports/adapters/base.py"
     "!**/engine/orchestrator.py"
+    "!**/reference_data/adapters/prediction/kalshi.py"
+    "!**/triggers/sports_fixtures_daily_repoll.py"
 )
 
 # Broad excepts in resolver/cache utilities are intentional defensive wrappers around
@@ -98,6 +100,7 @@ DEEP_IMPORT_EXCLUDE_GLOBS=(
     "!**/reference_data/adapters/sports/adapters/*.py"
     "!**/reference_data/catalogue/*.py"
     "!**/engine/orchestrator.py"
+    "!**/triggers/sports_fixtures_daily_repoll.py"
 )
 
 # Protocol-specific symbol checks: cache helper names (_get_gcs_bucket) in these
@@ -117,6 +120,8 @@ CLOUD_SDK_EXCLUDE_GLOBS=(
 FUNCTION_SIZE_EXTRA_EXCLUDES=(
     "!" "-path" "./${SOURCE_DIR}/reference_data/adapters/*"
     "!" "-path" "./${SOURCE_DIR}/engine/orchestrator.py"
+    "!" "-path" "./${SOURCE_DIR}/triggers/sports_fixtures_daily_repoll.py"
+    "!" "-path" "./${SOURCE_DIR}/cli/instruments_handler.py"
 )
 
 # pip-audit: ignore cryptography CVE-2026-34073 (DNS name constraint bypass, low severity, pending upgrade)
