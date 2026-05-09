@@ -1,3 +1,4 @@
+# SCHEMA_PROVENANCE_EXEMPT — script-local result dataclasses for smoke harness output.
 """instruments-service smoke matrix (Phase 2 — institutional smoke matrix plan).
 
 Runs a cell-level smoke across every (category x venue x data_type) combination
