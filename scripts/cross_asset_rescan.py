@@ -52,6 +52,7 @@ from pathlib import Path
 
 from google.cloud import storage
 
+from unified_trading_library.event_sink import GcsEventSink
 from unified_trading_library.events import log_event, setup_events
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -273,7 +274,16 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    setup_events(service_name=EVENTS_SERVICE)
+    # setup_events() requires explicit mode + GcsEventSink in batch mode (UTL
+    # contract; raises RuntimeError otherwise). Fix shipped 2026-05-11 after
+    # `cross-asset-rescan-20260511-171623` failed with
+    # `TypeError: setup_events() missing 1 required positional argument: 'mode'`.
+    sink = GcsEventSink(
+        project_id=PROJECT_ID,
+        bucket=f"{PROJECT_ID}-events",
+        service_name=EVENTS_SERVICE,
+    )
+    setup_events(service_name=EVENTS_SERVICE, mode=args.mode, sink=sink)
 
     vm_name = _vm_name()
     run_id = _run_id()
