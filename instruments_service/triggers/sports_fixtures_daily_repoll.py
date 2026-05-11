@@ -70,6 +70,7 @@ from datetime import date as _date
 from typing import TYPE_CHECKING
 
 import pandas as pd
+from unified_api_contracts import PipelineMode
 from unified_trading_library import (
     ManifestWriter,
     classify_and_emit_error,
@@ -261,6 +262,7 @@ async def run_sports_fixtures_daily_repoll(
                 row_key={"date": day_str, "data_type": "FIXTURES"},
                 error=str(exc),
                 attempted_at=datetime.now(UTC),
+                pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
             )
             continue
 
@@ -273,6 +275,7 @@ async def run_sports_fixtures_daily_repoll(
                 row_key={"date": day_str, "data_type": "FIXTURES"},
                 reason="SOURCE_RETURNED_ZERO",
                 attempted_at=datetime.now(UTC),
+                pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
             )
             logger.info(
                 "sports.fixtures.daily_repoll: empty fixture set for day=%s — recorded SOURCE_RETURNED_ZERO",
@@ -366,6 +369,7 @@ async def run_sports_fixtures_daily_repoll(
                     instrument_type="football",
                     data_type="FIXTURES",
                     league_id=canonical_lid,
+                    pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
                 )
                 counts[f"{day_str}/{canonical_lid}"] = row_count
             except Exception as exc:
