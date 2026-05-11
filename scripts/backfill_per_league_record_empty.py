@@ -36,6 +36,7 @@ from datetime import date as date_type
 
 import pandas as pd
 from google.cloud import storage
+from unified_api_contracts import PipelineMode
 from unified_api_contracts.canonical.domain.sports.league_data import (
     SOURCE_COVERAGE_START,
     clip_dates_to_source_coverage,
@@ -56,6 +57,16 @@ TARGETS: list[tuple[str, str, list[str]]] = [
     ("MATCHES", "footystats", ["Prediction", "Features"]),
     ("PLAYER_VALUES", "transfermarkt", ["Prediction", "Features"]),
 ]
+
+# Map source_key → PipelineMode for record_empty tag. footystats has no
+# dedicated enum (closed-set; UAC PipelineMode lacks BATCH_FOOTYSTATS); the
+# canonical source for MATCHES per UAC SOURCE_PRIORITY is api_football, so
+# footystats-served rows tag with BATCH_API_FOOTBALL per the workaround
+# documented in plans/active/issues/footystats_pipeline_mode_gap_2026_05_12.md.
+_SOURCE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
+    "footystats": PipelineMode.BATCH_API_FOOTBALL,
+    "transfermarkt": PipelineMode.BATCH_TRANSFERMARKT,
+}
 
 
 def _read_canonical_manifest() -> pd.DataFrame:
@@ -168,6 +179,7 @@ def _backfill_data_type(
                 writer.record_empty(
                     row_key={"date": date_iso, "data_type": data_type, "league_id": league_id},
                     attempted_at=attempt_ts,
+                    pipeline_mode=_SOURCE_TO_PIPELINE_MODE[source],
                 )
             written += 1
 

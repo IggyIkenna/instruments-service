@@ -171,7 +171,7 @@ async def test_understat_xg_calls_record_empty_on_zero_rows(
         def lookup(self, _row_key: object) -> None:
             return None
 
-        def record_empty(self, *, row_key: object, attempted_at: datetime) -> None:
+        def record_empty(self, *, row_key: object, attempted_at: datetime, **_kwargs: object) -> None:
             cast(list[dict[str, object]], captured["record_empty_calls"]).append(
                 {"row_key": row_key, "attempted_at": attempted_at},
             )
@@ -335,7 +335,14 @@ async def test_understat_xg_calls_record_failed_on_exception(
         def record_empty(self, **_kw: object) -> None:
             captured["record_empty_called"] = True
 
-        def record_failed(self, *, row_key: object, error: str, attempted_at: datetime) -> None:
+        def record_failed(
+            self,
+            *,
+            row_key: object,
+            error: str,
+            attempted_at: datetime,
+            **_kwargs: object,
+        ) -> None:
             cast(list[dict[str, object]], captured["record_failed_calls"]).append(
                 {"row_key": row_key, "error": error, "attempted_at": attempted_at},
             )

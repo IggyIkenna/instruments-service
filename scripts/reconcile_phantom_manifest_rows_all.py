@@ -14,6 +14,21 @@ prefix triple, then check each captured manifest row for membership.
 Idempotent: ``attempted_failed`` rows are skipped, real captures are
 left at ``captured``, only true phantoms get flipped.
 
+**v8 column shape (codified 2026-05-12)**: this reconciler reads the manifest
+via ``pd.read_parquet`` and modifies a small fixed set of columns
+(``capture_status`` / ``error_reason`` / ``attempted_at``) at the specified
+row indices, then writes back via ``df.to_parquet``. By construction this is
+**read-tolerant** to new schema columns (the read accepts whatever columns
+the parquet carries) and **write-preserving** (pandas DataFrame.to_parquet
+preserves every column already on the dataframe). The v8 emission-tracking
+columns added by ``gcs_migration_bundle_pipeline_mode_2026_05_08`` —
+``pipeline_mode`` / ``service_emission_state`` / ``last_emission_decision_at``
+/ ``expected_window_completeness_fraction`` — pass through transparently
+without any reconciler-side handling. Rows written by pre-v8 writers (no
+new columns on disk) round-trip with the columns absent; rows written by
+post-v8 writers round-trip with the columns intact. No special-case logic
+needed in this script.
+
 Usage::
 
     cd instruments-service
@@ -653,7 +668,12 @@ def main() -> int:
         df.loc[unphantom_idx, "error_reason"] = ""
         df.loc[unphantom_idx, "attempted_at"] = now_iso
 
-    # Write back.
+    # Write back. v8 columns (pipeline_mode / service_emission_state /
+    # last_emission_decision_at / expected_window_completeness_fraction)
+    # ride along untouched — pd.DataFrame.to_parquet preserves every
+    # column on the frame, so any column present on disk at read time
+    # round-trips back unchanged. Pre-v8 manifests (no new columns) also
+    # round-trip cleanly because the read-side never invents columns.
     out = io.BytesIO()
     df.to_parquet(out, index=False)
     out.seek(0)

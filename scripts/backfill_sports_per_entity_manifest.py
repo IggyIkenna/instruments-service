@@ -56,6 +56,7 @@ from pathlib import Path
 import pandas as pd
 from google.api_core.exceptions import NotFound
 from google.cloud import storage
+from unified_api_contracts import PipelineMode
 from unified_api_contracts.canonical.domain.sports.league_data import (
     get_league_by_api_football_id,
     get_league_fixture_calendar,
@@ -160,6 +161,39 @@ SPECS: tuple[EntitySpec, ...] = (
     # singleton (flat path: sports_reference/venues/venues.parquet, not under by_date/)
     EntitySpec("VENUES", "venues", "singleton"),
 )
+
+
+# Source → batch PipelineMode mapping. footystats has no dedicated enum value
+# in UAC (closed-set; missing BATCH_FOOTYSTATS) — its rows tag with
+# BATCH_API_FOOTBALL per the workaround documented in
+# ``plans/active/issues/footystats_pipeline_mode_gap_2026_05_12.md``. ODDS slice
+# from footystats odds adapter tags BATCH_ODDS_API per UAC SOURCE_PRIORITY for
+# ``ODDS_SNAPSHOT`` / ``ODDS_MOVEMENT`` / ``ARBITRAGE``.
+_SOURCE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
+    "api_football": PipelineMode.BATCH_API_FOOTBALL,
+    "footystats": PipelineMode.BATCH_API_FOOTBALL,
+    "understat": PipelineMode.BATCH_UNDERSTAT,
+    "open_meteo": PipelineMode.BATCH_OPEN_METEO,
+    "transfermarkt": PipelineMode.BATCH_TRANSFERMARKT,
+    "soccer_football_info": PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+}
+
+
+def _pipeline_mode_for_spec(spec: EntitySpec) -> PipelineMode:
+    """Return the batch PipelineMode for an EntitySpec.
+
+    Special-case ODDS data_type: tagged BATCH_ODDS_API per SOURCE_PRIORITY
+    even though spec.source == "footystats" (the odds adapter wraps the
+    odds_api source). Singleton VENUES spec carries empty source — fall
+    back to BATCH_INSTRUMENTS_SERVICE since the venues table is the
+    instruments-service catalog's own reference data.
+    """
+    if spec.data_type == "ODDS":
+        return PipelineMode.BATCH_ODDS_API
+    if not spec.source:
+        return PipelineMode.BATCH_INSTRUMENTS_SERVICE
+    return _SOURCE_TO_PIPELINE_MODE[spec.source]
+
 
 # Singleton flat-path layout — emit one row dated to a stable date inside any
 # query window. Today we use the file's blob ``updated`` time; the data-status
@@ -384,6 +418,7 @@ def _backfill_fixture_scoped_day(
                         "venue": "",
                     },
                     attempted_at=attempted_at,
+                    pipeline_mode=_pipeline_mode_for_spec(spec),
                 )
     return out
 
@@ -485,6 +520,7 @@ def _backfill_weather_day(
                     "venue": "",
                 },
                 attempted_at=attempted_at,
+                pipeline_mode=PipelineMode.BATCH_OPEN_METEO,
             )
     return {**counts, **dict.fromkeys(empty_leagues, 0)}
 
@@ -545,6 +581,7 @@ def _backfill_injuries_day(
                     "venue": "",
                 },
                 attempted_at=attempted_at,
+                pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
             )
     return {**counts, **dict.fromkeys(empty_leagues, 0)}
 

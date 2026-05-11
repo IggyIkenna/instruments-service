@@ -41,6 +41,7 @@ from unified_api_contracts import (
     CANONICAL_TO_UNDERSTAT_EPL,
     DEX_VENUE_KEYWORDS,
     EPL_TEAM_ALIASES,
+    PipelineMode,
     VenueMapping,
     classify_venue_error,
     get_prediction_leagues,
@@ -101,6 +102,79 @@ from instruments_service.reference_data.adapters.tradfi.databento import (
 from instruments_service.reference_data.utils.evm_creation_resolver import EvmCacheSession
 
 logger = logging.getLogger(__name__)
+
+
+# v8 pipeline_mode SSOT (Phase 4.INSTRUMENTS — explicit pipeline_mode= at every
+# record_* callsite). Closed-set mapping from sports/prediction data_type to
+# the external source the instruments-service catalog refresh pulls from. The
+# source determines which UAC ``PipelineMode.BATCH_<SOURCE>`` value tags the
+# manifest row. Used by helper ``_pipeline_mode_for_sports_data_type``.
+#
+# Per CLAUDE.md "Live = batch — same data, same fields, same timing semantics,
+# different sources OK" rule + writegate Phase 4.DEFAULT-REMOVAL prerequisite:
+# every record_* callsite MUST pass an explicit pipeline_mode= matching the
+# source that actually served the catalog refresh for that data_type. Implicit
+# default ``""`` is being removed once every consumer ships its explicit value
+# (plan ``gcs_migration_bundle_pipeline_mode_2026_05_08`` body line 360).
+#
+# **Note** (finding ``footystats_pipeline_mode_gap_2026_05_12.md``):
+# UAC ``PipelineMode`` does NOT yet carry a ``BATCH_FOOTYSTATS`` value (the
+# closed-set round-trip rule means every enum value must mirror a
+# ``SOURCE_PRIORITY`` entry, and ``footystats`` is documented as a "multi-source
+# merge candidate (deferred)" rather than a registered source). Per
+# ``SOURCE_PRIORITY`` the canonical source for the relevant data_types
+# (``MATCHES`` / ``PREDICTIONS`` / ``ODDS``) is ``api_football`` (live) with
+# ``odds_api`` for the dedicated odds-snapshot slice. We tag footystats-served
+# rows with ``BATCH_API_FOOTBALL`` here as the closest closed-set match until
+# UAC introduces ``BATCH_FOOTYSTATS`` + registers footystats in
+# ``SOURCE_PRIORITY``. Same applies to ``ODDS`` (footystats odds adapter →
+# tagged BATCH_ODDS_API because ``odds_api`` is the SOURCE_PRIORITY entry for
+# ``ODDS_SNAPSHOT`` / ``ODDS_MOVEMENT`` / ``ARBITRAGE``).
+_SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
+    # api_football catalog (FIXTURES + per-fixture entities + reference data)
+    "FIXTURES": PipelineMode.BATCH_API_FOOTBALL,
+    "INJURIES": PipelineMode.BATCH_API_FOOTBALL,
+    "FIXTURE_LINEUPS": PipelineMode.BATCH_API_FOOTBALL,
+    "FIXTURE_EVENTS": PipelineMode.BATCH_API_FOOTBALL,
+    "FIXTURE_STATS": PipelineMode.BATCH_API_FOOTBALL,
+    "PLAYER_STATS": PipelineMode.BATCH_API_FOOTBALL,
+    "TEAMS": PipelineMode.BATCH_API_FOOTBALL,
+    "STANDINGS": PipelineMode.BATCH_API_FOOTBALL,
+    "LEAGUES": PipelineMode.BATCH_API_FOOTBALL,
+    "VENUES": PipelineMode.BATCH_API_FOOTBALL,
+    # footystats catalog — tagged BATCH_API_FOOTBALL until UAC adds
+    # ``BATCH_FOOTYSTATS`` + footystats SOURCE_PRIORITY entry (see header note
+    # + ``footystats_pipeline_mode_gap_2026_05_12.md`` finding).
+    "PREDICTIONS": PipelineMode.BATCH_API_FOOTBALL,
+    "MATCHES": PipelineMode.BATCH_API_FOOTBALL,
+    # ODDS slice — UAC SOURCE_PRIORITY top entry for the odds-snapshot slice
+    # is ``odds_api``; footystats odds adapter tagged with BATCH_ODDS_API.
+    "ODDS": PipelineMode.BATCH_ODDS_API,
+    # understat catalog
+    "XG": PipelineMode.BATCH_UNDERSTAT,
+    # transfermarkt catalog
+    "TRANSFERMARKT_LEAGUES": PipelineMode.BATCH_TRANSFERMARKT,
+    "PLAYER_VALUES": PipelineMode.BATCH_TRANSFERMARKT,
+    # soccer_football_info (SFI) catalog
+    "SFI_LEAGUES": PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+    "SFI_STANDINGS": PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+    "SFI_PROGRESSIVE_STATS": PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+    # open_meteo catalog
+    "WEATHER": PipelineMode.BATCH_OPEN_METEO,
+}
+
+
+def _pipeline_mode_for_sports_data_type(data_type: str) -> PipelineMode:
+    """Return the batch ``PipelineMode`` for a sports/prediction data_type.
+
+    Used by orchestrator code paths that emit per-data_type manifest rows in
+    loops (zero-fixture fast-path, sports reference data fan-out, enrichment
+    fast-path). Raises ``KeyError`` for unknown data_types — keeps the
+    enum-set wired and surfaces typos at runtime instead of silently picking
+    an empty string.
+    """
+
+    return _SPORTS_DATA_TYPE_TO_PIPELINE_MODE[data_type.upper()]
 
 
 def _canonical_league_id(lid_raw: object) -> str:
@@ -1468,6 +1542,7 @@ async def process_instruments(
                                     "data_type": pf_entity.replace("API_FOOTBALL_", "").upper(),
                                 },
                                 attempted_at=_enr_attempt_ts,
+                                pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
                             )
                 sports_manifest.write()
                 logger.info(
@@ -1733,6 +1808,7 @@ async def process_instruments(
                         "league_id": _canonical_league_id(_league_id),
                     },
                     attempted_at=_empty_attempt_ts,
+                    pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
                 )
             _empty_manifest.write()
             logger.info(
@@ -1788,6 +1864,7 @@ async def process_instruments(
                                             "data_type": entity_name.upper(),
                                         },
                                         attempted_at=datetime.now(UTC),
+                                        pipeline_mode=_pipeline_mode_for_sports_data_type(entity_name.upper()),
                                     )
                         # Per-fixture entities on zero-fixture dates: nothing
                         # to fetch (no fixtures = no per-fixture data). Write
@@ -1805,6 +1882,7 @@ async def process_instruments(
                                         "data_type": pf_entity,
                                     },
                                     attempted_at=datetime.now(UTC),
+                                    pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
                                 )
                         sports_manifest.write()
                 # Zero-fixture fast path: fixture-dependent enrichment entities get
@@ -1839,6 +1917,7 @@ async def process_instruments(
                                 "data_type": _enr_entity,
                             },
                             attempted_at=_enr_attempt_ts,
+                            pipeline_mode=_pipeline_mode_for_sports_data_type(_enr_entity),
                         )
                     _enr_manifest.write()
                     logger.info(
@@ -1968,11 +2047,19 @@ async def process_instruments(
                     # Honest-coverage Phase 2.E.2: discriminate weekend vs
                     # holiday so the manifest carries an EXPECTED_* row per
                     # (shard_key, day) instead of a bare empty_confirmed.
+                    # instruments-service emits the TradFi non-trading-day
+                    # marker on behalf of its own catalog refresh — the
+                    # underlying tick source for TradFi venues (CME/NQ) is
+                    # databento per UAC SOURCE_PRIORITY, but the manifest
+                    # row here represents the instruments-service catalog's
+                    # statement that no instruments exist for the day, so
+                    # tag with BATCH_INSTRUMENTS_SERVICE.
                     _reason = non_trading_day_reason(venue, target_dt) or "EXPECTED_WEEKEND"
                     manifest.record_expected_empty(
                         row_key={"date": date, "venue": venue},
                         reason=_reason,
                         attempted_at=_nt_attempt_ts,
+                        pipeline_mode=PipelineMode.BATCH_INSTRUMENTS_SERVICE,
                     )
                 manifest.write()
                 logger.info(
@@ -2128,6 +2215,7 @@ async def process_instruments(
                             "league_id": _exp_lid,
                         },
                         attempted_at=_fx_attempt_ts,
+                        pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
                     )
 
             elif venue_str.upper() in ("POLYMARKET", "KALSHI") and "base_asset" in venue_df.columns:
@@ -2203,11 +2291,15 @@ async def process_instruments(
             for venue in sorted(non_trading):
                 # Honest-coverage Phase 2.E.2: discriminate weekend vs holiday
                 # so the manifest carries an EXPECTED_* row per (shard_key, day).
+                # See header note on TradFi non-trading day pipeline_mode: this
+                # is the instruments-service catalog asserting absence; tag
+                # with BATCH_INSTRUMENTS_SERVICE.
                 _reason = non_trading_day_reason(venue, target_dt) or "EXPECTED_WEEKEND"
                 manifest.record_expected_empty(
                     row_key={"date": date, "venue": venue},
                     reason=_reason,
                     attempted_at=_nt_attempt_ts,
+                    pipeline_mode=PipelineMode.BATCH_INSTRUMENTS_SERVICE,
                 )
                 counts[venue] = 0
             logger.info(
@@ -3328,6 +3420,7 @@ async def _fetch_sports_reference_data(
             row_key=_row_key,
             error=_err_code,
             attempted_at=_af_attempt_ts,
+            pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
         )
 
     def _af_record_empty(data_type: str, league_id: str = "") -> None:
@@ -3339,6 +3432,7 @@ async def _fetch_sports_reference_data(
         manifest.record_empty(
             row_key=_row_key,
             attempted_at=_af_attempt_ts,
+            pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
         )
 
     def _af_emit_empty_gaps_for_entity(data_type: str, captured_league_ids: set[str]) -> None:
@@ -3352,6 +3446,7 @@ async def _fetch_sports_reference_data(
             manifest.record_empty(
                 row_key={"date": date, "data_type": data_type, "league_id": _exp_lid},
                 attempted_at=_af_attempt_ts,
+                pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
             )
 
     def _should_fetch(entity_short: str) -> bool:
@@ -3998,6 +4093,7 @@ async def _fetch_sports_reference_data(
                             row_key={"date": date, "data_type": _af_entity_dt},
                             error=_err_code,
                             attempted_at=_af_attempt_ts,
+                            pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
                         )
                 else:
                     # Some / all calls succeeded but returned zero rows
@@ -4507,7 +4603,13 @@ async def _fetch_footystats_predictions(
         else:
             logger.info("FootyStats predictions: no predictive data for date=%s", date)
             # Honest-coverage: legitimate empty (no predictions for this date).
-            pred_manifest.record_empty(row_key=_row_key, attempted_at=attempt_ts)
+            # footystats catalog refresh tagged BATCH_API_FOOTBALL per
+            # footystats_pipeline_mode_gap_2026_05_12.md workaround.
+            pred_manifest.record_empty(
+                row_key=_row_key,
+                attempted_at=attempt_ts,
+                pipeline_mode=_pipeline_mode_for_sports_data_type("PREDICTIONS"),
+            )
             pred_manifest.write()
     except Exception as exc:
         classify_and_emit_error(
@@ -4532,6 +4634,7 @@ async def _fetch_footystats_predictions(
             row_key=_row_key,
             error=_err_code,
             attempted_at=attempt_ts,
+            pipeline_mode=_pipeline_mode_for_sports_data_type("PREDICTIONS"),
         )
         with contextlib.suppress(Exception):
             pred_manifest.write()
@@ -4739,10 +4842,12 @@ async def _fetch_footystats_matches(
             # Honest-coverage per-league: record_empty for expected footystats
             # leagues with no matches on this date (off-season / no fixtures).
             # Mirrors the XG adapter pattern at the understat block below.
+            # footystats-served MATCHES tagged BATCH_API_FOOTBALL per workaround.
             for _exp_lid in sorted(set(_ft_expected) - _captured_leagues):
                 _ft_manifest.record_empty(
                     row_key={"date": date, "data_type": "MATCHES", "league_id": _exp_lid},
                     attempted_at=attempt_ts,
+                    pipeline_mode=_pipeline_mode_for_sports_data_type("MATCHES"),
                 )
             _ft_manifest.write()
             logger.info("FootyStats matches: %d rows written for date=%s", len(df), date)
@@ -4755,6 +4860,7 @@ async def _fetch_footystats_matches(
                 _ft_manifest.record_empty(
                     row_key={"date": date, "data_type": "MATCHES", "league_id": _exp_lid},
                     attempted_at=attempt_ts,
+                    pipeline_mode=_pipeline_mode_for_sports_data_type("MATCHES"),
                 )
             _ft_manifest.write()
     except Exception as exc:
@@ -4780,6 +4886,7 @@ async def _fetch_footystats_matches(
             row_key=_row_key,
             error=_err_code,
             attempted_at=attempt_ts,
+            pipeline_mode=_pipeline_mode_for_sports_data_type("MATCHES"),
         )
         with contextlib.suppress(Exception):
             _ft_manifest.write()
@@ -4950,7 +5057,13 @@ async def _fetch_footystats_odds(
         else:
             logger.info("FootyStats odds: no odds data for date=%s", date)
             # Honest-coverage: legitimate empty (no odds for this date).
-            odds_manifest.record_empty(row_key=_row_key, attempted_at=attempt_ts)
+            # ODDS slice tagged BATCH_ODDS_API per UAC SOURCE_PRIORITY
+            # (footystats odds adapter; see footystats_pipeline_mode_gap_2026_05_12.md).
+            odds_manifest.record_empty(
+                row_key=_row_key,
+                attempted_at=attempt_ts,
+                pipeline_mode=_pipeline_mode_for_sports_data_type("ODDS"),
+            )
             odds_manifest.write()
     except Exception as exc:
         classify_and_emit_error(
@@ -4975,6 +5088,7 @@ async def _fetch_footystats_odds(
             row_key=_row_key,
             error=_err_code,
             attempted_at=attempt_ts,
+            pipeline_mode=_pipeline_mode_for_sports_data_type("ODDS"),
         )
         with contextlib.suppress(Exception):
             odds_manifest.write()
@@ -5124,6 +5238,7 @@ async def _fetch_understat_xg(
                 xg_manifest.record_empty(
                     row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
                     attempted_at=attempt_ts,
+                    pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
                 )
             xg_manifest.write()
             logger.info("Understat xG: %d rows written for date=%s", len(df), date)
@@ -5137,6 +5252,7 @@ async def _fetch_understat_xg(
                 xg_manifest.record_empty(
                     row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
                     attempted_at=attempt_ts,
+                    pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
                 )
             xg_manifest.write()
     except Exception as exc:
@@ -5167,6 +5283,7 @@ async def _fetch_understat_xg(
                 row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
                 error=_err_code,
                 attempted_at=attempt_ts,
+                pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
             )
         with contextlib.suppress(Exception):
             xg_manifest.write()
@@ -5433,12 +5550,14 @@ async def _fetch_transfermarkt_data(
             manifest.record_empty(
                 row_key={"date": date, "data_type": "PLAYER_VALUES", "league_id": _emp_lid},
                 attempted_at=attempt_ts,
+                pipeline_mode=PipelineMode.BATCH_TRANSFERMARKT,
             )
         for _f_lid, _f_err in sorted(_failed_leagues.items()):
             manifest.record_failed(
                 row_key={"date": date, "data_type": "PLAYER_VALUES", "league_id": _f_lid},
                 error=_f_err,
                 attempted_at=attempt_ts,
+                pipeline_mode=PipelineMode.BATCH_TRANSFERMARKT,
             )
 
     manifest.write()
@@ -5662,6 +5781,7 @@ async def _fetch_sfi_data(
                 manifest.record_empty(
                     row_key={"date": date, "data_type": "SFI_STANDINGS"},
                     attempted_at=attempt_ts,
+                    pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                 )
         except Exception as exc:
             classify_and_emit_error(
@@ -5675,6 +5795,7 @@ async def _fetch_sfi_data(
                 row_key={"date": date, "data_type": "SFI_STANDINGS"},
                 error=_err_code,
                 attempted_at=attempt_ts,
+                pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
             )
 
     # Progressive stats — per-match 30-second interval time-series.
@@ -5703,6 +5824,7 @@ async def _fetch_sfi_data(
             row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
             reason=_sfi_reason,
             attempted_at=attempt_ts,
+            pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
         )
         for _exp_lid in sorted(_expected_sfi_league_ids):
             manifest.record_expected_empty(
@@ -5713,6 +5835,7 @@ async def _fetch_sfi_data(
                 },
                 reason=_sfi_reason,
                 attempted_at=attempt_ts,
+                pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
             )
         _want_sfi_progressive = False
     if _want_sfi_progressive:
@@ -5838,6 +5961,7 @@ async def _fetch_sfi_data(
                                 "league_id": _exp_lid,
                             },
                             attempted_at=attempt_ts,
+                            pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                         )
                     logger.info("SFI progressive stats: %d rows written", len(df))
                 else:
@@ -5846,6 +5970,7 @@ async def _fetch_sfi_data(
                     manifest.record_empty(
                         row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
                         attempted_at=attempt_ts,
+                        pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                     )
                     for _exp_lid in sorted(_expected_sfi_league_ids):
                         manifest.record_empty(
@@ -5855,6 +5980,7 @@ async def _fetch_sfi_data(
                                 "league_id": _exp_lid,
                             },
                             attempted_at=attempt_ts,
+                            pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                         )
             else:
                 # No completed matches on this date (off-season / rest day).
@@ -5862,6 +5988,7 @@ async def _fetch_sfi_data(
                 manifest.record_empty(
                     row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
                     attempted_at=attempt_ts,
+                    pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                 )
                 for _exp_lid in sorted(_expected_sfi_league_ids):
                     manifest.record_empty(
@@ -5871,6 +5998,7 @@ async def _fetch_sfi_data(
                             "league_id": _exp_lid,
                         },
                         attempted_at=attempt_ts,
+                        pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                     )
         except Exception as exc:
             classify_and_emit_error(
@@ -5894,6 +6022,7 @@ async def _fetch_sfi_data(
                 row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
                 error=_err_code,
                 attempted_at=attempt_ts,
+                pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
             )
             for _exp_lid in sorted(_expected_sfi_league_ids):
                 manifest.record_failed(
@@ -5904,6 +6033,7 @@ async def _fetch_sfi_data(
                     },
                     error=_err_code,
                     attempted_at=attempt_ts,
+                    pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                 )
 
     manifest.write()
@@ -6046,6 +6176,7 @@ async def _fetch_weather_data(
             manifest.record_empty(
                 row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
                 attempted_at=attempt_ts,
+                pipeline_mode=PipelineMode.BATCH_OPEN_METEO,
             )
 
     def _record_weather_failed(err_code: str) -> None:
@@ -6059,6 +6190,7 @@ async def _fetch_weather_data(
                 row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
                 error=err_code,
                 attempted_at=attempt_ts,
+                pipeline_mode=PipelineMode.BATCH_OPEN_METEO,
             )
 
     # UAC venue coordinates: SCREAMING_SNAKE keys → (lat, lon)
@@ -6203,6 +6335,7 @@ async def _fetch_weather_data(
                 manifest.record_empty(
                     row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
                     attempted_at=attempt_ts,
+                    pipeline_mode=PipelineMode.BATCH_OPEN_METEO,
                 )
             logger.info(
                 "Weather: all %d venues already covered for date=%s — back-filled per-league manifest (%d captured, %d empty)",
@@ -6388,6 +6521,7 @@ async def _fetch_weather_data(
             manifest.record_empty(
                 row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
                 attempted_at=attempt_ts,
+                pipeline_mode=PipelineMode.BATCH_OPEN_METEO,
             )
         # NOTE: Previously we also emitted a date-level aggregate row
         # (``manifest.add(data_type="WEATHER")`` with no ``league_id``) for

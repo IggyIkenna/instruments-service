@@ -59,7 +59,18 @@ from pathlib import Path
 import pandas as pd
 import pyarrow.parquet as pq
 from google.cloud import storage
+from unified_api_contracts import PipelineMode
 from unified_trading_library import ManifestWriter, log_event, setup_events
+
+# Map asset_group → batch tick source per UAC SOURCE_PRIORITY: tradfi options
+# come from databento (CME / NQ direct feed); cefi options come from tardis
+# (multi-venue WS aggregator). Used at the ``record_captured`` callsite below
+# to tag the aggregated chain-bundle row with the underlying tick source so
+# batch-vs-live recon queries can pivot cleanly on pipeline_mode.
+_AGGREGATE_OPTIONS_PIPELINE_MODE_BY_ASSET_GROUP: dict[str, PipelineMode] = {
+    "tradfi": PipelineMode.BATCH_DATABENTO,
+    "cefi": PipelineMode.BATCH_TARDIS,
+}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -300,6 +311,7 @@ def _process_day_timeframe_dt(
             underlying=root,
             row_count=row_count,
             attempted_at=datetime.now(UTC),
+            pipeline_mode=_AGGREGATE_OPTIONS_PIPELINE_MODE_BY_ASSET_GROUP[asset_group],
         )
         logger.info(
             "%s tf=%s dt=%s root=%s: aggregated %d files -> %d rows",
