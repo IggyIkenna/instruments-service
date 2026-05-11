@@ -23,7 +23,7 @@ from datetime import date as date_type
 
 import pandas as pd
 import requests
-from unified_api_contracts import classify_venue_error
+from unified_api_contracts import PipelineMode, classify_venue_error
 from unified_trading_library import (
     CaptureStatus,
     ManifestRow,
@@ -272,6 +272,7 @@ def main() -> None:
                     "data_type": "ALL",
                 },
                 attempted_at=attempt_ts,
+                pipeline_mode=PipelineMode.BATCH_POLYMARKET_GAMMA_API,
             )
             dates_skipped += 1
             continue

@@ -50,6 +50,7 @@ from pathlib import Path
 import pandas as pd
 import pyarrow.parquet as pq
 from google.cloud import storage
+from unified_api_contracts import PipelineMode
 from unified_trading_library import ManifestWriter, log_event, setup_events
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -214,6 +215,7 @@ def _process_day(
                 data_type=data_type,
                 underlying=root,
                 attempted_at=datetime.now(UTC),
+                pipeline_mode=PipelineMode.BATCH_DATABENTO,
             )
             log_event(
                 "OPTIONS_CHAIN_AGGREGATED_EMPTY",
@@ -230,6 +232,7 @@ def _process_day(
             underlying=root,
             row_count=row_count,
             attempted_at=datetime.now(UTC),
+            pipeline_mode=PipelineMode.BATCH_DATABENTO,
         )
         logger.info(
             "day=%s dt=%s root=%s: aggregated %d files -> %d rows",
