@@ -58,13 +58,13 @@ TARGETS: list[tuple[str, str, list[str]]] = [
     ("PLAYER_VALUES", "transfermarkt", ["Prediction", "Features"]),
 ]
 
-# Map source_key → PipelineMode for record_empty tag. footystats has no
-# dedicated enum (closed-set; UAC PipelineMode lacks BATCH_FOOTYSTATS); the
-# canonical source for MATCHES per UAC SOURCE_PRIORITY is api_football, so
-# footystats-served rows tag with BATCH_API_FOOTBALL per the workaround
-# documented in plans/active/issues/footystats_pipeline_mode_gap_2026_05_12.md.
+# Map source_key → PipelineMode for record_empty tag. footystats-served rows
+# stamp with canonical ``BATCH_FOOTYSTATS`` per Q2=(A) flip on 2026-05-12 —
+# UAC@52d289c shipped the ``BATCH_FOOTYSTATS`` enum extension; this script
+# previously tagged with ``BATCH_API_FOOTBALL`` as the documented workaround.
+# Resolves plans/active/issues/footystats_pipeline_mode_gap_2026_05_12.md.
 _SOURCE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
-    "footystats": PipelineMode.BATCH_API_FOOTBALL,
+    "footystats": PipelineMode.BATCH_FOOTYSTATS,
     "transfermarkt": PipelineMode.BATCH_TRANSFERMARKT,
 }
 
