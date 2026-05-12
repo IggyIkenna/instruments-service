@@ -18,6 +18,7 @@ Usage (foreground):
 Background-able: redirect stderr/stdout to a log file; the script writes its
 own progress to <out_dir>/runner.log.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -191,12 +192,18 @@ def main() -> int:
     # run_vm_backfill_e2e.sh passes per-chunk.
     sys.argv = [
         "instruments-service",
-        "--operation", "instruments",
-        "--mode", "batch",
-        "--asset-group", args.asset_group.upper(),
-        "--venues", args.venue.upper(),
-        "--start-date", args.start_date,
-        "--end-date", args.end_date,
+        "--operation",
+        "instruments",
+        "--mode",
+        "batch",
+        "--asset-group",
+        args.asset_group.upper(),
+        "--venues",
+        args.venue.upper(),
+        "--start-date",
+        args.start_date,
+        "--end-date",
+        args.end_date,
     ]
 
     # Per-VM shard injection — same pattern as run_vm_backfill_e2e.sh.
@@ -211,12 +218,18 @@ def main() -> int:
 
     start_iso = datetime.now(UTC).isoformat()
     start_rss = psutil.Process().memory_info().rss
-    logger.info("=== chunk start: venue=%s range=%s..%s rss=%.1f MB ===",
-                args.venue, args.start_date, args.end_date, start_rss / 1024 / 1024)
+    logger.info(
+        "=== chunk start: venue=%s range=%s..%s rss=%.1f MB ===",
+        args.venue,
+        args.start_date,
+        args.end_date,
+        start_rss / 1024 / 1024,
+    )
 
     rc = 0
     try:
         from instruments_service.cli.main import main_service_cli
+
         main_service_cli()
     except SystemExit as e:
         rc = int(e.code) if isinstance(e.code, int) else 1
@@ -228,8 +241,7 @@ def main() -> int:
         _stop_event.set()
         end_rss = psutil.Process().memory_info().rss
         end_iso = datetime.now(UTC).isoformat()
-        logger.info("=== chunk end: rss=%.1f MB peak=%.1f MB ===",
-                    end_rss / 1024 / 1024, _peak_rss / 1024 / 1024)
+        logger.info("=== chunk end: rss=%.1f MB peak=%.1f MB ===", end_rss / 1024 / 1024, _peak_rss / 1024 / 1024)
         _take_final_snapshot()
 
         # Build the comparison report.

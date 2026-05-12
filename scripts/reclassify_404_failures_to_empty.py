@@ -72,9 +72,7 @@ def main() -> int:
 
     failed_mask = df["capture_status"].fillna("") == "attempted_failed"
     er = df["error_reason"].fillna("").astype(str)
-    not_found_mask = failed_mask & er.apply(
-        lambda s: any(s.startswith(p) for p in _DEFINITIVE_NOT_FOUND_PREFIXES)
-    )
+    not_found_mask = failed_mask & er.apply(lambda s: any(s.startswith(p) for p in _DEFINITIVE_NOT_FOUND_PREFIXES))
 
     n_target = int(not_found_mask.sum())
     logger.info("Rows matching definitive 404 reasons: %d", n_target)

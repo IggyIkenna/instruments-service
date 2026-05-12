@@ -332,7 +332,7 @@ async def test_fetch_instruments_for_all_venues_deduplicates_adapter():
 
 def test_cli_main_imports_cleanly():
     """cli/main.py can be imported without errors — bootstrap smoke test."""
-    import instruments_service.cli.main  # noqa: F401
+    import instruments_service.cli.main
 
 
 def test_instruments_handler_is_unified_service_handler():

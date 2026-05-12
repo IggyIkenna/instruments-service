@@ -1930,7 +1930,7 @@ async def process_instruments(
             counts: dict[str, int] = {}
             _active_venues_set = set(active_venues)
             _ef = sports_entity_filter
-            _entity_wanted_zf = lambda ent: _ef is None or _ef == ent  # noqa: E731
+            _entity_wanted_zf = lambda ent: _ef is None or _ef == ent
 
             # Check if today is a reference refresh trigger for any league.
             _batch_date = date_type.fromisoformat(date)

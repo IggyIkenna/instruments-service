@@ -51,7 +51,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from google.cloud import storage
-
 from unified_trading_library.event_sink import GcsEventSink
 from unified_trading_library.events import log_event, setup_events
 
@@ -178,9 +177,7 @@ def _run_per_asset_group_phantom_audit(
     # any "PHANTOM" lines into triage.jsonl so class-C ambiguities reach the
     # operator. Phantom-row drift that the reconciler couldn't auto-classify
     # is the canonical class-C case per the design spec.
-    phantom_lines = [
-        line for line in completed.stdout.splitlines() if "PHANTOM" in line.upper()
-    ]
+    phantom_lines = [line for line in completed.stdout.splitlines() if "PHANTOM" in line.upper()]
     with triage_jsonl.open("a", encoding="utf-8") as fh:
         for line in phantom_lines:
             fh.write(
