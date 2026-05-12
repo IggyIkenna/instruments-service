@@ -41,6 +41,7 @@ from unified_api_contracts import (
     CANONICAL_TO_UNDERSTAT_EPL,
     DEX_VENUE_KEYWORDS,
     EPL_TEAM_ALIASES,
+    EmptyConfirmedReason,
     PipelineMode,
     VenueMapping,
     classify_venue_error,
@@ -331,6 +332,9 @@ def _flatten_canonical_fixture_for_disk(fx: object, day: str) -> dict[str, objec
         "away_score_penalty": None,
         "day": day,
         "data_available_at": None,  # caller post-fills with kickoff_utc - 7 days
+        "match_end_time": getattr(fx, "match_end_time", None),
+        "announced_at": getattr(fx, "announced_at", None),
+        "report_time": getattr(fx, "report_time", None),
     }
 
 
@@ -1930,7 +1934,9 @@ async def process_instruments(
             counts: dict[str, int] = {}
             _active_venues_set = set(active_venues)
             _ef = sports_entity_filter
-            _entity_wanted_zf = lambda ent: _ef is None or _ef == ent
+
+            def _entity_wanted_zf(ent: str) -> bool:
+                return _ef is None or _ef == ent
 
             # Check if today is a reference refresh trigger for any league.
             _batch_date = date_type.fromisoformat(date)
@@ -3421,7 +3427,7 @@ async def _fetch_sports_reference_data(
             pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
         )
 
-    def _af_record_empty(data_type: str, league_id: str = "") -> None:
+    def _af_record_empty(data_type: str, league_id: str = "", reason: str = "") -> None:
         if manifest is None:
             return
         _row_key: dict[str, str] = {"date": date, "data_type": data_type}
@@ -3430,6 +3436,7 @@ async def _fetch_sports_reference_data(
         manifest.record_empty(
             row_key=_row_key,
             attempted_at=_af_attempt_ts,
+            reason=reason,
             pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
         )
 
@@ -3783,6 +3790,19 @@ async def _fetch_sports_reference_data(
                             af_lid = fx.league.api_football_id
                             if af_lid in _af_id_to_canonical_league:
                                 _af_fid_to_league[str(fid_int)] = _af_id_to_canonical_league[af_lid]
+                elif fx.status in {"PST", "CANC"}:
+                    _reason = (
+                        EmptyConfirmedReason.EXPECTED_FIXTURE_POSTPONED
+                        if fx.status == "PST"
+                        else EmptyConfirmedReason.EXPECTED_FIXTURE_CANCELLED
+                    )
+                    _lid: str = ""
+                    if hasattr(fx, "league") and hasattr(fx.league, "league_id"):
+                        _lid = str(fx.league.league_id)
+                    elif hasattr(fx, "league") and hasattr(fx.league, "api_football_id"):
+                        af_lid = fx.league.api_football_id
+                        _lid = _af_id_to_canonical_league.get(af_lid, "")
+                    _af_record_empty("FIXTURES", league_id=_lid, reason=str(_reason))
             logger.info("Sports reference: %d completed fixtures found for enrichment (API fetch)", len(fixture_ids))
 
             # Write canonical fixtures to sports_reference/by_date/entity=fixtures/
