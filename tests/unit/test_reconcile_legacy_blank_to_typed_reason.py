@@ -129,12 +129,17 @@ def test_main_scan_only_proposes_weekend_upgrade(monkeypatch: pytest.MonkeyPatch
     csvs = sorted(tmp_path.glob("recon-legacy-typed-tradfi-*.csv"))
     assert len(csvs) == 1, f"expected one CSV report, got {csvs}"
     report = pd.read_csv(csvs[0])
-    # Only the Saturday row upgrades; the Monday trading-day row stays SOURCE_RETURNED_ZERO (no upgrade).
-    assert len(report) == 1
-    row = report.iloc[0]
-    assert row["date"] == "2024-01-06"
-    assert row["old_reason"] == "SOURCE_RETURNED_ZERO"
-    assert row["new_reason"] == "EXPECTED_WEEKEND"
+    # Saturday (2024-01-06) → Shape (a): SOURCE_RETURNED_ZERO → EXPECTED_WEEKEND, stays empty_confirmed.
+    # Monday (2024-01-08) → Shape (b): SOURCE_RETURNED_ZERO → LegacyBlankErrorReasonError, flips to attempted_failed.
+    assert len(report) == 2
+    weekend_row = report[report["date"] == "2024-01-06"].iloc[0]
+    assert weekend_row["old_reason"] == "SOURCE_RETURNED_ZERO"
+    assert weekend_row["new_reason"] == "EXPECTED_WEEKEND"
+    assert weekend_row["new_capture_status"] == "empty_confirmed"
+    monday_row = report[report["date"] == "2024-01-08"].iloc[0]
+    assert monday_row["old_reason"] == "SOURCE_RETURNED_ZERO"
+    assert monday_row["new_reason"] == "LegacyBlankErrorReasonError"
+    assert monday_row["new_capture_status"] == "attempted_failed"
 
 
 def test_main_apply_flips_rewrites_error_reason(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -178,10 +183,14 @@ def test_main_apply_flips_rewrites_error_reason(monkeypatch: pytest.MonkeyPatch,
     assert rc == 0
     assert "shard" in uploaded, "apply-flips should have uploaded a per-VM shard"
     shard = uploaded["shard"]
-    # The uploaded shard contains only the upgraded row(s), with the new reason stamped.
-    assert len(shard) == 1
-    assert shard.iloc[0]["date"] == "2024-01-06"
-    assert shard.iloc[0]["error_reason"] == "EXPECTED_WEEKEND"
+    # Shard contains both upgraded rows: Shape (a) weekend + Shape (b) status-flip.
+    assert len(shard) == 2
+    weekend = shard[shard["date"] == "2024-01-06"].iloc[0]
+    assert weekend["error_reason"] == "EXPECTED_WEEKEND"
+    assert weekend["capture_status"] == "empty_confirmed"
+    monday = shard[shard["date"] == "2024-01-08"].iloc[0]
+    assert monday["error_reason"] == "LegacyBlankErrorReasonError"
+    assert monday["capture_status"] == "attempted_failed"
 
 
 def test_main_apply_flips_requires_per_vm_isolation_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
