@@ -231,7 +231,12 @@ def main() -> int:
             )
             return 0
 
-        # Re-classify each candidate; record only the rows that genuinely upgrade.
+        # Re-classify each candidate; record rows that genuinely upgrade.
+        # Two upgrade shapes:
+        #   (a) reason upgrade: empty_confirmed stays but gets a more-specific EXPECTED_* reason.
+        #   (b) status flip: empty_confirmed → attempted_failed (for cefi/defi/tradfi
+        #       instrument-day rows the discriminated classifier determines can't have a
+        #       legitimate empty_confirmed at instrument-day grain — operator rule 2026-05-07).
         candidate_idx = df.index[mask]
         upgrades: list[dict[str, str | int]] = []
         n_no_change = 0
@@ -244,14 +249,17 @@ def main() -> int:
                 logger.warning("Classifier failed for row %s: %s — leaving row unchanged", idx, exc)
                 n_no_change += 1
                 continue
-            # Only an upgrade if: stays empty_confirmed, lands on a *specific* EXPECTED_* reason
-            # (not the generic SOURCE_RETURNED_ZERO), and that reason differs from the current one.
-            is_upgrade = (
+            # Shape (a): reason upgrade — same capture_status, better EXPECTED_* reason.
+            is_reason_upgrade = (
                 new_status == "empty_confirmed"
                 and new_reason in EMPTY_CONFIRMED_REASONS
                 and new_reason != "SOURCE_RETURNED_ZERO"
                 and new_reason != current_reason
             )
+            # Shape (b): status flip — discriminated classifier determined the row should not
+            # be empty_confirmed (cefi/defi/tradfi instrument-day grain rule).
+            is_status_flip = new_status == "attempted_failed"
+            is_upgrade = is_reason_upgrade or is_status_flip
             if not is_upgrade:
                 n_no_change += 1
                 continue
@@ -265,6 +273,8 @@ def main() -> int:
                     "instrument_type": str(row.get("instrument_type", "")),
                     "instrument_id": str(row.get("instrument_id", "")),
                     "league_id": str(row.get("league_id", "")),
+                    "old_capture_status": "empty_confirmed",
+                    "new_capture_status": new_status,
                     "old_reason": current_reason,
                     "new_reason": new_reason,
                 }
@@ -285,9 +295,13 @@ def main() -> int:
             return 0
 
         # Distribution of (old → new) for operator review.
+        # Key includes capture_status change for status-flip upgrades.
         transition_counts: dict[str, int] = {}
         for entry in upgrades:
-            key = f"{entry['old_reason']} -> {entry['new_reason']}"
+            if entry["new_capture_status"] != entry["old_capture_status"]:
+                key = f"{entry['old_capture_status']}/{entry['old_reason']} -> {entry['new_capture_status']}/{entry['new_reason']}"
+            else:
+                key = f"{entry['old_reason']} -> {entry['new_reason']}"
             transition_counts[key] = transition_counts.get(key, 0) + 1
         logger.info("Upgrade transitions:")
         for key, count in sorted(transition_counts.items(), key=lambda kv: -kv[1]):
@@ -346,11 +360,15 @@ def main() -> int:
             )
             return 2
 
-        # Apply: stamp new error_reason on the dataframe, upload the upgraded
-        # rows back via the per-VM shard (consolidator merges last-writer-wins).
+        # Apply: stamp new capture_status + error_reason on the dataframe, upload the
+        # upgraded rows back via the per-VM shard (consolidator merges last-writer-wins).
+        # Two shapes: reason-upgrade (capture_status unchanged) and status-flip
+        # (capture_status changes from empty_confirmed → attempted_failed).
         upgraded_idx = [entry["row_index"] for entry in upgrades]
         for entry in upgrades:
             df.at[entry["row_index"], "error_reason"] = entry["new_reason"]
+            if entry["new_capture_status"] != entry["old_capture_status"]:
+                df.at[entry["row_index"], "capture_status"] = entry["new_capture_status"]
         if "reconciler_run_id" in df.columns:
             for entry in upgrades:
                 df.at[entry["row_index"], "reconciler_run_id"] = run_id
