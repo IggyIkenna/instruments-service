@@ -5535,7 +5535,7 @@ async def _fetch_transfermarkt_data(
 
         # Per-league honest-coverage manifest rows — identical between the
         # cache-hit and live-fetch branches.  ``cached=True`` is passed as a
-        # kwarg for future schema evolution (ManifestWriter v5 tolerates extra
+        # kwarg for future schema evolution (ManifestWriter v8 tolerates extra
         # kwargs); the cache-hit path also emits an UPSTREAM_FETCH_COMPLETED
         # event with ``cached=True`` so current observability can filter on it.
         for _cap_lid, _cap_count in _captured_league_counts.items():
