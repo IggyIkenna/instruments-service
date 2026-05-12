@@ -16,7 +16,10 @@ import re
 import time
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, cast
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 import aiohttp
 from unified_api_contracts import (
@@ -525,7 +528,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
 
     _CLOB_BASE = "https://clob.polymarket.com"
     _CLOB_PAGE_LIMIT = 1000
-    _CLOB_MAX_PAGES = 1000  # safety cap — CLOB has 863K+ markets
+    _CLOB_MAX_PAGES = 10000  # safety cap against runaway loop; CLOB exits naturally via "LTE=" cursor sentinel
     _CLOB_RAW_CACHE_TTL: ClassVar[float] = 86400.0  # 24 h — CLOB history is immutable; matches Tardis TTL
 
     @staticmethod
