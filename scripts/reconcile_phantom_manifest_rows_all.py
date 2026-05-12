@@ -414,7 +414,7 @@ def _audit_generic(
     # ``market_tick_data_service/.../cefi/tardis_shared.finalise_rows_and_path``).
     # Manifest holds the row-level type (``option`` / ``future``); disk has
     # the chain form. Audit must accept either.
-    _IT_DISK_EQUIV: dict[str, list[str]] = {
+    it_disk_equiv: dict[str, list[str]] = {
         "option": ["option", "options_chain"],
         "future": ["future", "futures_chain"],
     }
@@ -424,7 +424,7 @@ def _audit_generic(
     # rows with these values — they're identifier-only, not partitioning.
     # ``prediction_market`` is the only example today (Polymarket layout
     # uses ``market_type=binary/range_bracket/...`` instead).
-    _IT_NOT_ON_DISK: frozenset[str] = frozenset({"prediction_market"})
+    it_not_on_disk: frozenset[str] = frozenset({"prediction_market"})
 
     # DeFi migrated-bundle wildcard (added 2026-05-07 for C.9 audit) —
     # ``migrate_mtds_defi_legacy_venue_underscore.py`` produced
@@ -454,9 +454,9 @@ def _audit_generic(
         # means "any instrument_type counts" (schema-4 rows). Identifier-
         # only types like ``prediction_market`` skip the segment check.
         it_lower = raw_it.lower()
-        if it_lower in _IT_DISK_EQUIV:
-            it_needles_lower = [f"instrument_type={v}/" for v in _IT_DISK_EQUIV[it_lower]]
-        elif it_lower and it_lower not in _IT_NOT_ON_DISK:
+        if it_lower in it_disk_equiv:
+            it_needles_lower = [f"instrument_type={v}/" for v in it_disk_equiv[it_lower]]
+        elif it_lower and it_lower not in it_not_on_disk:
             it_needles_lower = [f"instrument_type={it_lower}/"]
         else:
             it_needles_lower = []
@@ -506,6 +506,18 @@ def main() -> int:
     p.add_argument("--venues", type=str, default="", help="Comma-separated venues to scope (default: all)")
     p.add_argument("--data-types", type=str, default="", help="Comma-separated data_types to scope")
     p.add_argument("--workers", type=int, default=32)
+    p.add_argument(
+        "--start-date",
+        type=str,
+        default="",
+        help="Scope audit to dates >= YYYY-MM-DD (inclusive). Useful for local testing on a short window.",
+    )
+    p.add_argument(
+        "--end-date",
+        type=str,
+        default="",
+        help="Scope audit to dates <= YYYY-MM-DD (inclusive). Useful for local testing on a short window.",
+    )
     p.add_argument(
         "--unphantom",
         action="store_true",
@@ -562,6 +574,10 @@ def main() -> int:
     if args.data_types:
         wanted_dts = {d.strip() for d in args.data_types.split(",") if d.strip()}
         captured_mask = captured_mask & df["data_type"].isin(wanted_dts)
+    if args.start_date:
+        captured_mask = captured_mask & (df["date"].astype(str) >= args.start_date)
+    if args.end_date:
+        captured_mask = captured_mask & (df["date"].astype(str) <= args.end_date)
 
     # 2026-05-04: drop schema_v4 vestigial rows from audit scope. These are
     # pre-v5 daily-manifest records with only ``venue`` populated (no
