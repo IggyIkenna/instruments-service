@@ -54,6 +54,7 @@ from unified_api_contracts.predictions import (
     classify_polymarket_to_canonical_group,
 )
 from unified_api_contracts.registry import get_supported_chains_for_protocol
+from unified_api_contracts.registry.source_data_latency import SFI_DATA_LAG_P95_SECONDS
 from unified_api_contracts.sports import (
     FOOTYSTATS_HISTORICAL_SEASON_IDS,
     SOCCER_FOOTBALL_INFO_IDS,
@@ -96,6 +97,9 @@ from instruments_service.reference_data.adapters.defi._solana_utils import Solan
 from instruments_service.reference_data.adapters.sports import create_sports_reference_adapter
 from instruments_service.reference_data.adapters.sports.adapters.api_football_reference import (
     _last_completed_fixture_ids as _urdi_completed_fixture_ids,
+)
+from instruments_service.reference_data.adapters.sports.adapters.soccerfootball_info import (
+    detect_match_end_time as _sfi_detect_match_end_time,
 )
 from instruments_service.reference_data.adapters.tradfi.databento import (
     is_non_trading_day,
@@ -6037,12 +6041,31 @@ async def _fetch_sfi_data(
                     try:
                         stats = await adapter.get_progressive_stats(mid)
                         _canonical_for_match = _match_to_canonical.get(str(mid), "")
+                        # Derive match_end_time + report_time once per match
+                        # (detect_match_end_time needs CanonicalProgressiveStats objects,
+                        # which we have before dict-coercion below).
+                        _mid_kickoff = datetime(
+                            int(date[:4]), int(date[5:7]), int(date[8:10]), 15, 0, tzinfo=UTC
+                        )
+                        _mid_match_end = _sfi_detect_match_end_time(stats, _mid_kickoff)
+                        _mid_report_time: datetime | None = (
+                            _mid_match_end + timedelta(seconds=SFI_DATA_LAG_P95_SECONDS)
+                            if _mid_match_end is not None
+                            else None
+                        )
                         for entry in stats:
                             _row: dict[str, str | int | float | None] = {
                                 k: str(v) if v is not None else None for k, v in _coerce_adapter_output(entry).items()
                             }
                             # Tag for per-league partitioning at write time.
                             _row["league_id"] = _canonical_for_match or None
+                            # Per-match timing fields (None for in-progress or short matches).
+                            _row["match_end_time"] = (
+                                _mid_match_end.isoformat() if _mid_match_end is not None else None
+                            )
+                            _row["report_time"] = (
+                                _mid_report_time.isoformat() if _mid_report_time is not None else None
+                            )
                             all_progressive.append(_row)
                     except Exception as exc:
                         classify_and_emit_error(
