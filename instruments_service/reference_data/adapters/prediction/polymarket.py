@@ -13,6 +13,7 @@ Supported endpoint:
 
 import logging
 import re
+import time
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import ClassVar, cast
@@ -319,6 +320,11 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         self._last_raw_page_size: int = 0
         # Captured during get_instruments() — available via get_market_metadata()
         self._last_markets: list[PolymarketGammaMarket] = []
+        # Raw CLOB market cache — full historical list, filtered per-date in _fetch_clob_markets.
+        # Paid once per process lifetime (like Tardis); saves the full 900K-market cursor scan
+        # for every date beyond the first in a multi-date backfill run.
+        self._clob_raw_markets: list[dict[str, object]] | None = None
+        self._clob_raw_markets_fetched_at: float = 0.0
 
     @property
     def venue(self) -> str:
@@ -520,6 +526,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
     _CLOB_BASE = "https://clob.polymarket.com"
     _CLOB_PAGE_LIMIT = 1000
     _CLOB_MAX_PAGES = 1000  # safety cap — CLOB has 863K+ markets
+    _CLOB_RAW_CACHE_TTL: ClassVar[float] = 86400.0  # 24 h — CLOB history is immutable; matches Tardis TTL
 
     @staticmethod
     def _enrich_clob_outcomes(raw_item: dict[str, object]) -> None:
@@ -545,37 +552,18 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         if isinstance(tags, list) and tags and isinstance(tags[0], str):
             raw_item["tags"] = [{"slug": str(t).lower().replace(" ", "-"), "label": str(t)} for t in tags]
 
-    async def _fetch_clob_markets(
-        self,
-        date: str,
-        now: datetime,
-    ) -> list[InstrumentRecord]:
-        """Fetch markets from CLOB API for a historical date.
+    async def _fetch_all_raw_clob_markets(self) -> list[dict[str, object]]:
+        """Scan the full CLOB market history and return all raw market dicts.
 
-        CLOB /markets returns all markets (including resolved) with cursor
-        pagination, sorted oldest-first by ``end_date_iso``.  Filters by
-        ``end_date_iso`` matching the target date.
-
-        Cursor sharding via env vars (optional, for parallel backfill):
-            POLYMARKET_START_CURSOR — base64-encoded offset to start at
-                                      (e.g. "MTAwMDAw" = 100000 markets in)
-            POLYMARKET_END_CURSOR   — base64-encoded offset to stop at
-                                      (worker exits when cursor reaches this)
-        Both default unset → full scan from offset 0 (legacy behavior).
+        No date filtering — caller filters the result per-date.  Cursor sharding
+        via env vars is preserved for parallel-worker backfills.
         """
         import base64
         import os
 
-        target_prefix = f"{date}T"
-        results: list[InstrumentRecord] = []
-
         start_cursor_b64 = os.environ.get("POLYMARKET_START_CURSOR", "").strip()
         end_cursor_b64 = os.environ.get("POLYMARKET_END_CURSOR", "").strip()
 
-        # Decode end-cursor to integer offset for early-exit comparison.
-        # Cursor format observed 2026-05-05: base64-encoded ASCII offset
-        # ("MTAwMDAw" -> "100000"). If decoding fails we silently disable
-        # the end-cursor bound — full scan continues until natural EOF.
         end_offset: int | None = None
         if end_cursor_b64:
             try:
@@ -588,15 +576,16 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
             try:
                 start_offset = int(base64.b64decode(cursor).decode("ascii"))
                 logger.info(
-                    "CLOB shard: starting at cursor offset %d (date=%s, end_offset=%s)",
+                    "CLOB shard: starting at cursor offset %d (end_offset=%s)",
                     start_offset,
-                    date,
                     end_offset if end_offset is not None else "unbounded",
                 )
             except (ValueError, UnicodeDecodeError):
                 logger.warning("POLYMARKET_START_CURSOR=%r is not a valid base64 int — ignoring", cursor)
                 cursor = ""
 
+        all_markets: list[dict[str, object]] = []
+        page = 0
         async with self._make_session() as session:
             for page in range(self._CLOB_MAX_PAGES):
                 params: dict[str, str] = {"limit": str(self._CLOB_PAGE_LIMIT)}
@@ -614,54 +603,91 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
                 if not isinstance(raw_markets, list) or not raw_markets:
                     break
 
-                for raw_item in raw_markets:
-                    if not isinstance(raw_item, dict):
-                        continue
-                    end_date = str(raw_item.get("end_date_iso", ""))
-                    if not end_date.startswith(target_prefix):
-                        continue
-                    # CLOB market matches target date — enrich with
-                    # outcomes from tokens[] and event fields
-                    self._enrich_clob_outcomes(raw_item)
-                    _enrich_raw_event_fields(raw_item)
-                    try:
-                        market = PolymarketGammaMarket.model_validate(raw_item)
-                    except (ValueError, TypeError):
-                        continue
-                    self._last_markets.append(market)
-                    record = self._parse_market(market, now)
-                    if record is not None:
-                        results.append(record)
+                all_markets.extend(cast(list[dict[str, object]], raw_markets))
 
                 cursor = str(data.get("next_cursor", ""))
-                # CLOB signals end with cursor "-1" (base64: "LTE=")
                 if not cursor or cursor == "LTE=":
                     break
 
-                # End-cursor bound: stop once next cursor reaches/passes the slice ceiling.
                 if end_offset is not None:
                     try:
                         next_offset = int(base64.b64decode(cursor).decode("ascii"))
                         if next_offset >= end_offset:
                             logger.info(
-                                "CLOB shard: reached end_offset=%d at page %d (date=%s, %d matches)",
+                                "CLOB shard: reached end_offset=%d at page %d (%d markets)",
                                 end_offset,
                                 page,
-                                date,
-                                len(results),
+                                len(all_markets),
                             )
                             break
                     except (ValueError, UnicodeDecodeError):
-                        pass  # cursor format changed upstream — let natural EOF handle it
+                        pass
 
                 if page > 0 and page % 100 == 0:
-                    logger.info(
-                        "CLOB scan: page %d, %d matches so far (date=%s)",
-                        page,
-                        len(results),
-                        date,
-                    )
-        logger.info("CLOB: %d instruments for date=%s (%d pages scanned)", len(results), date, page + 1)
+                    logger.info("CLOB scan: page %d, %d markets total", page, len(all_markets))
+
+        logger.info("CLOB full scan: %d markets (%d pages)", len(all_markets), page + 1)
+        return all_markets
+
+    async def _get_raw_clob_markets_cached(self) -> list[dict[str, object]]:
+        """Return the full CLOB market list, fetching once and caching for 24 h.
+
+        A multi-date backfill runs the expensive full-scan exactly once — every
+        subsequent date filters the in-memory list (same pattern as Tardis/CeFi).
+        TTL of 24 h matches Tardis; CLOB history is append-only and resolved
+        markets are immutable within any realistic single-run window.
+        """
+        if (
+            self._clob_raw_markets is not None
+            and (time.monotonic() - self._clob_raw_markets_fetched_at) < self._CLOB_RAW_CACHE_TTL
+        ):
+            logger.debug("CLOB raw cache hit (%d markets)", len(self._clob_raw_markets))
+            return self._clob_raw_markets
+        raw = await self._fetch_all_raw_clob_markets()
+        self._clob_raw_markets = raw
+        self._clob_raw_markets_fetched_at = time.monotonic()
+        logger.info("CLOB raw cache populated: %d markets", len(raw))
+        return raw
+
+    async def _fetch_clob_markets(
+        self,
+        date: str,
+        now: datetime,
+    ) -> list[InstrumentRecord]:
+        """Filter the cached CLOB market list to a single target date.
+
+        The full CLOB scan is performed once and cached (_get_raw_clob_markets_cached).
+        Each per-date call filters the ~900K-market in-memory list by end_date_iso,
+        so a multi-date backfill pays the download cost exactly once.
+
+        Cursor sharding via env vars (optional, for parallel backfill):
+            POLYMARKET_START_CURSOR — base64-encoded offset to start at
+            POLYMARKET_END_CURSOR   — base64-encoded offset to stop at
+        Both default unset → full scan from offset 0.
+        """
+        target_prefix = f"{date}T"
+        results: list[InstrumentRecord] = []
+        raw_markets = await self._get_raw_clob_markets_cached()
+        for raw_item in raw_markets:
+            end_date = str(raw_item.get("end_date_iso", ""))
+            if not end_date.startswith(target_prefix):
+                continue
+            self._enrich_clob_outcomes(raw_item)
+            _enrich_raw_event_fields(raw_item)
+            try:
+                market = PolymarketGammaMarket.model_validate(raw_item)
+            except (ValueError, TypeError):
+                continue
+            self._last_markets.append(market)
+            record = self._parse_market(market, now)
+            if record is not None:
+                results.append(record)
+        logger.info(
+            "CLOB: %d instruments for date=%s (from %d cached markets)",
+            len(results),
+            date,
+            len(raw_markets),
+        )
         return results
 
     async def _fetch_page(
