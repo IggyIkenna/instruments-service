@@ -232,11 +232,24 @@ def main() -> int:
             return 0
 
         # Re-classify each candidate; record rows that genuinely upgrade.
-        # Two upgrade shapes:
+        # Three upgrade shapes:
         #   (a) reason upgrade: empty_confirmed stays but gets a more-specific EXPECTED_* reason.
-        #   (b) status flip: empty_confirmed → attempted_failed (for cefi/defi/tradfi
-        #       instrument-day rows the discriminated classifier determines can't have a
-        #       legitimate empty_confirmed at instrument-day grain — operator rule 2026-05-07).
+        #   (b) status flip → attempted_failed: cefi/defi/tradfi instrument-day grain rule
+        #       OR sports where fixture exists but source returned zero (Phase 1.5).
+        #   (c) status flip → expected_unattempted: sports where no fixture exists for the
+        #       shard in the instruments-service universe (Phase 1.5 — fixture not in scope).
+        fixture_manifest: pd.DataFrame | None = None
+        if asset_group == "sports" and "data_type" in df.columns and "capture_status" in df.columns:
+            _fix_mask = (df["data_type"].astype(str).str.strip() == "fixtures") & (
+                df["capture_status"].astype(str).str.strip() == "captured"
+            )
+            _fixture_cols = [c for c in ("venue", "league_id", "date") if c in df.columns]
+            fixture_manifest = df.loc[_fix_mask, _fixture_cols].copy()
+            logger.info(
+                "Sports fixture manifest: %d captured fixture rows for fixture-existence check (Phase 1.5)",
+                len(fixture_manifest),
+            )
+
         candidate_idx = df.index[mask]
         upgrades: list[dict[str, str | int]] = []
         n_no_change = 0
@@ -244,7 +257,7 @@ def main() -> int:
             row = df.loc[idx]
             current_reason = str(row.get("error_reason", "")).strip()
             try:
-                new_status, new_reason = classify_blank_reason_row(asset_group, row)
+                new_status, new_reason = classify_blank_reason_row(asset_group, row, fixture_manifest=fixture_manifest)
             except (ValueError, TypeError, KeyError, AttributeError) as exc:
                 logger.warning("Classifier failed for row %s: %s — leaving row unchanged", idx, exc)
                 n_no_change += 1
@@ -256,10 +269,12 @@ def main() -> int:
                 and new_reason != "SOURCE_RETURNED_ZERO"
                 and new_reason != current_reason
             )
-            # Shape (b): status flip — discriminated classifier determined the row should not
-            # be empty_confirmed (cefi/defi/tradfi instrument-day grain rule).
+            # Shape (b): status flip → attempted_failed (cefi/defi/tradfi instrument-day
+            # grain rule; sports where fixture exists but source returned zero — Phase 1.5).
             is_status_flip = new_status == "attempted_failed"
-            is_upgrade = is_reason_upgrade or is_status_flip
+            # Shape (c): sports shard has no fixture in instruments-service universe → expected_unattempted.
+            is_expected_unattempted_flip = new_status == "expected_unattempted"
+            is_upgrade = is_reason_upgrade or is_status_flip or is_expected_unattempted_flip
             if not is_upgrade:
                 n_no_change += 1
                 continue
