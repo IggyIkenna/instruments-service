@@ -98,7 +98,7 @@ def _build_remediation_message(date: str, bucket: str, path: str) -> str:
     """Build the actionable error message shown to operators."""
     return (
         f"api-football reference data missing for date {date} in {bucket}\n"
-        f"(expected gs://{bucket}/{path}).\n"
+        f"(expected gs://{bucket}/{path}).\n"  # noqa: gs-uri — error message showing operator the expected GCS path for remediation
         f"Run this first:\n"
         f"  python -m instruments_service --operation instruments --mode batch \\\n"
         f"    --asset-group SPORTS --sports-provider API_FOOTBALL \\\n"
