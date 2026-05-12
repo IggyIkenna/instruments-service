@@ -85,6 +85,7 @@ from unified_trading_library import (
     get_write_bucket_name,
     log_event,
     read_availability_index,
+    stamp_available_at_explicit,
 )
 from unified_trading_library import unified_config as _uc
 
@@ -1525,10 +1526,14 @@ async def process_instruments(
                 }
                 for entity_name, row_count in sports_ref_counts.items():
                     if entity_name not in _self_manifested_enr:
-                        sports_manifest.add(
-                            processing_date=date_type.fromisoformat(date),
-                            row_count=row_count,
-                            data_type=entity_name.upper(),
+                        sports_manifest.record_captured_from_counts(
+                            row_key={"date": date, "data_type": entity_name.upper()},
+                            total_rows=row_count,
+                            expected_root_clusters={},
+                            observed_clusters={"": row_count},
+                            available_at_envelope=pd.Timestamp(datetime.now(UTC)),
+                            pipeline_mode=_pipeline_mode_for_sports_data_type(entity_name.upper()),
+                            service_emission_state=None,
                         )
                 # Honest-coverage: per-fixture entities on a 0-fixture date are
                 # legitimately empty — record_empty so attempt_coverage_pct lifts
@@ -1698,10 +1703,14 @@ async def process_instruments(
         )
         pf_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=_pf_bucket)
         for entity_name, row_count in pf_counts.items():
-            pf_manifest.add(
-                processing_date=date_type.fromisoformat(date),
-                row_count=row_count,
-                data_type=entity_name.upper(),
+            pf_manifest.record_captured_from_counts(
+                row_key={"date": date, "data_type": entity_name.upper()},
+                total_rows=row_count,
+                expected_root_clusters={},
+                observed_clusters={"": row_count},
+                available_at_envelope=pd.Timestamp(datetime.now(UTC)),
+                pipeline_mode=_pipeline_mode_for_sports_data_type(entity_name.upper()),
+                service_emission_state=None,
             )
         pf_manifest.write()
         return pf_counts
@@ -1852,10 +1861,14 @@ async def process_instruments(
                         for entity_name, row_count in sports_ref_counts.items():
                             if entity_name not in _self_manifested_zf:
                                 if row_count > 0:
-                                    sports_manifest.add(
-                                        processing_date=date_type.fromisoformat(date),
-                                        row_count=row_count,
-                                        data_type=entity_name.upper(),
+                                    sports_manifest.record_captured_from_counts(
+                                        row_key={"date": date, "data_type": entity_name.upper()},
+                                        total_rows=row_count,
+                                        expected_root_clusters={},
+                                        observed_clusters={"": row_count},
+                                        available_at_envelope=pd.Timestamp(datetime.now(UTC)),
+                                        pipeline_mode=_pipeline_mode_for_sports_data_type(entity_name.upper()),
+                                        service_emission_state=None,
                                     )
                                 else:
                                     # Honest-coverage: api returned 0 rows
@@ -2185,11 +2198,20 @@ async def process_instruments(
                         venue=venue_str,
                         entity="instruments",
                     )
-                    manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=len(_league_df_clean),
+                    _stamped_fixture_df = stamp_available_at_explicit(_league_df_clean, when=datetime.now(UTC))
+                    manifest.record_captured(
+                        row_key={
+                            "date": date,
+                            "data_type": "FIXTURES",
+                            "league_id": _canonical_league_id(_league_id_str),
+                        },
+                        df=_stamped_fixture_df,
+                        category="sports",
+                        instrument_type="",
                         data_type="FIXTURES",
                         league_id=_canonical_league_id(_league_id_str),
+                        pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
+                        service_emission_state=None,
                     )
                     counts[f"FIXTURES/{_league_id_str}"] = len(_league_df_clean)
                     if sampler.enable_sampling:
@@ -2263,12 +2285,29 @@ async def process_instruments(
                     # (the bundled data_type per UAC BUNDLED_DATA_TYPES SSOT),
                     # underlying=<canonical_group> (the per-bundle cluster
                     # identity, mirroring options_chain root-bucketing).
-                    manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=len(_group_df_clean),
-                        venue=_manifest_venue,
+                    _stamped_group_df = stamp_available_at_explicit(_group_df_clean, when=datetime.now(UTC))
+                    _pred_pm = (
+                        PipelineMode.BATCH_POLYMARKET_GAMMA_API
+                        if _manifest_venue == "POLYMARKET"
+                        else PipelineMode.BATCH_INSTRUMENTS_SERVICE
+                    )
+                    manifest.record_captured(
+                        row_key={
+                            "date": date,
+                            "data_type": "prediction_canonical_question_group",
+                            "venue": _manifest_venue,
+                            "underlying": _group_str,
+                        },
+                        df=_stamped_group_df,
+                        category="prediction",
+                        instrument_type="",
                         data_type="prediction_canonical_question_group",
+                        venue=_manifest_venue,
                         underlying=_group_str,
+                        expected_root_clusters={},
+                        cluster_extractor=lambda s: s,
+                        pipeline_mode=_pred_pm,
+                        service_emission_state=None,
                     )
                     counts[f"{_manifest_venue}/{_group_str}"] = len(_group_df_clean)
                     if sampler.enable_sampling:
@@ -2358,10 +2397,14 @@ async def process_instruments(
             _self_manifested = {"injuries", "fixture_stats", "fixture_events", "fixture_lineups", "player_stats"}
             for entity_name, row_count in sports_ref_counts.items():
                 if entity_name not in _self_manifested:
-                    sports_manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=row_count,
-                        data_type=entity_name.upper(),
+                    sports_manifest.record_captured_from_counts(
+                        row_key={"date": date, "data_type": entity_name.upper()},
+                        total_rows=row_count,
+                        expected_root_clusters={},
+                        observed_clusters={"": row_count},
+                        available_at_envelope=pd.Timestamp(datetime.now(UTC)),
+                        pipeline_mode=_pipeline_mode_for_sports_data_type(entity_name.upper()),
+                        service_emission_state=None,
                     )
             sports_manifest.write()
             logger.info(
@@ -2949,18 +2992,33 @@ def _write_venue(
                     manifest_venue = _protocol.upper()
                     manifest_chain = _chain
             if manifest is not None:
+                _stamped_venue_df = stamp_available_at_explicit(df, when=datetime.now(UTC))
                 if is_sports_ref:
-                    manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=len(df),
+                    try:
+                        _venue_pm = _pipeline_mode_for_sports_data_type(manifest_data_type)
+                    except KeyError:
+                        _venue_pm = PipelineMode.BATCH_INSTRUMENTS_SERVICE
+                    manifest.record_captured(
+                        row_key={"date": date, "data_type": manifest_data_type},
+                        df=_stamped_venue_df,
+                        category="sports",
+                        instrument_type="",
                         data_type=manifest_data_type,
+                        pipeline_mode=_venue_pm,
+                        service_emission_state=None,
                     )
                 else:
-                    manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=len(df),
+                    _cat = "defi" if manifest_chain else ("tradfi" if venue_str in _TRADFI_VENUES else "cefi")
+                    manifest.record_captured(
+                        row_key={"date": date, "venue": manifest_venue, "chain": manifest_chain},
+                        df=_stamped_venue_df,
+                        category=_cat,
+                        instrument_type="",
+                        data_type="",
                         venue=manifest_venue,
                         chain=manifest_chain,
+                        pipeline_mode=PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+                        service_emission_state=None,
                     )
             else:
                 path = f"instrument_availability/by_date/day={date}/venue={venue_str}/instruments.parquet"
@@ -3584,11 +3642,20 @@ async def _fetch_sports_reference_data(
                         entity="standings",
                     )
                     if manifest is not None:
-                        manifest.add(
-                            processing_date=date_type.fromisoformat(date),
-                            row_count=len(_s_league_df),
+                        _stamped_std_df = stamp_available_at_explicit(_s_league_df, when=datetime.now(UTC))
+                        manifest.record_captured(
+                            row_key={
+                                "date": date,
+                                "data_type": "STANDINGS",
+                                "league_id": _canonical_league_id(_s_lid_str),
+                            },
+                            df=_stamped_std_df,
+                            category="sports",
+                            instrument_type="",
                             data_type="STANDINGS",
                             league_id=_canonical_league_id(_s_lid_str),
+                            pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
+                            service_emission_state=None,
                         )
                 if manifest is not None:
                     _af_emit_empty_gaps_for_entity("STANDINGS", _std_captured)
@@ -3643,11 +3710,20 @@ async def _fetch_sports_reference_data(
                             entity="injuries",
                         )
                         if manifest is not None:
-                            manifest.add(
-                                processing_date=date_type.fromisoformat(date),
-                                row_count=len(_inj_clean),
+                            _stamped_inj_df = stamp_available_at_explicit(_inj_clean, when=datetime.now(UTC))
+                            manifest.record_captured(
+                                row_key={
+                                    "date": date,
+                                    "data_type": "INJURIES",
+                                    "league_id": _canonical_league_id(_inj_lid_str),
+                                },
+                                df=_stamped_inj_df,
+                                category="sports",
+                                instrument_type="",
                                 data_type="INJURIES",
                                 league_id=_canonical_league_id(_inj_lid_str),
+                                pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
+                                service_emission_state=None,
                             )
 
                     if not _without_league.empty:
@@ -4062,11 +4138,20 @@ async def _fetch_sports_reference_data(
                             entity=entity_name,
                         )
                         if manifest is not None:
-                            manifest.add(
-                                processing_date=date_type.fromisoformat(date),
-                                row_count=len(_pf_clean),
+                            _stamped_pf_df = stamp_available_at_explicit(_pf_clean, when=datetime.now(UTC))
+                            manifest.record_captured(
+                                row_key={
+                                    "date": date,
+                                    "data_type": _af_entity_dt,
+                                    "league_id": _canonical_league_id(_pf_lid_str),
+                                },
+                                df=_stamped_pf_df,
+                                category="sports",
+                                instrument_type="",
                                 data_type=_af_entity_dt,
                                 league_id=_canonical_league_id(_pf_lid_str),
+                                pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
+                                service_emission_state=None,
                             )
 
                     # Drop unmapped rows — single-SSOT means bare writes are
@@ -4567,11 +4652,20 @@ async def _fetch_footystats_predictions(
                         entity="footystats_predictions",
                         filename="footystats_predictions.parquet",
                     )
-                    pred_manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=len(_pred_clean),
+                    _stamped_pred_clean = stamp_available_at_explicit(_pred_clean, when=datetime.now(UTC))
+                    pred_manifest.record_captured(
+                        row_key={
+                            "date": date,
+                            "data_type": "PREDICTIONS",
+                            "league_id": _canonical_league_id(_pred_lid_str),
+                        },
+                        df=_stamped_pred_clean,
+                        category="sports",
+                        instrument_type="",
                         data_type="PREDICTIONS",
                         league_id=_canonical_league_id(_pred_lid_str),
+                        pipeline_mode=PipelineMode.BATCH_FOOTYSTATS,
+                        service_emission_state=None,
                     )
 
                 if not _without_league.empty:
@@ -4588,10 +4682,15 @@ async def _fetch_footystats_predictions(
                         entity="footystats_predictions",
                         filename="footystats_predictions.parquet",
                     )
-                    pred_manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=len(_pred_unmapped),
+                    _stamped_pred_unmapped = stamp_available_at_explicit(_pred_unmapped, when=datetime.now(UTC))
+                    pred_manifest.record_captured(
+                        row_key={"date": date, "data_type": "PREDICTIONS"},
+                        df=_stamped_pred_unmapped,
+                        category="sports",
+                        instrument_type="",
                         data_type="PREDICTIONS",
+                        pipeline_mode=PipelineMode.BATCH_FOOTYSTATS,
+                        service_emission_state=None,
                     )
             else:
                 _gated_sink_write(
@@ -4606,10 +4705,15 @@ async def _fetch_footystats_predictions(
                     entity="footystats_predictions",
                     filename="footystats_predictions.parquet",
                 )
-                pred_manifest.add(
-                    processing_date=date_type.fromisoformat(date),
-                    row_count=len(df),
+                _stamped_pred_df = stamp_available_at_explicit(df, when=datetime.now(UTC))
+                pred_manifest.record_captured(
+                    row_key={"date": date, "data_type": "PREDICTIONS"},
+                    df=_stamped_pred_df,
+                    category="sports",
+                    instrument_type="",
                     data_type="PREDICTIONS",
+                    pipeline_mode=PipelineMode.BATCH_FOOTYSTATS,
+                    service_emission_state=None,
                 )
             pred_manifest.write()
 
@@ -4833,11 +4937,16 @@ async def _fetch_footystats_matches(
                         entity="footystats_matches",
                         filename="footystats_matches.parquet",
                     )
-                    _ft_manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=len(_ft_clean),
+                    _stamped_ft_df = stamp_available_at_explicit(_ft_clean, when=datetime.now(UTC))
+                    _ft_manifest.record_captured(
+                        row_key={"date": date, "data_type": "MATCHES", "league_id": _ft_canonical},
+                        df=_stamped_ft_df,
+                        category="sports",
+                        instrument_type="",
                         data_type="MATCHES",
                         league_id=_ft_canonical,
+                        pipeline_mode=PipelineMode.BATCH_FOOTYSTATS,
+                        service_emission_state=None,
                     )
                     _captured_leagues.add(_ft_canonical)
 
@@ -5028,11 +5137,16 @@ async def _fetch_footystats_odds(
                         entity="footystats_odds",
                         filename="footystats_odds.parquet",
                     )
-                    odds_manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=len(_odds_clean),
+                    _stamped_odds_clean = stamp_available_at_explicit(_odds_clean, when=datetime.now(UTC))
+                    odds_manifest.record_captured(
+                        row_key={"date": date, "data_type": "ODDS", "league_id": _canonical_league_id(_odds_lid_str)},
+                        df=_stamped_odds_clean,
+                        category="sports",
+                        instrument_type="",
                         data_type="ODDS",
                         league_id=_canonical_league_id(_odds_lid_str),
+                        pipeline_mode=PipelineMode.BATCH_ODDS_API,
+                        service_emission_state=None,
                     )
 
                 if not _without_league.empty:
@@ -5049,10 +5163,15 @@ async def _fetch_footystats_odds(
                         entity="footystats_odds",
                         filename="footystats_odds.parquet",
                     )
-                    odds_manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=len(_odds_unmapped),
+                    _stamped_odds_unmapped = stamp_available_at_explicit(_odds_unmapped, when=datetime.now(UTC))
+                    odds_manifest.record_captured(
+                        row_key={"date": date, "data_type": "ODDS"},
+                        df=_stamped_odds_unmapped,
+                        category="sports",
+                        instrument_type="",
                         data_type="ODDS",
+                        pipeline_mode=PipelineMode.BATCH_ODDS_API,
+                        service_emission_state=None,
                     )
             else:
                 _gated_sink_write(
@@ -5067,10 +5186,15 @@ async def _fetch_footystats_odds(
                     entity="footystats_odds",
                     filename="footystats_odds.parquet",
                 )
-                odds_manifest.add(
-                    processing_date=date_type.fromisoformat(date),
-                    row_count=len(df),
+                _stamped_odds_df = stamp_available_at_explicit(df, when=datetime.now(UTC))
+                odds_manifest.record_captured(
+                    row_key={"date": date, "data_type": "ODDS"},
+                    df=_stamped_odds_df,
+                    category="sports",
+                    instrument_type="",
                     data_type="ODDS",
+                    pipeline_mode=PipelineMode.BATCH_ODDS_API,
+                    service_emission_state=None,
                 )
             odds_manifest.write()
             logger.info("FootyStats odds: %d rows written for date=%s", len(df), date)
@@ -5229,11 +5353,16 @@ async def _fetch_understat_xg(
                         venue="understat",
                         entity="understat_xg",
                     )
-                    xg_manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=len(_xg_league_df),
+                    _stamped_xg_df = stamp_available_at_explicit(_xg_league_df, when=datetime.now(UTC))
+                    xg_manifest.record_captured(
+                        row_key={"date": date, "data_type": "XG", "league_id": _canonical_league_id(_xg_lid_str)},
+                        df=_stamped_xg_df,
+                        category="sports",
+                        instrument_type="",
                         data_type="XG",
                         league_id=_canonical_league_id(_xg_lid_str),
+                        pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
+                        service_emission_state=None,
                     )
 
                 if not _without_league.empty:
@@ -5559,12 +5688,14 @@ async def _fetch_transfermarkt_data(
         # kwargs); the cache-hit path also emits an UPSTREAM_FETCH_COMPLETED
         # event with ``cached=True`` so current observability can filter on it.
         for _cap_lid, _cap_count in _captured_league_counts.items():
-            manifest.add(
-                processing_date=date_type.fromisoformat(date),
-                row_count=_cap_count,
-                data_type="PLAYER_VALUES",
-                league_id=_canonical_league_id(_cap_lid),
-                cached=_cache_hit,
+            manifest.record_captured_from_counts(
+                row_key={"date": date, "data_type": "PLAYER_VALUES", "league_id": _canonical_league_id(_cap_lid)},
+                total_rows=_cap_count,
+                expected_root_clusters={},
+                observed_clusters={"": _cap_count},
+                available_at_envelope=pd.Timestamp(datetime.now(UTC)),
+                pipeline_mode=PipelineMode.BATCH_TRANSFERMARKT,
+                service_emission_state=None,
             )
         for _emp_lid in sorted(_empty_leagues | _unmapped_leagues):
             manifest.record_empty(
@@ -5791,10 +5922,15 @@ async def _fetch_sfi_data(
                     entity="sfi_standings",
                 )
                 counts["sfi_standings"] = len(df)
-                manifest.add(
-                    processing_date=date_type.fromisoformat(date),
-                    row_count=len(df),
+                _stamped_sfi_std_df = stamp_available_at_explicit(df, when=datetime.now(UTC))
+                manifest.record_captured(
+                    row_key={"date": date, "data_type": "SFI_STANDINGS"},
+                    df=_stamped_sfi_std_df,
+                    category="sports",
+                    instrument_type="",
                     data_type="SFI_STANDINGS",
+                    pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+                    service_emission_state=None,
                 )
                 logger.info("SFI standings: %d rows written", len(df))
             else:
@@ -5946,11 +6082,20 @@ async def _fetch_sfi_data(
                                 venue="soccer_football_info",
                                 entity="progressive_stats",
                             )
-                            manifest.add(
-                                processing_date=date_type.fromisoformat(date),
-                                row_count=len(_pp_league_df),
+                            _stamped_pp_df = stamp_available_at_explicit(_pp_league_df, when=datetime.now(UTC))
+                            manifest.record_captured(
+                                row_key={
+                                    "date": date,
+                                    "data_type": "SFI_PROGRESSIVE_STATS",
+                                    "league_id": _canonical_league_id(_pp_lid_str),
+                                },
+                                df=_stamped_pp_df,
+                                category="sports",
+                                instrument_type="",
                                 data_type="SFI_PROGRESSIVE_STATS",
                                 league_id=_canonical_league_id(_pp_lid_str),
+                                pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+                                service_emission_state=None,
                             )
 
                         if not _without_league.empty:
@@ -6345,11 +6490,14 @@ async def _fetch_weather_data(
                     if not _lid_str:
                         continue
                     _captured_leagues_covered.add(_lid_str)
-                    manifest.add(
-                        processing_date=date_type.fromisoformat(date),
-                        row_count=1,
-                        data_type="WEATHER",
-                        league_id=_canonical_league_id(_lid_str),
+                    manifest.record_captured_from_counts(
+                        row_key={"date": date, "data_type": "WEATHER", "league_id": _canonical_league_id(_lid_str)},
+                        total_rows=1,
+                        expected_root_clusters={},
+                        observed_clusters={"": 1},
+                        available_at_envelope=pd.Timestamp(datetime.now(UTC)),
+                        pipeline_mode=PipelineMode.BATCH_OPEN_METEO,
+                        service_emission_state=None,
                     )
             for _exp_lid in sorted(_expected_weather_league_ids - _captured_leagues_covered):
                 manifest.record_empty(
@@ -6530,11 +6678,14 @@ async def _fetch_weather_data(
         # written above. _league_venue_count is populated only when the
         # per-league write path executed.
         for _lid, _count in sorted(_league_venue_count.items()):
-            manifest.add(
-                processing_date=date_type.fromisoformat(date),
-                row_count=_count,
-                data_type="WEATHER",
-                league_id=_canonical_league_id(_lid),
+            manifest.record_captured_from_counts(
+                row_key={"date": date, "data_type": "WEATHER", "league_id": _canonical_league_id(_lid)},
+                total_rows=_count,
+                expected_root_clusters={},
+                observed_clusters={"": _count},
+                available_at_envelope=pd.Timestamp(datetime.now(UTC)),
+                pipeline_mode=PipelineMode.BATCH_OPEN_METEO,
+                service_emission_state=None,
             )
         # Per-league empty_confirmed for in-season leagues with no captured weather
         for _exp_lid in sorted(_expected_weather_league_ids - _captured_leagues):
@@ -6712,13 +6863,20 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
             service_name="instruments-service",
             catalogue_bucket=bucket,
         )
-        writer.add(
-            processing_date=parsed,
-            row_count=record_count,
-            venue=manifest_venue,
-            chain=manifest_chain,
-            data_type=manifest_data_type,
-            league_id=manifest_league_id,
+        writer.record_captured_from_counts(
+            row_key={
+                "date": str(parsed),
+                "data_type": manifest_data_type,
+                "venue": manifest_venue,
+                "chain": manifest_chain,
+                "league_id": manifest_league_id,
+            },
+            total_rows=record_count,
+            expected_root_clusters={},
+            observed_clusters={"": record_count},
+            available_at_envelope=pd.Timestamp(datetime.now(UTC)),
+            pipeline_mode=PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+            service_emission_state=None,
         )
         writer.write()
     except Exception as exc:

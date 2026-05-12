@@ -10,6 +10,9 @@ from unified_api_contracts.registry import (
     bootstrap_capabilities,
     validate_operation,
 )
+from unified_api_contracts.registry.capability_declarations._defi import (
+    get_supported_chains_for_protocol,
+)
 
 from .adapters.cefi.aster import AsterReferenceDataAdapter
 from .adapters.cefi.ccxt_adapter import CCXTReferenceDataAdapter
@@ -210,10 +213,6 @@ _PROTOCOL_TO_ADAPTER_KEY: dict[str, str] = {
     "gmx": "uniswap_v3",
     "sushiswap": "uniswap_v3",
 }
-
-from unified_api_contracts.registry.capability_declarations._defi import (
-    get_supported_chains_for_protocol,
-)
 
 for _prefix, _protocol_slug in _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL.items():
     _adapter_key = _PROTOCOL_TO_ADAPTER_KEY.get(_protocol_slug, _protocol_slug)
