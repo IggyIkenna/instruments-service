@@ -1,18 +1,20 @@
 """Renzo reference data adapter — instrument discovery for the ezETH LRT.
 
-Discovers the Renzo liquid restaking token (ezETH) on Ethereum.
-Token is returned as InstrumentRecord with instrument_type="YIELD_BEARING".
+Discovers the Renzo liquid restaking token (ezETH) on Ethereum mainnet and on
+Renzo's canonical-bridge L2s (Arbitrum). Tokens are returned as InstrumentRecord
+with instrument_type="YIELD_BEARING".
 
 References:
 - https://www.renzoprotocol.com/
-- ezETH contract: https://etherscan.io/token/0xbf5495Efe5DB9ce00f80364C8B423567e58d2110
-- Launch date sourced from unified_api_contracts.registry.chain_env.PROTOCOL_LAUNCH_DATES
-  (("ETHEREUM", "RENZO") == 2024-04-29).
+- ezETH Ethereum:  https://etherscan.io/token/0xbf5495Efe5DB9ce00f80364C8B423567e58d2110
+- ezETH Arbitrum:  https://arbiscan.io/token/0x2416092f143378750bb29b79eD961ab195CcEea5
+- Renzo L2 docs:   https://docs.renzoprotocol.com/docs/integrations/l2-native-restaking
+- Launch dates sourced from unified_api_contracts.registry.chain_env.PROTOCOL_LAUNCH_DATES
+  (("ETHEREUM", "RENZO") == 2024-04-29; ("ARBITRUM", "RENZO") == 2024-02-29).
 
-Note: Renzo also has a bridged ezETH on Arbitrum (("ARBITRUM", "RENZO") == 2024-02-29) — the
-multi-chain extension (parse `chain` from the venue name + per-chain address map + register
-`RENZO-ARBITRUM` in factory.py's `defi_graph_adapters`) is a follow-up; this adapter currently
-serves Ethereum only, matching the lido/etherfi single-chain precedent.
+Per Renzo's canonical-bridge architecture, the ezETH token uses the SAME contract
+address across all L2s; chain dimension is encoded in the canonical venue tag
+(RENZO-ETHEREUM / RENZO-ARBITRUM) and is the per-chain shard atom in the manifest.
 """
 
 import logging
@@ -34,27 +36,48 @@ logger = logging.getLogger(__name__)
 _DEFAULT_CHAIN = "ETHEREUM"
 
 # Renzo Ethereum mainnet GA (2024-04-29) — mirrors PROTOCOL_LAUNCH_DATES[("ETHEREUM", "RENZO")].
-_RENZO_DEPLOY_DATE = datetime(2024, 4, 29, tzinfo=UTC)
+_RENZO_ETH_DEPLOY_DATE = datetime(2024, 4, 29, tzinfo=UTC)
+# Renzo Arbitrum L2 native-restaking GA (2024-02-29) — mirrors PROTOCOL_LAUNCH_DATES[("ARBITRUM", "RENZO")].
+_RENZO_ARB_DEPLOY_DATE = datetime(2024, 2, 29, tzinfo=UTC)
 
-# ezETH token address on Ethereum (18 decimals).
-_EZETH_ADDRESS = "0xbf5495Efe5DB9ce00f80364C8B423567e58d2110"
+# ezETH token address per chain. The Arbitrum address is the canonical bridged
+# representation; same canonical address is used across other Renzo L2s if added later.
 _EZETH_DECIMALS = 18
+_EZETH_ETH_ADDRESS = "0xbf5495Efe5DB9ce00f80364C8B423567e58d2110"
+_EZETH_ARB_ADDRESS = "0x2416092f143378750bb29b79eD961ab195CcEea5"
 
-_LRT_TOKENS: list[dict[str, str]] = [
-    {
-        "symbol": "EZETH",
-        "contract_address": _EZETH_ADDRESS,
-        "underlying": "ETH",
-    },
-]
+_LRT_TOKENS_BY_CHAIN: dict[str, list[dict[str, str]]] = {
+    "ETHEREUM": [
+        {
+            "symbol": "EZETH",
+            "contract_address": _EZETH_ETH_ADDRESS,
+            "underlying": "ETH",
+        },
+    ],
+    "ARBITRUM": [
+        {
+            "symbol": "EZETH",
+            "contract_address": _EZETH_ARB_ADDRESS,
+            "underlying": "ETH",
+        },
+    ],
+}
+
+
+def _get_deploy_date(chain: str) -> datetime:
+    if chain == "ARBITRUM":
+        return _RENZO_ARB_DEPLOY_DATE
+    return _RENZO_ETH_DEPLOY_DATE
 
 
 class RenzoReferenceDataAdapter(BaseReferenceDataAdapter):
-    """Renzo reference data: ezETH LRT token discovery.
+    """Renzo reference data: ezETH LRT token discovery (multi-chain).
 
-    Renzo launched on Ethereum mainnet 2024-04-29. ezETH is a yield-bearing
-    liquid restaking token; its exchange rate vs ETH appreciates as restaking
-    rewards (EigenLayer AVS + native staking) accrue.
+    Renzo launched on Ethereum mainnet 2024-04-29 with native ETH restaking on
+    EigenLayer. Renzo extended to Arbitrum on 2024-02-29 (L2-native restaking
+    via Renzo's canonical bridge — users deposit on L2 and mint ezETH at L2
+    speed/cost). ezETH is yield-bearing — its exchange rate vs ETH appreciates
+    as restaking rewards (EigenLayer AVS + native staking) accrue.
     """
 
     def __init__(
@@ -80,8 +103,10 @@ class RenzoReferenceDataAdapter(BaseReferenceDataAdapter):
 
         results: list[InstrumentRecord] = []
         venue_tag = f"RENZO-{self._chain}"
+        deploy_date = _get_deploy_date(self._chain)
+        tokens = _LRT_TOKENS_BY_CHAIN.get(self._chain, [])
 
-        for token in _LRT_TOKENS:
+        for token in tokens:
             symbol = token["symbol"]
             address = token["contract_address"]
             underlying = token["underlying"]
@@ -102,7 +127,7 @@ class RenzoReferenceDataAdapter(BaseReferenceDataAdapter):
                     option_type=None,
                     status=InstrumentStatus.ACTIVE,
                     underlying=underlying,
-                    available_from_datetime=_RENZO_DEPLOY_DATE,
+                    available_from_datetime=deploy_date,
                     base_asset_contract_address=address,
                     base_asset_decimals=_EZETH_DECIMALS,
                 )
