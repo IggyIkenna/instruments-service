@@ -163,15 +163,15 @@ SPECS: tuple[EntitySpec, ...] = (
 )
 
 
-# Source → batch PipelineMode mapping. footystats has no dedicated enum value
-# in UAC (closed-set; missing BATCH_FOOTYSTATS) — its rows tag with
-# BATCH_API_FOOTBALL per the workaround documented in
-# ``plans/active/issues/footystats_pipeline_mode_gap_2026_05_12.md``. ODDS slice
-# from footystats odds adapter tags BATCH_ODDS_API per UAC SOURCE_PRIORITY for
-# ``ODDS_SNAPSHOT`` / ``ODDS_MOVEMENT`` / ``ARBITRAGE``.
+# Source → batch PipelineMode mapping. footystats-served rows stamp with
+# canonical ``BATCH_FOOTYSTATS`` per Q2=(A) flip on 2026-05-12 (UAC@52d289c
+# shipped the enum extension; resolves
+# ``plans/active/issues/footystats_pipeline_mode_gap_2026_05_12.md``). ODDS
+# slice from the footystats odds adapter still tags BATCH_ODDS_API per UAC
+# SOURCE_PRIORITY for ``ODDS_SNAPSHOT`` / ``ODDS_MOVEMENT`` / ``ARBITRAGE``.
 _SOURCE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
     "api_football": PipelineMode.BATCH_API_FOOTBALL,
-    "footystats": PipelineMode.BATCH_API_FOOTBALL,
+    "footystats": PipelineMode.BATCH_FOOTYSTATS,
     "understat": PipelineMode.BATCH_UNDERSTAT,
     "open_meteo": PipelineMode.BATCH_OPEN_METEO,
     "transfermarkt": PipelineMode.BATCH_TRANSFERMARKT,
