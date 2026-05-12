@@ -20,6 +20,7 @@ from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
 from .adapters.defi.balancer import BalancerReferenceDataAdapter
 from .adapters.defi.benqi import BenqiReferenceDataAdapter
 from .adapters.defi.compound_v3 import CompoundV3ReferenceDataAdapter
+from .adapters.defi.convex import ConvexReferenceDataAdapter
 from .adapters.defi.curve import CurveReferenceDataAdapter
 from .adapters.defi.drift import DriftReferenceDataAdapter
 from .adapters.defi.eigenlayer import EigenLayerReferenceDataAdapter
@@ -28,22 +29,28 @@ from .adapters.defi.etherfi import EtherFiReferenceDataAdapter
 from .adapters.defi.ethfi import EthFiGovernanceReferenceDataAdapter
 from .adapters.defi.euler_v2 import EulerV2ReferenceDataAdapter
 from .adapters.defi.fluid import FluidReferenceDataAdapter
+from .adapters.defi.idle import IdleReferenceDataAdapter
 from .adapters.defi.jito import JitoReferenceDataAdapter
 from .adapters.defi.kamino import KaminoReferenceDataAdapter
+from .adapters.defi.karak import KarakReferenceDataAdapter
 from .adapters.defi.kelpdao import KelpDaoReferenceDataAdapter
 from .adapters.defi.lido import LidoReferenceDataAdapter
 from .adapters.defi.marinade import MarinadeReferenceDataAdapter
 from .adapters.defi.morpho import MorphoReferenceDataAdapter
 from .adapters.defi.orca import OrcaReferenceDataAdapter
+from .adapters.defi.puffer import PufferReferenceDataAdapter
 from .adapters.defi.radiant import RadiantReferenceDataAdapter
 from .adapters.defi.raydium import RaydiumReferenceDataAdapter
 from .adapters.defi.renzo import RenzoReferenceDataAdapter
 from .adapters.defi.rocket_pool import RocketPoolReferenceDataAdapter
+from .adapters.defi.solblaze import SolblazeReferenceDataAdapter
 from .adapters.defi.spark import SparkReferenceDataAdapter
+from .adapters.defi.symbiotic import SymbioticReferenceDataAdapter
 from .adapters.defi.uniswap_v2 import UniswapV2ReferenceDataAdapter
 from .adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
 from .adapters.defi.uniswap_v4 import UniswapV4ReferenceDataAdapter
 from .adapters.defi.venus import VenusReferenceDataAdapter
+from .adapters.defi.yearn import YearnReferenceDataAdapter
 from .adapters.prediction.kalshi import KalshiReferenceDataAdapter
 from .adapters.prediction.polymarket import PolymarketReferenceDataAdapter
 from .adapters.sports.adapters.api_football_reference import ApiFootballReferenceDataAdapter
@@ -113,6 +120,16 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "ROCKETPOOL-ETHEREUM": "rocket_pool",
     "RENZO-ETHEREUM": "renzo",
     "KELPDAO-ETHEREUM": "kelpdao",
+    "PUFFER-ETHEREUM": "puffer",
+    "SYMBIOTIC-ETHEREUM": "symbiotic",
+    "KARAK-ETHEREUM": "karak",
+    "KARAK-ARBITRUM": "karak",
+    # DeFi — Vault/yield-aggregator protocols (Ethereum + L2, static curated registry)
+    "CONVEX-ETHEREUM": "convex",
+    "IDLE-ETHEREUM": "idle",
+    "IDLE-ARBITRUM": "idle",
+    "YEARN-ETHEREUM": "yearn",
+    "YEARN-ARBITRUM": "yearn",
     # DeFi — Governance tokens (on-chain, Ethereum)
     "EIGENLAYER-ETHEREUM": "eigenlayer",
     "ETHERFI-GOV-ETHEREUM": "ethfi_governance",
@@ -126,6 +143,7 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "ORCA-SOLANA": "orca",
     "MARINADE-SOLANA": "marinade",
     "JITO-SOLANA": "jito",
+    "SOLBLAZE-SOLANA": "solblaze",
     # Jupiter is execution-only (swap aggregator), not instrument discovery.
 }
 
@@ -214,6 +232,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "benqi": BenqiReferenceDataAdapter,
     "betfair": BetfairReferenceDataAdapter,
     "compound_v3": CompoundV3ReferenceDataAdapter,
+    "convex": ConvexReferenceDataAdapter,
     "curve": CurveReferenceDataAdapter,
     "databento": DatabentoReferenceDataAdapter,
     "drift": DriftReferenceDataAdapter,
@@ -224,9 +243,11 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "euler_v2": EulerV2ReferenceDataAdapter,
     "fluid": FluidReferenceDataAdapter,
     "hyperliquid": HyperliquidReferenceDataAdapter,
+    "idle": IdleReferenceDataAdapter,
     "jito": JitoReferenceDataAdapter,
     "kelpdao": KelpDaoReferenceDataAdapter,
     "kamino": KaminoReferenceDataAdapter,
+    "karak": KarakReferenceDataAdapter,
     "marinade": MarinadeReferenceDataAdapter,
     "ibkr": IBKRReferenceDataAdapter,
     "kalshi": KalshiReferenceDataAdapter,
@@ -236,15 +257,19 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "polygon": PolygonReferenceDataAdapter,
     "polymarket": PolymarketReferenceDataAdapter,
     "radiant": RadiantReferenceDataAdapter,
+    "puffer": PufferReferenceDataAdapter,
     "raydium": RaydiumReferenceDataAdapter,
     "renzo": RenzoReferenceDataAdapter,
     "rocket_pool": RocketPoolReferenceDataAdapter,
+    "solblaze": SolblazeReferenceDataAdapter,
     "spark": SparkReferenceDataAdapter,
+    "symbiotic": SymbioticReferenceDataAdapter,
     "tardis": TardisReferenceDataAdapter,
     "uniswap_v2": UniswapV2ReferenceDataAdapter,
     "uniswap_v3": UniswapV3ReferenceDataAdapter,
     "uniswap_v4": UniswapV4ReferenceDataAdapter,
     "venus": VenusReferenceDataAdapter,
+    "yearn": YearnReferenceDataAdapter,
 }
 
 
@@ -306,6 +331,15 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "rocket_pool": "",
     "renzo": "",
     "kelpdao": "",
+    "puffer": "",
+    "solblaze": "",
+    # Restaking vault protocols — curated static vault registries.
+    "symbiotic": "",
+    "karak": "",
+    # Vault / yield-aggregator protocols — curated static vault registries.
+    "convex": "",
+    "idle": "",
+    "yearn": "",
 }
 
 
