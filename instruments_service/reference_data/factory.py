@@ -36,6 +36,7 @@ from .adapters.defi.morpho import MorphoReferenceDataAdapter
 from .adapters.defi.orca import OrcaReferenceDataAdapter
 from .adapters.defi.radiant import RadiantReferenceDataAdapter
 from .adapters.defi.raydium import RaydiumReferenceDataAdapter
+from .adapters.defi.rocket_pool import RocketPoolReferenceDataAdapter
 from .adapters.defi.spark import SparkReferenceDataAdapter
 from .adapters.defi.uniswap_v2 import UniswapV2ReferenceDataAdapter
 from .adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
@@ -107,6 +108,7 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "LIDO-ETHEREUM": "lido",
     "ETHERFI-ETHEREUM": "etherfi",
     "ETHENA-ETHEREUM": "ethena",
+    "ROCKETPOOL-ETHEREUM": "rocket_pool",
     # DeFi — Governance tokens (on-chain, Ethereum)
     "EIGENLAYER-ETHEREUM": "eigenlayer",
     "ETHERFI-GOV-ETHEREUM": "ethfi_governance",
@@ -230,6 +232,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "polymarket": PolymarketReferenceDataAdapter,
     "radiant": RadiantReferenceDataAdapter,
     "raydium": RaydiumReferenceDataAdapter,
+    "rocket_pool": RocketPoolReferenceDataAdapter,
     "spark": SparkReferenceDataAdapter,
     "tardis": TardisReferenceDataAdapter,
     "uniswap_v2": UniswapV2ReferenceDataAdapter,
@@ -293,6 +296,8 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "radiant": "",
     "venus": "",
     "benqi": "",
+    # LST protocols — curated single-token registries (rETH deploy date hardcoded).
+    "rocket_pool": "",
 }
 
 
