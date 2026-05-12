@@ -18,6 +18,7 @@ from .adapters.cefi.hyperliquid import HyperliquidReferenceDataAdapter
 from .adapters.cefi.tardis import TardisReferenceDataAdapter
 from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
 from .adapters.defi.balancer import BalancerReferenceDataAdapter
+from .adapters.defi.beefy import BeefyReferenceDataAdapter
 from .adapters.defi.benqi import BenqiReferenceDataAdapter
 from .adapters.defi.compound_v3 import CompoundV3ReferenceDataAdapter
 from .adapters.defi.convex import ConvexReferenceDataAdapter
@@ -31,6 +32,7 @@ from .adapters.defi.euler_v2 import EulerV2ReferenceDataAdapter
 from .adapters.defi.fluid import FluidReferenceDataAdapter
 from .adapters.defi.idle import IdleReferenceDataAdapter
 from .adapters.defi.jito import JitoReferenceDataAdapter
+from .adapters.defi.jito_restaking import JitoRestakingReferenceDataAdapter
 from .adapters.defi.kamino import KaminoReferenceDataAdapter
 from .adapters.defi.karak import KarakReferenceDataAdapter
 from .adapters.defi.kelpdao import KelpDaoReferenceDataAdapter
@@ -38,6 +40,7 @@ from .adapters.defi.lido import LidoReferenceDataAdapter
 from .adapters.defi.marinade import MarinadeReferenceDataAdapter
 from .adapters.defi.morpho import MorphoReferenceDataAdapter
 from .adapters.defi.orca import OrcaReferenceDataAdapter
+from .adapters.defi.pendle import PendleReferenceDataAdapter
 from .adapters.defi.puffer import PufferReferenceDataAdapter
 from .adapters.defi.radiant import RadiantReferenceDataAdapter
 from .adapters.defi.raydium import RaydiumReferenceDataAdapter
@@ -119,6 +122,7 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "ETHENA-ETHEREUM": "ethena",
     "ROCKETPOOL-ETHEREUM": "rocket_pool",
     "RENZO-ETHEREUM": "renzo",
+    "RENZO-ARBITRUM": "renzo",
     "KELPDAO-ETHEREUM": "kelpdao",
     "PUFFER-ETHEREUM": "puffer",
     "SYMBIOTIC-ETHEREUM": "symbiotic",
@@ -130,6 +134,20 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "IDLE-ARBITRUM": "idle",
     "YEARN-ETHEREUM": "yearn",
     "YEARN-ARBITRUM": "yearn",
+    # Beefy multi-chain yield aggregator (curated TOP-vault snapshot per chain).
+    # Polygon intentionally excluded 2026-05-12 — Beefy public API returned every
+    # Polygon vault as status=eol (no active vaults on the curated snapshot date).
+    "BEEFY-ETHEREUM": "beefy",
+    "BEEFY-ARBITRUM": "beefy",
+    "BEEFY-BASE": "beefy",
+    "BEEFY-BSC": "beefy",
+    "BEEFY-AVALANCHE": "beefy",
+    # Pendle yield-tokenization (PT/YT/SY tokens — curated active-markets snapshot).
+    "PENDLE-ETHEREUM": "pendle",
+    "PENDLE-ARBITRUM": "pendle",
+    # Jito Restaking — distinct from JITO-SOLANA (LST). Solana NCN-vault primitive
+    # launched 2024-08-01.
+    "JITORESTAKING-SOLANA": "jito_restaking",
     # DeFi — Governance tokens (on-chain, Ethereum)
     "EIGENLAYER-ETHEREUM": "eigenlayer",
     "ETHERFI-GOV-ETHEREUM": "ethfi_governance",
@@ -229,6 +247,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "aster": AsterReferenceDataAdapter,
     "deribit_combo": DeribitComboReferenceDataAdapter,
     "balancer": BalancerReferenceDataAdapter,
+    "beefy": BeefyReferenceDataAdapter,
     "benqi": BenqiReferenceDataAdapter,
     "betfair": BetfairReferenceDataAdapter,
     "compound_v3": CompoundV3ReferenceDataAdapter,
@@ -245,6 +264,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "hyperliquid": HyperliquidReferenceDataAdapter,
     "idle": IdleReferenceDataAdapter,
     "jito": JitoReferenceDataAdapter,
+    "jito_restaking": JitoRestakingReferenceDataAdapter,
     "kelpdao": KelpDaoReferenceDataAdapter,
     "kamino": KaminoReferenceDataAdapter,
     "karak": KarakReferenceDataAdapter,
@@ -254,6 +274,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "lido": LidoReferenceDataAdapter,
     "morpho": MorphoReferenceDataAdapter,
     "orca": OrcaReferenceDataAdapter,
+    "pendle": PendleReferenceDataAdapter,
     "polygon": PolygonReferenceDataAdapter,
     "polymarket": PolymarketReferenceDataAdapter,
     "radiant": RadiantReferenceDataAdapter,
@@ -340,6 +361,11 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "convex": "",
     "idle": "",
     "yearn": "",
+    "beefy": "",
+    # Pendle yield tokenization (PT/YT/SY) — curated active-markets snapshot.
+    "pendle": "",
+    # Jito Restaking (Solana NCN-vault primitive) — curated VRT registry.
+    "jito_restaking": "",
 }
 
 
@@ -439,7 +465,12 @@ def get_adapter_for_canonical_venue(
     if pool_key in _adapter_pool:
         return _adapter_pool[pool_key]
 
-    # DeFi adapters that accept chain parameter (EVM + Solana)
+    # DeFi adapters that accept chain parameter (EVM + Solana).
+    # Membership here = factory parses the chain segment from "<VENUE>-<CHAIN>"
+    # and passes it as `chain=` to the adapter ctor. Adapters NOT in this set
+    # default to ETHEREUM regardless of canonical-venue suffix — fine for true
+    # single-chain adapters; latent bug for multi-chain ones (see 2026-05-12
+    # additions: renzo / karak / idle / yearn / beefy / pendle / jito_restaking).
     defi_graph_adapters = {
         "uniswap_v2",
         "uniswap_v3",
@@ -463,6 +494,18 @@ def get_adapter_for_canonical_venue(
         "orca",
         "marinade",
         "jito",
+        # Multi-chain LST/LRT/restaking adapters (2026-05-12 latent fix —
+        # these were registered for multiple canonical venues earlier in the
+        # session but were missing from this set, so non-Ethereum venues
+        # silently used the ETHEREUM default chain).
+        "renzo",
+        "karak",
+        "idle",
+        "yearn",
+        # Phase-2 deferred adapters shipped 2026-05-12.
+        "beefy",
+        "pendle",
+        "jito_restaking",
     }
 
     # Some adapters need extra constructor parameters derived from the canonical venue name.
