@@ -30,12 +30,14 @@ from .adapters.defi.euler_v2 import EulerV2ReferenceDataAdapter
 from .adapters.defi.fluid import FluidReferenceDataAdapter
 from .adapters.defi.jito import JitoReferenceDataAdapter
 from .adapters.defi.kamino import KaminoReferenceDataAdapter
+from .adapters.defi.kelpdao import KelpDaoReferenceDataAdapter
 from .adapters.defi.lido import LidoReferenceDataAdapter
 from .adapters.defi.marinade import MarinadeReferenceDataAdapter
 from .adapters.defi.morpho import MorphoReferenceDataAdapter
 from .adapters.defi.orca import OrcaReferenceDataAdapter
 from .adapters.defi.radiant import RadiantReferenceDataAdapter
 from .adapters.defi.raydium import RaydiumReferenceDataAdapter
+from .adapters.defi.renzo import RenzoReferenceDataAdapter
 from .adapters.defi.rocket_pool import RocketPoolReferenceDataAdapter
 from .adapters.defi.spark import SparkReferenceDataAdapter
 from .adapters.defi.uniswap_v2 import UniswapV2ReferenceDataAdapter
@@ -109,6 +111,8 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "ETHERFI-ETHEREUM": "etherfi",
     "ETHENA-ETHEREUM": "ethena",
     "ROCKETPOOL-ETHEREUM": "rocket_pool",
+    "RENZO-ETHEREUM": "renzo",
+    "KELPDAO-ETHEREUM": "kelpdao",
     # DeFi — Governance tokens (on-chain, Ethereum)
     "EIGENLAYER-ETHEREUM": "eigenlayer",
     "ETHERFI-GOV-ETHEREUM": "ethfi_governance",
@@ -221,6 +225,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "fluid": FluidReferenceDataAdapter,
     "hyperliquid": HyperliquidReferenceDataAdapter,
     "jito": JitoReferenceDataAdapter,
+    "kelpdao": KelpDaoReferenceDataAdapter,
     "kamino": KaminoReferenceDataAdapter,
     "marinade": MarinadeReferenceDataAdapter,
     "ibkr": IBKRReferenceDataAdapter,
@@ -232,6 +237,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "polymarket": PolymarketReferenceDataAdapter,
     "radiant": RadiantReferenceDataAdapter,
     "raydium": RaydiumReferenceDataAdapter,
+    "renzo": RenzoReferenceDataAdapter,
     "rocket_pool": RocketPoolReferenceDataAdapter,
     "spark": SparkReferenceDataAdapter,
     "tardis": TardisReferenceDataAdapter,
@@ -296,8 +302,10 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "radiant": "",
     "venus": "",
     "benqi": "",
-    # LST protocols — curated single-token registries (rETH deploy date hardcoded).
+    # LST / LRT protocols — curated single-token registries (deploy dates hardcoded).
     "rocket_pool": "",
+    "renzo": "",
+    "kelpdao": "",
 }
 
 
