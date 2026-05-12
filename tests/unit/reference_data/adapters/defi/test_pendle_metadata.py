@@ -37,7 +37,7 @@ async def test_get_instruments_yields_pt_yt_sy_records() -> None:
     adapter = PendleReferenceDataAdapter()
     records = await adapter.get_instruments()
 
-    # 5 curated Ethereum markets × 3 roles = 15 records.
+    # 5 curated Ethereum markets x 3 roles = 15 records.
     assert len(records) == 15
 
     # Every record's basics.
@@ -67,7 +67,7 @@ async def test_get_instruments_arbitrum_yields_records() -> None:
     adapter = PendleReferenceDataAdapter(chain="ARBITRUM")
     records = await adapter.get_instruments()
 
-    # 5 curated Arbitrum markets × 3 roles = 15 records.
+    # 5 curated Arbitrum markets x 3 roles = 15 records.
     assert len(records) == 15
     for rec in records:
         assert rec.venue == "PENDLE-ARBITRUM"
