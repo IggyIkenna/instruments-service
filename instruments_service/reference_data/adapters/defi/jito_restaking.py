@@ -157,9 +157,7 @@ class JitoRestakingReferenceDataAdapter(BaseReferenceDataAdapter):
                 )
             )
 
-        logger.info(
-            "JitoRestaking: fetched %d VRT instruments on %s", len(results), self._chain
-        )
+        logger.info("JitoRestaking: fetched %d VRT instruments on %s", len(results), self._chain)
         return results
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
@@ -192,6 +190,4 @@ class JitoRestakingReferenceDataAdapter(BaseReferenceDataAdapter):
         interval: str = "1d",
         limit: int = 100,
     ) -> list[OHLCVRef]:
-        raise NotImplementedError(
-            "Jito Restaking OHLCV not supported via reference data"
-        )
+        raise NotImplementedError("Jito Restaking OHLCV not supported via reference data")

@@ -186,9 +186,7 @@ def main() -> int:
 
     if args.apply_flips:
         if os.environ.get("MANIFEST_PER_VM_SHARDS", "").lower() not in ("1", "true", "yes"):
-            logger.error(
-                "--apply-flips requires MANIFEST_PER_VM_SHARDS=true (per-VM shard isolation rule)."
-            )
+            logger.error("--apply-flips requires MANIFEST_PER_VM_SHARDS=true (per-VM shard isolation rule).")
             _emit_event(
                 "RECONCILER_FAILED",
                 reconciler="reconcile_blank_error_reason_rows",

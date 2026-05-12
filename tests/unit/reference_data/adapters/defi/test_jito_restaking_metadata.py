@@ -64,11 +64,7 @@ async def test_get_instrument_lookup() -> None:
     by_addr = await adapter.get_instrument(_EZSOL_MINT)
     by_symbol = await adapter.get_instrument("JTORK-EZSOL")
     assert by_addr is not None and by_symbol is not None
-    assert (
-        by_addr.instrument_key
-        == by_symbol.instrument_key
-        == "JITORESTAKING-SOLANA:VAULT:JTORK-EZSOL"
-    )
+    assert by_addr.instrument_key == by_symbol.instrument_key == "JITORESTAKING-SOLANA:VAULT:JTORK-EZSOL"
     assert await adapter.get_instrument("NOPE") is None
 
 

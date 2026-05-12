@@ -119,9 +119,8 @@ def main() -> int:
         return 2
 
     # --- (1) FIXTURES re-flip: empty_confirmed → attempted_failed ---
-    fixtures_re_flip_mask = (
-        (df["capture_status"].astype(str) == "empty_confirmed")
-        & (df["error_reason"].astype(str) == _PRIOR_FIXTURES_MARKER)
+    fixtures_re_flip_mask = (df["capture_status"].astype(str) == "empty_confirmed") & (
+        df["error_reason"].astype(str) == _PRIOR_FIXTURES_MARKER
     )
     fixtures_re_flip_count = int(fixtures_re_flip_mask.sum())
     logger.info("(1) FIXTURES rows tagged %r in empty_confirmed: %d", _PRIOR_FIXTURES_MARKER, fixtures_re_flip_count)

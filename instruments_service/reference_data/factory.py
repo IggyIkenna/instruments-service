@@ -211,7 +211,7 @@ _PROTOCOL_TO_ADAPTER_KEY: dict[str, str] = {
     "sushiswap": "uniswap_v3",
 }
 
-from unified_api_contracts.registry.capability_declarations._defi import (  # noqa: E402, qg-inside-import
+from unified_api_contracts.registry.capability_declarations._defi import (
     get_supported_chains_for_protocol,
 )
 

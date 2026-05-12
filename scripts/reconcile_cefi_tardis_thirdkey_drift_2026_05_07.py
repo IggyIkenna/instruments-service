@@ -90,14 +90,16 @@ MANIFEST_BLOB = "_index/availability_index.parquet"
 # 6 Tier3 Tardis venues — closed set per cross-AG audit 2026-05-07.
 # All other CeFi venues (BINANCE / COINBASE / OKX / HYPERLIQUID / etc.)
 # have 0 post-13Z bogus empty_confirmed rows and are out of scope.
-TIER3_TARDIS_VENUES: frozenset[str] = frozenset({
-    "BITFINEX-SPOT",
-    "BITFINEX-FUTURES",
-    "BITGET-SPOT",
-    "BITGET-FUTURES",
-    "KRAKEN-SPOT",
-    "KRAKEN-FUTURES",
-})
+TIER3_TARDIS_VENUES: frozenset[str] = frozenset(
+    {
+        "BITFINEX-SPOT",
+        "BITFINEX-FUTURES",
+        "BITGET-SPOT",
+        "BITGET-FUTURES",
+        "KRAKEN-SPOT",
+        "KRAKEN-FUTURES",
+    }
+)
 
 # Earliest attempted_at to be in scope. Pre-2026-05-01 rows pre-date the
 # broken-code era under audit; leaving them untouched keeps the reconciler
@@ -269,9 +271,12 @@ def _print_distribution(df_scope: pd.DataFrame) -> None:
             year_series = pd.Series([0] * len(df_scope), index=df_scope.index)
     else:
         year_series = pd.Series([0] * len(df_scope), index=df_scope.index)
-    grouped = df_scope.assign(_year=year_series).groupby(
-        ["venue", "_year", "data_type"], dropna=False
-    ).size().reset_index(name="count")
+    grouped = (
+        df_scope.assign(_year=year_series)
+        .groupby(["venue", "_year", "data_type"], dropna=False)
+        .size()
+        .reset_index(name="count")
+    )
     grouped = grouped.sort_values("count", ascending=False).head(40)
     logger.info("In-scope distribution (top 40 by (venue, year, data_type)):")
     for _, r in grouped.iterrows():
@@ -296,10 +301,18 @@ def _print_sample_rows(df_scope: pd.DataFrame, n: int) -> None:
     if df_scope.empty:
         return
     cols = [
-        c for c in (
-            "venue", "data_type", "instrument_type", "instrument_id",
-            "date", "capture_status", "error_reason", "attempted_at",
-        ) if c in df_scope.columns
+        c
+        for c in (
+            "venue",
+            "data_type",
+            "instrument_type",
+            "instrument_id",
+            "date",
+            "capture_status",
+            "error_reason",
+            "attempted_at",
+        )
+        if c in df_scope.columns
     ]
     sample = df_scope[cols].head(n)
     logger.info("Sample in-scope rows (first %d):\n%s", n, sample.to_string(index=False))
