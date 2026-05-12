@@ -91,9 +91,7 @@ async def test_get_instrument_lookup() -> None:
     by_symbol = await adapter.get_instrument(_ETH_MORPHO_USDC_FRONTIER_SYMBOL)
     assert by_addr is not None and by_symbol is not None
     assert (
-        by_addr.instrument_key
-        == by_symbol.instrument_key
-        == f"BEEFY-ETHEREUM:VAULT:{_ETH_MORPHO_USDC_FRONTIER_SYMBOL}"
+        by_addr.instrument_key == by_symbol.instrument_key == f"BEEFY-ETHEREUM:VAULT:{_ETH_MORPHO_USDC_FRONTIER_SYMBOL}"
     )
     assert await adapter.get_instrument("DOES-NOT-EXIST") is None
 

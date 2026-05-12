@@ -324,7 +324,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
     def venue(self) -> str:
         return "POLYMARKET"
 
-    def get_market_metadata_df(self) -> "pd.DataFrame":  # noqa: F821
+    def get_market_metadata_df(self) -> "pd.DataFrame":
         """Return captured market metadata from the last ``get_instruments()`` call.
 
         Returns a DataFrame with key metadata fields from every

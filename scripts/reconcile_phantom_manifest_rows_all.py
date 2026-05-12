@@ -414,7 +414,7 @@ def _audit_generic(
     # ``market_tick_data_service/.../cefi/tardis_shared.finalise_rows_and_path``).
     # Manifest holds the row-level type (``option`` / ``future``); disk has
     # the chain form. Audit must accept either.
-    _IT_DISK_EQUIV: dict[str, list[str]] = {  # noqa: N806 — local constant table
+    _IT_DISK_EQUIV: dict[str, list[str]] = {
         "option": ["option", "options_chain"],
         "future": ["future", "futures_chain"],
     }
@@ -424,7 +424,7 @@ def _audit_generic(
     # rows with these values — they're identifier-only, not partitioning.
     # ``prediction_market`` is the only example today (Polymarket layout
     # uses ``market_type=binary/range_bracket/...`` instead).
-    _IT_NOT_ON_DISK: frozenset[str] = frozenset({"prediction_market"})  # noqa: N806 — local constant table
+    _IT_NOT_ON_DISK: frozenset[str] = frozenset({"prediction_market"})
 
     # DeFi migrated-bundle wildcard (added 2026-05-07 for C.9 audit) —
     # ``migrate_mtds_defi_legacy_venue_underscore.py`` produced
