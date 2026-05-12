@@ -117,19 +117,16 @@ logger = logging.getLogger(__name__)
 # default ``""`` is being removed once every consumer ships its explicit value
 # (plan ``gcs_migration_bundle_pipeline_mode_2026_05_08`` body line 360).
 #
-# **Note** (finding ``footystats_pipeline_mode_gap_2026_05_12.md``):
-# UAC ``PipelineMode`` does NOT yet carry a ``BATCH_FOOTYSTATS`` value (the
-# closed-set round-trip rule means every enum value must mirror a
-# ``SOURCE_PRIORITY`` entry, and ``footystats`` is documented as a "multi-source
-# merge candidate (deferred)" rather than a registered source). Per
-# ``SOURCE_PRIORITY`` the canonical source for the relevant data_types
-# (``MATCHES`` / ``PREDICTIONS`` / ``ODDS``) is ``api_football`` (live) with
-# ``odds_api`` for the dedicated odds-snapshot slice. We tag footystats-served
-# rows with ``BATCH_API_FOOTBALL`` here as the closest closed-set match until
-# UAC introduces ``BATCH_FOOTYSTATS`` + registers footystats in
-# ``SOURCE_PRIORITY``. Same applies to ``ODDS`` (footystats odds adapter →
-# tagged BATCH_ODDS_API because ``odds_api`` is the SOURCE_PRIORITY entry for
-# ``ODDS_SNAPSHOT`` / ``ODDS_MOVEMENT`` / ``ARBITRAGE``).
+# **Footystats** (finding ``footystats_pipeline_mode_gap_2026_05_12.md`` —
+# Q2=(A) operator-approved 2026-05-12, UAC enum extension shipped at
+# UAC@52d289c): footystats-served catalog rows previously tagged with
+# ``BATCH_API_FOOTBALL`` as a documented workaround. With the canonical
+# ``BATCH_FOOTYSTATS`` member now present in UAC ``PipelineMode``,
+# footystats-served data_types (``PREDICTIONS`` / ``MATCHES``) are stamped
+# with their canonical source. ``ODDS`` still tags ``BATCH_ODDS_API``
+# because the footystats odds adapter wraps the ``odds_api`` source per
+# UAC SOURCE_PRIORITY for ``ODDS_SNAPSHOT`` / ``ODDS_MOVEMENT`` /
+# ``ARBITRAGE``.
 _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
     # api_football catalog (FIXTURES + per-fixture entities + reference data)
     "FIXTURES": PipelineMode.BATCH_API_FOOTBALL,
@@ -142,11 +139,12 @@ _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
     "STANDINGS": PipelineMode.BATCH_API_FOOTBALL,
     "LEAGUES": PipelineMode.BATCH_API_FOOTBALL,
     "VENUES": PipelineMode.BATCH_API_FOOTBALL,
-    # footystats catalog — tagged BATCH_API_FOOTBALL until UAC adds
-    # ``BATCH_FOOTYSTATS`` + footystats SOURCE_PRIORITY entry (see header note
-    # + ``footystats_pipeline_mode_gap_2026_05_12.md`` finding).
-    "PREDICTIONS": PipelineMode.BATCH_API_FOOTBALL,
-    "MATCHES": PipelineMode.BATCH_API_FOOTBALL,
+    # footystats catalog — canonical ``BATCH_FOOTYSTATS`` per
+    # footystats_pipeline_mode_gap_2026_05_12.md Q2=(A) flip (UAC@52d289c
+    # shipped the enum extension; instruments-service flipped from the
+    # workaround stamp on 2026-05-12).
+    "PREDICTIONS": PipelineMode.BATCH_FOOTYSTATS,
+    "MATCHES": PipelineMode.BATCH_FOOTYSTATS,
     # ODDS slice — UAC SOURCE_PRIORITY top entry for the odds-snapshot slice
     # is ``odds_api``; footystats odds adapter tagged with BATCH_ODDS_API.
     "ODDS": PipelineMode.BATCH_ODDS_API,
@@ -4603,8 +4601,9 @@ async def _fetch_footystats_predictions(
         else:
             logger.info("FootyStats predictions: no predictive data for date=%s", date)
             # Honest-coverage: legitimate empty (no predictions for this date).
-            # footystats catalog refresh tagged BATCH_API_FOOTBALL per
-            # footystats_pipeline_mode_gap_2026_05_12.md workaround.
+            # footystats catalog refresh tagged canonical BATCH_FOOTYSTATS
+            # (Q2=(A) flip 2026-05-12; resolves
+            # footystats_pipeline_mode_gap_2026_05_12.md workaround).
             pred_manifest.record_empty(
                 row_key=_row_key,
                 attempted_at=attempt_ts,
@@ -4842,7 +4841,8 @@ async def _fetch_footystats_matches(
             # Honest-coverage per-league: record_empty for expected footystats
             # leagues with no matches on this date (off-season / no fixtures).
             # Mirrors the XG adapter pattern at the understat block below.
-            # footystats-served MATCHES tagged BATCH_API_FOOTBALL per workaround.
+            # footystats-served MATCHES tagged canonical BATCH_FOOTYSTATS
+            # (Q2=(A) flip 2026-05-12).
             for _exp_lid in sorted(set(_ft_expected) - _captured_leagues):
                 _ft_manifest.record_empty(
                     row_key={"date": date, "data_type": "MATCHES", "league_id": _exp_lid},
