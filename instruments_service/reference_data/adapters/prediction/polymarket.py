@@ -22,9 +22,6 @@ from unified_api_contracts import (
     PolymarketGammaMarket,
     classify_venue_error,
 )
-from unified_api_contracts.canonical.domain.prediction import (
-    PredictionMarketMapper,
-)
 from unified_api_contracts.canonical.domain.sports import (
     build_crypto_prediction_id,
     build_macro_prediction_id,
@@ -40,6 +37,9 @@ from unified_api_contracts.external.polymarket import (
     get_canonical_team_for_polymarket,
 )
 from unified_api_contracts.internal import InstrumentRecord
+from unified_api_contracts.prediction import (
+    PredictionMarketMapper,
+)
 from unified_api_contracts.predictions import (
     CANONICAL_GROUP_METADATA,
     CanonicalQuestionGroup,
