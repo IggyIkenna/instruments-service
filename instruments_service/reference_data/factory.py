@@ -32,6 +32,7 @@ from .adapters.defi.ethena import EthenaReferenceDataAdapter
 from .adapters.defi.etherfi import EtherFiReferenceDataAdapter
 from .adapters.defi.ethfi import EthFiGovernanceReferenceDataAdapter
 from .adapters.defi.euler_v2 import EulerV2ReferenceDataAdapter
+from .adapters.defi.extended import ExtendedReferenceDataAdapter
 from .adapters.defi.fluid import FluidReferenceDataAdapter
 from .adapters.defi.idle import IdleReferenceDataAdapter
 from .adapters.defi.jito import JitoReferenceDataAdapter
@@ -40,9 +41,11 @@ from .adapters.defi.kamino import KaminoReferenceDataAdapter
 from .adapters.defi.karak import KarakReferenceDataAdapter
 from .adapters.defi.kelpdao import KelpDaoReferenceDataAdapter
 from .adapters.defi.lido import LidoReferenceDataAdapter
+from .adapters.defi.lighter import LighterReferenceDataAdapter
 from .adapters.defi.marinade import MarinadeReferenceDataAdapter
 from .adapters.defi.morpho import MorphoReferenceDataAdapter
 from .adapters.defi.orca import OrcaReferenceDataAdapter
+from .adapters.defi.pacifica import PacificaReferenceDataAdapter
 from .adapters.defi.pendle import PendleReferenceDataAdapter
 from .adapters.defi.puffer import PufferReferenceDataAdapter
 from .adapters.defi.radiant import RadiantReferenceDataAdapter
@@ -166,6 +169,10 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "JITO-SOLANA": "jito",
     "SOLBLAZE-SOLANA": "solblaze",
     # Jupiter is execution-only (swap aggregator), not instrument discovery.
+    # DEX perp venues (L2 + StarkNet + Solana clone)
+    "LIGHTER-ZKSYNC": "lighter",
+    "EXTENDED-STARKNET": "extended",
+    "PACIFICA-SOLANA": "pacifica",
 }
 
 # Dynamically add multi-chain DeFi venues from SUBGRAPH_IDS (SSOT in UAC).
@@ -254,6 +261,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "curve": CurveReferenceDataAdapter,
     "databento": DatabentoReferenceDataAdapter,
     "drift": DriftReferenceDataAdapter,
+    "extended": ExtendedReferenceDataAdapter,
     "eigenlayer": EigenLayerReferenceDataAdapter,
     "ethena": EthenaReferenceDataAdapter,
     "ethfi_governance": EthFiGovernanceReferenceDataAdapter,
@@ -270,9 +278,11 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "marinade": MarinadeReferenceDataAdapter,
     "ibkr": IBKRReferenceDataAdapter,
     "kalshi": KalshiReferenceDataAdapter,
+    "lighter": LighterReferenceDataAdapter,
     "lido": LidoReferenceDataAdapter,
     "morpho": MorphoReferenceDataAdapter,
     "orca": OrcaReferenceDataAdapter,
+    "pacifica": PacificaReferenceDataAdapter,
     "pendle": PendleReferenceDataAdapter,
     "polygon": PolygonReferenceDataAdapter,
     "polymarket": PolymarketReferenceDataAdapter,
