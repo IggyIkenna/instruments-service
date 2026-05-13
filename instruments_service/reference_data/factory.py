@@ -189,7 +189,7 @@ _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL: dict[str, str] = {
     "CAMELOTV3": "camelot_v3",
     # Messari-schema DEXes — use UniV3 adapter (Messari fallback query)
     "VELODROMEV2": "velodrome_v2",
-    "TRADERJOEV2": "trader_joe_v2",
+    "TRADER_JOEV2": "trader_joe_v2",
     "GMX": "gmx",
     # Messari lending (Spark = Aave V3 fork, same schema)
     "SPARK": "spark",
