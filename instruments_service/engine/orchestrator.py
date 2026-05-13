@@ -401,7 +401,7 @@ _SUBGRAPH_PROTOCOL_TO_VENUE_PREFIX: dict[str, str] = {
     "aerodrome_v3": "AERODROMEV3",
     "camelot_v3": "CAMELOTV3",
     "velodrome_v2": "VELODROMEV2",
-    "trader_joe_v2": "TRADERJOEV2",
+    "trader_joe_v2": "TRADER_JOEV2",
     "gmx": "GMX",
     "sushiswap": "SUSHISWAP",
     # Lending forks
