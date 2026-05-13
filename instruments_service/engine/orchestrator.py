@@ -4355,16 +4355,21 @@ def _write_fixture_mapping(bucket: str, date: str) -> None:
     except Exception as exc:
         _exc_name = type(exc).__name__
         _msg = str(exc)
-        # GCS blob not found (404) — forward-poll dates with zero fixtures have no instruments parquet.
+        # GCS blob not found (404): the instruments.parquet for this (date, venue) was
+        # never written. This is benign for ANY date (not just forward-poll window) —
+        # for historical forward-polled days the per-fixture entities were captured
+        # via enrichment-only mode without ever rolling up an availability parquet at
+        # `instrument_availability/by_date/.../venue=API_FOOTBALL/instruments.parquet`.
+        # Fixture-mapping is a best-effort secondary write; absent the upstream
+        # parquet there is nothing to map. Silently no-op rather than escalating to
+        # classify_and_emit_error. Reference: issue doc
+        # `plans/active/issues/api_football_enrichment_preflight_runtime_mismatch_2026_05_13.md`.
         if _exc_name == "NotFound" or "404" in _msg or "No such object" in _msg:
-            _d = date_type.fromisoformat(date)
-            _today = datetime.now(UTC).date()
-            if _today <= _d <= _today + timedelta(days=7):
-                logger.info(
-                    "Fixture mapping: no API_FOOTBALL instruments parquet for %s — skipping (forward-poll window)",
-                    date,
-                )
-                return
+            logger.info(
+                "Fixture mapping: no API_FOOTBALL instruments parquet for %s — skipping (no upstream availability rollup written)",
+                date,
+            )
+            return
         if isinstance(exc, (FileNotFoundError, OSError)):
             logger.debug("Fixture mapping: could not read fixtures for %s: %s", date, exc)
             return
@@ -6079,9 +6084,7 @@ async def _fetch_sfi_data(
                         # Derive match_end_time + report_time once per match
                         # (detect_match_end_time needs CanonicalProgressiveStats objects,
                         # which we have before dict-coercion below).
-                        _mid_kickoff = datetime(
-                            int(date[:4]), int(date[5:7]), int(date[8:10]), 15, 0, tzinfo=UTC
-                        )
+                        _mid_kickoff = datetime(int(date[:4]), int(date[5:7]), int(date[8:10]), 15, 0, tzinfo=UTC)
                         _mid_match_end = _sfi_detect_match_end_time(stats, _mid_kickoff)
                         _mid_report_time: datetime | None = (
                             _mid_match_end + timedelta(seconds=SFI_DATA_LAG_P95_SECONDS)
@@ -6095,12 +6098,8 @@ async def _fetch_sfi_data(
                             # Tag for per-league partitioning at write time.
                             _row["league_id"] = _canonical_for_match or None
                             # Per-match timing fields (None for in-progress or short matches).
-                            _row["match_end_time"] = (
-                                _mid_match_end.isoformat() if _mid_match_end is not None else None
-                            )
-                            _row["report_time"] = (
-                                _mid_report_time.isoformat() if _mid_report_time is not None else None
-                            )
+                            _row["match_end_time"] = _mid_match_end.isoformat() if _mid_match_end is not None else None
+                            _row["report_time"] = _mid_report_time.isoformat() if _mid_report_time is not None else None
                             all_progressive.append(_row)
                     except Exception as exc:
                         classify_and_emit_error(
