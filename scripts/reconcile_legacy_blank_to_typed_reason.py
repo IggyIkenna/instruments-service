@@ -240,8 +240,15 @@ def main() -> int:
         #       shard in the instruments-service universe (Phase 1.5 — fixture not in scope).
         fixture_manifest: pd.DataFrame | None = None
         if asset_group == "sports" and "data_type" in df.columns and "capture_status" in df.columns:
-            _fix_mask = (df["data_type"].astype(str).str.strip() == "fixtures") & (
-                df["capture_status"].astype(str).str.strip() == "captured"
+            # Case-insensitive: sports manifest writes data_type in UPPERCASE
+            # (FIXTURES / FIXTURE_STATS / FIXTURE_EVENTS / FIXTURE_LINEUPS / INJURIES / etc.)
+            # per api_football_minimal_flattening_removal_2026_05_07 + slot-8 verification
+            # at 2026-05-13. Reference incident: pre-fix, this mask matched 0 rows of 2.67M
+            # because it compared to lowercase "fixtures" — fixture_manifest stayed empty,
+            # _fixture_exists_for_shard() always returned False, Phase 1.5 fixture-existence
+            # check was a no-op, and 1.87M sports candidates wrongly reported "0 upgrades".
+            _fix_mask = (df["data_type"].astype(str).str.strip().str.lower() == "fixtures") & (
+                df["capture_status"].astype(str).str.strip().str.lower() == "captured"
             )
             _fixture_cols = [c for c in ("venue", "league_id", "date") if c in df.columns]
             fixture_manifest = df.loc[_fix_mask, _fixture_cols].copy()
