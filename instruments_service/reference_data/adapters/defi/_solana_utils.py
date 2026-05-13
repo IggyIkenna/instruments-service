@@ -45,6 +45,9 @@ SOLANA_PROTOCOL_DEPLOY_DATES: dict[str, datetime] = {
     "orca": datetime(2022, 3, 1, tzinfo=UTC),  # Orca Whirlpools (CLMM) launch
     "marinade": datetime(2021, 8, 1, tzinfo=UTC),  # Marinade mSOL mainnet launch
     "jito": datetime(2021, 11, 1, tzinfo=UTC),  # Jito stake pool mainnet launch
+    "mango": datetime(2023, 8, 1, tzinfo=UTC),  # Mango V4 mainnet launch (Aug 2023)
+    "zeta": datetime(2022, 4, 1, tzinfo=UTC),  # Zeta Markets v1 mainnet launch
+    "flash_trade": datetime(2023, 11, 1, tzinfo=UTC),  # Flash Trade mainnet launch
 }
 
 # ── Timestamp cache ───────────────────────────────────────────────────
