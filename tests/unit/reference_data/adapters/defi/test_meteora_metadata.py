@@ -71,7 +71,7 @@ def test_build_pool_record_sol_usdc() -> None:
     assert record.venue == "METEORA-SOLANA"
     assert record.instrument_key == "METEORA-SOLANA:SPOT:SOL-USDC"
     assert record.raw_symbol == "2SF1Xba1ug7WNF3o7Xs4NNmVp4jNGWQcZnZLqxSbmfe"
-    assert record.instrument_type == InstrumentType.SPOT
+    assert record.instrument_type == InstrumentType.SPOT_PAIR
     assert record.base_asset == "SOL"
     assert record.quote_asset == "USDC"
     assert record.settle_asset == "USDC"
@@ -135,7 +135,7 @@ async def test_get_instruments_returns_all_active() -> None:
     ):
         results = await adapter.get_instruments()
         assert len(results) == 3
-        assert all(r.instrument_type == InstrumentType.SPOT for r in results)
+        assert all(r.instrument_type == InstrumentType.SPOT_PAIR for r in results)
 
 
 @pytest.mark.asyncio

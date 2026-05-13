@@ -105,7 +105,7 @@ class LifinityReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Lifinity PMM pools as instruments."""
-        if instrument_type not in (None, InstrumentType.SPOT, "spot"):
+        if instrument_type not in (None, InstrumentType.SPOT_PAIR, "spot"):
             logger.info("Lifinity only supports SPOT instruments; requested %s", instrument_type)
             return []
 
@@ -154,7 +154,7 @@ class LifinityReferenceDataAdapter(BaseReferenceDataAdapter):
         token_0 = pool.get("token_0") or {}
         token_1 = pool.get("token_1") or {}
 
-        if isinstance(token_0, dict) and isinstance(token_1, dict):
+        if isinstance(token_0, dict) and token_0 and isinstance(token_1, dict) and token_1:
             base_asset = str(token_0.get("symbol") or token_0.get("name") or "").upper()
             quote_asset = str(token_1.get("symbol") or token_1.get("name") or "USDC").upper()
         elif pool_name and "-" in pool_name:
@@ -184,7 +184,7 @@ class LifinityReferenceDataAdapter(BaseReferenceDataAdapter):
             instrument_key=instrument_key,
             venue=self.venue,
             raw_symbol=raw_symbol,
-            instrument_type=InstrumentType.SPOT,
+            instrument_type=InstrumentType.SPOT_PAIR,
             base_asset=base_asset,
             quote_asset=quote_asset,
             settle_asset=quote_asset,

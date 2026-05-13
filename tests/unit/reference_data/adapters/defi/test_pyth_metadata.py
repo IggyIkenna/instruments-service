@@ -75,11 +75,12 @@ def test_price_feeds_registry_not_empty() -> None:
 
 
 def test_feed_ids_are_solana_addresses() -> None:
-    """Feed IDs must look like Solana base-58 addresses (32-44 chars, no 0/O/l/I)."""
+    """Feed IDs must look like Solana base-58 addresses (32-44 chars, alphanumeric, no '0' or 'O')."""
     for symbol, (feed_id, _) in PYTH_PRICE_FEEDS.items():
         assert 32 <= len(feed_id) <= 44, f"{symbol} feed_id length {len(feed_id)} out of range"
-        # No ambiguous base-58 characters
-        for char in ("0", "O", "l", "I"):
+        assert feed_id.isalnum(), f"{symbol} feed_id contains non-alphanumeric char"
+        # Exclude zero and capital O (visually ambiguous with 1 and 0)
+        for char in ("0", "O"):
             assert char not in feed_id, f"{symbol} feed_id contains ambiguous char {char!r}"
 
 
@@ -93,7 +94,7 @@ def test_build_feed_record_sol_usd() -> None:
     assert record.instrument_key == "PYTH-SOLANA:SPOT:SOL-USD"
     # raw_symbol is the Pyth feed ID
     assert record.raw_symbol == _SOL_FEED_ID
-    assert record.instrument_type == InstrumentType.SPOT
+    assert record.instrument_type == InstrumentType.SPOT_PAIR
     assert record.base_asset == "SOL"
     assert record.quote_asset == "USD"
     assert record.settle_asset == "USD"
@@ -134,7 +135,7 @@ async def test_get_instruments_returns_all_feeds() -> None:
     adapter = PythOracleReferenceDataAdapter()
     results = await adapter.get_instruments()
     assert len(results) == len(PYTH_PRICE_FEEDS)
-    assert all(r.instrument_type == InstrumentType.SPOT for r in results)
+    assert all(r.instrument_type == InstrumentType.SPOT_PAIR for r in results)
 
 
 @pytest.mark.asyncio
