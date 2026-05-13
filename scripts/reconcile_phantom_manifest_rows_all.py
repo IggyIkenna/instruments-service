@@ -183,6 +183,25 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
 # rows as phantom (29,782 hits in the 2026-05-07 dry-run on AAVEV3 alone).
 _PROTOCOL_VERSION_UNDERSCORE_RE = re.compile(r"^([A-Z]+?)(V\d+)(.*)$")
 
+# Axis-7 (Databento per-schema-bundle, 2026-05-13): TradFi Databento
+# downloads ``trades`` and ``tbbo`` as a PAIRED schema set in one API call.
+# Both data_types share the same venue-level prefix on disk. A manifest row
+# for ``trades`` may physically live under ``data_type=tbbo/`` (and vice
+# versa) when the Databento adapter bundles both.  Accept the paired schema
+# needle as evidence of capture — without this, both data_types produce
+# identical 1,017-count false-positive phantoms (same instruments, same dates).
+_TRADFI_DATABENTO_PAIRED_SCHEMAS: dict[str, list[str]] = {
+    "trades": ["tbbo"],
+    "tbbo": ["trades"],
+}
+
+# Axis-8 (cross-asset venue-less, 2026-05-13): manifest rows with
+# venue=UNKNOWN have no resolvable canonical GCS path. Probing
+# ``venue=UNKNOWN/`` never matches → ~565 TradFi + ~2k cross-asset false
+# positives. Treat UNKNOWN as venue-agnostic (skip venue needle) so the
+# data_type probe alone decides real-vs-phantom.
+_VENUE_UNKNOWN_SENTINELS: frozenset[str] = frozenset({"UNKNOWN"})
+
 
 def _defi_protocol_variants(venue: str) -> list[str]:
     """Return deduped list of venue spellings for DeFi.
@@ -253,6 +272,16 @@ def _venue_level_prefixes(asset_group: str, row: pd.Series) -> list[str]:
        Without this, AAVEV3 / UNISWAPV3 / COMPOUNDV3 rows whose data
        lives under the legacy underscored prefix false-positive 100%
        as phantom (29,782 hits in the 2026-05-07 dry-run on AAVEV3 alone).
+
+    Axes 7-9 are handled in ``_audit_generic`` / ``_audit_sports`` directly:
+    7. **TradFi Databento per-schema-bundle** (2026-05-13) — ``trades`` and
+       ``tbbo`` are downloaded and written as a paired set; accept either
+       data_type needle as capture evidence. See ``_TRADFI_DATABENTO_PAIRED_SCHEMAS``.
+    8. **Cross-asset venue=UNKNOWN** (2026-05-13) — UNKNOWN sentinel has no
+       canonical path; skip the venue needle. See ``_VENUE_UNKNOWN_SENTINELS``.
+    9. **Sports pre-coverage + known-gap** (2026-05-13) — rows before source
+       launch date or in registered gaps are not phantoms; excluded in
+       ``_audit_sports`` via ``is_pre_launch_date`` + ``is_in_known_gap``.
     """
     cfg = ASSET_GROUP_CONFIG[asset_group]
     raw_venue = str(row.get("venue", "") or "")
@@ -295,7 +324,12 @@ def _audit_sports(
     singleton row false-flags as phantom because it can't be in the
     day-partition listing by construction.
     """
-    from unified_api_contracts.sports import candidate_parquet_paths
+    from unified_api_contracts.sports import (
+        candidate_parquet_paths,
+        get_source_for_data_type,
+        is_in_known_gap,
+        is_pre_launch_date,
+    )
 
     # Bulk-list per day for all day-partitioned candidates.
     days = sorted({str(d) for d in df.loc[captured_idx, "date"].unique()})
@@ -326,11 +360,28 @@ def _audit_sports(
 
     # Probe each captured row.
     real_or_phantom: dict[int, bool] = {}  # idx -> True if real
+    _axis9_pre_coverage = 0
+    _axis9_known_gap = 0
     for idx in captured_idx:
         row = df.loc[idx]
         date = str(row["date"])
         data_type = str(row.get("data_type", "") or "")
         league_id = str(row.get("league_id", "") or "")
+        # Axis-9 (sports per-league SSOT + UAC date-range clips, 2026-05-13):
+        # Rows before the source's coverage start or inside a known gap are
+        # NOT phantoms — the source never had data for that (data_type, date).
+        # Flipping to attempted_failed would re-queue them for retry (wrong).
+        # Mark real=True to exclude from phantom detection; the absence-reason
+        # reconciler handles these rows separately.
+        if is_pre_launch_date(data_type, date):
+            real_or_phantom[idx] = True
+            _axis9_pre_coverage += 1
+            continue
+        _src_key = get_source_for_data_type(data_type)
+        if _src_key and is_in_known_gap(_src_key, data_type, date):
+            real_or_phantom[idx] = True
+            _axis9_known_gap += 1
+            continue
         candidates = candidate_parquet_paths(data_type, date, league_id)
         blobs = day_blobs.get(date, set())
         is_real = False
@@ -347,6 +398,12 @@ def _audit_sports(
                     is_real = True
                     break
         real_or_phantom[idx] = is_real
+    if _axis9_pre_coverage or _axis9_known_gap:
+        logger.info(
+            "Sports axis-9 coverage clip: %d pre-launch + %d known-gap rows excluded from phantom check",
+            _axis9_pre_coverage,
+            _axis9_known_gap,
+        )
     return real_or_phantom
 
 
@@ -445,11 +502,18 @@ def _audit_generic(
         venue = str(row.get("venue", "") or "")
         chain = str(row.get("chain", "") or "")
         dt_needle = f"data_type={data_type}/"
+        # Axis-7: for TradFi, Databento writes ``trades`` + ``tbbo`` under
+        # the same prefix. Accept either paired data_type needle as capture.
+        extra_dt_needles: list[str] = []
+        if asset_group == "tradfi":
+            for _paired in _TRADFI_DATABENTO_PAIRED_SCHEMAS.get(data_type, []):
+                extra_dt_needles.append(f"data_type={_paired}/")
         # Venue substring needle — required when prefix templates truncate
         # at category/asset_group level (e.g. prediction's Polymarket layout
         # interposes ``data_source=`` between category and venue, so the
         # prefix can't pin venue).  Empty venue → no needle (skip check).
-        venue_needle = f"venue={venue}/" if venue else ""
+        # Axis-8: venue=UNKNOWN has no resolvable path — skip the check.
+        venue_needle = f"venue={venue}/" if venue and venue.upper() not in _VENUE_UNKNOWN_SENTINELS else ""
         # Case-insensitive instrument_type needle. Empty manifest value
         # means "any instrument_type counts" (schema-4 rows). Identifier-
         # only types like ``prediction_market`` skip the segment check.
@@ -483,7 +547,8 @@ def _audit_generic(
                 if bundle_venue_needles and migrated_bundle_needle in k and any(b in k for b in bundle_venue_needles):
                     is_real = True
                     break
-                if dt_needle not in k:
+                # Axis-7: accept primary or Databento-paired schema needle.
+                if dt_needle not in k and not any(pn in k for pn in extra_dt_needles):
                     continue
                 if venue_needle and venue_needle not in k:
                     continue
