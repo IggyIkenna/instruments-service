@@ -365,6 +365,30 @@ class TestWriteFixtureMapping:
             _write_fixture_mapping("test-bucket", "2026-04-28")
         mock_classify.assert_not_called()
 
+    def test_404_historical_date_no_classify(self) -> None:
+        """Missing instruments parquet on a HISTORICAL forward-polled date is also benign.
+
+        Forward-polled days that were captured via enrichment-only mode never wrote
+        instrument_availability/.../instruments.parquet at fixture-poll time. The
+        downstream fixture_mapping is best-effort; absent the upstream parquet
+        nothing to map. Must silently skip (no classify_and_emit_error) regardless
+        of date. Reference: VM af-backfill-20260513-161517 failure 2026-05-13 +
+        issue doc api_football_enrichment_preflight_runtime_mismatch_2026_05_13.md.
+        """
+        mock_storage = MagicMock()
+        mock_storage.download_bytes.side_effect = Exception(
+            "404 GET https://storage.googleapis.com/... No such object: .../instruments.parquet"
+        )
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator.datetime") as mock_datetime,
+            patch("instruments_service.engine.orchestrator.classify_and_emit_error") as mock_classify,
+        ):
+            mock_datetime.now.return_value = datetime(2026, 5, 13, 12, 0, 0, tzinfo=UTC)
+            # 2026-04-26 is 17 days HISTORICAL relative to today (was failing before fix)
+            _write_fixture_mapping("test-bucket", "2026-04-26")
+        mock_classify.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # Bug 2 regression — UnboundLocalError on get_leagues_needing_refresh
