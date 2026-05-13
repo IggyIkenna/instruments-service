@@ -132,7 +132,7 @@ class JupiterReferenceDataAdapter(BaseReferenceDataAdapter):
         Returns core routable pairs (SOL/USDC, LST pairs, major tokens).
         For the full token universe, use _fetch_token_list().
         """
-        if instrument_type not in (None, InstrumentType.SPOT, "spot"):
+        if instrument_type not in (None, InstrumentType.SPOT_PAIR, "spot"):
             logger.info("Jupiter only supports SPOT instruments; requested %s", instrument_type)
             return []
 
@@ -177,7 +177,7 @@ class JupiterReferenceDataAdapter(BaseReferenceDataAdapter):
             instrument_key=instrument_key,
             venue=self.venue,
             raw_symbol=raw_symbol,
-            instrument_type=InstrumentType.SPOT,
+            instrument_type=InstrumentType.SPOT_PAIR,
             base_asset=base_asset.upper(),
             quote_asset=quote_asset.upper(),
             settle_asset=quote_asset.upper(),

@@ -103,7 +103,7 @@ class MeteoraReferenceDataAdapter(BaseReferenceDataAdapter):
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
         """Fetch active Meteora DLMM pools as instruments."""
-        if instrument_type not in (None, InstrumentType.SPOT, "spot"):
+        if instrument_type not in (None, InstrumentType.SPOT_PAIR, "spot"):
             logger.info("Meteora only supports SPOT instruments; requested %s", instrument_type)
             return []
 
@@ -182,7 +182,7 @@ class MeteoraReferenceDataAdapter(BaseReferenceDataAdapter):
             instrument_key=instrument_key,
             venue=self.venue,
             raw_symbol=raw_symbol,
-            instrument_type=InstrumentType.SPOT,
+            instrument_type=InstrumentType.SPOT_PAIR,
             base_asset=base_asset,
             quote_asset=quote_asset,
             settle_asset=quote_asset,
