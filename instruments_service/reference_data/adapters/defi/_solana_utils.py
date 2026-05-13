@@ -48,6 +48,12 @@ SOLANA_PROTOCOL_DEPLOY_DATES: dict[str, datetime] = {
     "mango": datetime(2023, 8, 1, tzinfo=UTC),  # Mango V4 mainnet launch (Aug 2023)
     "zeta": datetime(2022, 4, 1, tzinfo=UTC),  # Zeta Markets v1 mainnet launch
     "flash_trade": datetime(2023, 11, 1, tzinfo=UTC),  # Flash Trade mainnet launch
+    # Plan C: Solana AMM coverage expansion (2026-05-13)
+    "meteora": datetime(2022, 9, 1, tzinfo=UTC),  # Meteora Dynamic Liquidity mainnet launch
+    "phoenix": datetime(2023, 6, 1, tzinfo=UTC),  # Phoenix CLOB DEX mainnet launch
+    "jupiter": datetime(2021, 11, 1, tzinfo=UTC),  # Jupiter aggregator mainnet launch
+    "lifinity": datetime(2022, 3, 1, tzinfo=UTC),  # Lifinity proactive market making launch
+    "pyth": datetime(2021, 8, 1, tzinfo=UTC),  # Pyth Network oracle mainnet launch
 }
 
 # ── Timestamp cache ───────────────────────────────────────────────────
