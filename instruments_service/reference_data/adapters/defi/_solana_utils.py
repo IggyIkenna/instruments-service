@@ -54,6 +54,10 @@ SOLANA_PROTOCOL_DEPLOY_DATES: dict[str, datetime] = {
     "jupiter": datetime(2021, 11, 1, tzinfo=UTC),  # Jupiter aggregator mainnet launch
     "lifinity": datetime(2022, 3, 1, tzinfo=UTC),  # Lifinity proactive market making launch
     "pyth": datetime(2021, 8, 1, tzinfo=UTC),  # Pyth Network oracle mainnet launch
+    # Plan E: Solana restaking rewards coverage (2026-05-13)
+    "solayer": datetime(2024, 4, 1, tzinfo=UTC),  # Solayer endogenous AVS restaking mainnet launch
+    "picasso": datetime(2023, 5, 1, tzinfo=UTC),  # Picasso Network IBC + cross-chain restaking mainnet
+    "cambrian": datetime(2024, 6, 1, tzinfo=UTC),  # Cambrian Network Solana AVS restaking mainnet launch
 }
 
 # ── Timestamp cache ───────────────────────────────────────────────────
