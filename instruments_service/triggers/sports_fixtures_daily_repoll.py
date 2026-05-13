@@ -358,7 +358,7 @@ async def run_sports_fixtures_daily_repoll(
             league_df_clean = league_df.drop(columns=["_resolved_league_id"], errors="ignore")
             row_count = len(league_df_clean)
             try:
-                manifest.record_captured(
+                manifest.record_captured(  # QG-allow: emission-policy-not-applicable — raw api-football FIXTURES input capture; not a derived-output boundary
                     row_key={
                         "date": day_str,
                         "data_type": "FIXTURES",
