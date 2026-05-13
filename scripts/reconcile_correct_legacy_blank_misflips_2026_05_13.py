@@ -48,6 +48,9 @@ from datetime import datetime, timezone
 import pandas as pd
 from google.cloud import storage
 
+from unified_trading_library.instrument_lifecycle_loader import (
+    load_instrument_lifecycle,
+)
 from unified_trading_library.legacy_reason_classifier import (
     classify_blank_reason_row,
 )
@@ -185,6 +188,16 @@ def main() -> int:
         )
         return 0
 
+    # Wave 3: load per-instrument lifecycle map for cefi/defi. Sports/prediction
+    # don't need it (legit empty_confirmed at instrument-day grain).
+    instrument_lifecycle = None
+    if args.asset_group in {"cefi", "defi", "tradfi"}:
+        logger.info("Loading per-instrument lifecycle bounds for %s catalog...", args.asset_group)
+        instrument_lifecycle = load_instrument_lifecycle(args.asset_group, PROJECT_ID)
+        logger.info(
+            "Loaded %d (venue, instrument_key) lifecycle entries", len(instrument_lifecycle)
+        )
+
     # Re-classify each candidate.
     candidate_idx = df.index[mask]
     corrections: list[dict[str, str | int]] = []
@@ -194,7 +207,9 @@ def main() -> int:
     for idx in candidate_idx:
         row = df.loc[idx]
         try:
-            new_status, new_reason = classify_blank_reason_row(args.asset_group, row)
+            new_status, new_reason = classify_blank_reason_row(
+                args.asset_group, row, instrument_lifecycle=instrument_lifecycle
+            )
         except (ValueError, TypeError, KeyError, AttributeError) as exc:
             logger.warning("Classifier failed for row %s: %s — leaving unchanged", idx, exc)
             n_no_change += 1
