@@ -72,6 +72,7 @@ from unified_trading_library import (
     CaptureStatus,
     DataSink,
     DomainValidationService,
+    EmissionDecision,
     InstrumentsWriteGate,
     ManifestRow,
     ManifestWriter,
@@ -83,6 +84,7 @@ from unified_trading_library import (
     get_storage_client,
     get_write_bucket_name,
     log_event,
+    publish_with_policy,
     read_availability_index,
 )
 from unified_trading_library import unified_config as _uc
@@ -102,6 +104,8 @@ from instruments_service.reference_data.adapters.tradfi.databento import (
 from instruments_service.reference_data.utils.evm_creation_resolver import EvmCacheSession
 
 logger = logging.getLogger(__name__)
+
+_SERVICE_NAME: str = "instruments-service"
 
 
 # v8 pipeline_mode SSOT (Phase 4.INSTRUMENTS — explicit pipeline_mode= at every
@@ -1930,7 +1934,9 @@ async def process_instruments(
             counts: dict[str, int] = {}
             _active_venues_set = set(active_venues)
             _ef = sports_entity_filter
-            _entity_wanted_zf = lambda ent: _ef is None or _ef == ent
+
+            def _entity_wanted_zf(ent: str) -> bool:
+                return _ef is None or _ef == ent
 
             # Check if today is a reference refresh trigger for any league.
             _batch_date = date_type.fromisoformat(date)
@@ -2774,6 +2780,19 @@ async def process_instruments(
             len(expected_venues),
             date,
         )
+
+    # Emission policy check — PARTIAL_OK: emits PUBLISHED_DEGRADED when completeness < 1.0
+    # but always allows write through. Per UAC seed Phase 6.8 PART B.
+    _emission = _check_emission_policy(
+        date=date,
+        completeness_fraction=len(written_venues) / len(expected_venues) if expected_venues else 1.0,
+    )
+    logger.debug(
+        "catalog_snapshot emission decision date=%s: %s (completeness=%.3f)",
+        date,
+        _emission.service_emission_state,
+        _emission.completeness_fraction,
+    )
 
     log_event(
         "PROCESSING_COMPLETED",
@@ -6624,6 +6643,32 @@ def _get_instruments_bucket(asset_group: str | None = None) -> str:
         if not cfg.is_test_run:
             return prod_bucket
         return prod_bucket.replace(f"-{project}", f"-test-{project}", 1)
+
+
+def _check_emission_policy(
+    *,
+    date: str,
+    completeness_fraction: float,
+    correlation_id: str | None = None,
+) -> EmissionDecision:
+    """Return publish decision for catalog_snapshot emission boundary.
+
+    PARTIAL_OK — catalog_snapshot is a best-effort union of multiple source feeds;
+    partial coverage is normal (some venues may lag or be unavailable on any given day).
+    completeness < 1.0 → emits PUBLISHED_DEGRADED but still writes.
+    completeness == 0.0 → still writes (PARTIAL_OK never suppresses).
+    Only STRICT_FAIL / BLOCK_CRITICAL would suppress a write — not applicable here.
+
+    UAC seed: ("instruments-service", "catalog_snapshot"): ServiceEmissionPolicy.PARTIAL_OK
+    Plan: writegate_honest_coverage_endtoend_2026_05_06.md Phase 6.8 PART B.
+    """
+    return publish_with_policy(
+        service=_SERVICE_NAME,
+        output_data_type="catalog_snapshot",
+        row_key={"date": date},
+        completeness_fraction=completeness_fraction,
+        correlation_id=correlation_id,
+    )
 
 
 def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int) -> None:
