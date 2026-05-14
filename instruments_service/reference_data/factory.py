@@ -463,7 +463,7 @@ def get_adapter_for_canonical_venue(
     # Live mode: route CeFi Tardis venues to CCXT (real-time public endpoints).
     # Tardis is historical-only and can't provide live instrument definitions.
     ccxt_exchange_id = _CANONICAL_VENUE_TO_CCXT_EXCHANGE.get(canonical_venue)
-    if mode == "live" and adapter_key == "tardis" and ccxt_exchange_id:
+    if mode == "live" and adapter_key == "tardis" and ccxt_exchange_id:  # noqa: L2-mode-seam — adapter source-routing (different source per mode is the one allowed L2 seam)
         pool_key = ("ccxt", None, canonical_venue, None)
         if pool_key in _adapter_pool:
             return _adapter_pool[pool_key]
@@ -482,7 +482,7 @@ def get_adapter_for_canonical_venue(
     # Live mode: route TradFi Databento venues to GCS-first adapter.
     # Reads the most recent GCS snapshot, filters expired instruments,
     # falls back to Databento (T-3 days) if no GCS data.
-    if mode == "live" and adapter_key == "databento":
+    if mode == "live" and adapter_key == "databento":  # noqa: L2-mode-seam — adapter source-routing (different source per mode is the one allowed L2 seam)
         pool_key = ("tradfi_live", api_key, canonical_venue, None)
         if pool_key in _adapter_pool:
             return _adapter_pool[pool_key]
