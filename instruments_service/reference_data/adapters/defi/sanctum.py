@@ -1,22 +1,28 @@
-"""Sanctum reference data adapter — instrument discovery for Sanctum LST tokens.
+"""Sanctum reference data adapter — instrument discovery for Sanctum LST marketplace.
 
-Discovers Sanctum liquid staking tokens (LSTs) on Solana. Tokens are returned
-as InstrumentRecord with instrument_type="YIELD_BEARING".
+Discovers Sanctum-native liquid staking tokens (LSTs) on Solana.
+Tokens are returned as InstrumentRecord with instrument_type="YIELD_BEARING".
 
-Pure static-registry adapter for reference data (instrument catalogue). The
-actual LST→SOL exchange rate data (lst_rates) is fetched by MTDS via the
-Sanctum REST API `https://extra.sanctum.so/v1/sol-value`.
+Pure static-registry adapter: get_instruments returns a hardcoded catalogue of
+Sanctum-listed LSTs with active TVL. No network access required. Tests are
+credential-free and offline.
+
+Sanctum is a Solana LST infrastructure layer that:
+- Routes SOL staking into any LST at 1:1 rates via its liquidity pool
+- Manages the INF (Infinity) meta-LST that auto-reallocates across top LSTs
+- Lists dozens of community-run stake pools (jupSOL, laineSOL, etc.)
 
 References:
-- https://sanctum.so
-- INF token (Sanctum Infinity): 5oVNBeEEQvYi1cX3ir8Dx5n1P7pdxydbGF2X4TxVusJm
-- jupSOL token (Jupiter Staked SOL): jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v
-- laineSOL token: LAinEtNLgpmCP9Rvsf5Hn8W6EhNiKLZMTlkPradhmPuA
-- Launch date: 2023-06-01 (Sanctum v1 mainnet, conservative).
+- https://sanctum.so/
+- Sanctum Infinity (INF): https://extra.sanctum.so/
+- INF mint: 5oVNBeEEQvYi1cX3ir8Dx5n1P7pdxydbGF2X4TxVusJm
+- jupSOL (Jupiter Staked SOL) mint: jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v
+- laineSOL (Laine Staked SOL) mint: LAinEtNLgpmCP9Rvsf5Hn8W6EhNiKLZMTlkPradhmPuA
+- Launch date: 2023-06-01 (conservative mainnet-launch floor from UAC chain_env.py).
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
@@ -28,46 +34,56 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ._solana_utils import get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_CHAIN = "SOLANA"
 
-# Sanctum v1 mainnet launch — conservative floor used for EXPECTED_PRE_VENUE_LAUNCH
-# coverage gating in MTDS oracle_prices / lst_rates handlers.
-_SANCTUM_DEPLOY_DATE = datetime(2023, 6, 1, tzinfo=UTC)
+# Sanctum v1 mainnet launch (2023-06-01) — conservative floor per UAC chain_env.py.
+_SANCTUM_DEPLOY_DATE: datetime = get_protocol_floor_date("sanctum")
 
-# Sanctum LST token catalogue (9 decimals — standard SPL token).
-# Sources: Sanctum docs + Solana mainnet mint addresses (verified 2026-05-14).
+# INF (Sanctum Infinity) — meta-LST that auto-reallocates across top Solana LSTs.
+_INF_MINT = "5oVNBeEEQvYi1cX3ir8Dx5n1P7pdxydbGF2X4TxVusJm"
+
+# jupSOL (Jupiter Staked SOL) — Jupiter's stake pool LST.
+# Mint verified against Jupiter docs and sanctum.so marketplace (2026-05-14).
+_JUPSOL_MINT = "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v"
+
+# laineSOL (Laine Staked SOL) — Laine validator-hosted stake pool LST.
+_LAINESOL_MINT = "LAinEtNLgpmCP9Rvsf5Hn8W6EhNiKLZMTlkPradhmPuA"
+
+# Standard SPL token decimal precision
+_SPL_DECIMALS = 9
+
+# Sanctum LST tokens with active TVL as of 2026-05-14 snapshot.
+# Extend this list as new Sanctum-listed LSTs reach material TVL.
 _LST_TOKENS: list[dict[str, str]] = [
     {
         "symbol": "INF",
-        "mint_address": "5oVNBeEEQvYi1cX3ir8Dx5n1P7pdxydbGF2X4TxVusJm",
+        "mint_address": _INF_MINT,
         "underlying": "SOL",
-        "name": "Sanctum Infinity Token",
     },
     {
         "symbol": "JUPSOL",
-        "mint_address": "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v",
+        "mint_address": _JUPSOL_MINT,
         "underlying": "SOL",
-        "name": "Jupiter Staked SOL",
     },
     {
         "symbol": "LAINESOL",
-        "mint_address": "LAinEtNLgpmCP9Rvsf5Hn8W6EhNiKLZMTlkPradhmPuA",
+        "mint_address": _LAINESOL_MINT,
         "underlying": "SOL",
-        "name": "Laine Staked SOL",
     },
 ]
 
 
 class SanctumReferenceDataAdapter(BaseReferenceDataAdapter):
-    """Sanctum reference data: INF + jupSOL + laineSOL LST token discovery.
+    """Sanctum reference data: LST token discovery for the Sanctum marketplace.
 
-    Sanctum launched on Solana mainnet 2023-06-01. Its flagship product is
-    the Infinity (INF) token — a diversified LST index backed by multiple
-    Solana stake pools. Tokens are yield-bearing instruments whose SOL exchange
-    rate appreciates as staking rewards accrue.
+    Returns InstrumentRecord entries for the top Sanctum-listed LSTs (INF + jupSOL + laineSOL).
+    Sanctum launched on Solana mainnet 2023-06-01. INF is a yield-bearing
+    meta-LST; its exchange rate vs SOL appreciates as Solana staking rewards
+    accrue across Sanctum's diversified stake pool allocation.
     """
 
     def __init__(
@@ -117,7 +133,7 @@ class SanctumReferenceDataAdapter(BaseReferenceDataAdapter):
                     underlying=underlying,
                     available_from_datetime=_SANCTUM_DEPLOY_DATE,
                     base_asset_contract_address=mint,
-                    base_asset_decimals=9,
+                    base_asset_decimals=_SPL_DECIMALS,
                 )
             )
 

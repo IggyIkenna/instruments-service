@@ -58,6 +58,10 @@ SOLANA_PROTOCOL_DEPLOY_DATES: dict[str, datetime] = {
     "solayer": datetime(2024, 4, 1, tzinfo=UTC),  # Solayer endogenous AVS restaking mainnet launch
     "picasso": datetime(2023, 5, 1, tzinfo=UTC),  # Picasso Network IBC + cross-chain restaking mainnet
     "cambrian": datetime(2024, 6, 1, tzinfo=UTC),  # Cambrian Network Solana AVS restaking mainnet launch
+    # Plan A: Solana LST + native staking adapters (2026-05-14)
+    "sanctum": datetime(
+        2023, 6, 1, tzinfo=UTC
+    ),  # Sanctum v1 LST marketplace mainnet launch (conservative floor); medium confidence
 }
 
 # ── Timestamp cache ───────────────────────────────────────────────────
