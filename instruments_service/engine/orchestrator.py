@@ -1650,7 +1650,7 @@ async def process_instruments(
         non_defi_active = [v for v in active_venues if v not in defi_venue_names]
 
     # DeFi: use cached universe (one API call for entire batch run)
-    if defi_active and mode == "batch":
+    if defi_active and mode == "batch":  # noqa: L2-mode-seam — DeFi caching decision; design call pending per batch_live_symmetry Q3
         defi_records, defi_retryable = await _get_or_fetch_defi_universe(defi_active, api_keys=api_keys, mode=mode)
         records.extend(defi_records)
         _retryable_venues.extend(defi_retryable)
@@ -2069,7 +2069,7 @@ async def process_instruments(
         # DeFi batch: zero records after date filter is normal for early dates
         # (venue exists in UAC but no pools created yet on-chain). Skip without error.
         is_defi_only = all(c.upper() in ("DEFI",) for c in asset_groups)
-        if is_defi_only and mode == "batch":
+        if is_defi_only and mode == "batch":  # noqa: L2-mode-seam — DeFi pre-genesis early-exit; design call pending per batch_live_symmetry Q3
             logger.debug(
                 "DeFi batch: zero instruments after date filter for date=%s — "
                 "all venues pre-date their first pool creation. Skipping.",
