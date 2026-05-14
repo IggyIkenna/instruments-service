@@ -32,7 +32,10 @@ from ...schemas import (
 
 logger = logging.getLogger(__name__)
 
-_BASE = "https://www.aster.exchange"
+# Canonical Aster Finance futures API base per asterdex/api-docs.
+# Fixed 2026-05-14: prior "www.aster.exchange" caused 0% capture since 2024-10-01
+# (Aster rebranded from Astherus → Aster Finance; domain moved to asterdex.com).
+_BASE = "https://fapi.asterdex.com"
 # SSOT: UAC VenueMapping.get_instrument_discovery_start("ASTER"). Pre-2026-05-05
 # this was hardcoded as datetime(2024, 9, 1) and silently diverged from UAC's
 # venue_start_dates["ASTER"] = "2024-10-01" by one month. Investigation 2026-05-05:
