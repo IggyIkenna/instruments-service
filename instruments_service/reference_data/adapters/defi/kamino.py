@@ -172,6 +172,7 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
             instrument_key=instrument_key,
             venue=venue_tag,
             raw_symbol=address,
+            pool_address=address,
             instrument_type=InstrumentType.POOL,
             base_asset=sym_a,
             quote_asset=sym_b,
