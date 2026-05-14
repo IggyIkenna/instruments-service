@@ -152,7 +152,7 @@ class ZetaReferenceDataAdapter(BaseReferenceDataAdapter):
         if kind not in ("perp", "future", "perpetual"):
             return None
 
-        is_active = market.get("isActive") or market.get("active")
+        is_active = market.get("isActive") if "isActive" in market else market.get("active")
         if is_active is not None and not is_active:
             return None
 

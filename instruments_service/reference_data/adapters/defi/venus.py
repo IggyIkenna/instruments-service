@@ -107,6 +107,7 @@ class VenusReferenceDataAdapter(BaseReferenceDataAdapter):
                     instrument_key=instrument_key,
                     venue=venue_tag,
                     raw_symbol=address,
+                    pool_address=address,
                     instrument_type=InstrumentType.LENDING,
                     base_asset=collateral,
                     quote_asset=borrow,
