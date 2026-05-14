@@ -44,7 +44,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 from unified_trading_library import get_storage_client
-from unified_trading_library.cloud_interface.bucket_naming import resolve_bucket_name
+from unified_trading_library import resolve_bucket_name
 
 logger = logging.getLogger(__name__)
 
