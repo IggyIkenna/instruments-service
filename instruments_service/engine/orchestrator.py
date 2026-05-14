@@ -107,6 +107,9 @@ from instruments_service.reference_data.adapters.tradfi.databento import (
     is_non_trading_day,
     non_trading_day_reason,
 )
+from instruments_service.reference_data.adapters.tradfi.futures_factory import (
+    build_futures_contracts,
+)
 from instruments_service.reference_data.utils.evm_creation_resolver import EvmCacheSession
 
 logger = logging.getLogger(__name__)
@@ -2333,6 +2336,22 @@ async def process_instruments(
                         )
             else:
                 _write_venue(venue_str, venue_df, date, bucket, sink, counts, sampler, manifest)
+                # Phase 4.2 (tradfi_canonical_futures_contract_hard_required_fields_2026_05_13):
+                # For TradFi futures venues (CME, ICE), also write CanonicalFuturesContract
+                # records alongside the InstrumentRecord instruments.parquet.
+                # build_futures_contracts() derives all 5 hard-required lifecycle dates
+                # from InstrumentRecord.expiry using physical/cash-settled conventions.
+                # Shard-level isolation: a write failure here does NOT abort the instruments
+                # write — the futures_contracts.parquet is best-effort on the same date.
+                if venue_str in frozenset(_TRADFI_VENUES):
+                    _venue_instrument_records = [r for r in records if r.venue == venue_str]
+                    _write_futures_contracts(
+                        venue_str=venue_str,
+                        instrument_records=_venue_instrument_records,
+                        date=date,
+                        bucket=bucket,
+                        sink=sink,
+                    )
     else:
         _write_venue("all", df, date, bucket, sink, counts, sampler, manifest)
 
@@ -3082,6 +3101,73 @@ def _write_venue(
             log_event("WRITE_FAILED", details={"venue": venue_str, "date": date, "error": str(exc)})
             return
     # Programming errors (TypeError, KeyError, etc.) propagate — fail the shard
+
+
+def _write_futures_contracts(
+    venue_str: str,
+    instrument_records: list[InstrumentRecord],
+    date: str,
+    bucket: str,
+    sink: DataSink,
+) -> None:
+    """Write CanonicalFuturesContract records to ``futures_contracts.parquet``.
+
+    Called after _write_venue() for TradFi futures venues (CME, ICE). Builds
+    CanonicalFuturesContract from InstrumentRecord using ``build_futures_contracts()``,
+    which derives all 5 hard-required lifecycle dates (expiry_date, last_trading_date,
+    first_notice_date, delivery_date, settlement_date) from the single expiry timestamp
+    that Databento provides.
+
+    Output path mirrors the instruments.parquet partition:
+        instrument_availability/by_date/day={date}/venue={venue}/futures_contracts.parquet
+
+    Shard-level isolation: errors are logged but never propagate — a failure here
+    does not abort the instruments.parquet write that already succeeded.
+
+    Plan: tradfi_canonical_futures_contract_hard_required_fields_2026_05_13.md Phase 4.2.
+    """
+    try:
+        today = date_type.fromisoformat(date)
+        contracts = build_futures_contracts(instrument_records, today=today)
+        if not contracts:
+            logger.debug(
+                "_write_futures_contracts: no futures contracts for venue=%s date=%s — skipping",
+                venue_str,
+                date,
+            )
+            return
+        rows = [c.model_dump(mode="json") for c in contracts]
+        df = pd.DataFrame(rows)
+        _gated_sink_write(
+            sink,
+            data=df,
+            partition={"day": date, "venue": venue_str},
+            filename="futures_contracts.parquet",
+            venue=venue_str,
+            entity="futures_contracts",
+        )
+        logger.info(
+            "_write_futures_contracts: wrote %d contracts for venue=%s date=%s",
+            len(contracts),
+            venue_str,
+            date,
+        )
+    except Exception as exc:  # broad-except-ok — shard-level isolation per CLAUDE.md
+        logger.error(
+            "_write_futures_contracts: failed for venue=%s date=%s: %s",
+            venue_str,
+            date,
+            exc,
+        )
+        log_event(
+            "WRITE_FAILED",
+            details={
+                "venue": venue_str,
+                "date": date,
+                "entity": "futures_contracts",
+                "error": str(exc),
+            },
+        )
 
 
 def _write_venues_from_teams(teams_df: pd.DataFrame, bucket: str) -> None:
