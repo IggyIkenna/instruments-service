@@ -176,7 +176,6 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "JITO-SOLANA": "jito",
     "SANCTUM-SOLANA": "sanctum",
     "SOLBLAZE-SOLANA": "solblaze",
-    "SANCTUM-SOLANA": "sanctum",
     # Jupiter is execution-only (swap aggregator), not instrument discovery.
     # DEX perp venues (L2 + StarkNet + Solana clone)
     "LIGHTER-ZKSYNC": "lighter",
@@ -262,6 +261,12 @@ _CANONICAL_VENUE_TO_CCXT_EXCHANGE: dict[str, str] = {
     "DERIBIT": "deribit",
     "COINBASE-SPOT": "coinbase",
     "UPBIT": "upbit",
+    # Tier-3 CeFi — Kraken spot (public /0/public/AssetPairs, no auth needed) and
+    # futures (Kraken Derivatives, formerly Cryptofacilities) via krakenfutures.
+    # Credentials are NOT required for live instrument discovery — public endpoints.
+    # kraken-api-key / kraken-api-secret are for trading only (execution-service).
+    "KRAKEN-SPOT": "kraken",
+    "KRAKEN-FUTURES": "krakenfutures",
 }
 
 _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {

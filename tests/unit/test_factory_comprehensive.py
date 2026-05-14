@@ -71,6 +71,27 @@ class TestFactoryLiveModeRouting:
         adapter = get_adapter_for_canonical_venue("BINANCE-SPOT", mode="batch")
         assert adapter.venue == "tardis"
 
+    def test_kraken_spot_live_routes_to_ccxt(self) -> None:
+        from instruments_service.reference_data.adapters.cefi.ccxt_adapter import CCXTReferenceDataAdapter
+
+        clear_adapter_pool()
+        adapter = get_adapter_for_canonical_venue("KRAKEN-SPOT", mode="live")
+        assert isinstance(adapter, CCXTReferenceDataAdapter)
+        assert adapter.venue == "KRAKEN-SPOT"
+
+    def test_kraken_futures_live_routes_to_ccxt(self) -> None:
+        from instruments_service.reference_data.adapters.cefi.ccxt_adapter import CCXTReferenceDataAdapter
+
+        clear_adapter_pool()
+        adapter = get_adapter_for_canonical_venue("KRAKEN-FUTURES", mode="live")
+        assert isinstance(adapter, CCXTReferenceDataAdapter)
+        assert adapter.venue == "KRAKEN-FUTURES"
+
+    def test_kraken_batch_routes_to_tardis(self) -> None:
+        clear_adapter_pool()
+        adapter = get_adapter_for_canonical_venue("KRAKEN-SPOT", mode="batch")
+        assert adapter.venue == "tardis"
+
 
 # ---------------------------------------------------------------------------
 # Factory: DeFi chain parsing
