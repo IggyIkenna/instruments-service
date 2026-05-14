@@ -56,6 +56,7 @@ from .adapters.defi.radiant import RadiantReferenceDataAdapter
 from .adapters.defi.raydium import RaydiumReferenceDataAdapter
 from .adapters.defi.renzo import RenzoReferenceDataAdapter
 from .adapters.defi.rocket_pool import RocketPoolReferenceDataAdapter
+from .adapters.defi.sanctum import SanctumReferenceDataAdapter
 from .adapters.defi.solayer import SolayerReferenceDataAdapter
 from .adapters.defi.solblaze import SolblazeReferenceDataAdapter
 from .adapters.defi.spark import SparkReferenceDataAdapter
@@ -174,6 +175,7 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "MARINADE-SOLANA": "marinade",
     "JITO-SOLANA": "jito",
     "SOLBLAZE-SOLANA": "solblaze",
+    "SANCTUM-SOLANA": "sanctum",
     # Jupiter is execution-only (swap aggregator), not instrument discovery.
     # DEX perp venues (L2 + StarkNet + Solana clone)
     "LIGHTER-ZKSYNC": "lighter",
@@ -309,6 +311,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "raydium": RaydiumReferenceDataAdapter,
     "renzo": RenzoReferenceDataAdapter,
     "rocket_pool": RocketPoolReferenceDataAdapter,
+    "sanctum": SanctumReferenceDataAdapter,
     "solblaze": SolblazeReferenceDataAdapter,
     "solayer": SolayerReferenceDataAdapter,
     "spark": SparkReferenceDataAdapter,
@@ -390,6 +393,7 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "renzo": "",
     "kelpdao": "",
     "puffer": "",
+    "sanctum": "",
     "solblaze": "",
     # Restaking vault protocols — curated static vault registries.
     "symbiotic": "",
