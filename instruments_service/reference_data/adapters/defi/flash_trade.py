@@ -146,7 +146,13 @@ class FlashTradeReferenceDataAdapter(BaseReferenceDataAdapter):
         if not name:
             return None
 
-        is_active = market.get("isActive") or market.get("enabled") or market.get("active")
+        is_active = (
+            market.get("isActive")
+            if "isActive" in market
+            else market.get("enabled")
+            if "enabled" in market
+            else market.get("active")
+        )
         if is_active is not None and not is_active:
             return None
 

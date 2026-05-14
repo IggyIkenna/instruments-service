@@ -66,6 +66,7 @@ class EthenaReferenceDataAdapter(BaseReferenceDataAdapter):
                 instrument_key=f"{venue_tag}:YIELD_BEARING:sUSDe",
                 venue=venue_tag,
                 raw_symbol=_SUSDE_ADDRESS,
+                base_asset_contract_address=_SUSDE_ADDRESS,
                 instrument_type=InstrumentType.YIELD_BEARING,
                 base_asset="sUSDe",
                 quote_asset="",

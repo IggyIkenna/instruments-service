@@ -375,6 +375,10 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "mango": "",
     "zeta": "",
     "flash_trade": "",
+    "pacifica": "",
+    # Layer-2 perp DEX adapters — public REST APIs, no API key needed
+    "lighter": "",
+    "extended": "",
     # Phase-4 lending protocols. Curated registries — no live data source
     # for instrument discovery (deploy dates resolved via direct RPC).
     "euler_v2": "",
