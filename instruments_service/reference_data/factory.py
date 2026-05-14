@@ -23,6 +23,7 @@ from .adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
 from .adapters.defi.balancer import BalancerReferenceDataAdapter
 from .adapters.defi.beefy import BeefyReferenceDataAdapter
 from .adapters.defi.benqi import BenqiReferenceDataAdapter
+from .adapters.defi.cambrian import CambrianReferenceDataAdapter
 from .adapters.defi.compound_v3 import CompoundV3ReferenceDataAdapter
 from .adapters.defi.convex import ConvexReferenceDataAdapter
 from .adapters.defi.curve import CurveReferenceDataAdapter
@@ -32,6 +33,8 @@ from .adapters.defi.ethena import EthenaReferenceDataAdapter
 from .adapters.defi.etherfi import EtherFiReferenceDataAdapter
 from .adapters.defi.ethfi import EthFiGovernanceReferenceDataAdapter
 from .adapters.defi.euler_v2 import EulerV2ReferenceDataAdapter
+from .adapters.defi.extended import ExtendedReferenceDataAdapter
+from .adapters.defi.flash_trade import FlashTradeReferenceDataAdapter
 from .adapters.defi.fluid import FluidReferenceDataAdapter
 from .adapters.defi.idle import IdleReferenceDataAdapter
 from .adapters.defi.jito import JitoReferenceDataAdapter
@@ -40,15 +43,20 @@ from .adapters.defi.kamino import KaminoReferenceDataAdapter
 from .adapters.defi.karak import KarakReferenceDataAdapter
 from .adapters.defi.kelpdao import KelpDaoReferenceDataAdapter
 from .adapters.defi.lido import LidoReferenceDataAdapter
+from .adapters.defi.lighter import LighterReferenceDataAdapter
+from .adapters.defi.mango import MangoReferenceDataAdapter
 from .adapters.defi.marinade import MarinadeReferenceDataAdapter
 from .adapters.defi.morpho import MorphoReferenceDataAdapter
 from .adapters.defi.orca import OrcaReferenceDataAdapter
+from .adapters.defi.pacifica import PacificaReferenceDataAdapter
 from .adapters.defi.pendle import PendleReferenceDataAdapter
+from .adapters.defi.picasso import PicassoReferenceDataAdapter
 from .adapters.defi.puffer import PufferReferenceDataAdapter
 from .adapters.defi.radiant import RadiantReferenceDataAdapter
 from .adapters.defi.raydium import RaydiumReferenceDataAdapter
 from .adapters.defi.renzo import RenzoReferenceDataAdapter
 from .adapters.defi.rocket_pool import RocketPoolReferenceDataAdapter
+from .adapters.defi.solayer import SolayerReferenceDataAdapter
 from .adapters.defi.solblaze import SolblazeReferenceDataAdapter
 from .adapters.defi.spark import SparkReferenceDataAdapter
 from .adapters.defi.symbiotic import SymbioticReferenceDataAdapter
@@ -57,6 +65,7 @@ from .adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
 from .adapters.defi.uniswap_v4 import UniswapV4ReferenceDataAdapter
 from .adapters.defi.venus import VenusReferenceDataAdapter
 from .adapters.defi.yearn import YearnReferenceDataAdapter
+from .adapters.defi.zeta import ZetaReferenceDataAdapter
 from .adapters.prediction.kalshi import KalshiReferenceDataAdapter
 from .adapters.prediction.polymarket import PolymarketReferenceDataAdapter
 from .adapters.sports.adapters.api_football_reference import ApiFootballReferenceDataAdapter
@@ -166,6 +175,18 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "JITO-SOLANA": "jito",
     "SOLBLAZE-SOLANA": "solblaze",
     # Jupiter is execution-only (swap aggregator), not instrument discovery.
+    # DEX perp venues (L2 + StarkNet + Solana clone)
+    "LIGHTER-ZKSYNC": "lighter",
+    "EXTENDED-STARKNET": "extended",
+    "PACIFICA-SOLANA": "pacifica",
+    # Solana perp DEX venues (Plan B 2026-05-13)
+    "MANGO-SOLANA": "mango",
+    "ZETA-SOLANA": "zeta",
+    "FLASH-SOLANA": "flash_trade",
+    # Solana restaking venues (Plan E 2026-05-13)
+    "SOLAYER-SOLANA": "solayer",
+    "PICASSO-SOLANA": "picasso",
+    "CAMBRIAN-SOLANA": "cambrian",
 }
 
 # Dynamically add multi-chain DeFi venues from SUBGRAPH_IDS (SSOT in UAC).
@@ -189,7 +210,7 @@ _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL: dict[str, str] = {
     "CAMELOTV3": "camelot_v3",
     # Messari-schema DEXes — use UniV3 adapter (Messari fallback query)
     "VELODROMEV2": "velodrome_v2",
-    "TRADERJOEV2": "trader_joe_v2",
+    "TRADER_JOEV2": "trader_joe_v2",
     "GMX": "gmx",
     # Messari lending (Spark = Aave V3 fork, same schema)
     "SPARK": "spark",
@@ -243,6 +264,7 @@ _CANONICAL_VENUE_TO_CCXT_EXCHANGE: dict[str, str] = {
 _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "aave_v3": AaveV3ReferenceDataAdapter,
     "api_football": ApiFootballReferenceDataAdapter,
+    "cambrian": CambrianReferenceDataAdapter,
     "aster": AsterReferenceDataAdapter,
     "deribit_combo": DeribitComboReferenceDataAdapter,
     "balancer": BalancerReferenceDataAdapter,
@@ -254,7 +276,9 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "curve": CurveReferenceDataAdapter,
     "databento": DatabentoReferenceDataAdapter,
     "drift": DriftReferenceDataAdapter,
+    "extended": ExtendedReferenceDataAdapter,
     "eigenlayer": EigenLayerReferenceDataAdapter,
+    "flash_trade": FlashTradeReferenceDataAdapter,
     "ethena": EthenaReferenceDataAdapter,
     "ethfi_governance": EthFiGovernanceReferenceDataAdapter,
     "etherfi": EtherFiReferenceDataAdapter,
@@ -267,13 +291,17 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "kelpdao": KelpDaoReferenceDataAdapter,
     "kamino": KaminoReferenceDataAdapter,
     "karak": KarakReferenceDataAdapter,
+    "mango": MangoReferenceDataAdapter,
     "marinade": MarinadeReferenceDataAdapter,
     "ibkr": IBKRReferenceDataAdapter,
     "kalshi": KalshiReferenceDataAdapter,
+    "lighter": LighterReferenceDataAdapter,
     "lido": LidoReferenceDataAdapter,
     "morpho": MorphoReferenceDataAdapter,
     "orca": OrcaReferenceDataAdapter,
+    "pacifica": PacificaReferenceDataAdapter,
     "pendle": PendleReferenceDataAdapter,
+    "picasso": PicassoReferenceDataAdapter,
     "polygon": PolygonReferenceDataAdapter,
     "polymarket": PolymarketReferenceDataAdapter,
     "radiant": RadiantReferenceDataAdapter,
@@ -282,6 +310,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "renzo": RenzoReferenceDataAdapter,
     "rocket_pool": RocketPoolReferenceDataAdapter,
     "solblaze": SolblazeReferenceDataAdapter,
+    "solayer": SolayerReferenceDataAdapter,
     "spark": SparkReferenceDataAdapter,
     "symbiotic": SymbioticReferenceDataAdapter,
     "tardis": TardisReferenceDataAdapter,
@@ -290,6 +319,7 @@ _ADAPTERS: dict[str, type[BaseReferenceDataAdapter]] = {
     "uniswap_v4": UniswapV4ReferenceDataAdapter,
     "venus": VenusReferenceDataAdapter,
     "yearn": YearnReferenceDataAdapter,
+    "zeta": ZetaReferenceDataAdapter,
 }
 
 
@@ -341,6 +371,14 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "orca": "",
     "marinade": "",
     "jito": "",
+    # Solana perp DEX adapters (Plan B 2026-05-13) — public REST APIs, no API key needed
+    "mango": "",
+    "zeta": "",
+    "flash_trade": "",
+    "pacifica": "",
+    # Layer-2 perp DEX adapters — public REST APIs, no API key needed
+    "lighter": "",
+    "extended": "",
     # Phase-4 lending protocols. Curated registries — no live data source
     # for instrument discovery (deploy dates resolved via direct RPC).
     "euler_v2": "",
@@ -365,6 +403,10 @@ ADAPTER_DATA_SOURCES: dict[str, str] = {
     "pendle": "",
     # Jito Restaking (Solana NCN-vault primitive) — curated VRT registry.
     "jito_restaking": "",
+    # Solana restaking adapters (Plan E 2026-05-13) — curated static vault registries.
+    "solayer": "",
+    "picasso": "",
+    "cambrian": "",
 }
 
 

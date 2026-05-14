@@ -105,6 +105,9 @@ _EXPECTED_COLUMNS = {
     "away_score_penalty",
     "day",
     "data_available_at",
+    "match_end_time",
+    "announced_at",
+    "report_time",
 }
 
 

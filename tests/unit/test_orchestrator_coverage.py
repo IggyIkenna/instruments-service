@@ -40,6 +40,7 @@ def _make_record(
         instrument_type=instrument_type,
         base_asset=base_asset,
         quote_asset=quote_asset,
+        base_asset_contract_address="0x" + "a" * 40,
         available_from_datetime=available_since,
         available_to_datetime=available_to,
     )

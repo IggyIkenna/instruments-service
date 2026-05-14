@@ -19,6 +19,7 @@ def _make_record(venue: str = "AAVEV3-ETHEREUM", itype: str = "A_TOKEN") -> Inst
         instrument_type=itype,
         base_asset="WETH",
         quote_asset="USDC",
+        base_asset_contract_address="0x" + "a" * 40,
         available_from_datetime=datetime(2021, 3, 16, tzinfo=UTC),
     )
 
@@ -332,7 +333,6 @@ async def test_fetch_instruments_for_all_venues_deduplicates_adapter():
 
 def test_cli_main_imports_cleanly():
     """cli/main.py can be imported without errors — bootstrap smoke test."""
-    import instruments_service.cli.main
 
 
 def test_instruments_handler_is_unified_service_handler():
@@ -583,11 +583,11 @@ def test_write_catalogue_record_success():
             500,
         )
 
-    mock_writer.add.assert_called_once()
+    mock_writer.record_captured_from_counts.assert_called_once()
     mock_writer.write.assert_called_once()
-    add_kwargs = mock_writer.add.call_args.kwargs
-    assert add_kwargs["row_count"] == 500
-    assert add_kwargs["venue"] == "NYSE"
+    call_kwargs = mock_writer.record_captured_from_counts.call_args.kwargs
+    assert call_kwargs["total_rows"] == 500
+    assert call_kwargs["row_key"]["venue"] == "NYSE"
 
 
 # ---------------------------------------------------------------------------
@@ -1008,6 +1008,7 @@ def _make_defi_record(venue: str, base: str, quote: str, itype: str = "POOL") ->
         instrument_type=itype,
         base_asset=base,
         quote_asset=quote,
+        pool_address="0x" + "a" * 40,
     )
 
 

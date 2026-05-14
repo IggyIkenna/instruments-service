@@ -51,8 +51,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from google.cloud import storage
-from unified_trading_library.event_sink import GcsEventSink
-from unified_trading_library.events import log_event, setup_events
+from unified_trading_library import GcsEventSink, log_event, setup_events
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
