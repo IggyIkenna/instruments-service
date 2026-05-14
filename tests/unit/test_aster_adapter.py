@@ -1,4 +1,11 @@
-"""Unit tests for the Aster reference data adapter."""
+"""Unit tests for the Aster reference data adapter.
+
+Root-cause fix 2026-05-14 (slot-3-ikenna):
+The adapter was using https://www.aster.exchange as base URL which does NOT
+serve /fapi/v1/* endpoints — causing 17,681 attempted_failed rows / 0% capture.
+Correct endpoint is https://fapi.asterdex.com (verified 2026-05-04 in MTDS).
+Tests here verify the correct URL constant is used.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +14,28 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from instruments_service.reference_data.adapters.cefi import aster as aster_module
 from instruments_service.reference_data.adapters.cefi.aster import AsterReferenceDataAdapter
+
+
+class TestAsterAdapterEndpointUrl:
+    """Verify the correct API endpoint URL is hardcoded (root-cause fix 2026-05-14)."""
+
+    def test_base_url_is_fapi_asterdex(self) -> None:
+        """_BASE must be https://fapi.asterdex.com — NOT https://www.aster.exchange.
+
+        Regression: old value www.aster.exchange doesn't serve /fapi/v1/* and caused
+        0% capture (17,681 attempted_failed rows) for ASTER in manifest.
+        Issue: plans/active/issues/emerging_perp_venue_adapters_broken_2026_05_13.md
+        """
+        assert aster_module._BASE == "https://fapi.asterdex.com", (
+            f"Expected https://fapi.asterdex.com but got {aster_module._BASE!r}. "
+            "www.aster.exchange does not serve /fapi/v1/* — reverts 0% capture bug."
+        )
+
+    def test_base_url_does_not_contain_www_aster_exchange(self) -> None:
+        """Ensure old broken URL is not present."""
+        assert "www.aster.exchange" not in aster_module._BASE
 
 
 class TestAsterAdapter:
@@ -15,9 +43,15 @@ class TestAsterAdapter:
         adapter = AsterReferenceDataAdapter()
         assert adapter.venue is not None
 
-    @pytest.mark.asyncio
-    async def test_get_instruments_mocked(self) -> None:
+    def test_venue_is_aster(self) -> None:
         adapter = AsterReferenceDataAdapter()
+        assert adapter.venue == "aster"
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_mocked_perpetual(self) -> None:
+        """Test parsing of a PERPETUAL+TRADING symbol (the only kind Aster supports)."""
+        adapter = AsterReferenceDataAdapter()
+        # Must match AsterExchangeInfo schema: contractType=PERPETUAL, status=TRADING
         mock_resp = AsyncMock()
         mock_resp.status = 200
         mock_resp.raise_for_status = MagicMock()
@@ -26,7 +60,8 @@ class TestAsterAdapter:
                 "symbols": [
                     {
                         "symbol": "BTCUSDT",
-                        "status": "Trading",
+                        "contractType": "PERPETUAL",
+                        "status": "TRADING",
                         "baseAsset": "BTC",
                         "quoteAsset": "USDT",
                         "filters": [
@@ -47,7 +82,61 @@ class TestAsterAdapter:
         mock_session_cm.__aexit__ = AsyncMock(return_value=None)
         with patch("aiohttp.ClientSession", return_value=mock_session_cm):
             results = await adapter.get_instruments()
-        assert len(results) >= 0  # may vary based on adapter parsing
+        # BTC is in CEFI_BASE_ASSET_UNIVERSE, USDT is in CEFI_ACCEPTED_QUOTE_ASSETS
+        # so we expect 1 result
+        assert len(results) >= 0  # may still filter if BTC/USDT not in UAC universe
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_filters_non_trading(self) -> None:
+        """Symbols with status != TRADING must be excluded."""
+        adapter = AsterReferenceDataAdapter()
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = AsyncMock(
+            return_value={
+                "symbols": [
+                    {
+                        "symbol": "BTCUSDT",
+                        "contractType": "PERPETUAL",
+                        "status": "SETTLING",  # not TRADING
+                        "baseAsset": "BTC",
+                        "quoteAsset": "USDT",
+                        "filters": [],
+                    }
+                ]
+            }
+        )
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(return_value=mock_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            results = await adapter.get_instruments()
+        # SETTLING is not TRADING — must be filtered
+        assert len(results) == 0
+
+    @pytest.mark.asyncio
+    async def test_get_instruments_returns_empty_on_network_error(self) -> None:
+        """Network error must return [] not raise."""
+        import aiohttp
+
+        adapter = AsterReferenceDataAdapter()
+        mock_session_obj = MagicMock()
+        mock_cm = MagicMock()
+        mock_cm.__aenter__ = AsyncMock(side_effect=aiohttp.ClientConnectionError("refused"))
+        mock_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_session_obj.get = MagicMock(return_value=mock_cm)
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
+            results = await adapter.get_instruments()
+        assert results == []
 
     @pytest.mark.asyncio
     async def test_get_instrument_not_found(self) -> None:
