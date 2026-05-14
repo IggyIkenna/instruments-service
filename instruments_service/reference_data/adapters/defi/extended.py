@@ -26,6 +26,13 @@ from ...schemas import (
 
 logger = logging.getLogger(__name__)
 
+# DIAGNOSIS 2026-05-14 (slot-3): 0 blobs captured from 15 attempted manifest rows
+# (all 2026-04-30, all attempted_failed). Likely stale domain — Extended.exchange
+# may have rebranded or moved its REST API (mirrors ASTER pattern: ASTER used
+# www.aster.exchange instead of fapi.asterdex.com). Action needed: probe this
+# URL live and check Extended Finance docs for the current REST base. Until
+# corrected, every adapter call will fail into attempted_failed.
+# Reference: plans/active/issues/emerging_perp_venue_adapters_broken_2026_05_13.md
 _EXTENDED_API_BASE = "https://api.starknet.extended.exchange/api/v1"
 # Extended StarkNet mainnet launch (historical OHLCV available from 2024-07-26).
 _EXTENDED_DEPLOY_DATE = datetime(2024, 7, 26, tzinfo=UTC)
