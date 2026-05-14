@@ -3,6 +3,26 @@
 Extended is a StarkNet perp DEX (Extended.exchange). Public REST at
 api.starknet.extended.exchange — no auth required for market discovery.
 Returns all active perpetual markets as InstrumentRecord objects.
+
+Diagnosis 2026-05-14 (slot-3-ikenna):
+Manifest shows 15 attempted_failed rows on 2026-04-30 only (0% capture).
+Three possible root causes:
+1. API transient failure on that specific date — the adapter code itself is
+   correct (uses api.starknet.extended.exchange/api/v1/info/markets which
+   is the verified endpoint). The fallback list handles network outages.
+2. Extended was in testnet/pre-launch on 2026-04-30 — the _EXTENDED_DEPLOY_DATE
+   is 2024-07-26 but Extended.exchange may have relaunched/migrated to StarkNet
+   mainnet later (MTDS notes "funding only from 2025-08-01 Starknet migration").
+   Instruments discovery date may need to be updated to 2025-08-01 when StarkNet
+   mainnet funded — or pre-migration data simply returns empty.
+3. Only one VM run attempted on 2026-04-30 — 15 rows is suspiciously small;
+   the adapter likely ran but the API returned no ACTIVE markets that day.
+
+Recommended next steps:
+- Re-run instruments discovery for 2026-05-14 to verify API is live
+- If returns ACTIVE markets, the 0% capture is a transient VM/date issue
+- If returns 404/error, investigate StarkNet migration date as true launch
+- Issue: plans/active/issues/emerging_perp_venue_adapters_broken_2026_05_13.md
 """
 
 from __future__ import annotations
