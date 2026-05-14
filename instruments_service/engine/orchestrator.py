@@ -1705,9 +1705,16 @@ async def process_instruments(
         primary_asset_group = asset_groups[0] if asset_groups else None
         _pf_bucket = _get_instruments_bucket(primary_asset_group)
         gcs_fixture_ids = _read_fixture_ids_from_gcs(_pf_bucket, date)
-        if not gcs_fixture_ids:
-            logger.info("Per-fixture GCS skip: no fixtures in GCS for date=%s", date)
+        if not gcs_fixture_ids and not recovery_fixture_ids:
+            logger.info("Per-fixture GCS skip: no fixtures in GCS for date=%s, no recovery IDs provided", date)
             return {}
+        if not gcs_fixture_ids and recovery_fixture_ids:
+            logger.info(
+                "Per-fixture GCS skip: no GCS fixtures for date=%s — using %d recovery IDs directly",
+                date,
+                len(recovery_fixture_ids),
+            )
+            gcs_fixture_ids = list(recovery_fixture_ids)
         api_football_key = api_keys.get("api_football") if api_keys else None
         if not api_football_key:
             logger.warning("Per-fixture backfill: no API Football key for date=%s", date)
@@ -1871,7 +1878,7 @@ async def process_instruments(
                         api_key=api_football_key,
                         bucket=bucket,
                         entities_to_fetch=_sports_missing_entities if _sports_missing_entities else None,
-                        fixture_ids_override=[],  # zero-fixture date — skip 33-league API re-fetch
+                        fixture_ids_override=list(recovery_fixture_ids) if recovery_fixture_ids else [],
                         manifest=sports_manifest,
                         recovery_fixture_ids=recovery_fixture_ids,
                         redo_all=redo_all,
