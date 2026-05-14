@@ -161,11 +161,8 @@ _SPORTS_DATA_TYPE_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
     # understat catalog
     "XG": PipelineMode.BATCH_UNDERSTAT,
     # transfermarkt catalog
-    "TRANSFERMARKT_LEAGUES": PipelineMode.BATCH_TRANSFERMARKT,
     "PLAYER_VALUES": PipelineMode.BATCH_TRANSFERMARKT,
     # soccer_football_info (SFI) catalog
-    "SFI_LEAGUES": PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
-    "SFI_STANDINGS": PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
     "SFI_PROGRESSIVE_STATS": PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
     # open_meteo catalog
     "WEATHER": PipelineMode.BATCH_OPEN_METEO,
@@ -1216,12 +1213,12 @@ async def process_instruments(
                 # every trigger. Leagues list (metadata) is fast (1 API call), always fetched.
                 _batch_dt = date_type.fromisoformat(date) if isinstance(date, str) else date
                 _leagues_today = get_leagues_needing_refresh(_batch_dt)
-                # CLI entity filter takes precedence; otherwise per-league trigger logic decides
+                # CLI entity filter takes precedence; TRANSFERMARKT_LEAGUES retired 2026-05-05
                 _tm_entity = sports_entity_filter
                 if not _tm_entity:
-                    _tm_entity = None if _leagues_today else "TRANSFERMARKT_LEAGUES"
+                    _tm_entity = None
                 if not _leagues_today and not sports_entity_filter:
-                    logger.info("Transfermarkt: date=%s has no league triggers — leagues only (skipping teams)", date)
+                    logger.info("Transfermarkt: date=%s has no league triggers — skipping PLAYER_VALUES refresh", date)
                 elif _leagues_today and not sports_entity_filter:
                     logger.info(
                         "Transfermarkt: date=%s triggers %d leagues: %s", date, len(_leagues_today), _leagues_today
@@ -1243,7 +1240,7 @@ async def process_instruments(
                     api_key=tm_key,
                     bucket=bucket,
                     entity_filter=_tm_entity,
-                    league_filter=_leagues_today if _leagues_today and _tm_entity != "TRANSFERMARKT_LEAGUES" else None,
+                    league_filter=_leagues_today if _leagues_today else None,
                     season=_tm_season,
                     force=redo_all,
                 )
@@ -1315,10 +1312,7 @@ async def process_instruments(
             ("MATCHES", "FOOTYSTATS"),
             ("PREDICTIONS", "FOOTYSTATS"),
             ("XG", "UNDERSTAT"),
-            ("TRANSFERMARKT_LEAGUES", "TRANSFERMARKT"),
             ("PLAYER_VALUES", "TRANSFERMARKT"),
-            ("SFI_LEAGUES", "SOCCER_FOOTBALL_INFO"),
-            ("SFI_STANDINGS", "SOCCER_FOOTBALL_INFO"),
             ("SFI_PROGRESSIVE_STATS", "SOCCER_FOOTBALL_INFO"),
             ("WEATHER", "OPEN_METEO"),
         ]
@@ -1598,9 +1592,6 @@ async def process_instruments(
             "MATCHES",
             "PREDICTIONS",
             "PLAYER_VALUES",
-            "TRANSFERMARKT_LEAGUES",
-            "SFI_LEAGUES",
-            "SFI_STANDINGS",
         }
     )
     # Per-fixture entities need fixture IDs but can read them from GCS
@@ -2002,11 +1993,7 @@ async def process_instruments(
                     "TRANSFERMARKT is active but no API key found — skipping for date=%s.",
                     date,
                 )
-            if (
-                transfermarkt_key
-                and _is_trigger
-                and (_entity_wanted_zf("TRANSFERMARKT_LEAGUES") or _entity_wanted_zf("PLAYER_VALUES"))
-            ):
+            if transfermarkt_key and _is_trigger and _entity_wanted_zf("PLAYER_VALUES"):
                 logger.info(
                     "Trigger-based Transfermarkt refresh for date=%s (leagues: %s)",
                     date,
@@ -2041,11 +2028,7 @@ async def process_instruments(
                     "SOCCER_FOOTBALL_INFO is active but no API key found — skipping for date=%s.",
                     date,
                 )
-            if sfi_key and (
-                _entity_wanted_zf("SFI_LEAGUES")
-                or _entity_wanted_zf("SFI_STANDINGS")
-                or _entity_wanted_zf("SFI_PROGRESSIVE_STATS")
-            ):
+            if sfi_key and _entity_wanted_zf("SFI_PROGRESSIVE_STATS"):
                 try:
                     sfi_counts = await _fetch_sfi_data(
                         date=date,
@@ -2546,11 +2529,7 @@ async def process_instruments(
                 "date=%s: not a reference refresh trigger — skipping Transfermarkt",
                 date,
             )
-        if (
-            transfermarkt_key
-            and _tm_trigger
-            and (_entity_wanted("TRANSFERMARKT_LEAGUES") or _entity_wanted("PLAYER_VALUES"))
-        ):
+        if transfermarkt_key and _tm_trigger and _entity_wanted("PLAYER_VALUES"):
             try:
                 tm_counts = await _fetch_transfermarkt_data(
                     date=date,
@@ -2580,9 +2559,7 @@ async def process_instruments(
                 "SOCCER_FOOTBALL_INFO is active but no API key found — skipping SFI fetch for date=%s.",
                 date,
             )
-        if sfi_key and (
-            _entity_wanted("SFI_LEAGUES") or _entity_wanted("SFI_STANDINGS") or _entity_wanted("SFI_PROGRESSIVE_STATS")
-        ):
+        if sfi_key and _entity_wanted("SFI_PROGRESSIVE_STATS"):
             try:
                 sfi_counts = await _fetch_sfi_data(
                     date=date,
@@ -5502,8 +5479,8 @@ async def _fetch_transfermarkt_data(
 ) -> dict[str, int]:
     """Fetch Transfermarkt leagues and teams (with player values) to GCS.
 
-    entity_filter: when set to "TRANSFERMARKT_LEAGUES" or "PLAYER_VALUES",
-        only that entity is fetched and written (entity-scoped VM mode).
+    entity_filter: when set to "PLAYER_VALUES", only that entity is fetched
+        and written (entity-scoped VM mode). TRANSFERMARKT_LEAGUES retired 2026-05-05.
     season: override season year for historical backfill (e.g. 2019).
         When None, the adapter defaults to the current year.
 
@@ -5776,19 +5753,15 @@ async def _fetch_sfi_data(
 ) -> dict[str, int]:
     """Fetch SoccerFootball.info leagues, standings, and progressive stats to GCS.
 
-    entity_filter: when set to "SFI_LEAGUES", "SFI_STANDINGS", or
-        "SFI_PROGRESSIVE_STATS", only that entity is written (entity-scoped
-        VM mode). Note: SFI_STANDINGS always fetches leagues first to get
-        league IDs, but only writes the requested entity.
+    entity_filter: when set to "SFI_PROGRESSIVE_STATS", only that entity is
+        written (entity-scoped VM mode). SFI_LEAGUES + SFI_STANDINGS retired 2026-04-24/2026-05-05.
 
-    SFI provides league standings and tables from an independent source,
-    useful for cross-validation with API Football standings. Progressive
-    stats provide 30-second interval match time-series data for halftime
-    feature engineering.
+    SFI provides progressive stats: 30-second interval match time-series data
+    for halftime feature engineering.
 
-    Honest-coverage: per-league SFI_STANDINGS + SFI_PROGRESSIVE_STATS shards
-    emit ``captured`` / ``empty_confirmed`` / ``attempted_failed`` so the
-    data-status page can distinguish legitimate empties from API failures.
+    Honest-coverage: per-league SFI_PROGRESSIVE_STATS shards emit ``captured``
+    / ``empty_confirmed`` / ``attempted_failed`` so the data-status page can
+    distinguish legitimate empties from API failures.
     Shard-level failure isolation: a per-league exception is recorded and
     the loop continues — never raised to caller.
 
@@ -5809,7 +5782,6 @@ async def _fetch_sfi_data(
     # adapter.get_leagues() still runs at runtime to build the prediction-tier
     # filter for progressive_stats fetches, but no GCS write or manifest row.
     # SFI_STANDINGS retired 2026-04-24 — SFI has no standings endpoint.
-    _want_sfi_standings = False
     _want_sfi_progressive = entity_filter is None or entity_filter == "SFI_PROGRESSIVE_STATS"
 
     manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
@@ -5942,68 +5914,6 @@ async def _fetch_sfi_data(
             len(sfi_league_ids),
             len(_filtered_sfi_ids),
         )
-
-    if _filtered_sfi_ids and _want_sfi_standings:
-        # Currently unreachable — ``_want_sfi_standings`` is hard-coded False
-        # above because SFI has no standings endpoint.  Kept for completeness
-        # in case the endpoint is reintroduced.
-        try:
-            all_standings: list[dict[str, str | None]] = []
-            for lid in _filtered_sfi_ids:
-                try:
-                    standings = await adapter.get_standings(lid)  # type: ignore[arg-type]
-                    for entry in standings:
-                        row = entry.model_dump() if hasattr(entry, "model_dump") else entry
-                        all_standings.append({k: str(v) if v is not None else None for k, v in row.items()})
-                except Exception as exc:
-                    classify_and_emit_error(
-                        exc,
-                        service_name="instruments-service",
-                        operation="sfi_standings_fetch",
-                        shard=lid,
-                    )
-            if all_standings:
-                df = pd.DataFrame(all_standings)
-                _gated_sink_write(
-                    sink,
-                    data=df,
-                    partition={"day": date, "entity": "sfi_standings"},
-                    filename="sfi_standings.parquet",
-                    venue="soccer_football_info",
-                    entity="sfi_standings",
-                )
-                counts["sfi_standings"] = len(df)
-                _stamped_sfi_std_df = stamp_available_at_explicit(df, when=datetime.now(UTC))
-                manifest.record_captured(
-                    row_key={"date": date, "data_type": "SFI_STANDINGS"},
-                    df=_stamped_sfi_std_df,
-                    category="sports",
-                    instrument_type="",
-                    data_type="SFI_STANDINGS",
-                    pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
-                    service_emission_state=None,
-                )
-                logger.info("SFI standings: %d rows written", len(df))
-            else:
-                manifest.record_empty(
-                    row_key={"date": date, "data_type": "SFI_STANDINGS"},
-                    attempted_at=attempt_ts,
-                    pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
-                )
-        except Exception as exc:
-            classify_and_emit_error(
-                exc,
-                service_name="instruments-service",
-                operation="sfi_standings_batch",
-                shard=date,
-            )
-            _err_code = _classify_adapter_failure(exc, "soccer_football_info")
-            manifest.record_failed(
-                row_key={"date": date, "data_type": "SFI_STANDINGS"},
-                error=_err_code,
-                attempted_at=attempt_ts,
-                pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
-            )
 
     # Progressive stats — per-match 30-second interval time-series.
     # Requires SFI match IDs for the date, then fetches progressive data
