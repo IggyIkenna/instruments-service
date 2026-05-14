@@ -340,7 +340,7 @@ class TestWriteCatalogueRecord:
                 "2026-03-22",
                 10,
             )
-        mock_writer.add.assert_called_once()
+        mock_writer.record_captured_from_counts.assert_called_once()
         mock_writer.write.assert_called_once()
 
 
