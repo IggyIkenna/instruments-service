@@ -177,6 +177,7 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
             instrument_key=instrument_key,
             venue=venue_tag,
             raw_symbol=str(address),
+            pool_address=str(address),
             instrument_type=InstrumentType.POOL,
             base_asset=base,
             quote_asset=quote,

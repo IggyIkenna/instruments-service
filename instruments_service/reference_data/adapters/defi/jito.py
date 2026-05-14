@@ -120,6 +120,7 @@ class JitoReferenceDataAdapter(BaseReferenceDataAdapter):
             instrument_key=f"{venue_tag}:STAKING:JITOSOL",
             venue=venue_tag,
             raw_symbol=_JITOSOL_MINT,
+            base_asset_contract_address=_JITOSOL_MINT,
             instrument_type=InstrumentType.STAKING,
             base_asset="SOL",
             quote_asset="JITOSOL",
