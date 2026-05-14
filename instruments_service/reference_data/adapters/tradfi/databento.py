@@ -29,6 +29,8 @@ from unified_api_contracts import (
     KNOWN_ETFS,
     TRADFI_DATABENTO_INSTRUMENTS,
     TRADFI_TICKER_UNIVERSE,
+    CanonicalFuturesContract,
+    FuturesContractLifecyclePhase,
     VenueMapping,
     classify_venue_error,
 )
@@ -658,6 +660,65 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
             expiries=sorted(expiry_set),
             updated_at=datetime.now(UTC),
         )
+
+    async def get_canonical_futures_contracts(
+        self,
+        venue: str | None = None,
+        underlying: str | None = None,
+    ) -> list[CanonicalFuturesContract]:
+        """Return CanonicalFuturesContract records for all known futures roots/months.
+
+        Conservative lifecycle date mapping: all 5 required date fields are set to
+        inst.expiry.date() since Databento DEFINITION records carry only a single
+        expiry timestamp.  Per Phase 4.1 plan (tradfi_canonical_futures_contract_
+        hard_required_fields_2026_05_13): this conservative approach is correct for
+        initial rollout; per-venue refinement (distinct LTD/FND/delivery) is a
+        separate follow-up.
+
+        Args:
+            venue: Optional venue filter (e.g. "CME", "ICE"). Defaults to all venues.
+            underlying: Optional root/underlying filter (e.g. "ES", "CL").
+        """
+        instruments = await self.get_instruments(instrument_type="FUTURE")
+        today = date.today()
+        result: list[CanonicalFuturesContract] = []
+        for inst in instruments:
+            if inst.expiry is None:
+                continue
+            root = _extract_underlying_from_symbol(inst.raw_symbol) or (inst.underlying or "")
+            if not root:
+                continue
+            inst_venue = inst.venue or self.venue
+            if venue is not None and inst_venue.upper() != venue.upper():
+                continue
+            if underlying is not None and root.upper() != underlying.upper():
+                continue
+            expiry_dt = inst.expiry
+            expiry_d = expiry_dt.date() if isinstance(expiry_dt, datetime) else expiry_dt
+            phase = FuturesContractLifecyclePhase.EXPIRED if today > expiry_d else FuturesContractLifecyclePhase.ACTIVE
+            listed_at = inst.available_from_datetime
+            if listed_at is not None and listed_at.tzinfo is None:
+                listed_at = listed_at.replace(tzinfo=UTC)
+            with contextlib.suppress(Exception):
+                result.append(
+                    CanonicalFuturesContract(
+                        venue=inst_venue,
+                        root=root,
+                        contract_symbol=inst.raw_symbol,
+                        contract_month=expiry_d.month,
+                        contract_year=expiry_d.year,
+                        expiry_date=expiry_d,
+                        last_trading_date=expiry_d,
+                        first_notice_date=expiry_d,
+                        delivery_date=expiry_d,
+                        settlement_date=expiry_d,
+                        lifecycle_phase=phase,
+                        tick_size=inst.tick_size,
+                        contract_size=inst.contract_size,
+                        listed_at=listed_at,
+                    )
+                )
+        return result
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
         raise NotImplementedError("Databento does not provide funding rates (equity/futures only)")
