@@ -75,7 +75,7 @@ from pathlib import Path
 import pandas as pd
 from google.cloud import storage
 from unified_api_contracts import EMPTY_CONFIRMED_REASONS
-from unified_trading_library.legacy_reason_classifier import classify_blank_reason_row
+from unified_trading_library.legacy_reason_classifier import classify_blank_reason_row  # noqa: qg-deep-import
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -231,7 +231,32 @@ def main() -> int:
             )
             return 0
 
-        # Re-classify each candidate; record only the rows that genuinely upgrade.
+        # Re-classify each candidate; record rows that genuinely upgrade.
+        # Three upgrade shapes:
+        #   (a) reason upgrade: empty_confirmed stays but gets a more-specific EXPECTED_* reason.
+        #   (b) status flip → attempted_failed: cefi/defi/tradfi instrument-day grain rule
+        #       OR sports where fixture exists but source returned zero (Phase 1.5).
+        #   (c) status flip → expected_unattempted: sports where no fixture exists for the
+        #       shard in the instruments-service universe (Phase 1.5 — fixture not in scope).
+        fixture_manifest: pd.DataFrame | None = None
+        if asset_group == "sports" and "data_type" in df.columns and "capture_status" in df.columns:
+            # Case-insensitive: sports manifest writes data_type in UPPERCASE
+            # (FIXTURES / FIXTURE_STATS / FIXTURE_EVENTS / FIXTURE_LINEUPS / INJURIES / etc.)
+            # per api_football_minimal_flattening_removal_2026_05_07 + slot-8 verification
+            # at 2026-05-13. Reference incident: pre-fix, this mask matched 0 rows of 2.67M
+            # because it compared to lowercase "fixtures" — fixture_manifest stayed empty,
+            # _fixture_exists_for_shard() always returned False, Phase 1.5 fixture-existence
+            # check was a no-op, and 1.87M sports candidates wrongly reported "0 upgrades".
+            _fix_mask = (df["data_type"].astype(str).str.strip().str.lower() == "fixtures") & (
+                df["capture_status"].astype(str).str.strip().str.lower() == "captured"
+            )
+            _fixture_cols = [c for c in ("venue", "league_id", "date") if c in df.columns]
+            fixture_manifest = df.loc[_fix_mask, _fixture_cols].copy()
+            logger.info(
+                "Sports fixture manifest: %d captured fixture rows for fixture-existence check (Phase 1.5)",
+                len(fixture_manifest),
+            )
+
         candidate_idx = df.index[mask]
         upgrades: list[dict[str, str | int]] = []
         n_no_change = 0
@@ -239,19 +264,24 @@ def main() -> int:
             row = df.loc[idx]
             current_reason = str(row.get("error_reason", "")).strip()
             try:
-                new_status, new_reason = classify_blank_reason_row(asset_group, row)
+                new_status, new_reason = classify_blank_reason_row(asset_group, row, fixture_manifest=fixture_manifest)
             except (ValueError, TypeError, KeyError, AttributeError) as exc:
                 logger.warning("Classifier failed for row %s: %s — leaving row unchanged", idx, exc)
                 n_no_change += 1
                 continue
-            # Only an upgrade if: stays empty_confirmed, lands on a *specific* EXPECTED_* reason
-            # (not the generic SOURCE_RETURNED_ZERO), and that reason differs from the current one.
-            is_upgrade = (
+            # Shape (a): reason upgrade — same capture_status, better EXPECTED_* reason.
+            is_reason_upgrade = (
                 new_status == "empty_confirmed"
                 and new_reason in EMPTY_CONFIRMED_REASONS
                 and new_reason != "SOURCE_RETURNED_ZERO"
                 and new_reason != current_reason
             )
+            # Shape (b): status flip → attempted_failed (cefi/defi/tradfi instrument-day
+            # grain rule; sports where fixture exists but source returned zero — Phase 1.5).
+            is_status_flip = new_status == "attempted_failed"
+            # Shape (c): sports shard has no fixture in instruments-service universe → expected_unattempted.
+            is_expected_unattempted_flip = new_status == "expected_unattempted"
+            is_upgrade = is_reason_upgrade or is_status_flip or is_expected_unattempted_flip
             if not is_upgrade:
                 n_no_change += 1
                 continue
@@ -265,6 +295,8 @@ def main() -> int:
                     "instrument_type": str(row.get("instrument_type", "")),
                     "instrument_id": str(row.get("instrument_id", "")),
                     "league_id": str(row.get("league_id", "")),
+                    "old_capture_status": "empty_confirmed",
+                    "new_capture_status": new_status,
                     "old_reason": current_reason,
                     "new_reason": new_reason,
                 }
@@ -285,9 +317,13 @@ def main() -> int:
             return 0
 
         # Distribution of (old → new) for operator review.
+        # Key includes capture_status change for status-flip upgrades.
         transition_counts: dict[str, int] = {}
         for entry in upgrades:
-            key = f"{entry['old_reason']} -> {entry['new_reason']}"
+            if entry["new_capture_status"] != entry["old_capture_status"]:
+                key = f"{entry['old_capture_status']}/{entry['old_reason']} -> {entry['new_capture_status']}/{entry['new_reason']}"
+            else:
+                key = f"{entry['old_reason']} -> {entry['new_reason']}"
             transition_counts[key] = transition_counts.get(key, 0) + 1
         logger.info("Upgrade transitions:")
         for key, count in sorted(transition_counts.items(), key=lambda kv: -kv[1]):
@@ -346,11 +382,15 @@ def main() -> int:
             )
             return 2
 
-        # Apply: stamp new error_reason on the dataframe, upload the upgraded
-        # rows back via the per-VM shard (consolidator merges last-writer-wins).
+        # Apply: stamp new capture_status + error_reason on the dataframe, upload the
+        # upgraded rows back via the per-VM shard (consolidator merges last-writer-wins).
+        # Two shapes: reason-upgrade (capture_status unchanged) and status-flip
+        # (capture_status changes from empty_confirmed → attempted_failed).
         upgraded_idx = [entry["row_index"] for entry in upgrades]
         for entry in upgrades:
             df.at[entry["row_index"], "error_reason"] = entry["new_reason"]
+            if entry["new_capture_status"] != entry["old_capture_status"]:
+                df.at[entry["row_index"], "capture_status"] = entry["new_capture_status"]
         if "reconciler_run_id" in df.columns:
             for entry in upgrades:
                 df.at[entry["row_index"], "reconciler_run_id"] = run_id

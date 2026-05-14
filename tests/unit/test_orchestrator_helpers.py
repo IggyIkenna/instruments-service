@@ -340,7 +340,7 @@ class TestWriteCatalogueRecord:
                 "2026-03-22",
                 10,
             )
-        mock_writer.add.assert_called_once()
+        mock_writer.record_captured_from_counts.assert_called_once()
         mock_writer.write.assert_called_once()
 
 
@@ -363,6 +363,30 @@ class TestWriteFixtureMapping:
         ):
             mock_datetime.now.return_value = datetime(2026, 4, 21, 12, 0, 0, tzinfo=UTC)
             _write_fixture_mapping("test-bucket", "2026-04-28")
+        mock_classify.assert_not_called()
+
+    def test_404_historical_date_no_classify(self) -> None:
+        """Missing instruments parquet on a HISTORICAL forward-polled date is also benign.
+
+        Forward-polled days that were captured via enrichment-only mode never wrote
+        instrument_availability/.../instruments.parquet at fixture-poll time. The
+        downstream fixture_mapping is best-effort; absent the upstream parquet
+        nothing to map. Must silently skip (no classify_and_emit_error) regardless
+        of date. Reference: VM af-backfill-20260513-161517 failure 2026-05-13 +
+        issue doc api_football_enrichment_preflight_runtime_mismatch_2026_05_13.md.
+        """
+        mock_storage = MagicMock()
+        mock_storage.download_bytes.side_effect = Exception(
+            "404 GET https://storage.googleapis.com/... No such object: .../instruments.parquet"
+        )
+        with (
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            patch("instruments_service.engine.orchestrator.datetime") as mock_datetime,
+            patch("instruments_service.engine.orchestrator.classify_and_emit_error") as mock_classify,
+        ):
+            mock_datetime.now.return_value = datetime(2026, 5, 13, 12, 0, 0, tzinfo=UTC)
+            # 2026-04-26 is 17 days HISTORICAL relative to today (was failing before fix)
+            _write_fixture_mapping("test-bucket", "2026-04-26")
         mock_classify.assert_not_called()
 
 
@@ -429,4 +453,65 @@ class TestGetLeaguesNeedingRefreshImportScope:
             "No function-local import of get_leagues_needing_refresh is "
             "permitted — it caused Bug 2 UnboundLocalError. Keep the "
             "symbol imported once at module scope."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Bug 3 regression — recovery_fixture_ids ignored by zero-fixture fast paths
+# ---------------------------------------------------------------------------
+
+
+class TestRecoveryFixtureIdsBypassBug:
+    """Regression for recovery_fixture_ids bypass bug (2026-05-14).
+
+    Two fast paths inside process_instruments ignored --recovery-fixture-ids:
+    1. Per-fixture _skip_urdi path: early-exited with ``return {}`` when
+       _read_fixture_ids_from_gcs returned empty, before checking recovery_fixture_ids.
+    2. Zero-fixture path: passed fixture_ids_override=[] unconditionally, meaning
+       recovery_fixture_ids was never used even when provided.
+
+    Both paths now guard with ``if not recovery_fixture_ids`` before early-exit or
+    empty-list override. Source scans lock in the fix pattern.
+
+    Reference: VM af-backfill-20260514-102928 (Phase 3.C, Man City vs Crystal Palace
+    EPL FT, fixture 1379275) completed in ~22s with no FIXTURE_STATS written.
+    Issue doc: plans/active/issues/orchestrator_zero_fixture_path_recovery_bypass_bug_2026_05_14.md.
+    """
+
+    def test_skip_urdi_early_exit_guards_recovery_fixture_ids(self) -> None:
+        """_skip_urdi path must check recovery_fixture_ids before early-exit.
+
+        Pattern: ``if not gcs_fixture_ids and not recovery_fixture_ids:``
+        must appear before ``return {}``. If this guard is missing, a VM launched
+        with ``--entity FIXTURE_STATS --recovery-fixture-ids <parquet>`` on a date
+        where GCS has no completed fixtures will exit in ~22s with zero data written.
+        """
+        import inspect
+
+        from instruments_service.engine import orchestrator
+
+        src = inspect.getsource(orchestrator)
+        assert "not gcs_fixture_ids and not recovery_fixture_ids" in src, (
+            "The _skip_urdi early-exit must guard against recovery_fixture_ids. "
+            "Pattern 'not gcs_fixture_ids and not recovery_fixture_ids' missing — "
+            "restores Bug 3 bypass (recovery mode ignored when GCS fixtures empty)."
+        )
+
+    def test_zero_fixture_path_uses_recovery_ids_when_provided(self) -> None:
+        """Zero-fixture path must use recovery_fixture_ids as fixture_ids_override.
+
+        Pattern: ``list(recovery_fixture_ids) if recovery_fixture_ids else []``
+        must appear in fixture_ids_override kwarg of _fetch_sports_reference_data.
+        If this guard is missing, zero-fixture dates with --recovery-fixture-ids
+        silently skip all per-fixture entity fetches.
+        """
+        import inspect
+
+        from instruments_service.engine import orchestrator
+
+        src = inspect.getsource(orchestrator)
+        assert "list(recovery_fixture_ids) if recovery_fixture_ids else []" in src, (
+            "Zero-fixture path must use recovery_fixture_ids as fixture_ids_override. "
+            "Pattern 'list(recovery_fixture_ids) if recovery_fixture_ids else []' missing — "
+            "restores Bug 3 bypass (recovery IDs ignored on zero-fixture dates)."
         )

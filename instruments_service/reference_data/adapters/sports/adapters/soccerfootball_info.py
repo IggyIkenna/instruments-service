@@ -8,6 +8,7 @@ Base URL: https://soccer-football-info.p.rapidapi.com
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 
 from unified_api_contracts.sports import (
     CanonicalFixture,
@@ -589,6 +590,9 @@ def _stats_signature(row: CanonicalProgressiveStats) -> tuple[object, ...]:
 _MIN_HALFTIME_RUN = 5
 _HALFTIME_SEARCH_START_SECONDS = 43 * 60  # 43:00
 
+_MIN_MATCH_END_RUN = 30  # 30 frozen intervals = ~15 min at 30s cadence
+_MATCH_END_SEARCH_START_SECONDS = 85 * 60  # 85:00 — minimum full-time
+
 
 def detect_halftime_window(
     rows: list[CanonicalProgressiveStats],
@@ -651,3 +655,47 @@ def detect_halftime_window(
 
     # Rebuild all rows with halftime annotations
     return [row.model_copy(update={"ht_start_timer": ht_start, "ht_end_timer": ht_end}) for row in rows]
+
+
+def detect_match_end_time(
+    rows: list[CanonicalProgressiveStats],
+    kickoff_utc: datetime,
+) -> datetime | None:
+    """Derive match end time from SFI progressive stats freeze.
+
+    Algorithm:
+    1. Sort rows by timer_seconds.
+    2. Scan rows with timer >= 85:00 for a run of _MIN_MATCH_END_RUN consecutive
+       entries with identical stat fingerprints (freeze = no live updates arriving).
+    3. If freeze found: match_end_time = kickoff_utc + max_timer_seconds.
+    4. If no freeze but rows exist past 85:00 (batch completed-match case): use max.
+
+    Returns None when no rows are present or max timer < 85:00.
+    """
+    if not rows:
+        return None
+
+    sorted_rows = sorted(rows, key=lambda r: r.timer_seconds)
+    late_rows = [r for r in sorted_rows if r.timer_seconds >= _MATCH_END_SEARCH_START_SECONDS]
+
+    if not late_rows:
+        return None
+
+    max_timer = late_rows[-1].timer_seconds
+
+    # Check for freeze (live mode: stats stopped arriving)
+    run_length = 1
+    prev_fp = _stats_signature(late_rows[0])
+
+    for idx in range(1, len(late_rows)):
+        fp = _stats_signature(late_rows[idx])
+        if fp == prev_fp:
+            run_length += 1
+            if run_length >= _MIN_MATCH_END_RUN:
+                return kickoff_utc + timedelta(seconds=max_timer)
+        else:
+            run_length = 1
+        prev_fp = fp
+
+    # Batch mode: completed match — rows exist past 85:00, use max timer directly
+    return kickoff_utc + timedelta(seconds=max_timer)

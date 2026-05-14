@@ -86,6 +86,7 @@ class LidoReferenceDataAdapter(BaseReferenceDataAdapter):
                     instrument_key=f"{venue_tag}:LST:{symbol}",
                     venue=venue_tag,
                     raw_symbol=address,
+                    base_asset_contract_address=address,
                     instrument_type=InstrumentType.YIELD_BEARING,
                     base_asset=underlying,
                     quote_asset="",
