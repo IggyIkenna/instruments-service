@@ -174,6 +174,7 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
     "ORCA-SOLANA": "orca",
     "MARINADE-SOLANA": "marinade",
     "JITO-SOLANA": "jito",
+    "SANCTUM-SOLANA": "sanctum",
     "SOLBLAZE-SOLANA": "solblaze",
     "SANCTUM-SOLANA": "sanctum",
     # Jupiter is execution-only (swap aggregator), not instrument discovery.
