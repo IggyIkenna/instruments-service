@@ -12,12 +12,12 @@ import pytest
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
 
 from instruments_service.reference_data.adapters.defi.sanctum import (
+    _INF_MINT,
+    _JUPSOL_MINT,
+    _LAINESOL_MINT,
     SanctumReferenceDataAdapter,
 )
 
-_INF_MINT = "5oVNBeEEQvYi1cX3ir8Dx5n1P7pdxydbGF2X4TxVusJm"
-_JUPSOL_MINT = "jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v"
-_LAINESOL_MINT = "LAinEtNLgpmCP9Rvsf5Hn8W6EhNiKLZMTlkPradhmPuA"
 _EXPECTED_DEPLOY_DATE = datetime(2023, 6, 1, tzinfo=UTC)
 
 
@@ -39,9 +39,10 @@ async def test_get_instruments_returns_all_three_tokens() -> None:
 async def test_inf_record_fields() -> None:
     adapter = SanctumReferenceDataAdapter()
     records = await adapter.get_instruments()
-    inf = next(r for r in records if r.instrument_key == "SANCTUM-SOLANA:LST:INF")
+    inf = next(r for r in records if r.instrument_key.endswith(":INF"))
     assert isinstance(inf, InstrumentRecord)
     assert inf.venue == "SANCTUM-SOLANA"
+    assert inf.instrument_key == "SANCTUM-SOLANA:LST:INF"
     assert inf.raw_symbol == _INF_MINT
     assert inf.instrument_type == InstrumentType.YIELD_BEARING
     assert inf.base_asset == "SOL"
@@ -78,8 +79,13 @@ async def test_get_instrument_by_symbol() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_instrument_not_found_returns_none() -> None:
-    assert await SanctumReferenceDataAdapter().get_instrument("NOTEXIST") is None
+async def test_get_instrument_lookup_by_inf_mint_and_symbol() -> None:
+    adapter = SanctumReferenceDataAdapter()
+    by_mint = await adapter.get_instrument(_INF_MINT)
+    by_symbol = await adapter.get_instrument("INF")
+    assert by_mint is not None and by_symbol is not None
+    assert by_mint.instrument_key == by_symbol.instrument_key == "SANCTUM-SOLANA:LST:INF"
+    assert await adapter.get_instrument("NOPE") is None
 
 
 @pytest.mark.asyncio
