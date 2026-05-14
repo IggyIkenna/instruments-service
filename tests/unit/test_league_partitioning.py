@@ -400,11 +400,11 @@ class TestOrchestratorSportsLeaguePartitioning:
         partition_leagues = {c.kwargs["partition"]["league"] for c in league_writes}
         assert partition_leagues == {"EPL", "BUNDESLIGA"}
 
-        # Verify manifest.add() called with league_id for each league
-        manifest_add_calls = mock_manifest_instance.add.call_args_list
-        league_manifest_calls = [c for c in manifest_add_calls if c.kwargs.get("league_id")]
+        # Verify manifest.record_captured() called with league_id for each league
+        manifest_captured_calls = mock_manifest_instance.record_captured.call_args_list
+        league_manifest_calls = [c for c in manifest_captured_calls if c.kwargs.get("row_key", {}).get("league_id")]
         assert len(league_manifest_calls) == 2
-        manifest_leagues = {c.kwargs["league_id"] for c in league_manifest_calls}
+        manifest_leagues = {c.kwargs["row_key"]["league_id"] for c in league_manifest_calls}
         assert manifest_leagues == {"EPL", "BUNDESLIGA"}
 
     @pytest.mark.asyncio

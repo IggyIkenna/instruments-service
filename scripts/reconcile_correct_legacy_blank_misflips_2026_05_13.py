@@ -48,10 +48,10 @@ from datetime import datetime, timezone
 import pandas as pd
 from google.cloud import storage
 
-from unified_trading_library.instrument_lifecycle_loader import (
+from unified_trading_library.instrument_lifecycle_loader import (  # noqa: qg-deep-import
     load_instrument_lifecycle,
 )
-from unified_trading_library.legacy_reason_classifier import (
+from unified_trading_library.legacy_reason_classifier import (  # noqa: qg-deep-import
     classify_blank_reason_row,
 )
 
