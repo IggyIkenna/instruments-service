@@ -72,6 +72,7 @@ from pathlib import Path
 import pandas as pd
 from google.cloud import storage
 from unified_api_contracts import EMPTY_CONFIRMED_REASONS
+from unified_trading_library.instrument_lifecycle_loader import load_instrument_lifecycle
 from unified_trading_library.legacy_reason_classifier import classify_blank_reason_row  # noqa: qg-deep-import
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -212,6 +213,10 @@ def main() -> int:
     )
 
     start = time.time()
+    logger.info("Loading instrument lifecycle catalog for asset_group=%s ...", asset_group)
+    instrument_lifecycle = load_instrument_lifecycle(asset_group, PROJECT_ID)
+    logger.info("Loaded %d (venue, key) lifecycle entries.", len(instrument_lifecycle))
+
     df, local_manifest = _download_manifest(bucket_name, asset_group)
     try:
         mask = _build_candidate_mask(df)
@@ -244,7 +249,9 @@ def main() -> int:
         for idx in candidate_idx:
             row = df.loc[idx]
             try:
-                new_status, new_reason = classify_blank_reason_row(asset_group, row)
+                new_status, new_reason = classify_blank_reason_row(
+                    asset_group, row, instrument_lifecycle=instrument_lifecycle
+                )
             except (ValueError, TypeError, KeyError, AttributeError) as exc:
                 logger.warning("Classifier failed for row %s: %s — leaving unchanged", idx, exc)
                 n_errors += 1
