@@ -46,6 +46,7 @@ def _is_real_env() -> bool:
 
 
 @pytest.mark.e2e
+@pytest.mark.live
 @pytest.mark.skipif(not _is_real_env(), reason="Requires IS_TEST_RUN=true + real GCP project")
 def test_defi_instruments_e2e():
     """DeFi instruments: fetch from URDI and write to test bucket."""
@@ -73,6 +74,7 @@ def test_defi_instruments_e2e():
 
 
 @pytest.mark.e2e
+@pytest.mark.live
 @pytest.mark.skipif(not _is_real_env(), reason="Requires IS_TEST_RUN=true + real GCP project")
 def test_tradfi_instruments_e2e():
     """TradFi instruments: Databento-sourced from NYSE/NASDAQ/CME."""
@@ -91,6 +93,7 @@ def test_tradfi_instruments_e2e():
 
 
 @pytest.mark.e2e
+@pytest.mark.live
 @pytest.mark.skipif(not _is_real_env(), reason="Requires IS_TEST_RUN=true + real GCP project")
 def test_write_to_test_bucket_not_prod():
     """Verify the test run writes to the test bucket (is_test_run=true in config)."""
