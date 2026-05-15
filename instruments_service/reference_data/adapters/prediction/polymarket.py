@@ -564,8 +564,8 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         import base64
         import os
 
-        start_cursor_b64 = os.environ.get("POLYMARKET_START_CURSOR", "").strip()
-        end_cursor_b64 = os.environ.get("POLYMARKET_END_CURSOR", "").strip()
+        start_cursor_b64 = os.environ.get("POLYMARKET_START_CURSOR", "").strip()  # noqa: qg-os-env
+        end_cursor_b64 = os.environ.get("POLYMARKET_END_CURSOR", "").strip()  # noqa: qg-os-env
 
         end_offset: int | None = None
         if end_cursor_b64:

@@ -104,6 +104,18 @@ def _make_parquet_unknown_symbol() -> bytes:
     return buf.getvalue()
 
 
+def _make_parquet_mixed_symbols() -> bytes:
+    """Options parquet with one OCC symbol (repairable) and one non-OCC (unresolvable), both null expiration."""
+    rows = [
+        {"symbol": "AAPL  241220C00200000", "option_type": "C", "strike": 200.0, "expiration": None},
+        {"symbol": "ESH26C5000", "option_type": "C", "strike": 5000.0, "expiration": None},
+    ]
+    df = pd.DataFrame(rows)
+    buf = io.BytesIO()
+    df.to_parquet(buf, index=False)
+    return buf.getvalue()
+
+
 def _make_mock_blob(payload: bytes, generation: int = 100) -> MagicMock:
     blob = MagicMock()
     blob.generation = generation
@@ -152,6 +164,26 @@ def test_parse_occ_expiry_short_symbol_right_padded() -> None:
     # "AAPL241220C00200000" — ticker not padded
     result = migration._parse_occ_expiry("AAPL  241220C00200000")
     assert result is not None
+
+
+@pytest.mark.unit
+def test_parse_occ_expiry_put_option_parses_correctly() -> None:
+    """PUT option symbol (P type indicator) parses the same expiry date as CALL (C)."""
+    result = migration._parse_occ_expiry("AAPL  241220P00180000")
+    assert result is not None
+    assert result.year == 2024
+    assert result.month == 12
+    assert result.day == 20
+    assert result.hour == 15
+    assert result.tzinfo is not None
+
+
+@pytest.mark.unit
+def test_parse_occ_expiry_invalid_date_returns_none() -> None:
+    """OCC symbol with invalid date digits (month=99) — ValueError caught — returns None."""
+    # Ticker padded to 6 + 24 year + 99 month (invalid) + 20 day + C + strike
+    result = migration._parse_occ_expiry("AAPL  249920C00200000")
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +238,13 @@ def test_is_options_chain_blob_rejects_non_options_path() -> None:
 def test_is_options_chain_blob_rejects_non_parquet() -> None:
     """Non-parquet file → False."""
     path = "raw_tick_data/by_date/day=2026-01-15/asset_group=tradfi/venue=CBOE/data_type=options_chain/file.csv"
+    assert migration._is_options_chain_blob(path) is False
+
+
+@pytest.mark.unit
+def test_is_options_chain_blob_rejects_non_tradfi_asset_group() -> None:
+    """Path with asset_group=cefi (not tradfi) is rejected even if data_type=options_chain."""
+    path = "raw_tick_data/by_date/day=2026-01-15/asset_group=cefi/venue=CBOE/data_type=options_chain/file.parquet"
     assert migration._is_options_chain_blob(path) is False
 
 
@@ -286,3 +325,81 @@ def test_process_parquet_download_error_returns_error_result() -> None:
 
     assert result.error != ""
     assert "download failed" in result.error
+
+
+@pytest.mark.unit
+def test_process_parquet_parquet_read_error_returns_error_result() -> None:
+    """Corrupt parquet bytes → read failure returns error in result without crashing."""
+    blob = MagicMock()
+    blob.generation = 100
+    blob.download_as_bytes.return_value = b"not-a-parquet"
+    bucket = MagicMock()
+    bucket.blob.return_value = blob
+
+    result = migration._process_parquet(bucket, "some/path.parquet", apply=True)
+
+    assert result.error != ""
+    assert "parquet read failed" in result.error
+    blob.upload_from_file.assert_not_called()
+
+
+@pytest.mark.unit
+def test_process_parquet_upload_failure_returns_error() -> None:
+    """Upload failure during apply mode returns error in result."""
+    payload = _make_parquet_with_expiration(nullable=True)
+    blob = _make_mock_blob(payload, generation=77)
+    bucket = _make_mock_bucket(blob)
+    blob.upload_from_file.side_effect = Exception("permission denied")
+
+    result = migration._process_parquet(bucket, "some/path.parquet", apply=True)
+
+    assert result.error != ""
+    assert "upload failed" in result.error
+
+
+@pytest.mark.unit
+def test_process_parquet_mixed_symbols_partial_repair() -> None:
+    """Mixed OCC + non-OCC null rows: one repaired, one unresolvable; GCS write still occurs."""
+    payload = _make_parquet_mixed_symbols()
+    blob = _make_mock_blob(payload, generation=55)
+    bucket = _make_mock_bucket(blob)
+
+    result = migration._process_parquet(bucket, "some/path.parquet", apply=True)
+
+    assert result.null_rows == 2
+    assert result.repaired == 1
+    assert result.unresolvable == 1
+    assert result.error == ""
+    # Write occurs because at least one row was repaired
+    blob.upload_from_file.assert_called_once()
+
+
+@pytest.mark.unit
+def test_process_parquet_dry_run_unresolvable_no_write() -> None:
+    """Dry-run with non-OCC symbol: unresolvable reported, no GCS write."""
+    payload = _make_parquet_unknown_symbol()
+    blob = _make_mock_blob(payload)
+    bucket = _make_mock_bucket(blob)
+
+    result = migration._process_parquet(bucket, "some/path.parquet", apply=False)
+
+    assert result.null_rows == 1
+    assert result.repaired == 0
+    assert result.unresolvable == 1
+    assert result.error == ""
+    blob.upload_from_file.assert_not_called()
+
+
+@pytest.mark.unit
+def test_process_parquet_no_expiration_column_skipped() -> None:
+    """Parquet without expiration column treated as no nulls — null_rows=0, no write."""
+    payload = _make_parquet_no_expiration_col()
+    blob = _make_mock_blob(payload)
+    bucket = _make_mock_bucket(blob)
+
+    result = migration._process_parquet(bucket, "some/path.parquet", apply=True)
+
+    assert result.null_rows == 0
+    assert result.repaired == 0
+    assert result.error == ""
+    blob.upload_from_file.assert_not_called()
