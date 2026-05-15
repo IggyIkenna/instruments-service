@@ -398,10 +398,61 @@ def test_build_futures_contracts_lifecycle_phase_active() -> None:
 
 
 @pytest.mark.unit
-def test_build_futures_contracts_lifecycle_phase_settled() -> None:
-    """Contract where today > settlement_date → SETTLED."""
+def test_build_futures_contracts_lifecycle_phase_settled_with_reject_false() -> None:
+    """Contract where today > settlement_date → SETTLED (included when reject_expired=False)."""
     today = date(2026, 9, 1)
     expiry_dt = datetime(2026, 6, 19, 0, 0, 0, tzinfo=UTC)
     records = [_make_future("ESM26", expiry=expiry_dt)]
-    contracts = build_futures_contracts(records, today=today)
+    contracts = build_futures_contracts(records, today=today, reject_expired=False)
     assert contracts[0].lifecycle_phase == FuturesContractLifecyclePhase.SETTLED
+
+
+@pytest.mark.unit
+def test_build_futures_contracts_expiry_guard_rejects_expired(caplog: pytest.LogCaptureFixture) -> None:
+    """Expiry guard: EXPIRED contracts are rejected with WARNING when reject_expired=True (default)."""
+    today = date(2026, 6, 20)
+    # Expiry was yesterday → EXPIRED phase
+    expiry_dt = datetime(2026, 6, 19, 0, 0, 0, tzinfo=UTC)
+    records = [_make_future("ESM26", expiry=expiry_dt)]
+    with caplog.at_level("WARNING", logger="instruments_service.reference_data.adapters.tradfi.futures_factory"):
+        contracts = build_futures_contracts(records, today=today)
+    assert len(contracts) == 0
+    assert "Expiry guard" in caplog.text
+    assert "ESM26" in caplog.text
+
+
+@pytest.mark.unit
+def test_build_futures_contracts_expiry_guard_rejects_settled(caplog: pytest.LogCaptureFixture) -> None:
+    """Expiry guard: SETTLED contracts are also rejected with WARNING when reject_expired=True (default)."""
+    today = date(2026, 9, 1)
+    expiry_dt = datetime(2026, 6, 19, 0, 0, 0, tzinfo=UTC)
+    records = [_make_future("ESM26", expiry=expiry_dt)]
+    with caplog.at_level("WARNING", logger="instruments_service.reference_data.adapters.tradfi.futures_factory"):
+        contracts = build_futures_contracts(records, today=today)
+    assert len(contracts) == 0
+    assert "Expiry guard" in caplog.text
+
+
+@pytest.mark.unit
+def test_build_futures_contracts_expiry_guard_passes_active() -> None:
+    """Expiry guard: ACTIVE contracts pass through even with reject_expired=True."""
+    today = date(2026, 4, 20)
+    expiry_dt = datetime(2026, 6, 19, 0, 0, 0, tzinfo=UTC)
+    records = [_make_future("ESM26", expiry=expiry_dt)]
+    contracts = build_futures_contracts(records, today=today)  # default reject_expired=True
+    assert len(contracts) == 1
+    assert contracts[0].lifecycle_phase == FuturesContractLifecyclePhase.ACTIVE
+
+
+@pytest.mark.unit
+def test_build_futures_contracts_expiry_guard_bypass_historical() -> None:
+    """reject_expired=False allows EXPIRED/SETTLED through for historical backfill queries."""
+    today = date(2026, 9, 1)
+    expiry_expired = datetime(2026, 6, 19, 0, 0, 0, tzinfo=UTC)  # SETTLED relative to today
+    expiry_active = datetime(2026, 12, 18, 0, 0, 0, tzinfo=UTC)  # ACTIVE
+    records = [
+        _make_future("ESM26", expiry=expiry_expired),
+        _make_future("ESZ26", expiry=expiry_active),
+    ]
+    contracts = build_futures_contracts(records, today=today, reject_expired=False)
+    assert len(contracts) == 2
