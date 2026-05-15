@@ -403,3 +403,84 @@ def test_process_parquet_no_expiration_column_skipped() -> None:
     assert result.repaired == 0
     assert result.error == ""
     blob.upload_from_file.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Pre/post-state schema + row-count invariants
+# ---------------------------------------------------------------------------
+
+
+class TestPrePostMigrationState:
+    """Assert schema shape and row count are preserved across the migration."""
+
+    def _capture_uploaded_parquet(self, blob: MagicMock) -> pd.DataFrame:
+        """Read the parquet bytes from the first upload_from_file call."""
+        call_args = blob.upload_from_file.call_args
+        buf: io.BytesIO = call_args.args[0]
+        buf.seek(0)
+        return pd.read_parquet(buf)
+
+    @pytest.mark.unit
+    def test_pre_state_schema_has_expected_columns(self) -> None:
+        """Pre-state parquet must have [symbol, option_type, strike, expiration] columns."""
+        payload = _make_parquet_with_expiration(nullable=True)
+        df_pre = pd.read_parquet(io.BytesIO(payload))
+        assert set(df_pre.columns) >= {"symbol", "option_type", "strike", "expiration"}
+
+    @pytest.mark.unit
+    def test_post_state_schema_matches_pre_state_columns(self) -> None:
+        """Post-migration parquet has the same column set as the pre-state."""
+        payload = _make_parquet_with_expiration(nullable=True)
+        df_pre = pd.read_parquet(io.BytesIO(payload))
+
+        blob = _make_mock_blob(payload, generation=10)
+        bucket = _make_mock_bucket(blob)
+
+        migration._process_parquet(bucket, "some/path.parquet", apply=True)
+
+        df_post = self._capture_uploaded_parquet(blob)
+        assert set(df_post.columns) == set(df_pre.columns)
+
+    @pytest.mark.unit
+    def test_row_count_preserved_after_migration(self) -> None:
+        """Row count must be identical before and after applying the migration."""
+        payload = _make_parquet_with_expiration(nullable=True)
+        df_pre = pd.read_parquet(io.BytesIO(payload))
+        pre_count = len(df_pre)
+
+        blob = _make_mock_blob(payload, generation=10)
+        bucket = _make_mock_bucket(blob)
+
+        migration._process_parquet(bucket, "some/path.parquet", apply=True)
+
+        df_post = self._capture_uploaded_parquet(blob)
+        assert len(df_post) == pre_count
+
+    @pytest.mark.unit
+    def test_post_state_expiration_has_no_nulls(self) -> None:
+        """After migration, no expiration values should be null for OCC-parseable symbols."""
+        payload = _make_parquet_with_expiration(nullable=True)
+
+        blob = _make_mock_blob(payload, generation=10)
+        bucket = _make_mock_bucket(blob)
+
+        migration._process_parquet(bucket, "some/path.parquet", apply=True)
+
+        df_post = self._capture_uploaded_parquet(blob)
+        assert df_post["expiration"].notna().all(), "Post-migration expiration still contains nulls"
+
+    @pytest.mark.unit
+    def test_post_state_expiration_is_timezone_aware_datetime(self) -> None:
+        """Repaired expiration values must be timezone-aware datetime64 (UTC)."""
+        payload = _make_parquet_with_expiration(nullable=True)
+
+        blob = _make_mock_blob(payload, generation=10)
+        bucket = _make_mock_bucket(blob)
+
+        migration._process_parquet(bucket, "some/path.parquet", apply=True)
+
+        df_post = self._capture_uploaded_parquet(blob)
+        dtype = df_post["expiration"].dtype
+        assert isinstance(dtype, pd.DatetimeTZDtype), (
+            f"Post-migration expiration dtype {dtype!r} is not timezone-aware DatetimeTZDtype"
+        )
