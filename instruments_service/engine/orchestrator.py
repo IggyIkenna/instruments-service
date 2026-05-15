@@ -1420,7 +1420,6 @@ async def process_instruments(
                 "PLAYER_STATS",
                 "XG",
                 "PLAYER_VALUES",
-                "TRANSFERMARKT_VALUES",
                 "SFI_PROGRESSIVE_STATS",
                 "WEATHER",
                 "ODDS_HORIZON_BUCKET",
