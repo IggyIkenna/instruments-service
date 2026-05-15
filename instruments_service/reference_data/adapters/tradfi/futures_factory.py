@@ -233,6 +233,7 @@ def build_futures_contracts(
     records: list[InstrumentRecord],
     *,
     today: date | None = None,
+    reject_expired: bool = True,
 ) -> list[CanonicalFuturesContract]:
     """Convert a list of InstrumentRecord objects to CanonicalFuturesContract.
 
@@ -243,6 +244,10 @@ def build_futures_contracts(
         records: InstrumentRecord list (typically the full Databento output).
         today: Reference date for lifecycle phase classification. Defaults to
             ``datetime.now(UTC).date()``.
+        reject_expired: When True (default), skip EXPIRED/SETTLED contracts and
+            emit a WARNING — they should have been filtered by the adapter.
+            Pass False for historical backfill queries where expired contracts
+            are intentionally included.
 
     Returns:
         List of CanonicalFuturesContract objects. Rows where the symbol cannot
@@ -254,6 +259,7 @@ def build_futures_contracts(
 
     contracts: list[CanonicalFuturesContract] = []
     skipped = 0
+    rejected = 0
 
     for record in records:
         if record.instrument_type != InstrumentType.FUTURE:
@@ -296,6 +302,21 @@ def build_futures_contracts(
             settlement_date,
         )
 
+        if reject_expired and lifecycle_phase in (
+            FuturesContractLifecyclePhase.EXPIRED,
+            FuturesContractLifecyclePhase.SETTLED,
+        ):
+            logger.warning(
+                "Expiry guard: rejecting %s — phase=%s expiry=%s today=%s "
+                "(should have been filtered by adapter; check _is_filtered_out)",
+                record.raw_symbol,
+                lifecycle_phase.value,
+                expiry_date,
+                today,
+            )
+            rejected += 1
+            continue
+
         try:
             contract = CanonicalFuturesContract(
                 venue=record.venue,
@@ -323,8 +344,9 @@ def build_futures_contracts(
             skipped += 1
 
     logger.info(
-        "build_futures_contracts: built %d contracts, skipped %d records",
+        "build_futures_contracts: built %d contracts, skipped %d, rejected %d expired/settled",
         len(contracts),
         skipped,
+        rejected,
     )
     return contracts
