@@ -10,6 +10,7 @@ Reference: https://docs.drift.trade/
 import logging
 from datetime import datetime
 from decimal import Decimal
+from typing import cast
 
 import aiohttp
 from unified_api_contracts import classify_venue_error
@@ -133,10 +134,10 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
             logger.error("Drift stats/markets request failed after retries: %s", exc)
             raise
 
-        raw: dict[str, object] = data if isinstance(data, dict) else {}
+        raw = cast(dict[str, object], data) if isinstance(data, dict) else cast(dict[str, object], {})
         markets = raw.get("markets")
         if isinstance(markets, list):
-            return markets
+            return cast(list[dict[str, object]], markets)
         return []
 
     def _build_perp_record(
@@ -207,7 +208,7 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         instruments = await self.get_instruments()
         for inst in instruments:
-            if inst.raw_symbol == symbol or inst.symbol == symbol:
+            if inst.raw_symbol == symbol or inst.instrument_key == symbol:
                 return inst
         return None
 
