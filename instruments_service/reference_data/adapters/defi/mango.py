@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 from decimal import Decimal
+from typing import cast
 
 import aiohttp
 from unified_api_contracts import classify_venue_error
@@ -129,11 +130,11 @@ class MangoReferenceDataAdapter(BaseReferenceDataAdapter):
             raise
 
         if isinstance(data, list):
-            return data
-        raw: dict[str, object] = data if isinstance(data, dict) else {}
+            return cast(list[dict[str, object]], data)
+        raw = cast(dict[str, object], data) if isinstance(data, dict) else cast(dict[str, object], {})
         markets = raw.get("markets") or raw.get("data")
         if isinstance(markets, list):
-            return markets
+            return cast(list[dict[str, object]], markets)
         return []
 
     def _build_perp_record(
