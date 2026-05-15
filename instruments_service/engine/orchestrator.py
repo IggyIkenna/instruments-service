@@ -2112,6 +2112,28 @@ async def process_instruments(
                 )
                 return dict.fromkeys(non_trading_venues, 0)
 
+        # Active-day-zero diagnostic: TradFi venues that are trading today but
+        # returned 0 records indicate a likely upstream data source issue (not a
+        # calendar gap). Emit a structured WARN so oncall can distinguish adapter
+        # failure from expected absence without inspecting raw adapter logs.
+        if tradfi_active:
+            target_dt = date_type.fromisoformat(date)
+            _active_tradfi_zero = [v for v in tradfi_active if not is_non_trading_day(v, target_dt)]
+            if _active_tradfi_zero:
+                logger.warning(
+                    "TRADFI active-day-zero: date=%s venues=%s returned 0 instruments on "
+                    "a trading day — potential upstream adapter / connectivity issue",
+                    date,
+                    sorted(_active_tradfi_zero),
+                )
+                log_event(
+                    "ADAPTER_FETCH_FAILED",
+                    details={
+                        "date": date,
+                        "venues": sorted(_active_tradfi_zero),
+                        "reason": "active_day_zero_instruments",
+                    },
+                )
         msg = (
             f"URDI returned zero records for date={date} asset_groups={asset_groups}. "
             f"Venues attempted: {active_venues}. "
