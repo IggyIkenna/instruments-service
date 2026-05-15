@@ -2147,7 +2147,7 @@ async def process_instruments(
     #    If ANY instrument in a venue fails validation, the whole venue is skipped.
     #    Validation-failed venues are tracked separately so the completeness check
     #    doesn't count them as "missing" (they were fetched, just rejected).
-    valid_records, rejected = validate_instrument_records(records)
+    valid_records, rejected = validate_instrument_records(records, as_of_date=date_type.fromisoformat(date))
     validation_failed_venues: set[str] = set()
     if rejected:
         # Group rejections by venue — fail entire venue shard
@@ -2804,7 +2804,7 @@ async def process_instruments(
         if any(c.upper() in ("DEFI", "ALL") for c in asset_groups):
             retry_records = filter_defi_instruments_by_relevance(retry_records)
         if retry_records:
-            valid_retry, _ = validate_instrument_records(retry_records)
+            valid_retry, _ = validate_instrument_records(retry_records, as_of_date=date_type.fromisoformat(date))
             if valid_retry:
                 retry_rows = []
                 for r in valid_retry:
