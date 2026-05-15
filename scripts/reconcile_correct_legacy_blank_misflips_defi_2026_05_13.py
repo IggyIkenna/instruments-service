@@ -72,7 +72,7 @@ from pathlib import Path
 import pandas as pd
 from google.cloud import storage
 from unified_api_contracts import EMPTY_CONFIRMED_REASONS
-from unified_trading_library.instrument_lifecycle_loader import load_instrument_lifecycle
+from unified_trading_library.instrument_lifecycle_loader import load_instrument_lifecycle  # noqa: qg-deep-import
 from unified_trading_library.legacy_reason_classifier import classify_blank_reason_row  # noqa: qg-deep-import
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
