@@ -105,6 +105,14 @@ _VENUE_PREFIX: dict[str, str] = {
     "compound_v3": "COMPOUNDV3",
 }
 
+# Inverse map: venue_prefix (manifest column value) → protocol slug (GCS path segment).
+# The lending-indices bucket's flat-prefix layout uses lowercase + underscored protocol
+# slugs (e.g. ``lending_indices/aave_v3/ETHEREUM/...``) while the canonical manifest
+# carries venue=AAVEV3 (uppercase, no underscore). The audit must translate before
+# probing GCS — without this fix, every captured row false-positives as phantom
+# (path /AAVEV3/ has 0 parquets; actual path /aave_v3/ has the data).
+_VENUE_TO_SLUG: dict[str, str] = {v: k for k, v in _VENUE_PREFIX.items()}
+
 # GCS prefix template for listing parquets under a (protocol, chain, date) shard.
 # Written by LendingIndicesHandler._collect_protocol_chain → write_defi_rows → upload.
 # Example: ``lending_indices/aave_v3/ETHEREUM/date=2026-05-07/``
@@ -125,24 +133,24 @@ def _has_parquet(bucket: storage.Bucket, prefix: str) -> bool:
 
 
 def _classify_phantom(
-    protocol: str,
+    venue: str,
     chain: str,
     date_str: str,
 ) -> str:
     """Return the ``empty_confirmed`` reason string for a phantom shard.
 
-    Uses ``get_protocol_launch_date(chain, venue_prefix)`` from UAC SSOT to
+    Takes the canonical venue (uppercase, manifest form — e.g. ``AAVEV3``) and
+    uses ``get_protocol_launch_date(chain, venue_prefix)`` from UAC SSOT to
     distinguish pre-genesis rows (``EXPECTED_PRE_GENESIS_CHAIN``) from
     post-genesis true phantoms (``SOURCE_RETURNED_ZERO``).
     """
     from unified_api_contracts.registry.chain_env import get_protocol_launch_date
 
-    venue_prefix = _VENUE_PREFIX.get(protocol)
-    if venue_prefix is None:
-        # Unknown protocol — cannot determine launch date; default to post-genesis.
+    if venue not in _VENUE_TO_SLUG:
+        # Unknown venue — cannot determine launch date; default to post-genesis.
         return "SOURCE_RETURNED_ZERO"
 
-    launch_iso = get_protocol_launch_date(chain, venue_prefix)
+    launch_iso = get_protocol_launch_date(chain, venue)
     if launch_iso is not None and date_str < launch_iso:
         return "EXPECTED_PRE_GENESIS_CHAIN"
     return "SOURCE_RETURNED_ZERO"
@@ -163,13 +171,26 @@ def _audit_captured_rows(
     guaranteed upstream by the scope mask.
     """
     prefixes_by_idx: dict[int, str] = {}
+    venue_to_protocol_warnings: set[str] = set()
     for idx in captured_idx:
         row = df.loc[idx]
-        protocol = str(row.get("venue", "") or "")
+        venue = str(row.get("venue", "") or "")
         chain = str(row.get("chain", "") or "")
         date_str = str(row.get("date", "") or "")[:10]
-        if not protocol or not chain or not date_str:
+        if not venue or not chain or not date_str:
             logger.warning("Row %d missing venue/chain/date — skipping", idx)
+            continue
+        # Translate manifest venue (uppercase, e.g. ``AAVEV3``) to flat-prefix protocol
+        # slug (lowercase + underscored, e.g. ``aave_v3``). Without this translation
+        # every captured row false-positives as phantom (GCS layout uses slugs).
+        protocol = _VENUE_TO_SLUG.get(venue)
+        if protocol is None:
+            if venue not in venue_to_protocol_warnings:
+                logger.warning(
+                    "Unknown venue %r in manifest — no slug mapping; rows for this venue will be skipped",
+                    venue,
+                )
+                venue_to_protocol_warnings.add(venue)
             continue
         prefixes_by_idx[idx] = _shard_prefix(protocol, chain, date_str)
 
@@ -208,14 +229,14 @@ def _audit_captured_rows(
     results: dict[int, tuple[bool, str]] = {}
     for idx, prefix in prefixes_by_idx.items():
         row = df.loc[idx]
-        protocol = str(row.get("venue", "") or "")
+        venue = str(row.get("venue", "") or "")
         chain = str(row.get("chain", "") or "")
         date_str = str(row.get("date", "") or "")[:10]
         is_real = prefix_exists.get(prefix, False)
         if is_real:
             results[idx] = (True, "")
         else:
-            reason = _classify_phantom(protocol, chain, date_str)
+            reason = _classify_phantom(venue, chain, date_str)
             results[idx] = (False, reason)
 
     return results
@@ -352,7 +373,12 @@ def main() -> int:  # noqa: C901
     captured_mask = df["capture_status"].fillna("").astype(str) == "captured"
 
     if wanted_protocols is not None:
-        captured_mask = captured_mask & df["venue"].astype(str).str.lower().isin(wanted_protocols)
+        # Manifest carries venue in uppercase-no-underscore form (e.g. AAVEV3, COMPOUNDV3).
+        # CLI --protocols passes slug form (aave_v3, compound_v3). Translate manifest
+        # venue → slug via _VENUE_TO_SLUG before comparing. Pre-fix bug: this used
+        # ``.str.lower()`` which produces ``aavev3`` (no underscore) ∉ {aave_v3, ...}.
+        slugs_for_row = df["venue"].astype(str).map(_VENUE_TO_SLUG).fillna("")
+        captured_mask = captured_mask & slugs_for_row.isin(wanted_protocols)
     if wanted_chains is not None:
         captured_mask = captured_mask & df["chain"].astype(str).str.upper().isin(wanted_chains)
     if args.start_date:
@@ -360,10 +386,15 @@ def main() -> int:  # noqa: C901
     if args.end_date:
         captured_mask = captured_mask & (df["date"].astype(str) <= args.end_date)
 
-    # Filter to data_type=lending_indices (defensive — this bucket only carries this
-    # data_type, but guards against future schema additions or migration accidents).
+    # Filter to data_type=lending_indices (defensive — accept BOTH the canonical snake
+    # form ``lending_indices`` AND the legacy kebab ``lending-indices`` 24,976 pre-rename
+    # rows; full audit-trail in
+    # plans/active/issues/lending_indices_data_type_vocabulary_drift_2026_05_16.md).
     if "data_type" in df.columns:
-        captured_mask = captured_mask & (df["data_type"].fillna("").astype(str) == "lending_indices")
+        dt_str = df["data_type"].fillna("").astype(str)
+        captured_mask = captured_mask & (
+            (dt_str == "lending_indices") | (dt_str == "lending-indices")
+        )
 
     captured_idx = df[captured_mask].index
     logger.info("Captured rows in scope: %d", len(captured_idx))
