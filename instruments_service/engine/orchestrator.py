@@ -6408,8 +6408,16 @@ async def _fetch_weather_data(
         lg.league_id for lg in get_expected_leagues_for_source("open_meteo", classifications=["Prediction"])
     }
 
-    def _record_weather_empty() -> None:
+    def _record_weather_empty(reason: str = "") -> None:
         """Helper — emit per-league record_empty for WEATHER shard.
+
+        Args:
+            reason: Optional ``EmptyConfirmedReason`` string. Pass
+                ``"EXPECTED_NO_FIXTURE"`` on the no-fixtures branch so the
+                classifier doesn't have to second-guess the no-fixture case
+                (per ``sports_classifier_weather_no_fixture_2026_05_13.md``
+                write-side prevention). Empty default keeps prior behaviour
+                for any future branch where the reason is genuinely unknown.
 
         Historic versions also emitted a date-aggregate row (no ``league_id``)
         alongside the per-league rows; the aggregator ignores it
@@ -6423,6 +6431,7 @@ async def _fetch_weather_data(
                 row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
                 attempted_at=attempt_ts,
                 pipeline_mode=PipelineMode.BATCH_OPEN_METEO,
+                reason=reason,
             )
 
     def _record_weather_failed(err_code: str) -> None:
@@ -6484,9 +6493,12 @@ async def _fetch_weather_data(
 
     if fixtures_df is None or fixtures_df.empty or "venue_name" not in fixtures_df.columns:
         logger.info("Weather: no fixture venue_name data for date=%s — skipping", date)
-        # Honest-coverage: no fixtures == legitimate empty for the WEATHER
-        # shard.  Record empty so attempt-coverage is honest.
-        _record_weather_empty()
+        # Honest-coverage: no fixtures == EXPECTED_NO_FIXTURE for the WEATHER
+        # shard (per sports_classifier_weather_no_fixture_2026_05_13 write-side
+        # prevention). Was previously falling through to SOURCE_RETURNED_ZERO
+        # at classifier-side; emitting the typed reason here saves the
+        # classifier round-trip.
+        _record_weather_empty(reason="EXPECTED_NO_FIXTURE")
         manifest.write()
         return counts
 
