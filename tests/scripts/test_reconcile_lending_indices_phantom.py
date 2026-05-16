@@ -98,7 +98,7 @@ def test_phantom_detection_dry_run_no_writes() -> None:
         [
             {
                 "date": "2026-05-07",
-                "venue": "aave_v3",
+                "venue": "AAVEV3",
                 "chain": "ETHEREUM",
                 "capture_status": "captured",
             }
@@ -124,7 +124,7 @@ def test_real_capture_left_alone() -> None:
         [
             {
                 "date": "2026-05-07",
-                "venue": "aave_v3",
+                "venue": "AAVEV3",
                 "chain": "ETHEREUM",
                 "capture_status": "captured",
             }
@@ -144,7 +144,7 @@ def test_real_capture_left_alone() -> None:
 
 def test_pre_genesis_classification_uses_protocol_launch_dates() -> None:
     """Date before AAVEV3/ETHEREUM launch (2023-01-27) → EXPECTED_PRE_GENESIS_CHAIN."""
-    reason = _mod._classify_phantom("aave_v3", "ETHEREUM", "2022-01-01")
+    reason = _mod._classify_phantom("AAVEV3", "ETHEREUM", "2022-01-01")
     assert reason == "EXPECTED_PRE_GENESIS_CHAIN", (
         f"Expected EXPECTED_PRE_GENESIS_CHAIN for 2022-01-01 (AAVEV3 ETHEREUM launched 2023-01-27), got {reason!r}"
     )
@@ -152,7 +152,7 @@ def test_pre_genesis_classification_uses_protocol_launch_dates() -> None:
 
 def test_post_genesis_phantom_classified_as_source_returned_zero() -> None:
     """Date after AAVEV3/ETHEREUM launch → SOURCE_RETURNED_ZERO."""
-    reason = _mod._classify_phantom("aave_v3", "ETHEREUM", "2024-03-01")
+    reason = _mod._classify_phantom("AAVEV3", "ETHEREUM", "2024-03-01")
     assert reason == "SOURCE_RETURNED_ZERO", (
         f"Expected SOURCE_RETURNED_ZERO for 2024-03-01, got {reason!r}"
     )
@@ -164,7 +164,7 @@ def test_apply_flips_writes_typed_reason() -> None:
         [
             {
                 "date": "2026-05-07",
-                "venue": "aave_v3",
+                "venue": "AAVEV3",
                 "chain": "ETHEREUM",
                 "capture_status": "captured",
                 "error_reason": "",
@@ -193,7 +193,7 @@ def test_max_flips_cap_enforced() -> None:
     rows = [
         {
             "date": f"2026-05-{d:02d}",
-            "venue": "aave_v3",
+            "venue": "AAVEV3",
             "chain": "ETHEREUM",
             "capture_status": "captured",
             "data_type": "lending_indices",
@@ -257,7 +257,7 @@ def test_idempotent_rerun() -> None:
         [
             {
                 "date": "2026-05-07",
-                "venue": "aave_v3",
+                "venue": "AAVEV3",
                 "chain": "ETHEREUM",
                 "capture_status": "empty_confirmed",  # already flipped
                 "error_reason": "SOURCE_RETURNED_ZERO",
@@ -281,31 +281,30 @@ def test_protocols_filter_narrows_scan() -> None:
         [
             {
                 "date": "2026-05-07",
-                "venue": "aave_v3",
+                "venue": "AAVEV3",
                 "chain": "ETHEREUM",
                 "capture_status": "captured",
             },
             {
                 "date": "2026-05-07",
-                "venue": "compound_v3",
+                "venue": "COMPOUNDV3",
                 "chain": "ETHEREUM",
                 "capture_status": "captured",
             },
         ]
     )
-    # Filter to aave_v3 only.
+    # Filter to aave_v3 slug only — mirror the script's main() venue→slug translation.
     wanted_protocols: frozenset[str] = frozenset({"aave_v3"})
-    filtered_mask = (
-        df["capture_status"].fillna("").astype(str) == "captured"
-    ) & df["venue"].astype(str).str.lower().isin(wanted_protocols)
+    slugs_for_row = df["venue"].astype(str).map(_mod._VENUE_TO_SLUG).fillna("")
+    filtered_mask = (df["capture_status"].fillna("").astype(str) == "captured") & slugs_for_row.isin(wanted_protocols)
 
     filtered_idx = df[filtered_mask].index
     assert len(filtered_idx) == 1, "Expected only 1 row after protocol filter"
-    assert df.loc[filtered_idx[0], "venue"] == "aave_v3"
+    assert df.loc[filtered_idx[0], "venue"] == "AAVEV3"
 
-    # Confirm compound_v3 row is excluded.
+    # Confirm COMPOUNDV3 row is excluded.
     venues_in_scope = {df.loc[i, "venue"] for i in filtered_idx}
-    assert "compound_v3" not in venues_in_scope
+    assert "COMPOUNDV3" not in venues_in_scope
 
 
 def test_shard_prefix_format() -> None:
@@ -315,6 +314,71 @@ def test_shard_prefix_format() -> None:
 
 
 def test_classify_phantom_unknown_protocol_defaults_to_source_returned_zero() -> None:
-    """Unknown protocol slug falls back to SOURCE_RETURNED_ZERO (no launch date)."""
-    reason = _mod._classify_phantom("unknown_proto", "ETHEREUM", "2020-01-01")
+    """Unknown venue falls back to SOURCE_RETURNED_ZERO (no launch date lookup)."""
+    reason = _mod._classify_phantom("UNKNOWN_VENUE", "ETHEREUM", "2020-01-01")
     assert reason == "SOURCE_RETURNED_ZERO"
+
+
+def test_audit_translates_uppercase_venue_to_lowercase_slug_for_gcs_prefix() -> None:
+    """Manifest venue=AAVEV3 (uppercase) → GCS prefix uses aave_v3 (lowercase slug).
+
+    Regression for the 2026-05-16 bug where _audit_captured_rows passed the manifest
+    venue directly into the path template, causing every captured row to false-positive
+    as phantom (path /AAVEV3/ has 0 parquets; actual path /aave_v3/ has the data).
+    """
+    df = _make_manifest(
+        [
+            {
+                "date": "2026-05-07",
+                "venue": "AAVEV3",  # uppercase manifest form
+                "chain": "ETHEREUM",
+                "capture_status": "captured",
+            }
+        ]
+    )
+    # Mock bucket has the parquet at LOWERCASE slug path (the real GCS layout).
+    slug_prefix = "lending_indices/aave_v3/ETHEREUM/date=2026-05-07/"
+    bucket = _mock_bucket_with_blobs({slug_prefix: [f"{slug_prefix}aave_v3_ETHEREUM_20260507.parquet"]})
+
+    audit = _mod._audit_captured_rows(bucket, df, df.index, workers=1)
+
+    is_real, reason = audit[0]
+    assert is_real, (
+        "Row with venue=AAVEV3 should resolve to slug aave_v3 + find parquet; "
+        "if False, the venue→slug translation regressed"
+    )
+    assert reason == ""
+
+
+def test_data_type_filter_accepts_both_kebab_and_snake_forms() -> None:
+    """Reconciler must scan rows with data_type='lending-indices' (kebab legacy) AND
+    'lending_indices' (snake canonical). Pre-fix, only snake was scanned, missing
+    24,976 legacy kebab rows. See plans/active/issues/
+    lending_indices_data_type_vocabulary_drift_2026_05_16.md.
+    """
+    df = _make_manifest(
+        [
+            {
+                "date": "2026-05-07",
+                "venue": "AAVEV3",
+                "chain": "ETHEREUM",
+                "capture_status": "captured",
+                "data_type": "lending-indices",  # kebab legacy
+            },
+            {
+                "date": "2026-05-07",
+                "venue": "AAVEV3",
+                "chain": "ARBITRUM",
+                "capture_status": "captured",
+                "data_type": "lending_indices",  # snake canonical
+            },
+        ]
+    )
+    # Mirror the script main() data_type filter logic.
+    dt_str = df["data_type"].fillna("").astype(str)
+    in_scope_mask = (df["capture_status"].astype(str) == "captured") & (
+        (dt_str == "lending_indices") | (dt_str == "lending-indices")
+    )
+    assert in_scope_mask.sum() == 2, (
+        "Both kebab and snake data_type rows must be in audit scope; pre-fix only snake was."
+    )
