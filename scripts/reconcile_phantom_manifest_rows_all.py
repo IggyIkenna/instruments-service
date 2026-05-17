@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import io
+import json
 import logging
 import os
 import re
@@ -578,6 +579,88 @@ def _audit_generic(
     return real_or_phantom
 
 
+def _build_triage_records(
+    asset_group: str,
+    phantom_df: pd.DataFrame,
+    snapshot_time: str,
+) -> list[dict]:
+    """Build Gate-3 triage JSONL records from phantom rows.
+
+    Schema per Gate-3 runbook:
+    {venue, data_type, date, instrument_id, manifest_status,
+     manifest_capture_time, parquet_row_count, reason, confidence, recommendation}
+    """
+    records: list[dict] = []
+    for _, row in phantom_df.iterrows():
+        venue = str(row.get("venue", "") or "")
+        data_type = str(row.get("data_type", "") or "")
+        date_str = str(row.get("date", "") or "")
+        instrument_id = str(row.get("instrument_id", "") or "")
+        error_reason = str(row.get("error_reason", "") or "")
+        written_at = str(row.get("written_at", row.get("available_at", "")) or "")
+
+        reason = "PHANTOM_NO_PARQUET"
+        confidence = "MEDIUM"
+        recommendation = "flip_to_attempted_failed"
+
+        if error_reason and error_reason not in (
+            "phantom_captured_no_parquet_at_canonical_path",
+            "",
+        ):
+            reason = f"PHANTOM_KNOWN_ERROR_REASON:{error_reason}"
+            confidence = "HIGH"
+            recommendation = "accept_expected_gap"
+        elif asset_group == "tradfi" and date_str:
+            try:
+                dt = datetime.strptime(date_str[:10], "%Y-%m-%d")
+                if dt.weekday() >= 5:  # 5=Saturday, 6=Sunday
+                    reason = "PHANTOM_WEEKEND_TRADFI"
+                    confidence = "HIGH"
+                    recommendation = "accept_expected_gap"
+            except ValueError:
+                pass
+
+        records.append(
+            {
+                "venue": venue,
+                "data_type": data_type,
+                "date": date_str,
+                "instrument_id": instrument_id,
+                "manifest_status": "captured",
+                "manifest_capture_time": written_at or snapshot_time,
+                "parquet_row_count": 0,
+                "reason": reason,
+                "confidence": confidence,
+                "recommendation": recommendation,
+            }
+        )
+    return records
+
+
+def _write_triage_jsonl_gcs(
+    client: storage.Client,
+    gcs_uri: str,
+    records: list[dict],
+) -> None:
+    """Write triage records as JSONL to GCS."""
+    if not gcs_uri.startswith("gs://"):
+        raise ValueError(f"--triage-output-gcs must start with gs://, got: {gcs_uri!r}")
+    path = gcs_uri[5:]
+    slash_idx = path.index("/")
+    bucket_name = path[:slash_idx]
+    blob_path = path[slash_idx + 1 :]
+    lines = "\n".join(json.dumps(r, default=str) for r in records) + "\n"
+    triage_bucket = client.bucket(bucket_name)
+    triage_blob = triage_bucket.blob(blob_path)
+    triage_blob.upload_from_string(lines, content_type="application/x-ndjson")
+    logger.info(
+        "Triage JSONL written: gs://%s/%s (%d records)",
+        bucket_name,
+        blob_path,
+        len(records),
+    )
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--asset-group", required=True, choices=list(ASSET_GROUP_CONFIG.keys()))
@@ -632,6 +715,27 @@ def main() -> int:
         default="",
         help=(
             "Override the manifest blob path inside the manifest bucket (default: _index/availability_index.parquet)."
+        ),
+    )
+    p.add_argument(
+        "--triage-output-gcs",
+        type=str,
+        default="",
+        help=(
+            "GCS URI for Gate-3 triage JSONL output (e.g. "
+            "gs://central-element-323112-phantom-triage/triage-cefi-2026-05-17.jsonl). "
+            "Written only in --dry-run mode. Schema: "
+            "{venue, data_type, date, instrument_id, manifest_status, "
+            "manifest_capture_time, parquet_row_count, reason, confidence, recommendation}."
+        ),
+    )
+    p.add_argument(
+        "--manifest-snapshot-time",
+        type=str,
+        default="",
+        help=(
+            "ISO timestamp of when the manifest was snapshotted (default: now). "
+            "Used as manifest_capture_time fallback in triage records."
         ),
     )
     args = p.parse_args()
@@ -784,6 +888,10 @@ def main() -> int:
             logger.info("Phantom distribution by venue (top 15):\n%s", by_v.head(15).to_string())
 
     if args.dry_run:
+        if args.triage_output_gcs and phantom_idx:
+            snapshot_time = args.manifest_snapshot_time or datetime.now(UTC).isoformat()
+            triage_records = _build_triage_records(args.asset_group, df.loc[phantom_idx], snapshot_time)
+            _write_triage_jsonl_gcs(client, args.triage_output_gcs, triage_records)
         logger.info("DRY RUN — manifest not modified.")
         return 0
 
