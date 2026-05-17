@@ -888,10 +888,14 @@ def main() -> int:
             logger.info("Phantom distribution by venue (top 15):\n%s", by_v.head(15).to_string())
 
     if args.dry_run:
-        if args.triage_output_gcs and phantom_idx:
+        if phantom_idx:
+            triage_gcs = args.triage_output_gcs
+            if not triage_gcs:
+                ts = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+                triage_gcs = f"gs://central-element-323112-phantom-triage/triage_{args.asset_group}_{ts}.jsonl"
             snapshot_time = args.manifest_snapshot_time or datetime.now(UTC).isoformat()
             triage_records = _build_triage_records(args.asset_group, df.loc[phantom_idx], snapshot_time)
-            _write_triage_jsonl_gcs(client, args.triage_output_gcs, triage_records)
+            _write_triage_jsonl_gcs(client, triage_gcs, triage_records)
         logger.info("DRY RUN — manifest not modified.")
         return 0
 
