@@ -513,7 +513,21 @@ def _audit_generic(
         # interposes ``data_source=`` between category and venue, so the
         # prefix can't pin venue).  Empty venue → no needle (skip check).
         # Axis-8: venue=UNKNOWN has no resolvable path — skip the check.
-        venue_needle = f"venue={venue}/" if venue and venue.upper() not in _VENUE_UNKNOWN_SENTINELS else ""
+        # DeFi-only: accept ANY protocol-name spelling variant (AAVEV3 vs
+        # AAVE_V3 etc.) as the venue match. Without this, manifest rows holding
+        # the underscored spelling are flagged phantom even though their data
+        # lives at the non-underscored disk path (and vice versa) — confirmed
+        # 2026-05-17 on the lending-indices bucket (60 false phantoms reported
+        # for AAVEV3 + COMPOUNDV3 rows whose data lives at venue=AAVE_V3 /
+        # venue=COMPOUND_V3). The PREFIX template already probes both via
+        # ``_defi_protocol_variants`` (line 290) — the substring NEEDLE needs
+        # the same treatment.
+        if not venue or venue.upper() in _VENUE_UNKNOWN_SENTINELS:
+            venue_needles_any: list[str] = []
+        elif asset_group == "defi":
+            venue_needles_any = [f"venue={v}/" for v in _defi_protocol_variants(venue)]
+        else:
+            venue_needles_any = [f"venue={venue}/"]
         # Case-insensitive instrument_type needle. Empty manifest value
         # means "any instrument_type counts" (schema-4 rows). Identifier-
         # only types like ``prediction_market`` skip the segment check.
@@ -550,7 +564,7 @@ def _audit_generic(
                 # Axis-7: accept primary or Databento-paired schema needle.
                 if dt_needle not in k and not any(pn in k for pn in extra_dt_needles):
                     continue
-                if venue_needle and venue_needle not in k:
+                if venue_needles_any and not any(vn in k for vn in venue_needles_any):
                     continue
                 if it_needles_lower:
                     k_lower = k.lower()
@@ -597,9 +611,43 @@ def main() -> int:
             "attempted_failed even after the singleton-fallback fix landed)."
         ),
     )
+    p.add_argument(
+        "--manifest-bucket",
+        type=str,
+        default="",
+        help=(
+            "Override the manifest bucket (default: the per-asset_group bucket in "
+            "ASSET_GROUP_CONFIG). Required for DeFi per-data-type buckets like "
+            "lending-indices-{pid} / lst-rates-{pid} / oracle-prices-{pid} / "
+            "perp-funding-{pid} / eigenlayer-rewards-{pid} that hold their own "
+            "manifest separate from the central market-data-tick-defi-{pid}. "
+            "Routes BOTH manifest read AND prefix-path probing to this bucket. "
+            "Added 2026-05-17 after the lending-indices phantom-flip one-shot "
+            "(plans/active/issues/lending_indices_phantom_manifest_rows_2026_05_17.md)."
+        ),
+    )
+    p.add_argument(
+        "--manifest-index",
+        type=str,
+        default="",
+        help=(
+            "Override the manifest blob path inside the manifest bucket (default: _index/availability_index.parquet)."
+        ),
+    )
     args = p.parse_args()
 
-    cfg = ASSET_GROUP_CONFIG[args.asset_group]
+    cfg = dict(ASSET_GROUP_CONFIG[args.asset_group])
+    # Per-data-type bucket overrides: rewire cfg in-place so all downstream
+    # logic (manifest read + prefix-path probing + write-back) hits the
+    # override bucket. The prefix templates remain the asset_group-level set —
+    # the per-data-type buckets in DeFi all share the same path layout as
+    # the central bucket (raw_tick_data/by_date/day=*/asset_group=defi/...).
+    if args.manifest_bucket:
+        cfg["bucket"] = args.manifest_bucket
+        logger.info("Manifest bucket override: %s", args.manifest_bucket)
+    if args.manifest_index:
+        cfg["index"] = args.manifest_index
+        logger.info("Manifest blob override: %s", args.manifest_index)
     # Bump GCS HTTP connection pool to match worker count; the default of 10
     # silently truncates list_blobs() results under high concurrency. The
     # 2026-05-04 CeFi audit produced 12k false-positive phantoms from this —
