@@ -48,7 +48,7 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
                 f"ccxt does not support exchange {self._exchange_id!r}. "
                 "Check ccxt.exchanges for the list of supported venues."
             )
-        return exchange_class()  # type: ignore[no-any-return]
+        return exchange_class()  # type: ignore[no-any-return]  # ccxt exchange classes are dynamically typed; return value is always an exchange instance
 
     async def get_instruments(
         self,

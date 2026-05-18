@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 def _make_session(**kwargs: object) -> aiohttp.ClientSession:
     """Create an aiohttp session with ThreadedResolver (OS DNS)."""
     connector = aiohttp.TCPConnector(resolver=aiohttp.resolver.ThreadedResolver())
-    return aiohttp.ClientSession(connector=connector, **kwargs)  # type: ignore[arg-type]
+    return aiohttp.ClientSession(connector=connector, **kwargs)  # type: ignore[arg-type]  # **kwargs typed as object; aiohttp accepts arbitrary connector kwargs
 
 
 # ── Cache files ──────────────────────────────────────────────────────

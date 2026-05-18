@@ -88,7 +88,7 @@ class BaseReferenceDataAdapter(ABC):
         negligible overhead at our connection scale.
         """
         connector = aiohttp.TCPConnector(resolver=aiohttp.resolver.ThreadedResolver())
-        return aiohttp.ClientSession(connector=connector, **kwargs)  # type: ignore[arg-type]
+        return aiohttp.ClientSession(connector=connector, **kwargs)  # type: ignore[arg-type]  # **kwargs typed as object; aiohttp accepts arbitrary connector kwargs
 
     def _optional_api_key(self) -> str | None:
         """Return the injected API key, or None if not provided.
