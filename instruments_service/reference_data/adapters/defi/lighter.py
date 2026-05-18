@@ -11,6 +11,8 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from typing import cast
+
 import aiohttp
 from unified_api_contracts import classify_venue_error
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType
@@ -89,9 +91,7 @@ class LighterReferenceDataAdapter(BaseReferenceDataAdapter):
                 return []
 
         details: dict[str, object] = raw if isinstance(raw, dict) else {}
-        markets_raw: list[dict[str, object]] = (
-            details.get("order_book_details") or []  # type: ignore[assignment]
-        )
+        markets_raw = cast("list[dict[str, object]]", details.get("order_book_details") or [])
 
         results: list[InstrumentRecord] = []
         for m in markets_raw:
