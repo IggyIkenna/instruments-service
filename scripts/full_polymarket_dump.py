@@ -355,7 +355,7 @@ _MACRO_KEYWORDS: dict[str, str] = {
 }
 
 
-def _classify_market_from_question(row: pd.Series) -> str:  # type: ignore[type-arg]
+def _classify_market_from_question(row: pd.Series) -> str:
     """Classify market shard from question text."""
     question = str(row.get("question") or "").lower()
 

@@ -241,7 +241,7 @@ def _fake_tempfile(df: pd.DataFrame) -> Any:
     import tempfile
 
     @contextlib.contextmanager
-    def _ctx(**kwargs: object) -> Any:  # type: ignore[misc]
+    def _ctx(**kwargs: object) -> Any:
         with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tf:
             df.to_parquet(tf.name, index=False)
             tf_mock = MagicMock()

@@ -11,7 +11,7 @@ import pytest
 
 
 @pytest.fixture(scope="module")
-def rescan_module():  # type: ignore[no-untyped-def]
+def rescan_module():
     repo_root = Path(__file__).resolve().parents[2]
     path = repo_root / "scripts" / "rescan_sports_fixtures_canonical.py"
     spec = importlib.util.spec_from_file_location("rescan_sports_fixtures_canonical", path)

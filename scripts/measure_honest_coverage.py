@@ -171,10 +171,10 @@ def main() -> None:
 
     # Print per-asset-group summary to stdout for event-stream visibility
     print(f"\n=== Honest Coverage — {now_utc.strftime('%Y-%m-%d %H:%M')} UTC ===")
-    for ag, counts in payload["by_asset_group"].items():  # type: ignore[union-attr]
-        pct = counts["coverage_pct"]  # type: ignore[index]
-        cap = counts["captured"]  # type: ignore[index]
-        total = counts["total"]  # type: ignore[index]
+    for ag, counts in payload["by_asset_group"].items():
+        pct = counts["coverage_pct"]
+        cap = counts["captured"]
+        total = counts["total"]
         print(f"  {ag:12s}: {pct:6.2f}%  ({cap:,}/{total:,} captured)")
 
 

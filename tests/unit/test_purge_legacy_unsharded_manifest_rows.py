@@ -15,7 +15,7 @@ from pathlib import Path
 import pandas as pd
 
 
-def _load_purge_module():  # type: ignore[no-untyped-def]
+def _load_purge_module():
     repo_root = Path(__file__).resolve().parents[2]
     path = repo_root / "scripts" / "purge_legacy_unsharded_manifest_rows.py"
     spec = importlib.util.spec_from_file_location("purge_legacy_unsharded_manifest_rows", path)
@@ -94,7 +94,7 @@ def test_purge_dry_run_identifies_unsharded_rows_only_when_shard_exists() -> Non
     purger = LegacyRowPurger(
         "bucket",
         service_name="instruments-service",
-        storage=storage,  # type: ignore[arg-type]
+        storage=storage,
         index_blob="_index/availability_index.parquet",
     )
 

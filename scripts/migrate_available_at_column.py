@@ -96,8 +96,8 @@ def _make_storage_client(project_id: str, workers: int) -> storage.Client:
             pool_maxsize=pool_size,
             max_retries=3,
         )
-        client._http.mount("https://", adapter)  # type: ignore[attr-defined]
-        client._http.mount("http://", adapter)  # type: ignore[attr-defined]
+        client._http.mount("https://", adapter)
+        client._http.mount("http://", adapter)
     except (AttributeError, TypeError):
         pass
     return client

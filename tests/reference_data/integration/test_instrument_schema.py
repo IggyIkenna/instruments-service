@@ -30,12 +30,12 @@ CASSETTE_DIR = Path(__file__).parent.parent / "cassettes"
 
 def _load_cassette_response_body(cassette_path: Path, interaction_index: int = 0) -> object:
     """Parse a VCR cassette YAML and return the response body as a Python object."""
-    import yaml  # type: ignore[import-untyped]
+    import yaml
 
     data: dict[str, object] = yaml.safe_load(cassette_path.read_text())
-    interactions: list[dict[str, object]] = data["interactions"]  # type: ignore[index]
+    interactions: list[dict[str, object]] = data["interactions"]
     assert len(interactions) > interaction_index, f"Cassette {cassette_path} has only {len(interactions)} interactions"
-    body_str: str = interactions[interaction_index]["response"]["body"]["string"]  # type: ignore[index]
+    body_str: str = interactions[interaction_index]["response"]["body"]["string"]
     return json.loads(body_str)
 
 
@@ -75,7 +75,7 @@ def test_binance_instrument_price_filter_fields() -> None:
     raw = _load_cassette_response_body(cassette)
 
     assert isinstance(raw, dict)
-    symbols: list[dict[str, object]] = raw["symbols"]  # type: ignore[index]
+    symbols: list[dict[str, object]] = raw["symbols"]
     assert len(symbols) >= 1
 
     btc = symbols[0]
@@ -83,7 +83,7 @@ def test_binance_instrument_price_filter_fields() -> None:
     assert btc["baseAsset"] == "BTC"
     assert btc["quoteAsset"] == "USDT"
 
-    filters: list[dict[str, object]] = btc["filters"]  # type: ignore[index]
+    filters: list[dict[str, object]] = btc["filters"]
     price_filter = next(f for f in filters if f["filterType"] == "PRICE_FILTER")
     lot_size = next(f for f in filters if f["filterType"] == "LOT_SIZE")
 
@@ -130,7 +130,7 @@ def test_deribit_instrument_schema_fields() -> None:
     assert isinstance(raw, dict)
     assert raw["jsonrpc"] == "2.0"
 
-    instruments_raw: list[dict[str, object]] = raw["result"]  # type: ignore[index]
+    instruments_raw: list[dict[str, object]] = raw["result"]
     assert len(instruments_raw) == 2
 
     instruments = [DeribitInstrumentInfoFull.model_validate(item) for item in instruments_raw]
@@ -158,7 +158,7 @@ def test_deribit_instrument_all_fields_positive() -> None:
     raw = _load_cassette_response_body(cassette)
 
     assert isinstance(raw, dict)
-    instruments_raw: list[dict[str, object]] = raw["result"]  # type: ignore[index]
+    instruments_raw: list[dict[str, object]] = raw["result"]
 
     for item in instruments_raw:
         inst = DeribitInstrumentInfoFull.model_validate(item)

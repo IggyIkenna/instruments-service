@@ -114,7 +114,7 @@ def _venues_with_subgraph_support() -> list[tuple[str, str, str]]:
     # Deferred import — factory module-level bootstrap touches UAC capability
     # registry; only needed once we actually run.
     from instruments_service.reference_data.factory import (
-        _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL,  # type: ignore[reportPrivateUsage]
+        _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL,
     )
 
     triples: list[tuple[str, str, str]] = []
@@ -171,7 +171,7 @@ def _read_parquet_for_day(
     """Download and parse the parquet for a venue/day. Returns ``None`` if missing."""
     blob_path = f"{prefix}/day={day}/venue={venue_tag}/instruments.parquet"
     try:
-        raw_obj = cast("object", storage_client).download_bytes(bucket, blob_path)  # type: ignore[reportAttributeAccessIssue]
+        raw_obj = cast("object", storage_client).download_bytes(bucket, blob_path)
     except (OSError, ValueError) as exc:
         logger.warning("[%s] parquet missing for day=%s (%s) — skipping", venue_tag, day, exc)
         return None

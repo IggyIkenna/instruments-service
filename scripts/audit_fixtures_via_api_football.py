@@ -312,7 +312,7 @@ def _load_partial_truth_set(
 ) -> pd.DataFrame:
     """Load the partial truth-set parquet from GCS for a resume run."""
     blob_name = _audit_blob("fixtures_truthset", run_ts, "parquet")
-    raw = storage_client.download_bytes(bucket, blob_name)  # type: ignore[attr-defined]
+    raw = storage_client.download_bytes(bucket, blob_name)
     return pd.read_parquet(io.BytesIO(raw))
 
 
@@ -328,7 +328,7 @@ def _checkpoint_truth_set(
     buf = io.BytesIO()
     truth_df.to_parquet(buf, index=False, engine="pyarrow")
     buf.seek(0)
-    storage_client.upload_bytes(  # type: ignore[attr-defined]
+    storage_client.upload_bytes(
         bucket, _audit_blob("fixtures_truthset", run_ts, "parquet"), buf.read()
     )
 
