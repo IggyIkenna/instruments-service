@@ -30,6 +30,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import cast
 
 import aiohttp
 from unified_api_contracts import classify_venue_error
@@ -103,7 +104,7 @@ class ExtendedReferenceDataAdapter(BaseReferenceDataAdapter):
             try:
                 raw = await self._get_with_retry(session, f"{_EXTENDED_API_BASE}/info/markets")
                 payload: dict[str, object] = raw if isinstance(raw, dict) else {}
-                mkt_list: list[dict[str, object]] = payload.get("data") or []  # type: ignore[assignment]
+                mkt_list = cast("list[dict[str, object]]", payload.get("data") or [])
                 symbols = [str(m["name"]) for m in mkt_list if m.get("active") and str(m.get("status", "")) == "ACTIVE"]
                 if not symbols:
                     logger.warning("Extended /info/markets returned no ACTIVE markets — using fallback")
