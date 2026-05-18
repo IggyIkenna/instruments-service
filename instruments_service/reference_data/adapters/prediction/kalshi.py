@@ -97,6 +97,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "kalshi"
 
     def _get_headers(self) -> dict[str, str]:
@@ -256,6 +257,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
+        """Return options chain; not supported for this venue."""
         raise NotImplementedError(
             "Kalshi does not provide options chains. Use get_instruments() to list available prediction markets."
         )
@@ -265,11 +267,13 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
+        """Return expiry calendar; not supported for this venue."""
         raise NotImplementedError(
             "Kalshi does not provide expiry calendars. Market close times are in InstrumentRecord.expiry."
         )
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        """Return funding rate; not supported for this venue."""
         raise NotImplementedError("Kalshi does not have perpetual funding rates.")
 
     async def get_ohlcv(
@@ -278,6 +282,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         interval: str = "1d",
         limit: int = 100,
     ) -> list[OHLCVRef]:
+        """Return ohlcv."""
         raise NotImplementedError("Kalshi OHLCV is not available via reference data API.")
 
     def _parse_market(

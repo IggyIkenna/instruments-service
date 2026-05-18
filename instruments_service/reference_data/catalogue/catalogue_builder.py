@@ -131,12 +131,15 @@ class CatalogueBuilder:
     # Per-asset-group builders (sync — convenient for CLI / tests)
     # ------------------------------------------------------------------
     def build_cefi(self) -> list[InstrumentRecord]:
+        """Build and return cefi."""
         return asyncio.run(self.build_asset_group_async("CEFI"))
 
     def build_tradfi(self) -> list[InstrumentRecord]:
+        """Build and return tradfi."""
         return asyncio.run(self.build_asset_group_async("TRADFI"))
 
     def build_defi(self) -> list[InstrumentRecord]:
+        """Build and return defi."""
         return asyncio.run(self.build_asset_group_async("DEFI"))
 
     def build_all(self) -> list[InstrumentRecord]:
@@ -147,6 +150,7 @@ class CatalogueBuilder:
         return out
 
     async def build_asset_group_async(self, asset_group: str) -> list[InstrumentRecord]:
+        """Build and return asset group async."""
         venues = get_venues_for_asset_groups([asset_group])
         if not venues:
             return []

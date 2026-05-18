@@ -159,6 +159,7 @@ class ApiFootballAdapter(BaseSportsReferenceAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "api_football"
 
     def _headers(self) -> dict[str, str]:

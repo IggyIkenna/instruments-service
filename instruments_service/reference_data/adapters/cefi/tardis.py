@@ -435,12 +435,14 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "tardis"
 
     async def get_instruments(
         self,
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
+        """Fetch all instruments from the venue."""
         api_key = self._optional_api_key()
         results: list[InstrumentRecord] = []
         async with self._make_session() as session:
@@ -477,6 +479,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         return records
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
+        """Fetch a single instrument by identifier."""
         instruments = await self.get_instruments()
         for inst in instruments:
             if inst.raw_symbol == symbol:
@@ -488,6 +491,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
+        """Return options chain; not supported for this venue."""
         instruments = await self.get_instruments(instrument_type="OPTION")
         calls: list[InstrumentRecord] = []
         puts: list[InstrumentRecord] = []
@@ -521,6 +525,7 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
+        """Return expiry calendar; not supported for this venue."""
         instruments = await self.get_instruments(instrument_type=instrument_type)
         expiry_set: set[datetime] = set()
         for inst in instruments:

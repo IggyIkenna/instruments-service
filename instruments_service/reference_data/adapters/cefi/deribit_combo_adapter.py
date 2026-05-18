@@ -147,6 +147,7 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "DERIBIT"
 
     async def get_instruments(
@@ -358,6 +359,7 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
+        """Return options chain; not supported for this venue."""
         raise UnsupportedCapabilityError(
             venue="DERIBIT",
             capability="options_chain",
@@ -370,6 +372,7 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
+        """Return expiry calendar; not supported for this venue."""
         raise UnsupportedCapabilityError(
             venue="DERIBIT",
             capability="expiry_calendar",
@@ -378,6 +381,7 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
         )
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        """Return funding rate; not supported for this venue."""
         raise UnsupportedCapabilityError(
             venue="DERIBIT",
             capability="funding_rate",
@@ -391,6 +395,7 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
         interval: str = "1d",
         limit: int = 100,
     ) -> list[OHLCVRef]:
+        """Return ohlcv."""
         raise UnsupportedCapabilityError(
             venue="DERIBIT",
             capability="ohlcv",
