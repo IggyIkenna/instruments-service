@@ -30,7 +30,7 @@ def _make_session(**kwargs: object) -> aiohttp.ClientSession:
     uses the OS resolver via a thread pool and works everywhere.
     """
     connector = aiohttp.TCPConnector(resolver=aiohttp.resolver.ThreadedResolver())
-    return aiohttp.ClientSession(connector=connector, **kwargs)  # type: ignore[arg-type]
+    return aiohttp.ClientSession(connector=connector, **kwargs)  # type: ignore[arg-type]  # **kwargs typed as object; aiohttp accepts arbitrary connector kwargs
 
 
 # ── Protocol floor dates (conservative mainnet launch dates) ──────────
