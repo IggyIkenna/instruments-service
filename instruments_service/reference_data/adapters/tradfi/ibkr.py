@@ -190,6 +190,7 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "ibkr"
 
     def _get_ib(self) -> object:
@@ -529,6 +530,7 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
+        """Return options chain; not supported for this venue."""
         raise NotImplementedError(
             "IBKR get_options_chain: use Databento adapter for TradFi options chains "
             "in batch mode. For live options data, implement reqSecDefOptParams via "
@@ -540,11 +542,13 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
+        """Return expiry calendar; not supported for this venue."""
         raise NotImplementedError(
             "IBKR get_expiry_calendar: use Databento adapter for TradFi expiry calendars in batch mode."
         )
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        """Return funding rate; not supported for this venue."""
         raise NotImplementedError(f"get_funding_rate not applicable for {self.venue} (TradFi equity venue)")
 
     async def get_ohlcv(
@@ -553,6 +557,7 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
         interval: str = "1d",
         limit: int = 100,
     ) -> list[OHLCVRef]:
+        """Return ohlcv."""
         raise NotImplementedError(
             f"get_ohlcv not implemented for {self.venue} — use Databento adapter for TradFi OHLCV data"
         )

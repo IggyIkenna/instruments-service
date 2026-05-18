@@ -504,12 +504,14 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return self._venue_filter or "databento"
 
     async def get_instruments(
         self,
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
+        """Fetch all instruments from the venue."""
         api_key = self._optional_api_key()
         if api_key is None:
             raise ValueError(
@@ -601,6 +603,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                 record.holiday_calendar = meta.get("holiday_calendar")
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
+        """Fetch a single instrument by identifier."""
         instruments = await self.get_instruments()
         for inst in instruments:
             if inst.raw_symbol == symbol:
@@ -612,6 +615,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
+        """Return options chain; not supported for this venue."""
         instruments = await self.get_instruments(instrument_type="OPTION")
         calls: list[InstrumentRecord] = []
         puts: list[InstrumentRecord] = []
@@ -645,6 +649,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
+        """Return expiry calendar; not supported for this venue."""
         instruments = await self.get_instruments(instrument_type=instrument_type)
         expiry_set: set[datetime] = set()
         for inst in instruments:
@@ -721,6 +726,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         return result
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        """Return funding rate; not supported for this venue."""
         raise NotImplementedError("Databento does not provide funding rates (equity/futures only)")
 
     async def get_ohlcv(
@@ -729,6 +735,7 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         interval: str = "1d",
         limit: int = 100,
     ) -> list[OHLCVRef]:
+        """Return ohlcv."""
         raise NotImplementedError(
             "Databento OHLCV requires timeseries.get_range with DBN binary format. "
             "Use the databento Python SDK directly for this operation."

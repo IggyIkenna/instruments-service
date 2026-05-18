@@ -89,6 +89,7 @@ class ExtendedReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "EXTENDED-STARKNET"
 
     async def get_instruments(
@@ -161,6 +162,7 @@ class ExtendedReferenceDataAdapter(BaseReferenceDataAdapter):
         return results
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
+        """Fetch a single instrument by identifier."""
         for inst in await self.get_instruments():
             if inst.raw_symbol == symbol or inst.raw_symbol == symbol.upper():
                 return inst
@@ -171,6 +173,7 @@ class ExtendedReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
+        """Return options chain; not supported for this venue."""
         raise NotImplementedError("Extended does not support options")
 
     async def get_expiry_calendar(
@@ -178,9 +181,11 @@ class ExtendedReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         instrument_type: str = "future",
     ) -> CanonicalExpiryCalendar:
+        """Return expiry calendar; not supported for this venue."""
         raise NotImplementedError("Extended perpetuals have no expiry calendar")
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        """Return funding rate; not supported for this venue."""
         raise NotImplementedError("Extended funding rate not supported via reference data adapter")
 
     async def get_ohlcv(
@@ -189,4 +194,5 @@ class ExtendedReferenceDataAdapter(BaseReferenceDataAdapter):
         interval: str = "1d",
         limit: int = 100,
     ) -> list[OHLCVRef]:
+        """Return ohlcv."""
         raise NotImplementedError("Extended OHLCV not supported via reference data adapter")

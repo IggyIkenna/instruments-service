@@ -62,6 +62,7 @@ class ApiFootballReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "API_FOOTBALL"
 
     async def get_instruments(
@@ -117,6 +118,7 @@ class ApiFootballReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
+        """Return options chain; not supported for this venue."""
         raise NotImplementedError(
             "API-Football does not provide options chains. Use get_instruments() to list available fixtures."
         )
@@ -126,11 +128,13 @@ class ApiFootballReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
+        """Return expiry calendar; not supported for this venue."""
         raise NotImplementedError(
             "API-Football does not provide expiry calendars. Fixture dates are embedded in InstrumentRecord.expiry."
         )
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        """Return funding rate; not supported for this venue."""
         raise NotImplementedError("API-Football does not have perpetual funding rates.")
 
     async def get_ohlcv(
@@ -139,6 +143,7 @@ class ApiFootballReferenceDataAdapter(BaseReferenceDataAdapter):
         interval: str = "1d",
         limit: int = 100,
     ) -> list[OHLCVRef]:
+        """Return ohlcv."""
         raise NotImplementedError("API-Football OHLCV is not available via reference data API.")
 
 

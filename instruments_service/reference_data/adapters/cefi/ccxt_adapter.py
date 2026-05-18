@@ -38,6 +38,7 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return self._venue
 
     def _get_exchange(self) -> ccxta.Exchange:

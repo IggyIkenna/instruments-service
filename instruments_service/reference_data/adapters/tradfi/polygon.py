@@ -66,6 +66,7 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "polygon"
 
     def _get_api_key(self) -> str:
@@ -100,6 +101,7 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
         return results
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
+        """Fetch a single instrument by identifier."""
         api_key = self._get_api_key()
         headers = {"Authorization": f"Bearer {api_key}"}
         url = f"{_POLYGON_BASE}/v3/reference/tickers/{symbol.upper()}"
@@ -125,6 +127,7 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
+        """Return options chain; not supported for this venue."""
         api_key = self._get_api_key()
         now = datetime.now(UTC)
         instruments = await self._fetch_options(api_key, underlying=underlying.upper())
@@ -156,6 +159,7 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         instrument_type: str = "OPTION",
     ) -> CanonicalExpiryCalendar:
+        """Return expiry calendar; not supported for this venue."""
         api_key = self._get_api_key()
         instruments = await self._fetch_options(api_key, underlying=underlying.upper())
         expiry_set: set[datetime] = set()
@@ -171,6 +175,7 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
         )
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        """Return funding rate; not supported for this venue."""
         raise NotImplementedError("Polygon.io covers equities and options — no funding rates.")
 
     _POLYGON_TIMESPAN_MAP: ClassVar[dict[str, tuple[int, str]]] = {

@@ -68,6 +68,7 @@ class EthFiGovernanceReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "etherfi-governance"
 
     async def get_instruments(
@@ -110,6 +111,7 @@ class EthFiGovernanceReferenceDataAdapter(BaseReferenceDataAdapter):
         return results
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
+        """Fetch a single instrument by identifier."""
         instruments = await self.get_instruments()
         for inst in instruments:
             if inst.raw_symbol == symbol or inst.base_asset == symbol:
@@ -121,6 +123,7 @@ class EthFiGovernanceReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
+        """Return options chain; not supported for this venue."""
         raise NotImplementedError("ETHFI governance token does not support options")
 
     async def get_expiry_calendar(
@@ -128,9 +131,11 @@ class EthFiGovernanceReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
+        """Return expiry calendar; not supported for this venue."""
         raise NotImplementedError("ETHFI governance token has no expiry calendar")
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        """Return funding rate; not supported for this venue."""
         raise NotImplementedError("ETHFI governance token has no on-chain funding rate")
 
     async def get_ohlcv(
@@ -139,4 +144,5 @@ class EthFiGovernanceReferenceDataAdapter(BaseReferenceDataAdapter):
         interval: str = "1d",
         limit: int = 100,
     ) -> list[OHLCVRef]:
+        """Return ohlcv."""
         raise NotImplementedError("ETHFI OHLCV not supported via reference data — use MTDS/MDPS")

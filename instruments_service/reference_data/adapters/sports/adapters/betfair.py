@@ -85,6 +85,7 @@ class BetfairReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "betfair"
 
     def _get_credentials(self) -> tuple[str, str]:
@@ -187,6 +188,7 @@ class BetfairReferenceDataAdapter(BaseReferenceDataAdapter):
         return cast(list[object], result_raw) if result_raw is not None else []
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
+        """Fetch a single instrument by identifier."""
         instruments = await self.get_instruments()
         for inst in instruments:
             if inst.raw_symbol == symbol or inst.instrument_key == symbol:
@@ -198,6 +200,7 @@ class BetfairReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
+        """Return options chain; not supported for this venue."""
         raise NotImplementedError(
             "Betfair does not provide options chains. Use get_instruments() to list available markets/runners."
         )
@@ -207,12 +210,14 @@ class BetfairReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
+        """Return expiry calendar; not supported for this venue."""
         raise NotImplementedError(
             "Betfair does not provide expiry calendars in the TradFi sense. "
             "Market start times are embedded in InstrumentRecord.expiry."
         )
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        """Return funding rate; not supported for this venue."""
         raise NotImplementedError("Betfair does not have perpetual funding rates.")
 
     async def get_ohlcv(
@@ -221,6 +226,7 @@ class BetfairReferenceDataAdapter(BaseReferenceDataAdapter):
         interval: str = "1d",
         limit: int = 100,
     ) -> list[OHLCVRef]:
+        """Return ohlcv."""
         raise NotImplementedError("Betfair OHLCV is not available via reference data API.")
 
     def _parse_catalogue_item(
