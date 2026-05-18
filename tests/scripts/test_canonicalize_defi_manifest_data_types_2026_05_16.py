@@ -18,19 +18,14 @@ Plan ref: ``plans/active/issues/lending_indices_data_type_vocabulary_drift_2026_
 
 from __future__ import annotations
 
-import contextlib
 import importlib.util
 import io
-import os
 import sys
-import tempfile
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Module loader — mirrors pattern from test_reconcile_lending_indices_phantom.py
@@ -134,11 +129,13 @@ def _mock_client_with_buckets(family_to_df: dict[str, pd.DataFrame], project_id:
 
 def test_dry_run_reports_drift_no_writes() -> None:
     """dry-run mode: kebab rows are detected + counted but no upload occurs."""
-    df = _make_manifest([
-        {"data_type": "lending-indices"},
-        {"data_type": "lending-indices"},
-        {"data_type": "lending_indices"},
-    ])
+    df = _make_manifest(
+        [
+            {"data_type": "lending-indices"},
+            {"data_type": "lending-indices"},
+            {"data_type": "lending_indices"},
+        ]
+    )
     blob = _mock_blob_with_df(df)
     bucket = _mock_bucket_with_blob(blob)
 
@@ -165,11 +162,13 @@ def test_dry_run_reports_drift_no_writes() -> None:
 
 def test_apply_flips_kebab_to_snake_in_canonical_manifest() -> None:
     """apply mode: kebab data_type values are renamed to snake in the uploaded manifest."""
-    df = _make_manifest([
-        {"data_type": "dex-swaps"},
-        {"data_type": "dex_swaps"},
-        {"data_type": "dex-swaps"},
-    ])
+    df = _make_manifest(
+        [
+            {"data_type": "dex-swaps"},
+            {"data_type": "dex_swaps"},
+            {"data_type": "dex-swaps"},
+        ]
+    )
     blob = _mock_blob_with_df(df)
     bucket = _mock_bucket_with_blob(blob)
     client = MagicMock()
@@ -202,10 +201,12 @@ def test_apply_flips_kebab_to_snake_in_canonical_manifest() -> None:
 
 def test_idempotent_rerun_skips_already_canonical_bucket() -> None:
     """Bucket with zero kebab rows → returns (0, total) and no upload."""
-    df = _make_manifest([
-        {"data_type": "oracle_prices"},
-        {"data_type": "oracle_prices"},
-    ])
+    df = _make_manifest(
+        [
+            {"data_type": "oracle_prices"},
+            {"data_type": "oracle_prices"},
+        ]
+    )
     blob = _mock_blob_with_df(df)
     bucket = _mock_bucket_with_blob(blob)
     client = MagicMock()
@@ -251,11 +252,15 @@ def test_single_bucket_filter_narrows_scope() -> None:
     )
 
     with (
-        patch("sys.argv", [
-            "script.py",
-            "--dry-run",
-            "--bucket", "lending-indices",
-        ]),
+        patch(
+            "sys.argv",
+            [
+                "script.py",
+                "--dry-run",
+                "--bucket",
+                "lending-indices",
+            ],
+        ),
         patch("google.cloud.storage.Client", return_value=client),
     ):
         result = _mod.main()
@@ -285,23 +290,25 @@ def test_unknown_bucket_arg_rejected() -> None:
 
 def test_preserves_other_columns_v8_round_trip() -> None:
     """v8 emission-tracking columns present in the manifest survive the upload unchanged."""
-    df = _make_manifest([
-        {
-            "data_type": "lst-rates",
-            # Simulate v8 columns that the script must NOT alter.
-            "pipeline_mode": "batch",
-            "service_emission_state": "emitted",
-            "last_emission_decision_at": "2026-05-16T10:00:00Z",
-            "expected_window_completeness_fraction": 1.0,
-        },
-        {"data_type": "lst_rates"},
-    ])
+    df = _make_manifest(
+        [
+            {
+                "data_type": "lst-rates",
+                # Simulate v8 columns that the script must NOT alter.
+                "pipeline_mode": "batch",
+                "service_emission_state": "emitted",
+                "last_emission_decision_at": "2026-05-16T10:00:00Z",
+                "expected_window_completeness_fraction": 1.0,
+            },
+            {"data_type": "lst_rates"},
+        ]
+    )
     blob = _mock_blob_with_df(df)
     bucket = _mock_bucket_with_blob(blob)
     client = MagicMock()
     client.bucket.return_value = bucket
 
-    kebab_count, total = _mod._process_bucket(
+    kebab_count, _total = _mod._process_bucket(
         family="lst-rates",
         project_id=_mod.PROJECT_ID,
         client=client,
