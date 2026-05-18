@@ -79,6 +79,7 @@ from unified_trading_library import (
     ManifestRow,
     ManifestWriter,
     SamplingService,
+    assert_available_at_present,
     check_shard_freshness,
     classify_and_emit_error,
     create_sampling_service,
@@ -368,6 +369,7 @@ def _gated_sink_write(
     propagates and the caller's per-shard failure-isolation block records the
     shard as ``attempted_failed`` on the manifest.
     """
+    assert_available_at_present(data)
     _WRITE_GATE.validate_and_write(
         sink=sink,
         data=data,
@@ -2230,15 +2232,15 @@ async def process_instruments(
                     _league_id_str = str(_lid)
                     _captured_lids.add(_league_id_str)
                     _league_df_clean = _league_df.drop(columns=["_league_id"])
+                    _stamped_fixture_df = stamp_available_at_explicit(_league_df_clean, when=datetime.now(UTC))
                     _gated_sink_write(
                         sink,
-                        data=_league_df_clean,
+                        data=_stamped_fixture_df,
                         partition={"day": date, "venue": venue_str, "league": _canonical_league_id(_league_id_str)},
                         filename="instruments.parquet",
                         venue=venue_str,
                         entity="instruments",
                     )
-                    _stamped_fixture_df = stamp_available_at_explicit(_league_df_clean, when=datetime.now(UTC))
                     manifest.record_captured(
                         row_key={
                             "date": date,
@@ -2309,9 +2311,14 @@ async def process_instruments(
                 for _group_raw, _group_df in _pred_df.groupby("_canonical_group"):
                     _group_str = str(_group_raw)
                     _group_df_clean = _group_df.drop(columns=["_canonical_group"])
+                    # Manifest row: data_type=prediction_canonical_question_group
+                    # (the bundled data_type per UAC BUNDLED_DATA_TYPES SSOT),
+                    # underlying=<canonical_group> (the per-bundle cluster
+                    # identity, mirroring options_chain root-bucketing).
+                    _stamped_group_df = stamp_available_at_explicit(_group_df_clean, when=datetime.now(UTC))
                     _gated_sink_write(
                         sink,
-                        data=_group_df_clean,
+                        data=_stamped_group_df,
                         partition={
                             "day": date,
                             "venue": venue_str,
@@ -2321,11 +2328,6 @@ async def process_instruments(
                         venue=venue_str,
                         entity="instruments",
                     )
-                    # Manifest row: data_type=prediction_canonical_question_group
-                    # (the bundled data_type per UAC BUNDLED_DATA_TYPES SSOT),
-                    # underlying=<canonical_group> (the per-bundle cluster
-                    # identity, mirroring options_chain root-bucketing).
-                    _stamped_group_df = stamp_available_at_explicit(_group_df_clean, when=datetime.now(UTC))
                     _pred_pm = (
                         PipelineMode.BATCH_POLYMARKET_GAMMA_API
                         if _manifest_venue == "POLYMARKET"
@@ -2998,11 +3000,13 @@ def _write_venue(
     import time as _time
 
     max_attempts = 3
+    # Stamp available_at before any write so the parquet carries the column.
+    _stamped_df = stamp_available_at_explicit(df, when=datetime.now(UTC))
     for attempt in range(max_attempts):
         try:
             _gated_sink_write(
                 sink,
-                data=df,
+                data=_stamped_df,
                 partition={"day": date, "venue": venue_str},
                 filename="instruments.parquet",
                 venue=venue_str,
@@ -3055,7 +3059,7 @@ def _write_venue(
                     manifest_venue = _protocol.upper()
                     manifest_chain = _chain
             if manifest is not None:
-                _stamped_venue_df = stamp_available_at_explicit(df, when=datetime.now(UTC))
+                _stamped_venue_df = _stamped_df
                 if is_sports_ref:
                     try:
                         _venue_pm = _pipeline_mode_for_sports_data_type(manifest_data_type)
@@ -3158,7 +3162,7 @@ def _write_futures_contracts(
             )
             return
         rows = [c.model_dump(mode="json") for c in contracts]
-        df = pd.DataFrame(rows)
+        df = stamp_available_at_explicit(pd.DataFrame(rows), when=datetime.now(UTC))
         _gated_sink_write(
             sink,
             data=df,
@@ -3347,7 +3351,9 @@ def _write_fixtures_per_league(
 
     for _lid, _ldf in _with_league.groupby(_league_col):
         _lid_str = str(_lid)
-        _ldf_clean = _ldf.drop(columns=["_canonical_league_id"], errors="ignore")
+        _ldf_clean = stamp_available_at_explicit(
+            _ldf.drop(columns=["_canonical_league_id"], errors="ignore"), when=datetime.now(UTC)
+        )
         _gated_sink_write(
             sink,
             data=_ldf_clean,
@@ -3708,9 +3714,10 @@ async def _fetch_sports_reference_data(
             if "league_id" in teams_df.columns:
                 for _t_lid, _t_league_df in teams_df.groupby("league_id"):
                     _t_lid_str = str(_t_lid)
+                    _t_stamped = stamp_available_at_explicit(_t_league_df, when=datetime.now(UTC))
                     _gated_sink_write(
                         sink,
-                        data=_t_league_df,
+                        data=_t_stamped,
                         partition={"day": date, "entity": "teams", "league": _canonical_league_id(_t_lid_str)},
                         filename="teams.parquet",
                         venue="api_football",
@@ -3763,16 +3770,16 @@ async def _fetch_sports_reference_data(
                 for _s_lid, _s_league_df in standings_df.groupby("league_id"):
                     _s_lid_str = str(_s_lid)
                     _std_captured.add(_s_lid_str)
+                    _stamped_std_df = stamp_available_at_explicit(_s_league_df, when=datetime.now(UTC))
                     _gated_sink_write(
                         sink,
-                        data=_s_league_df,
+                        data=_stamped_std_df,
                         partition={"day": date, "entity": "standings", "league": _canonical_league_id(_s_lid_str)},
                         filename="standings.parquet",
                         venue="api_football",
                         entity="standings",
                     )
                     if manifest is not None:
-                        _stamped_std_df = stamp_available_at_explicit(_s_league_df, when=datetime.now(UTC))
                         manifest.record_captured(
                             row_key={
                                 "date": date,
@@ -3831,16 +3838,16 @@ async def _fetch_sports_reference_data(
                         _inj_lid_str = str(_inj_lid)
                         _inj_captured.add(_inj_lid_str)
                         _inj_clean = _inj_league_df.drop(columns=["_inj_league"], errors="ignore")
+                        _stamped_inj_df = stamp_available_at_explicit(_inj_clean, when=datetime.now(UTC))
                         _gated_sink_write(
                             sink,
-                            data=_inj_clean,
+                            data=_stamped_inj_df,
                             partition={"day": date, "entity": "injuries", "league": _canonical_league_id(_inj_lid_str)},
                             filename="injuries.parquet",
                             venue="api_football",
                             entity="injuries",
                         )
                         if manifest is not None:
-                            _stamped_inj_df = stamp_available_at_explicit(_inj_clean, when=datetime.now(UTC))
                             manifest.record_captured(
                                 row_key={
                                     "date": date,
@@ -4259,16 +4266,16 @@ async def _fetch_sports_reference_data(
                                 fid_col=_fid_col,
                             )
 
+                        _stamped_pf_df = stamp_available_at_explicit(_pf_clean, when=datetime.now(UTC))
                         _gated_sink_write(
                             sink,
-                            data=_pf_clean,
+                            data=_stamped_pf_df,
                             partition={"day": date, "entity": entity_name, "league": _canonical_league_id(_pf_lid_str)},
                             filename=f"{entity_name}.parquet",
                             venue="api_football",
                             entity=entity_name,
                         )
                         if manifest is not None:
-                            _stamped_pf_df = stamp_available_at_explicit(_pf_clean, when=datetime.now(UTC))
                             manifest.record_captured(
                                 row_key={
                                     "date": date,
@@ -4774,9 +4781,10 @@ async def _fetch_footystats_predictions(
                 for _pred_lid, _pred_league_df in _with_league.groupby("_pred_league"):
                     _pred_lid_str = str(_pred_lid)
                     _pred_clean = _pred_league_df.drop(columns=["_pred_league"])
+                    _stamped_pred_clean = stamp_available_at_explicit(_pred_clean, when=datetime.now(UTC))
                     _gated_sink_write(
                         sink,
-                        data=_pred_clean,
+                        data=_stamped_pred_clean,
                         partition={
                             "day": date,
                             "entity": "footystats_predictions",
@@ -4787,7 +4795,6 @@ async def _fetch_footystats_predictions(
                         entity="footystats_predictions",
                         filename="footystats_predictions.parquet",
                     )
-                    _stamped_pred_clean = stamp_available_at_explicit(_pred_clean, when=datetime.now(UTC))
                     pred_manifest.record_captured(
                         row_key={
                             "date": date,
@@ -4805,9 +4812,10 @@ async def _fetch_footystats_predictions(
 
                 if not _without_league.empty:
                     _pred_unmapped = _without_league.drop(columns=["_pred_league"])
+                    _stamped_pred_unmapped = stamp_available_at_explicit(_pred_unmapped, when=datetime.now(UTC))
                     _gated_sink_write(
                         sink,
-                        data=_pred_unmapped,
+                        data=_stamped_pred_unmapped,
                         partition={
                             "day": date,
                             "entity": "footystats_predictions",
@@ -4817,7 +4825,6 @@ async def _fetch_footystats_predictions(
                         entity="footystats_predictions",
                         filename="footystats_predictions.parquet",
                     )
-                    _stamped_pred_unmapped = stamp_available_at_explicit(_pred_unmapped, when=datetime.now(UTC))
                     pred_manifest.record_captured(
                         row_key={"date": date, "data_type": "PREDICTIONS"},
                         df=_stamped_pred_unmapped,
@@ -4828,9 +4835,10 @@ async def _fetch_footystats_predictions(
                         service_emission_state=None,
                     )
             else:
+                _stamped_pred_df = stamp_available_at_explicit(df, when=datetime.now(UTC))
                 _gated_sink_write(
                     sink,
-                    data=df,
+                    data=_stamped_pred_df,
                     partition={
                         "day": date,
                         "entity": "footystats_predictions",
@@ -4840,7 +4848,6 @@ async def _fetch_footystats_predictions(
                     entity="footystats_predictions",
                     filename="footystats_predictions.parquet",
                 )
-                _stamped_pred_df = stamp_available_at_explicit(df, when=datetime.now(UTC))
                 pred_manifest.record_captured(
                     row_key={"date": date, "data_type": "PREDICTIONS"},
                     df=_stamped_pred_df,
@@ -5060,9 +5067,10 @@ async def _fetch_footystats_matches(
                     _ft_lid_str = str(_ft_lid)
                     _ft_canonical = _canonical_league_id(_ft_lid_str)
                     _ft_clean = _ft_league_df.drop(columns=["_ft_league"])
+                    _stamped_ft_df = stamp_available_at_explicit(_ft_clean, when=datetime.now(UTC))
                     _gated_sink_write(
                         sink,
-                        data=_ft_clean,
+                        data=_stamped_ft_df,
                         partition={
                             "day": date,
                             "entity": "footystats_matches",
@@ -5072,7 +5080,6 @@ async def _fetch_footystats_matches(
                         entity="footystats_matches",
                         filename="footystats_matches.parquet",
                     )
-                    _stamped_ft_df = stamp_available_at_explicit(_ft_clean, when=datetime.now(UTC))
                     _ft_manifest.record_captured(
                         row_key={"date": date, "data_type": "MATCHES", "league_id": _ft_canonical},
                         df=_stamped_ft_df,
@@ -5259,9 +5266,10 @@ async def _fetch_footystats_odds(
                 for _odds_lid, _odds_league_df in _with_league.groupby("_odds_league"):
                     _odds_lid_str = str(_odds_lid)
                     _odds_clean = _odds_league_df.drop(columns=["_odds_league"])
+                    _stamped_odds_clean = stamp_available_at_explicit(_odds_clean, when=datetime.now(UTC))
                     _gated_sink_write(
                         sink,
-                        data=_odds_clean,
+                        data=_stamped_odds_clean,
                         partition={
                             "day": date,
                             "entity": "footystats_odds",
@@ -5272,7 +5280,6 @@ async def _fetch_footystats_odds(
                         entity="footystats_odds",
                         filename="footystats_odds.parquet",
                     )
-                    _stamped_odds_clean = stamp_available_at_explicit(_odds_clean, when=datetime.now(UTC))
                     odds_manifest.record_captured(
                         row_key={"date": date, "data_type": "ODDS", "league_id": _canonical_league_id(_odds_lid_str)},
                         df=_stamped_odds_clean,
@@ -5286,9 +5293,10 @@ async def _fetch_footystats_odds(
 
                 if not _without_league.empty:
                     _odds_unmapped = _without_league.drop(columns=["_odds_league"])
+                    _stamped_odds_unmapped = stamp_available_at_explicit(_odds_unmapped, when=datetime.now(UTC))
                     _gated_sink_write(
                         sink,
-                        data=_odds_unmapped,
+                        data=_stamped_odds_unmapped,
                         partition={
                             "day": date,
                             "entity": "footystats_odds",
@@ -5298,7 +5306,6 @@ async def _fetch_footystats_odds(
                         entity="footystats_odds",
                         filename="footystats_odds.parquet",
                     )
-                    _stamped_odds_unmapped = stamp_available_at_explicit(_odds_unmapped, when=datetime.now(UTC))
                     odds_manifest.record_captured(
                         row_key={"date": date, "data_type": "ODDS"},
                         df=_stamped_odds_unmapped,
@@ -5309,9 +5316,10 @@ async def _fetch_footystats_odds(
                         service_emission_state=None,
                     )
             else:
+                _stamped_odds_df = stamp_available_at_explicit(df, when=datetime.now(UTC))
                 _gated_sink_write(
                     sink,
-                    data=df,
+                    data=_stamped_odds_df,
                     partition={
                         "day": date,
                         "entity": "footystats_odds",
@@ -5321,7 +5329,6 @@ async def _fetch_footystats_odds(
                     entity="footystats_odds",
                     filename="footystats_odds.parquet",
                 )
-                _stamped_odds_df = stamp_available_at_explicit(df, when=datetime.now(UTC))
                 odds_manifest.record_captured(
                     row_key={"date": date, "data_type": "ODDS"},
                     df=_stamped_odds_df,
@@ -5480,15 +5487,15 @@ async def _fetch_understat_xg(
                 for _xg_lid, _xg_league_df in _with_league.groupby("league"):
                     _xg_lid_str = str(_xg_lid)
                     _captured_leagues.add(_xg_lid_str)
+                    _stamped_xg_df = stamp_available_at_explicit(_xg_league_df, when=datetime.now(UTC))
                     _gated_sink_write(
                         sink,
-                        data=_xg_league_df,
+                        data=_stamped_xg_df,
                         partition={"day": date, "entity": "understat_xg", "league": _canonical_league_id(_xg_lid_str)},
                         filename="understat_xg.parquet",
                         venue="understat",
                         entity="understat_xg",
                     )
-                    _stamped_xg_df = stamp_available_at_explicit(_xg_league_df, when=datetime.now(UTC))
                     xg_manifest.record_captured(
                         row_key={"date": date, "data_type": "XG", "league_id": _canonical_league_id(_xg_lid_str)},
                         df=_stamped_xg_df,
@@ -5791,7 +5798,7 @@ async def _fetch_transfermarkt_data(
                     pv_partition["season"] = str(season)
                 _gated_sink_write(
                     sink,
-                    data=df,
+                    data=stamp_available_at_explicit(df, when=datetime.now(UTC)),
                     partition=pv_partition,
                     filename="player_values.parquet",
                     venue="transfermarkt",
@@ -6151,9 +6158,10 @@ async def _fetch_sfi_data(
                         for _pp_lid, _pp_league_df in _with_league.groupby("league_id"):
                             _pp_lid_str = str(_pp_lid)
                             _sfi_pp_captured.add(_pp_lid_str)
+                            _stamped_pp_df = stamp_available_at_explicit(_pp_league_df, when=datetime.now(UTC))
                             _gated_sink_write(
                                 sink,
-                                data=_pp_league_df,
+                                data=_stamped_pp_df,
                                 partition={
                                     "day": date,
                                     "entity": "progressive_stats",
@@ -6163,7 +6171,6 @@ async def _fetch_sfi_data(
                                 venue="soccer_football_info",
                                 entity="progressive_stats",
                             )
-                            _stamped_pp_df = stamp_available_at_explicit(_pp_league_df, when=datetime.now(UTC))
                             manifest.record_captured(
                                 row_key={
                                     "date": date,
@@ -6732,7 +6739,7 @@ async def _fetch_weather_data(
                 _league_venue_count[_lid_v] = _league_venue_count.get(_lid_v, 0) + len(_w_lid_df)
                 _gated_sink_write(
                     sink,
-                    data=_w_lid_df,
+                    data=stamp_available_at_explicit(_w_lid_df, when=datetime.now(UTC)),
                     partition={"day": date, "entity": "weather", "league": _canonical_league_id(_lid_v)},
                     filename="weather.parquet",
                     venue="open_meteo",
