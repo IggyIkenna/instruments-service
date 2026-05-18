@@ -2141,7 +2141,7 @@ async def process_instruments(
             f"Venues attempted: {active_venues}. "
             "Check URDI adapter coverage and network connectivity."
         )
-        logger.error(msg)
+        logger.error("%s", msg)
         log_event("PROCESSING_FAILED", details={"date": date, "reason": msg})
         raise RuntimeError(msg)
 
@@ -2179,7 +2179,7 @@ async def process_instruments(
         records = valid_records
     if not records:
         msg = f"All records/venues rejected by schema validation for date={date}"
-        logger.error(msg)
+        logger.error("%s", msg)
         log_event("PROCESSING_FAILED", details={"date": date, "reason": msg})
         raise RuntimeError(msg)
 
