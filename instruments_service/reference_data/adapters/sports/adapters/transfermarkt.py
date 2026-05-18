@@ -55,6 +55,7 @@ class TransfermarktAdapter(BaseSportsReferenceAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "transfermarkt"
 
     @property

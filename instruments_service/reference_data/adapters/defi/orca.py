@@ -65,6 +65,7 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return f"ORCA-{self._chain}"
 
     def _log_fetch_error(self, exc: aiohttp.ClientError) -> None:
@@ -192,6 +193,7 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
+        """Fetch a single instrument by identifier."""
         instruments = await self.get_instruments()
         for inst in instruments:
             if inst.raw_symbol == symbol or inst.symbol == symbol:
@@ -203,6 +205,7 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
+        """Return options chain; not supported for this venue."""
         raise NotImplementedError("Orca does not support options")
 
     async def get_expiry_calendar(
@@ -210,9 +213,11 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
+        """Return expiry calendar; not supported for this venue."""
         raise NotImplementedError("Orca pools have no expiry calendar")
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        """Return funding rate; not supported for this venue."""
         raise NotImplementedError("Orca pools have no funding rate")
 
     async def get_ohlcv(
@@ -221,4 +226,5 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
         interval: str = "1d",
         limit: int = 100,
     ) -> list[OHLCVRef]:
+        """Return ohlcv."""
         raise NotImplementedError("Orca OHLCV not supported via reference data")

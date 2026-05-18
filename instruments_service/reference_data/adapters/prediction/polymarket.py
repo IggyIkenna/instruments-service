@@ -331,6 +331,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "POLYMARKET"
 
     def get_market_metadata_df(self) -> "pd.DataFrame":
@@ -416,6 +417,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
+        """Return options chain; not supported for this venue."""
         raise NotImplementedError(
             "Polymarket does not provide options chains. Use get_instruments() to list available prediction markets."
         )
@@ -425,11 +427,13 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
+        """Return expiry calendar; not supported for this venue."""
         raise NotImplementedError(
             "Polymarket does not provide expiry calendars. Market resolution dates are in InstrumentRecord.expiry."
         )
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        """Return funding rate; not supported for this venue."""
         raise NotImplementedError("Polymarket does not have perpetual funding rates.")
 
     _CLOB_INTERVAL_MAP: ClassVar[dict[str, str]] = {

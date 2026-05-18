@@ -46,6 +46,7 @@ class FootystatsAdapter(BaseSportsReferenceAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "footystats"
 
     def _params_with_key(self, extra: dict[str, str] | None = None) -> dict[str, str]:

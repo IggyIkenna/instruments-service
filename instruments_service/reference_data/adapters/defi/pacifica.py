@@ -56,6 +56,7 @@ class PacificaReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "PACIFICA-SOLANA"
 
     async def get_instruments(
@@ -95,6 +96,7 @@ class PacificaReferenceDataAdapter(BaseReferenceDataAdapter):
         return results
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
+        """Fetch a single instrument by identifier."""
         for inst in await self.get_instruments():
             if inst.raw_symbol == symbol or inst.raw_symbol == symbol.upper():
                 return inst
@@ -105,6 +107,7 @@ class PacificaReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
+        """Return options chain; not supported for this venue."""
         raise NotImplementedError("Pacifica does not support options")
 
     async def get_expiry_calendar(
@@ -112,9 +115,11 @@ class PacificaReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         instrument_type: str = "future",
     ) -> CanonicalExpiryCalendar:
+        """Return expiry calendar; not supported for this venue."""
         raise NotImplementedError("Pacifica perpetuals have no expiry calendar")
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        """Return funding rate; not supported for this venue."""
         raise NotImplementedError("Pacifica funding rate not supported via reference data adapter")
 
     async def get_ohlcv(
@@ -123,4 +128,5 @@ class PacificaReferenceDataAdapter(BaseReferenceDataAdapter):
         interval: str = "1d",
         limit: int = 100,
     ) -> list[OHLCVRef]:
+        """Return ohlcv."""
         raise NotImplementedError("Pacifica OHLCV not supported via reference data adapter")

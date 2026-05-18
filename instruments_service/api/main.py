@@ -21,6 +21,7 @@ _last_processed_date: date | None = None
 
 
 def set_last_processed_date(d: date) -> None:
+    """Set last processed date."""
     global _last_processed_date
     _last_processed_date = d
 
@@ -41,6 +42,7 @@ async def _lifespan(app: FastAPI):
 
 
 def create_app() -> FastAPI:
+    """Create app."""
     app = FastAPI(
         title="instruments-service",
         version="0.1.117",

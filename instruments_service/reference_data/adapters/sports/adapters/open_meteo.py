@@ -61,6 +61,7 @@ class OpenMeteoAdapter(BaseSportsReferenceAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "open_meteo"
 
     async def get_weather(

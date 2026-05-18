@@ -68,6 +68,7 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return f"KAMINO-{self._chain}"
 
     def _log_fetch_error(self, exc: aiohttp.ClientError) -> None:
@@ -187,6 +188,7 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
+        """Fetch a single instrument by identifier."""
         instruments = await self.get_instruments()
         for inst in instruments:
             if inst.raw_symbol == symbol or inst.symbol == symbol:
@@ -198,6 +200,7 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         expiry: datetime | None = None,
     ) -> CanonicalOptionsChain:
+        """Return options chain; not supported for this venue."""
         raise NotImplementedError("Kamino does not support options")
 
     async def get_expiry_calendar(
@@ -205,9 +208,11 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
         underlying: str,
         instrument_type: str = "FUTURE",
     ) -> CanonicalExpiryCalendar:
+        """Return expiry calendar; not supported for this venue."""
         raise NotImplementedError("Kamino vaults have no expiry calendar")
 
     async def get_funding_rate(self, symbol: str) -> FundingRateRef:
+        """Return funding rate; not supported for this venue."""
         raise NotImplementedError("Kamino vaults have no funding rate")
 
     async def get_ohlcv(
@@ -216,4 +221,5 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
         interval: str = "1d",
         limit: int = 100,
     ) -> list[OHLCVRef]:
+        """Return ohlcv."""
         raise NotImplementedError("Kamino OHLCV not supported via reference data")

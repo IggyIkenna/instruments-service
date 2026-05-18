@@ -56,12 +56,15 @@ class InstrumentsDomainConfigState:
         self._reloader: DomainConfigReloader[InstrumentDomainConfig] | None = None
 
     def get_subscription_list(self) -> list[str]:
+        """Return subscription list."""
         return list(self._subscription_list)
 
     def get_enabled_venues(self) -> list[str]:
+        """Return enabled venues."""
         return list(self._enabled_venues)
 
     def get_ticker_universe(self) -> dict[str, list[str]]:
+        """Return the ticker universe configuration."""
         return {
             "sp500": list(self._ticker_sp500),
             "etf": list(self._ticker_etf),
@@ -70,6 +73,7 @@ class InstrumentsDomainConfigState:
         }
 
     def is_ticker_universe_from_cloud(self) -> bool:
+        """Return whether ticker universe is loaded from cloud."""
         return self._ticker_from_cloud
 
     def get_defi_major_assets(self) -> frozenset[str]:
@@ -162,6 +166,7 @@ class InstrumentsDomainConfigState:
         logger.info("Instruments domain config reloader started")
 
     def stop_watching(self) -> None:
+        """Stop watching."""
         if self._reloader is not None:
             self._reloader.stop_watching()
             self._reloader = None
@@ -172,30 +177,37 @@ _state = InstrumentsDomainConfigState()
 
 
 def get_active_subscription_list() -> list[str]:
+    """Return active subscription configuration list."""
     return _state.get_subscription_list()
 
 
 def get_active_enabled_venues() -> list[str]:
+    """Return enabled venues from active config."""
     return _state.get_enabled_venues()
 
 
 def get_ticker_universe() -> dict[str, list[str]]:
+    """Return the ticker universe configuration."""
     return _state.get_ticker_universe()
 
 
 def is_ticker_universe_from_cloud() -> bool:
+    """Return whether ticker universe is loaded from cloud."""
     return _state.is_ticker_universe_from_cloud()
 
 
 def load_ticker_universe_from_cloud(service_config: InstrumentsServiceConfig, target_date: date | None = None) -> bool:
+    """Load ticker universe configuration from cloud storage."""
     return _state.load_ticker_universe_from_cloud(service_config, target_date)
 
 
 def start_domain_config_reloaders(service_config: InstrumentsServiceConfig) -> None:
+    """Start domain config reloaders."""
     _state.start_watching(service_config)
 
 
 def stop_domain_config_reloaders() -> None:
+    """Stop domain config reloaders."""
     _state.stop_watching()
 
 

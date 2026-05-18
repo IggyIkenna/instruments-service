@@ -50,6 +50,7 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
 
     @property
     def venue(self) -> str:
+        """Return the venue identifier."""
         return "understat"
 
     def _headers(self) -> dict[str, str]:
