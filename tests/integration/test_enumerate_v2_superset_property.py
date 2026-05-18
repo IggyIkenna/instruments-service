@@ -6,7 +6,7 @@ superset)".
 
 The deferred claim required a live instruments-service catalog read; we cover
 the SUPERSET PROPERTY here against synthetic catalogs (the property is
-data-shape-invariant; live-catalog × 100-day-axis performance is the unrelated
+data-shape-invariant; live-catalog x 100-day-axis performance is the unrelated
 sub-claim that genuinely needs a same-region VM and stays deferred).
 
 Grain mapping:
@@ -131,9 +131,7 @@ def test_cefi_v2_covers_all_v1_pre_venue_launch_cells() -> None:
     v2_cells = _venue_day_dt_cells(v2_rows)
 
     missing = v1_cells - v2_cells
-    assert not missing, (
-        f"v2 missing {len(missing)} cells covered by v1 (sample: {sorted(missing)[:5]})"
-    )
+    assert not missing, f"v2 missing {len(missing)} cells covered by v1 (sample: {sorted(missing)[:5]})"
 
 
 # ---------------------------------------------------------------------------
@@ -194,8 +192,7 @@ def test_defi_v2_covers_v1_pre_genesis_chain_cells() -> None:
 
     missing = v1_cells - v2_cells
     assert not missing, (
-        f"v2 missing {len(missing)} pre-genesis/launch cells covered by v1 "
-        f"(sample: {sorted(missing)[:5]})"
+        f"v2 missing {len(missing)} pre-genesis/launch cells covered by v1 (sample: {sorted(missing)[:5]})"
     )
 
 
@@ -249,8 +246,7 @@ def test_prediction_v2_covers_v1_pre_venue_launch_cells() -> None:
 
     missing = v1_cells - v2_cells
     assert not missing, (
-        f"v2 prediction missing {len(missing)} pre-launch cells covered by v1 "
-        f"(sample: {sorted(missing)[:5]})"
+        f"v2 prediction missing {len(missing)} pre-launch cells covered by v1 (sample: {sorted(missing)[:5]})"
     )
 
 
@@ -288,6 +284,6 @@ def test_v2_cefi_emits_at_least_one_row_per_catalog_instrument_in_pre_launch() -
             data_types=["ohlcv_1d"],
         )
     )
-    # 5 instruments × 1 day × 1 data_type = 5 rows (one per instrument).
+    # 5 instruments x 1 day x 1 data_type = 5 rows (one per instrument).
     assert len(rows) == 5
     assert {r.instrument_id for r in rows} == {f"INSTR-{i}" for i in range(5)}

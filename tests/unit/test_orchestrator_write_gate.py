@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 import pandas as pd
 import pytest
-from unified_trading_library import InstrumentsWriteGate, TimestampAlignmentError
+from unified_trading_library import InstrumentsWriteGate, LookaheadBiasError, TimestampAlignmentError
 
 from instruments_service.engine.orchestrator import (
     _WRITE_GATE,
@@ -54,10 +54,12 @@ class TestModuleLevelGate:
 class TestGatedSinkWrite:
     def test_compliant_rows_pass_through(self) -> None:
         sink = _FakeSink()
+        _ts = pd.Timestamp("2023-03-16", tz="UTC")
         df = pd.DataFrame(
             {
                 "player_id": ["p1", "p2"],
                 "valuation_date": ["2023-02-01", "2023-03-10"],
+                "available_at": [_ts, _ts],
             }
         )
         _gated_sink_write(
@@ -99,10 +101,12 @@ class TestGatedSinkWrite:
         )
 
         sink = _FakeSink()
+        _ts = pd.Timestamp("2023-03-16", tz="UTC")
         df = pd.DataFrame(
             {
                 "player_id": ["p1", "p2"],
                 "valuation_date": ["2026-04-22", "2026-04-22"],  # wall-clock-today
+                "available_at": [_ts, _ts],
             }
         )
         _gated_sink_write(
@@ -130,12 +134,14 @@ class TestGatedSinkWrite:
         value.date() <= D after timer_seconds addition (timer never negative)."""
         sink = _FakeSink()
         kickoff = pd.Timestamp("2023-03-16", tz="UTC") + pd.Timedelta(hours=15)
+        write_ts = pd.Timestamp("2023-03-16", tz="UTC")
         # A few progressive ticks at 0s / 45s / 90s into the match.
         df = pd.DataFrame(
             {
                 "match_id": ["m1", "m1", "m1"],
                 "timer_seconds": [0, 45, 90],
                 "data_available_at": [kickoff + pd.Timedelta(seconds=s) for s in [0, 45, 90]],
+                "available_at": [write_ts, write_ts, write_ts],
             }
         )
         _gated_sink_write(
@@ -152,7 +158,12 @@ class TestGatedSinkWrite:
         """Team-mapping / fixture-mapping writes have no ``day=`` partition — the
         gate must pass through without scanning."""
         sink = _FakeSink()
-        df = pd.DataFrame({"valuation_date": ["2099-01-01"]})
+        df = pd.DataFrame(
+            {
+                "valuation_date": ["2099-01-01"],
+                "available_at": [pd.Timestamp("2023-03-16", tz="UTC")],
+            }
+        )
         _gated_sink_write(
             sink,
             data=df,
@@ -201,11 +212,13 @@ class TestVenueParityCases:
             fake_log,
             raising=False,
         )
+        _write_ts = pd.Timestamp("2023-03-16", tz="UTC")
         sink = _FakeSink()
         df = pd.DataFrame(
             {
                 "row_id": ["r1", "r2"],
                 column: [self._WALL_CLOCK_VIOLATION, self._WALL_CLOCK_VIOLATION],
+                "available_at": [_write_ts, _write_ts],
             }
         )
         _gated_sink_write(
@@ -330,6 +343,79 @@ class TestVenueParityCases:
         details = next(e[2] for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION")
         assert details["venue"] == "HYPERLIQUID"
         assert details["entity"] == "instruments"
+
+
+class TestAvailableAtPresent:
+    """Phase 2.D — ``_gated_sink_write`` must reject DataFrames missing
+    ``available_at`` or containing null values so ingesters that forget to
+    stamp the column fail loud instead of silently writing lookahead-biased data."""
+
+    def test_missing_available_at_raises(self) -> None:
+        sink = _FakeSink()
+        df = pd.DataFrame({"player_id": ["p1", "p2"]})
+        with pytest.raises(LookaheadBiasError):
+            _gated_sink_write(
+                sink,
+                data=df,
+                partition={"day": "2023-03-16", "entity": "player_values"},
+                filename="player_values.parquet",
+                venue="transfermarkt",
+                entity="player_values",
+            )
+        assert sink.writes == []
+
+    def test_null_available_at_raises(self) -> None:
+        sink = _FakeSink()
+        df = pd.DataFrame(
+            {
+                "player_id": ["p1", "p2"],
+                "available_at": [pd.Timestamp("2023-03-16", tz="UTC"), pd.NaT],
+            }
+        )
+        with pytest.raises(LookaheadBiasError):
+            _gated_sink_write(
+                sink,
+                data=df,
+                partition={"day": "2023-03-16", "entity": "player_values"},
+                filename="player_values.parquet",
+                venue="transfermarkt",
+                entity="player_values",
+            )
+        assert sink.writes == []
+
+    def test_present_available_at_passes(self) -> None:
+        sink = _FakeSink()
+        df = pd.DataFrame(
+            {
+                "player_id": ["p1", "p2"],
+                "available_at": [
+                    pd.Timestamp("2023-03-16", tz="UTC"),
+                    pd.Timestamp("2023-03-16", tz="UTC"),
+                ],
+            }
+        )
+        _gated_sink_write(
+            sink,
+            data=df,
+            partition={"day": "2023-03-16", "entity": "player_values"},
+            filename="player_values.parquet",
+            venue="transfermarkt",
+            entity="player_values",
+        )
+        assert len(sink.writes) == 1
+
+    def test_empty_dataframe_passes(self) -> None:
+        sink = _FakeSink()
+        df = pd.DataFrame({"player_id": pd.Series([], dtype=str)})
+        _gated_sink_write(
+            sink,
+            data=df,
+            partition={"day": "2023-03-16", "entity": "player_values"},
+            filename="player_values.parquet",
+            venue="transfermarkt",
+            entity="player_values",
+        )
+        assert len(sink.writes) == 1
 
 
 class TestStrictModeEndToEnd:
