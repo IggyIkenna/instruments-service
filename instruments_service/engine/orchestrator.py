@@ -4109,7 +4109,7 @@ async def _fetch_sports_reference_data(
         async def _fetch_one(entity_name: str, fetch_fn: object, fid: int) -> None:
             async with sem:
                 try:
-                    rows = await fetch_fn(fid)  # type: ignore[operator]
+                    rows = await fetch_fn(fid)  # type: ignore[operator]  # fetch_fn typed as object; runtime value is always an async callable
                     for row in rows:
                         # Adapters return a mix of Pydantic models and plain dicts
                         # depending on whether the normalizer produces a typed model.
@@ -4728,7 +4728,7 @@ async def _fetch_footystats_predictions(
         from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
         from unified_api_contracts.sports import resolve_footystats_team
 
-        predictions = await adapter.get_fixture_predictions(date)  # type: ignore[attr-defined]
+        predictions = await adapter.get_fixture_predictions(date)  # type: ignore[attr-defined]  # adapter is a union of protocol types; method guaranteed by runtime dispatch
         if predictions:
             df = pd.DataFrame([_coerce_adapter_output(p) for p in predictions])
             # PIT safety: FootyStats predictions publish alongside odds ~3 days before kickoff
@@ -5223,7 +5223,7 @@ async def _fetch_footystats_odds(
         from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
         from unified_api_contracts.sports import resolve_footystats_team
 
-        odds_rows = await adapter.get_fixture_odds_snapshot(date)  # type: ignore[attr-defined]
+        odds_rows = await adapter.get_fixture_odds_snapshot(date)  # type: ignore[attr-defined]  # adapter is a union of protocol types; method guaranteed by runtime dispatch
         if odds_rows:
             df = pd.DataFrame(odds_rows)
             # PIT safety: FootyStats publishes odds ~3 days before kickoff (empirically verified
