@@ -28,7 +28,7 @@ def test_service_cli_parses_rolling_window_flags_end_to_end() -> None:
 
     cli = ServiceCLI(
         service_name="instruments-service",
-        operations={"instruments": InstrumentsHandler},  # type: ignore[dict-item]
+        operations={"instruments": InstrumentsHandler},
         config={},
         extra_args_fn=_add_instruments_extra_args,
     )

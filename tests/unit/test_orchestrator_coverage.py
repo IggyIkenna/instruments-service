@@ -136,7 +136,7 @@ class TestCountPerVenue:
 
     def test_none_venue_mapped_to_unknown(self) -> None:
         record = _make_record()
-        record.venue = None  # type: ignore[assignment]
+        record.venue = None
         counts = _count_per_venue([record])
         assert counts == {"UNKNOWN": 1}
 

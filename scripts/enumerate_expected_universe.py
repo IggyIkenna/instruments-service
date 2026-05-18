@@ -211,7 +211,7 @@ def _enumerate_sports(start: str, end: str) -> Iterator[ExpectedRow]:
     For now enumerates per-source pre-coverage dates which is the
     largest absent slice.
     """
-    from unified_api_contracts.sports import SOURCE_COVERAGE_START  # type: ignore[attr-defined]
+    from unified_api_contracts.sports import SOURCE_COVERAGE_START
 
     data_types = DATA_TYPES_BY_ASSET_GROUP.get("sports", [])
     if not data_types:
@@ -678,7 +678,7 @@ def enumerate_v2(
         )
     resolved_data_types: list[str] = data_types or [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
     enumerator_func = _V2_ENUMERATORS[asset_group]
-    yield from enumerator_func(catalog, date_axis, resolved_data_types)  # type: ignore[operator]
+    yield from enumerator_func(catalog, date_axis, resolved_data_types)
 
 
 def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
@@ -694,7 +694,7 @@ def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
         if val is None:
             return ""
         try:
-            if pd.isna(val):  # type: ignore[arg-type]
+            if pd.isna(val):
                 return ""
         except (TypeError, ValueError):
             pass
@@ -705,7 +705,7 @@ def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
         if val is None:
             return None
         try:
-            if pd.isna(val):  # type: ignore[arg-type]
+            if pd.isna(val):
                 return None
         except (TypeError, ValueError):
             pass
@@ -1230,7 +1230,7 @@ def main() -> int:
         enumerator = _ENUMERATORS[asset_group]
         absent_rows: list[ExpectedRow] = []
         scan_start = time.time()
-        for expected in enumerator(start_date, end_date):  # type: ignore[operator]
+        for expected in enumerator(start_date, end_date):
             key = _row_key(expected, available_cols)
             if key in present_set:
                 continue

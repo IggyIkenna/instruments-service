@@ -125,8 +125,8 @@ def _make_storage_client() -> storage.Client:
     client = storage.Client(project=PROJECT_ID)
     try:
         adapter = HTTPAdapter(pool_connections=64, pool_maxsize=64, max_retries=3)
-        client._http.mount("https://", adapter)  # type: ignore[attr-defined]
-        client._http.mount("http://", adapter)  # type: ignore[attr-defined]
+        client._http.mount("https://", adapter)
+        client._http.mount("http://", adapter)
     except (AttributeError, TypeError):
         pass
     return client

@@ -74,10 +74,10 @@ def _list_dates_for_venue(
     prefix: str = _DEFAULT_PREFIX,
 ) -> list[str]:
     """Return all date strings (YYYY-MM-DD) under the given venue, sorted ascending."""
-    bucket_handle = cast("object", storage_client).bucket(bucket)  # type: ignore[reportAttributeAccessIssue]
+    bucket_handle = cast("object", storage_client).bucket(bucket)
     venue_segment = f"venue={venue_tag}/"
     dates: set[str] = set()
-    for blob in bucket_handle.list_blobs(prefix=prefix):  # type: ignore[reportAttributeAccessIssue]
+    for blob in bucket_handle.list_blobs(prefix=prefix):
         name = str(blob.name)
         if not name.endswith("/instruments.parquet"):
             continue
@@ -94,7 +94,7 @@ def _venues_to_check() -> list[str]:
     from unified_api_contracts.registry import SUBGRAPH_IDS, get_subgraph_id
 
     from instruments_service.reference_data.factory import (
-        _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL,  # type: ignore[reportPrivateUsage]
+        _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL,
     )
 
     venues: list[str] = []
@@ -112,7 +112,7 @@ def _verify_one_parquet(
     blob_path: str,
 ) -> tuple[bool, dict[str, int]]:
     """Verify one parquet. Returns ``(passed, per_column_non_null_counts)``."""
-    raw = cast("object", storage_client).download_bytes(bucket, blob_path)  # type: ignore[reportAttributeAccessIssue]
+    raw = cast("object", storage_client).download_bytes(bucket, blob_path)
     df = pd.read_parquet(io.BytesIO(raw))
 
     counts: dict[str, int] = {}

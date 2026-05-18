@@ -59,7 +59,7 @@ def test_classify_schema_handles_empty_columns() -> None:
 
 
 def _make_table(columns: dict[str, list[object]]) -> pa.Table:
-    return pa.table(columns)  # type: ignore[arg-type]
+    return pa.table(columns)
 
 
 def test_case_a_renames_legacy_to_canonical() -> None:

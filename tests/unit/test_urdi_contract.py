@@ -468,7 +468,7 @@ class TestGetWithRetry:
         mock_session = MagicMock(spec=aiohttp.ClientSession)
         mock_session.get = MagicMock(return_value=mock_cm)
 
-        result = await adapter._get_with_retry(mock_session, "https://api.example.com/data")  # type: ignore[attr-defined]
+        result = await adapter._get_with_retry(mock_session, "https://api.example.com/data")
         assert result == {"key": "value"}
 
     @pytest.mark.asyncio
@@ -487,7 +487,7 @@ class TestGetWithRetry:
             patch("asyncio.sleep", new_callable=AsyncMock),
             pytest.raises(RuntimeError, match="attempts failed"),
         ):
-            await adapter._get_with_retry(  # type: ignore[attr-defined]
+            await adapter._get_with_retry(
                 mock_session, "https://api.example.com/data"
             )
 
@@ -511,6 +511,6 @@ class TestGetWithRetry:
             patch("asyncio.sleep", new_callable=AsyncMock),
             pytest.raises(RuntimeError, match="429"),
         ):
-            await adapter._get_with_retry(  # type: ignore[attr-defined]
+            await adapter._get_with_retry(
                 mock_session, "https://api.example.com/data"
             )
