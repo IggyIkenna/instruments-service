@@ -6,12 +6,13 @@ coverage at three aggregation levels:
   - per (asset_group, venue)
   - per (asset_group, venue, data_type)
 
-Coverage formula:  captured / (captured + empty_confirmed + attempted_failed + expected_unattempted)
+Coverage formula:  captured / (captured + attempted_failed + expected_unattempted)
 
-i.e. the fraction of *all known manifest rows* that were actually captured.
-This is the correct honest baseline — it measures the pipeline's ability to
-turn expected shard slots into captured data, WITHOUT inflating the denominator
-with days before source-coverage-start (those are not in the manifest at all).
+i.e. the fraction of *reachable* shard slots that were captured.
+empty_confirmed rows (non-trading days, pre-genesis chain dates, source-confirmed
+gaps) are excluded from the denominator — they represent legitimate absence, not
+pipeline failures.  The old all-shards formula is preserved as
+``all_shards_coverage_pct`` for reference.
 
 Output: gs://central-element-323112-honest-coverage/{YYYY-MM-DD}/coverage.json
 SSOT: codex/03-deployment/data-status-ui-surface.md (Phase 2E/2F target).
@@ -73,13 +74,16 @@ def _read_manifest(asset_group: str) -> pd.DataFrame | None:
         return None
 
 
-def _count_statuses(df: pd.DataFrame) -> dict[str, int]:
-    counts: dict[str, int] = {}
+def _count_statuses(df: pd.DataFrame) -> dict[str, int | float]:
+    counts: dict[str, int | float] = {}
     for status in _CAPTURE_STATUSES:
         counts[status] = int((df["capture_status"] == status).sum())
-    total = sum(counts.values())
+    total = sum(int(v) for v in counts.values())
     counts["total"] = total
-    counts["coverage_pct"] = round(counts["captured"] / total * 100, 2) if total else 0.0
+    # Reachable denominator excludes empty_confirmed (legitimate absence).
+    reachable = counts["captured"] + counts["attempted_failed"] + counts["expected_unattempted"]
+    counts["coverage_pct"] = round(counts["captured"] / reachable * 100, 2) if reachable else 100.0
+    counts["all_shards_coverage_pct"] = round(counts["captured"] / total * 100, 2) if total else 0.0
     return counts
 
 
@@ -171,11 +175,14 @@ def main() -> None:
 
     # Print per-asset-group summary to stdout for event-stream visibility
     print(f"\n=== Honest Coverage — {now_utc.strftime('%Y-%m-%d %H:%M')} UTC ===")
-    for ag, counts in payload["by_asset_group"].items():
-        pct = counts["coverage_pct"]
-        cap = counts["captured"]
-        total = counts["total"]
-        print(f"  {ag:12s}: {pct:6.2f}%  ({cap:,}/{total:,} captured)")
+    print("  (reachable: captured / (captured + attempted_failed + expected_unattempted))")
+    for ag, counts in payload["by_asset_group"].items():  # type: ignore[union-attr]
+        pct = counts["coverage_pct"]  # type: ignore[index]
+        cap = counts["captured"]  # type: ignore[index]
+        af = counts["attempted_failed"]  # type: ignore[index]
+        eu = counts["expected_unattempted"]  # type: ignore[index]
+        reachable = cap + af + eu  # type: ignore[operator]
+        print(f"  {ag:12s}: {pct:6.2f}%  ({cap:,}/{reachable:,} reachable)")
 
 
 if __name__ == "__main__":
