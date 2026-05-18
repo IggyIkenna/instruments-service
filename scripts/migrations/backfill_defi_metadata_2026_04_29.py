@@ -105,7 +105,7 @@ def _venues_with_subgraph_support() -> list[tuple[str, str, str]]:
     # config-bootstrap: deferred import — factory's module-level bootstrap
     # touches UAC capability registry and is only needed for migrations.
     from instruments_service.reference_data.factory import (
-        _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL,  # type: ignore[reportPrivateUsage]
+        _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL,
     )
 
     triples: list[tuple[str, str, str]] = []
@@ -180,9 +180,9 @@ def _list_historical_parquets(
     # to iterate days. Using list_blobs() with a non-narrowing prefix and
     # filtering venue= in the loop is robust to bucket layout changes.
     paths: list[str] = []
-    bucket_handle = cast("object", storage_client).bucket(bucket)  # type: ignore[reportAttributeAccessIssue]
+    bucket_handle = cast("object", storage_client).bucket(bucket)
     venue_segment = f"venue={venue_tag}/"
-    for blob in bucket_handle.list_blobs(prefix=prefix):  # type: ignore[reportAttributeAccessIssue]
+    for blob in bucket_handle.list_blobs(prefix=prefix):
         name = str(blob.name)
         if name.endswith("/instruments.parquet") and venue_segment in name:
             paths.append(name)
@@ -259,7 +259,7 @@ def _rewrite_parquet(
     """
     buf = io.BytesIO()
     df.to_parquet(buf, index=False, coerce_timestamps="us", allow_truncated_timestamps=True)
-    cast("object", storage_client).upload_bytes(  # type: ignore[reportAttributeAccessIssue]
+    cast("object", storage_client).upload_bytes(
         bucket=bucket,
         blob_path=blob_path,
         data=buf.getvalue(),
@@ -280,7 +280,7 @@ def _process_one_parquet(
     ``status`` is one of ``"skipped"``, ``"unchanged"``, ``"rewritten"`` (real
     write), or ``"would-rewrite"`` (dry-run preview).
     """
-    raw = cast("object", storage_client).download_bytes(bucket, blob_path)  # type: ignore[reportAttributeAccessIssue]
+    raw = cast("object", storage_client).download_bytes(bucket, blob_path)
     df = pd.read_parquet(io.BytesIO(raw))
     n_rows = len(df)
 

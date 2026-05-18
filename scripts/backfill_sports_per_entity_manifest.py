@@ -230,7 +230,7 @@ def _list_days(client: storage.Client) -> list[str]:
     iterator = bucket.list_blobs(prefix=ROOT, delimiter="/")
     list(iterator)
     days: list[str] = []
-    for p in iterator.prefixes:  # type: ignore[attr-defined]
+    for p in iterator.prefixes:
         seg = p.removeprefix(ROOT).removesuffix("/")
         if not seg.startswith("day="):
             continue

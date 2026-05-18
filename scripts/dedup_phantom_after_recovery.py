@@ -101,7 +101,7 @@ def _backup_path(blob_name: str, run_ts: str) -> str:
 def _list_shard_paths(storage: object, bucket: str) -> list[str]:
     """Return canonical + every per-VM shard path."""
     paths: list[str] = [_INDEX_PATH]
-    for blob in storage.list_blobs(bucket=bucket, prefix=_PER_VM_PREFIX):  # type: ignore[attr-defined]
+    for blob in storage.list_blobs(bucket=bucket, prefix=_PER_VM_PREFIX):
         if blob.name.endswith(".parquet") and ".bak.parquet" not in blob.name:
             paths.append(blob.name)
     return paths
@@ -117,7 +117,7 @@ def _identify_real_data_cells(storage: object, bucket: str, shard_paths: list[st
     real_cells: set[tuple[str, str, str]] = set()
     for path in shard_paths:
         try:
-            raw = storage.download_bytes(bucket, path)  # type: ignore[attr-defined]
+            raw = storage.download_bytes(bucket, path)
             df = pd.read_parquet(io.BytesIO(raw))
         except Exception as exc:
             logger.warning("dedup-phantom: could not read %s: %s", path, exc)
@@ -192,7 +192,7 @@ def main() -> int:
 
     for path in shard_paths:
         try:
-            raw = storage.download_bytes(bucket, path)  # type: ignore[attr-defined]
+            raw = storage.download_bytes(bucket, path)
             df = pd.read_parquet(io.BytesIO(raw))
         except Exception as exc:
             logger.warning("dedup-phantom: skip %s (read failed: %s)", path, exc)
@@ -239,11 +239,11 @@ def main() -> int:
     # Step 4: backup + write each modified shard.
     for path, new_df, raw, n_drop in shard_modifications:
         backup_blob = _backup_path(path, run_ts)
-        storage.upload_bytes(bucket, backup_blob, raw)  # type: ignore[attr-defined]
+        storage.upload_bytes(bucket, backup_blob, raw)
         out = io.BytesIO()
         new_df.to_parquet(out, index=False, engine="pyarrow")
         out.seek(0)
-        storage.upload_bytes(bucket, path, out.read())  # type: ignore[attr-defined]
+        storage.upload_bytes(bucket, path, out.read())
         logger.info("%s: wrote (drop=%d, backup=gs://%s/%s)", path, n_drop, bucket, backup_blob)
 
     logger.info(

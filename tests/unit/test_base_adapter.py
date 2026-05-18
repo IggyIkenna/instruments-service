@@ -96,7 +96,7 @@ class TestBaseAdapter:
 
     def test_cannot_instantiate_abstract_base(self) -> None:
         with pytest.raises(TypeError):
-            BaseReferenceDataAdapter()  # type: ignore[abstract]
+            BaseReferenceDataAdapter()
 
     def test_optional_api_key_returns_none_without_project_id(self) -> None:
         adapter = _ConcreteAdapter()

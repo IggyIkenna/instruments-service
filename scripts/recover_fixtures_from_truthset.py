@@ -96,17 +96,17 @@ def _audit_blob(name: str, run_ts: str, suffix: str) -> str:
 
 
 def _read_recovery_set(storage: object, bucket: str, run_ts: str) -> pd.DataFrame:
-    raw = cast("bytes", storage.download_bytes(bucket, _audit_blob("fixtures_recovery_set", run_ts, "parquet")))  # type: ignore[attr-defined]
+    raw = cast("bytes", storage.download_bytes(bucket, _audit_blob("fixtures_recovery_set", run_ts, "parquet")))
     return pd.read_parquet(io.BytesIO(raw))
 
 
 def _read_truth_set(storage: object, bucket: str, run_ts: str) -> pd.DataFrame:
-    raw = cast("bytes", storage.download_bytes(bucket, _audit_blob("fixtures_truthset", run_ts, "parquet")))  # type: ignore[attr-defined]
+    raw = cast("bytes", storage.download_bytes(bucket, _audit_blob("fixtures_truthset", run_ts, "parquet")))
     return pd.read_parquet(io.BytesIO(raw))
 
 
 def _read_diff(storage: object, bucket: str, run_ts: str) -> pd.DataFrame:
-    raw = cast("bytes", storage.download_bytes(bucket, _audit_blob("fixtures_diff", run_ts, "csv")))  # type: ignore[attr-defined]
+    raw = cast("bytes", storage.download_bytes(bucket, _audit_blob("fixtures_diff", run_ts, "csv")))
     return pd.read_csv(io.BytesIO(raw))
 
 
@@ -201,7 +201,7 @@ def _write_per_league_parquet(
     df.to_parquet(buf, index=False, engine="pyarrow")
     buf.seek(0)
     blob = _FIXTURES_PARQUET_TEMPLATE.format(day=day, league_id=canonical_league_id)
-    storage.upload_bytes(bucket, blob, buf.read())  # type: ignore[attr-defined]
+    storage.upload_bytes(bucket, blob, buf.read())
     return len(df)
 
 
@@ -248,7 +248,7 @@ def _flip_attempted_failed_to_empty_confirmed(
         len(target_pairs),
     )
 
-    raw = cast("bytes", storage.download_bytes(bucket, _INDEX_PATH))  # type: ignore[attr-defined]
+    raw = cast("bytes", storage.download_bytes(bucket, _INDEX_PATH))
     canonical = pd.read_parquet(io.BytesIO(raw))
 
     # Build mask: capture_status==attempted_failed AND data_type==FIXTURES AND
@@ -288,7 +288,7 @@ def _flip_attempted_failed_to_empty_confirmed(
     out = io.BytesIO()
     flipped.to_parquet(out, index=False, engine="pyarrow")
     out.seek(0)
-    storage.upload_bytes(bucket, shard_blob, out.read())  # type: ignore[attr-defined]
+    storage.upload_bytes(bucket, shard_blob, out.read())
     logger.info("Wrote per-VM shard to gs://%s/%s (%d rows)", bucket, shard_blob, n_flip)
     logger.info(
         "Consolidator will merge this shard into canonical on next cycle "

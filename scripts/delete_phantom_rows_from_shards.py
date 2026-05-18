@@ -115,7 +115,7 @@ def _process_blob(
 ) -> tuple[int, int]:
     """Process one shard blob. Returns (deleted_count, total_rows_before)."""
     try:
-        raw = storage.download_bytes(bucket, blob_name)  # type: ignore[attr-defined]  # pyright: ignore[reportAny]
+        raw = storage.download_bytes(bucket, blob_name)
     except Exception as exc:  # pragma: no cover — best-effort
         logger.warning("Failed to read %s: %s", blob_name, exc)
         return 0, 0
@@ -139,12 +139,12 @@ def _process_blob(
 
     # Backup-then-write
     backup = _backup_path(blob_name, run_ts)
-    storage.upload_bytes(bucket, backup, raw)  # type: ignore[attr-defined]  # pyright: ignore[reportAny]
+    storage.upload_bytes(bucket, backup, raw)
 
     out = io.BytesIO()
     filtered.to_parquet(out, index=False, engine="pyarrow")
     out.seek(0)
-    storage.upload_bytes(bucket, blob_name, out.read())  # type: ignore[attr-defined]  # pyright: ignore[reportAny]
+    storage.upload_bytes(bucket, blob_name, out.read())
     logger.info(
         "    backup → gs://%s/%s; rewrote %d rows",
         bucket,
@@ -186,7 +186,7 @@ def main() -> int:
     if native is None:
         logger.error("Could not access native GCS client for listing per-VM shards. Aborting.")
         return 2
-    blobs = list(native.bucket(bucket).list_blobs(prefix=_PER_VM_PREFIX))  # type: ignore[union-attr]  # pyright: ignore[reportAny]
+    blobs = list(native.bucket(bucket).list_blobs(prefix=_PER_VM_PREFIX))
     parquet_blobs = [b.name for b in blobs if b.name.endswith(".parquet") and ".bak" not in b.name]
     logger.info("Per-VM shards to scan: %d", len(parquet_blobs))
 
