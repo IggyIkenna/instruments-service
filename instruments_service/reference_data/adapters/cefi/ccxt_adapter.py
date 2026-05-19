@@ -1,8 +1,10 @@
 """CCXT generic reference data adapter — wraps ccxt for multi-venue support."""
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import cast
 
 import ccxt.async_support as ccxta
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType, MarginType, OptionType
@@ -49,7 +51,7 @@ class CCXTReferenceDataAdapter(BaseReferenceDataAdapter):
                 f"ccxt does not support exchange {self._exchange_id!r}. "
                 "Check ccxt.exchanges for the list of supported venues."
             )
-        return exchange_class()  # type: ignore[no-any-return]  # ccxt exchange classes are dynamically typed; return value is always an exchange instance
+        return cast(Callable[[], ccxta.Exchange], exchange_class)()
 
     async def get_instruments(
         self,
