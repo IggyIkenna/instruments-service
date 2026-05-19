@@ -2145,40 +2145,49 @@ async def process_instruments(
         log_event("PROCESSING_FAILED", details={"date": date, "reason": msg})
         raise RuntimeError(msg)
 
-    # 5. Schema validation — bad records fail the entire venue shard.
-    #    If ANY instrument in a venue fails validation, the whole venue is skipped.
-    #    Validation-failed venues are tracked separately so the completeness check
-    #    doesn't count them as "missing" (they were fetched, just rejected).
+    # 5. Schema validation — per-record failure isolation (hard_schema_enforcement Phase 2).
+    #    Invalid records route to SCHEMA_VALIDATION_FAILED event; valid records from the
+    #    same venue continue to record_captured. A venue is added to validation_failed_venues
+    #    only when ALL its records fail — per CLAUDE.md shard-level failure isolation rule
+    #    (no raise inside per-record loop; bad row must not kill the whole shard).
     valid_records, rejected = validate_instrument_records(records, as_of_date=date_type.fromisoformat(date))
     validation_failed_venues: set[str] = set()
     if rejected:
-        # Group rejections by venue — fail entire venue shard
-        failed_venues: dict[str, list[str]] = {}
+        rejected_by_venue: dict[str, int] = {}
         for rec, reason in rejected:
-            failed_venues.setdefault(rec.venue, []).append(reason)
-        for venue, reasons in sorted(failed_venues.items()):
-            logger.error(
-                "SHARD FAILED date=%s venue=%s: %d instruments failed validation — %s",
+            rejected_by_venue[rec.venue] = rejected_by_venue.get(rec.venue, 0) + 1
+            logger.warning(
+                "SCHEMA_VALIDATION_FAILED date=%s venue=%s instrument_key=%s reason=%s",
                 date,
-                venue,
-                len(reasons),
-                reasons[0],
+                rec.venue,
+                rec.instrument_key,
+                reason,
             )
-        # Remove all records from failed venues (fail the shard, not just the record)
-        validation_failed_venues = set(failed_venues.keys())
-        records = [r for r in valid_records if r.venue not in validation_failed_venues]
-        log_event(
-            "SHARD_INCOMPLETE",
-            details={
-                "date": date,
-                "failed_venues": sorted(validation_failed_venues),
-                "reason": "schema_validation_failure",
-            },
-        )
-    else:
-        records = valid_records
+            log_event(
+                "SCHEMA_VALIDATION_FAILED",
+                details={
+                    "date": date,
+                    "venue": rec.venue,
+                    "instrument_key": rec.instrument_key,
+                    "reason": reason,
+                },
+            )
+        # Mark venue fully-failed only when zero valid records survive for it.
+        valid_by_venue: dict[str, int] = {}
+        for rec in valid_records:
+            valid_by_venue[rec.venue] = valid_by_venue.get(rec.venue, 0) + 1
+        for venue, failed_count in rejected_by_venue.items():
+            if venue not in valid_by_venue:
+                validation_failed_venues.add(venue)
+                logger.error(
+                    "SHARD FAILED date=%s venue=%s: all %d instruments failed validation",
+                    date,
+                    venue,
+                    failed_count,
+                )
+    records = valid_records
     if not records:
-        msg = f"All records/venues rejected by schema validation for date={date}"
+        msg = f"All records rejected by schema validation for date={date}"
         logger.error("%s", msg)
         log_event("PROCESSING_FAILED", details={"date": date, "reason": msg})
         raise RuntimeError(msg)
@@ -2662,7 +2671,7 @@ async def process_instruments(
     #    filtering — the data source simply has no data for that date (e.g. NASDAQ
     #    before DBEQ.BASIC dataset starts, or CME on a holiday).
     #  - Validation rejected all records (validation_failed_venues) — data quality
-    #    issue, not a missing-data issue. Already logged as SHARD FAILED above.
+    #    issue, not a missing-data issue. Per-record SCHEMA_VALIDATION_FAILED events logged above.
     #  - [SPORTS] The venue doesn't cover any leagues with fixtures on this date.
     #    Each league declares its data_sources in UAC LeagueDefinition. A venue
     #    is only expected if at least one league with fixtures lists it.
