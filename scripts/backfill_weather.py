@@ -30,7 +30,7 @@ import sys
 import time
 from collections import defaultdict
 from datetime import date as date_type
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 import pyarrow as pa
@@ -244,7 +244,7 @@ def run(args: argparse.Namespace) -> None:
         for chunk_start_str, chunk_end_str in year_chunks:
             # Actuals
             try:
-                cutoff = (datetime.utcnow() - timedelta(days=90)).strftime("%Y-%m-%d")
+                cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
                 url = _ARCHIVE_URL if chunk_end_str < cutoff else _FORECAST_URL
                 hourly = _fetch_hourly_bulk(lat, lon, chunk_start_str, chunk_end_str, url)
                 times = hourly.get("time", [])
