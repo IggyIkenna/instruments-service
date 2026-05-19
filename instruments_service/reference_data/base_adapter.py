@@ -79,7 +79,7 @@ class BaseReferenceDataAdapter(ABC):
         self._cache_ttl: float = 3600.0  # 1 hour default; subclasses can override
 
     @staticmethod
-    def _make_session(**kwargs: object) -> aiohttp.ClientSession:
+    def _make_session() -> aiohttp.ClientSession:
         """Create an aiohttp session with ThreadedResolver.
 
         Uses the OS DNS resolver (via thread pool) instead of aiodns/c-ares.
@@ -88,7 +88,7 @@ class BaseReferenceDataAdapter(ABC):
         negligible overhead at our connection scale.
         """
         connector = aiohttp.TCPConnector(resolver=aiohttp.resolver.ThreadedResolver())
-        return aiohttp.ClientSession(connector=connector, **kwargs)  # type: ignore[arg-type]  # **kwargs typed as object; aiohttp accepts arbitrary connector kwargs
+        return aiohttp.ClientSession(connector=connector)
 
     def _optional_api_key(self) -> str | None:
         """Return the injected API key, or None if not provided.

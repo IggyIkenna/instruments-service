@@ -22,7 +22,7 @@ import aiohttp.resolver
 logger = logging.getLogger(__name__)
 
 
-def _make_session(**kwargs: object) -> aiohttp.ClientSession:
+def _make_session() -> aiohttp.ClientSession:
     """Create an aiohttp session with ThreadedResolver.
 
     The default AsyncResolver (aiodns/c-ares) fails to resolve certain
@@ -30,7 +30,7 @@ def _make_session(**kwargs: object) -> aiohttp.ClientSession:
     uses the OS resolver via a thread pool and works everywhere.
     """
     connector = aiohttp.TCPConnector(resolver=aiohttp.resolver.ThreadedResolver())
-    return aiohttp.ClientSession(connector=connector, **kwargs)  # type: ignore[arg-type]  # **kwargs typed as object; aiohttp accepts arbitrary connector kwargs
+    return aiohttp.ClientSession(connector=connector)
 
 
 # ── Protocol floor dates (conservative mainnet launch dates) ──────────
