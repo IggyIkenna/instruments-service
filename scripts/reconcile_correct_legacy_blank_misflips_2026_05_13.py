@@ -47,7 +47,6 @@ from datetime import datetime, timezone
 
 import pandas as pd
 from google.cloud import storage
-
 from unified_trading_library.instrument_lifecycle_loader import (  # noqa: qg-deep-import
     load_instrument_lifecycle,
 )

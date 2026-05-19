@@ -36,10 +36,11 @@ import asyncio
 import logging
 import sys
 
+from unified_trading_library import get_secret
+
 from instruments_service.reference_data.adapters.sports.adapters.api_football import (
     ApiFootballAdapter,
 )
-from unified_trading_library import get_secret
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("smoke_af_flattening")
