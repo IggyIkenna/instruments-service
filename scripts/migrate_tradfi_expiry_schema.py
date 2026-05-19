@@ -8,7 +8,7 @@ Phase 1B of tradfi_canonical_futures_contract_hard_required_fields_2026_05_13 fl
 options-chain parquets written *before* that schema change may have ``expiration=null``
 rows.  This script locates those rows and attempts to backfill via OCC symbol parsing
 (works for US equity options).  Rows that cannot be backfilled are reported and flagged
-with ``LEGACY_MIGRATION_MISSING_EXPIRY`` for operator review.
+with ``EXPECTED_LEGACY_MIGRATION_MISSING_EXPIRY`` for operator review.
 
 What it does
 ------------
@@ -18,7 +18,7 @@ What it does
    from the OCC 21-character symbol format used by US equity options.
 4. If parsed: fill ``expiration`` in-place; mark row as REPAIRED.
 5. If unparseable (CME futures options, non-OCC symbols): log as MISSING — operator must
-   decide re-fetch vs accept ``LEGACY_MIGRATION_MISSING_EXPIRY``.
+   decide re-fetch vs accept ``EXPECTED_LEGACY_MIGRATION_MISSING_EXPIRY``.
 6. In --apply mode: rewrite the parquet to GCS using server-side CAS
    (``if_generation_match``) for idempotency.
 
@@ -150,7 +150,7 @@ def _process_parquet(
         else:
             unresolvable += 1
             logger.warning(
-                "LEGACY_MIGRATION_MISSING_EXPIRY blob=%s idx=%s symbol=%r",
+                "EXPECTED_LEGACY_MIGRATION_MISSING_EXPIRY blob=%s idx=%s symbol=%r",
                 blob_name,
                 idx,
                 symbol,
@@ -270,7 +270,7 @@ def main() -> int:
 
     if total_unresolvable > 0:
         logger.warning(
-            "%d rows could not be repaired — flag with LEGACY_MIGRATION_MISSING_EXPIRY "
+            "%d rows could not be repaired — flag with EXPECTED_LEGACY_MIGRATION_MISSING_EXPIRY "
             "and schedule re-fetch via Databento RDC or accept as schema-incomplete.",
             total_unresolvable,
         )
