@@ -27,8 +27,6 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # Module loader (same pattern as test_enumerate_expected_universe.py)
@@ -69,7 +67,9 @@ def _make_manifest(rows: list[dict[str, object]]) -> pd.DataFrame:
     return pd.DataFrame(full_rows)
 
 
-def _make_blob(name: str = "lending_indices/aave_v3/ETHEREUM/date=2026-05-07/aave_v3_ETHEREUM_20260507.parquet") -> MagicMock:
+def _make_blob(
+    name: str = "lending_indices/aave_v3/ETHEREUM/date=2026-05-07/aave_v3_ETHEREUM_20260507.parquet",
+) -> MagicMock:
     blob = MagicMock()
     blob.name = name
     return blob
@@ -153,9 +153,7 @@ def test_pre_genesis_classification_uses_protocol_launch_dates() -> None:
 def test_post_genesis_phantom_classified_as_source_returned_zero() -> None:
     """Date after AAVEV3/ETHEREUM launch → SOURCE_RETURNED_ZERO."""
     reason = _mod._classify_phantom("AAVEV3", "ETHEREUM", "2024-03-01")
-    assert reason == "SOURCE_RETURNED_ZERO", (
-        f"Expected SOURCE_RETURNED_ZERO for 2024-03-01, got {reason!r}"
-    )
+    assert reason == "SOURCE_RETURNED_ZERO", f"Expected SOURCE_RETURNED_ZERO for 2024-03-01, got {reason!r}"
 
 
 def test_apply_flips_writes_typed_reason() -> None:
@@ -270,9 +268,7 @@ def test_idempotent_rerun() -> None:
     captured_mask = df["capture_status"].fillna("").astype(str) == "captured"
     captured_idx = df[captured_mask].index
 
-    assert len(captured_idx) == 0, (
-        "Already-empty_confirmed row should not appear in captured scope — re-run is a no-op"
-    )
+    assert len(captured_idx) == 0, "Already-empty_confirmed row should not appear in captured scope — re-run is a no-op"
 
 
 def test_protocols_filter_narrows_scan() -> None:

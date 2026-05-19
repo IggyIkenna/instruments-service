@@ -487,9 +487,7 @@ class TestGetWithRetry:
             patch("asyncio.sleep", new_callable=AsyncMock),
             pytest.raises(RuntimeError, match="attempts failed"),
         ):
-            await adapter._get_with_retry(
-                mock_session, "https://api.example.com/data"
-            )
+            await adapter._get_with_retry(mock_session, "https://api.example.com/data")
 
     @pytest.mark.asyncio
     async def test_get_with_retry_retryable_status_raises_after_max_attempts(self) -> None:
@@ -511,6 +509,4 @@ class TestGetWithRetry:
             patch("asyncio.sleep", new_callable=AsyncMock),
             pytest.raises(RuntimeError, match="429"),
         ):
-            await adapter._get_with_retry(
-                mock_session, "https://api.example.com/data"
-            )
+            await adapter._get_with_retry(mock_session, "https://api.example.com/data")
