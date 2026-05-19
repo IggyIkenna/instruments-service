@@ -104,11 +104,7 @@ def process_one(
     venue = df["venue"].astype(str)
     chain = df["chain"].fillna("").astype(str)
 
-    corrupt_mask = (
-        dt.isin(data_type_values)
-        & (venue == corrupt_venue)
-        & (chain == "")
-    )
+    corrupt_mask = dt.isin(data_type_values) & (venue == corrupt_venue) & (chain == "")
     corrupt_count = int(corrupt_mask.sum())
     logger.info(
         "[%s] corrupt rows (venue=%s, chain=empty, data_type∈%s): %d",
@@ -122,7 +118,11 @@ def process_one(
         logger.info("[%s] nothing to drop — already clean", full_bucket)
         return 0
 
-    sample_cols = [c for c in ("date", "venue", "chain", "data_type", "instrument_type", "capture_status", "written_at") if c in df.columns]
+    sample_cols = [
+        c
+        for c in ("date", "venue", "chain", "data_type", "instrument_type", "capture_status", "written_at")
+        if c in df.columns
+    ]
     logger.info(
         "[%s] sample 3 corrupt rows (cols=%s):\n%s",
         full_bucket,
@@ -157,11 +157,7 @@ def process_one(
         canon_dt = canon_df.get("data_type", pd.Series([], dtype=str)).astype(str)
         canon_venue = canon_df.get("venue", pd.Series([], dtype=str)).astype(str)
         canon_chain = canon_df.get("chain", pd.Series([], dtype=str)).fillna("").astype(str)
-        canon_corrupt = (
-            canon_dt.isin(data_type_values)
-            & (canon_venue == corrupt_venue)
-            & (canon_chain == "")
-        )
+        canon_corrupt = canon_dt.isin(data_type_values) & (canon_venue == corrupt_venue) & (canon_chain == "")
         canon_corrupt_count = int(canon_corrupt.sum())
         if canon_corrupt_count > 0:
             canon_clean = canon_df.loc[~canon_corrupt].copy()

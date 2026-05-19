@@ -134,10 +134,7 @@ def main() -> int:
         return 1
 
     bucket_name = args.bucket or BUCKETS[args.asset_group]
-    run_id = (
-        f"recon-correct-misflips-{args.asset_group}-"
-        f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
-    )
+    run_id = f"recon-correct-misflips-{args.asset_group}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
     _log_event(
         "RECONCILER_STARTED",
         asset_group=args.asset_group,
@@ -148,9 +145,7 @@ def main() -> int:
     )
 
     # Read main consolidated manifest.
-    logger.info(
-        "Loading manifest from gs://%s/_index/availability_index.parquet", bucket_name
-    )
+    logger.info("Loading manifest from gs://%s/_index/availability_index.parquet", bucket_name)
     client = storage.Client()
     bucket = client.bucket(bucket_name)
     blob = bucket.blob("_index/availability_index.parquet")
@@ -166,13 +161,10 @@ def main() -> int:
 
     status_col = df["capture_status"].astype(str).str.strip()
     reason_col = df["error_reason"].astype(str).str.strip()
-    mask = (status_col == "attempted_failed") & reason_col.str.contains(
-        "LegacyBlankErrorReasonError", na=False
-    )
+    mask = (status_col == "attempted_failed") & reason_col.str.contains("LegacyBlankErrorReasonError", na=False)
     n_candidates = int(mask.sum())
     logger.info(
-        "Candidate rows (attempted_failed AND error_reason contains LegacyBlankErrorReasonError): "
-        "%d / %d (%.2f%%)",
+        "Candidate rows (attempted_failed AND error_reason contains LegacyBlankErrorReasonError): %d / %d (%.2f%%)",
         n_candidates,
         len(df),
         100.0 * n_candidates / max(len(df), 1),
@@ -194,9 +186,7 @@ def main() -> int:
     if args.asset_group in {"cefi", "defi", "tradfi"}:
         logger.info("Loading per-instrument lifecycle bounds for %s catalog...", args.asset_group)
         instrument_lifecycle = load_instrument_lifecycle(args.asset_group, PROJECT_ID)
-        logger.info(
-            "Loaded %d (venue, instrument_key) lifecycle entries", len(instrument_lifecycle)
-        )
+        logger.info("Loaded %d (venue, instrument_key) lifecycle entries", len(instrument_lifecycle))
 
     # Re-classify each candidate.
     candidate_idx = df.index[mask]
@@ -219,15 +209,11 @@ def main() -> int:
         # If the classifier still returns attempted_failed/LegacyBlank (or any
         # attempted_failed variant) for this row, no upgrade is possible —
         # leave it alone. The row genuinely is attempted_failed.
-        is_upgrade_to_empty_confirmed = (
-            new_status == "empty_confirmed" and new_reason != "SOURCE_RETURNED_ZERO"
-        )
+        is_upgrade_to_empty_confirmed = new_status == "empty_confirmed" and new_reason != "SOURCE_RETURNED_ZERO"
         if not is_upgrade_to_empty_confirmed:
             n_no_change += 1
             continue
-        transition_key = (
-            f"attempted_failed/LegacyBlankErrorReasonError -> {new_status}/{new_reason}"
-        )
+        transition_key = f"attempted_failed/LegacyBlankErrorReasonError -> {new_status}/{new_reason}"
         transitions[transition_key] = transitions.get(transition_key, 0) + 1
         corrections.append(
             {
@@ -329,8 +315,7 @@ def main() -> int:
         n_corrections,
     )
     logger.info(
-        "Corrected %d rows in %.1fs; per-VM shard at gs://%s/%s. "
-        "Consolidator merges within ~5min.",
+        "Corrected %d rows in %.1fs; per-VM shard at gs://%s/%s. Consolidator merges within ~5min.",
         n_corrections,
         elapsed,
         bucket_name,
