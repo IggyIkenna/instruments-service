@@ -30,8 +30,10 @@ import json
 import logging
 import re
 import tempfile
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from datetime import date as date_type
+from typing import Protocol, cast
 
 import pandas as pd
 from unified_api_contracts import (
@@ -101,6 +103,7 @@ from instruments_service.reference_data.adapters.sports import create_sports_ref
 from instruments_service.reference_data.adapters.sports.adapters.api_football_reference import (
     _last_completed_fixture_ids as _urdi_completed_fixture_ids,
 )
+from instruments_service.reference_data.adapters.sports.adapters.footystats import FootystatsAdapter
 from instruments_service.reference_data.adapters.sports.adapters.soccerfootball_info import (
     detect_match_end_time as _sfi_detect_match_end_time,
 )
@@ -114,6 +117,13 @@ from instruments_service.reference_data.adapters.tradfi.futures_factory import (
 from instruments_service.reference_data.utils.evm_creation_resolver import EvmCacheSession
 
 logger = logging.getLogger(__name__)
+
+
+class _ModelDumpable(Protocol):
+    """Protocol for objects that expose a Pydantic-style .model_dump() method."""
+
+    def model_dump(self) -> dict[str, object]: ...
+
 
 _SERVICE_NAME: str = "instruments-service"
 
@@ -4115,14 +4125,21 @@ async def _fetch_sports_reference_data(
         # Per-entity failure tracking for honest-coverage: map entity → (failed_count, sample_error_code).
         entity_failures: dict[str, tuple[int, str]] = {name: (0, "") for name, _ in _per_fixture_entities}
 
-        async def _fetch_one(entity_name: str, fetch_fn: object, fid: int) -> None:
+        async def _fetch_one(
+            entity_name: str,
+            fetch_fn: Callable[[int], Awaitable[Sequence[object]]],
+            fid: int,
+        ) -> None:
             async with sem:
                 try:
-                    rows = await fetch_fn(fid)  # type: ignore[operator]  # fetch_fn typed as object; runtime value is always an async callable
+                    rows = await fetch_fn(fid)
                     for row in rows:
                         # Adapters return a mix of Pydantic models and plain dicts
                         # depending on whether the normalizer produces a typed model.
-                        d = row.model_dump() if hasattr(row, "model_dump") else row
+                        if hasattr(row, "model_dump"):
+                            d: dict[str, object] = cast(_ModelDumpable, row).model_dump()
+                        else:
+                            d = cast(dict[str, object], row)
                         entity_rows[entity_name].append(d)
                 except Exception as exc:
                     classify_and_emit_error(
@@ -4737,7 +4754,7 @@ async def _fetch_footystats_predictions(
         from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
         from unified_api_contracts.sports import resolve_footystats_team
 
-        predictions = await adapter.get_fixture_predictions(date)  # type: ignore[attr-defined]  # adapter is a union of protocol types; method guaranteed by runtime dispatch
+        predictions = await cast(FootystatsAdapter, adapter).get_fixture_predictions(date)
         if predictions:
             df = pd.DataFrame([_coerce_adapter_output(p) for p in predictions])
             # PIT safety: FootyStats predictions publish alongside odds ~3 days before kickoff
@@ -5232,7 +5249,7 @@ async def _fetch_footystats_odds(
         from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
         from unified_api_contracts.sports import resolve_footystats_team
 
-        odds_rows = await adapter.get_fixture_odds_snapshot(date)  # type: ignore[attr-defined]  # adapter is a union of protocol types; method guaranteed by runtime dispatch
+        odds_rows = await cast(FootystatsAdapter, adapter).get_fixture_odds_snapshot(date)
         if odds_rows:
             df = pd.DataFrame(odds_rows)
             # PIT safety: FootyStats publishes odds ~3 days before kickoff (empirically verified

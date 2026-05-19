@@ -37,6 +37,7 @@ import logging
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timezone
+from typing import cast
 
 import pandas as pd
 from google.cloud import storage
@@ -176,12 +177,13 @@ def main() -> None:
     # Print per-asset-group summary to stdout for event-stream visibility
     print(f"\n=== Honest Coverage — {now_utc.strftime('%Y-%m-%d %H:%M')} UTC ===")
     print("  (reachable: captured / (captured + attempted_failed + expected_unattempted))")
-    for ag, counts in payload["by_asset_group"].items():  # type: ignore[union-attr]
-        pct = counts["coverage_pct"]  # type: ignore[index]
-        cap = counts["captured"]  # type: ignore[index]
-        af = counts["attempted_failed"]  # type: ignore[index]
-        eu = counts["expected_unattempted"]  # type: ignore[index]
-        reachable = cap + af + eu  # type: ignore[operator]
+    ag_counts = cast(dict[str, dict[str, int | float]], payload["by_asset_group"])
+    for ag, counts in ag_counts.items():
+        pct = counts["coverage_pct"]
+        cap = counts["captured"]
+        af = counts["attempted_failed"]
+        eu = counts["expected_unattempted"]
+        reachable = cap + af + eu
         print(f"  {ag:12s}: {pct:6.2f}%  ({cap:,}/{reachable:,} reachable)")
 
 
