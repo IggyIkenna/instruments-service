@@ -6,7 +6,6 @@ allocator is responsible for the observed 1.8 GB -> 17 GB chunk-RAM growth.
 
 Drops these into <out_dir>:
   rss.log              — psutil RSS / VMS sampled every <sample_secs>
-  snapshot_<n>.bin     — pickled tracemalloc snapshots, taken every <snapshot_secs>
   top_allocators.txt   — sorted "filename:line size_diff" produced from snapshot diffs
   summary.json         — start/end RSS, peak RSS, top allocators, OOM flag
 
@@ -26,7 +25,6 @@ import json
 import linecache
 import logging
 import os
-import pickle
 import signal
 import sys
 import threading
@@ -44,6 +42,7 @@ _out_dir: Path | None = None
 _snapshot_interval = 300  # 5 min
 _rss_interval = 30  # 30 s
 _snapshot_counter = 0
+_snapshots: list[tracemalloc.Snapshot] = []
 _peak_rss = 0
 _oom_flag = False
 
@@ -72,40 +71,29 @@ def _rss_sampler(pid: int, log_path: Path) -> None:
 def _snapshot_scheduler() -> None:
     """Take a tracemalloc snapshot every _snapshot_interval seconds."""
     global _snapshot_counter
-    assert _out_dir is not None
     while not _stop_event.wait(_snapshot_interval):
         snap = tracemalloc.take_snapshot()
         _snapshot_counter += 1
-        path = _out_dir / f"snapshot_{_snapshot_counter:03d}.bin"
-        with path.open("wb") as f:
-            pickle.dump(snap, f)
-        logger.info("snapshot %d written: %s (%d traces)", _snapshot_counter, path, len(snap.traces))
+        _snapshots.append(snap)
+        logger.info("snapshot %d captured (%d traces)", _snapshot_counter, len(snap.traces))
 
 
-def _take_final_snapshot() -> Path:
+def _take_final_snapshot() -> None:
     """Force one last snapshot regardless of timer state."""
     global _snapshot_counter
-    assert _out_dir is not None
     _snapshot_counter += 1
     snap = tracemalloc.take_snapshot()
-    path = _out_dir / f"snapshot_{_snapshot_counter:03d}_final.bin"
-    with path.open("wb") as f:
-        pickle.dump(snap, f)
-    logger.info("final snapshot written: %s (%d traces)", path, len(snap.traces))
-    return path
+    _snapshots.append(snap)
+    logger.info("final snapshot %d captured (%d traces)", _snapshot_counter, len(snap.traces))
 
 
 def _diff_first_vs_last() -> str:
-    """Build a top-30 allocator-growth report from snapshot_001 vs final snapshot."""
-    assert _out_dir is not None
-    snaps = sorted(_out_dir.glob("snapshot_*.bin"))
-    if len(snaps) < 2:
+    """Build a top-30 allocator-growth report from first vs final in-memory snapshot."""
+    if len(_snapshots) < 2:
         return "ONLY_ONE_SNAPSHOT — cannot diff. RSS log shows growth shape; snapshot is point-in-time."
 
-    with snaps[0].open("rb") as f:
-        first = pickle.load(f)
-    with snaps[-1].open("rb") as f:
-        last = pickle.load(f)
+    first = _snapshots[0]
+    last = _snapshots[-1]
 
     diffs = last.compare_to(first, "filename")
     lines = ["=== top 30 file-level growth (last - first) ==="]
@@ -176,8 +164,8 @@ def main() -> int:
 
     # Capture baseline immediately (before service imports).
     pre_import_snap = tracemalloc.take_snapshot()
-    with (_out_dir / "snapshot_000_preimport.bin").open("wb") as f:
-        pickle.dump(pre_import_snap, f)
+    _snapshots.append(pre_import_snap)
+    logger.info("pre-import snapshot captured (%d traces)", len(pre_import_snap.traces))
 
     # Spin up samplers.
     pid = os.getpid()
