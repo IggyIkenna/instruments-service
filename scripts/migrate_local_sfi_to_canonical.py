@@ -58,6 +58,7 @@ import argparse
 import io
 import logging
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
@@ -328,7 +329,7 @@ def main() -> int:
     p.add_argument(
         "--lookup-cache",
         type=str,
-        default="/tmp/sfi_fixture_lookup.parquet",
+        default=str(Path(tempfile.gettempdir()) / "sfi_fixture_lookup.parquet"),
         help="Local parquet cache for the canonical fixture lookup. Re-runs skip the 22-min scan.",
     )
     p.add_argument("--rebuild-lookup", action="store_true", help="Force rebuild of lookup cache.")
