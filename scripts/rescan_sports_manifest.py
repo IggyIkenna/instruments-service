@@ -24,8 +24,10 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pandas as pd
 from google.cloud import storage
@@ -216,7 +218,7 @@ def main() -> None:
     existing_entries: list[dict[str, str | int]] = []
     if index_blob.exists():
         logger.info("Reading existing index to preserve non-sports entries...")
-        local_path = "/tmp/_existing_manifest.parquet"
+        local_path = str(Path(tempfile.gettempdir()) / "_existing_manifest.parquet")
         index_blob.download_to_filename(local_path)
         existing_df = pd.read_parquet(local_path)
         # Keep entries from other services (not instruments-service sports rescan)
@@ -227,7 +229,7 @@ def main() -> None:
 
     # Combine: new sports entries + preserved non-sports entries
     combined = pd.DataFrame(all_entries + existing_entries)
-    local_out = "/tmp/_new_manifest.parquet"
+    local_out = str(Path(tempfile.gettempdir()) / "_new_manifest.parquet")
     combined.to_parquet(local_out, index=False)
     index_blob.upload_from_filename(local_out)
     logger.info("Wrote new index: %d total entries to %s/%s", len(combined), args.bucket, INDEX_BLOB)
