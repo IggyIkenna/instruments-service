@@ -89,7 +89,16 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
         #   (d) top-level + category= hive (older Tardis adapter)
         # Earlier audit only probed (a) + (b) and false-positived 130k rows
         # whose data lives at (c)/(d). 2026-05-03: extended to all 4 shapes.
+        # Axis-10 (2026-05-19): Phase-3 GCS migration prepended pipeline_mode=
+        # before asset_group=; probe canonical + legacy hive-key under each
+        # batch pipeline_mode used for CeFi data sources.
         "prefix_tpls": [
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_databento/asset_group=cefi/venue={venue}/"
+            "instrument_type={instrument_type}/data_type={data_type}/",
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_tardis/asset_group=cefi/venue={venue}/"
+            "instrument_type={instrument_type}/data_type={data_type}/",
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_hyperliquid_rest/asset_group=cefi/venue={venue}/"
+            "instrument_type={instrument_type}/data_type={data_type}/",
             "raw_tick_data/by_date/day={date}/asset_group=cefi/venue={venue}/"
             "instrument_type={instrument_type}/data_type={data_type}/",
             "raw_tick_data/by_date/day={date}/category=cefi/venue={venue}/"
@@ -104,7 +113,23 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
         # DeFi layout has venue + chain (no instrument_type segment in older
         # paths). Probe new + legacy hive keys + no-asset-group + top-level
         # (no raw_tick_data/by_date/ prefix) variants.
+        # Axis-10 (2026-05-19): Phase-3 migration prepended pipeline_mode=
+        # before asset_group=; DeFi uses onchain/subgraph/REST batch sources.
         "prefix_tpls": [
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_onchain_rpc/asset_group=defi/venue={venue}/"
+            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_onchain_subgraph/asset_group=defi/venue={venue}/"
+            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_hyperliquid_rest/asset_group=defi/venue={venue}/"
+            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_chainlink/asset_group=defi/venue={venue}/"
+            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_pyth_hermes/asset_group=defi/venue={venue}/"
+            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_helius_rpc/asset_group=defi/venue={venue}/"
+            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_solana_rpc/asset_group=defi/venue={venue}/"
+            "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
             "raw_tick_data/by_date/day={date}/asset_group=defi/venue={venue}/"
             "chain={chain}/instrument_type={instrument_type}/data_type={data_type}/",
             "raw_tick_data/by_date/day={date}/category=defi/venue={venue}/"
@@ -140,7 +165,15 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
     "tradfi": {
         "bucket": f"market-data-tick-tradfi-{PROJECT_ID}",
         "index": "_index/availability_index.parquet",
+        # Axis-10 (2026-05-19): Phase-3 migration prepended pipeline_mode=
+        # before asset_group=; TradFi data source is Databento exclusively.
+        # GCS confirmed: raw_tick_data/by_date/day=*/pipeline_mode=batch_databento/
+        # asset_group=tradfi/ exists post-migration; old asset_group=tradfi/ is gone.
         "prefix_tpls": [
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_databento/asset_group=tradfi/venue={venue}/"
+            "instrument_type={instrument_type}/data_type={data_type}/",
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_tardis/asset_group=tradfi/venue={venue}/"
+            "instrument_type={instrument_type}/data_type={data_type}/",
             "raw_tick_data/by_date/day={date}/asset_group=tradfi/venue={venue}/"
             "instrument_type={instrument_type}/data_type={data_type}/",
             "raw_tick_data/by_date/day={date}/category=tradfi/venue={venue}/"
@@ -162,7 +195,11 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
         # logic below verifies ``venue={V}/`` + ``data_type={DT}/`` membership
         # (instrument_type check is skipped for ``prediction_market`` rows
         # because the segment doesn't exist on disk).
+        # Axis-10 (2026-05-19): Phase-3 migration prepended pipeline_mode=
+        # before asset_group=; Polymarket sources are CLOB + Gamma API.
         "prefix_tpls": [
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_polymarket_clob/asset_group=prediction/",
+            "raw_tick_data/by_date/day={date}/pipeline_mode=batch_polymarket_gamma_api/asset_group=prediction/",
             "raw_tick_data/by_date/day={date}/asset_group=prediction/",
             "raw_tick_data/by_date/day={date}/category=prediction/",
             "day={date}/asset_group=prediction/",
@@ -274,7 +311,7 @@ def _venue_level_prefixes(asset_group: str, row: pd.Series) -> list[str]:
        lives under the legacy underscored prefix false-positive 100%
        as phantom (29,782 hits in the 2026-05-07 dry-run on AAVEV3 alone).
 
-    Axes 7-9 are handled in ``_audit_generic`` / ``_audit_sports`` directly:
+    Axes 7-10 are handled in ``_audit_generic`` / ``_audit_sports`` directly:
     7. **TradFi Databento per-schema-bundle** (2026-05-13) — ``trades`` and
        ``tbbo`` are downloaded and written as a paired set; accept either
        data_type needle as capture evidence. See ``_TRADFI_DATABENTO_PAIRED_SCHEMAS``.
@@ -283,6 +320,12 @@ def _venue_level_prefixes(asset_group: str, row: pd.Series) -> list[str]:
     9. **Sports pre-coverage + known-gap** (2026-05-13) — rows before source
        launch date or in registered gaps are not phantoms; excluded in
        ``_audit_sports`` via ``is_pre_launch_date`` + ``is_in_known_gap``.
+    10. **Phase-3 pipeline_mode= prefix** (2026-05-19) — the GCS migration
+        bundle (``gcs_migration_bundle_pipeline_mode_2026_05_08``) Phase 3
+        prepended ``pipeline_mode={batch_*}/`` before ``asset_group=`` on all
+        ``raw_tick_data/by_date/`` paths. Pre-migration paths had no
+        ``pipeline_mode=`` segment; post-migration canonical paths do. Both
+        shapes are covered by ``ASSET_GROUP_CONFIG[ag]["prefix_tpls"]``.
     """
     cfg = ASSET_GROUP_CONFIG[asset_group]
     raw_venue = str(row.get("venue", "") or "")
