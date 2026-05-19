@@ -231,10 +231,7 @@ def main() -> int:
         "--bucket",
         type=str,
         default="",
-        help=(
-            "Run on a single family bucket only (e.g. 'lending-indices'). "
-            "Default: all 6 affected buckets."
-        ),
+        help=("Run on a single family bucket only (e.g. 'lending-indices'). Default: all 6 affected buckets."),
     )
     p.add_argument(
         "--project-id",

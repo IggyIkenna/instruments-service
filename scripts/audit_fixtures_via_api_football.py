@@ -328,9 +328,7 @@ def _checkpoint_truth_set(
     buf = io.BytesIO()
     truth_df.to_parquet(buf, index=False, engine="pyarrow")
     buf.seek(0)
-    storage_client.upload_bytes(
-        bucket, _audit_blob("fixtures_truthset", run_ts, "parquet"), buf.read()
-    )
+    storage_client.upload_bytes(bucket, _audit_blob("fixtures_truthset", run_ts, "parquet"), buf.read())
 
 
 # ---------------------------------------------------------------------------

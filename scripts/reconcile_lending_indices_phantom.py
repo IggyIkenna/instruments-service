@@ -270,10 +270,7 @@ def main() -> int:  # noqa: C901
         "--protocols",
         type=str,
         default="",
-        help=(
-            "Comma-separated protocol slugs to include "
-            "(default: all — aave_v3,spark,compound_v3)."
-        ),
+        help=("Comma-separated protocol slugs to include (default: all — aave_v3,spark,compound_v3)."),
     )
     p.add_argument(
         "--chains",
@@ -327,9 +324,7 @@ def main() -> int:  # noqa: C901
     # Protocol filter (default: all declared protocols).
     wanted_protocols: frozenset[str] | None = None
     if args.protocols:
-        raw_protos: frozenset[str] = frozenset(
-            q.strip().lower() for q in str(args.protocols).split(",") if q.strip()
-        )
+        raw_protos: frozenset[str] = frozenset(q.strip().lower() for q in str(args.protocols).split(",") if q.strip())
         unknown = raw_protos - _DEFAULT_PROTOCOLS
         if unknown:
             logger.warning(
@@ -392,9 +387,7 @@ def main() -> int:  # noqa: C901
     # plans/active/issues/lending_indices_data_type_vocabulary_drift_2026_05_16.md).
     if "data_type" in df.columns:
         dt_str = df["data_type"].fillna("").astype(str)
-        captured_mask = captured_mask & (
-            (dt_str == "lending_indices") | (dt_str == "lending-indices")
-        )
+        captured_mask = captured_mask & ((dt_str == "lending_indices") | (dt_str == "lending-indices"))
 
     captured_idx = df[captured_mask].index
     logger.info("Captured rows in scope: %d", len(captured_idx))

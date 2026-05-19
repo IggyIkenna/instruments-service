@@ -94,10 +94,12 @@ def _prefix_for(asset_group: str, date_str: str, venue: str, chain: str) -> tupl
         f"raw_tick_data/by_date/day={date_str}/category={asset_group}/venue={venue}/",
     ]
     if chain:
-        bases.extend([
-            f"raw_tick_data/by_date/day={date_str}/asset_group={asset_group}/venue={venue}/chain={chain}/",
-            f"raw_tick_data/by_date/day={date_str}/category={asset_group}/venue={venue}/chain={chain}/",
-        ])
+        bases.extend(
+            [
+                f"raw_tick_data/by_date/day={date_str}/asset_group={asset_group}/venue={venue}/chain={chain}/",
+                f"raw_tick_data/by_date/day={date_str}/category={asset_group}/venue={venue}/chain={chain}/",
+            ]
+        )
     return tuple(bases)
 
 
@@ -115,9 +117,7 @@ def _bulk_prefix_check(
         date_str, venue, chain = key
         for prefix in _prefix_for(asset_group, date_str, venue, chain):
             try:
-                blobs = list(bucket.client.list_blobs(
-                    bucket, prefix=prefix, max_results=1, timeout=30
-                ))
+                blobs = list(bucket.client.list_blobs(bucket, prefix=prefix, max_results=1, timeout=30))
                 if blobs:
                     return key, True
             except Exception as exc:  # noqa: BLE001 — defensive against transient GCS errors
@@ -139,8 +139,12 @@ def _bulk_prefix_check(
             result[key] = exists
             completed += 1
             if completed % 500 == 0:
-                logger.info("  %d/%d prefixes checked (%.1f%% present)",
-                            completed, len(unique), 100.0 * sum(result.values()) / len(result))
+                logger.info(
+                    "  %d/%d prefixes checked (%.1f%% present)",
+                    completed,
+                    len(unique),
+                    100.0 * sum(result.values()) / len(result),
+                )
     return result
 
 
@@ -171,10 +175,7 @@ def main() -> int:
         return 1
 
     bucket_name = args.bucket or BUCKETS[args.asset_group]
-    run_id = (
-        f"recon-att-failed-to-captured-{args.asset_group}-"
-        f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
-    )
+    run_id = f"recon-att-failed-to-captured-{args.asset_group}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
     _log_event(
         "RECONCILER_STARTED",
         asset_group=args.asset_group,
@@ -198,7 +199,9 @@ def main() -> int:
     n_candidates = int(mask.sum())
     logger.info(
         "Candidate attempted_failed rows: %d / %d (%.2f%%)",
-        n_candidates, len(df), 100.0 * n_candidates / max(len(df), 1),
+        n_candidates,
+        len(df),
+        100.0 * n_candidates / max(len(df), 1),
     )
     if n_candidates == 0:
         logger.info("No candidates.")
@@ -220,7 +223,9 @@ def main() -> int:
     n_prefixes_with_data = sum(existence.values())
     logger.info(
         "Prefixes with data: %d / %d (%.2f%%)",
-        n_prefixes_with_data, len(existence), 100.0 * n_prefixes_with_data / max(len(existence), 1),
+        n_prefixes_with_data,
+        len(existence),
+        100.0 * n_prefixes_with_data / max(len(existence), 1),
     )
 
     flips: list[dict[str, object]] = []
@@ -232,16 +237,18 @@ def main() -> int:
         key = (date_str, venue, chain)
         if not existence.get(key, False):
             continue
-        flips.append({
-            "row_index": int(idx),
-            "date": date_str,
-            "venue": venue,
-            "chain": chain,
-            "data_type": str(row.get("data_type", "")),
-            "instrument_id": str(row.get("instrument_id", ""))[:50],
-            "old_status": "attempted_failed",
-            "new_status": "captured",
-        })
+        flips.append(
+            {
+                "row_index": int(idx),
+                "date": date_str,
+                "venue": venue,
+                "chain": chain,
+                "data_type": str(row.get("data_type", "")),
+                "instrument_id": str(row.get("instrument_id", ""))[:50],
+                "old_status": "attempted_failed",
+                "new_status": "captured",
+            }
+        )
 
     n_flips = len(flips)
     logger.info("Flips proposed: %d (attempted_failed → captured)", n_flips)
@@ -251,7 +258,9 @@ def main() -> int:
         logger.info("Report: %s", report)
     _log_event(
         "RECONCILER_PROGRESS",
-        asset_group=args.asset_group, candidates=n_candidates, flips=n_flips,
+        asset_group=args.asset_group,
+        candidates=n_candidates,
+        flips=n_flips,
     )
     if n_flips == 0:
         _log_event("RECONCILER_COMPLETED", asset_group=args.asset_group, candidates=n_candidates, flipped=0)
@@ -262,7 +271,9 @@ def main() -> int:
         return 1
     if not args.apply_flips:
         logger.info("Dry-run complete. Pass --apply-flips to commit.")
-        _log_event("RECONCILER_COMPLETED", asset_group=args.asset_group, candidates=n_candidates, flipped=0, dry_run=True)
+        _log_event(
+            "RECONCILER_COMPLETED", asset_group=args.asset_group, candidates=n_candidates, flipped=0, dry_run=True
+        )
         return 0
 
     # Apply
@@ -282,12 +293,15 @@ def main() -> int:
     subset.to_parquet(buf, index=False)
     bucket.blob(per_vm_blob_path).upload_from_string(buf.getvalue(), content_type="application/octet-stream")
     elapsed = (datetime.now(timezone.utc) - started).total_seconds()
-    logger.info("Uploaded per-VM shard: gs://%s/%s (%d rows) in %.1fs",
-                bucket_name, per_vm_blob_path, n_flips, elapsed)
+    logger.info("Uploaded per-VM shard: gs://%s/%s (%d rows) in %.1fs", bucket_name, per_vm_blob_path, n_flips, elapsed)
     _log_event(
         "RECONCILER_COMPLETED",
-        asset_group=args.asset_group, candidates=n_candidates, flipped=n_flips,
-        per_vm_blob=per_vm_blob_path, run_id=run_id, elapsed_s=round(elapsed, 1),
+        asset_group=args.asset_group,
+        candidates=n_candidates,
+        flipped=n_flips,
+        per_vm_blob=per_vm_blob_path,
+        run_id=run_id,
+        elapsed_s=round(elapsed, 1),
     )
     return 0
 

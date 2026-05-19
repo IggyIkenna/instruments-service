@@ -110,9 +110,7 @@ def main() -> int:
         logger.error("--data-types resolved to empty set. Refusing.")
         return 1
 
-    if args.apply and (
-        os.environ.get("MANIFEST_PER_VM_SHARDS") != "true" or not os.environ.get("VM_NAME")
-    ):
+    if args.apply and (os.environ.get("MANIFEST_PER_VM_SHARDS") != "true" or not os.environ.get("VM_NAME")):
         logger.error(
             "--apply requires MANIFEST_PER_VM_SHARDS=true AND VM_NAME=<unique> per the manifest "
             "concurrency principle. Without per-VM isolation a multi-worker run clobbers the canonical "
@@ -140,8 +138,7 @@ def main() -> int:
 
     retired_mask = df["data_type"].fillna("").isin(retired_types)
     already_flipped_mask = retired_mask & (
-        (df["capture_status"].fillna("") == "empty_confirmed")
-        & (df["error_reason"].fillna("") == NEW_REASON)
+        (df["capture_status"].fillna("") == "empty_confirmed") & (df["error_reason"].fillna("") == NEW_REASON)
     )
     to_flip_mask = retired_mask & ~already_flipped_mask
 
