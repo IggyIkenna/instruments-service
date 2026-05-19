@@ -62,6 +62,26 @@ EVENTS_SERVICE = "instruments-service"
 
 ASSET_GROUPS_ALL: tuple[str, ...] = ("cefi", "defi", "tradfi", "sports", "prediction")
 
+# Pass → --data-types mapping for ordered reconciliation
+# (manifest_cross_asset_rescan_design_2026_05_08.md § "Reconciliation dependency ordering").
+# RESCAN_PASS="" (unset) or "all" = no data-type filter (backwards-compatible dry-run).
+PASS_DATA_TYPES: dict[str, str] = {
+    "1": "instruments,venue_trading_calendar",
+    "2": (
+        "ohlcv_1h,ohlcv_1m,ohlcv_24h,ohlcv_15m,trades,tbbo,book_snapshot_5,book_snapshot,"
+        "lending_rates,lst_yields,lending_indices,dex_pools,dex_pool_swaps,perp_funding,"
+        "oracle_prices,staking_yields,risk_params,rewards,flash_loan_events,governance_events,"
+        "liquidation_events,bridge_events,position_data,token_transfers,vault_share_price,"
+        "options_chain,futures_chain,prediction_canonical_question_group,MARKET_LIFECYCLE"
+    ),
+    # Pass 3 = MDPS pipeline_mode outputs. ohlcv_1h rows with pipeline_mode=pipeline
+    # are distinguished from MTDS rows at the reconciler level via the on-disk path probe.
+    "3": "ohlcv_1h",
+    # Pass 4 = features families. Data-types TBD (vary per family + asset_group);
+    # empty string = all remaining rows not already flipped by passes 1-3 (idempotent).
+    "4": "",
+}
+
 
 def _env_flag(name: str, *, default: bool = False) -> bool:
     """Read a boolean env var (true/1/yes vs everything else)."""
@@ -104,6 +124,18 @@ def _reconcile_script() -> Path:
     return candidate
 
 
+def _pass_data_types() -> str:
+    """Return the --data-types filter string for the current RESCAN_PASS env var.
+
+    RESCAN_PASS is set by the launcher when running a specific ordered pass (1-4).
+    Unset or "all" means no filter (backwards-compatible: reconciler scans everything).
+    """
+    rescan_pass = os.environ.get("RESCAN_PASS", "").strip()
+    if not rescan_pass or rescan_pass == "all":
+        return ""
+    return PASS_DATA_TYPES.get(rescan_pass, "")
+
+
 def _run_per_asset_group_phantom_audit(
     *,
     asset_group: str,
@@ -130,13 +162,19 @@ def _run_per_asset_group_phantom_audit(
     ]
     if not apply_flips:
         cmd.append("--dry-run")
+    data_types = _pass_data_types()
+    if data_types:
+        cmd.extend(["--data-types", data_types])
 
+    rescan_pass = os.environ.get("RESCAN_PASS", "all") or "all"
     log_event(
         "RESCAN_SHARD_STARTED",
         details={
             "asset_group": asset_group,
             "apply_flips": apply_flips,
             "vm_name": _vm_name(),
+            "rescan_pass": rescan_pass,
+            "data_types_filter": _pass_data_types() or "(all)",
         },
     )
 
