@@ -32,6 +32,10 @@ _BASE_URL = get_solana_protocol_url("marinade") or "https://api.marinade.finance
 _DEFAULT_CHAIN = "SOLANA"
 _MARINADE_DEPLOY_DATE = get_protocol_floor_date("marinade")
 
+# Archive metadata (is_mtds_contract_audit_2026_05_20 Phase 2).
+# MTDS handlers derive the APY/rate fetch URL from this field; hardcoding is banned.
+_MARINADE_APY_URL_TEMPLATE = "https://api.marinade.finance/msol/apy/365d"
+
 
 def _classify_marinade_error(exc: Exception, status: int | None = None) -> str:
     """Map a Marinade HTTP/network error to a UAC error code for classification."""
@@ -155,6 +159,8 @@ class MarinadeReferenceDataAdapter(BaseReferenceDataAdapter):
             underlying="SOL",
             available_from_datetime=_MARINADE_DEPLOY_DATE,
             base_asset_decimals=9,
+            listed_at=_MARINADE_DEPLOY_DATE.date() if _MARINADE_DEPLOY_DATE else None,
+            source_archive_url_template=_MARINADE_APY_URL_TEMPLATE,
         )
 
     def _build_native_stake_record(
@@ -181,6 +187,8 @@ class MarinadeReferenceDataAdapter(BaseReferenceDataAdapter):
             underlying="SOL",
             available_from_datetime=_MARINADE_DEPLOY_DATE,
             base_asset_decimals=9,
+            listed_at=_MARINADE_DEPLOY_DATE.date() if _MARINADE_DEPLOY_DATE else None,
+            source_archive_url_template=_MARINADE_APY_URL_TEMPLATE,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:

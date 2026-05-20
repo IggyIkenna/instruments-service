@@ -8,7 +8,7 @@ Reference: https://docs.drift.trade/
 """
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import cast
 
@@ -32,6 +32,34 @@ logger = logging.getLogger(__name__)
 _DATA_API_URL = get_solana_protocol_url("drift", "api_url") or "https://data.api.drift.trade"
 _DEFAULT_CHAIN = "SOLANA"
 _DRIFT_DEPLOY_DATE = get_protocol_floor_date("drift")
+
+# Archive metadata (is_mtds_contract_audit_2026_05_20 Phase 2).
+# MTDS handlers derive S3 fetch URLs from these fields; hardcoding in MTDS is banned.
+_DRIFT_PROGRAM_ID = "dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH"
+_DRIFT_S3_ARCHIVE_URL_TEMPLATE = (
+    f"https://drift-historical-data-v2.s3.eu-west-1.amazonaws.com/program/{_DRIFT_PROGRAM_ID}"
+    "/market/{market}/{record_type}/{year}/{day}"
+)
+_DRIFT_ARCHIVE_RECORD_TYPES: dict[str, str] = {
+    "trades": "tradeRecords",
+    "funding_rate": "fundingRateRecords",
+    "liquidations": "liquidationRecords",
+    "orders": "orderRecords",
+}
+# Drift V1 S3 archive stopped writing 2025-01-08 (direct S3 probe 2026-05-20).
+# Dates after this → EXPECTED_PAST_SOURCE_COVERAGE_END.
+_DRIFT_ARCHIVE_COVERAGE_START: dict[str, date] = {
+    "trades": date(2020, 9, 14),
+    "funding_rate": date(2021, 5, 1),
+    "liquidations": date(2020, 9, 14),
+    "orders": date(2020, 9, 14),
+}
+_DRIFT_ARCHIVE_COVERAGE_END: dict[str, date] = {
+    "trades": date(2025, 1, 8),
+    "funding_rate": date(2025, 1, 8),
+    "liquidations": date(2025, 1, 8),
+    "orders": date(2025, 1, 8),
+}
 
 
 def _classify_drift_error(exc: Exception, status: int | None = None) -> str:
@@ -173,6 +201,11 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
             status=InstrumentStatus.ACTIVE,
             available_from_datetime=_DRIFT_DEPLOY_DATE,
             timezone="UTC",
+            listed_at=_DRIFT_DEPLOY_DATE.date() if _DRIFT_DEPLOY_DATE else None,
+            source_archive_url_template=_DRIFT_S3_ARCHIVE_URL_TEMPLATE,
+            source_record_types=_DRIFT_ARCHIVE_RECORD_TYPES,
+            source_coverage_start=_DRIFT_ARCHIVE_COVERAGE_START,
+            source_coverage_end=_DRIFT_ARCHIVE_COVERAGE_END,
         )
 
     def _build_spot_record(
@@ -204,6 +237,11 @@ class DriftReferenceDataAdapter(BaseReferenceDataAdapter):
             status=InstrumentStatus.ACTIVE,
             available_from_datetime=_DRIFT_DEPLOY_DATE,
             timezone="UTC",
+            listed_at=_DRIFT_DEPLOY_DATE.date() if _DRIFT_DEPLOY_DATE else None,
+            source_archive_url_template=_DRIFT_S3_ARCHIVE_URL_TEMPLATE,
+            source_record_types=_DRIFT_ARCHIVE_RECORD_TYPES,
+            source_coverage_start=_DRIFT_ARCHIVE_COVERAGE_START,
+            source_coverage_end=_DRIFT_ARCHIVE_COVERAGE_END,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
