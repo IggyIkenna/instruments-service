@@ -154,7 +154,7 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
         if not address:
             return None
 
-        # Extract token symbols from tokenA/tokenB
+        # Extract token symbols and decimals from tokenA/tokenB
         token_a = pool.get("tokenA") or {}
         token_b = pool.get("tokenB") or {}
         sym_a = str(token_a.get("symbol", "")).upper() if isinstance(token_a, dict) else ""
@@ -168,6 +168,26 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
         tvl_raw = pool.get("tvl") or pool.get("liquidity") or 0
         tvl = float(str(tvl_raw)) if tvl_raw else 0
         if tvl < 10_000:  # $10k minimum TVL
+            return None
+
+        def _parse_dec(t: object) -> int | None:
+            if not isinstance(t, dict):
+                return None
+            raw = t.get("decimals")
+            if isinstance(raw, int):
+                return raw
+            if isinstance(raw, str) and raw.isdigit():
+                return int(raw)
+            return None
+
+        if base == sym_a:
+            base_decimals = _parse_dec(token_a)
+            quote_decimals = _parse_dec(token_b)
+        else:
+            base_decimals = _parse_dec(token_b)
+            quote_decimals = _parse_dec(token_a)
+
+        if base_decimals is None or quote_decimals is None:
             return None
 
         venue_tag = self.venue
@@ -190,6 +210,8 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             status=InstrumentStatus.ACTIVE,
             available_from_datetime=_ORCA_DEPLOY_DATE,
+            base_asset_decimals=base_decimals,
+            quote_asset_decimals=quote_decimals,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:

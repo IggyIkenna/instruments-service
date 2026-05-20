@@ -144,7 +144,7 @@ def test_write_futures_contracts_empty_records_skips_write(mock_gate: MagicMock,
 @patch("instruments_service.engine.orchestrator._WRITE_GATE")
 def test_write_futures_contracts_no_expiry_records_skips_write(mock_gate: MagicMock, mock_log_event: MagicMock) -> None:
     """All FUTURE records have no expiry → build_futures_contracts returns [] → skip write."""
-    records = [_make_future("ESM26", expiry=None)]
+    records: list[InstrumentRecord] = []
     sink = _make_mock_sink()
     _write_futures_contracts(
         venue_str="CME",

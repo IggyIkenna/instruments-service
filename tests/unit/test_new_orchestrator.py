@@ -21,6 +21,8 @@ def _make_record(venue: str = "AAVEV3-ETHEREUM", itype: str = "A_TOKEN") -> Inst
         quote_asset="USDC",
         base_asset_contract_address="0x" + "a" * 40,
         base_asset_decimals=18,
+        pool_address="0x" + "b" * 40 if itype == "POOL" else None,
+        quote_asset_decimals=6 if itype == "POOL" else None,
         available_from_datetime=datetime(2021, 3, 16, tzinfo=UTC),
     )
 

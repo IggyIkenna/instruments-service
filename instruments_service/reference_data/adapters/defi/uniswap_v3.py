@@ -435,6 +435,9 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         pool_fee_tier_bps = self._parse_fee_tier_bps(fee_tier)
         base_decimals = self._parse_decimals(base_token.get("decimals"))
         quote_decimals = self._parse_decimals(quote_token.get("decimals"))
+        if base_decimals is None or quote_decimals is None:
+            logger.warning("UniswapV3: skipping pool %s — missing token decimals", pool_id)
+            return None
         base_addr = self._parse_address(base_token.get("id"))
         quote_addr = self._parse_address(quote_token.get("id"))
         base_sym_onchain = self._parse_optional_str(base_token.get("symbol"))

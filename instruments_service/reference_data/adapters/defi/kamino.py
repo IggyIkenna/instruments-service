@@ -35,6 +35,32 @@ _BASE_URL = get_solana_protocol_url("kamino") or "https://api.kamino.finance"
 _DEFAULT_CHAIN = "SOLANA"
 _KAMINO_DEPLOY_DATE = get_protocol_floor_date("kamino")
 
+# Common SPL token decimals by symbol; fallback is 9 (Solana native default)
+_SPL_TOKEN_DECIMALS: dict[str, int] = {
+    "SOL": 9,
+    "WSOL": 9,
+    "USDC": 6,
+    "USDT": 6,
+    "BTC": 8,
+    "WBTC": 8,
+    "ETH": 8,
+    "WETH": 8,
+    "BONK": 5,
+    "JTO": 9,
+    "JUP": 6,
+    "ORCA": 6,
+    "RAY": 6,
+    "MNGO": 6,
+    "MSOL": 9,
+    "STSOL": 9,
+    "JITOSOL": 9,
+}
+
+
+def _resolve_spl_decimals(symbol: str) -> int:
+    """Return SPL token decimals by symbol. Fallback: 9 (Solana default)."""
+    return _SPL_TOKEN_DECIMALS.get(symbol.upper(), 9)
+
 
 def _classify_kamino_error(exc: Exception, status: int | None = None) -> str:
     """Map a Kamino HTTP/network error to a UAC error code for classification."""
@@ -185,6 +211,8 @@ class KaminoReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             status=InstrumentStatus.ACTIVE,
             available_from_datetime=_KAMINO_DEPLOY_DATE,
+            base_asset_decimals=_resolve_spl_decimals(sym_a),
+            quote_asset_decimals=_resolve_spl_decimals(sym_b),
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:

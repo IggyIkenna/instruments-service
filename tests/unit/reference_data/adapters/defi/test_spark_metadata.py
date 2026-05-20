@@ -276,8 +276,8 @@ class TestSparkMetadataPopulation:
         assert isinstance(token, dict)
         token["decimals"] = "not-a-number"
         records = _adapter()._build_market_records(market, "SPARK-ETHEREUM", _TEST_AVAILABLE_SINCE)
-        a_record = next(r for r in records if "A_TOKEN" in r.instrument_key)
-        assert a_record.base_asset_decimals is None
+        # hard_schema enforcement: invalid decimals skip the market entirely
+        assert records == []
 
     def test_missing_v_token_yields_none_debt_address(self) -> None:
         market = _usdc_market_fixture()

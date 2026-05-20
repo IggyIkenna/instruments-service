@@ -21,6 +21,7 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ...utils.defi_utils import resolve_evm_token_decimals
 from ...utils.evm_creation_resolver import (
     batch_resolve_evm_creation_timestamps,
     get_protocol_floor_date,
@@ -109,6 +110,7 @@ class EulerV2ReferenceDataAdapter(BaseReferenceDataAdapter):
                     option_type=None,
                     status=InstrumentStatus.ACTIVE,
                     available_from_datetime=available_since,
+                    base_asset_decimals=resolve_evm_token_decimals(collateral),
                 )
             )
 

@@ -321,7 +321,9 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
                     break
                 response_opt = PolygonOptionContractsResponse.model_validate(raw_json_opt)
                 for contract in response_opt.results or []:
-                    results.append(self._parse_option_contract(contract, now))
+                    record = self._parse_option_contract(contract, now)
+                    if record is not None:
+                        results.append(record)
                 url = response_opt.next_url
                 params = {}
                 pages += 1
@@ -331,12 +333,14 @@ class PolygonReferenceDataAdapter(BaseReferenceDataAdapter):
         self,
         contract: PolygonOptionContract,
         now: datetime,
-    ) -> InstrumentRecord:
+    ) -> InstrumentRecord | None:
         """Map a Polygon option contract to an InstrumentRecord."""
         underlying_ticker = contract.underlying_ticker or ""
         contract_type = contract.contract_type or "call"
         ticker_sym = contract.ticker or ""
         expiry = _parse_expiry_date(contract.expiration_date)
+        if expiry is None:
+            return None
         strike = Decimal(str(contract.strike_price)) if contract.strike_price is not None else None
         return InstrumentRecord(
             instrument_key=ticker_sym,
