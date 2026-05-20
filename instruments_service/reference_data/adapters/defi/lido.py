@@ -31,6 +31,9 @@ _LIDO_DEPLOY_DATE = datetime(2020, 12, 18, tzinfo=UTC)
 _STETH_ADDRESS = "0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84"
 _WSTETH_ADDRESS = "0x7f39C581F595B53c5cb19bD0b3f8dA6c935E2Ca0"
 
+# MTDS handlers derive the APY/rate fetch URL from this field; hardcoding is banned.
+_LIDO_APY_URL_TEMPLATE = "https://api.lido.fi/v1/protocol/steth/apr/last"
+
 _LST_TOKENS: list[dict[str, str]] = [
     {
         "symbol": "STETH",
@@ -101,6 +104,7 @@ class LidoReferenceDataAdapter(BaseReferenceDataAdapter):
                     underlying=underlying,
                     available_from_datetime=_LIDO_DEPLOY_DATE,
                     base_asset_decimals=18,
+                    source_archive_url_template=_LIDO_APY_URL_TEMPLATE,
                 )
             )
 

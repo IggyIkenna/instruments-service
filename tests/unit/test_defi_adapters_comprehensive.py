@@ -2201,10 +2201,12 @@ class TestJitoAdapter:
         stats_data = {"stakePoolStats": {"apy": 7.5}}
         with patch.object(adapter, "_get_with_retry", return_value=stats_data):
             results = await adapter.get_instruments()
-        assert len(results) == 1
+        assert len(results) == 2
         assert results[0].instrument_type == InstrumentType.STAKING
         assert results[0].base_asset == "SOL"
         assert results[0].quote_asset == "JITOSOL"
+        assert results[1].instrument_key.endswith(":JITO-MEV-AGGREGATE")
+        assert results[1].source_archive_url_template is not None
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:
