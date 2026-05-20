@@ -16,7 +16,7 @@ Reference: https://docs.raydium.io/
 """
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 import aiohttp
@@ -52,6 +52,12 @@ _RAYDIUM_AMM_V4_POOL_DATA_SIZE = 752
 
 # Program ID from UAC SSOT (SOLANA_DEFI_PROTOCOLS)
 _RAYDIUM_PROGRAM_ID: str = SOLANA_DEFI_PROTOCOLS["raydium"]["program_id"]
+
+# Historical OHLCV endpoint — parameterised by pool_id (AMM V4 pool pubkey).
+# Raydium V3 API returns candlestick data for each pool back to its creation.
+_RAYDIUM_HIST_OHLCV_TEMPLATE = "https://api-v3.raydium.io/pools/line/position?id={pool_id}&type=swap&timeType=day"
+_RAYDIUM_ARCHIVE_RECORD_TYPES: dict[str, str] = {"ohlcv": "swap"}
+_RAYDIUM_ARCHIVE_COVERAGE_START: dict[str, date] = {"ohlcv": date(2021, 2, 21)}
 
 
 def _classify_raydium_error(exc: Exception, status: int | None = None) -> str:
@@ -294,6 +300,10 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
             available_from_datetime=_RAYDIUM_DEPLOY_DATE,
             base_asset_decimals=0,
             quote_asset_decimals=0,
+            source_archive_url_template=_RAYDIUM_HIST_OHLCV_TEMPLATE,
+            source_record_types=_RAYDIUM_ARCHIVE_RECORD_TYPES,
+            source_coverage_start=_RAYDIUM_ARCHIVE_COVERAGE_START,
+            source_coverage_end=None,
         )
 
     def _build_pool_record(
@@ -356,6 +366,10 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
             available_from_datetime=available_since,
             base_asset_decimals=base_decimals,
             quote_asset_decimals=quote_decimals,
+            source_archive_url_template=_RAYDIUM_HIST_OHLCV_TEMPLATE,
+            source_record_types=_RAYDIUM_ARCHIVE_RECORD_TYPES,
+            source_coverage_start=_RAYDIUM_ARCHIVE_COVERAGE_START,
+            source_coverage_end=None,
         )
 
     def _extract_token_symbol(self, pool: dict[str, object], key: str) -> str:
