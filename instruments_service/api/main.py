@@ -17,6 +17,8 @@ from unified_trading_library import (
     make_health_router,
 )
 
+from instruments_service.api.data_status import router as data_status_router
+
 _last_processed_date: date | None = None
 
 
@@ -56,6 +58,7 @@ def create_app() -> FastAPI:
         data_freshness=_data_freshness,
     )
     app.include_router(health_router)
+    app.include_router(data_status_router)
     return app
 
 
