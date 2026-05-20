@@ -140,6 +140,16 @@ export CODEX_MAX_VIOLATIONS
 WORKSPACE_ROOT="$(cd "$(git rev-parse --show-toplevel)/.." && pwd)"
 source "${WORKSPACE_ROOT}/unified-trading-pm/scripts/quality-gates-base/base-service.sh"
 
+# STEP 5.70: IS-MTDS contract integrity gates (is_mtds_contract_audit_2026_05_20 Phase 7)
+log_section "[5.70/6] IS-MTDS CONTRACT INTEGRITY"
+QG_SCRIPTS_DIR="${WORKSPACE_ROOT}/unified-trading-pm/scripts/qg"
+if [[ -f "${QG_SCRIPTS_DIR}/no_silent_absence_handlers.sh" ]]; then
+    run_timeout 30 bash "${QG_SCRIPTS_DIR}/no_silent_absence_handlers.sh" "${WORKSPACE_ROOT}" \
+        || log_warn "IS-MTDS: silent-absence violation — see plans/active/is_mtds_contract_audit_2026_05_20.md Phase 3"
+else
+    log_warn "IS-MTDS QG scripts not found at ${QG_SCRIPTS_DIR}"
+fi
+
 # Codex enforcement: lifecycle triple (STARTED / STOPPED / FAILED) via UTL — not duplicated in service code.
 # See: unified-trading-pm/codex/03-observability/lifecycle-events.md § Lifecycle Event QG Enforcement
 log_section "[5.X/6] UEI LIFECYCLE EVENT ENFORCEMENT (STARTED/STOPPED/FAILED)"
