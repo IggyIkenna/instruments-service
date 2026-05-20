@@ -123,9 +123,7 @@ def test_should_skip_shard_skips_expected_unattempted_known_empty() -> None:
 def test_should_skip_shard_retries_expected_unattempted_pending_fetch() -> None:
     """expected_unattempted + non-EXPECTED_* reason = pending_fetch → retry (don't skip)."""
     manifest = MagicMock(spec=ManifestWriter)
-    manifest.lookup.return_value = _make_lookup_row(
-        CaptureStatus.EXPECTED_UNATTEMPTED.value, error_reason=""
-    )
+    manifest.lookup.return_value = _make_lookup_row(CaptureStatus.EXPECTED_UNATTEMPTED.value, error_reason="")
     assert _should_skip_shard(manifest, row_key={"date": "2026-04-19"}, force=False) is False
 
 

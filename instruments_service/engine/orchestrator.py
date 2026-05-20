@@ -643,9 +643,10 @@ def _should_skip_date_for_per_league(
         if prev.capture_status in (CaptureStatus.CAPTURED.value, CaptureStatus.EMPTY_CONFIRMED.value):
             continue
         # expected_unattempted + EXPECTED_* reason = known-empty → treat as covered
-        if prev.capture_status == CaptureStatus.EXPECTED_UNATTEMPTED.value:
-            if (prev.error_reason or "").startswith("EXPECTED_"):
-                continue
+        if prev.capture_status == CaptureStatus.EXPECTED_UNATTEMPTED.value and (prev.error_reason or "").startswith(
+            "EXPECTED_"
+        ):
+            continue
         return False
     return True
 
