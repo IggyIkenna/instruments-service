@@ -212,6 +212,10 @@ class OrcaReferenceDataAdapter(BaseReferenceDataAdapter):
             available_from_datetime=_ORCA_DEPLOY_DATE,
             base_asset_decimals=base_decimals,
             quote_asset_decimals=quote_decimals,
+            source_archive_url_template=None,
+            source_record_types=None,
+            source_coverage_start=None,
+            source_coverage_end=None,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
