@@ -36,6 +36,15 @@ _DATA_API_URL = get_solana_protocol_url("phoenix", "api_url") or "https://api.ph
 _DEFAULT_CHAIN = "SOLANA"
 _PHOENIX_DEPLOY_DATE = get_protocol_floor_date("phoenix")
 
+# Archive metadata (is_mtds_contract_audit_2026_05_20 Phase 2).
+# Phoenix REST API (api.phoenix.trade) is dead as of 2026-05-15.
+# Current tick-data source: Jupiter lite-api with dexes=Phoenix filter.
+# MTDS handlers derive the quote URL from this template rather than hardcoding.
+_PHOENIX_JUPITER_QUOTE_TEMPLATE = (
+    "https://lite-api.jup.ag/swap/v1/quote"
+    "?inputMint={base_mint}&outputMint={quote_mint}&amount={base_amount}&dexes=Phoenix"
+)
+
 
 def _classify_phoenix_error(exc: Exception, status: int | None = None) -> str:
     """Map a Phoenix HTTP/network error to a UAC error code for classification."""
@@ -210,6 +219,8 @@ class PhoenixReferenceDataAdapter(BaseReferenceDataAdapter):
             status=InstrumentStatus.ACTIVE,
             available_from_datetime=_PHOENIX_DEPLOY_DATE,
             timezone="UTC",
+            listed_at=_PHOENIX_DEPLOY_DATE.date() if _PHOENIX_DEPLOY_DATE else None,
+            source_archive_url_template=_PHOENIX_JUPITER_QUOTE_TEMPLATE,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:

@@ -32,6 +32,10 @@ _BASE_URL = get_solana_protocol_url("jito") or "https://kobe.mainnet.jito.networ
 _DEFAULT_CHAIN = "SOLANA"
 _JITO_DEPLOY_DATE = get_protocol_floor_date("jito")
 
+# Archive metadata (is_mtds_contract_audit_2026_05_20 Phase 2).
+# MTDS handlers derive the kobe API URL from this field; hardcoding is banned.
+_JITO_STAKE_POOL_API_TEMPLATE = "https://kobe.mainnet.jito.network/api/v1/stake_pool_stats"
+
 # JitoSOL token mint address on Solana mainnet
 _JITOSOL_MINT = "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn"
 
@@ -135,6 +139,8 @@ class JitoReferenceDataAdapter(BaseReferenceDataAdapter):
             underlying="SOL",
             available_from_datetime=_JITO_DEPLOY_DATE,
             base_asset_decimals=9,
+            listed_at=_JITO_DEPLOY_DATE.date() if _JITO_DEPLOY_DATE else None,
+            source_archive_url_template=_JITO_STAKE_POOL_API_TEMPLATE,
         )
 
         logger.info("Jito: fetched 1 staking instrument on %s", self._chain)
