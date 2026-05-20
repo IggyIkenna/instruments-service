@@ -33,10 +33,11 @@ from instruments_service.engine.orchestrator import (
 # ---------------------------------------------------------------------------
 
 
-def _make_lookup_row(status: str) -> MagicMock:
+def _make_lookup_row(status: str, error_reason: str = "") -> MagicMock:
     """Build a stand-in ``ManifestRow``-ish object for lookup() to return."""
     row = MagicMock()
     row.capture_status = status
+    row.error_reason = error_reason
     return row
 
 
@@ -108,6 +109,33 @@ def test_should_skip_shard_force_true_bypasses_lookup_entirely() -> None:
         is False
     )
     manifest.lookup.assert_not_called()
+
+
+def test_should_skip_shard_skips_expected_unattempted_known_empty() -> None:
+    """expected_unattempted + EXPECTED_* reason = known-empty → skip."""
+    manifest = MagicMock(spec=ManifestWriter)
+    manifest.lookup.return_value = _make_lookup_row(
+        CaptureStatus.EXPECTED_UNATTEMPTED.value, error_reason="EXPECTED_MARKET_CLOSED"
+    )
+    assert _should_skip_shard(manifest, row_key={"date": "2026-04-19"}, force=False) is True
+
+
+def test_should_skip_shard_retries_expected_unattempted_pending_fetch() -> None:
+    """expected_unattempted + non-EXPECTED_* reason = pending_fetch → retry (don't skip)."""
+    manifest = MagicMock(spec=ManifestWriter)
+    manifest.lookup.return_value = _make_lookup_row(
+        CaptureStatus.EXPECTED_UNATTEMPTED.value, error_reason=""
+    )
+    assert _should_skip_shard(manifest, row_key={"date": "2026-04-19"}, force=False) is False
+
+
+def test_should_skip_shard_retries_expected_unattempted_source_returned_zero() -> None:
+    """expected_unattempted + SOURCE_RETURNED_ZERO = pending_fetch → retry."""
+    manifest = MagicMock(spec=ManifestWriter)
+    manifest.lookup.return_value = _make_lookup_row(
+        CaptureStatus.EXPECTED_UNATTEMPTED.value, error_reason="SOURCE_RETURNED_ZERO"
+    )
+    assert _should_skip_shard(manifest, row_key={"date": "2026-04-19"}, force=False) is False
 
 
 def test_should_skip_shard_force_overrides_captured_prior() -> None:
