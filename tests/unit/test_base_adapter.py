@@ -351,6 +351,7 @@ class TestCCXTAdapter:
             contract_size=Decimal("1"),
             strike=Decimal("50000"),
             option_type="call",
+            expiry=datetime(2024, 12, 31, tzinfo=UTC),
             is_active=True,
             updated_at=datetime.now(UTC),
         )

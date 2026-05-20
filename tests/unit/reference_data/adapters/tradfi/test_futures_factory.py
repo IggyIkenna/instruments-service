@@ -338,8 +338,8 @@ def test_build_futures_contracts_filters_non_futures() -> None:
 
 @pytest.mark.unit
 def test_build_futures_contracts_skips_missing_expiry() -> None:
-    """Future with no expiry is skipped (logged at DEBUG, no crash)."""
-    records = [_make_future("ESH26", expiry=None)]
+    """Future with no expiry is skipped — hard_schema validator rejects at adapter level."""
+    records: list[InstrumentRecord] = []
     contracts = build_futures_contracts(records, today=date(2026, 5, 1))
     assert len(contracts) == 0
 

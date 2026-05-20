@@ -968,6 +968,7 @@ class TestCCXTAdapterComprehensive:
             "inverse": True,
             "precision": {},
             "limits": {},
+            "expiryDatetime": "2026-06-27T08:00:00Z",
         }
         result = adapter._parse_ccxt_market("BTC-50000-C", market, None)
         assert result is not None
@@ -1734,7 +1735,7 @@ class TestPolygonAdapterComprehensive:
     @pytest.mark.asyncio
     async def test_get_instruments_option_only(self) -> None:
         adapter = PolygonReferenceDataAdapter(api_key="key")
-        inst = _make_instrument(instrument_type="OPTION", venue="polygon")
+        inst = _make_instrument(instrument_type="OPTION", venue="polygon", expiry=datetime(2026, 6, 27, tzinfo=UTC))
         with (
             patch.object(adapter, "_fetch_tickers", return_value=[]),
             patch.object(adapter, "_fetch_options", return_value=[inst]),
@@ -2138,7 +2139,9 @@ class TestTradFiLiveAdapterComprehensive:
     @pytest.mark.asyncio
     async def test_get_instruments_filters_by_type(self) -> None:
         adapter = TradFiLiveReferenceDataAdapter(venue_filter="CME")
-        future = _make_instrument(venue="CME", instrument_type="FUTURE", raw_symbol="ESZ6")
+        future = _make_instrument(
+            venue="CME", instrument_type="FUTURE", raw_symbol="ESZ6", expiry=datetime(2026, 12, 19, tzinfo=UTC)
+        )
         spot = _make_instrument(venue="CME", instrument_type="SPOT_PAIR", raw_symbol="AAPL")
         with patch.object(adapter, "_read_most_recent_gcs_snapshot", return_value=[future, spot]):
             result = await adapter.get_instruments(instrument_type="FUTURE")
@@ -2250,8 +2253,8 @@ class TestTradFiLiveAdapterComprehensive:
             ]
         )
         records = _dataframe_to_instrument_records(df)
-        assert len(records) == 1
-        assert records[0].raw_symbol == "ESZ6"
+        # FUTURE with NaN expiry → None expiry → validator rejects → record skipped
+        assert len(records) == 0
 
     def test_dataframe_to_instrument_records_with_legs_json(self) -> None:
         import pandas as pd

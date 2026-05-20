@@ -284,7 +284,8 @@ class SparkReferenceDataAdapter(BaseReferenceDataAdapter):
         elif isinstance(decimals_raw, str) and decimals_raw.isdigit():
             decimals_int = int(decimals_raw)
         else:
-            decimals_int = None
+            logger.warning("Spark: skipping market %s — invalid/missing decimals %r", market.get("id"), decimals_raw)
+            return []
 
         market_id = str(market.get("id", "")) or None
 

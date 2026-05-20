@@ -97,6 +97,7 @@ def _defi_records() -> list[InstrumentRecord]:
             quote_asset="USDC",
             pool_address="0x" + "a" * 40,
             available_from_datetime=listing,
+            base_asset_decimals=6,
         ),
         InstrumentRecord(
             instrument_key="",
@@ -107,6 +108,8 @@ def _defi_records() -> list[InstrumentRecord]:
             quote_asset="WETH",
             pool_address="0x" + "a" * 40,
             available_from_datetime=listing,
+            base_asset_decimals=6,
+            quote_asset_decimals=18,
         ),
     ]
 

@@ -24,6 +24,9 @@ def _make_record(
     quote_asset: str = "USD",
     **kwargs: object,
 ) -> InstrumentRecord:
+    # FUTURE and OPTION require non-null expiry per hard_schema validator
+    if instrument_type in ("FUTURE", "OPTION") and "expiry" not in kwargs:
+        kwargs["expiry"] = datetime(2024, 12, 20, tzinfo=UTC)
     return InstrumentRecord(
         instrument_key=key,
         venue=venue,
