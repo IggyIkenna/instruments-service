@@ -57,7 +57,10 @@ def _run_coverage_status(argv: list[str] | None = None) -> None:  # pragma: no c
           ]
         }
     """
-    from unified_trading_library.manifest_writer import compute_coverage_for_bucket, read_availability_index  # pyright: ignore[reportUnknownVariableType]
+    from unified_trading_library import (  # pyright: ignore[reportUnknownVariableType]  # noqa: imports-inside-functions
+        compute_coverage_for_bucket,
+        read_availability_index,
+    )
 
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--asset-group", default=None)
@@ -81,12 +84,14 @@ def _run_coverage_status(argv: list[str] | None = None) -> None:  # pragma: no c
     rows: list[dict[str, object]] = []
     for dt in data_types:
         counts, ratio = compute_coverage_for_bucket(bucket, asset_group=asset_group, data_type=dt)
-        rows.append({
-            "asset_group": asset_group,
-            "data_type": dt,
-            "counts": counts._asdict(),
-            "coverage": round(ratio, 6),
-        })
+        rows.append(
+            {
+                "asset_group": asset_group,
+                "data_type": dt,
+                "counts": counts._asdict(),
+                "coverage": round(ratio, 6),
+            }
+        )
 
     print(json.dumps({"bucket": bucket, "rows": rows}, indent=2))
 
