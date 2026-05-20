@@ -80,6 +80,7 @@ class EthenaReferenceDataAdapter(BaseReferenceDataAdapter):
                 status=InstrumentStatus.ACTIVE,
                 underlying="USDe",
                 available_from_datetime=_ETHENA_DEPLOY_DATE,
+                base_asset_decimals=18,
             )
         ]
 

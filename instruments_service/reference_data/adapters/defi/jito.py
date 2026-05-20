@@ -134,6 +134,7 @@ class JitoReferenceDataAdapter(BaseReferenceDataAdapter):
             status=InstrumentStatus.ACTIVE,
             underlying="SOL",
             available_from_datetime=_JITO_DEPLOY_DATE,
+            base_asset_decimals=9,
         )
 
         logger.info("Jito: fetched 1 staking instrument on %s", self._chain)
