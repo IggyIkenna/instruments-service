@@ -173,6 +173,16 @@ if [[ -d "${QG_SCRIPTS_DIR}" ]]; then
         run_timeout 30 bash "${QG_SCRIPTS_DIR}/no_hardcoded_venue_universe.sh" "${WORKSPACE_ROOT}" \
             || log_warn "IS-MTDS: hardcoded venue universe violation — see plans/active/is_mtds_contract_audit_2026_05_20.md Phase 7"
     fi
+    if [[ -f "${QG_SCRIPTS_DIR}/no_inline_coverage_formula.sh" ]]; then
+        run_timeout 30 bash "${QG_SCRIPTS_DIR}/no_inline_coverage_formula.sh" "${WORKSPACE_ROOT}" \
+            || log_warn "Honest coverage: inline formula violation — see honest_coverage_formula_consolidation_2026_05_19.md Phase 6"
+    fi
+    if [[ -f "${QG_SCRIPTS_DIR}/honest_coverage_ratchet.sh" ]]; then
+        _RATCHET_BUCKET="instruments-store-defi-${GCP_PROJECT_ID:-central-element-323112}"
+        run_timeout 60 bash "${QG_SCRIPTS_DIR}/honest_coverage_ratchet.sh" \
+            "instruments-service" "${_RATCHET_BUCKET}" "defi" \
+            || log_warn "Honest coverage: IS defi coverage regression — see honest_coverage_formula_consolidation_2026_05_19.md Phase 6"
+    fi
 else
     log_warn "IS-MTDS QG scripts dir not found at ${QG_SCRIPTS_DIR}"
 fi
