@@ -183,6 +183,11 @@ if [[ -d "${QG_SCRIPTS_DIR}" ]]; then
             "instruments-service" "${_RATCHET_BUCKET}" "defi" \
             || log_warn "Honest coverage: IS defi coverage regression — see honest_coverage_formula_consolidation_2026_05_19.md Phase 6"
     fi
+    # STEP 5.83: adapter contract-call regression ratchet (lint_sweep_774602ea8 audit Phase 1)
+    if [[ -f "${QG_SCRIPTS_DIR}/no_adapter_contract_regression.sh" ]]; then
+        run_timeout 60 bash "${QG_SCRIPTS_DIR}/no_adapter_contract_regression.sh" "${WORKSPACE_ROOT}" \
+            || log_warn "Adapter contract-call regression — see plans/active/issues/lint_sweep_774602ea8_regression_audit_2026_05_20.md"
+    fi
 else
     log_warn "IS-MTDS QG scripts dir not found at ${QG_SCRIPTS_DIR}"
 fi
