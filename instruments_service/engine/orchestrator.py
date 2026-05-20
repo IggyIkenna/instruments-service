@@ -600,10 +600,12 @@ def _should_skip_shard(
     prev: ManifestRow | None = manifest.lookup(row_key)
     if prev is None:
         return False
-    return prev.capture_status in (
-        CaptureStatus.CAPTURED.value,
-        CaptureStatus.EMPTY_CONFIRMED.value,
-    )
+    if prev.capture_status in (CaptureStatus.CAPTURED.value, CaptureStatus.EMPTY_CONFIRMED.value):
+        return True
+    # expected_unattempted with EXPECTED_* reason = known-empty sentinel → skip (same as empty_confirmed)
+    if prev.capture_status == CaptureStatus.EXPECTED_UNATTEMPTED.value:
+        return (prev.error_reason or "").startswith("EXPECTED_")
+    return False
 
 
 def _should_skip_date_for_per_league(
@@ -638,11 +640,13 @@ def _should_skip_date_for_per_league(
         prev = manifest.lookup({"date": date, "data_type": data_type, "league_id": lid})
         if prev is None:
             return False
-        if prev.capture_status not in (
-            CaptureStatus.CAPTURED.value,
-            CaptureStatus.EMPTY_CONFIRMED.value,
-        ):
-            return False
+        if prev.capture_status in (CaptureStatus.CAPTURED.value, CaptureStatus.EMPTY_CONFIRMED.value):
+            continue
+        # expected_unattempted + EXPECTED_* reason = known-empty → treat as covered
+        if prev.capture_status == CaptureStatus.EXPECTED_UNATTEMPTED.value:
+            if (prev.error_reason or "").startswith("EXPECTED_"):
+                continue
+        return False
     return True
 
 
