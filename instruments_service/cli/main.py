@@ -29,13 +29,66 @@ Custom args (registered via extra_args_fn):
 from __future__ import annotations
 
 import argparse
+import json
+import sys
 
-from unified_trading_library import ServiceBootstrap
+import pandas as pd  # pyright: ignore[reportMissingImports]
+from unified_trading_library import ServiceBootstrap, get_write_bucket_name
 
 from instruments_service.cli.instruments_handler import InstrumentsHandler
 from instruments_service.config import get_config
 
 _SERVICE_NAME = "instruments-service"  # pragma: no cover
+
+
+def _run_coverage_status(argv: list[str] | None = None) -> None:  # pragma: no cover
+    """Print honest-coverage JSON for an instruments-service bucket.
+
+    Called when ``--operation=status`` is passed. Bypasses the ServiceBootstrap
+    date-loop — this is a read-only diagnostic, not a data-fetching operation.
+
+    Output shape (one JSON object to stdout):
+        {
+          "bucket": "<name>",
+          "rows": [
+            {"asset_group": "defi", "data_type": "DEX_POOLS",
+             "counts": {5 fields...}, "coverage": 0.9831},
+            ...
+          ]
+        }
+    """
+    from unified_trading_library.manifest_writer import compute_coverage_for_bucket, read_availability_index  # pyright: ignore[reportUnknownVariableType]
+
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--asset-group", default=None)
+    parser.add_argument("--bucket", default=None)
+    args, _ = parser.parse_known_args(argv)
+
+    asset_group: str | None = str(args.asset_group) if args.asset_group is not None else None  # pyright: ignore[reportAny]
+    bucket: str = str(args.bucket) if args.bucket else get_write_bucket_name("instruments", asset_group or "defi")  # pyright: ignore[reportAny]
+
+    try:
+        index: pd.DataFrame = read_availability_index(bucket)  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
+    except Exception as exc:
+        print(json.dumps({"error": str(exc), "bucket": bucket}), file=sys.stderr)
+        sys.exit(1)
+
+    if index.empty or "data_type" not in index.columns:  # pyright: ignore[reportUnknownMemberType]
+        print(json.dumps({"bucket": bucket, "rows": []}))
+        return
+
+    data_types: list[str] = sorted(str(v) for v in index["data_type"].dropna().unique())  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportUnknownArgumentType]
+    rows: list[dict[str, object]] = []
+    for dt in data_types:
+        counts, ratio = compute_coverage_for_bucket(bucket, asset_group=asset_group, data_type=dt)
+        rows.append({
+            "asset_group": asset_group,
+            "data_type": dt,
+            "counts": counts._asdict(),
+            "coverage": round(ratio, 6),
+        })
+
+    print(json.dumps({"bucket": bucket, "rows": rows}, indent=2))
 
 
 def _add_instruments_extra_args(parser: argparse.ArgumentParser) -> None:  # pragma: no cover
@@ -122,6 +175,11 @@ def _add_instruments_extra_args(parser: argparse.ArgumentParser) -> None:  # pra
 
 def main_service_cli() -> None:  # pragma: no cover
     """ServiceBootstrap entry point for instruments-service."""
+    # --operation=status is a read-only diagnostic; bypass the date-loop framework.
+    _argv = sys.argv[1:]
+    if "--operation=status" in _argv or ("--operation" in _argv and _argv[_argv.index("--operation") + 1] == "status"):
+        _run_coverage_status(_argv)
+        return
     ServiceBootstrap(
         service_name=_SERVICE_NAME,
         operations={"instruments": InstrumentsHandler},
