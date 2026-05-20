@@ -52,6 +52,17 @@ from ...schemas import (
 
 logger = logging.getLogger(__name__)
 
+
+def _parse_ibkr_expiry(s: str | None) -> datetime | None:
+    """Parse IBKR lastTradeDateOrContractMonth (YYYYMMDD) to UTC datetime."""
+    if not s:
+        return None
+    try:
+        return datetime.strptime(s[:8], "%Y%m%d").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
 # Map IBKR secType → canonical InstrumentType
 _SEC_TYPE_MAP: dict[str, InstrumentType] = {
     "STK": InstrumentType.SPOT_PAIR,
@@ -262,6 +273,9 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
         asset_group = _SEC_TYPE_asset_group_MAP.get(sec_type, AssetClass.EQUITY)
         currency = uac.currency or "USD"
         tick_size = Decimal(str(uac.minTick)) if uac.minTick else Decimal("0.01")
+        expiry = _parse_ibkr_expiry(uac.lastTradeDateOrContractMonth) if sec_type in ("FUT", "OPT", "FOP") else None
+        if instrument_type in (InstrumentType.FUTURE, InstrumentType.OPTION) and expiry is None:
+            return None
         return InstrumentRecord(
             instrument_key=f"{symbol}:{sec_type}:{currency}",
             symbol=symbol,
@@ -274,6 +288,7 @@ class IBKRReferenceDataAdapter(BaseReferenceDataAdapter):
             min_size=Decimal("1"),
             contract_size=Decimal(str(uac.multiplier)) if uac.multiplier else Decimal("1"),
             status=InstrumentStatus.ACTIVE,
+            expiry=expiry,
         )
 
     def _contract_details_to_instrument(

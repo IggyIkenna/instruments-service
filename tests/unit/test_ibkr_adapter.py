@@ -240,6 +240,7 @@ class TestIBKRAdapter:
             "exchange": "CME",
             "minTick": 0.25,
             "multiplier": "50",
+            "lastTradeDateOrContractMonth": "20260320",
         }
         result = adapter._contract_details_to_instrument(raw)
         assert result is not None

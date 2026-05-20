@@ -280,8 +280,8 @@ class TestUniswapV3Adapter:
             {
                 "id": "0xabc",
                 "feeTier": None,
-                "token0": {"symbol": "AAVE"},
-                "token1": {"symbol": "ETH"},
+                "token0": {"symbol": "AAVE", "decimals": "18"},
+                "token1": {"symbol": "ETH", "decimals": "18"},
             }
         )
         assert result is not None
@@ -523,8 +523,8 @@ class TestUniswapV3Adapter:
             "id": "0xalg",
             "feeZtO": "100",
             "feeOtZ": "200",
-            "token0": {"symbol": "UNI"},
-            "token1": {"symbol": "USDC"},
+            "token0": {"symbol": "UNI", "decimals": "18"},
+            "token1": {"symbol": "USDC", "decimals": "6"},
             "totalValueLockedUSD": "500000",
             "createdAtTimestamp": "1677000000",
         }
@@ -612,8 +612,8 @@ class TestRaydiumAdapter:
                 "data": [
                     {
                         "id": "pool_addr_1",
-                        "mintA": {"symbol": "SOL"},
-                        "mintB": {"symbol": "USDC"},
+                        "mintA": {"symbol": "SOL", "decimals": 9},
+                        "mintB": {"symbol": "USDC", "decimals": 6},
                         "tvl": 50000,
                         "openTime": "1677000000",
                         "type": "Concentrated",
@@ -876,6 +876,7 @@ class TestAaveV3Adapter:
                     {
                         "symbol": "GHO",
                         "underlyingAsset": "0xgho",
+                        "decimals": 18,
                         "borrowingEnabled": False,
                         "aToken": {"id": "0xatoken_gho"},
                     }
@@ -1039,8 +1040,8 @@ class TestUniswapV4Adapter:
             {
                 "id": "0xabc",
                 "feeTier": "500",
-                "token0": {"symbol": "UNI"},
-                "token1": {"symbol": "USDC"},
+                "token0": {"symbol": "UNI", "decimals": "18"},
+                "token1": {"symbol": "USDC", "decimals": "6"},
                 "createdAtTimestamp": "1677000000",
             }
         )
@@ -1261,8 +1262,8 @@ class TestOrcaAdapter:
             "whirlpools": [
                 {
                     "address": "wp_addr_1",
-                    "tokenA": {"symbol": "SOL"},
-                    "tokenB": {"symbol": "USDC"},
+                    "tokenA": {"symbol": "SOL", "decimals": 9},
+                    "tokenB": {"symbol": "USDC", "decimals": 6},
                     "tvl": 50000,
                     "tickSpacing": 64,
                 }
@@ -1668,8 +1669,8 @@ class TestUniswapV2Adapter:
         result = adapter._build_pair_record(
             {
                 "id": "0xpair",
-                "token0": {"symbol": "AAVE"},
-                "token1": {"symbol": "WETH"},
+                "token0": {"symbol": "AAVE", "decimals": "18"},
+                "token1": {"symbol": "WETH", "decimals": "18"},
                 "createdAtTimestamp": "1620000000",
             }
         )
@@ -1820,8 +1821,8 @@ class TestMorphoAdapter:
         record = MorphoReferenceDataAdapter._market_to_record(
             {
                 "uniqueKey": "0xkey123456",
-                "loanAsset": {"symbol": "USDC"},
-                "collateralAsset": {"symbol": "WETH"},
+                "loanAsset": {"symbol": "USDC", "decimals": 6},
+                "collateralAsset": {"symbol": "WETH", "decimals": 18},
             },
             "MORPHO-ETHEREUM",
         )
@@ -1891,8 +1892,8 @@ class TestBalancerAdapter:
                         "protocolVersion": 3,
                         "createTime": 1677000000,
                         "poolTokens": [
-                            {"address": "0xweth", "symbol": "WETH"},
-                            {"address": "0xusdc", "symbol": "USDC"},
+                            {"address": "0xweth", "symbol": "WETH", "decimals": "18"},
+                            {"address": "0xusdc", "symbol": "USDC", "decimals": "6"},
                         ],
                         "dynamicData": {"totalLiquidity": "5000000"},
                     }
@@ -1937,8 +1938,8 @@ class TestBalancerAdapter:
                 "address": "0xaddr",
                 "name": "Test Pool",
                 "poolTokens": [
-                    {"address": "0xt0", "symbol": "WETH"},
-                    {"address": "0xt1", "symbol": "USDC"},
+                    {"address": "0xt0", "symbol": "WETH", "decimals": "18"},
+                    {"address": "0xt1", "symbol": "USDC", "decimals": "6"},
                 ],
                 "createTime": 1677000000,
             }
@@ -1973,8 +1974,8 @@ class TestBalancerAdapter:
                 "address": "0xaddr",
                 "name": "",
                 "poolTokens": [
-                    {"symbol": "WETH"},
-                    {"symbol": "DAI"},
+                    {"symbol": "WETH", "decimals": "18"},
+                    {"symbol": "DAI", "decimals": "18"},
                 ],
             }
         )
@@ -2098,8 +2099,8 @@ class TestCurveAdapter:
                         "address": "0xcurvepool1",
                         "name": "3pool",
                         "coins": [
-                            {"symbol": "DAI", "address": "0xdai"},
-                            {"symbol": "USDC", "address": "0xusdc"},
+                            {"symbol": "DAI", "address": "0xdai", "decimals": "18"},
+                            {"symbol": "USDC", "address": "0xusdc", "decimals": "6"},
                         ],
                     }
                 ]
@@ -2171,7 +2172,7 @@ class TestCurveAdapter:
         }
         with patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(pool_data)):
             results = await adapter.get_instruments()
-        assert len(results) == 1  # Still creates record with "UNKNOWN" symbols
+        assert len(results) == 0  # Non-dict coins → missing decimals → validator rejects record
 
 
 # ── JitoReferenceDataAdapter ─────────────────────────────────────────────────
@@ -2702,8 +2703,8 @@ class TestTimestampResolution:
             "whirlpools": [
                 {
                     "address": "wp_addr_1",
-                    "tokenA": {"symbol": "SOL"},
-                    "tokenB": {"symbol": "USDC"},
+                    "tokenA": {"symbol": "SOL", "decimals": 9},
+                    "tokenB": {"symbol": "USDC", "decimals": 6},
                     "tvl": 50000,
                     "tickSpacing": 64,
                 }
@@ -2732,8 +2733,8 @@ class TestTimestampResolution:
                 "data": [
                     {
                         "id": "pool_1",
-                        "mintA": {"symbol": "SOL"},
-                        "mintB": {"symbol": "USDC"},
+                        "mintA": {"symbol": "SOL", "decimals": 9},
+                        "mintB": {"symbol": "USDC", "decimals": 6},
                         "tvl": 50000,
                         "openTime": "1677000000",
                         "type": "Standard",

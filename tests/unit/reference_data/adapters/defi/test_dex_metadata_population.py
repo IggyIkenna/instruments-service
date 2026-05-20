@@ -297,11 +297,8 @@ class TestParseHelperEdgeCases:
         assert isinstance(token1, dict)
         token1["decimals"] = "not-a-number"
         record = adapter._build_pool_record(pool)
-        assert record is not None
-        # token1 (WETH) maps onto the quote slot in this fixture; invalid
-        # decimals must yield None there. token0 (USDC) base slot stays valid.
-        assert record.base_asset_decimals == 6
-        assert record.quote_asset_decimals is None
+        # hard_schema enforcement: invalid quote decimals skip the pool entirely
+        assert record is None
 
     def test_v3_zero_fee_tier_yields_none(self) -> None:
         adapter = UniswapV3ReferenceDataAdapter(chain="ETHEREUM")

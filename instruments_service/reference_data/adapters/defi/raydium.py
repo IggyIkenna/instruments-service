@@ -292,6 +292,8 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             status=InstrumentStatus.DELISTED,
             available_from_datetime=_RAYDIUM_DEPLOY_DATE,
+            base_asset_decimals=0,
+            quote_asset_decimals=0,
         )
 
     def _build_pool_record(
@@ -320,6 +322,18 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
         # Raydium API returns openTime (Unix seconds) for pool creation
         available_since = parse_created_timestamp(pool.get("openTime")) or _RAYDIUM_DEPLOY_DATE
 
+        # base/quote align with sym_a/sym_b ordering after order_base_quote
+        if base == sym_a:
+            base_decimals = self._extract_token_decimals(pool, "mintA")
+            quote_decimals = self._extract_token_decimals(pool, "mintB")
+        else:
+            base_decimals = self._extract_token_decimals(pool, "mintB")
+            quote_decimals = self._extract_token_decimals(pool, "mintA")
+
+        if base_decimals is None or quote_decimals is None:
+            logger.warning("Raydium: skipping pool %s — missing token decimals", pool_id)
+            return None
+
         venue_tag = self.venue
         pool_type = str(pool.get("type", "Standard"))
         instrument_key = f"{venue_tag}:POOL:{base}-{quote}:{pool_type}"
@@ -340,6 +354,8 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
             option_type=None,
             status=InstrumentStatus.ACTIVE,
             available_from_datetime=available_since,
+            base_asset_decimals=base_decimals,
+            quote_asset_decimals=quote_decimals,
         )
 
     def _extract_token_symbol(self, pool: dict[str, object], key: str) -> str:
@@ -360,6 +376,19 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
             return str(flat_symbol).upper()
 
         return ""
+
+    @staticmethod
+    def _extract_token_decimals(pool: dict[str, object], key: str) -> int | None:
+        """Extract token decimals from nested mintA/mintB dict."""
+        token_data = pool.get(key)
+        if not isinstance(token_data, dict):
+            return None
+        raw = token_data.get("decimals")
+        if isinstance(raw, int):
+            return raw
+        if isinstance(raw, str) and raw.isdigit():
+            return int(raw)
+        return None
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         """Fetch a single instrument by identifier."""

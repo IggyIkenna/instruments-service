@@ -9,6 +9,52 @@ from datetime import UTC, datetime
 #: Tokens that act as quote/price denominators in DeFi pool pairs.
 DEFI_QUOTE_TOKENS: frozenset[str] = frozenset({"USDC", "USDT", "DAI", "WETH", "ETH", "WBTC", "USDE"})
 
+# Standard EVM token decimals (ERC-20 standard is 18; stablecoins and BTC wrappers differ).
+_EVM_TOKEN_DECIMALS: dict[str, int] = {
+    "USDC": 6,
+    "USDT": 6,
+    "USDE": 6,
+    "WBTC": 8,
+    "ETH": 18,
+    "WETH": 18,
+    "WSTETH": 18,
+    "STETH": 18,
+    "RETH": 18,
+    "DAI": 18,
+    "FRAX": 18,
+    "LUSD": 18,
+    "CRVUSD": 18,
+    "SUSD": 18,
+    "TUSD": 18,
+    "WBNB": 18,
+    "BNB": 18,
+    "AVAX": 18,
+    "WAVAX": 18,
+    "SAVAX": 18,
+    "WETHE": 18,
+    "BTCB": 18,
+    "ARB": 18,
+    "OP": 18,
+    "MATIC": 18,
+    "WMATIC": 18,
+    "AAVE": 18,
+    "UNI": 18,
+    "LINK": 18,
+    "CRV": 18,
+    "LDO": 18,
+    "SNX": 18,
+    "MKR": 18,
+    "COMP": 18,
+    "YFI": 18,
+    "CBETH": 18,
+    "MSOL": 18,
+}
+
+
+def resolve_evm_token_decimals(symbol: str) -> int:
+    """Return canonical ERC-20 decimals for a known token; default 18."""
+    return _EVM_TOKEN_DECIMALS.get(symbol.upper(), 18)
+
 
 def classify_graph_error(exc: Exception, status: int | None = None) -> str:
     """Map a The Graph / DeFi subgraph HTTP or network error to a UAC error code."""
