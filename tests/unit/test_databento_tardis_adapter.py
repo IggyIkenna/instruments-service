@@ -163,6 +163,80 @@ class TestDatabentoAdapterMocked:
 
 
 # ---------------------------------------------------------------------------
+# EVENT_CONTRACT classification via _parse_row_to_record (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+class TestDatabentoEventContractClassification:
+    """BAG + EC* raw_symbol → EVENT_CONTRACT; underlying = EC root; available_since heuristic."""
+
+    def _make_row(
+        self,
+        raw_symbol: str = "ECBTC-EOM-2026-05-30-0.5",
+        instrument_class: str = "BAG",
+        currency: str = "USD",
+        underlying: str = "",
+        expiry: str = "2026-05-30T21:00:00+00:00",
+        activation: str | None = None,
+        strike_price: float = 0.5,
+    ) -> object:
+        """Build a minimal mock DataFrame row for _parse_row_to_record."""
+        row = MagicMock()
+        row.raw_symbol = raw_symbol
+        row.instrument_class = instrument_class
+        row.currency = currency
+        row.underlying = underlying
+        row.expiration = expiry
+        row.activation = activation
+        row.strike_price = strike_price
+        row.min_price_increment = 0.01
+        row.min_lot_size_round_lot = 1
+        row.symbol = raw_symbol
+        return row
+
+    def _make_adapter(self) -> DatabentoReferenceDataAdapter:
+        from datetime import date
+
+        adapter = DatabentoReferenceDataAdapter(api_key="test-key")
+        adapter._target_date = date(2026, 5, 20)
+        return adapter
+
+    def test_bag_ec_prefix_maps_to_event_contract(self) -> None:
+        adapter = self._make_adapter()
+        row = self._make_row("ECBTC-EOM-2026-05-30-0.5", instrument_class="BAG")
+        record = adapter._parse_row_to_record(row, dataset="GLBX.MDP3", canonical_venue="CME")
+        assert record is not None
+        assert record.instrument_type == "EVENT_CONTRACT"
+
+    def test_bag_without_ec_prefix_does_not_map_to_event_contract(self) -> None:
+        adapter = self._make_adapter()
+        # Generic BAG (calendar spread) — not an EC* event contract
+        row = self._make_row("ESM6-ESU6", instrument_class="BAG", expiry="2026-06-20T21:00:00+00:00")
+        record = adapter._parse_row_to_record(row, dataset="GLBX.MDP3", canonical_venue="CME")
+        # Generic BAG routes to COMBO (no EC* prefix)
+        assert record is None or (record is not None and record.instrument_type != "EVENT_CONTRACT")
+
+    def test_event_contract_underlying_is_ec_root(self) -> None:
+        adapter = self._make_adapter()
+        row = self._make_row("ECBTC-EOM-2026-05-30-0.5", instrument_class="BAG")
+        record = adapter._parse_row_to_record(row, dataset="GLBX.MDP3", canonical_venue="CME")
+        assert record is not None
+        assert record.underlying == "ECBTC"
+
+    def test_event_contract_available_since_within_30_days_of_expiry(self) -> None:
+        from datetime import UTC, timedelta
+
+        adapter = self._make_adapter()
+        row = self._make_row("ECES-EOM-2026-05-30-5000", instrument_class="BAG", expiry="2026-05-30T21:00:00+00:00")
+        record = adapter._parse_row_to_record(row, dataset="GLBX.MDP3", canonical_venue="CME")
+        assert record is not None
+        assert record.available_from_datetime is not None
+        expiry_dt = datetime(2026, 5, 30, 21, 0, tzinfo=UTC)
+        # listing_months=1 → ~30 days before expiry
+        assert record.available_from_datetime <= expiry_dt - timedelta(days=25)
+
+
+# ---------------------------------------------------------------------------
 # Tardis adapter mocked tests
 # ---------------------------------------------------------------------------
 

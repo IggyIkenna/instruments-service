@@ -1017,6 +1017,9 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
 
         inst_class = str(getattr(row, "instrument_class", "E"))
         instrument_type = _CLASS_TO_TYPE.get(inst_class, InstrumentType.SPOT_PAIR)
+        # Databento returns CME event contracts (EC* roots) as instrument_class="BAG"
+        if inst_class == "BAG" and raw_symbol[:2] == "EC":
+            instrument_type = InstrumentType.EVENT_CONTRACT
         currency = str(getattr(row, "currency", "USD") or "USD")
 
         expiry = self._parse_expiry_from_row(row)
@@ -1027,6 +1030,8 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         # Derive from raw_symbol using registered exchange codes (parent symbols).
         if not underlying and instrument_type in (InstrumentType.FUTURE, InstrumentType.OPTION) and raw_symbol:
             underlying = _extract_underlying_from_symbol(raw_symbol)
+        if not underlying and instrument_type == InstrumentType.EVENT_CONTRACT and raw_symbol:
+            underlying = raw_symbol.split("-")[0]  # "ECBTC-EOM-2026-05-30-0.5" → "ECBTC"
         tick_size, lot_size = self._parse_tick_and_lot(row)
 
         if self._is_filtered_out(dataset, inst_class, expiry):
@@ -1123,9 +1128,15 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
 
         For equities/spot without expiry: fall back to venue floor date.
         """
-        if expiry is not None and instrument_type in (InstrumentType.FUTURE, InstrumentType.OPTION):
+        if expiry is not None and instrument_type in (
+            InstrumentType.FUTURE,
+            InstrumentType.OPTION,
+            InstrumentType.EVENT_CONTRACT,
+        ):
             # Listing period heuristic by venue
-            if instrument_type == InstrumentType.OPTION:
+            if instrument_type == InstrumentType.EVENT_CONTRACT:
+                listing_months = 1  # CME EC* daily binaries list ~30 days before resolution
+            elif instrument_type == InstrumentType.OPTION:
                 listing_months = 6  # options list closer to expiry
             elif canonical_venue == "CME":
                 listing_months = 18  # CME standard futures
