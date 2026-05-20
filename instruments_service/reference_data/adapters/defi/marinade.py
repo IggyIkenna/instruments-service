@@ -154,6 +154,7 @@ class MarinadeReferenceDataAdapter(BaseReferenceDataAdapter):
             status=InstrumentStatus.ACTIVE,
             underlying="SOL",
             available_from_datetime=_MARINADE_DEPLOY_DATE,
+            base_asset_decimals=9,
         )
 
     def _build_native_stake_record(
@@ -179,6 +180,7 @@ class MarinadeReferenceDataAdapter(BaseReferenceDataAdapter):
             status=InstrumentStatus.ACTIVE,
             underlying="SOL",
             available_from_datetime=_MARINADE_DEPLOY_DATE,
+            base_asset_decimals=9,
         )
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
