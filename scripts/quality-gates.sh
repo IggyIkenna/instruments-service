@@ -188,6 +188,16 @@ if [[ -d "${QG_SCRIPTS_DIR}" ]]; then
         run_timeout 60 bash "${QG_SCRIPTS_DIR}/no_adapter_contract_regression.sh" "${WORKSPACE_ROOT}" \
             || log_warn "Adapter contract-call regression — see plans/active/issues/lint_sweep_774602ea8_regression_audit_2026_05_20.md"
     fi
+    # STEP 5.84: schema-version compliance — no schema_version < 8 in service source (mega audit B1 Pattern 3)
+    if [[ -f "${QG_SCRIPTS_DIR}/no_legacy_schema_version.sh" ]]; then
+        run_timeout 30 bash "${QG_SCRIPTS_DIR}/no_legacy_schema_version.sh" "${WORKSPACE_ROOT}" \
+            || log_warn "Legacy schema_version < 8 in source — see codex/04-architecture/service-contract-audit-template.md § Pattern 3"
+    fi
+    # STEP 5.85: honest-absence reason taxonomy — no blank/string-literal record_empty reasons (mega audit B1 Pattern 4)
+    if [[ -f "${QG_SCRIPTS_DIR}/no_blank_empty_reason.sh" ]]; then
+        run_timeout 30 bash "${QG_SCRIPTS_DIR}/no_blank_empty_reason.sh" "${WORKSPACE_ROOT}" \
+            || log_warn "Blank or string-literal record_empty reason — use EmptyConfirmedReason enum. SSOT: service-contract-audit-template.md § Pattern 4"
+    fi
 else
     log_warn "IS-MTDS QG scripts dir not found at ${QG_SCRIPTS_DIR}"
 fi
