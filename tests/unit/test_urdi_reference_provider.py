@@ -28,6 +28,7 @@ def _make_record(venue: str = "MORPHO-ETHEREUM") -> object:
         base_asset="WETH",
         quote_asset="USDC",
         base_asset_contract_address="0x" + "a" * 40,
+        base_asset_decimals=18,
     )
 
 
