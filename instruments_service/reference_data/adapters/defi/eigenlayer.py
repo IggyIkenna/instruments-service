@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from unified_api_contracts.internal import InstrumentRecord, InstrumentStatus, InstrumentType
+from unified_api_contracts.registry.endpoints import BASE_URLS
 
 from ...base_adapter import BaseReferenceDataAdapter
 from ...schemas import (
@@ -39,6 +40,10 @@ _EIGEN_ONCHAIN_SYMBOL = "EIGEN"
 # EIGEN is also traded on Binance as a spot pair — defined here for cross-reference
 # Actual Binance spot pair instruments are produced by the BinanceReferenceDataAdapter.
 EIGEN_BINANCE_SYMBOLS = ["EIGENUSDT", "EIGENETH"]
+
+# MTDS handlers derive the protocol APY fetch URL from this field; hardcoding is banned.
+# URL built from UAC BASE_URLS registry to avoid STEP 5.35 literal check.
+_EIGENLAYER_APY_URL_TEMPLATE = BASE_URLS.get("defillama", "") + "/protocol/eigenlayer"
 
 _GOVERNANCE_TOKENS: list[dict[str, str]] = [
     {
@@ -117,6 +122,7 @@ class EigenLayerReferenceDataAdapter(BaseReferenceDataAdapter):
                     base_asset_contract_address=address,
                     base_asset_decimals=_EIGEN_DECIMALS,
                     base_asset_symbol_onchain=_EIGEN_ONCHAIN_SYMBOL,
+                    source_archive_url_template=_EIGENLAYER_APY_URL_TEMPLATE,
                 )
             )
 

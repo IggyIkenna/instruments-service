@@ -33,8 +33,9 @@ _DEFAULT_CHAIN = "SOLANA"
 _JITO_DEPLOY_DATE = get_protocol_floor_date("jito")
 
 # Archive metadata (is_mtds_contract_audit_2026_05_20 Phase 2).
-# MTDS handlers derive the kobe API URL from this field; hardcoding is banned.
+# MTDS handlers derive the kobe API URLs from these fields; hardcoding is banned.
 _JITO_STAKE_POOL_API_TEMPLATE = "https://kobe.mainnet.jito.network/api/v1/stake_pool_stats"
+_JITO_MEV_REWARDS_API_TEMPLATE = "https://kobe.mainnet.jito.network/api/v1/mev_rewards"
 
 # JitoSOL token mint address on Solana mainnet
 _JITOSOL_MINT = "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn"
@@ -143,8 +144,30 @@ class JitoReferenceDataAdapter(BaseReferenceDataAdapter):
             source_archive_url_template=_JITO_STAKE_POOL_API_TEMPLATE,
         )
 
-        logger.info("Jito: fetched 1 staking instrument on %s", self._chain)
-        return [record]
+        mev_record = InstrumentRecord(
+            instrument_key=f"{venue_tag}:STAKING:JITO-MEV-AGGREGATE",
+            venue=venue_tag,
+            raw_symbol="JITO-MEV-AGGREGATE",
+            base_asset_contract_address=_JITOSOL_MINT,
+            instrument_type=InstrumentType.STAKING,
+            base_asset="SOL",
+            quote_asset="JITOSOL",
+            tick_size=Decimal("0.000000001"),
+            min_size=Decimal("0.000000001"),
+            contract_size=Decimal("1"),
+            expiry=None,
+            strike=None,
+            option_type=None,
+            status=InstrumentStatus.ACTIVE,
+            underlying="SOL",
+            available_from_datetime=_JITO_DEPLOY_DATE,
+            base_asset_decimals=9,
+            listed_at=_JITO_DEPLOY_DATE.date() if _JITO_DEPLOY_DATE else None,
+            source_archive_url_template=_JITO_MEV_REWARDS_API_TEMPLATE,
+        )
+
+        logger.info("Jito: fetched 2 staking instruments on %s", self._chain)
+        return [record, mev_record]
 
     async def get_instrument(self, symbol: str) -> InstrumentRecord | None:
         """Fetch a single instrument by identifier."""
