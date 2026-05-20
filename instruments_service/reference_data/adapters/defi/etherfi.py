@@ -30,6 +30,9 @@ _ETHERFI_DEPLOY_DATE = datetime(2023, 11, 1, tzinfo=UTC)
 # EtherFi token address on Ethereum
 _WEETH_ADDRESS = "0xcd5fe23c85820f7b72d0926fc9b05b43e359b7ee"
 
+# MTDS handlers derive the APY/rate fetch URL from this field; hardcoding is banned.
+_ETHERFI_APY_URL_TEMPLATE = "https://api.etherfi.id/weeth/apr"
+
 _LST_TOKENS: list[dict[str, str]] = [
     {
         "symbol": "WEETH",
@@ -94,6 +97,7 @@ class EtherFiReferenceDataAdapter(BaseReferenceDataAdapter):
                     underlying=underlying,
                     available_from_datetime=_ETHERFI_DEPLOY_DATE,
                     base_asset_decimals=18,
+                    source_archive_url_template=_ETHERFI_APY_URL_TEMPLATE,
                 )
             )
 

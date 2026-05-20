@@ -40,6 +40,9 @@ _SOLBLAZE_DEPLOY_DATE = datetime(2022, 2, 17, tzinfo=UTC)
 _BSOL_MINT = "bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1"
 _BSOL_DECIMALS = 9
 
+# MTDS handlers derive the exchange-rate fetch URL from this field; hardcoding is banned.
+_SOLBLAZE_EXCHANGE_RATE_URL_TEMPLATE = "https://stake.solblaze.org/api/v1/exchange_rate"
+
 _LST_TOKENS: list[dict[str, str]] = [
     {
         "symbol": "BSOL",
@@ -106,6 +109,7 @@ class SolblazeReferenceDataAdapter(BaseReferenceDataAdapter):
                     available_from_datetime=_SOLBLAZE_DEPLOY_DATE,
                     base_asset_contract_address=mint,
                     base_asset_decimals=_BSOL_DECIMALS,
+                    source_archive_url_template=_SOLBLAZE_EXCHANGE_RATE_URL_TEMPLATE,
                 )
             )
 
