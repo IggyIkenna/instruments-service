@@ -118,14 +118,13 @@ from instruments_service.reference_data.utils.evm_creation_resolver import EvmCa
 
 logger = logging.getLogger(__name__)
 
+_SERVICE_NAME: str = "instruments-service"
+
 
 class _ModelDumpable(Protocol):
     """Protocol for objects that expose a Pydantic-style .model_dump() method."""
 
     def model_dump(self) -> dict[str, object]: ...
-
-
-_SERVICE_NAME: str = "instruments-service"
 
 
 # v8 pipeline_mode SSOT (Phase 4.INSTRUMENTS — explicit pipeline_mode= at every
