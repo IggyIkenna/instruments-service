@@ -130,6 +130,7 @@ class FluidReferenceDataAdapter(BaseReferenceDataAdapter):
                     option_type=None,
                     status=InstrumentStatus.ACTIVE,
                     available_from_datetime=available_since,
+                    base_asset_decimals=18,
                 )
             )
 

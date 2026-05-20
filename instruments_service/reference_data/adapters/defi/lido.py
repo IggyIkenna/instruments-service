@@ -100,6 +100,7 @@ class LidoReferenceDataAdapter(BaseReferenceDataAdapter):
                     status=InstrumentStatus.ACTIVE,
                     underlying=underlying,
                     available_from_datetime=_LIDO_DEPLOY_DATE,
+                    base_asset_decimals=18,
                 )
             )
 

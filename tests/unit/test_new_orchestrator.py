@@ -20,6 +20,7 @@ def _make_record(venue: str = "AAVEV3-ETHEREUM", itype: str = "A_TOKEN") -> Inst
         base_asset="WETH",
         quote_asset="USDC",
         base_asset_contract_address="0x" + "a" * 40,
+        base_asset_decimals=18,
         available_from_datetime=datetime(2021, 3, 16, tzinfo=UTC),
     )
 
@@ -1009,6 +1010,8 @@ def _make_defi_record(venue: str, base: str, quote: str, itype: str = "POOL") ->
         base_asset=base,
         quote_asset=quote,
         pool_address="0x" + "a" * 40,
+        base_asset_decimals=18,
+        quote_asset_decimals=6,
     )
 
 

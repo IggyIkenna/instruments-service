@@ -93,6 +93,7 @@ class EtherFiReferenceDataAdapter(BaseReferenceDataAdapter):
                     status=InstrumentStatus.ACTIVE,
                     underlying=underlying,
                     available_from_datetime=_ETHERFI_DEPLOY_DATE,
+                    base_asset_decimals=18,
                 )
             )
 
