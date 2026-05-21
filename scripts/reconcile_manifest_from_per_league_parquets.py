@@ -126,7 +126,7 @@ def main() -> int:
                 "service_name": "instruments-service",
                 "instrument_count": 0,
                 "written_at": now_iso,
-                "schema_version": 5,
+                "schema_version": 8,
                 "timeframe": "",
                 "league_id": lid,
                 "chain": "",

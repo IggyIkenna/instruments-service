@@ -212,7 +212,7 @@ def _manifest_row(
     count: int,
     capture_status: str,
 ) -> dict[str, object]:
-    """Build one v5 manifest row for a (date, data_type, league_id) shard."""
+    """Build one manifest row for a (date, data_type, league_id) shard."""
     return {
         "date": date_str,
         "venue": "",
@@ -220,7 +220,7 @@ def _manifest_row(
         "service_name": "instruments-service",
         "instrument_count": int(count),
         "written_at": _NOW,
-        "schema_version": 5,
+        "schema_version": 8,
         "timeframe": "",
         "league_id": league_id,
         "chain": "",
