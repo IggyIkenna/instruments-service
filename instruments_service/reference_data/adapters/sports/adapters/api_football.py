@@ -63,7 +63,7 @@ def _effective_season_for_league(
             fixtures (e.g. 2022-01-15), pass that date so the correct
             season is calculated.  Defaults to today (UTC).
     """
-    from unified_api_contracts.canonical.domain.sports.league_data import (
+    from unified_api_contracts.sports import (
         get_league_by_api_football_id,
     )
 
@@ -101,7 +101,7 @@ def _parse_team_item(
     the UAC static venue coordinates registry (SSOT for weather data).
     """
     from unified_api_contracts import get_venue_coordinates
-    from unified_api_contracts.canonical.domain.sports import (
+    from unified_api_contracts.sports import (
         CanonicalVenue,
         build_team_id,
         build_venue_id,

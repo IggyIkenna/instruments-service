@@ -2709,7 +2709,7 @@ async def process_instruments(
     # is only needed for full-spectrum runs that haven't pre-decided.
     if is_sports_run and not (sports_entity_filter or recovery_fixture_ids is not None):
         try:
-            from unified_api_contracts.canonical.domain.sports.league_data import get_league
+            from unified_api_contracts.sports import get_league
 
             # Get leagues with fixtures on this date from written data
             _fixture_leagues: set[str] = set()
@@ -4005,7 +4005,7 @@ async def _fetch_sports_reference_data(
         # Reference leagues (cups, continental) provide team workload context for
         # fatigue/distance calculations. Features leagues (lower divisions) provide
         # additional fixture data for cross-division team tracking.
-        from unified_api_contracts.canonical.domain.sports.league_data import get_leagues_by_classification
+        from unified_api_contracts.sports import get_leagues_by_classification
 
         for cls in ("Prediction", "Features", "Reference"):
             for league_def in get_leagues_by_classification(cls):
@@ -4737,7 +4737,7 @@ async def _fetch_footystats_predictions(
     # Per-league skip: only skip the date when every expected canonical
     # footystats league has a (captured | empty_confirmed) row for it.
     # See ``_should_skip_date_for_per_league`` for the bug this fixes.
-    from unified_api_contracts.canonical.domain.sports.league_data import (
+    from unified_api_contracts.sports import (
         get_expected_leagues_for_source,
     )
 
@@ -4756,8 +4756,7 @@ async def _fetch_footystats_predictions(
     attempt_ts = datetime.now(UTC)
 
     try:
-        from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
-        from unified_api_contracts.sports import resolve_footystats_team
+        from unified_api_contracts.sports import build_fixture_id, resolve_footystats_team
 
         predictions = await cast(FootystatsAdapter, adapter).get_fixture_predictions(date)
         if predictions:
@@ -5012,7 +5011,7 @@ async def _fetch_footystats_matches(
     # Honest-coverage pre-flight + attempt-stamp.
     _ft_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
     _row_key: dict[str, str] = {"date": date, "data_type": "MATCHES"}
-    from unified_api_contracts.canonical.domain.sports.league_data import (
+    from unified_api_contracts.sports import (
         get_expected_leagues_for_source,
     )
 
@@ -5031,8 +5030,7 @@ async def _fetch_footystats_matches(
     attempt_ts = datetime.now(UTC)
 
     try:
-        from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
-        from unified_api_contracts.sports import resolve_footystats_team
+        from unified_api_contracts.sports import build_fixture_id, resolve_footystats_team
 
         # FootyStats league IDs are seasonal — use HISTORICAL map which covers
         # all seasons 2019-2026 (not just current, so old backfill dates match).
@@ -5232,7 +5230,7 @@ async def _fetch_footystats_odds(
         catalogue_bucket=bucket,
     )
     _row_key: dict[str, str] = {"date": date, "data_type": "ODDS"}
-    from unified_api_contracts.canonical.domain.sports.league_data import (
+    from unified_api_contracts.sports import (
         get_expected_leagues_for_source,
     )
 
@@ -5251,8 +5249,7 @@ async def _fetch_footystats_odds(
     attempt_ts = datetime.now(UTC)
 
     try:
-        from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
-        from unified_api_contracts.sports import resolve_footystats_team
+        from unified_api_contracts.sports import build_fixture_id, resolve_footystats_team
 
         odds_rows = await cast(FootystatsAdapter, adapter).get_fixture_odds_snapshot(date)
         if odds_rows:
@@ -5435,7 +5432,7 @@ async def _fetch_understat_xg(
     # Expected-league denominator (Understat covers 5 PREDICTION leagues: EPL,
     # LA_LIGA, BUNDESLIGA, SERIE_A, LIGUE_1). SSOT:
     # ``codex/02-data/sports-data-source-coverage-matrix.md``.
-    from unified_api_contracts.canonical.domain.sports.league_data import (
+    from unified_api_contracts.sports import (
         get_expected_leagues_for_source,
     )
 
@@ -5471,8 +5468,7 @@ async def _fetch_understat_xg(
     attempt_ts = datetime.now(UTC)
 
     try:
-        from unified_api_contracts.canonical.domain.sports.canonical_ids import build_fixture_id
-        from unified_api_contracts.sports import resolve_understat_team
+        from unified_api_contracts.sports import build_fixture_id, resolve_understat_team
 
         fixtures = await adapter.get_fixtures(date)
         if fixtures:
@@ -5642,7 +5638,7 @@ async def _fetch_transfermarkt_data(
         sports_reference/by_date/day={date}/entity=transfermarkt_leagues/
         sports_reference/by_date/day={date}/entity=transfermarkt_teams/
     """
-    from unified_api_contracts.canonical.domain.sports.league_data import (
+    from unified_api_contracts.sports import (
         get_expected_leagues_for_source,
     )
 
@@ -5915,7 +5911,7 @@ async def _fetch_sfi_data(
         sports_reference/by_date/day={date}/entity=sfi_standings/
         sports_reference/by_date/day={date}/entity=progressive_stats/
     """
-    from unified_api_contracts.canonical.domain.sports.league_data import (
+    from unified_api_contracts.sports import (
         get_expected_leagues_for_source,
     )
 
@@ -6430,7 +6426,7 @@ async def _fetch_weather_data(
     """
     import re
 
-    from unified_api_contracts.canonical.domain.sports.league_data import (
+    from unified_api_contracts.sports import (
         get_expected_leagues_for_source,
     )
 
