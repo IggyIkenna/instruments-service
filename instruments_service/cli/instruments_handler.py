@@ -62,7 +62,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
         # calling api_football, and the per-league parquet writes use
         # read-modify-write semantics to preserve existing fixtures' rows.
         self._recovery_fixture_ids: frozenset[int] | None = None
-        # Live-mode trigger name (Phase A.7 of instruments_live_master_2026_05_08).
+        # Live-mode trigger name (Phase A.7 of instruments_master).
         # When set under --mode live, names which entity-type subset to refresh +
         # which source adapter to invoke. Closed-set per-asset-group taxonomy lives
         # in UAC (Phase A.6); until that lands the field accepts any string and the
