@@ -1,6 +1,6 @@
 """Unit + integration tests for ``sports.fixtures.daily_repoll`` trigger.
 
-Covers Phase B.1 of ``instruments_live_master_2026_05_08.md``:
+Covers Phase B.1 of ``instruments_master.md``:
 
 1. Adapter mocked → run_sports_fixtures_daily_repoll iterates the
    9-day window, calls ``get_fixtures`` per day, flattens via the same

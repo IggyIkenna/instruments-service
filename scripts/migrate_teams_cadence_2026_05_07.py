@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """migrate_teams_cadence_2026_05_07.py — flip TEAMS daily-cadence manifest rows.
 
-C.11 audit (manifest_migration_master_2026_05_07.md § Refdata cadence
+C.11 audit (manifest_migration_SUPERSEDED_2026_05_21.md § Refdata cadence
 SSOT — groups C.1 + C.11): TEAMS rosters change per-season at most (transfer
 windows are bounded events, not daily drift), but the orchestrator currently
 writes one TEAMS shard per league per day — ~830x denominator inflation

@@ -443,7 +443,7 @@ class KalshiReferenceDataAdapter(BaseReferenceDataAdapter):
         Used by the orchestrator's prediction writer path to emit the
         ``MARKET_LIFECYCLE`` data_type parquet alongside per-instrument
         records (per the
-        ``predictions_master_2026_05_07.plan.md`` Phase 1 critical path).
+        ``predictions_master.plan.md`` Phase 1 critical path).
 
         Markets that fail :meth:`classify_lifecycle` (missing ticker or
         unparseable close_time) are silently dropped — they're already

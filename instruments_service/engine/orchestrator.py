@@ -1289,7 +1289,7 @@ async def process_instruments(
     # so they must be defined unconditionally (not inside redo_all gate).
     is_sports_run = any(c.upper() in ("SPORTS", "ALL") for c in asset_groups)
     _sports_core_entities = [
-        # LEAGUES retired 2026-05-07 (C.1 audit, manifest_migration_master_2026_05_07).
+        # LEAGUES retired 2026-05-07 (C.1 audit, manifest_migration_SUPERSEDED_2026_05_21).
         # UAC ``LeagueDefinition`` + ``provider_league_ids`` (FOOTYSTATS_SEASON_IDS,
         # FOOTYSTATS_HISTORICAL_SEASON_IDS, etc.) canonicalise the league refdata via
         # code commits — daily-cadence GCS dump was 3046 daily shards of identical
@@ -2318,7 +2318,7 @@ async def process_instruments(
                 # DAILY = 1/day — so the shard atom is per-(canonical_group,
                 # day), with all market_ids active on that day bundled into
                 # one parquet (analogous to options-chain bundling). Per
-                # ``predictions_master_2026_05_07.plan.md`` Phase 1
+                # ``predictions_master.plan.md`` Phase 1
                 # critical-path + CLAUDE.md "Per-asset-group shard-key
                 # matrix → Prediction". Polymarket + Kalshi share this
                 # path: both prediction venues classify per the UAC
@@ -2925,7 +2925,7 @@ def _extract_prediction_canonical_group(row: pd.Series) -> str:
     """Map a PREDICTION instrument row onto a canonical-question-group name.
 
     Per the
-    ``predictions_master_2026_05_07.plan.md`` Phase 1 critical-path
+    ``predictions_master.plan.md`` Phase 1 critical-path
     todo: replace the legacy per-base_asset shard with the UAC
     canonical-question-group SSOT (``BTC_UP_DOWN_HOURLY``,
     ``BTC_UP_DOWN_DAILY``, ``SPX_UP_DOWN_DAILY``,

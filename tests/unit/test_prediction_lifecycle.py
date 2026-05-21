@@ -1,6 +1,6 @@
 """Unit tests for the per-market lifecycle output of the prediction adapters.
 
-Per ``unified-trading-pm/plans/active/predictions_master_2026_05_07.plan.md``
+Per ``unified-trading-pm/plans/active/predictions_master.plan.md``
 Phase 1 critical-path: instruments-service Polymarket / Kalshi adapters
 must capture ``market_created_at`` / ``resolution_time`` / ``settlement_time``
 + ``canonical_question_group`` membership per market_id, exposed via

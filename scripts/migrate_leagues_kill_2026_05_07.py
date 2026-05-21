@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """migrate_leagues_kill_2026_05_07.py — flip retired LEAGUES manifest rows.
 
-C.1 audit (manifest_migration_master_2026_05_07.md § Audit findings
+C.1 audit (manifest_migration_SUPERSEDED_2026_05_21.md § Audit findings
 2026-05-07): retire the api_football LEAGUES daily-dump (3046 daily shards
 of identical static league refdata) because UAC ``LeagueDefinition`` +
 ``provider_league_ids`` (FOOTYSTATS_SEASON_IDS, FOOTYSTATS_HISTORICAL_SEASON_IDS,

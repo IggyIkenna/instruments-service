@@ -2,7 +2,7 @@
 
 Each module in this package implements one named trigger from the closed
 per-asset-group taxonomy declared in
-``plans/epics/instruments_live_master_2026_05_08.md`` Phase A.6 (UAC SSOT
+``plans/epics/instruments_master.md`` Phase A.6 (UAC SSOT
 landing follow-up). Triggers are dispatched by name from the
 ``InstrumentsHandler`` when ``--mode live --trigger <name>`` is invoked.
 
@@ -26,7 +26,7 @@ References:
 
 * CLAUDE.md "Live = batch — same data, same fields, same timing
   semantics, different sources OK".
-* ``plans/epics/instruments_live_master_2026_05_08.md`` Phase B.1
+* ``plans/epics/instruments_master.md`` Phase B.1
   (sports daily fixture re-poll).
 """
 

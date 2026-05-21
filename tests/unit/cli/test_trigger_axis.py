@@ -1,6 +1,6 @@
 """Live-mode ``--trigger`` axis CLI tests.
 
-Phase A.7 of ``instruments_live_master_2026_05_08`` — the instruments-service
+Phase A.7 of ``instruments_master`` — the instruments-service
 CLI gains a ``--trigger <name>`` flag that pairs with ``--mode live`` to select
 which entity-type subset is refreshed + which source adapter is invoked. The
 flag itself is additive (free-form string, validated downstream by the Phase
