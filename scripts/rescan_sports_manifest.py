@@ -136,7 +136,7 @@ def scan_date(client: storage.Client, bucket: storage.Bucket, date_str: str) -> 
                 "service_name": "instruments-service",
                 "instrument_count": row_count if row_count >= 0 else 1,
                 "written_at": _NOW,
-                "schema_version": 4,
+                "schema_version": 8,
                 "timeframe": "",
                 "league_id": "",
             }
