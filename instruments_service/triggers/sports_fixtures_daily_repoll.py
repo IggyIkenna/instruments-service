@@ -130,7 +130,7 @@ def _league_ids_for_repoll(league_filter: Iterable[str | int] | None) -> list[in
     api_football int IDs since that's what
     :class:`ApiFootballAdapter.get_fixtures` accepts.
     """
-    from unified_api_contracts.canonical.domain.sports.league_data import (
+    from unified_api_contracts.sports import (
         get_league,
         get_leagues_by_classification,
     )
@@ -333,7 +333,7 @@ async def run_sports_fixtures_daily_repoll(
         if "league_id" not in df_with_league.columns or df_with_league["league_id"].isna().all():
             # Fall back to af_league_id mapping (same logic as
             # _write_fixtures_per_league).
-            from unified_api_contracts.canonical.domain.sports.league_data import (
+            from unified_api_contracts.sports import (
                 get_league_by_api_football_id,
             )
 
