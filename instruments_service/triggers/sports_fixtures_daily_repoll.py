@@ -1,6 +1,6 @@
 """Sports daily fixture re-poll trigger — ``sports.fixtures.daily_repoll``.
 
-Phase B.1 of ``plans/epics/instruments_live_master_2026_05_08.md``: a
+Phase B.1 of ``plans/epics/instruments_master.md``: a
 live-mode trigger that pulls fixtures from api-football for the rolling
 window ``[today, today + 8d]``, upserts to the canonical sports GCS
 path (per UAC ``candidate_parquet_paths(SPORTS_FIXTURES, day,
@@ -54,7 +54,7 @@ Behaviour contract:
 
 References:
 
-* ``plans/epics/instruments_live_master_2026_05_08.md`` § B.1
+* ``plans/epics/instruments_master.md`` § B.1
   (lines 285-294).
 * ``orchestrator._flatten_canonical_fixture_for_disk`` —
   CanonicalFixture → SPORTS_FIXTURES SchemaContract row.

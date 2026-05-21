@@ -18,7 +18,7 @@ Custom args (registered via extra_args_fn):
   --trigger        Live-mode trigger name selector (e.g. ``cefi.instruments.daily_refresh``,
                    ``defi.token_lists.refresh``, ``sports.fixtures.daily_repoll``). Closed
                    per-asset-group taxonomy lives in UAC (Phase A.6 of
-                   ``instruments_live_master_2026_05_08``); until the UAC enum lands the flag
+                   ``instruments_master``); until the UAC enum lands the flag
                    accepts any string and the downstream trigger dispatcher (Phase B.1+)
                    validates the name. Pairs with ``--mode live`` — selects which entity-type
                    subset to refresh + which source adapter to invoke. Same single CLI codepath
@@ -171,7 +171,7 @@ def _add_instruments_extra_args(parser: argparse.ArgumentParser) -> None:  # pra
             "``defi.token_lists.refresh``, ``sports.fixtures.daily_repoll``, "
             "``sports.lineups.pre_kickoff``, ``prediction.markets.discover``. The trigger name "
             "selects which entity-type subset is refreshed + which source adapter is invoked; "
-            "downstream dispatch (Phase B.1+ of instruments_live_master_2026_05_08) validates "
+            "downstream dispatch (Phase B.1+ of instruments_master) validates "
             "the name against the UAC trigger taxonomy. Until the UAC enum lands the flag is a "
             "free-form string — the dispatcher fail-loud-rejects unknown names there, not here."
         ),

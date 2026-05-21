@@ -1,7 +1,7 @@
 """Unit tests for the canonical-question-group shard helpers in
 ``instruments_service.engine.orchestrator``.
 
-Per ``unified-trading-pm/plans/active/predictions_master_2026_05_07.plan.md``
+Per ``unified-trading-pm/plans/active/predictions_master.plan.md``
 Phase 1 critical-path: ``_extract_prediction_canonical_group`` /
 ``_compute_prediction_shards`` MUST call the UAC classifier and emit the
 shard atom on the canonical-question-group axis (per CLAUDE.md
