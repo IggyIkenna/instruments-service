@@ -127,9 +127,6 @@ FUNCTION_SIZE_EXTRA_EXCLUDES=(
 # pip-audit: ignore cryptography CVE-2026-34073 (DNS name constraint bypass, low severity, pending upgrade)
 PIP_AUDIT_EXTRA_ARGS="--ignore-vuln CVE-2026-34073"
 
-# STEP 5.23: instruments-service legitimately uses canonical.domain.sports/prediction
-# imports — these symbols are not yet re-exported through UAC facades.
-UAC_CANONICAL_EXEMPT=true
 
 # Temporary rollout tolerance for known codex debt under active remediation.
 # Remaining: bandit /tmp usage (orchestrator fixture cache), backward-compat docstring,

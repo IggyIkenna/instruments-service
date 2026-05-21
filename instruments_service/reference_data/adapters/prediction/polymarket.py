@@ -26,15 +26,6 @@ from unified_api_contracts import (
     PolymarketGammaMarket,
     classify_venue_error,
 )
-from unified_api_contracts.canonical.domain.sports import (
-    build_crypto_prediction_id,
-    build_macro_prediction_id,
-    build_prediction_instrument_id,
-)
-from unified_api_contracts.canonical.domain.sports.canonical_ids import (
-    POLYMARKET_MARKET_TO_CANONICAL,
-    _slug,
-)
 from unified_api_contracts.external.polymarket import (
     POLYMARKET_PREDICTION_LEAGUES,
     get_canonical_league_for_polymarket_series,
@@ -49,6 +40,13 @@ from unified_api_contracts.predictions import (
     CanonicalQuestionGroup,
     MarketLifecycle,
     classify_polymarket_to_canonical_group,
+)
+from unified_api_contracts.sports import (
+    POLYMARKET_MARKET_TO_CANONICAL,
+    build_crypto_prediction_id,
+    build_macro_prediction_id,
+    build_prediction_instrument_id,
+    slugify_canonical_name,
 )
 from unified_trading_library import log_event
 
@@ -210,8 +208,8 @@ def _normalize_team_pair(raw_home: str, raw_away: str) -> tuple[str, str]:
     """Normalize a pair of team names to canonical IDs."""
     home_canonical = get_canonical_team_for_polymarket(raw_home)
     away_canonical = get_canonical_team_for_polymarket(raw_away)
-    home = home_canonical if home_canonical else _slug(raw_home)[:30]
-    away = away_canonical if away_canonical else _slug(raw_away)[:30]
+    home = home_canonical if home_canonical else slugify_canonical_name(raw_home)[:30]
+    away = away_canonical if away_canonical else slugify_canonical_name(raw_away)[:30]
     return home, away
 
 
@@ -913,7 +911,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
 
         outcomes = market.outcomes or []
         pm_market_type = market.sports_market_type or "moneyline"
-        canonical_market = POLYMARKET_MARKET_TO_CANONICAL.get(pm_market_type, _slug(pm_market_type))
+        canonical_market = POLYMARKET_MARKET_TO_CANONICAL.get(pm_market_type, slugify_canonical_name(pm_market_type))
 
         # Extract team names — priority: event_title > outcomes > question
         home, away = self._extract_teams(market, outcomes)
@@ -976,7 +974,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         single = _parse_single_team_question(question)
         if single:
             canonical = get_canonical_team_for_polymarket(single)
-            team_id = canonical if canonical else _slug(single)[:30]
+            team_id = canonical if canonical else slugify_canonical_name(single)[:30]
             return team_id, "UNKNOWN"
 
         return "UNKNOWN", "UNKNOWN"
@@ -1000,7 +998,7 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
         if cache_key in self._fixture_cache:
             return self._fixture_cache[cache_key]
 
-        from unified_api_contracts.canonical.domain.sports.league_data import (
+        from unified_api_contracts.sports import (
             get_league,
         )
 

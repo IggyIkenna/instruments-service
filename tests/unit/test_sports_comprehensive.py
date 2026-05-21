@@ -696,7 +696,7 @@ class TestEffectiveSeasonForLeague:
     def test_european_league_after_start(self) -> None:
         """European Aug-start league queried in October → same year."""
         with patch(
-            "unified_api_contracts.canonical.domain.sports.league_data.get_league_by_api_football_id",
+            "unified_api_contracts.sports.get_league_by_api_football_id",
             return_value=MagicMock(season_months=[8, 9, 10, 11, 12, 1, 2, 3, 4, 5]),
         ):
             result = _effective_season_for_league(39, reference_date=date(2025, 10, 15))
@@ -705,7 +705,7 @@ class TestEffectiveSeasonForLeague:
     def test_european_league_before_start(self) -> None:
         """European Aug-start league queried in March → previous year."""
         with patch(
-            "unified_api_contracts.canonical.domain.sports.league_data.get_league_by_api_football_id",
+            "unified_api_contracts.sports.get_league_by_api_football_id",
             return_value=MagicMock(season_months=[8, 9, 10, 11, 12, 1, 2, 3, 4, 5]),
         ):
             result = _effective_season_for_league(39, reference_date=date(2026, 3, 15))
@@ -714,7 +714,7 @@ class TestEffectiveSeasonForLeague:
     def test_south_american_league_after_start(self) -> None:
         """South American Feb-start league queried in March → same year."""
         with patch(
-            "unified_api_contracts.canonical.domain.sports.league_data.get_league_by_api_football_id",
+            "unified_api_contracts.sports.get_league_by_api_football_id",
             return_value=MagicMock(season_months=[2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
         ):
             result = _effective_season_for_league(71, reference_date=date(2026, 3, 15))
@@ -723,7 +723,7 @@ class TestEffectiveSeasonForLeague:
     def test_unknown_league_defaults_to_august(self) -> None:
         """Unknown league defaults to August start."""
         with patch(
-            "unified_api_contracts.canonical.domain.sports.league_data.get_league_by_api_football_id",
+            "unified_api_contracts.sports.get_league_by_api_football_id",
             return_value=None,
         ):
             result = _effective_season_for_league(9999, reference_date=date(2026, 3, 15))
@@ -732,7 +732,7 @@ class TestEffectiveSeasonForLeague:
     def test_no_reference_date_uses_utc_now(self) -> None:
         """When no reference_date, uses today (UTC)."""
         with patch(
-            "unified_api_contracts.canonical.domain.sports.league_data.get_league_by_api_football_id",
+            "unified_api_contracts.sports.get_league_by_api_football_id",
             return_value=None,
         ):
             result = _effective_season_for_league(39)
