@@ -4,7 +4,7 @@ Kalshi's REST API provides market metadata for prediction markets.
 Each active market is returned as an InstrumentRecord so services can treat
 prediction markets as tradeable instruments.
 
-Base URL: https://trading-api.kalshi.com/trade-api/v2
+Base URL: https://api.elections.kalshi.com/trade-api/v2
 Auth: API key passed as header (RSA key signing for production).
 """
 
@@ -37,7 +37,7 @@ from ...schemas import (
 
 logger = logging.getLogger(__name__)
 
-_KALSHI_BASE_URL = "https://trading-api.kalshi.com/trade-api/v2"
+_KALSHI_BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 _PAGE_LIMIT = 200
 _MAX_PAGES = 10  # cap at 2000 markets per fetch
 
