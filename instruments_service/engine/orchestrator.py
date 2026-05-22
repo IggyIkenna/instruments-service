@@ -1587,6 +1587,7 @@ async def process_instruments(
                                     "data_type": pf_entity.replace("API_FOOTBALL_", "").upper(),
                                 },
                                 attempted_at=_enr_attempt_ts,
+                                reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                                 pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
                             )
                 sports_manifest.write()
@@ -1861,6 +1862,7 @@ async def process_instruments(
                         "league_id": _canonical_league_id(_league_id),
                     },
                     attempted_at=_empty_attempt_ts,
+                    reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
                 )
             _empty_manifest.write()
@@ -1921,6 +1923,7 @@ async def process_instruments(
                                             "data_type": entity_name.upper(),
                                         },
                                         attempted_at=datetime.now(UTC),
+                                        reason=EmptyConfirmedReason.SOURCE_RETURNED_ZERO,
                                         pipeline_mode=_pipeline_mode_for_sports_data_type(entity_name.upper()),
                                     )
                         # Per-fixture entities on zero-fixture dates: nothing
@@ -1939,6 +1942,7 @@ async def process_instruments(
                                         "data_type": pf_entity,
                                     },
                                     attempted_at=datetime.now(UTC),
+                                    reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                                     pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
                                 )
                         sports_manifest.write()
@@ -1974,6 +1978,7 @@ async def process_instruments(
                                 "data_type": _enr_entity,
                             },
                             attempted_at=_enr_attempt_ts,
+                            reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                             pipeline_mode=_pipeline_mode_for_sports_data_type(_enr_entity),
                         )
                     _enr_manifest.write()
@@ -2306,6 +2311,7 @@ async def process_instruments(
                             "league_id": _exp_lid,
                         },
                         attempted_at=_fx_attempt_ts,
+                        reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                         pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
                     )
 
@@ -3671,6 +3677,7 @@ async def _fetch_sports_reference_data(
             manifest.record_empty(
                 row_key={"date": date, "data_type": data_type, "league_id": _exp_lid},
                 attempted_at=_af_attempt_ts,
+                reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                 pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
             )
 
@@ -4905,6 +4912,7 @@ async def _fetch_footystats_predictions(
             pred_manifest.record_empty(
                 row_key=_row_key,
                 attempted_at=attempt_ts,
+                reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                 pipeline_mode=_pipeline_mode_for_sports_data_type("PREDICTIONS"),
             )
             pred_manifest.write()
@@ -5149,6 +5157,7 @@ async def _fetch_footystats_matches(
                 _ft_manifest.record_empty(
                     row_key={"date": date, "data_type": "MATCHES", "league_id": _exp_lid},
                     attempted_at=attempt_ts,
+                    reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_pipeline_mode_for_sports_data_type("MATCHES"),
                 )
             _ft_manifest.write()
@@ -5162,6 +5171,7 @@ async def _fetch_footystats_matches(
                 _ft_manifest.record_empty(
                     row_key={"date": date, "data_type": "MATCHES", "league_id": _exp_lid},
                     attempted_at=attempt_ts,
+                    reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=_pipeline_mode_for_sports_data_type("MATCHES"),
                 )
             _ft_manifest.write()
@@ -5378,6 +5388,7 @@ async def _fetch_footystats_odds(
             odds_manifest.record_empty(
                 row_key=_row_key,
                 attempted_at=attempt_ts,
+                reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                 pipeline_mode=_pipeline_mode_for_sports_data_type("ODDS"),
             )
             odds_manifest.write()
@@ -5558,6 +5569,7 @@ async def _fetch_understat_xg(
                 xg_manifest.record_empty(
                     row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
                     attempted_at=attempt_ts,
+                    reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
                 )
             xg_manifest.write()
@@ -5572,6 +5584,7 @@ async def _fetch_understat_xg(
                 xg_manifest.record_empty(
                     row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
                     attempted_at=attempt_ts,
+                    reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
                 )
             xg_manifest.write()
@@ -5872,6 +5885,7 @@ async def _fetch_transfermarkt_data(
             manifest.record_empty(
                 row_key={"date": date, "data_type": "PLAYER_VALUES", "league_id": _emp_lid},
                 attempted_at=attempt_ts,
+                reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                 pipeline_mode=PipelineMode.BATCH_TRANSFERMARKT,
             )
         for _f_lid, _f_err in sorted(_failed_leagues.items()):
@@ -6243,6 +6257,7 @@ async def _fetch_sfi_data(
                                 "league_id": _exp_lid,
                             },
                             attempted_at=attempt_ts,
+                            reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                             pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                         )
                     logger.info("SFI progressive stats: %d rows written", len(df))
@@ -6252,6 +6267,7 @@ async def _fetch_sfi_data(
                     manifest.record_empty(
                         row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
                         attempted_at=attempt_ts,
+                        reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                         pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                     )
                     for _exp_lid in sorted(_expected_sfi_league_ids):
@@ -6262,6 +6278,7 @@ async def _fetch_sfi_data(
                                 "league_id": _exp_lid,
                             },
                             attempted_at=attempt_ts,
+                            reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                             pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                         )
             else:
@@ -6270,6 +6287,7 @@ async def _fetch_sfi_data(
                 manifest.record_empty(
                     row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
                     attempted_at=attempt_ts,
+                    reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                 )
                 for _exp_lid in sorted(_expected_sfi_league_ids):
@@ -6280,6 +6298,7 @@ async def _fetch_sfi_data(
                             "league_id": _exp_lid,
                         },
                         attempted_at=attempt_ts,
+                        reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                         pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                     )
         except Exception as exc:
@@ -6632,6 +6651,7 @@ async def _fetch_weather_data(
                 manifest.record_empty(
                     row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
                     attempted_at=attempt_ts,
+                    reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                     pipeline_mode=PipelineMode.BATCH_OPEN_METEO,
                 )
             logger.info(
@@ -6821,6 +6841,7 @@ async def _fetch_weather_data(
             manifest.record_empty(
                 row_key={"date": date, "data_type": "WEATHER", "league_id": _exp_lid},
                 attempted_at=attempt_ts,
+                reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
                 pipeline_mode=PipelineMode.BATCH_OPEN_METEO,
             )
         # NOTE: Previously we also emitted a date-level aggregate row
