@@ -1656,7 +1656,7 @@ class TestPolygonAdapterComprehensive:
     # ── _parse_ticker ─────────────────────────────────────────────────────
 
     def test_parse_ticker_valid(self) -> None:
-        from unified_api_contracts import PolygonTicker
+        from instruments_service.reference_data.adapters.tradfi.polygon import PolygonTicker
 
         adapter = PolygonReferenceDataAdapter(api_key="key")
         ticker = PolygonTicker(ticker="AAPL", name="Apple Inc.", active=True)
@@ -1667,7 +1667,7 @@ class TestPolygonAdapterComprehensive:
         assert result.base_asset == "AAPL"
 
     def test_parse_ticker_empty_sym_returns_none(self) -> None:
-        from unified_api_contracts import PolygonTicker
+        from instruments_service.reference_data.adapters.tradfi.polygon import PolygonTicker
 
         adapter = PolygonReferenceDataAdapter(api_key="key")
         ticker = PolygonTicker(ticker="", name="")
@@ -1677,7 +1677,7 @@ class TestPolygonAdapterComprehensive:
     # ── _parse_option_contract ────────────────────────────────────────────
 
     def test_parse_option_contract(self) -> None:
-        from unified_api_contracts import PolygonOptionContract
+        from instruments_service.reference_data.adapters.tradfi.polygon import PolygonOptionContract
 
         adapter = PolygonReferenceDataAdapter(api_key="key")
         contract = PolygonOptionContract(

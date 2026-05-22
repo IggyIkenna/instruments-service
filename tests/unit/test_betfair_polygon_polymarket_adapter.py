@@ -523,9 +523,7 @@ class TestPolygonAdapterExtended:
     def test_parse_ticker_no_ticker_sym_returns_none(self) -> None:
         from datetime import UTC, datetime
 
-        from unified_api_contracts.external.polygon.schemas import (
-            PolygonTicker,
-        )
+        from instruments_service.reference_data.adapters.tradfi.polygon import PolygonTicker
 
         adapter = PolygonReferenceDataAdapter()
         now = datetime.now(UTC)
