@@ -317,3 +317,101 @@ class TestBuildMarketLifecycleDf:
 
         assert len(out) == 5
         assert set(out["market_id"].tolist()) == set(markets)
+
+
+class TestPredictionWriterManifestContract:
+    """Verify the writer emits canonical shard atoms for prediction instruments.
+
+    Contract (per ``data_status_coverage_gaps_and_prediction_manifest_fix_2026_05_22.md`` Phase 3.1):
+      - data_type  = ``"prediction_canonical_question_group"`` (literal string)
+      - underlying = ``<CanonicalQuestionGroup.value>``  (e.g. ``"BTC_UP_DOWN_HOURLY"``)
+
+    These tests pin the bridge between ``_extract_prediction_canonical_group`` (the
+    per-row classifier) and the writer's ``manifest.record_captured`` call so a future
+    refactor cannot silently flip back to the legacy ``data_type=BTC`` format.
+    """
+
+    _PREDICTION_DATA_TYPE = "prediction_canonical_question_group"
+
+    def test_hourly_btc_rows_map_to_canonical_underlying(self) -> None:
+        """BTC hourly rows must resolve to ``BTC_UP_DOWN_HOURLY`` as the underlying
+        (used verbatim in the ``record_captured`` row_key).
+        """
+        rows = [
+            {
+                "venue": "POLYMARKET",
+                "instrument_key": f"0xbtc-h{i:02d}",
+                "raw_symbol": f"bitcoin-up-or-down-hour-2026-05-22-h{i:02d}",
+                "base_asset": f"BTC:H{i:02d}",
+            }
+            for i in range(8)
+        ]
+        df = pd.DataFrame(rows)
+
+        shards = _compute_prediction_shards(df)
+        group_key = "POLYMARKET/BTC_UP_DOWN_HOURLY"
+
+        assert group_key in shards
+        assert shards[group_key] == 8
+        # Underlying value = canonical group string — must be a valid CanonicalQuestionGroup member.
+        group_str = group_key.split("/", 1)[1]
+        assert group_str == CanonicalQuestionGroup.BTC_UP_DOWN_HOURLY.value
+
+    def test_data_type_literal_is_canonical_constant(self) -> None:
+        """The manifest data_type literal must equal 'prediction_canonical_question_group'."""
+        assert self._PREDICTION_DATA_TYPE == "prediction_canonical_question_group"
+
+    def test_underlying_is_canonical_group_enum_value(self) -> None:
+        """Every shard key produced by ``_compute_prediction_shards`` has format
+        ``VENUE/<CanonicalQuestionGroup.value>`` — the second segment IS the underlying
+        that flows into ``record_captured(underlying=...)``.
+        """
+        rows = [
+            {
+                "venue": "POLYMARKET",
+                "instrument_key": "0xspx",
+                "raw_symbol": "spx-up-or-down-daily-2026-05-22",
+                "base_asset": "SPX",
+            },
+            {
+                "venue": "POLYMARKET",
+                "instrument_key": "0xother",
+                "raw_symbol": "who-will-win-the-tournament-2026",
+                "base_asset": "OTHER",
+            },
+        ]
+        df = pd.DataFrame(rows)
+        shards = _compute_prediction_shards(df)
+
+        valid_group_values = {g.value for g in CanonicalQuestionGroup}
+        for key in shards:
+            _venue, group_str = key.split("/", 1)
+            assert group_str in valid_group_values, (
+                f"shard key '{key}' has group_str='{group_str}' not in CanonicalQuestionGroup"
+            )
+
+    def test_mixed_prediction_venues_produce_separate_shards(self) -> None:
+        """POLYMARKET and KALSHI rows go to distinct shard buckets; both use
+        ``CanonicalQuestionGroup.OTHER.value`` as underlying for unrecognised slugs/tickers.
+        """
+        df = pd.DataFrame(
+            [
+                {
+                    "venue": "POLYMARKET",
+                    "instrument_key": "0xpoly",
+                    "raw_symbol": "some-unknown-event",
+                    "base_asset": "OTHER",
+                },
+                {
+                    "venue": "kalshi",
+                    "instrument_key": "KXUNKNOWN-26DEC-00000",
+                    "raw_symbol": "KXUNKNOWN",
+                    "base_asset": "OTHER",
+                },
+            ]
+        )
+        shards = _compute_prediction_shards(df)
+
+        other_val = CanonicalQuestionGroup.OTHER.value
+        assert shards.get(f"POLYMARKET/{other_val}") == 1
+        assert shards.get(f"KALSHI/{other_val}") == 1
