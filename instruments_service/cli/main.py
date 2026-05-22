@@ -189,5 +189,6 @@ def main_service_cli() -> None:  # pragma: no cover
         service_name=_SERVICE_NAME,
         operations={"instruments": InstrumentsHandler},
         config=get_config(),
+        add_venues_arg=True,
         extra_args_fn=_add_instruments_extra_args,
     ).run()
