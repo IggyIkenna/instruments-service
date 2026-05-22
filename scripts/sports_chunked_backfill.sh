@@ -20,7 +20,7 @@ CHUNK_DAYS="${CHUNK_DAYS:-30}"
 LOG_DIR="/tmp/sports-chunked-${PROVIDER,,}"
 mkdir -p "$LOG_DIR"
 
-cd /home/hk/unified-trading-system-repos/instruments-service
+cd "${INSTRUMENTS_SERVICE_DIR:-/home/hk/unified-trading-system-repos/instruments-service}"
 export GCP_PROJECT_ID=central-element-323112
 export CLOUD_PROVIDER=gcp
 export CLOUD_MOCK_MODE=false
