@@ -17,12 +17,7 @@ from decimal import Decimal
 from typing import ClassVar, cast
 
 import aiohttp
-from unified_api_contracts import (
-    PolygonOptionContract,
-    PolygonOptionContractsResponse,
-    PolygonTicker,
-    PolygonTickersResponse,
-)
+from pydantic import BaseModel
 from unified_api_contracts.internal import InstrumentRecord, InstrumentType
 
 from ...base_adapter import BaseReferenceDataAdapter
@@ -34,6 +29,40 @@ from ...schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class PolygonTicker(BaseModel):  # CORRECT-LOCAL — adapter-internal API response schema; UAC external/polygon deleted
+    """Polygon.io ticker schema from /v3/reference/tickers."""
+
+    ticker: str | None = None
+    name: str | None = None
+    active: bool = True
+
+
+class PolygonTickersResponse(BaseModel):  # CORRECT-LOCAL — adapter-internal API response schema
+    """Pagination wrapper for /v3/reference/tickers."""
+
+    results: list[PolygonTicker] | None = None
+    next_url: str | None = None
+
+
+class PolygonOptionContract(BaseModel):  # CORRECT-LOCAL — adapter-internal API response schema
+    """Polygon.io option contract schema from /v3/reference/options/contracts."""
+
+    ticker: str | None = None
+    underlying_ticker: str | None = None
+    contract_type: str | None = None
+    expiration_date: str | None = None
+    strike_price: float | None = None
+    shares_per_contract: int | None = None
+
+
+class PolygonOptionContractsResponse(BaseModel):  # CORRECT-LOCAL — adapter-internal API response schema
+    """Pagination wrapper for /v3/reference/options/contracts."""
+
+    results: list[PolygonOptionContract] | None = None
+    next_url: str | None = None
+
 
 _POLYGON_BASE = "https://api.polygon.io"
 _PAGE_LIMIT = 1000
