@@ -73,7 +73,7 @@ from pathlib import Path
 
 import pandas as pd
 from google.cloud import storage
-from unified_trading_library import classify_blank_reason_row
+from unified_trading_library.legacy_reason_classifier import classify_blank_reason_row
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
