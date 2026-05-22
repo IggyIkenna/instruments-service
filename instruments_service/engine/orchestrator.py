@@ -891,6 +891,10 @@ _CEFI_VENUES: list[str] = [
     # Tier-3 CeFi (Tardis archive — factory entries exist, added to orchestrator 2026-05-12)
     "KRAKEN-FUTURES",
     "BITFINEX-FUTURES",
+    # Tier-3 CeFi (Tardis archive — added 2026-05-22: factory entries existed, missing from batch)
+    "BITGET-SPOT",
+    "BITGET-FUTURES",
+    "BITFINEX-SPOT",
 ]
 
 _TRADFI_VENUES: list[str] = [
