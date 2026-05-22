@@ -168,7 +168,7 @@ def _build_fixture_rows_for_league_season(
     return by_day
 
 
-def _post_fill_data_available_at(df: pd.DataFrame) -> pd.DataFrame:
+def _post_fill_available_at(df: pd.DataFrame) -> pd.DataFrame:
     """Vectorised post-fill of ``available_at`` = kickoff - 7d.
 
     The orchestrator's mainline writer does the same on its per-day DataFrame
@@ -196,7 +196,7 @@ def _write_per_league_parquet(
     rows: list[dict[str, object]],
 ) -> int:
     df = pd.DataFrame(rows)
-    df = _post_fill_data_available_at(df)
+    df = _post_fill_available_at(df)
     buf = io.BytesIO()
     df.to_parquet(buf, index=False, engine="pyarrow")
     buf.seek(0)
