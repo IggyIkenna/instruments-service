@@ -2373,7 +2373,6 @@ async def process_instruments(
                         cluster_extractor=lambda s: s,
                         pipeline_mode=_pred_pm,
                         service_emission_state=None,
-                        canonical_question_group=_group_str,
                     )
                     counts[f"{_manifest_venue}/{_group_str}"] = len(_group_df_clean)
                     if sampler.enable_sampling:
