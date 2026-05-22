@@ -140,7 +140,7 @@ def _build_fixture_rows_for_league_season(
     """Filter response to target dates + flatten to disk-shape dicts grouped by date.
 
     Each output dict is the 32-column SPORTS_FIXTURES row dict produced by
-    ``_flatten_canonical_fixture_for_disk``. ``data_available_at`` is filled
+    ``_flatten_canonical_fixture_for_disk``. ``available_at`` is filled
     by the caller (post-batch operation on the per-day DataFrame) so we can
     apply the kickoff - 7d formula vectorised.
     """
@@ -169,22 +169,22 @@ def _build_fixture_rows_for_league_season(
 
 
 def _post_fill_data_available_at(df: pd.DataFrame) -> pd.DataFrame:
-    """Vectorised post-fill of ``data_available_at`` = kickoff - 7d.
+    """Vectorised post-fill of ``available_at`` = kickoff - 7d.
 
     The orchestrator's mainline writer does the same on its per-day DataFrame
     (see ``orchestrator.py:3241+`` and many other call sites). Schema
     expectations match the on-disk SPORTS_FIXTURES contract.
     """
     if "timestamp" in df.columns and df["timestamp"].notna().any():
-        df["data_available_at"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce") - pd.Timedelta(
+        df["available_at"] = pd.to_datetime(df["timestamp"], utc=True, errors="coerce") - pd.Timedelta(
             days=_DATA_AVAILABLE_LEAD_DAYS
         )
     elif "date" in df.columns:
-        df["data_available_at"] = pd.to_datetime(df["date"], utc=True, errors="coerce") - pd.Timedelta(
+        df["available_at"] = pd.to_datetime(df["date"], utc=True, errors="coerce") - pd.Timedelta(
             days=_DATA_AVAILABLE_LEAD_DAYS
         )
     else:
-        df["data_available_at"] = pd.NaT
+        df["available_at"] = pd.NaT
     return df
 
 

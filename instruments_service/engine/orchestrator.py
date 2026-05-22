@@ -350,7 +350,7 @@ def _flatten_canonical_fixture_for_disk(fx: object, day: str) -> dict[str, objec
         "home_score_penalty": None,
         "away_score_penalty": None,
         "day": day,
-        "data_available_at": None,  # caller post-fills with kickoff_utc - 7 days
+        "available_at": None,  # caller post-fills with kickoff_utc - 7 days
         "match_end_time": getattr(fx, "match_end_time", None),
         "announced_at": getattr(fx, "announced_at", None),
         "report_time": getattr(fx, "report_time", None),
@@ -3838,7 +3838,7 @@ async def _fetch_sports_reference_data(
             if injuries:
                 df = pd.DataFrame([_coerce_adapter_output(inj) for inj in injuries])
                 # PIT safety: daily injuries published morning-of (date + 12:00 UTC)
-                df["data_available_at"] = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=12)
+                df["available_at"] = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=12)
                 counts["injuries"] = len(df)
 
                 # Determine league column — prefer league_id, fallback to fixture_id prefix
@@ -3983,7 +3983,7 @@ async def _fetch_sports_reference_data(
                         _fx_df = pd.DataFrame(_fx_dicts)
                         # PIT safety: scheduled fixtures published ~1 week before kickoff
                         if "timestamp" in _fx_df.columns:
-                            _fx_df["data_available_at"] = pd.to_datetime(
+                            _fx_df["available_at"] = pd.to_datetime(
                                 _fx_df["timestamp"], utc=True, errors="coerce"
                             ) - pd.Timedelta(days=7)
                         _ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
@@ -4050,7 +4050,7 @@ async def _fetch_sports_reference_data(
                     fixture_df = pd.DataFrame(fixture_dicts)
                     # PIT safety: scheduled fixtures published ~1 week before kickoff
                     if "timestamp" in fixture_df.columns:
-                        fixture_df["data_available_at"] = pd.to_datetime(
+                        fixture_df["available_at"] = pd.to_datetime(
                             fixture_df["timestamp"], utc=True, errors="coerce"
                         ) - pd.Timedelta(days=7)
                     _fix_ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
@@ -4259,7 +4259,7 @@ async def _fetch_sports_reference_data(
 
                 # PIT safety: per-fixture stats/events/lineups/player_stats available ~2h after kickoff.
                 # No per-row kickoff here — approximate using date + 17:00 UTC (15:00 typical KO + 2h).
-                df["data_available_at"] = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=17)
+                df["available_at"] = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=17)
 
                 counts[entity_name] = len(df)
 
@@ -4764,7 +4764,7 @@ async def _fetch_footystats_predictions(
             # PIT safety: FootyStats predictions publish alongside odds ~3 days before kickoff
             # (empirically verified 2026-04-17: 98% coverage at T-24h, 100% at T-72h).
             if "kickoff_utc" in df.columns:
-                df["data_available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True) - pd.Timedelta(hours=72)
+                df["available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True) - pd.Timedelta(hours=72)
             df["fetched_at"] = fetched_at_ts
             # Build canonical fixture_id for downstream join.
             # FootyStats fixture_id format: "{competition_id}:{HOME}_v_{AWAY}:{DATE}"
@@ -5079,7 +5079,7 @@ async def _fetch_footystats_matches(
             df = pd.DataFrame(flat_rows)
             # PIT safety: post-match stats available ~3h after kickoff when match complete
             if "kickoff_utc" in df.columns:
-                df["data_available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True, errors="coerce") + pd.Timedelta(
+                df["available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True, errors="coerce") + pd.Timedelta(
                     hours=3
                 )
             counts["footystats_matches"] = len(df)
@@ -5258,7 +5258,7 @@ async def _fetch_footystats_odds(
             # 2026-04-17: 98% of matches have odds at T-24h, 100% at T-72h, ~8% at T-168h).
             # Conservative: assume odds available from T-72h.
             if "kickoff_utc" in df.columns:
-                df["data_available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True) - pd.Timedelta(hours=72)
+                df["available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True) - pd.Timedelta(hours=72)
             # fetched_at = when we actually captured this snapshot (for odds movement tracking)
             df["fetched_at"] = fetched_at_ts
             _ft_id_to_league = FOOTYSTATS_HISTORICAL_SEASON_IDS
@@ -5499,7 +5499,7 @@ async def _fetch_understat_xg(
             df = pd.DataFrame(flat_rows)
             # PIT safety: Understat xG scraped day after match
             if "kickoff_utc" in df.columns:
-                df["data_available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True, errors="coerce") + pd.Timedelta(
+                df["available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True, errors="coerce") + pd.Timedelta(
                     hours=24
                 )
             counts["understat_xg"] = len(df)
@@ -6172,7 +6172,7 @@ async def _fetch_sfi_data(
                     # Without per-match kickoff lookup, approximate using date at 15:00 UTC (common match hour).
                     if "timer_seconds" in df.columns:
                         _sfi_kickoff = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=15)
-                        df["data_available_at"] = _sfi_kickoff + pd.to_timedelta(
+                        df["available_at"] = _sfi_kickoff + pd.to_timedelta(
                             pd.to_numeric(df["timer_seconds"], errors="coerce"), unit="s"
                         )
                     # Per-league partitioned write — single SSOT, no bare write.
@@ -6704,11 +6704,11 @@ async def _fetch_weather_data(
         # PIT safety: weather observation/forecast availability.
         # Prefer existing observation_time/forecast_issue_time columns; otherwise fallback to date + 12:00 UTC.
         if "observation_time" in new_df.columns:
-            new_df["data_available_at"] = pd.to_datetime(new_df["observation_time"], utc=True, errors="coerce")
+            new_df["available_at"] = pd.to_datetime(new_df["observation_time"], utc=True, errors="coerce")
         elif "forecast_issue_time" in new_df.columns:
-            new_df["data_available_at"] = pd.to_datetime(new_df["forecast_issue_time"], utc=True, errors="coerce")
+            new_df["available_at"] = pd.to_datetime(new_df["forecast_issue_time"], utc=True, errors="coerce")
         else:
-            new_df["data_available_at"] = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=12)
+            new_df["available_at"] = pd.Timestamp(date, tz="UTC") + pd.Timedelta(hours=12)
 
         # Merge with existing weather data (append new venues to existing).
         # Note: existing parquet may live at the bare or per-league path; we

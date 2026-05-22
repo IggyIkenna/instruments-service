@@ -302,22 +302,12 @@ async def run_sports_fixtures_daily_repoll(
         if "timestamp" in df.columns:
             kickoff_utc = pd.to_datetime(df["timestamp"], utc=True, errors="coerce")
             announced_at = kickoff_utc - pd.Timedelta(days=_ANNOUNCED_AT_LEAD_DAYS)
-            df["data_available_at"] = announced_at
-            # UTL's ``assert_available_at_present`` keys off the column name
-            # ``available_at`` — the on-disk schema column for SPORTS_FIXTURES
-            # is ``data_available_at`` (legacy) per the
-            # ``_flatten_canonical_fixture_for_disk`` contract. Stamp BOTH so
-            # downstream readers + the live-pipeline-arrival presence guard
-            # both see a populated cell. Once the writegate "available_at as
-            # canonical name" sweep ships (writegate Phase 2.D follow-up),
-            # this dual-stamp collapses to a single ``available_at`` column.
             df["available_at"] = announced_at
         else:
             # Defensive — every CanonicalFixture carries kickoff_utc (else
             # _flatten emits day-string ``date`` and None ``timestamp``). Stamp
             # ``available_at`` to today midnight so the presence guard passes
             # with the most-conservative possible value (= we'd have it now).
-            df["data_available_at"] = pd.Timestamp(day_str, tz="UTC")
             df["available_at"] = pd.Timestamp(day_str, tz="UTC")
 
         # Per-league split + write via the existing canonical sink helper.

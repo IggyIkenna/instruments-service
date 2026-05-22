@@ -180,13 +180,11 @@ async def test_run_sports_fixtures_daily_repoll_stamps_available_at(
     assert len(captured_dfs) == 1
     df = captured_dfs[0]
     assert "available_at" in df.columns
-    assert "data_available_at" in df.columns
+    assert "data_available_at" not in df.columns
     # mock fixture kickoff = 2026-05-09 15:00 UTC; expected available_at = 2026-05-02 15:00 UTC
     expected = datetime(2026, 5, 2, 15, 0, tzinfo=UTC)
     actual = df["available_at"].iloc[0].to_pydatetime()
     assert actual == expected
-    actual_legacy = df["data_available_at"].iloc[0].to_pydatetime()
-    assert actual_legacy == expected
 
 
 @pytest.mark.asyncio
