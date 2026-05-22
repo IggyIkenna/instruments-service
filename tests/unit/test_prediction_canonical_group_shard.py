@@ -26,10 +26,13 @@ These tests pin down:
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pandas as pd
-from unified_api_contracts.predictions import CanonicalQuestionGroup
+from unified_api_contracts.predictions import CANONICAL_GROUP_METADATA, CanonicalQuestionGroup
 
 from instruments_service.engine.orchestrator import (
+    _build_market_lifecycle_df,
     _compute_prediction_shards,
     _extract_prediction_canonical_group,
 )
@@ -181,3 +184,136 @@ class TestComputePredictionShards:
 
         # Both route to OTHER (no override seeded yet) under KALSHI/OTHER.
         assert shard_counts.get("KALSHI/OTHER") == 2
+
+
+def _lifecycle_df(
+    instrument_keys: list[str],
+    available_from: list[datetime],
+    available_to: list[datetime],
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "instrument_key": instrument_keys,
+            "available_from_datetime": available_from,
+            "available_to_datetime": available_to,
+        }
+    )
+
+
+class TestBuildMarketLifecycleDf:
+    """Unit tests for :func:`_build_market_lifecycle_df`."""
+
+    def test_derives_required_columns(self) -> None:
+        now = datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC)
+        past = datetime(2026, 5, 20, 10, 0, 0, tzinfo=UTC)
+        created = datetime(2026, 5, 1, 0, 0, 0, tzinfo=UTC)
+        df = _lifecycle_df(["0xabc"], [created], [past])
+
+        out = _build_market_lifecycle_df(df, CanonicalQuestionGroup.BTC_UP_DOWN_DAILY.value, now)
+
+        assert list(out.columns) == [
+            "market_id",
+            "canonical_question_group",
+            "market_created_at",
+            "resolution_time",
+            "settlement_time",
+            "status",
+        ]
+        assert len(out) == 1
+        row = out.iloc[0]
+        assert row["market_id"] == "0xabc"
+        assert row["canonical_question_group"] == CanonicalQuestionGroup.BTC_UP_DOWN_DAILY.value
+
+    def test_settlement_lag_applied(self) -> None:
+        now = datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC)
+        settlement = datetime(2026, 5, 20, 14, 0, 0, tzinfo=UTC)
+        created = datetime(2026, 5, 1, 0, 0, 0, tzinfo=UTC)
+        df = _lifecycle_df(["mkt1"], [created], [settlement])
+
+        expected_lag = CANONICAL_GROUP_METADATA[CanonicalQuestionGroup.SPX_UP_DOWN_DAILY].settlement_lag
+        out = _build_market_lifecycle_df(df, CanonicalQuestionGroup.SPX_UP_DOWN_DAILY.value, now)
+
+        row = out.iloc[0]
+        assert row["resolution_time"] == pd.Timestamp(settlement) - expected_lag
+
+    def test_status_settled_when_settlement_before_now(self) -> None:
+        now = datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC)
+        past_settlement = datetime(2026, 5, 20, 8, 0, 0, tzinfo=UTC)
+        created = datetime(2026, 5, 1, 0, 0, 0, tzinfo=UTC)
+        df = _lifecycle_df(["settled-mkt"], [created], [past_settlement])
+
+        out = _build_market_lifecycle_df(df, CanonicalQuestionGroup.BTC_UP_DOWN_DAILY.value, now)
+
+        assert out.iloc[0]["status"] == "settled"
+
+    def test_status_active_when_settlement_after_now(self) -> None:
+        now = datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC)
+        future_settlement = datetime(2026, 5, 30, 20, 0, 0, tzinfo=UTC)
+        created = datetime(2026, 5, 1, 0, 0, 0, tzinfo=UTC)
+        df = _lifecycle_df(["active-mkt"], [created], [future_settlement])
+
+        out = _build_market_lifecycle_df(df, CanonicalQuestionGroup.BTC_UP_DOWN_DAILY.value, now)
+
+        assert out.iloc[0]["status"] == "active"
+
+    def test_rows_with_null_available_from_dropped(self) -> None:
+        now = datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC)
+        settlement = datetime(2026, 5, 20, 10, 0, 0, tzinfo=UTC)
+        created = datetime(2026, 5, 1, 0, 0, 0, tzinfo=UTC)
+        df = _lifecycle_df(
+            ["valid-mkt", "null-from-mkt"],
+            [created, None],  # type: ignore[list-item]
+            [settlement, settlement],
+        )
+
+        out = _build_market_lifecycle_df(df, CanonicalQuestionGroup.BTC_UP_DOWN_DAILY.value, now)
+
+        assert len(out) == 1
+        assert out.iloc[0]["market_id"] == "valid-mkt"
+
+    def test_rows_with_null_available_to_dropped(self) -> None:
+        now = datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC)
+        created = datetime(2026, 5, 1, 0, 0, 0, tzinfo=UTC)
+        df = _lifecycle_df(
+            ["null-to-mkt"],
+            [created],
+            [None],  # type: ignore[list-item]
+        )
+
+        out = _build_market_lifecycle_df(df, CanonicalQuestionGroup.BTC_UP_DOWN_DAILY.value, now)
+
+        assert out.empty
+
+    def test_missing_required_columns_returns_empty(self) -> None:
+        now = datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC)
+        df = pd.DataFrame({"instrument_key": ["0xabc"]})
+
+        out = _build_market_lifecycle_df(df, CanonicalQuestionGroup.BTC_UP_DOWN_DAILY.value, now)
+
+        assert out.empty
+
+    def test_unknown_canonical_group_falls_back_to_other_lag(self) -> None:
+        now = datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC)
+        settlement = datetime(2026, 5, 20, 10, 0, 0, tzinfo=UTC)
+        created = datetime(2026, 5, 1, 0, 0, 0, tzinfo=UTC)
+        df = _lifecycle_df(["mkt"], [created], [settlement])
+
+        other_lag = CANONICAL_GROUP_METADATA[CanonicalQuestionGroup.OTHER].settlement_lag
+        out = _build_market_lifecycle_df(df, "TOTALLY_UNKNOWN_GROUP", now)
+
+        row = out.iloc[0]
+        assert row["canonical_question_group"] == "TOTALLY_UNKNOWN_GROUP"
+        assert row["resolution_time"] == pd.Timestamp(settlement) - other_lag
+
+    def test_multiple_markets_all_present(self) -> None:
+        now = datetime(2026, 5, 22, 12, 0, 0, tzinfo=UTC)
+        base = datetime(2026, 5, 1, 0, 0, 0, tzinfo=UTC)
+        markets = [f"0xmkt{i}" for i in range(5)]
+        settlements = [base + timedelta(days=i) for i in range(5)]
+        createds = [base - timedelta(days=30) for _ in range(5)]
+        df = _lifecycle_df(markets, createds, settlements)
+
+        out = _build_market_lifecycle_df(df, CanonicalQuestionGroup.ETH_UP_DOWN_DAILY.value, now)
+
+        assert len(out) == 5
+        assert set(out["market_id"].tolist()) == set(markets)
