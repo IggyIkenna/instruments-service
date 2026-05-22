@@ -76,12 +76,17 @@ from unified_trading_library import (
     classify_and_emit_error,
     get_data_sink,
 )
+from unified_trading_library.cloud_interface.bucket_naming import resolve_bucket_name
 
+# Import private functions - these should be made public in future refactor
 from instruments_service.engine.orchestrator import (
-    _canonical_league_id,
-    _flatten_canonical_fixture_for_disk,
-    _get_instruments_bucket,
-    _write_fixtures_per_league,
+    _canonical_league_id as canonical_league_id,
+)
+from instruments_service.engine.orchestrator import (
+    _flatten_canonical_fixture_for_disk as flatten_canonical_fixture_for_disk,
+)
+from instruments_service.engine.orchestrator import (
+    _write_fixtures_per_league as write_fixtures_per_league,
 )
 from instruments_service.reference_data import create_sports_reference_adapter
 
@@ -89,6 +94,12 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
+
+
+def get_instruments_bucket_for_asset_group(asset_group: str = "SPORTS") -> str:
+    """Get the instruments bucket for the given asset group using public API."""
+    return resolve_bucket_name(f"instruments-store-{asset_group.lower()}")
+
 
 SPORTS_FIXTURES_DAILY_REPOLL_TRIGGER: str = "sports.fixtures.daily_repoll"
 """Closed-set trigger name routed to :func:`run_sports_fixtures_daily_repoll`."""
@@ -216,7 +227,7 @@ async def run_sports_fixtures_daily_repoll(
         )
         return {}
 
-    sports_bucket = bucket or _get_instruments_bucket("SPORTS")
+    sports_bucket = bucket or get_instruments_bucket_for_asset_group("SPORTS")
     if not sports_bucket:
         raise ValueError(
             "sports.fixtures.daily_repoll: could not resolve SPORTS instruments-store "
@@ -293,7 +304,7 @@ async def run_sports_fixtures_daily_repoll(
         # below + carry the canonical id through to the manifest row_key.
         rows: list[dict[str, object]] = []
         for fx in fixtures:
-            row = _flatten_canonical_fixture_for_disk(fx, day_str)
+            row = flatten_canonical_fixture_for_disk(fx, day_str)
             league = getattr(fx, "league", None)
             if league is not None:
                 row["league_id"] = getattr(league, "league_id", "") or ""
@@ -312,7 +323,7 @@ async def run_sports_fixtures_daily_repoll(
 
         # Per-league split + write via the existing canonical sink helper.
         # Same path, same partition keys, same filename as batch.
-        _write_fixtures_per_league(sink, df, day_str, source_label="trigger:daily_repoll")
+        write_fixtures_per_league(sink, df, day_str, source_label="trigger:daily_repoll")
 
         # Per-league manifest rows — the writer dedupes by row_key, so a
         # subsequent fire on the same day overwrites cleanly with
@@ -344,7 +355,7 @@ async def run_sports_fixtures_daily_repoll(
             lid_str = str(lid_raw)
             if not lid_str or lid_str == "nan":
                 continue
-            canonical_lid = _canonical_league_id(lid_str)
+            canonical_lid = canonical_league_id(lid_str)
             league_df_clean = league_df.drop(columns=["_resolved_league_id"], errors="ignore")
             row_count = len(league_df_clean)
             try:
