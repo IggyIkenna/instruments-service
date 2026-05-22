@@ -51,6 +51,7 @@ from unified_api_contracts import (
 )
 from unified_api_contracts.internal import InstrumentRecord, validate_instrument_records
 from unified_api_contracts.predictions import (
+    CANONICAL_GROUP_METADATA,
     CanonicalQuestionGroup,
     classify_kalshi_to_canonical_group,
     classify_polymarket_to_canonical_group,
@@ -2241,6 +2242,9 @@ async def process_instruments(
     bucket = _get_instruments_bucket(primary_asset_group)
     # prefix ensures writes land at instrument_availability/by_date/{day=X}/{venue=Y}/
     sink = get_data_sink(bucket=bucket, prefix="instrument_availability/by_date")
+    # Separate sink for prediction market lifecycle parquet (per predictions_master Phase 3 L618).
+    # Path: market_lifecycle/by_canonical_group/group={g}/day={d}/market_lifecycle.parquet
+    lifecycle_sink = get_data_sink(bucket=bucket, prefix="market_lifecycle/by_canonical_group")
 
     manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
     if "venue" in df.columns:
@@ -2386,6 +2390,15 @@ async def process_instruments(
                             _group_df_clean,
                             filename_prefix=f"instruments_{_manifest_venue}_{_group_str}_{date}",
                         )
+                    _write_market_lifecycle(
+                        sink=lifecycle_sink,
+                        group_df=_group_df_clean,
+                        canonical_group_str=_group_str,
+                        date=date,
+                        manifest_venue=_manifest_venue,
+                        manifest=manifest,
+                        pipeline_mode=_pred_pm,
+                    )
             else:
                 _write_venue(venue_str, venue_df, date, bucket, sink, counts, sampler, manifest)
                 # Phase 4.2 (tradfi_canonical_futures_contract_hard_required_fields_2026_05_13):
@@ -3222,6 +3235,130 @@ def _write_futures_contracts(
                 "venue": venue_str,
                 "date": date,
                 "entity": "futures_contracts",
+                "error": str(exc),
+            },
+        )
+
+
+def _build_market_lifecycle_df(
+    group_df: pd.DataFrame,
+    canonical_group_str: str,
+    now: datetime,
+) -> pd.DataFrame:
+    """Build a MARKET_LIFECYCLE DataFrame from prediction InstrumentRecord rows.
+
+    Extracts lifecycle fields present in InstrumentRecord:
+      market_created_at  ← available_from_datetime (set by adapter.classify_lifecycle)
+      settlement_time    ← available_to_datetime
+      resolution_time    ← settlement_time - CANONICAL_GROUP_METADATA[group].settlement_lag
+      status             ← "settled" if settlement_time ≤ now else "active"
+
+    Returns an empty DataFrame if the required columns are absent or all values are null.
+    Rows missing either available_from_datetime or available_to_datetime are dropped.
+    """
+    required = {"instrument_key", "available_from_datetime", "available_to_datetime"}
+    if not required.issubset(group_df.columns):
+        return pd.DataFrame()
+
+    rows = group_df[group_df["available_from_datetime"].notna() & group_df["available_to_datetime"].notna()].copy()
+    if rows.empty:
+        return pd.DataFrame()
+
+    try:
+        group_enum = CanonicalQuestionGroup(canonical_group_str)
+    except ValueError:
+        group_enum = CanonicalQuestionGroup.OTHER
+    settlement_lag = CANONICAL_GROUP_METADATA[group_enum].settlement_lag
+
+    now_ts = pd.Timestamp(now).tz_convert("UTC") if pd.Timestamp(now).tzinfo else pd.Timestamp(now, tz="UTC")
+    rows["settlement_time"] = pd.to_datetime(rows["available_to_datetime"], utc=True)
+    rows["resolution_time"] = rows["settlement_time"] - settlement_lag
+    rows["market_created_at"] = pd.to_datetime(rows["available_from_datetime"], utc=True)
+    settled_mask: pd.Series[bool] = rows["settlement_time"] <= now_ts
+    rows["status"] = pd.Series(
+        ["settled" if v else "active" for v in settled_mask],
+        index=rows.index,
+        dtype=str,
+    )
+    rows["canonical_question_group"] = canonical_group_str
+    rows["market_id"] = rows["instrument_key"].astype(str)
+
+    return rows[
+        ["market_id", "canonical_question_group", "market_created_at", "resolution_time", "settlement_time", "status"]
+    ].copy()
+
+
+def _write_market_lifecycle(
+    sink: DataSink,
+    group_df: pd.DataFrame,
+    canonical_group_str: str,
+    date: str,
+    manifest_venue: str,
+    manifest: ManifestWriter,
+    pipeline_mode: PipelineMode,
+) -> None:
+    """Write MARKET_LIFECYCLE parquet alongside instruments.parquet for a prediction group.
+
+    Output: market_lifecycle/by_canonical_group/group={g}/day={d}/market_lifecycle.parquet
+    Shard-level isolation: errors are logged but do not abort the instruments write.
+    Plan: predictions_master.md Phase 3 L618.
+    """
+    try:
+        now = datetime.now(UTC)
+        out_df = _build_market_lifecycle_df(group_df, canonical_group_str, now)
+        if out_df.empty:
+            logger.debug(
+                "_write_market_lifecycle: no lifecycle rows for venue=%s group=%s date=%s",
+                manifest_venue,
+                canonical_group_str,
+                date,
+            )
+            return
+        out_df = stamp_available_at_explicit(out_df, when=now)
+        _gated_sink_write(
+            sink,
+            data=out_df,
+            partition={"group": canonical_group_str, "day": date},
+            filename="market_lifecycle.parquet",
+            venue=manifest_venue,
+            entity="market_lifecycle",
+        )
+        manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable
+            row_key={
+                "date": date,
+                "data_type": "prediction_market_lifecycle",
+                "venue": manifest_venue,
+                "underlying": canonical_group_str,
+            },
+            total_rows=len(out_df),
+            expected_root_clusters={},
+            observed_clusters={"": len(out_df)},
+            available_at_envelope=pd.Timestamp(now),
+            pipeline_mode=pipeline_mode,
+            service_emission_state=None,
+        )
+        logger.info(
+            "_write_market_lifecycle: %d rows venue=%s group=%s date=%s",
+            len(out_df),
+            manifest_venue,
+            canonical_group_str,
+            date,
+        )
+    except Exception as exc:  # broad-except-ok — shard-level isolation per CLAUDE.md
+        logger.error(
+            "_write_market_lifecycle: failed venue=%s group=%s date=%s: %s",
+            manifest_venue,
+            canonical_group_str,
+            date,
+            exc,
+        )
+        log_event(
+            "WRITE_FAILED",
+            details={
+                "venue": manifest_venue,
+                "canonical_question_group": canonical_group_str,
+                "date": date,
+                "operation": "market_lifecycle_write",
                 "error": str(exc),
             },
         )
