@@ -25,8 +25,8 @@ import logging
 
 import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
+from unified_api_contracts import CaptureStatusCounts
 from unified_trading_library import (
-    CaptureStatusCounts,
     compute_coverage_for_bucket,
     get_write_bucket_name,
     read_availability_index,
