@@ -22,9 +22,15 @@ Response (500):
 from __future__ import annotations
 
 import logging
-from typing import Any
 
+import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
+from unified_trading_library import (
+    CaptureStatusCounts,
+    compute_coverage_for_bucket,
+    get_write_bucket_name,
+    read_availability_index,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,31 +42,27 @@ async def get_data_status(
     asset_group: str = Query(default="defi", description="Instruments bucket selector"),
     bucket: str | None = Query(default=None, description="Explicit bucket override"),
     data_type: str | None = Query(default=None, description="Filter to single data_type"),
-) -> dict[str, Any]:
-    from unified_trading_library import (  # pyright: ignore[reportUnknownVariableType]  # noqa: imports-inside-functions
-        compute_coverage_for_bucket,
-        get_write_bucket_name,
-        read_availability_index,
-    )
-
-    resolved_bucket: str = bucket if bucket else get_write_bucket_name("instruments", asset_group)  # pyright: ignore[reportUnknownVariableType]
+) -> dict[str, object]:
+    resolved_bucket: str = bucket if bucket else get_write_bucket_name("instruments", asset_group)
 
     try:
-        index = read_availability_index(resolved_bucket)  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]
+        index: pd.DataFrame = read_availability_index(resolved_bucket)
     except Exception as exc:
         logger.warning("data-status: failed to read index for bucket %s: %s", resolved_bucket, exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    if index.empty or "data_type" not in index.columns:  # pyright: ignore[reportUnknownMemberType]
+    if index.empty or "data_type" not in index.columns:
         return {"bucket": resolved_bucket, "rows": []}
 
-    all_data_types: list[str] = sorted(str(v) for v in index["data_type"].dropna().unique())  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportUnknownArgumentType]
+    all_data_types: list[str] = sorted(str(v) for v in index["data_type"].dropna().unique())
     if data_type is not None:
         all_data_types = [dt for dt in all_data_types if dt == data_type]
 
     rows: list[dict[str, object]] = []
     for dt in all_data_types:
-        counts, ratio = compute_coverage_for_bucket(resolved_bucket, asset_group=asset_group, data_type=dt)  # pyright: ignore[reportUnknownVariableType]
+        counts: CaptureStatusCounts
+        ratio: float
+        counts, ratio = compute_coverage_for_bucket(resolved_bucket, asset_group=asset_group, data_type=dt)
         rows.append(
             {
                 "asset_group": asset_group,
