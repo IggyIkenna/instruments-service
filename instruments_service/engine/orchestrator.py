@@ -3100,8 +3100,11 @@ def _write_venue(
                     )
                 else:
                     _cat = "defi" if manifest_chain else ("tradfi" if venue_str in _TRADFI_VENUES else "cefi")
+                    _rk: dict[str, str] = {"date": date, "venue": manifest_venue}
+                    if manifest_chain:
+                        _rk["chain"] = manifest_chain
                     manifest.record_captured(  # QG-allow: emission-policy-not-applicable
-                        row_key={"date": date, "venue": manifest_venue, "chain": manifest_chain},
+                        row_key=_rk,
                         df=_stamped_venue_df,
                         category=_cat,
                         instrument_type="",
