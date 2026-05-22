@@ -128,20 +128,18 @@ class TestGatedSinkWrite:
         assert details["entity"] == "player_values"
 
     def test_sfi_kickoff_compliant(self) -> None:
-        """SFI progressive_stats stamps data_available_at = kickoff + timer_seconds.
+        """SFI progressive_stats stamps available_at = kickoff + timer_seconds.
         For a historical backfill on day=D, kickoff_utc derives from D at 15:00 UTC
-        (see orchestrator.py ~L4894). All data_available_at values should satisfy
+        (see orchestrator.py ~L4894). All available_at values should satisfy
         value.date() <= D after timer_seconds addition (timer never negative)."""
         sink = _FakeSink()
         kickoff = pd.Timestamp("2023-03-16", tz="UTC") + pd.Timedelta(hours=15)
-        write_ts = pd.Timestamp("2023-03-16", tz="UTC")
         # A few progressive ticks at 0s / 45s / 90s into the match.
         df = pd.DataFrame(
             {
                 "match_id": ["m1", "m1", "m1"],
                 "timer_seconds": [0, 45, 90],
-                "data_available_at": [kickoff + pd.Timedelta(seconds=s) for s in [0, 45, 90]],
-                "available_at": [write_ts, write_ts, write_ts],
+                "available_at": [kickoff + pd.Timedelta(seconds=s) for s in [0, 45, 90]],
             }
         )
         _gated_sink_write(
@@ -255,7 +253,7 @@ class TestVenueParityCases:
             filename="injuries.parquet",
             venue="api_football",
             entity="injuries",
-            column="data_available_at",
+            column="kickoff_utc",
         )
         assert len(sink.writes) == 1
         assert any(e[0] == "DATA_ALIGNMENT_VIOLATION" for e in events)
@@ -284,7 +282,7 @@ class TestVenueParityCases:
             filename="footystats_odds.parquet",
             venue="footystats",
             entity="footystats_odds",
-            column="data_available_at",
+            column="kickoff_utc",
         )
         assert len(sink.writes) == 1
         assert any(e[0] == "DATA_ALIGNMENT_VIOLATION" for e in events)
@@ -320,7 +318,7 @@ class TestVenueParityCases:
             filename="weather.parquet",
             venue="open_meteo",
             entity="weather",
-            column="data_available_at",
+            column="kickoff_utc",
         )
         assert len(sink.writes) == 1
         details = next(e[2] for e in events if e[0] == "DATA_ALIGNMENT_VIOLATION")
