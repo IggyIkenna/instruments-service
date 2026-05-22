@@ -9,6 +9,7 @@ In CLOUD_MOCK_MODE, key validation is skipped (no real Secret Manager available)
 
 from __future__ import annotations
 
+import argparse
 import contextlib
 import io
 import logging
@@ -25,16 +26,21 @@ from unified_trading_library import (
     get_storage_client,
     publish_coordination_event,  # pyright: ignore[reportPrivateImportUsage]
 )
+from unified_trading_library.cloud_interface.bucket_naming import resolve_bucket_name
 
 from instruments_service.engine import orchestrator as engine_orchestrator
 from instruments_service.engine.orchestrator import (
-    _get_instruments_bucket,
     clear_defi_universe_cache,
     earliest_venue_date,
     get_venues_for_asset_groups,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _get_instruments_bucket_for_asset_group(asset_group: str) -> str:
+    """Get the instruments bucket for the given asset group using public API."""
+    return resolve_bucket_name(f"instruments-store-{asset_group.lower()}")
 
 
 class InstrumentsHandler(UnifiedServiceHandler):
@@ -46,6 +52,9 @@ class InstrumentsHandler(UnifiedServiceHandler):
 
     process(payload): calls engine orchestrator for the given date+asset groups
     """
+
+    # Args property is set by the service framework adapter
+    args: argparse.Namespace | None
 
     def __init__(self, runtime: ServiceRuntime) -> None:
         super().__init__(runtime)
@@ -157,8 +166,8 @@ class InstrumentsHandler(UnifiedServiceHandler):
         allowlist, run normally."
         """
         try:
-            if path.startswith("gs://"):  # noqa: gs-uri
-                without_scheme = path[len("gs://") :]  # noqa: gs-uri
+            if path.startswith("gs://"):
+                without_scheme = path[len("gs://") :]
                 bucket, _, blob = without_scheme.partition("/")
                 if not bucket or not blob:
                     logger.error(
@@ -248,7 +257,7 @@ class InstrumentsHandler(UnifiedServiceHandler):
         flushed: list[str] = []
         for asset_group in ("SPORTS", "CEFI", "DEFI", "TRADFI"):
             try:
-                bucket = _get_instruments_bucket(asset_group)
+                bucket = _get_instruments_bucket_for_asset_group(asset_group)
                 if bucket:
                     writer = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
                     writer.flush()
