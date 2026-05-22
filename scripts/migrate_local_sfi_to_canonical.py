@@ -18,7 +18,7 @@ Schema (one row per ``(fixture_id, timer_seconds)``):
 * ``timer_seconds`` — integer seconds (we convert ``"MM:SS"`` -> ``MM*60 + SS``)
 * ``odds_1x2_home / draw / away``, ``odds_ou_*``, ``odds_ah_*``, ``odds_asian_corner_*``
 * ``dominance_index_home / away``, ``dominance_pct``, ``dominance_avg_*``
-* ``league_id``, ``data_available_at``
+* ``league_id``, ``available_at``
 
 Mapping (local -> canonical):
 
@@ -297,7 +297,7 @@ def _merge_into_canonical(
     # mixed-dtype object columns (existing canonical sometimes stores odds as
     # bytes/string; local stores them as float — combine_first leaves the
     # result as ``object`` with both types, which pyarrow rejects).
-    _id_cols = {"fixture_id", "timer_seconds", "league_id", "data_available_at"}
+    _id_cols = {"fixture_id", "timer_seconds", "league_id", "available_at"}
     for col in merged.columns:
         if col in _id_cols:
             continue
@@ -363,10 +363,10 @@ def main() -> int:
         len(local_with_meta),
         dropped,
     )
-    # Add data_available_at — set to MAX(updated_at) per fixture, fall back to day midnight.
+    # Add available_at — set to MAX(updated_at) per fixture, fall back to day midnight.
     # Keep simple: stamp all rows with ``now`` as the migration time.
     now = datetime.now(UTC)
-    local_with_meta["data_available_at"] = now
+    local_with_meta["available_at"] = now
 
     # Phase 4: group + merge + upload.
     groups = list(local_with_meta.groupby(["day", "league_id"], sort=False))
