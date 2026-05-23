@@ -45,7 +45,7 @@ def test_urdi_supported_venues_uses_canonical_names():
     """All venue names are UAC canonical (uppercase, not URDI adapter file stems)."""
     # Canonical names are uppercase hyphenated
     assert "BINANCE-SPOT" in URDI_SUPPORTED_VENUES or "BINANCE-FUTURES" in URDI_SUPPORTED_VENUES
-    assert "UNISWAPV3-ETHEREUM" in URDI_SUPPORTED_VENUES
+    assert "UNISWAP_V3-ETHEREUM" in URDI_SUPPORTED_VENUES
     assert "MORPHO-ETHEREUM" in URDI_SUPPORTED_VENUES
     assert "BETFAIR" in URDI_SUPPORTED_VENUES
     # Must NOT contain lowercase URDI adapter keys
@@ -96,7 +96,7 @@ async def test_fetch_supported_venue_returns_records():
 @pytest.mark.asyncio
 async def test_fetch_deduplicates_shared_adapters():
     """Two canonical venues mapping to the same adapter key are deduplicated."""
-    record = _make_record("AAVEV3-ETHEREUM")
+    record = _make_record("AAVE_V3-ETHEREUM")
     mock_adapter = MagicMock()
     mock_adapter.get_instruments_cached = AsyncMock(return_value=[record])
 
@@ -104,8 +104,8 @@ async def test_fetch_deduplicates_shared_adapters():
         "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
         return_value=mock_adapter,
     ):
-        # Only AAVEV3-ETHEREUM (single venue, single adapter call)
-        result = await fetch_instruments_for_all_venues(["AAVEV3-ETHEREUM"])
+        # Only AAVE_V3-ETHEREUM (single venue, single adapter call)
+        result = await fetch_instruments_for_all_venues(["AAVE_V3-ETHEREUM"])
 
     assert len(result.records) == 1
     assert mock_adapter.get_instruments_cached.call_count == 1
@@ -232,7 +232,7 @@ async def test_fetch_adapter_value_error_is_logged_not_raised(caplog):
             return_value=mock_adapter,
         ),
     ):
-        result = await fetch_instruments_for_all_venues(["AAVEV3-ETHEREUM"])
+        result = await fetch_instruments_for_all_venues(["AAVE_V3-ETHEREUM"])
 
     assert result.records == []
     assert any("ADAPTER_ERROR" in r.message for r in caplog.records)

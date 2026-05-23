@@ -77,7 +77,7 @@ def _make_cefi_entry(
 def _make_defi_entry(
     instrument_id: str = "ETH-USDC",
     instrument_type: str = "SPOT",
-    venue: str = "AAVEV3",
+    venue: str = "AAVE_V3",
     chain: str = "ARBITRUM",
     available_from: str | None = "2022-01-01",
     available_to: str | None = None,
@@ -791,7 +791,7 @@ def test_defi_v2_alive_date_in_present_set_skipped() -> None:
     date_axis = _date_axis("2024-06-01")
     key = _row_key_from_dict(
         {
-            "venue": "AAVEV3",
+            "venue": "AAVE_V3",
             "chain": "ARBITRUM",
             "data_type": "lending_indices",
             "instrument_type": "SPOT",

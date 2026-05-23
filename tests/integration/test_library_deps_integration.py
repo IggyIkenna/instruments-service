@@ -85,14 +85,14 @@ def test_uic_instrument_record_constructable() -> None:
     from unified_api_contracts.internal import InstrumentRecord
 
     record = InstrumentRecord(
-        instrument_key="UNISWAPV3-ETHEREUM:POOL:WETH-USDC",
-        venue="UNISWAPV3-ETHEREUM",
+        instrument_key="UNISWAP_V3-ETHEREUM:POOL:WETH-USDC",
+        venue="UNISWAP_V3-ETHEREUM",
         instrument_type="POOL",
         base_asset="WETH",
         quote_asset="USDC",
     )
-    assert record.instrument_key == "UNISWAPV3-ETHEREUM:POOL:WETH-USDC"
-    assert record.venue == "UNISWAPV3-ETHEREUM"
+    assert record.instrument_key == "UNISWAP_V3-ETHEREUM:POOL:WETH-USDC"
+    assert record.venue == "UNISWAP_V3-ETHEREUM"
     assert record.model_dump() is not None, "model_dump() must work (used in orchestrator)"
 
 
@@ -357,7 +357,7 @@ def test_uei_log_event_callable() -> None:
 @pytest.mark.integration
 def test_urdi_adapter_registry_populated() -> None:
     """CANONICAL_VENUE_TO_ADAPTER maps canonical venue names to URDI adapter keys.
-    If URDI removes a venue (e.g. UNISWAPV3-ETHEREUM), instrument fetching silently
+    If URDI removes a venue (e.g. UNISWAP_V3-ETHEREUM), instrument fetching silently
     returns zero records for that venue.
     """
     from instruments_service.reference_data import CANONICAL_VENUE_TO_ADAPTER
@@ -365,8 +365,8 @@ def test_urdi_adapter_registry_populated() -> None:
     assert isinstance(CANONICAL_VENUE_TO_ADAPTER, dict)
     assert len(CANONICAL_VENUE_TO_ADAPTER) >= 15, "must cover at least 15 canonical venues"
     # Key venues the service processes must be present
-    assert "UNISWAPV3-ETHEREUM" in CANONICAL_VENUE_TO_ADAPTER, "Uniswap V3 must be registered"
-    assert "AAVEV3-ETHEREUM" in CANONICAL_VENUE_TO_ADAPTER, "Aave V3 must be registered"
+    assert "UNISWAP_V3-ETHEREUM" in CANONICAL_VENUE_TO_ADAPTER, "Uniswap V3 must be registered"
+    assert "AAVE_V3-ETHEREUM" in CANONICAL_VENUE_TO_ADAPTER, "Aave V3 must be registered"
     assert "MORPHO-ETHEREUM" in CANONICAL_VENUE_TO_ADAPTER, "Morpho must be registered"
 
 

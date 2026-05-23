@@ -101,21 +101,21 @@ class TestFactoryLiveModeRouting:
 class TestFactoryDefiChainParsing:
     def test_defi_multichain_adapter_creation(self) -> None:
         clear_adapter_pool()
-        adapter = get_adapter_for_canonical_venue("AAVEV3-ETHEREUM")
+        adapter = get_adapter_for_canonical_venue("AAVE_V3-ETHEREUM")
         assert adapter is not None
 
     def test_defi_multichain_different_chains(self) -> None:
         clear_adapter_pool()
-        a1 = get_adapter_for_canonical_venue("AAVEV3-ETHEREUM")
-        a2 = get_adapter_for_canonical_venue("AAVEV3-ARBITRUM")
+        a1 = get_adapter_for_canonical_venue("AAVE_V3-ETHEREUM")
+        a2 = get_adapter_for_canonical_venue("AAVE_V3-ARBITRUM")
         # Different chain = different pool entries
         assert a1 is not a2
 
     def test_defi_fork_protocol_slug(self) -> None:
         """DEX forks (PancakeSwap, SushiSwap) use UniV3 adapter with resolved protocol_slug."""
         clear_adapter_pool()
-        if "PANCAKESWAPV3-ETHEREUM" in CANONICAL_VENUE_TO_ADAPTER:
-            adapter = get_adapter_for_canonical_venue("PANCAKESWAPV3-ETHEREUM")
+        if "PANCAKESWAP_V3-ETHEREUM" in CANONICAL_VENUE_TO_ADAPTER:
+            adapter = get_adapter_for_canonical_venue("PANCAKESWAP_V3-ETHEREUM")
             assert adapter is not None
 
     def test_defi_solana_chain(self) -> None:

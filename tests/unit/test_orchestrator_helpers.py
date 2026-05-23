@@ -53,8 +53,8 @@ class TestGetVenuesForCategories:
 
     def test_defi_returns_defi_venues(self) -> None:
         venues = get_venues_for_asset_groups(["DEFI"])
-        assert any("AAVEV3" in v for v in venues)
-        assert any("UNISWAPV3" in v for v in venues)
+        assert any("AAVE_V3" in v for v in venues)
+        assert any("UNISWAP_V3" in v for v in venues)
 
     def test_tradfi_returns_tradfi_venues(self) -> None:
         venues = get_venues_for_asset_groups(["TRADFI"])
@@ -76,7 +76,7 @@ class TestGetVenuesForCategories:
         assert "CME" in venues
         assert "API_FOOTBALL" in venues
         assert "POLYMARKET" in venues
-        assert any("AAVEV3" in v for v in venues)
+        assert any("AAVE_V3" in v for v in venues)
 
     def test_empty_categories_returns_empty(self) -> None:
         venues = get_venues_for_asset_groups([])
@@ -167,9 +167,9 @@ class TestFilterInstrumentsByDate:
         assert len(result) == 0
 
     def test_defi_venue_missing_available_since_warns(self, caplog) -> None:
-        record = _make_record(venue="AAVEV3-ETHEREUM")
+        record = _make_record(venue="AAVE_V3-ETHEREUM")
         date_dt = datetime(2024, 6, 1, tzinfo=UTC)
-        defi_venues = frozenset(["AAVEV3-ETHEREUM"])
+        defi_venues = frozenset(["AAVE_V3-ETHEREUM"])
         with caplog.at_level("WARNING"):
             result = filter_instruments_by_date([record], date_dt, defi_venues=defi_venues)
         assert len(result) == 1  # still included
@@ -192,7 +192,7 @@ class TestFilterInstrumentsByDate:
 class TestFilterDefiInstrumentsByRelevance:
     def test_dex_both_major_passes(self) -> None:
         record = _make_record(
-            venue="UNISWAPV3-ETHEREUM",
+            venue="UNISWAP_V3-ETHEREUM",
             base_asset="WETH",
             quote_asset="USDC",
         )
@@ -205,7 +205,7 @@ class TestFilterDefiInstrumentsByRelevance:
 
     def test_dex_one_long_tail_filtered(self) -> None:
         record = _make_record(
-            venue="UNISWAPV3-ETHEREUM",
+            venue="UNISWAP_V3-ETHEREUM",
             base_asset="PEPE",
             quote_asset="WETH",
         )
@@ -218,7 +218,7 @@ class TestFilterDefiInstrumentsByRelevance:
 
     def test_lending_base_major_passes(self) -> None:
         record = _make_record(
-            venue="AAVEV3-ETHEREUM",
+            venue="AAVE_V3-ETHEREUM",
             base_asset="WETH",
             quote_asset="USD",
         )
@@ -231,7 +231,7 @@ class TestFilterDefiInstrumentsByRelevance:
 
     def test_lending_base_long_tail_filtered(self) -> None:
         record = _make_record(
-            venue="AAVEV3-ETHEREUM",
+            venue="AAVE_V3-ETHEREUM",
             base_asset="SHIB",
             quote_asset="USD",
         )
@@ -265,8 +265,8 @@ class TestBuildDefiVenues:
 
     def test_includes_subgraph_venues(self) -> None:
         venues = _build_defi_venues()
-        assert any("AAVEV3" in v for v in venues)
-        assert any("UNISWAPV3" in v for v in venues)
+        assert any("AAVE_V3" in v for v in venues)
+        assert any("UNISWAP_V3" in v for v in venues)
 
     def test_returns_non_empty(self) -> None:
         venues = _build_defi_venues()

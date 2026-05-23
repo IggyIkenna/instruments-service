@@ -36,7 +36,7 @@ from instruments_service.reference_data.utils.evm_creation_resolver import (
 
 class TestGetProtocolFloorDate:
     def test_known_protocol_and_chain_uses_uac_ssot(self) -> None:
-        # UAC PROTOCOL_LAUNCH_DATES is the canonical SSOT — ETHEREUM AAVEV3
+        # UAC PROTOCOL_LAUNCH_DATES is the canonical SSOT — ETHEREUM AAVE_V3
         # mainnet deploy was 2023-01-27 (not the L2 cohort 2022-03 launch).
         # Verified 2026-05-08 via AAVE V3 ETH subgraph
         # ``Cd2gEDVeqnjBn1hSeqFMitw8Q1iiyV9FYUZkLNRcL87g``: earliest
@@ -63,7 +63,7 @@ class TestGetProtocolFloorDate:
         assert dt == datetime(2023, 1, 27, tzinfo=UTC)
 
     def test_compound_v3_arbitrum_uses_uac_ssot(self) -> None:
-        # UAC ``PROTOCOL_LAUNCH_DATES`` says ("ARBITRUM", "COMPOUNDV3") =
+        # UAC ``PROTOCOL_LAUNCH_DATES`` says ("ARBITRUM", "COMPOUND_V3") =
         # 2023-05-04 (Tab 14 subgraph audit 2026-05-08: earliest
         # ``dailyMarketAccountings`` event 2023-05-04 22:00:26 UTC; pre-fix
         # 2023-04-13 was 21 days early). The local

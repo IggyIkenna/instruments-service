@@ -90,7 +90,7 @@ def _defi_records() -> list[InstrumentRecord]:
     return [
         InstrumentRecord(
             instrument_key="",
-            venue="AAVEV3-ETHEREUM",
+            venue="AAVE_V3-ETHEREUM",
             instrument_type=InstrumentType.LENDING,
             raw_symbol="USDC",
             base_asset="USDC",
@@ -101,7 +101,7 @@ def _defi_records() -> list[InstrumentRecord]:
         ),
         InstrumentRecord(
             instrument_key="",
-            venue="UNISWAPV3-ETHEREUM",
+            venue="UNISWAP_V3-ETHEREUM",
             instrument_type=InstrumentType.POOL,
             raw_symbol="USDC-WETH-500",
             base_asset="USDC",
@@ -187,8 +187,8 @@ def test_build_defi_preserves_venue_chain_split(monkeypatch: pytest.MonkeyPatch)
 
     assert len(records) == 2
     keys = {rec.instrument_key for rec in records}
-    assert "AAVEV3-ETHEREUM:LENDING:USDC" in keys
-    assert "UNISWAPV3-ETHEREUM:POOL:USDC-WETH-500" in keys
+    assert "AAVE_V3-ETHEREUM:LENDING:USDC" in keys
+    assert "UNISWAP_V3-ETHEREUM:POOL:USDC-WETH-500" in keys
 
 
 def test_build_all_concatenates(monkeypatch: pytest.MonkeyPatch) -> None:

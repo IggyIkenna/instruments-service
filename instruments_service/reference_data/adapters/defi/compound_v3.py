@@ -134,7 +134,7 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         raw_data = data.get("data") or {}
         markets: list[dict[str, object]] = raw_data.get("markets") or []
         results: list[InstrumentRecord] = []
-        venue_tag = f"COMPOUNDV3-{self._chain}"
+        venue_tag = f"COMPOUND_V3-{self._chain}"
 
         # Resolve creationBlockNumber → timestamp for each market
         block_ts_map: dict[int, datetime] = {}
