@@ -80,7 +80,7 @@ async def fetch_instruments_for_all_venues(
     """Fetch canonical InstrumentRecord[] for all configured venues via URDI.
 
     Args:
-        venues: UAC canonical venue names (e.g. "UNISWAPV3-ETHEREUM").
+        venues: UAC canonical venue names (e.g. "UNISWAP_V3-ETHEREUM").
         instrument_type: Optional URDI type filter. None = all.
         api_keys: {data_source: api_key} from UTL validate_api_keys_for_venues().
                   Injected into adapters at construction time.

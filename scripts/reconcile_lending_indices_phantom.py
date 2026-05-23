@@ -98,19 +98,19 @@ _DEFAULT_PROTOCOLS: frozenset[str] = frozenset({"aave_v3", "spark", "compound_v3
 
 # Protocol slug → canonical venue_prefix used in UAC PROTOCOL_LAUNCH_DATES.
 # Derived from PROTOCOL_CAPABILITIES[slug].venue_prefix in UAC _defi.py via
-# get_venue_prefix("aave_v3") == "AAVEV3", etc.
+# get_venue_prefix("aave_v3") == "AAVE_V3", etc.
 _VENUE_PREFIX: dict[str, str] = {
-    "aave_v3": "AAVEV3",
+    "aave_v3": "AAVE_V3",
     "spark": "SPARK",
-    "compound_v3": "COMPOUNDV3",
+    "compound_v3": "COMPOUND_V3",
 }
 
 # Inverse map: venue_prefix (manifest column value) → protocol slug (GCS path segment).
 # The lending-indices bucket's flat-prefix layout uses lowercase + underscored protocol
 # slugs (e.g. ``lending_indices/aave_v3/ETHEREUM/...``) while the canonical manifest
-# carries venue=AAVEV3 (uppercase, no underscore). The audit must translate before
+# carries venue=AAVE_V3 (uppercase, no underscore). The audit must translate before
 # probing GCS — without this fix, every captured row false-positives as phantom
-# (path /AAVEV3/ has 0 parquets; actual path /aave_v3/ has the data).
+# (path /AAVE_V3/ has 0 parquets; actual path /aave_v3/ has the data).
 _VENUE_TO_SLUG: dict[str, str] = {v: k for k, v in _VENUE_PREFIX.items()}
 
 # GCS prefix template for listing parquets under a (protocol, chain, date) shard.
@@ -139,7 +139,7 @@ def _classify_phantom(
 ) -> str:
     """Return the ``empty_confirmed`` reason string for a phantom shard.
 
-    Takes the canonical venue (uppercase, manifest form — e.g. ``AAVEV3``) and
+    Takes the canonical venue (uppercase, manifest form — e.g. ``AAVE_V3``) and
     uses ``get_protocol_launch_date(chain, venue_prefix)`` from UAC SSOT to
     distinguish pre-genesis rows (``EXPECTED_PRE_GENESIS_CHAIN``) from
     post-genesis true phantoms (``SOURCE_RETURNED_ZERO``).
@@ -180,7 +180,7 @@ def _audit_captured_rows(
         if not venue or not chain or not date_str:
             logger.warning("Row %d missing venue/chain/date — skipping", idx)
             continue
-        # Translate manifest venue (uppercase, e.g. ``AAVEV3``) to flat-prefix protocol
+        # Translate manifest venue (uppercase, e.g. ``AAVE_V3``) to flat-prefix protocol
         # slug (lowercase + underscored, e.g. ``aave_v3``). Without this translation
         # every captured row false-positives as phantom (GCS layout uses slugs).
         protocol = _VENUE_TO_SLUG.get(venue)
@@ -368,7 +368,7 @@ def main() -> int:  # noqa: C901
     captured_mask = df["capture_status"].fillna("").astype(str) == "captured"
 
     if wanted_protocols is not None:
-        # Manifest carries venue in uppercase-no-underscore form (e.g. AAVEV3, COMPOUNDV3).
+        # Manifest carries venue in uppercase-no-underscore form (e.g. AAVE_V3, COMPOUND_V3).
         # CLI --protocols passes slug form (aave_v3, compound_v3). Translate manifest
         # venue → slug via _VENUE_TO_SLUG before comparing. Pre-fix bug: this used
         # ``.str.lower()`` which produces ``aavev3`` (no underscore) ∉ {aave_v3, ...}.

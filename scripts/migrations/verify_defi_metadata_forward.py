@@ -16,7 +16,7 @@ Usage
     python3 scripts/migrations/verify_defi_metadata_forward.py
 
     # Subset of venues (e.g. after re-deploying one adapter)
-    python3 scripts/migrations/verify_defi_metadata_forward.py --venues UNISWAPV3-ETHEREUM
+    python3 scripts/migrations/verify_defi_metadata_forward.py --venues UNISWAP_V3-ETHEREUM
 
 Exit codes
 ----------
@@ -153,7 +153,7 @@ def main() -> int:
     parser.add_argument(
         "--venues",
         default=None,
-        help="Comma-separated venue filter (e.g. UNISWAPV3-ETHEREUM,AAVEV3-ETHEREUM).",
+        help="Comma-separated venue filter (e.g. UNISWAP_V3-ETHEREUM,AAVE_V3-ETHEREUM).",
     )
     args = parser.parse_args()
 

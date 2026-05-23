@@ -47,8 +47,8 @@ def _historical_parquet_bytes(stamped: bool = False) -> bytes:
     """Build a parquet payload that mirrors the historical (Phase 2a/2b-pre) DeFi schema."""
     rows: list[dict[str, object]] = [
         {
-            "instrument_key": "UNISWAPV3-ETHEREUM:POOL:USDC-WETH:30",
-            "venue": "UNISWAPV3-ETHEREUM",
+            "instrument_key": "UNISWAP_V3-ETHEREUM:POOL:USDC-WETH:30",
+            "venue": "UNISWAP_V3-ETHEREUM",
             "instrument_type": "POOL",
             "base_asset": "USDC",
             "quote_asset": "WETH",
@@ -66,8 +66,8 @@ def _historical_parquet_bytes(stamped: bool = False) -> bytes:
             "debt_token_address": None,
         },
         {
-            "instrument_key": "UNISWAPV3-ETHEREUM:POOL:DAI-WETH:30",
-            "venue": "UNISWAPV3-ETHEREUM",
+            "instrument_key": "UNISWAP_V3-ETHEREUM:POOL:DAI-WETH:30",
+            "venue": "UNISWAP_V3-ETHEREUM",
             "instrument_type": "POOL",
             "base_asset": "DAI",
             "quote_asset": "WETH",
@@ -99,7 +99,7 @@ def _historical_parquet_bytes(stamped: bool = False) -> bytes:
 def _subgraph_lookup_for_uniswap() -> dict[str, dict[str, object]]:
     """Mirror what `_fetch_metadata_lookup_for_venue` would return."""
     return {
-        "UNISWAPV3-ETHEREUM:POOL:USDC-WETH:30": {
+        "UNISWAP_V3-ETHEREUM:POOL:USDC-WETH:30": {
             "pool_address": "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640",
             "pool_fee_tier": 30,
             "base_asset_contract_address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -111,7 +111,7 @@ def _subgraph_lookup_for_uniswap() -> dict[str, dict[str, object]]:
             "atoken_address": None,
             "debt_token_address": None,
         },
-        "UNISWAPV3-ETHEREUM:POOL:DAI-WETH:30": {
+        "UNISWAP_V3-ETHEREUM:POOL:DAI-WETH:30": {
             "pool_address": "0xc2e9f25be6257c210d7adf0d4cd6e3e881ba25f8",
             "pool_fee_tier": 30,
             "base_asset_contract_address": "0x6b175474e89094c44da98b954eedeac495271d0f",
@@ -139,7 +139,7 @@ def test_merge_metadata_fills_new_columns_only() -> None:
 
     assert n_filled == 2  # both rows had at least one non-null column added
     # Existing columns untouched
-    assert merged.loc[0, "venue"] == "UNISWAPV3-ETHEREUM"
+    assert merged.loc[0, "venue"] == "UNISWAP_V3-ETHEREUM"
     assert merged.loc[0, "instrument_type"] == "POOL"
     assert merged.loc[0, "base_asset"] == "USDC"
     # New columns populated from lookup
@@ -157,7 +157,7 @@ def test_merge_metadata_preserves_pre_stamped_values() -> None:
     df = pd.read_parquet(io.BytesIO(_historical_parquet_bytes(stamped=True)))
     # Lookup says a different pool address — but the parquet's value should win.
     lookup = {
-        "UNISWAPV3-ETHEREUM:POOL:USDC-WETH:30": {
+        "UNISWAP_V3-ETHEREUM:POOL:USDC-WETH:30": {
             "pool_address": "0xDIFFERENT",  # Should NOT overwrite
             "pool_fee_tier": 9999,
             "base_asset_contract_address": "0xOTHER",
@@ -193,7 +193,7 @@ def test_idempotent_skip_when_pool_address_populated() -> None:
 @pytest.mark.unit
 def test_idempotent_skip_when_column_missing() -> None:
     """No `pool_address` column at all → not stamped (Phase 1 schema-pre case)."""
-    df = pd.DataFrame({"instrument_key": ["UNISWAPV3-ETHEREUM:POOL:USDC-WETH:30"], "venue": ["UNISWAPV3-ETHEREUM"]})
+    df = pd.DataFrame({"instrument_key": ["UNISWAP_V3-ETHEREUM:POOL:USDC-WETH:30"], "venue": ["UNISWAP_V3-ETHEREUM"]})
     assert migration._is_already_stamped(df) is False
 
 
@@ -207,7 +207,7 @@ def test_process_one_parquet_skipped_on_stamped() -> None:
     status, n_rows, n_filled = migration._process_one_parquet(
         storage,
         bucket="instruments-store-defi-test",
-        blob_path="instrument_availability/by_date/day=2024-01-01/venue=UNISWAPV3-ETHEREUM/instruments.parquet",
+        blob_path="instrument_availability/by_date/day=2024-01-01/venue=UNISWAP_V3-ETHEREUM/instruments.parquet",
         lookup=_subgraph_lookup_for_uniswap(),
         dry_run=False,
     )
@@ -229,7 +229,7 @@ def test_process_one_parquet_dry_run_emits_diff_no_write() -> None:
     status, n_rows, n_filled = migration._process_one_parquet(
         storage,
         bucket="instruments-store-defi-test",
-        blob_path="instrument_availability/by_date/day=2024-01-01/venue=UNISWAPV3-ETHEREUM/instruments.parquet",
+        blob_path="instrument_availability/by_date/day=2024-01-01/venue=UNISWAP_V3-ETHEREUM/instruments.parquet",
         lookup=_subgraph_lookup_for_uniswap(),
         dry_run=True,
     )
@@ -247,7 +247,7 @@ def test_process_one_parquet_rewrites_when_not_dry_run() -> None:
     storage = MagicMock()
     storage.download_bytes.return_value = payload
 
-    blob_path = "instrument_availability/by_date/day=2024-01-01/venue=UNISWAPV3-ETHEREUM/instruments.parquet"
+    blob_path = "instrument_availability/by_date/day=2024-01-01/venue=UNISWAP_V3-ETHEREUM/instruments.parquet"
     status, n_rows, n_filled = migration._process_one_parquet(
         storage,
         bucket="instruments-store-defi-test",
@@ -274,11 +274,11 @@ def test_process_one_parquet_rewrites_when_not_dry_run() -> None:
 def test_list_historical_parquets_filters_to_venue() -> None:
     """`_list_historical_parquets` only returns paths under the requested venue segment."""
     blob_a = MagicMock()
-    blob_a.name = "instrument_availability/by_date/day=2024-01-01/venue=UNISWAPV3-ETHEREUM/instruments.parquet"
+    blob_a.name = "instrument_availability/by_date/day=2024-01-01/venue=UNISWAP_V3-ETHEREUM/instruments.parquet"
     blob_b = MagicMock()
-    blob_b.name = "instrument_availability/by_date/day=2024-01-02/venue=UNISWAPV3-ETHEREUM/instruments.parquet"
+    blob_b.name = "instrument_availability/by_date/day=2024-01-02/venue=UNISWAP_V3-ETHEREUM/instruments.parquet"
     blob_c = MagicMock()
-    blob_c.name = "instrument_availability/by_date/day=2024-01-01/venue=AAVEV3-ETHEREUM/instruments.parquet"
+    blob_c.name = "instrument_availability/by_date/day=2024-01-01/venue=AAVE_V3-ETHEREUM/instruments.parquet"
     blob_d = MagicMock()
     blob_d.name = "_index/availability_index.parquet"  # Should be filtered out
 
@@ -290,12 +290,12 @@ def test_list_historical_parquets_filters_to_venue() -> None:
     paths = migration._list_historical_parquets(
         storage,
         bucket="instruments-store-defi-test",
-        venue_tag="UNISWAPV3-ETHEREUM",
+        venue_tag="UNISWAP_V3-ETHEREUM",
     )
 
     assert paths == [
-        "instrument_availability/by_date/day=2024-01-01/venue=UNISWAPV3-ETHEREUM/instruments.parquet",
-        "instrument_availability/by_date/day=2024-01-02/venue=UNISWAPV3-ETHEREUM/instruments.parquet",
+        "instrument_availability/by_date/day=2024-01-01/venue=UNISWAP_V3-ETHEREUM/instruments.parquet",
+        "instrument_availability/by_date/day=2024-01-02/venue=UNISWAP_V3-ETHEREUM/instruments.parquet",
     ]
 
 
@@ -303,10 +303,10 @@ def test_list_historical_parquets_filters_to_venue() -> None:
 def test_parse_venues_filter() -> None:
     assert migration._parse_venues_filter(None) is None
     assert migration._parse_venues_filter("") is None
-    assert migration._parse_venues_filter("UNISWAPV3-ETHEREUM") == {"UNISWAPV3-ETHEREUM"}
+    assert migration._parse_venues_filter("UNISWAP_V3-ETHEREUM") == {"UNISWAP_V3-ETHEREUM"}
     assert migration._parse_venues_filter("UniswapV3-Ethereum,aavev3-arbitrum") == {
-        "UNISWAPV3-ETHEREUM",
-        "AAVEV3-ARBITRUM",
+        "UNISWAP_V3-ETHEREUM",
+        "AAVE_V3-ARBITRUM",
     }
 
 
@@ -325,8 +325,8 @@ def test_merge_metadata_unmatched_instruments_remain_null() -> None:
     df = pd.DataFrame(
         [
             {
-                "instrument_key": "UNISWAPV3-ETHEREUM:POOL:DELISTED-WETH:30",
-                "venue": "UNISWAPV3-ETHEREUM",
+                "instrument_key": "UNISWAP_V3-ETHEREUM:POOL:DELISTED-WETH:30",
+                "venue": "UNISWAP_V3-ETHEREUM",
                 "pool_address": None,
                 "pool_fee_tier": None,
                 "base_asset_contract_address": None,

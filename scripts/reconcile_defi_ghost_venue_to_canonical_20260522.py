@@ -2,7 +2,7 @@
 # pyright: reportAny=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportMissingTypeStubs=false
 """Reconcile DeFi ghost venue names to canonical names in the availability manifest.
 
-Audit 2026-05-22 found ghost venue names (UNISWAPV3, UNISWAPV2, AAVEV3) sitting in
+Audit 2026-05-22 found ghost venue names (UNISWAP_V3, UNISWAP_V2, AAVE_V3) sitting in
 the consolidated manifest alongside 0 canonical rows (UNISWAP_V3, UNISWAP_V2, AAVE_V3).
 
 Root cause: consolidator incremental merge skips ``_index/per_vm/local-10889-bd08.parquet``
@@ -13,7 +13,7 @@ Canonical GCS parquets already exist at split paths for the full date range.
 This script writes a new per-VM corrector shard that:
 1. Copies canonical rows from local-10889 for UNISWAP_V3/V2/AAVE_V3/V4 (bumps attempted_at
    to now so consolidator last-write-wins picks them up).
-2. Adds superseding empty_confirmed rows for ghost venues UNISWAPV3/UNISWAPV2/AAVEV3 with
+2. Adds superseding empty_confirmed rows for ghost venues UNISWAP_V3/UNISWAP_V2/AAVE_V3 with
    reason=EXPECTED_DEPRECATED_DATA_TYPE (newer attempted_at → wins over v7_to_v8_migrate rows).
 
 The manifest consolidator runs every 1 minute. After this script uploads the shard, the
@@ -60,9 +60,9 @@ CORRECTOR_SHARD = "_index/per_vm/ikenna-slot1-ghost-venue-corrector-defi-2026052
 
 # Ghost venue → canonical venue mapping
 GHOST_TO_CANONICAL: dict[str, str] = {
-    "UNISWAPV3": "UNISWAP_V3",
-    "UNISWAPV2": "UNISWAP_V2",
-    "AAVEV3": "AAVE_V3",
+    "UNISWAP_V3": "UNISWAP_V3",
+    "UNISWAP_V2": "UNISWAP_V2",
+    "AAVE_V3": "AAVE_V3",
 }
 
 # Canonical venues to pull from source shard (includes UNISWAP_V4 as bonus)

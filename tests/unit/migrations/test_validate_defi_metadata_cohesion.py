@@ -54,7 +54,7 @@ def _parquet_bytes(rows: list[dict[str, object]]) -> bytes:
 
 def _clean_match_subgraph_lookup() -> dict[str, dict[str, object]]:
     return {
-        "UNISWAPV3-ETHEREUM:POOL:USDC-WETH:30": {
+        "UNISWAP_V3-ETHEREUM:POOL:USDC-WETH:30": {
             "pool_address": "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640",
             "pool_fee_tier": 30,
             "base_asset_contract_address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -63,7 +63,7 @@ def _clean_match_subgraph_lookup() -> dict[str, dict[str, object]]:
             "quote_asset_decimals": 18,
             "atoken_address": None,
         },
-        "UNISWAPV3-ETHEREUM:POOL:DAI-WETH:30": {
+        "UNISWAP_V3-ETHEREUM:POOL:DAI-WETH:30": {
             "pool_address": "0xc2e9f25be6257c210d7adf0d4cd6e3e881ba25f8",
             "pool_fee_tier": 30,
             "base_asset_contract_address": "0x6b175474e89094c44da98b954eedeac495271d0f",
@@ -80,8 +80,8 @@ def _clean_match_parquet_df() -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
-                "instrument_key": "UNISWAPV3-ETHEREUM:POOL:USDC-WETH:30",
-                "venue": "UNISWAPV3-ETHEREUM",
+                "instrument_key": "UNISWAP_V3-ETHEREUM:POOL:USDC-WETH:30",
+                "venue": "UNISWAP_V3-ETHEREUM",
                 "pool_address": "0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640",
                 "pool_fee_tier": 30,
                 "base_asset_contract_address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
@@ -91,8 +91,8 @@ def _clean_match_parquet_df() -> pd.DataFrame:
                 "atoken_address": None,
             },
             {
-                "instrument_key": "UNISWAPV3-ETHEREUM:POOL:DAI-WETH:30",
-                "venue": "UNISWAPV3-ETHEREUM",
+                "instrument_key": "UNISWAP_V3-ETHEREUM:POOL:DAI-WETH:30",
+                "venue": "UNISWAP_V3-ETHEREUM",
                 "pool_address": "0xc2e9f25be6257c210d7adf0d4cd6e3e881ba25f8",
                 "pool_fee_tier": 30,
                 "base_asset_contract_address": "0x6b175474e89094c44da98b954eedeac495271d0f",
@@ -110,8 +110,8 @@ def _mismatched_parquet_df() -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
-                "instrument_key": "UNISWAPV3-ETHEREUM:POOL:USDC-WETH:30",
-                "venue": "UNISWAPV3-ETHEREUM",
+                "instrument_key": "UNISWAP_V3-ETHEREUM:POOL:USDC-WETH:30",
+                "venue": "UNISWAP_V3-ETHEREUM",
                 # pool_address differs — drift
                 "pool_address": "0xDRIFTEDPOOL00000000000000000000000000000",
                 "pool_fee_tier": 30,
@@ -123,8 +123,8 @@ def _mismatched_parquet_df() -> pd.DataFrame:
                 "atoken_address": None,
             },
             {
-                "instrument_key": "UNISWAPV3-ETHEREUM:POOL:DAI-WETH:30",
-                "venue": "UNISWAPV3-ETHEREUM",
+                "instrument_key": "UNISWAP_V3-ETHEREUM:POOL:DAI-WETH:30",
+                "venue": "UNISWAP_V3-ETHEREUM",
                 "pool_address": "0xc2e9f25be6257c210d7adf0d4cd6e3e881ba25f8",
                 "pool_fee_tier": 30,
                 "base_asset_contract_address": "0x6b175474e89094c44da98b954eedeac495271d0f",
@@ -174,7 +174,7 @@ def test_values_match_distinguishes_missing_from_present() -> None:
 def test_compare_clean_match_yields_zero_mismatches() -> None:
     """100% match between subgraph and parquet → all match, no mismatch samples."""
     result = cohesion._compare_one_venue(
-        "UNISWAPV3-ETHEREUM",
+        "UNISWAP_V3-ETHEREUM",
         _clean_match_subgraph_lookup(),
         _clean_match_parquet_df(),
     )
@@ -194,7 +194,7 @@ def test_compare_clean_match_yields_zero_mismatches() -> None:
 def test_compare_synthetic_mismatch_logs_correctly() -> None:
     """Synthetic drift on pool_address + base_asset_decimals → mismatch counts + samples."""
     result = cohesion._compare_one_venue(
-        "UNISWAPV3-ETHEREUM",
+        "UNISWAP_V3-ETHEREUM",
         _clean_match_subgraph_lookup(),
         _mismatched_parquet_df(),
     )
@@ -223,22 +223,22 @@ def test_compare_synthetic_mismatch_logs_correctly() -> None:
 def test_compare_subgraph_only_and_parquet_only_counts() -> None:
     """Disjoint key sets are reported as subgraph_only / parquet_only, not as mismatches."""
     subgraph = {
-        "UNISWAPV3-ETHEREUM:POOL:USDC-WETH:30": dict.fromkeys(cohesion.COHESION_FIELDS),
-        "UNISWAPV3-ETHEREUM:POOL:NEWPOOL-WETH:30": dict.fromkeys(cohesion.COHESION_FIELDS),
+        "UNISWAP_V3-ETHEREUM:POOL:USDC-WETH:30": dict.fromkeys(cohesion.COHESION_FIELDS),
+        "UNISWAP_V3-ETHEREUM:POOL:NEWPOOL-WETH:30": dict.fromkeys(cohesion.COHESION_FIELDS),
     }
     parquet = pd.DataFrame(
         [
             {
-                "instrument_key": "UNISWAPV3-ETHEREUM:POOL:USDC-WETH:30",
+                "instrument_key": "UNISWAP_V3-ETHEREUM:POOL:USDC-WETH:30",
                 **dict.fromkeys(cohesion.COHESION_FIELDS),
             },
             {
-                "instrument_key": "UNISWAPV3-ETHEREUM:POOL:DELISTED-WETH:30",
+                "instrument_key": "UNISWAP_V3-ETHEREUM:POOL:DELISTED-WETH:30",
                 **dict.fromkeys(cohesion.COHESION_FIELDS),
             },
         ]
     )
-    result = cohesion._compare_one_venue("UNISWAPV3-ETHEREUM", subgraph, parquet)
+    result = cohesion._compare_one_venue("UNISWAP_V3-ETHEREUM", subgraph, parquet)
     assert result["total_instruments"] == 1  # only USDC-WETH overlaps
     assert result["subgraph_only"] == 1  # NEWPOOL only in subgraph
     assert result["parquet_only"] == 1  # DELISTED only in parquet
@@ -251,7 +251,7 @@ def test_compare_mismatch_sample_cap() -> None:
     subgraph: dict[str, dict[str, object]] = {}
     rows: list[dict[str, object]] = []
     for i in range(10):
-        ikey = f"UNISWAPV3-ETHEREUM:POOL:T{i}-WETH:30"
+        ikey = f"UNISWAP_V3-ETHEREUM:POOL:T{i}-WETH:30"
         subgraph[ikey] = dict.fromkeys(cohesion.COHESION_FIELDS)
         subgraph[ikey]["pool_address"] = f"0xSUBGRAPH{i}"
         rows.append(
@@ -262,7 +262,7 @@ def test_compare_mismatch_sample_cap() -> None:
             }
         )
     parquet = pd.DataFrame(rows)
-    result = cohesion._compare_one_venue("UNISWAPV3-ETHEREUM", subgraph, parquet)
+    result = cohesion._compare_one_venue("UNISWAP_V3-ETHEREUM", subgraph, parquet)
     samples = result["mismatch_samples"]
     assert isinstance(samples, list)
     assert len(samples) == cohesion._MAX_MISMATCH_SAMPLES
@@ -276,9 +276,9 @@ def test_compare_mismatch_sample_cap() -> None:
 @pytest.mark.unit
 def test_compare_handles_missing_instrument_key_column() -> None:
     """Parquet without instrument_key column is treated as 0 overlap, not a crash."""
-    parquet = pd.DataFrame([{"venue": "UNISWAPV3-ETHEREUM", "pool_address": "0xABC"}])
+    parquet = pd.DataFrame([{"venue": "UNISWAP_V3-ETHEREUM", "pool_address": "0xABC"}])
     result = cohesion._compare_one_venue(
-        "UNISWAPV3-ETHEREUM",
+        "UNISWAP_V3-ETHEREUM",
         _clean_match_subgraph_lookup(),
         parquet,
     )
@@ -295,7 +295,7 @@ def test_read_parquet_for_day_returns_none_on_missing_blob() -> None:
     storage = MagicMock()
     storage.download_bytes.side_effect = OSError("404 not found")
 
-    result = cohesion._read_parquet_for_day(storage, "instruments-store-defi-test", "UNISWAPV3-ETHEREUM", "2026-04-29")
+    result = cohesion._read_parquet_for_day(storage, "instruments-store-defi-test", "UNISWAP_V3-ETHEREUM", "2026-04-29")
     assert result is None
 
 
@@ -304,12 +304,12 @@ def test_read_parquet_for_day_constructs_canonical_path() -> None:
     """Read targets the canonical day=YYYY-MM-DD/venue=VENUE/instruments.parquet path."""
     storage = MagicMock()
     storage.download_bytes.return_value = _parquet_bytes([{"instrument_key": "X", "pool_address": "0xabc"}])
-    df = cohesion._read_parquet_for_day(storage, "instruments-store-defi-test", "UNISWAPV3-ETHEREUM", "2026-04-29")
+    df = cohesion._read_parquet_for_day(storage, "instruments-store-defi-test", "UNISWAP_V3-ETHEREUM", "2026-04-29")
     assert df is not None
     assert len(df) == 1
     storage.download_bytes.assert_called_once_with(
         "instruments-store-defi-test",
-        "instrument_availability/by_date/day=2026-04-29/venue=UNISWAPV3-ETHEREUM/instruments.parquet",
+        "instrument_availability/by_date/day=2026-04-29/venue=UNISWAP_V3-ETHEREUM/instruments.parquet",
     )
 
 
@@ -320,8 +320,8 @@ def test_read_parquet_for_day_constructs_canonical_path() -> None:
 def test_markdown_report_shape_clean_match() -> None:
     """Clean match → no mismatch samples block, summary table populated."""
     per_venue = {
-        "UNISWAPV3-ETHEREUM": cohesion._compare_one_venue(
-            "UNISWAPV3-ETHEREUM",
+        "UNISWAP_V3-ETHEREUM": cohesion._compare_one_venue(
+            "UNISWAP_V3-ETHEREUM",
             _clean_match_subgraph_lookup(),
             _clean_match_parquet_df(),
         )
@@ -330,7 +330,7 @@ def test_markdown_report_shape_clean_match() -> None:
     assert "# DeFi Metadata Cohesion Report" in report
     assert "day=2026-04-29" in report
     assert "## Per-venue summary" in report
-    assert "UNISWAPV3-ETHEREUM" in report
+    assert "UNISWAP_V3-ETHEREUM" in report
     assert "100% cohesive" in report  # no mismatches → message rendered
     # Markdown table contains every cohesion field column
     for f in cohesion.COHESION_FIELDS:
@@ -341,15 +341,15 @@ def test_markdown_report_shape_clean_match() -> None:
 def test_markdown_report_shape_with_mismatches() -> None:
     """Mismatches → samples table rendered with instrument_key + field + values."""
     per_venue = {
-        "UNISWAPV3-ETHEREUM": cohesion._compare_one_venue(
-            "UNISWAPV3-ETHEREUM",
+        "UNISWAP_V3-ETHEREUM": cohesion._compare_one_venue(
+            "UNISWAP_V3-ETHEREUM",
             _clean_match_subgraph_lookup(),
             _mismatched_parquet_df(),
         )
     }
     report = cohesion._format_markdown_report("2026-04-29", per_venue)
     assert "## Mismatch samples" in report
-    assert "### UNISWAPV3-ETHEREUM" in report
+    assert "### UNISWAP_V3-ETHEREUM" in report
     assert "USDC-WETH" in report
     assert "pool_address" in report
     assert "0xDRIFTEDPOOL" in report  # parquet drift value rendered in mismatch sample
@@ -363,10 +363,10 @@ def test_markdown_report_shape_with_mismatches() -> None:
 def test_parse_venues_filter_returns_uppercase_set() -> None:
     assert cohesion._parse_venues_filter(None) is None
     assert cohesion._parse_venues_filter("") is None
-    assert cohesion._parse_venues_filter("UNISWAPV3-ETHEREUM") == {"UNISWAPV3-ETHEREUM"}
+    assert cohesion._parse_venues_filter("UNISWAP_V3-ETHEREUM") == {"UNISWAP_V3-ETHEREUM"}
     assert cohesion._parse_venues_filter("uniswapv3-ethereum,AaveV3-Arbitrum") == {
-        "UNISWAPV3-ETHEREUM",
-        "AAVEV3-ARBITRUM",
+        "UNISWAP_V3-ETHEREUM",
+        "AAVE_V3-ARBITRUM",
     }
 
 
@@ -382,7 +382,7 @@ def test_read_parquet_never_invokes_write_paths() -> None:
     """
     storage = MagicMock()
     storage.download_bytes.return_value = _parquet_bytes([{"instrument_key": "X", "pool_address": "0xabc"}])
-    cohesion._read_parquet_for_day(storage, "instruments-store-defi-test", "UNISWAPV3-ETHEREUM", "2026-04-29")
+    cohesion._read_parquet_for_day(storage, "instruments-store-defi-test", "UNISWAP_V3-ETHEREUM", "2026-04-29")
     storage.upload_bytes.assert_not_called()
     storage.upload_text.assert_not_called()
     # Bucket() returns a handle — but no write methods on it should be exercised.
@@ -394,7 +394,7 @@ def test_compare_does_not_touch_storage() -> None:
     """`_compare_one_venue` is a pure function — no I/O at all."""
     storage = MagicMock()
     cohesion._compare_one_venue(
-        "UNISWAPV3-ETHEREUM",
+        "UNISWAP_V3-ETHEREUM",
         _clean_match_subgraph_lookup(),
         _clean_match_parquet_df(),
     )

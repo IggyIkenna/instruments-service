@@ -448,7 +448,7 @@ def get_adapter_for_canonical_venue(
     """Create a reference data adapter for a UAC canonical venue name.
 
     This is the preferred entry point for services that work with UAC canonical
-    venue names (e.g. "UNISWAPV3-ETHEREUM", "BINANCE-SPOT"). Translates via
+    venue names (e.g. "UNISWAP_V3-ETHEREUM", "BINANCE-SPOT"). Translates via
     CANONICAL_VENUE_TO_ADAPTER and delegates to create_reference_data_adapter().
 
     For CeFi venues in live mode, routes to CCXT (real-time public endpoints)
@@ -456,7 +456,7 @@ def get_adapter_for_canonical_venue(
     the full historical instrument universe.
 
     Args:
-        canonical_venue: UAC canonical venue name (e.g. "UNISWAPV3-ETHEREUM").
+        canonical_venue: UAC canonical venue name (e.g. "UNISWAP_V3-ETHEREUM").
         api_key: Injected API key from Secret Manager (via UTL validate_api_keys_for_venues).
         project_id: Deprecated.
         date: ISO date string for date-aware adapters.
@@ -513,7 +513,7 @@ def get_adapter_for_canonical_venue(
         return adapter
 
     # Check pool — reuse existing adapter if same key + credentials + venue + date
-    # Include canonical_venue in pool key so AAVEV3-ARBITRUM != AAVEV3-ETHEREUM
+    # Include canonical_venue in pool key so AAVE_V3-ARBITRUM != AAVE_V3-ETHEREUM
     # Include date for Databento (target_date baked into adapter at init time)
     pool_date = date if adapter_key == "databento" else None
     pool_key = (adapter_key, api_key, canonical_venue, pool_date)
@@ -572,7 +572,7 @@ def get_adapter_for_canonical_venue(
         parts = canonical_venue.split("-", 1)
         chain = parts[1] if len(parts) == 2 else "ETHEREUM"
         adapter_class = _ADAPTERS[adapter_key]
-        # Resolve the actual protocol slug from the venue prefix (e.g., PANCAKESWAPV3 → pancakeswap_v3)
+        # Resolve the actual protocol slug from the venue prefix (e.g., PANCAKESWAP_V3 → pancakeswap_v3)
         # This allows adapter reuse: UniV3 adapter can serve PancakeSwap, SushiSwap, etc.
         venue_prefix = parts[0] if len(parts) >= 1 else canonical_venue
         resolved_protocol = _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL.get(venue_prefix, adapter_key)
