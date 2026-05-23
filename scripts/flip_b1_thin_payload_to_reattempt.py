@@ -193,6 +193,16 @@ def main() -> int:
         default=16,
         help="Parallel workers for parquet deletion (default 16).",
     )
+    parser.add_argument(
+        "--data-types",
+        nargs="+",
+        default=list(_TARGET_DATA_TYPES),
+        metavar="DT",
+        help=(
+            "Data types to flip (default: FIXTURE_STATS FIXTURE_EVENTS FIXTURE_LINEUPS INJURIES). "
+            "Override to target other types, e.g. --data-types STANDINGS PLAYER_VALUES."
+        ),
+    )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true", help="Report changes without touching GCS.")
     mode.add_argument("--apply", action="store_true", help="Apply the manifest flip (and optional parquet deletion).")
@@ -217,8 +227,9 @@ def main() -> int:
         return 2
 
     # Build flip mask: captured + target data_type + date < cutoff
+    target_dts = tuple(dt.upper() for dt in args.data_types)
     captured_mask = df["capture_status"].astype(str) == "captured"
-    dt_mask = df["data_type"].astype(str).isin(_TARGET_DATA_TYPES)
+    dt_mask = df["data_type"].astype(str).isin(target_dts)
 
     # Date filter — only rows captured before the normalizer ship date.
     if "date" in df.columns:
@@ -232,7 +243,7 @@ def main() -> int:
     total = int(flip_mask.sum())
     logger.info(
         "Rows to flip (capture_status=captured, data_type in %s, date < %s): %d",
-        _TARGET_DATA_TYPES,
+        target_dts,
         args.cutoff_date,
         total,
     )
