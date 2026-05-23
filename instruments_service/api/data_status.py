@@ -54,7 +54,8 @@ async def get_data_status(
     if index.empty or "data_type" not in index.columns:
         return {"bucket": resolved_bucket, "rows": []}
 
-    all_data_types: list[str] = sorted(str(v) for v in index["data_type"].dropna().unique())
+    unique_values: object = index["data_type"].dropna().unique()
+    all_data_types: list[str] = sorted(str(v) for v in unique_values if v is not None)  # pyright: ignore[reportArgumentType,reportUnknownVariableType]
     if data_type is not None:
         all_data_types = [dt for dt in all_data_types if dt == data_type]
 
