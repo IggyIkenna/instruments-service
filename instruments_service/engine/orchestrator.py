@@ -6374,7 +6374,16 @@ async def _fetch_sfi_data(
                         for _pp_lid, _pp_league_df in _with_league.groupby("league_id"):
                             _pp_lid_str = str(_pp_lid)
                             _sfi_pp_captured.add(_pp_lid_str)
-                            _stamped_pp_df = stamp_available_at_explicit(_pp_league_df, when=datetime.now(UTC))
+                            # C.6: use report_time (match_end + SFI_DATA_LAG_P95_SECONDS) as available_at for
+                            # completed matches — more accurate than timer_seconds approximation. For in-progress
+                            # rows where report_time is absent, fall back to wall-clock (live write-time).
+                            _pp_copy = _pp_league_df.copy()
+                            if "report_time" in _pp_copy.columns:
+                                _rt_series = pd.to_datetime(_pp_copy["report_time"], utc=True, errors="coerce")
+                                _pp_copy["available_at"] = _rt_series.fillna(pd.Timestamp(datetime.now(UTC)))
+                            else:
+                                _pp_copy["available_at"] = pd.Timestamp(datetime.now(UTC))
+                            _stamped_pp_df = _pp_copy
                             _gated_sink_write(
                                 sink,
                                 data=_stamped_pp_df,
