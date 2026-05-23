@@ -18,14 +18,14 @@ from instruments_service.reference_data.intent_resolver import (
 
 
 def _make_intent(
-    protocol: str = "AAVEV3",
+    protocol: str = "AAVE_V3",
     chain: str = "ETHEREUM",
     base_currencies: list[str] | None = None,
     instrument_types: list[str] | None = None,
     venue_filter: list[str] | None = None,
 ) -> StrategyInstrumentIntent:
-    """Create a test intent.  Default protocol is ``AAVEV3`` (no underscore)
-    so that ``protocol.upper() in "AAVEV3-ETHEREUM"`` is True.
+    """Create a test intent.  Default protocol is ``AAVE_V3``
+    so that ``protocol.upper() in "AAVE_V3-ETHEREUM"`` is True.
     """
     return StrategyInstrumentIntent(
         protocol=protocol,
@@ -37,8 +37,8 @@ def _make_intent(
 
 
 def _make_instrument(
-    instrument_id: str = "AAVEV3-ETHEREUM:A_TOKEN:WETH",
-    venue: str = "AAVEV3-ETHEREUM",
+    instrument_id: str = "AAVE_V3-ETHEREUM:A_TOKEN:WETH",
+    venue: str = "AAVE_V3-ETHEREUM",
     instrument_type: str = "A_TOKEN",
     base_currency: str = "WETH",
 ) -> dict[str, str]:
@@ -78,10 +78,10 @@ class TestResolveInstruments:
 
     def test_protocol_filter(self) -> None:
         # Protocol filter: intent.protocol.upper() must be a substring of venue.upper()
-        # "AAVEV3" in "AAVEV3-ETHEREUM" = True, "AAVEV3" not in "MORPHO-ETHEREUM"
-        intent = _make_intent(protocol="AAVEV3")
+        # "AAVE_V3" in "AAVE_V3-ETHEREUM" = True, "AAVE_V3" not in "MORPHO-ETHEREUM"
+        intent = _make_intent(protocol="AAVE_V3")
         available = [
-            _make_instrument(instrument_id="id1", venue="AAVEV3-ETHEREUM", base_currency="WETH"),
+            _make_instrument(instrument_id="id1", venue="AAVE_V3-ETHEREUM", base_currency="WETH"),
             _make_instrument(instrument_id="id2", venue="MORPHO-ETHEREUM", base_currency="WETH"),
         ]
         result = resolve_instruments(intent, available, "2024-06-01")
@@ -91,8 +91,8 @@ class TestResolveInstruments:
     def test_chain_filter(self) -> None:
         intent = _make_intent(chain="ETHEREUM")
         available = [
-            _make_instrument(instrument_id="id1", venue="AAVEV3-ETHEREUM", base_currency="WETH"),
-            _make_instrument(instrument_id="id2", venue="AAVEV3-ARBITRUM", base_currency="WETH"),
+            _make_instrument(instrument_id="id1", venue="AAVE_V3-ETHEREUM", base_currency="WETH"),
+            _make_instrument(instrument_id="id2", venue="AAVE_V3-ARBITRUM", base_currency="WETH"),
         ]
         result = resolve_instruments(intent, available, "2024-06-01")
         assert "id1" in result.instrument_ids
@@ -109,10 +109,10 @@ class TestResolveInstruments:
         assert "id2" not in result.instrument_ids
 
     def test_venue_filter(self) -> None:
-        intent = _make_intent(venue_filter=["AAVEV3-ETHEREUM"])
+        intent = _make_intent(venue_filter=["AAVE_V3-ETHEREUM"])
         available = [
-            _make_instrument(instrument_id="id1", venue="AAVEV3-ETHEREUM", base_currency="WETH"),
-            _make_instrument(instrument_id="id2", venue="AAVEV3-ARBITRUM", base_currency="WETH"),
+            _make_instrument(instrument_id="id1", venue="AAVE_V3-ETHEREUM", base_currency="WETH"),
+            _make_instrument(instrument_id="id2", venue="AAVE_V3-ARBITRUM", base_currency="WETH"),
         ]
         result = resolve_instruments(intent, available, "2024-06-01")
         assert "id1" in result.instrument_ids
@@ -173,7 +173,7 @@ class TestValidateResolvedInstruments:
         self,
         instrument_ids: list[str] | None = None,
         missing: list[str] | None = None,
-        protocol: str = "AAVEV3",
+        protocol: str = "AAVE_V3",
         chain: str = "ETHEREUM",
     ) -> ResolvedInstruments:
         intent = _make_intent(protocol=protocol, chain=chain)

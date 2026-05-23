@@ -920,14 +920,14 @@ class TestAaveV3Adapter:
         from instruments_service.reference_data.adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
 
         adapter = AaveV3ReferenceDataAdapter()
-        result = adapter._build_reserve_records({"symbol": "", "underlyingAsset": "0x"}, "AAVEV3-ETHEREUM")
+        result = adapter._build_reserve_records({"symbol": "", "underlyingAsset": "0x"}, "AAVE_V3-ETHEREUM")
         assert result == []
 
     def test_build_reserve_records_empty_underlying(self) -> None:
         from instruments_service.reference_data.adapters.defi.aave_v3 import AaveV3ReferenceDataAdapter
 
         adapter = AaveV3ReferenceDataAdapter()
-        result = adapter._build_reserve_records({"symbol": "WETH", "underlyingAsset": ""}, "AAVEV3-ETHEREUM")
+        result = adapter._build_reserve_records({"symbol": "WETH", "underlyingAsset": ""}, "AAVE_V3-ETHEREUM")
         assert result == []
 
     @pytest.mark.asyncio
@@ -1046,7 +1046,7 @@ class TestUniswapV4Adapter:
             }
         )
         assert result is not None
-        assert "UNISWAPV4" in result.instrument_key
+        assert "UNISWAP_V4" in result.instrument_key
 
     def test_build_pool_record_missing_token(self) -> None:
         from instruments_service.reference_data.adapters.defi.uniswap_v4 import UniswapV4ReferenceDataAdapter
@@ -1195,7 +1195,7 @@ class TestCompoundV3Adapter:
         from instruments_service.reference_data.adapters.defi.compound_v3 import CompoundV3ReferenceDataAdapter
 
         adapter = CompoundV3ReferenceDataAdapter()
-        result = adapter._build_market_records({"id": "0x1", "configuration": None}, "COMPOUNDV3-ETHEREUM")
+        result = adapter._build_market_records({"id": "0x1", "configuration": None}, "COMPOUND_V3-ETHEREUM")
         assert result == []
 
     def test_build_market_records_no_base_token(self) -> None:
@@ -1203,7 +1203,7 @@ class TestCompoundV3Adapter:
 
         adapter = CompoundV3ReferenceDataAdapter()
         result = adapter._build_market_records(
-            {"id": "0x1", "configuration": {"baseToken": None}}, "COMPOUNDV3-ETHEREUM"
+            {"id": "0x1", "configuration": {"baseToken": None}}, "COMPOUND_V3-ETHEREUM"
         )
         assert result == []
 
@@ -1216,7 +1216,7 @@ class TestCompoundV3Adapter:
                 "id": "0x1",
                 "configuration": {"baseToken": {"token": {"symbol": ""}}},
             },
-            "COMPOUNDV3-ETHEREUM",
+            "COMPOUND_V3-ETHEREUM",
         )
         assert result == []
 
@@ -1224,7 +1224,7 @@ class TestCompoundV3Adapter:
         from instruments_service.reference_data.adapters.defi.compound_v3 import CompoundV3ReferenceDataAdapter
 
         adapter = CompoundV3ReferenceDataAdapter()
-        result = adapter._build_market_records({"configuration": {"baseToken": {}}}, "COMPOUNDV3-ETHEREUM")
+        result = adapter._build_market_records({"configuration": {"baseToken": {}}}, "COMPOUND_V3-ETHEREUM")
         assert result == []
 
     def test_log_fetch_error(self) -> None:

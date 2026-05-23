@@ -194,24 +194,24 @@ CANONICAL_VENUE_TO_ADAPTER: dict[str, str] = {
 }
 
 # Dynamically add multi-chain DeFi venues from SUBGRAPH_IDS (SSOT in UAC).
-# This auto-generates entries like AAVEV3-ARBITRUM → aave_v3, MORPHO-BASE → morpho, etc.
+# This auto-generates entries like AAVE_V3-ARBITRUM → aave_v3, MORPHO-BASE → morpho, etc.
 # Maps UAC venue prefix → protocol slug (for subgraph ID lookup).
 # Protocols that reuse another adapter's class are resolved via _PROTOCOL_TO_ADAPTER_KEY.
 _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL: dict[str, str] = {
-    "AAVEV3": "aave_v3",
-    "COMPOUNDV3": "compound_v3",
+    "AAVE_V3": "aave_v3",
+    "COMPOUND_V3": "compound_v3",
     "MORPHO": "morpho",
     "FLUID": "fluid",
-    "UNISWAPV2": "uniswap_v2",
-    "UNISWAPV3": "uniswap_v3",
-    "UNISWAPV4": "uniswap_v4",
+    "UNISWAP_V2": "uniswap_v2",
+    "UNISWAP_V3": "uniswap_v3",
+    "UNISWAP_V4": "uniswap_v4",
     "BALANCER": "balancer",
     "CURVE": "curve",
     # DEX forks — each has own subgraph IDs, reuse UniV3 adapter (with Messari fallback)
-    "PANCAKESWAPV3": "pancakeswap_v3",
-    "SUSHISWAPV3": "sushiswap_v3",
-    "AERODROMEV3": "aerodrome_v3",
-    "CAMELOTV3": "camelot_v3",
+    "PANCAKESWAP_V3": "pancakeswap_v3",
+    "SUSHISWAP_V3": "sushiswap_v3",
+    "AERODROME_V3": "aerodrome_v3",
+    "CAMELOT_V3": "camelot_v3",
     # Messari-schema DEXes — use UniV3 adapter (Messari fallback query)
     "VELODROMEV2": "velodrome_v2",
     "TRADER_JOEV2": "trader_joe_v2",

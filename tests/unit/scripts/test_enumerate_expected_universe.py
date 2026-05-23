@@ -77,7 +77,7 @@ def test_tradfi_yields_no_rows_for_known_trading_day() -> None:
 
 
 def test_defi_yields_pre_genesis_for_arbitrum_pre_2021() -> None:
-    """Arbitrum genesis is 2021-08-31; AAVEV3-ARBITRUM on 2018-01-01 should
+    """Arbitrum genesis is 2021-08-31; AAVE_V3-ARBITRUM on 2018-01-01 should
     yield EXPECTED_PRE_GENESIS_CHAIN (chain didn't exist yet)."""
     rows = list(enumerator_module._enumerate_defi("2018-01-01", "2018-01-01"))
     arbitrum_rows = [r for r in rows if r.chain == "ARBITRUM"]
@@ -217,7 +217,7 @@ def test_build_present_set_extracts_tuples_from_manifest() -> None:
                 "date": "2018-01-06",
             },
             {
-                "venue": "AAVEV3-ARBITRUM",
+                "venue": "AAVE_V3-ARBITRUM",
                 "chain": "ARBITRUM",
                 "data_type": "lending_indices",
                 "instrument_type": "",
@@ -230,7 +230,7 @@ def test_build_present_set_extracts_tuples_from_manifest() -> None:
     present_set = enumerator_module._build_present_set(df, asset_group="tradfi")
     assert ("BARCHART", "", "ohlcv_1m", "", "", "", "2018-01-06") in present_set
     assert (
-        "AAVEV3-ARBITRUM",
+        "AAVE_V3-ARBITRUM",
         "ARBITRUM",
         "lending_indices",
         "",
@@ -249,7 +249,7 @@ def test_build_present_set_returns_empty_for_empty_manifest() -> None:
 def test_row_key_aligns_with_manifest_columns() -> None:
     row = ExpectedRow(
         asset_group="defi",
-        venue="AAVEV3-ARBITRUM",
+        venue="AAVE_V3-ARBITRUM",
         chain="ARBITRUM",
         data_type="lending_indices",
         instrument_type="",
@@ -261,7 +261,7 @@ def test_row_key_aligns_with_manifest_columns() -> None:
     available_cols = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
     key = enumerator_module._row_key(row, available_cols)
     assert key == (
-        "AAVEV3-ARBITRUM",
+        "AAVE_V3-ARBITRUM",
         "ARBITRUM",
         "lending_indices",
         "",

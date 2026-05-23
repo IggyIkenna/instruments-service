@@ -27,7 +27,7 @@ from instruments_service.engine.orchestrator import (
 
 def _make_record(
     instrument_key: str = "TEST",
-    venue: str = "AAVEV3-ETHEREUM",
+    venue: str = "AAVE_V3-ETHEREUM",
     instrument_type: str = "A_TOKEN",
     base_asset: str = "WETH",
     quote_asset: str = "USDC",
@@ -100,11 +100,11 @@ class TestNormalizeWrappedToken:
 
 class TestGetVenueEpoch:
     def test_known_venue_with_prefix(self) -> None:
-        epoch = _get_venue_epoch("AAVEV3-ETHEREUM")
+        epoch = _get_venue_epoch("AAVE_V3-ETHEREUM")
         assert epoch is not None
 
     def test_known_venue_exact_prefix(self) -> None:
-        epoch = _get_venue_epoch("UNISWAPV3-ARBITRUM")
+        epoch = _get_venue_epoch("UNISWAP_V3-ARBITRUM")
         assert epoch is not None
 
     def test_unknown_venue_returns_none(self) -> None:
@@ -251,9 +251,9 @@ class TestEarliestVenueDate:
 
 class TestFilterInstrumentsByDateDefiWarning:
     def test_defi_venue_no_available_from_emits_error(self, caplog) -> None:
-        record = _make_record(venue="AAVEV3-ETHEREUM")  # no available_since
+        record = _make_record(venue="AAVE_V3-ETHEREUM")  # no available_since
         date_dt = datetime(2024, 6, 1, tzinfo=UTC)
-        defi_venues = frozenset(["AAVEV3-ETHEREUM"])
+        defi_venues = frozenset(["AAVE_V3-ETHEREUM"])
         with caplog.at_level("ERROR"):
             result = filter_instruments_by_date([record], date_dt, defi_venues=defi_venues)
         assert len(result) == 1
@@ -262,7 +262,7 @@ class TestFilterInstrumentsByDateDefiWarning:
     def test_non_defi_no_warning(self, caplog) -> None:
         record = _make_record(venue="BINANCE-SPOT")  # no available_since
         date_dt = datetime(2024, 6, 1, tzinfo=UTC)
-        defi_venues = frozenset(["AAVEV3-ETHEREUM"])  # BINANCE not in defi set
+        defi_venues = frozenset(["AAVE_V3-ETHEREUM"])  # BINANCE not in defi set
         with caplog.at_level("ERROR"):
             result = filter_instruments_by_date([record], date_dt, defi_venues=defi_venues)
         assert len(result) == 1
@@ -278,7 +278,7 @@ class TestFilterInstrumentsByDateDefiWarning:
 class TestFilterDefiWrappedTokens:
     def test_dex_avusdc_usdc_passes(self) -> None:
         record = _make_record(
-            venue="UNISWAPV3-ETHEREUM",
+            venue="UNISWAP_V3-ETHEREUM",
             base_asset="avUSDC",
             quote_asset="WETH",
         )
@@ -291,7 +291,7 @@ class TestFilterDefiWrappedTokens:
 
     def test_dex_renbtc_weth_passes(self) -> None:
         record = _make_record(
-            venue="UNISWAPV3-ETHEREUM",
+            venue="UNISWAP_V3-ETHEREUM",
             base_asset="renBTC",
             quote_asset="WETH",
         )
@@ -304,7 +304,7 @@ class TestFilterDefiWrappedTokens:
 
     def test_dex_usdt_dot_e_passes(self) -> None:
         record = _make_record(
-            venue="UNISWAPV3-AVALANCHE",
+            venue="UNISWAP_V3-AVALANCHE",
             base_asset="USDT.e",
             quote_asset="USDC",
         )
@@ -317,7 +317,7 @@ class TestFilterDefiWrappedTokens:
 
     def test_lending_wrapped_base_passes(self) -> None:
         record = _make_record(
-            venue="AAVEV3-ETHEREUM",
+            venue="AAVE_V3-ETHEREUM",
             base_asset="aAvaDAI",
             quote_asset="USD",
         )
@@ -330,7 +330,7 @@ class TestFilterDefiWrappedTokens:
 
     def test_dex_both_long_tail_rejected(self) -> None:
         record = _make_record(
-            venue="UNISWAPV3-ETHEREUM",
+            venue="UNISWAP_V3-ETHEREUM",
             base_asset="PEPE",
             quote_asset="SHIB",
         )
@@ -372,7 +372,7 @@ class TestGetOrFetchDefiUniverse:
         try:
             mod._defi_universe_cache = [_make_record()]
             mod._defi_universe_retryable = ["SOME-VENUE"]
-            records, retryable = await _get_or_fetch_defi_universe(["AAVEV3-ETHEREUM"], None, "batch")
+            records, retryable = await _get_or_fetch_defi_universe(["AAVE_V3-ETHEREUM"], None, "batch")
             assert len(records) == 1
             assert retryable == ["SOME-VENUE"]
         finally:
@@ -412,7 +412,7 @@ class TestGetOrFetchDefiUniverse:
                     MagicMock(),
                 ),
             ):
-                records, _retryable = await _get_or_fetch_defi_universe(["AAVEV3-ETHEREUM"], None, "batch")
+                records, _retryable = await _get_or_fetch_defi_universe(["AAVE_V3-ETHEREUM"], None, "batch")
             assert len(records) == 1
             assert mod._defi_universe_cache is not None
         finally:
