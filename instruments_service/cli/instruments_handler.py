@@ -40,7 +40,8 @@ logger = logging.getLogger(__name__)
 
 def _get_instruments_bucket_for_asset_group(asset_group: str) -> str:
     """Get the instruments bucket for the given asset group using public API."""
-    return resolve_bucket_name(cloud="gcp", kind="instruments", asset_group=asset_group.lower())
+    normalized_group = asset_group.lower()
+    return resolve_bucket_name(cloud="gcp", kind="instruments", asset_group=normalized_group)  # pyright: ignore[reportArgumentType]
 
 
 # Alias for backward compatibility with tests

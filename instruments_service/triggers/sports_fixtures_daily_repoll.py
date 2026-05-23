@@ -80,13 +80,13 @@ from unified_trading_library.cloud_interface.bucket_naming import resolve_bucket
 
 # Import private functions - these should be made public in future refactor
 from instruments_service.engine.orchestrator import (
-    _canonical_league_id as canonical_league_id,
+    _canonical_league_id as canonical_league_id,  # pyright: ignore[reportPrivateUsage]
 )
 from instruments_service.engine.orchestrator import (
-    _flatten_canonical_fixture_for_disk as flatten_canonical_fixture_for_disk,
+    _flatten_canonical_fixture_for_disk as flatten_canonical_fixture_for_disk,  # pyright: ignore[reportPrivateUsage]
 )
 from instruments_service.engine.orchestrator import (
-    _write_fixtures_per_league as write_fixtures_per_league,
+    _write_fixtures_per_league as write_fixtures_per_league,  # pyright: ignore[reportPrivateUsage]
 )
 from instruments_service.reference_data import create_sports_reference_adapter
 
@@ -103,7 +103,8 @@ logger = logging.getLogger(__name__)
 
 def get_instruments_bucket_for_asset_group(asset_group: str = "SPORTS") -> str:
     """Get the instruments bucket for the given asset group using public API."""
-    return resolve_bucket_name(cloud="gcp", kind="instruments", asset_group=asset_group.lower())
+    normalized_group = asset_group.lower()
+    return resolve_bucket_name(cloud="gcp", kind="instruments", asset_group=normalized_group)  # pyright: ignore[reportArgumentType]
 
 
 SPORTS_FIXTURES_DAILY_REPOLL_TRIGGER: str = "sports.fixtures.daily_repoll"
