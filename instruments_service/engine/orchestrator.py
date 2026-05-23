@@ -4479,7 +4479,13 @@ async def _fetch_sports_reference_data(
                                 fid_col=_fid_col,
                             )
 
-                        _stamped_pf_df = stamp_available_at_explicit(_pf_clean, when=datetime.now(UTC))
+                        # C.6: available_at = date + 17h already set on df at line ~4444 (KO + 2h
+                        # approximation). Preserve it; fillna wall-clock for any NaT rows (defensive).
+                        _pf_copy = _pf_clean.copy()
+                        _pf_copy["available_at"] = _pf_copy["available_at"].fillna(
+                            pd.Timestamp(datetime.now(UTC))
+                        )
+                        _stamped_pf_df = _pf_copy
                         _gated_sink_write(
                             sink,
                             data=_stamped_pf_df,
