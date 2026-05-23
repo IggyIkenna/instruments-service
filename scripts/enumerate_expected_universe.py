@@ -426,8 +426,11 @@ def _enumerate_v2_cefi(
     """
     _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
     for instr in catalog:
-        af_ts = pd.Timestamp(instr.available_from) if instr.available_from else None
-        at_ts = pd.Timestamp(instr.available_to) if instr.available_to else None
+        af_raw = pd.Timestamp(instr.available_from) if instr.available_from else None
+        at_raw = pd.Timestamp(instr.available_to) if instr.available_to else None
+        # Normalize to tz-naive date-only for comparison with the date axis
+        af_ts = af_raw.tz_localize(None) if (af_raw is not None and af_raw.tzinfo is not None) else af_raw
+        at_ts = at_raw.tz_localize(None) if (at_raw is not None and at_raw.tzinfo is not None) else at_raw
         venue_launch_str = CEFI_VENUE_LAUNCH_DATES.get(instr.venue)
         venue_launch_ts = pd.Timestamp(venue_launch_str) if venue_launch_str else None
         for d in date_axis:
@@ -918,15 +921,23 @@ def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
     entries: list[InstrumentCatalogEntry] = []
     for row in df.itertuples(index=False, name=None):
         row_dict = dict(zip(df.columns, row, strict=True))
+        # Support both canonical column names and instruments-service catalog aliases.
+        # instruments-service catalog uses:
+        #   instrument_key (not instrument_id)
+        #   available_from_datetime (not available_from)
+        #   available_to_datetime (not available_to)
+        instrument_id = _safe_str(row_dict.get("instrument_id") or row_dict.get("instrument_key", ""))
+        available_from = _opt_date(row_dict.get("available_from") or row_dict.get("available_from_datetime"))
+        available_to = _opt_date(row_dict.get("available_to") or row_dict.get("available_to_datetime"))
         entries.append(
             InstrumentCatalogEntry(
-                instrument_id=_safe_str(row_dict.get("instrument_id", "")),
+                instrument_id=instrument_id,
                 instrument_type=_safe_str(row_dict.get("instrument_type", "")),
                 venue=_safe_str(row_dict.get("venue", "")),
                 chain=_safe_str(row_dict.get("chain", "")),
                 league_id=_safe_str(row_dict.get("league_id", "")),
-                available_from=_opt_date(row_dict.get("available_from")),
-                available_to=_opt_date(row_dict.get("available_to")),
+                available_from=available_from,
+                available_to=available_to,
                 market_created_at=_opt_date(row_dict.get("market_created_at")),
                 settlement_time=_opt_date(row_dict.get("settlement_time")),
             )
@@ -940,7 +951,22 @@ def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
 
 
 def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame, str]:
-    """Bulk-download the canonical manifest. Returns (df, local_path)."""
+    """Bulk-download the canonical manifest. Returns (df, local_path).
+
+    If a pre-cached copy exists at /tmp/{asset_group}_manifest_cache.parquet
+    (written by a preceding gsutil cp to avoid GCS SDK stream timeouts on
+    large manifests), use it directly instead of re-downloading.
+    """
+    # Support both /tmp and home-dir caches (macOS sandbox writes home-dir on some calls)
+    _home_cache = os.path.expanduser(f"~/tmp_manifest_cache/{asset_group}_manifest_cache.parquet")
+    _tmp_cache = f"/tmp/{asset_group}_manifest_cache.parquet"
+    cache_path = _home_cache if os.path.exists(_home_cache) else _tmp_cache
+    if os.path.exists(cache_path):
+        logger.info("Using pre-cached manifest at %s", cache_path)
+        df = pd.read_parquet(cache_path)
+        logger.info("Manifest rows: %d", len(df))
+        return df, cache_path
+
     client = storage.Client(project=PROJECT_ID)
     bucket = client.bucket(bucket_name)
     blob = bucket.blob(MANIFEST_BLOB)
@@ -951,7 +977,7 @@ def _download_manifest(bucket_name: str, asset_group: str) -> tuple[pd.DataFrame
         delete=False,
     ) as tf:
         local_path = tf.name
-    blob.download_to_filename(local_path)
+    blob.download_to_filename(local_path, timeout=600)
     df = pd.read_parquet(local_path)
     logger.info("Manifest rows: %d", len(df))
     return df, local_path
