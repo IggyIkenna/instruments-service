@@ -425,12 +425,22 @@ def _enumerate_v2_cefi(
     before the venue launched — same logic as v1's _enumerate_cefi.
     """
     _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
+    # Pre-compute window bounds once for overlap filter below.
+    window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
+    window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
     for instr in catalog:
         af_raw = pd.Timestamp(instr.available_from) if instr.available_from else None
         at_raw = pd.Timestamp(instr.available_to) if instr.available_to else None
         # Normalize to tz-naive date-only for comparison with the date axis
         af_ts = af_raw.tz_localize(None) if (af_raw is not None and af_raw.tzinfo is not None) else af_raw
         at_ts = at_raw.tz_localize(None) if (at_raw is not None and at_raw.tzinfo is not None) else at_raw
+        # Skip instruments with no lifecycle overlap with the window — avoids
+        # generating millions of EXPECTED_INSTRUMENT_DELISTED rows for options
+        # that expired before the window started (179K+ in a 12-month cefi run).
+        if at_ts is not None and window_start_ts is not None and at_ts < window_start_ts:
+            continue  # fully delisted before window started
+        if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
+            continue  # not yet listed when window ended
         venue_launch_str = CEFI_VENUE_LAUNCH_DATES.get(instr.venue)
         venue_launch_ts = pd.Timestamp(venue_launch_str) if venue_launch_str else None
         for d in date_axis:
@@ -509,9 +519,15 @@ def _enumerate_v2_defi(
     * alive AND present_set not provided → skip (legacy mode)
     """
     _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
+    window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
+    window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
     for instr in catalog:
         af_ts = pd.Timestamp(instr.available_from) if instr.available_from else None
         at_ts = pd.Timestamp(instr.available_to) if instr.available_to else None
+        if at_ts is not None and window_start_ts is not None and at_ts < window_start_ts:
+            continue  # fully delisted before window started
+        if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
+            continue  # not yet listed when window ended
         chain_upper = instr.chain.upper() if instr.chain else ""
         chain_genesis_str = CHAIN_GENESIS_DATES.get(chain_upper)
         chain_genesis_ts = pd.Timestamp(chain_genesis_str) if chain_genesis_str else None
@@ -590,9 +606,15 @@ def _enumerate_v2_tradfi(
     * alive AND present_set not provided → skip (legacy mode)
     """
     _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
+    window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
+    window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
     for instr in catalog:
         af_ts = pd.Timestamp(instr.available_from) if instr.available_from else None
         at_ts = pd.Timestamp(instr.available_to) if instr.available_to else None
+        if at_ts is not None and window_start_ts is not None and at_ts < window_start_ts:
+            continue  # fully delisted before window started
+        if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
+            continue  # not yet listed when window ended
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -668,9 +690,15 @@ def _enumerate_v2_sports(
     * alive AND present_set not provided → skip (legacy mode)
     """
     _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
+    window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
+    window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
     for instr in catalog:
         af_ts = pd.Timestamp(instr.available_from) if instr.available_from else None
         at_ts = pd.Timestamp(instr.available_to) if instr.available_to else None
+        if at_ts is not None and window_start_ts is not None and at_ts < window_start_ts:
+            continue  # fully delisted before window started
+        if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
+            continue  # not yet listed when window ended
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -745,12 +773,18 @@ def _enumerate_v2_prediction(
     * alive AND present_set not provided → skip (legacy mode)
     """
     _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
+    window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
+    window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
     for instr in catalog:
         # Prefer market lifecycle fields; fall back to generic available_from/to
         created_str = instr.market_created_at or instr.available_from
         settled_str = instr.settlement_time or instr.available_to
         af_ts = pd.Timestamp(created_str) if created_str else None
         at_ts = pd.Timestamp(settled_str) if settled_str else None
+        if at_ts is not None and window_start_ts is not None and at_ts < window_start_ts:
+            continue  # fully settled before window started
+        if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
+            continue  # not yet created when window ended
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()

@@ -254,9 +254,13 @@ def test_catalog_from_dataframe_empty() -> None:
 
 
 def test_cefi_v2_pre_listing_yields_not_listed() -> None:
-    """Date before available_from → EXPECTED_INSTRUMENT_NOT_LISTED."""
+    """Date before available_from → EXPECTED_INSTRUMENT_NOT_LISTED.
+
+    Window includes an alive date so the overlap filter does not skip the instrument;
+    the pre-listing date still yields exactly one NOT_LISTED row.
+    """
     catalog = [_make_cefi_entry(available_from="2021-01-01", available_to=None, venue="BINANCE")]
-    dates = _date_axis("2020-06-01")
+    dates = _date_axis("2020-06-01", "2021-06-01")  # 2021-06-01 is alive → no row; 2020-06-01 → NOT_LISTED
     rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"]))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
@@ -266,9 +270,13 @@ def test_cefi_v2_pre_listing_yields_not_listed() -> None:
 
 
 def test_cefi_v2_post_delisting_yields_delisted() -> None:
-    """Date after available_to → EXPECTED_INSTRUMENT_DELISTED."""
+    """Date after available_to → EXPECTED_INSTRUMENT_DELISTED.
+
+    Window includes an alive date so the overlap filter does not skip the instrument;
+    only the post-delisting date yields a row.
+    """
     catalog = [_make_cefi_entry(available_from="2019-01-01", available_to="2022-12-31", venue="BINANCE")]
-    dates = _date_axis("2023-06-01")
+    dates = _date_axis("2022-06-01", "2023-06-01")  # 2022-06-01 alive → no row; 2023-06-01 → DELISTED
     rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, ["ohlcv_1d"]))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
@@ -312,9 +320,12 @@ def test_cefi_v2_empty_catalog() -> None:
 
 
 def test_cefi_v2_multiple_data_types() -> None:
-    """One absent instrument x N data_types should produce N rows."""
+    """One absent instrument x N data_types should produce N rows.
+
+    Window includes an alive date so the overlap filter does not skip the instrument.
+    """
     catalog = [_make_cefi_entry(available_from="2025-01-01", venue="BINANCE")]
-    dates = _date_axis("2020-01-01")
+    dates = _date_axis("2020-01-01", "2025-06-01")  # 2025-06-01 alive → no row; 2020-01-01 → N NOT_LISTED rows
     data_types = ["ohlcv_1d", "ohlcv_1h", "book_snapshot_5"]
     rows = list(enumerator_module._enumerate_v2_cefi(catalog, dates, data_types))
     assert len(rows) == len(data_types)
@@ -330,9 +341,10 @@ def test_defi_v2_pre_chain_genesis_yields_pre_genesis() -> None:
     """Date before chain genesis → EXPECTED_PRE_GENESIS_CHAIN.
 
     ARBITRUM genesis is 2021-08-31; 2020-01-01 should fire pre-genesis.
+    Window includes an alive date so the overlap filter does not skip the instrument.
     """
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
-    dates = _date_axis("2020-01-01")
+    dates = _date_axis("2020-01-01", "2022-06-01")  # 2022-06-01 alive → no row; 2020-01-01 → PRE_GENESIS
     rows = list(enumerator_module._enumerate_v2_defi(catalog, dates, ["lending_indices"]))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_PRE_GENESIS_CHAIN"
@@ -346,23 +358,33 @@ def test_defi_v2_chain_genesis_beats_available_from() -> None:
     a date between genesis and available_from (e.g. 2021-09-01) must emit
     EXPECTED_INSTRUMENT_NOT_LISTED — not EXPECTED_PRE_GENESIS_CHAIN.
     A date before genesis must emit EXPECTED_PRE_GENESIS_CHAIN.
+
+    Each window includes an alive date so the overlap filter passes.
     """
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
-    # Date before chain genesis → pre-genesis
+    # Date before chain genesis → pre-genesis; 2022-06-01 is alive → no row
     pre_genesis_rows = list(
-        enumerator_module._enumerate_v2_defi(catalog, _date_axis("2020-01-01"), ["lending_indices"])
+        enumerator_module._enumerate_v2_defi(catalog, _date_axis("2020-01-01", "2022-06-01"), ["lending_indices"])
     )
     assert pre_genesis_rows[0].reason == "EXPECTED_PRE_GENESIS_CHAIN"
 
-    # Date after chain genesis but before available_from → not_listed
-    not_listed_rows = list(enumerator_module._enumerate_v2_defi(catalog, _date_axis("2021-09-01"), ["lending_indices"]))
+    # Date after chain genesis but before available_from → not_listed; 2022-06-01 is alive → no row
+    not_listed_rows = list(
+        enumerator_module._enumerate_v2_defi(catalog, _date_axis("2021-09-01", "2022-06-01"), ["lending_indices"])
+    )
     assert not_listed_rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
 
 
 def test_defi_v2_delisted_instrument() -> None:
-    """Date after available_to → EXPECTED_INSTRUMENT_DELISTED."""
+    """Date after available_to → EXPECTED_INSTRUMENT_DELISTED.
+
+    Window includes an alive date so the overlap filter does not skip the instrument.
+    """
     catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01", available_to="2023-06-30")]
-    rows = list(enumerator_module._enumerate_v2_defi(catalog, _date_axis("2024-01-01"), ["lending_indices"]))
+    # 2023-01-01 is alive → no row; 2024-01-01 → DELISTED
+    rows = list(
+        enumerator_module._enumerate_v2_defi(catalog, _date_axis("2023-01-01", "2024-01-01"), ["lending_indices"])
+    )
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
 
@@ -378,8 +400,9 @@ def test_defi_v2_empty_catalog() -> None:
 
 
 def test_tradfi_v2_pre_listing_yields_not_listed() -> None:
+    # Window includes an alive date so the overlap filter does not skip the instrument.
     catalog = [_make_tradfi_entry(available_from="2022-01-01")]
-    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01"), ["ohlcv_1d"]))
+    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-06-01"), ["ohlcv_1d"]))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
     assert rows[0].asset_group == "tradfi"
@@ -387,8 +410,10 @@ def test_tradfi_v2_pre_listing_yields_not_listed() -> None:
 
 
 def test_tradfi_v2_delisted_instrument() -> None:
+    # Window includes an alive date so the overlap filter does not skip the instrument.
     catalog = [_make_tradfi_entry(available_from="2020-01-01", available_to="2021-06-30")]
-    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2022-01-01"), ["ohlcv_1d"]))
+    # 2021-01-01 is alive → no row; 2022-01-01 → DELISTED
+    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2021-01-01", "2022-01-01"), ["ohlcv_1d"]))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
 
@@ -417,9 +442,12 @@ def test_tradfi_v2_empty_catalog() -> None:
 
 
 def test_sports_v2_pre_fixture_start_yields_not_listed() -> None:
-    """Date before fixture available_from → EXPECTED_INSTRUMENT_NOT_LISTED."""
+    """Date before fixture available_from → EXPECTED_INSTRUMENT_NOT_LISTED.
+
+    Window includes an alive date (2024-01-12) so the overlap filter passes.
+    """
     catalog = [_make_sports_entry(available_from="2024-01-10", available_to="2024-01-15")]
-    rows = list(enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-01-05"), ["lineups"]))
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-01-05", "2024-01-12"), ["lineups"]))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
     assert rows[0].league_id == "PL"
@@ -427,17 +455,26 @@ def test_sports_v2_pre_fixture_start_yields_not_listed() -> None:
 
 
 def test_sports_v2_post_fixture_end_yields_delisted() -> None:
-    """Date after fixture available_to → EXPECTED_INSTRUMENT_DELISTED."""
+    """Date after fixture available_to → EXPECTED_INSTRUMENT_DELISTED.
+
+    Window includes an alive date (2024-01-12) so the overlap filter passes.
+    """
     catalog = [_make_sports_entry(available_from="2024-01-10", available_to="2024-01-15")]
-    rows = list(enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-01-20"), ["lineups"]))
+    # 2024-01-12 is alive → no row; 2024-01-20 → DELISTED
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-01-12", "2024-01-20"), ["lineups"]))
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
 
 
 def test_sports_v2_league_id_propagated_to_row() -> None:
-    """league_id from catalog must appear in every yielded row."""
-    catalog = [_make_sports_entry(league_id="LA_LIGA", available_from="2024-06-01")]
-    rows = list(enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-01-01"), ["lineups"]))
+    """league_id from catalog must appear in every yielded row.
+
+    Window includes an alive date so the overlap filter passes.
+    available_to=None so the instrument has no end date and 2024-07-01 is alive.
+    """
+    catalog = [_make_sports_entry(league_id="LA_LIGA", available_from="2024-06-01", available_to=None)]
+    # 2024-07-01 alive → no row; 2024-01-01 → NOT_LISTED with league_id
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-01-01", "2024-07-01"), ["lineups"]))
     assert len(rows) == 1
     assert rows[0].league_id == "LA_LIGA"
 
@@ -457,6 +494,8 @@ def test_prediction_v2_market_created_at_prefers_over_available_from() -> None:
 
     market_created_at=2024-03-01 means date 2024-02-15 is before creation
     → EXPECTED_INSTRUMENT_NOT_LISTED.
+
+    Window includes an alive date (2024-03-15) so the overlap filter passes.
     """
     catalog = [
         _make_prediction_entry(
@@ -465,7 +504,10 @@ def test_prediction_v2_market_created_at_prefers_over_available_from() -> None:
             available_from="2024-01-01",  # earlier than market_created_at
         )
     ]
-    rows = list(enumerator_module._enumerate_v2_prediction(catalog, _date_axis("2024-02-15"), ["prediction_clob"]))
+    # 2024-03-15 alive → no row; 2024-02-15 → NOT_LISTED
+    rows = list(
+        enumerator_module._enumerate_v2_prediction(catalog, _date_axis("2024-02-15", "2024-03-15"), ["prediction_clob"])
+    )
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
 
@@ -475,6 +517,8 @@ def test_prediction_v2_settlement_time_prefers_over_available_to() -> None:
 
     settlement_time=2024-03-31 means date 2024-04-01 is after settlement
     → EXPECTED_INSTRUMENT_DELISTED.
+
+    Window includes an alive date (2024-03-15) so the overlap filter passes.
     """
     catalog = [
         _make_prediction_entry(
@@ -483,13 +527,19 @@ def test_prediction_v2_settlement_time_prefers_over_available_to() -> None:
             available_to="2025-12-31",  # later than settlement_time
         )
     ]
-    rows = list(enumerator_module._enumerate_v2_prediction(catalog, _date_axis("2024-04-01"), ["prediction_clob"]))
+    # 2024-03-15 alive → no row; 2024-04-01 → DELISTED
+    rows = list(
+        enumerator_module._enumerate_v2_prediction(catalog, _date_axis("2024-03-15", "2024-04-01"), ["prediction_clob"])
+    )
     assert len(rows) == 1
     assert rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
 
 
 def test_prediction_v2_falls_back_to_available_from_when_no_market_dates() -> None:
-    """When market_created_at is None, falls back to available_from."""
+    """When market_created_at is None, falls back to available_from.
+
+    Each window includes an alive date so the overlap filter passes.
+    """
     catalog = [
         _make_prediction_entry(
             market_created_at=None,
@@ -498,12 +548,16 @@ def test_prediction_v2_falls_back_to_available_from_when_no_market_dates() -> No
             available_to="2024-09-30",
         )
     ]
-    # Before available_from → not listed
-    pre_rows = list(enumerator_module._enumerate_v2_prediction(catalog, _date_axis("2024-01-01"), ["prediction_clob"]))
+    # Before available_from → not listed; 2024-07-01 alive → no row
+    pre_rows = list(
+        enumerator_module._enumerate_v2_prediction(catalog, _date_axis("2024-01-01", "2024-07-01"), ["prediction_clob"])
+    )
     assert pre_rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
 
-    # After available_to → delisted
-    post_rows = list(enumerator_module._enumerate_v2_prediction(catalog, _date_axis("2024-10-01"), ["prediction_clob"]))
+    # After available_to → delisted; 2024-07-01 alive → no row
+    post_rows = list(
+        enumerator_module._enumerate_v2_prediction(catalog, _date_axis("2024-07-01", "2024-10-01"), ["prediction_clob"])
+    )
     assert post_rows[0].reason == "EXPECTED_INSTRUMENT_DELISTED"
 
 
@@ -518,13 +572,16 @@ def test_prediction_v2_empty_catalog() -> None:
 
 
 def test_enumerate_v2_dispatch_cefi() -> None:
-    """enumerate_v2 routes cefi to _enumerate_v2_cefi."""
+    """enumerate_v2 routes cefi to _enumerate_v2_cefi.
+
+    Window includes an alive date so the overlap filter passes.
+    """
     catalog = [_make_cefi_entry(available_from="2025-01-01", venue="BINANCE")]
     rows = list(
         enumerator_module.enumerate_v2(
             asset_group="cefi",
             catalog=catalog,
-            date_axis=_date_axis("2020-01-01"),
+            date_axis=_date_axis("2020-01-01", "2025-06-01"),  # 2025-06-01 alive → no row; 2020-01-01 → NOT_LISTED
             data_types=["ohlcv_1d"],
         )
     )
@@ -570,58 +627,58 @@ def test_enumerate_v2_empty_catalog_returns_no_rows() -> None:
         (
             "cefi",
             [_make_cefi_entry(available_from="2025-01-01", venue="BINANCE")],
-            _date_axis("2020-01-01"),
+            _date_axis("2020-01-01", "2025-06-01"),  # 2025-06-01 alive → no row; 2020-01-01 → NOT_LISTED
         ),
         (
             "cefi",
             [_make_cefi_entry(available_from="2019-01-01", available_to="2020-01-01", venue="BINANCE")],
-            _date_axis("2023-01-01"),
+            _date_axis("2019-06-01", "2023-01-01"),  # 2019-06-01 alive → no row; 2023-01-01 → DELISTED
         ),
         (
             "cefi",
-            # LIGHTER-ZKSYNC: pre-venue-launch
+            # LIGHTER-ZKSYNC: pre-venue-launch; available_from=2024-01-01 ≤ 2024-08-01 so no overlap filter needed
             [_make_cefi_entry(venue="LIGHTER-ZKSYNC", available_from="2024-01-01")],
             _date_axis("2024-08-01"),
         ),
         (
             "defi",
             [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")],
-            _date_axis("2020-01-01"),
+            _date_axis("2020-01-01", "2022-06-01"),  # 2022-06-01 alive → no row; 2020-01-01 → PRE_GENESIS
         ),
         (
             "defi",
             [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01", available_to="2023-06-30")],
-            _date_axis("2024-01-01"),
+            _date_axis("2023-01-01", "2024-01-01"),  # 2023-01-01 alive → no row; 2024-01-01 → DELISTED
         ),
         (
             "tradfi",
             [_make_tradfi_entry(available_from="2025-01-01")],
-            _date_axis("2020-01-01"),
+            _date_axis("2020-01-01", "2025-06-01"),  # 2025-06-01 alive → no row; 2020-01-01 → NOT_LISTED
         ),
         (
             "tradfi",
             [_make_tradfi_entry(available_from="2020-01-01", available_to="2021-01-01")],
-            _date_axis("2024-01-01"),
+            _date_axis("2020-06-01", "2024-01-01"),  # 2020-06-01 alive → no row; 2024-01-01 → DELISTED
         ),
         (
             "sports",
-            [_make_sports_entry(available_from="2024-06-01")],
-            _date_axis("2024-01-01"),
+            [_make_sports_entry(available_from="2024-06-01", available_to=None)],  # no end → 2024-07-01 alive
+            _date_axis("2024-01-01", "2024-07-01"),  # 2024-07-01 alive → no row; 2024-01-01 → NOT_LISTED
         ),
         (
             "sports",
             [_make_sports_entry(available_from="2024-01-01", available_to="2024-03-01")],
-            _date_axis("2024-06-01"),
+            _date_axis("2024-01-15", "2024-06-01"),  # 2024-01-15 alive → no row; 2024-06-01 → DELISTED
         ),
         (
             "prediction",
             [_make_prediction_entry(market_created_at="2024-06-01", settlement_time="2024-09-01")],
-            _date_axis("2024-01-01"),
+            _date_axis("2024-01-01", "2024-07-01"),  # 2024-07-01 alive → no row; 2024-01-01 → NOT_LISTED
         ),
         (
             "prediction",
             [_make_prediction_entry(market_created_at="2024-01-01", settlement_time="2024-03-01")],
-            _date_axis("2024-06-01"),
+            _date_axis("2024-02-01", "2024-06-01"),  # 2024-02-01 alive → no row; 2024-06-01 → DELISTED
         ),
     ],
 )
@@ -921,17 +978,22 @@ def test_expected_unattempted_rows_have_empty_reason() -> None:
 
 
 def test_empty_confirmed_rows_still_have_typed_reason_when_present_set_given() -> None:
-    """Even when present_set is provided, lifecycle-boundary rows still emit typed reason."""
+    """Even when present_set is provided, lifecycle-boundary rows still emit typed reason.
+
+    Window includes an alive date so the overlap filter passes.
+    """
     catalog = [_make_cefi_entry(available_from="2025-01-01", venue="BINANCE")]
     rows = list(
         enumerator_module.enumerate_v2(
             asset_group="cefi",
             catalog=catalog,
-            date_axis=_date_axis("2020-01-01"),
+            date_axis=_date_axis(
+                "2020-01-01", "2025-06-01"
+            ),  # 2025-06-01 alive → expected_unattempted; 2020-01-01 → NOT_LISTED
             data_types=["ohlcv_1d"],
             present_set=set(),  # providing present_set shouldn't affect lifecycle boundary rows
         )
     )
-    assert len(rows) == 1
-    assert rows[0].capture_status == "empty_confirmed"
-    assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
+    not_listed = [r for r in rows if r.capture_status == "empty_confirmed"]
+    assert len(not_listed) == 1
+    assert not_listed[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
