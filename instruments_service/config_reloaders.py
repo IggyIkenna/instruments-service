@@ -53,7 +53,7 @@ class InstrumentsDomainConfigState:
         # Read the field default without instantiating the full config (avoids env var conflicts).
         _field = InstrumentDomainConfig.model_fields["defi_major_assets"]
         self._defi_major_assets: frozenset[str] = (
-            _field.default_factory() if _field.default_factory is not None else frozenset()
+            _field.default_factory() if callable(_field.default_factory) else frozenset()  # type: ignore[misc]
         )
         self._reloader: DomainConfigReloader[InstrumentDomainConfig] | None = None
 
