@@ -6,6 +6,14 @@ Tests:
   (c) normalize_api_football_fixture — announced_at = kickoff_utc - 7 days
   (d) orchestrator PST fixture → record_empty(reason=EXPECTED_FIXTURE_POSTPONED)
   (e) orchestrator CANC fixture → record_empty(reason=EXPECTED_FIXTURE_CANCELLED)
+
+C.6 available_at cascade tests (added 2026-05-23):
+  (f) report_time → available_at for completed SFI matches
+  (g) None report_time → wall-clock fallback for in-progress SFI rows
+  (h) mixed report_time rows — completed use report_time, in-progress use fallback
+  (i) detect_match_end_time + SFI_DATA_LAG_P95_SECONDS → correct report_time derivation
+  (j) understat XG kickoff+24h preserved (not overridden by wall-clock)
+  (k) understat XG None kickoff → wall-clock fallback
 """
 
 from __future__ import annotations
@@ -13,6 +21,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock
 
+import pandas as pd
 from unified_api_contracts.canonical.domain.sports import CanonicalProgressiveStats
 from unified_api_contracts.external.api_football.normalize import normalize_api_football_fixture
 from unified_api_contracts.external.api_football.schemas import (
@@ -23,6 +32,7 @@ from unified_api_contracts.external.api_football.schemas import (
     ApiFootballScore,
     ApiFootballTeamWithWinner,
 )
+from unified_api_contracts.registry.source_data_latency import SFI_DATA_LAG_P95_SECONDS
 
 from instruments_service.reference_data.adapters.sports.adapters.soccerfootball_info import (
     _MATCH_END_SEARCH_START_SECONDS,
@@ -211,3 +221,139 @@ def test_af_record_empty_passes_reason_to_manifest() -> None:
     assert call_kwargs["reason"] == "EXPECTED_FIXTURE_POSTPONED"
     assert call_kwargs["row_key"] == {"date": date, "data_type": "FIXTURES", "league_id": "EPL"}
     assert call_kwargs["pipeline_mode"] == PipelineMode.BATCH_API_FOOTBALL
+
+
+# ---------------------------------------------------------------------------
+# C.6 available_at cascade — (f)-(k) added 2026-05-23
+# ---------------------------------------------------------------------------
+
+
+def _apply_report_time_stamping(df: pd.DataFrame, fallback: datetime) -> pd.DataFrame:
+    """Mirrors the C.6 stamping logic shipped in orchestrator.py ~6380."""
+    out = df.copy()
+    if "report_time" in out.columns:
+        rt = pd.to_datetime(out["report_time"], utc=True, errors="coerce")
+        out["available_at"] = rt.fillna(pd.Timestamp(fallback))
+    else:
+        out["available_at"] = pd.Timestamp(fallback)
+    return out
+
+
+def _apply_xg_stamping(df: pd.DataFrame, fallback: datetime) -> pd.DataFrame:
+    """Mirrors the C.6 stamping logic for understat XG (orchestrator.py ~5703)."""
+    out = df.copy()
+    out["available_at"] = out["available_at"].fillna(pd.Timestamp(fallback))
+    return out
+
+
+_REPORT_TIME = datetime(2024, 3, 10, 17, 5, 0, tzinfo=UTC)
+_FALLBACK = datetime(2026, 5, 23, 12, 0, 0, tzinfo=UTC)
+
+
+# (f) Completed match — report_time used as available_at
+
+
+def test_c6_report_time_used_as_available_at() -> None:
+    """Completed match rows with report_time use it as available_at."""
+    df = pd.DataFrame(
+        [
+            {"fixture_id": "1", "timer_seconds": 5400, "report_time": _REPORT_TIME.isoformat()},
+            {"fixture_id": "1", "timer_seconds": 5430, "report_time": _REPORT_TIME.isoformat()},
+        ]
+    )
+    df["available_at"] = pd.Timestamp(_KICKOFF) + pd.to_timedelta(
+        pd.to_numeric(df["timer_seconds"], errors="coerce"), unit="s"
+    )
+    result = _apply_report_time_stamping(df, _FALLBACK)
+
+    expected = pd.Timestamp(_REPORT_TIME)
+    assert (result["available_at"] == expected).all(), f"Expected {expected}, got {result['available_at'].tolist()}"
+
+
+# (g) In-progress match — None report_time falls back to wall-clock
+
+
+def test_c6_none_report_time_falls_back_to_wall_clock() -> None:
+    """In-progress match rows with report_time=None fall back to wall-clock timestamp."""
+    df = pd.DataFrame(
+        [
+            {"fixture_id": "2", "timer_seconds": 2700, "report_time": None},
+            {"fixture_id": "2", "timer_seconds": 2730, "report_time": None},
+        ]
+    )
+    df["available_at"] = pd.Timestamp(_KICKOFF) + pd.to_timedelta(
+        pd.to_numeric(df["timer_seconds"], errors="coerce"), unit="s"
+    )
+    result = _apply_report_time_stamping(df, _FALLBACK)
+
+    expected = pd.Timestamp(_FALLBACK)
+    assert (result["available_at"] == expected).all()
+
+
+# (h) Mixed rows — completed use report_time, in-progress use fallback
+
+
+def test_c6_mixed_rows_use_correct_available_at() -> None:
+    """Mixed df: rows with report_time use it; rows without use wall-clock fallback."""
+    df = pd.DataFrame(
+        [
+            {"fixture_id": "1", "timer_seconds": 5400, "report_time": _REPORT_TIME.isoformat()},
+            {"fixture_id": "2", "timer_seconds": 2700, "report_time": None},
+        ]
+    )
+    df["available_at"] = pd.Timestamp(_KICKOFF)
+    result = _apply_report_time_stamping(df, _FALLBACK)
+
+    assert result.loc[0, "available_at"] == pd.Timestamp(_REPORT_TIME)
+    assert result.loc[1, "available_at"] == pd.Timestamp(_FALLBACK)
+
+
+# (i) detect_match_end_time + SFI_DATA_LAG_P95_SECONDS → correct report_time derivation
+
+
+def test_c6_detect_match_end_time_derives_report_time_with_lag() -> None:
+    """Full cascade: detect_match_end_time + lag gives correct report_time."""
+    pre = [_make_row(t) for t in range(0, _LATE_START, 30)]
+    frozen = _make_frozen_rows(start_seconds=_LATE_START, count=_MIN_MATCH_END_RUN + 2)
+    rows = pre + frozen
+
+    match_end = detect_match_end_time(rows, _KICKOFF)
+    assert match_end is not None
+
+    report_time = match_end + timedelta(seconds=SFI_DATA_LAG_P95_SECONDS)
+    expected_match_end = _KICKOFF + timedelta(seconds=_LATE_START + (_MIN_MATCH_END_RUN + 2 - 1) * 30)
+    assert match_end == expected_match_end
+    assert report_time == expected_match_end + timedelta(seconds=300)
+
+
+# (j) Understat XG — kickoff+24h preserved when set
+
+
+def test_c6_understat_xg_kickoff_plus_24h_preserved() -> None:
+    """kickoff+24h available_at set before stamp call is not overridden by wall-clock."""
+    kickoff = pd.Timestamp(_KICKOFF)
+    df = pd.DataFrame(
+        [
+            {"match_id": "m1", "kickoff_utc": kickoff},
+            {"match_id": "m2", "kickoff_utc": kickoff},
+        ]
+    )
+    df["available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True, errors="coerce") + pd.Timedelta(hours=24)
+
+    result = _apply_xg_stamping(df, _FALLBACK)
+
+    expected = kickoff + pd.Timedelta(hours=24)
+    assert (result["available_at"] == expected).all()
+
+
+# (k) Understat XG — missing kickoff_utc falls back to wall-clock
+
+
+def test_c6_understat_xg_none_kickoff_falls_back() -> None:
+    """Row with no kickoff_utc (NaT available_at) falls back to wall-clock timestamp."""
+    df = pd.DataFrame([{"match_id": "m1", "kickoff_utc": None}])
+    df["available_at"] = pd.to_datetime(df["kickoff_utc"], utc=True, errors="coerce") + pd.Timedelta(hours=24)
+
+    result = _apply_xg_stamping(df, _FALLBACK)
+
+    assert result.loc[0, "available_at"] == pd.Timestamp(_FALLBACK)
