@@ -99,7 +99,7 @@ DEFAULT_START_DATE = "2018-01-01"
 class ExpectedRow:
     """One row in the expected universe — either present in the manifest
     already (in which case the enumerator skips it) or missing (in which
-    case the enumerator writes ``record_expected_empty(reason=...)``)."""
+    case the enumerator writes the appropriate manifest status)."""
 
     asset_group: str
     venue: str
@@ -109,7 +109,8 @@ class ExpectedRow:
     instrument_id: str
     league_id: str
     date: str
-    reason: str  # one of EMPTY_CONFIRMED_REASONS
+    reason: str  # one of EMPTY_CONFIRMED_REASONS (empty string when capture_status=expected_unattempted)
+    capture_status: str = "empty_confirmed"  # "empty_confirmed" | "expected_unattempted"
 
 
 def _emit_event(event: str, /, **details: object) -> None:
@@ -408,17 +409,22 @@ def _enumerate_v2_cefi(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
     data_types: list[str],
+    *,
+    present_set: set[tuple[str, ...]] | None = None,
+    present_cols: list[str] | None = None,
 ) -> Iterator[ExpectedRow]:
     """Per-instrument cefi v2 enumerator.
 
     For each instrument in the catalog:
-      * date < available_from  → EXPECTED_INSTRUMENT_NOT_LISTED
-      * date > available_to    → EXPECTED_INSTRUMENT_DELISTED
-      * available_from <= date <= available_to → skip (captured/attempted by pipeline)
+      * date < available_from  → EXPECTED_INSTRUMENT_NOT_LISTED (empty_confirmed)
+      * date > available_to    → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
+      * alive AND no manifest row (present_set provided) → expected_unattempted
+      * alive AND present_set not provided → skip (legacy mode)
 
     Also respects venue launch dates (EXPECTED_PRE_VENUE_LAUNCH) for dates
     before the venue launched — same logic as v1's _enumerate_cefi.
     """
+    _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
     for instr in catalog:
         af_ts = pd.Timestamp(instr.available_from) if instr.available_from else None
         at_ts = pd.Timestamp(instr.available_to) if instr.available_to else None
@@ -426,6 +432,7 @@ def _enumerate_v2_cefi(
         venue_launch_ts = pd.Timestamp(venue_launch_str) if venue_launch_str else None
         for d in date_axis:
             d_ts = pd.Timestamp(d)
+            iso = d.isoformat()
             # venue pre-launch beats instrument lifecycle
             if venue_launch_ts is not None and d_ts < venue_launch_ts:
                 reason = "EXPECTED_PRE_VENUE_LAUNCH"
@@ -434,8 +441,36 @@ def _enumerate_v2_cefi(
             elif at_ts is not None and d_ts > at_ts:
                 reason = "EXPECTED_INSTRUMENT_DELISTED"
             else:
-                continue  # instrument alive on this day — pipeline handles it
-            iso = d.isoformat()
+                if present_set is None:
+                    continue  # legacy mode: alive on this day — skip
+                # alive + manifest-aware: yield expected_unattempted for missing rows
+                for dt in data_types:
+                    row_key = tuple(
+                        {
+                            "venue": instr.venue,
+                            "chain": instr.chain,
+                            "data_type": dt,
+                            "instrument_type": instr.instrument_type,
+                            "instrument_id": instr.instrument_id,
+                            "league_id": "",
+                            "date": iso,
+                        }.get(c, "")
+                        for c in _pcols
+                    )
+                    if row_key not in present_set:
+                        yield ExpectedRow(
+                            asset_group="cefi",
+                            venue=instr.venue,
+                            chain=instr.chain,
+                            data_type=dt,
+                            instrument_type=instr.instrument_type,
+                            instrument_id=instr.instrument_id,
+                            league_id="",
+                            date=iso,
+                            reason="",
+                            capture_status="expected_unattempted",
+                        )
+                continue
             for dt in data_types:
                 yield ExpectedRow(
                     asset_group="cefi",
@@ -454,13 +489,23 @@ def _enumerate_v2_defi(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
     data_types: list[str],
+    *,
+    present_set: set[tuple[str, ...]] | None = None,
+    present_cols: list[str] | None = None,
 ) -> Iterator[ExpectedRow]:
     """Per-instrument defi v2 enumerator.
 
     Respects both chain genesis dates and protocol launch dates.
     For instruments with available_from/available_to bounds also applies
     per-instrument lifecycle rules.
+
+    * date < chain_genesis     → EXPECTED_PRE_GENESIS_CHAIN (empty_confirmed)
+    * date < available_from    → EXPECTED_INSTRUMENT_NOT_LISTED (empty_confirmed)
+    * date > available_to      → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
+    * alive AND no manifest row (present_set provided) → expected_unattempted
+    * alive AND present_set not provided → skip (legacy mode)
     """
+    _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
     for instr in catalog:
         af_ts = pd.Timestamp(instr.available_from) if instr.available_from else None
         at_ts = pd.Timestamp(instr.available_to) if instr.available_to else None
@@ -469,6 +514,7 @@ def _enumerate_v2_defi(
         chain_genesis_ts = pd.Timestamp(chain_genesis_str) if chain_genesis_str else None
         for d in date_axis:
             d_ts = pd.Timestamp(d)
+            iso = d.isoformat()
             # chain genesis takes priority
             if chain_genesis_ts is not None and d_ts < chain_genesis_ts:
                 reason = "EXPECTED_PRE_GENESIS_CHAIN"
@@ -477,8 +523,35 @@ def _enumerate_v2_defi(
             elif at_ts is not None and d_ts > at_ts:
                 reason = "EXPECTED_INSTRUMENT_DELISTED"
             else:
+                if present_set is None:
+                    continue  # legacy mode: alive on this day — skip
+                for dt in data_types:
+                    row_key = tuple(
+                        {
+                            "venue": instr.venue,
+                            "chain": chain_upper,
+                            "data_type": dt,
+                            "instrument_type": instr.instrument_type,
+                            "instrument_id": instr.instrument_id,
+                            "league_id": "",
+                            "date": iso,
+                        }.get(c, "")
+                        for c in _pcols
+                    )
+                    if row_key not in present_set:
+                        yield ExpectedRow(
+                            asset_group="defi",
+                            venue=instr.venue,
+                            chain=chain_upper,
+                            data_type=dt,
+                            instrument_type=instr.instrument_type,
+                            instrument_id=instr.instrument_id,
+                            league_id="",
+                            date=iso,
+                            reason="",
+                            capture_status="expected_unattempted",
+                        )
                 continue
-            iso = d.isoformat()
             for dt in data_types:
                 yield ExpectedRow(
                     asset_group="defi",
@@ -497,6 +570,9 @@ def _enumerate_v2_tradfi(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
     data_types: list[str],
+    *,
+    present_set: set[tuple[str, ...]] | None = None,
+    present_cols: list[str] | None = None,
 ) -> Iterator[ExpectedRow]:
     """Per-instrument tradfi v2 enumerator.
 
@@ -504,19 +580,53 @@ def _enumerate_v2_tradfi(
     Weekend and holiday dates fall through to the pipeline (v1 handles them
     at venue-grain; v2 only adds per-instrument rows for the non-trading-day
     windows outside the instrument lifecycle).
+
+    * date < available_from    → EXPECTED_INSTRUMENT_NOT_LISTED (empty_confirmed)
+    * date > available_to      → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
+    * alive AND no manifest row (present_set provided) → expected_unattempted
+    * alive AND present_set not provided → skip (legacy mode)
     """
+    _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
     for instr in catalog:
         af_ts = pd.Timestamp(instr.available_from) if instr.available_from else None
         at_ts = pd.Timestamp(instr.available_to) if instr.available_to else None
         for d in date_axis:
             d_ts = pd.Timestamp(d)
+            iso = d.isoformat()
             if af_ts is not None and d_ts < af_ts:
                 reason = "EXPECTED_INSTRUMENT_NOT_LISTED"
             elif at_ts is not None and d_ts > at_ts:
                 reason = "EXPECTED_INSTRUMENT_DELISTED"
             else:
+                if present_set is None:
+                    continue  # legacy mode: alive on this day — skip
+                for dt in data_types:
+                    row_key = tuple(
+                        {
+                            "venue": instr.venue,
+                            "chain": "",
+                            "data_type": dt,
+                            "instrument_type": instr.instrument_type,
+                            "instrument_id": instr.instrument_id,
+                            "league_id": "",
+                            "date": iso,
+                        }.get(c, "")
+                        for c in _pcols
+                    )
+                    if row_key not in present_set:
+                        yield ExpectedRow(
+                            asset_group="tradfi",
+                            venue=instr.venue,
+                            chain="",
+                            data_type=dt,
+                            instrument_type=instr.instrument_type,
+                            instrument_id=instr.instrument_id,
+                            league_id="",
+                            date=iso,
+                            reason="",
+                            capture_status="expected_unattempted",
+                        )
                 continue
-            iso = d.isoformat()
             for dt in data_types:
                 yield ExpectedRow(
                     asset_group="tradfi",
@@ -535,6 +645,9 @@ def _enumerate_v2_sports(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
     data_types: list[str],
+    *,
+    present_set: set[tuple[str, ...]] | None = None,
+    present_cols: list[str] | None = None,
 ) -> Iterator[ExpectedRow]:
     """Per-fixture/league sports v2 enumerator.
 
@@ -545,19 +658,53 @@ def _enumerate_v2_sports(
 
     Leagues without per-fixture bounds fall through (covered by v1 source-coverage rows).
     Paused leagues emit EXPECTED_PAUSED_LEAGUE per the reason taxonomy.
+
+    * date < available_from    → EXPECTED_INSTRUMENT_NOT_LISTED (empty_confirmed)
+    * date > available_to      → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
+    * alive AND no manifest row (present_set provided) → expected_unattempted
+    * alive AND present_set not provided → skip (legacy mode)
     """
+    _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
     for instr in catalog:
         af_ts = pd.Timestamp(instr.available_from) if instr.available_from else None
         at_ts = pd.Timestamp(instr.available_to) if instr.available_to else None
         for d in date_axis:
             d_ts = pd.Timestamp(d)
+            iso = d.isoformat()
             if af_ts is not None and d_ts < af_ts:
                 reason = "EXPECTED_INSTRUMENT_NOT_LISTED"
             elif at_ts is not None and d_ts > at_ts:
                 reason = "EXPECTED_INSTRUMENT_DELISTED"
             else:
+                if present_set is None:
+                    continue  # legacy mode: alive on this day — skip
+                for dt in data_types:
+                    row_key = tuple(
+                        {
+                            "venue": instr.venue,
+                            "chain": "",
+                            "data_type": dt,
+                            "instrument_type": instr.instrument_type,
+                            "instrument_id": instr.instrument_id,
+                            "league_id": instr.league_id,
+                            "date": iso,
+                        }.get(c, "")
+                        for c in _pcols
+                    )
+                    if row_key not in present_set:
+                        yield ExpectedRow(
+                            asset_group="sports",
+                            venue=instr.venue,
+                            chain="",
+                            data_type=dt,
+                            instrument_type=instr.instrument_type,
+                            instrument_id=instr.instrument_id,
+                            league_id=instr.league_id,
+                            date=iso,
+                            reason="",
+                            capture_status="expected_unattempted",
+                        )
                 continue
-            iso = d.isoformat()
             for dt in data_types:
                 yield ExpectedRow(
                     asset_group="sports",
@@ -576,6 +723,9 @@ def _enumerate_v2_prediction(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
     data_types: list[str],
+    *,
+    present_set: set[tuple[str, ...]] | None = None,
+    present_cols: list[str] | None = None,
 ) -> Iterator[ExpectedRow]:
     """Per-market prediction v2 enumerator.
 
@@ -585,7 +735,13 @@ def _enumerate_v2_prediction(
 
     When ``market_created_at`` / ``settlement_time`` are absent, falls back
     to available_from / available_to.
+
+    * date < market_created_at → EXPECTED_INSTRUMENT_NOT_LISTED (empty_confirmed)
+    * date > settlement_time   → EXPECTED_INSTRUMENT_DELISTED (empty_confirmed)
+    * alive AND no manifest row (present_set provided) → expected_unattempted
+    * alive AND present_set not provided → skip (legacy mode)
     """
+    _pcols = present_cols or ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
     for instr in catalog:
         # Prefer market lifecycle fields; fall back to generic available_from/to
         created_str = instr.market_created_at or instr.available_from
@@ -594,13 +750,41 @@ def _enumerate_v2_prediction(
         at_ts = pd.Timestamp(settled_str) if settled_str else None
         for d in date_axis:
             d_ts = pd.Timestamp(d)
+            iso = d.isoformat()
             if af_ts is not None and d_ts < af_ts:
                 reason = "EXPECTED_INSTRUMENT_NOT_LISTED"
             elif at_ts is not None and d_ts > at_ts:
                 reason = "EXPECTED_INSTRUMENT_DELISTED"
             else:
+                if present_set is None:
+                    continue  # legacy mode: alive on this day — skip
+                for dt in data_types:
+                    row_key = tuple(
+                        {
+                            "venue": instr.venue,
+                            "chain": "",
+                            "data_type": dt,
+                            "instrument_type": instr.instrument_type,
+                            "instrument_id": instr.instrument_id,
+                            "league_id": "",
+                            "date": iso,
+                        }.get(c, "")
+                        for c in _pcols
+                    )
+                    if row_key not in present_set:
+                        yield ExpectedRow(
+                            asset_group="prediction",
+                            venue=instr.venue,
+                            chain="",
+                            data_type=dt,
+                            instrument_type=instr.instrument_type,
+                            instrument_id=instr.instrument_id,
+                            league_id="",
+                            date=iso,
+                            reason="",
+                            capture_status="expected_unattempted",
+                        )
                 continue
-            iso = d.isoformat()
             for dt in data_types:
                 yield ExpectedRow(
                     asset_group="prediction",
@@ -633,13 +817,16 @@ def enumerate_v2(
     catalog: list[InstrumentCatalogEntry],
     date_axis: list[date],
     data_types: list[str] | None = None,
+    present_set: set[tuple[str, ...]] | None = None,
+    present_cols: list[str] | None = None,
 ) -> Iterator[ExpectedRow]:
     """Per-instrument-grain enumerator (v2).
 
     Cross-joins the instruments-service catalog with a date axis and a list of
     data_types to yield one ``ExpectedRow`` per
     ``(instrument_id, date, data_type)`` triple where the instrument is NOT
-    alive on that date.
+    alive on that date (``empty_confirmed``) OR is alive but has no manifest
+    row (``expected_unattempted``, when ``present_set`` is provided).
 
     Args:
         asset_group: One of the five supported asset groups.
@@ -650,10 +837,20 @@ def enumerate_v2(
             ``pd.date_range(start, end, freq="D")`` + ``.date`` conversion.
         data_types: Optional override list of data_type strings. Defaults to
             ``DATA_TYPES_BY_ASSET_GROUP[asset_group]``.
+        present_set: Set of manifest row-key tuples already present in the
+            manifest (built via :func:`_build_present_set`). When provided,
+            alive-instrument dates with no manifest row yield
+            ``expected_unattempted`` rows. When ``None``, alive dates are
+            silently skipped (legacy mode — no-op for alive window).
+        present_cols: Column order used to build ``present_set`` tuples (must
+            match the order used in :func:`_build_present_set`). Defaults to
+            ``["venue", "chain", "data_type", "instrument_type",
+            "instrument_id", "league_id", "date"]``.
 
     Yields:
         :class:`ExpectedRow` instances with ``reason`` drawn from the
-        ``EMPTY_CONFIRMED_REASONS`` closed set.
+        ``EMPTY_CONFIRMED_REASONS`` closed set (``empty_confirmed`` rows) or
+        ``reason=""`` with ``capture_status="expected_unattempted"``.
 
     Lifecycle rules applied per asset_group:
         - **cefi**: CEFI_VENUE_LAUNCH_DATES (pre-launch) > available_from/to
@@ -671,6 +868,7 @@ def enumerate_v2(
 
     Gate G3 of ``manifest_evolution_SUPERSEDED_2026_05_21``. Ships per
     ``expected_universe_v2_design_2026_05_08.md`` Phase 1.A.
+    Wave 3 (``expected_unattempted``): writegate plan Phase 3.D.5 item.
     """
     if asset_group not in _V2_ENUMERATORS:
         raise ValueError(
@@ -678,7 +876,13 @@ def enumerate_v2(
         )
     resolved_data_types: list[str] = data_types or [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
     enumerator_func = _V2_ENUMERATORS[asset_group]
-    yield from enumerator_func(catalog, date_axis, resolved_data_types)
+    yield from enumerator_func(
+        catalog,
+        date_axis,
+        resolved_data_types,
+        present_set=present_set,
+        present_cols=present_cols,
+    )
 
 
 def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
@@ -1016,8 +1220,8 @@ def _write_absent_rows(
             "instrument_id": r.instrument_id,
             "league_id": r.league_id,
             "date": r.date,
-            "capture_status": "empty_confirmed",
-            "error_reason": r.reason,
+            "capture_status": r.capture_status,
+            "error_reason": r.reason if r.capture_status == "empty_confirmed" else "",
             "attempted_at": attempted_at_iso,
             "row_count": 0,
             "service_name": "instruments-service",
@@ -1136,7 +1340,7 @@ def main() -> int:
         run_id=run_id,
     )
 
-    # v2 path: load catalog, build date axis, delegate to enumerate_v2()
+    # v2 path: load catalog + manifest, build date axis, delegate to enumerate_v2()
     if enumerator_version == "v2":
         if not catalog_path:
             logger.error("--enumerator-version=v2 requires --catalog-path <parquet path or gs:// URI>")
@@ -1149,64 +1353,77 @@ def main() -> int:
             catalog_df = pd.read_parquet(catalog_path)
         logger.info("v2 catalog loaded: %d instruments", len(catalog_df))
         catalog = _catalog_from_dataframe(catalog_df)
-        # Build date_axis as list[date]
-        date_axis_ts = pd.date_range(start_date, end_date, freq="D")
-        date_axis: list[date] = [d.date() for d in date_axis_ts]
-        data_types_list: list[str] = [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
-        # Wrap enumerate_v2 in an adapter that matches the absent_rows list
-        # the existing write-path expects (list[ExpectedRow])
-        v2_absent: list[ExpectedRow] = []
-        for expected_row in enumerate_v2(
-            asset_group=asset_group,
-            catalog=catalog,
-            date_axis=date_axis,
-            data_types=data_types_list,
-        ):
-            v2_absent.append(expected_row)
-            if len(v2_absent) > max_writes_per_run:
-                logger.error(
-                    "Halt-safety triggered: would-write %d > max_writes_per_run %d. "
-                    "Increase --max-writes-per-run after operator review.",
-                    len(v2_absent),
-                    max_writes_per_run,
-                )
+        # Download manifest to build present_set for expected_unattempted detection.
+        v2_manifest_df, v2_local_manifest = _download_manifest(bucket_name, asset_group)
+        try:
+            v2_present_set = _build_present_set(v2_manifest_df, asset_group)
+            logger.info("v2 manifest present-set size: %d", len(v2_present_set))
+            # Column order used in _build_present_set (must match present_set tuples).
+            _possible_cols = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
+            v2_present_cols = [c for c in _possible_cols if c in v2_manifest_df.columns]
+            # Build date_axis as list[date]
+            date_axis_ts = pd.date_range(start_date, end_date, freq="D")
+            date_axis: list[date] = [d.date() for d in date_axis_ts]
+            data_types_list: list[str] = [str(dt) for dt in DATA_TYPES_BY_ASSET_GROUP.get(asset_group, [])]
+            # Wrap enumerate_v2 in an adapter that matches the absent_rows list
+            # the existing write-path expects (list[ExpectedRow])
+            v2_absent: list[ExpectedRow] = []
+            for expected_row in enumerate_v2(
+                asset_group=asset_group,
+                catalog=catalog,
+                date_axis=date_axis,
+                data_types=data_types_list,
+                present_set=v2_present_set,
+                present_cols=v2_present_cols,
+            ):
+                v2_absent.append(expected_row)
+                if len(v2_absent) > max_writes_per_run:
+                    logger.error(
+                        "Halt-safety triggered: would-write %d > max_writes_per_run %d. "
+                        "Increase --max-writes-per-run after operator review.",
+                        len(v2_absent),
+                        max_writes_per_run,
+                    )
+                    _emit_event(
+                        "ENUMERATOR_FAILED",
+                        reason="max_writes_exceeded",
+                        candidates=len(v2_absent),
+                        cap=max_writes_per_run,
+                        run_id=run_id,
+                    )
+                    return 5
+            logger.info(
+                "v2 enumeration complete: %d candidate rows (per-instrument grain)",
+                len(v2_absent),
+            )
+            if not v2_absent:
+                logger.info("v2: nothing to backfill — manifest already covers the expected per-instrument universe.")
                 _emit_event(
-                    "ENUMERATOR_FAILED",
-                    reason="max_writes_exceeded",
-                    candidates=len(v2_absent),
-                    cap=max_writes_per_run,
+                    "ENUMERATOR_COMPLETED",
+                    enumerator_version="v2",
+                    asset_group=asset_group,
+                    candidates=0,
+                    written=0,
                     run_id=run_id,
                 )
-                return 5
-        logger.info(
-            "v2 enumeration complete: %d candidate rows (per-instrument grain)",
-            len(v2_absent),
-        )
-        if not v2_absent:
-            logger.info("v2: nothing to backfill — manifest already covers the expected per-instrument universe.")
-            _emit_event(
-                "ENUMERATOR_COMPLETED",
-                enumerator_version="v2",
+                return 0
+            # Route through shared write path (v1 passes manifest_df for column
+            # alignment; v2 passes None — uses minimal schema).
+            return _write_absent_rows(
+                absent_rows=v2_absent,
                 asset_group=asset_group,
-                candidates=0,
-                written=0,
+                bucket_name=bucket_name,
+                apply_write=apply_write,
+                report_dir=report_dir,
+                report_path=report_path,
                 run_id=run_id,
+                run_ts=run_ts,
+                gcs_report_bucket_arg=gcs_report_bucket_arg,
+                enumerator_version="v2",
             )
-            return 0
-        # Route through shared write path (v1 passes manifest_df for column
-        # alignment; v2 passes None — uses minimal schema).
-        return _write_absent_rows(
-            absent_rows=v2_absent,
-            asset_group=asset_group,
-            bucket_name=bucket_name,
-            apply_write=apply_write,
-            report_dir=report_dir,
-            report_path=report_path,
-            run_id=run_id,
-            run_ts=run_ts,
-            gcs_report_bucket_arg=gcs_report_bucket_arg,
-            enumerator_version="v2",
-        )
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(v2_local_manifest)
 
     # v1 path: download manifest, build present-set, enumerate expected universe.
     df, local_manifest = _download_manifest(bucket_name, asset_group)
