@@ -660,3 +660,278 @@ def test_v2_enumerators_dict_covers_all_5_asset_groups() -> None:
         "sports",
         "prediction",
     }
+
+
+# ---------------------------------------------------------------------------
+# Wave 3 — expected_unattempted rows (present_set-aware mode)
+# ---------------------------------------------------------------------------
+
+_DEFAULT_COLS = ["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"]
+
+
+def _row_key_from_dict(d: dict[str, str]) -> tuple[str, ...]:
+    return tuple(d.get(c, "") for c in _DEFAULT_COLS)
+
+
+def test_cefi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
+    """Alive instrument date absent from manifest → expected_unattempted row."""
+    catalog = [_make_cefi_entry(available_from="2019-01-01", available_to=None, venue="BINANCE")]
+    date_axis = _date_axis("2023-06-01")
+    present_set: set[tuple[str, ...]] = set()  # empty — no manifest rows
+    rows = list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set=present_set))
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.capture_status == "expected_unattempted"
+    assert r.reason == ""
+    assert r.date == "2023-06-01"
+    assert r.data_type == "ohlcv_1d"
+    assert r.asset_group == "cefi"
+
+
+def test_cefi_v2_alive_date_in_present_set_skipped() -> None:
+    """Alive instrument date already in manifest → no row emitted."""
+    catalog = [_make_cefi_entry(available_from="2019-01-01", venue="BINANCE")]
+    date_axis = _date_axis("2023-06-01")
+    key = _row_key_from_dict(
+        {
+            "venue": "BINANCE",
+            "chain": "",
+            "data_type": "ohlcv_1d",
+            "instrument_type": "SPOT",
+            "instrument_id": "BTC-USDT",
+            "league_id": "",
+            "date": "2023-06-01",
+        }
+    )
+    rows = list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set={key}))
+    assert rows == []
+
+
+def test_cefi_v2_legacy_mode_alive_date_skipped() -> None:
+    """present_set=None (legacy mode) → alive dates produce no rows."""
+    catalog = [_make_cefi_entry(available_from="2019-01-01", venue="BINANCE")]
+    date_axis = _date_axis("2023-06-01")
+    rows = list(enumerator_module._enumerate_v2_cefi(catalog, date_axis, ["ohlcv_1d"], present_set=None))
+    assert rows == []
+
+
+def test_defi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
+    """DeFi alive instrument date absent from manifest → expected_unattempted."""
+    catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
+    date_axis = _date_axis("2024-06-01")
+    rows = list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set=set()))
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.capture_status == "expected_unattempted"
+    assert r.reason == ""
+    assert r.chain == "ARBITRUM"
+    assert r.asset_group == "defi"
+
+
+def test_defi_v2_alive_date_in_present_set_skipped() -> None:
+    """DeFi alive date already in manifest → no row emitted."""
+    catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
+    date_axis = _date_axis("2024-06-01")
+    key = _row_key_from_dict(
+        {
+            "venue": "AAVEV3",
+            "chain": "ARBITRUM",
+            "data_type": "lending_indices",
+            "instrument_type": "SPOT",
+            "instrument_id": "ETH-USDC",
+            "league_id": "",
+            "date": "2024-06-01",
+        }
+    )
+    rows = list(enumerator_module._enumerate_v2_defi(catalog, date_axis, ["lending_indices"], present_set={key}))
+    assert rows == []
+
+
+def test_defi_v2_legacy_mode_alive_date_skipped() -> None:
+    catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
+    rows = list(
+        enumerator_module._enumerate_v2_defi(catalog, _date_axis("2024-06-01"), ["lending_indices"], present_set=None)
+    )
+    assert rows == []
+
+
+def test_tradfi_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
+    """TradFi alive instrument date absent from manifest → expected_unattempted."""
+    catalog = [_make_tradfi_entry(available_from="2020-01-01")]
+    date_axis = _date_axis("2024-06-01")
+    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set=set()))
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.capture_status == "expected_unattempted"
+    assert r.reason == ""
+    assert r.chain == ""
+    assert r.asset_group == "tradfi"
+
+
+def test_tradfi_v2_alive_date_in_present_set_skipped() -> None:
+    catalog = [_make_tradfi_entry(available_from="2020-01-01")]
+    date_axis = _date_axis("2024-06-01")
+    key = _row_key_from_dict(
+        {
+            "venue": "NASDAQ",
+            "chain": "",
+            "data_type": "ohlcv_1m",
+            "instrument_type": "ETF",
+            "instrument_id": "SPY",
+            "league_id": "",
+            "date": "2024-06-01",
+        }
+    )
+    rows = list(enumerator_module._enumerate_v2_tradfi(catalog, date_axis, ["ohlcv_1m"], present_set={key}))
+    assert rows == []
+
+
+def test_tradfi_v2_legacy_mode_alive_date_skipped() -> None:
+    catalog = [_make_tradfi_entry(available_from="2020-01-01")]
+    rows = list(
+        enumerator_module._enumerate_v2_tradfi(catalog, _date_axis("2024-06-01"), ["ohlcv_1m"], present_set=None)
+    )
+    assert rows == []
+
+
+def test_sports_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
+    """Sports alive fixture absent from manifest → expected_unattempted (league_id propagated)."""
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="PL")]
+    date_axis = _date_axis("2024-01-12")
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["lineups"], present_set=set()))
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.capture_status == "expected_unattempted"
+    assert r.reason == ""
+    assert r.league_id == "PL"
+    assert r.asset_group == "sports"
+
+
+def test_sports_v2_alive_date_in_present_set_skipped() -> None:
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None, league_id="PL")]
+    date_axis = _date_axis("2024-01-12")
+    key = _row_key_from_dict(
+        {
+            "venue": "api_football",
+            "chain": "",
+            "data_type": "lineups",
+            "instrument_type": "FIXTURE",
+            "instrument_id": "FIX-1234",
+            "league_id": "PL",
+            "date": "2024-01-12",
+        }
+    )
+    rows = list(enumerator_module._enumerate_v2_sports(catalog, date_axis, ["lineups"], present_set={key}))
+    assert rows == []
+
+
+def test_sports_v2_legacy_mode_alive_date_skipped() -> None:
+    catalog = [_make_sports_entry(available_from="2024-01-10", available_to=None)]
+    rows = list(
+        enumerator_module._enumerate_v2_sports(catalog, _date_axis("2024-01-12"), ["lineups"], present_set=None)
+    )
+    assert rows == []
+
+
+def test_prediction_v2_alive_date_not_in_present_set_yields_expected_unattempted() -> None:
+    """Prediction active market absent from manifest → expected_unattempted."""
+    catalog = [_make_prediction_entry(market_created_at="2024-03-01", settlement_time="2024-03-31")]
+    date_axis = _date_axis("2024-03-15")
+    rows = list(enumerator_module._enumerate_v2_prediction(catalog, date_axis, ["prediction_clob"], present_set=set()))
+    assert len(rows) == 1
+    r = rows[0]
+    assert r.capture_status == "expected_unattempted"
+    assert r.reason == ""
+    assert r.asset_group == "prediction"
+
+
+def test_prediction_v2_alive_date_in_present_set_skipped() -> None:
+    catalog = [_make_prediction_entry(market_created_at="2024-03-01", settlement_time="2024-03-31")]
+    date_axis = _date_axis("2024-03-15")
+    key = _row_key_from_dict(
+        {
+            "venue": "POLYMARKET",
+            "chain": "",
+            "data_type": "prediction_clob",
+            "instrument_type": "BINARY",
+            "instrument_id": "MKT-999",
+            "league_id": "",
+            "date": "2024-03-15",
+        }
+    )
+    rows = list(enumerator_module._enumerate_v2_prediction(catalog, date_axis, ["prediction_clob"], present_set={key}))
+    assert rows == []
+
+
+def test_prediction_v2_legacy_mode_alive_date_skipped() -> None:
+    catalog = [_make_prediction_entry(market_created_at="2024-03-01", settlement_time="2024-03-31")]
+    rows = list(
+        enumerator_module._enumerate_v2_prediction(
+            catalog, _date_axis("2024-03-15"), ["prediction_clob"], present_set=None
+        )
+    )
+    assert rows == []
+
+
+def test_enumerate_v2_forwards_present_set_to_enumerator() -> None:
+    """enumerate_v2() must forward present_set to the per-asset-group enumerator."""
+    catalog = [_make_cefi_entry(available_from="2019-01-01", venue="BINANCE")]
+    present_set: set[tuple[str, ...]] = set()  # empty → expected_unattempted
+    rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="cefi",
+            catalog=catalog,
+            date_axis=_date_axis("2023-06-01"),
+            data_types=["ohlcv_1d"],
+            present_set=present_set,
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0].capture_status == "expected_unattempted"
+
+
+def test_enumerate_v2_with_present_set_none_skips_alive_dates() -> None:
+    """enumerate_v2() with present_set=None must skip alive dates (legacy mode)."""
+    catalog = [_make_tradfi_entry(available_from="2020-01-01")]
+    rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="tradfi",
+            catalog=catalog,
+            date_axis=_date_axis("2024-06-01"),
+            data_types=["ohlcv_1m"],
+            present_set=None,
+        )
+    )
+    assert rows == []
+
+
+def test_expected_unattempted_rows_have_empty_reason() -> None:
+    """expected_unattempted rows must always have reason='' (not a typed reason)."""
+    catalog = [_make_defi_entry(chain="ARBITRUM", available_from="2022-01-01")]
+    rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="defi",
+            catalog=catalog,
+            date_axis=_date_axis("2024-06-01"),
+            data_types=["lending_indices"],
+            present_set=set(),
+        )
+    )
+    assert all(r.reason == "" for r in rows if r.capture_status == "expected_unattempted")
+
+
+def test_empty_confirmed_rows_still_have_typed_reason_when_present_set_given() -> None:
+    """Even when present_set is provided, lifecycle-boundary rows still emit typed reason."""
+    catalog = [_make_cefi_entry(available_from="2025-01-01", venue="BINANCE")]
+    rows = list(
+        enumerator_module.enumerate_v2(
+            asset_group="cefi",
+            catalog=catalog,
+            date_axis=_date_axis("2020-01-01"),
+            data_types=["ohlcv_1d"],
+            present_set=set(),  # providing present_set shouldn't affect lifecycle boundary rows
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0].capture_status == "empty_confirmed"
+    assert rows[0].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
