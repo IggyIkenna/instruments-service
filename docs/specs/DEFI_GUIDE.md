@@ -65,8 +65,8 @@ This guide covers DeFi protocol integration, data sources, and instrument discov
 
 **Instrument Format**:
 
-- **Pools**: `UNISWAPV3-ETH:POOL:ETH-USDC:3000@ETHEREUM`
-- **Spot Pairs**: `UNISWAPV3-ETH:SPOT_PAIR:ETH-USDT@ETHEREUM`
+- **Pools**: `UNISWAP_V3-ETH:POOL:ETH-USDC:3000@ETHEREUM`
+- **Spot Pairs**: `UNISWAP_V3-ETH:SPOT_PAIR:ETH-USDT@ETHEREUM`
 
 **Fee Tiers**:
 
@@ -437,8 +437,8 @@ Each pool becomes an instrument definition:
 
 ```python
 {
-    'instrument_key': 'UNISWAPV3-ETH:POOL:ETH-USDT:3000@ETHEREUM',
-    'venue': 'UNISWAPV3-ETH',
+    'instrument_key': 'UNISWAP_V3-ETH:POOL:ETH-USDT:3000@ETHEREUM',
+    'venue': 'UNISWAP_V3-ETH',
     'instrument_type': 'POOL',
     'symbol': 'ETH-USDT:3000',
     'base_asset': 'ETH',

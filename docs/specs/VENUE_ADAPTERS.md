@@ -248,8 +248,8 @@ pools = adapter.fetch_pools(base_currency='ETH', min_liquidity=100000)
 
 **Instrument Format**:
 
-- **Pools**: `UNISWAPV3-ETH:POOL:ETH-USDC:3000@ETHEREUM`
-- **Spot Pairs**: `UNISWAPV3-ETH:SPOT_PAIR:ETH-USDT@ETHEREUM`
+- **Pools**: `UNISWAP_V3-ETH:POOL:ETH-USDC:3000@ETHEREUM`
+- **Spot Pairs**: `UNISWAP_V3-ETH:SPOT_PAIR:ETH-USDT@ETHEREUM`
 
 **Fee Tiers**:
 
