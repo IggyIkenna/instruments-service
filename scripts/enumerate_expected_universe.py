@@ -1337,7 +1337,7 @@ def _write_absent_rows(
         client = storage.Client(project=PROJECT_ID)
         bucket = client.bucket(bucket_name)
         out_blob = bucket.blob(per_vm_blob)
-        out_blob.upload_from_filename(out_path)
+        out_blob.upload_from_filename(out_path, timeout=600)
         logger.info("Uploaded per-VM shard to gs://%s/%s", bucket_name, per_vm_blob)
     finally:
         with contextlib.suppress(OSError):
