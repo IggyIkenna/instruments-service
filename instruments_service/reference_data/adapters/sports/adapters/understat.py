@@ -17,6 +17,7 @@ import logging
 from unified_api_contracts.external.understat import (
     UnderstatMatch,
     UnderstatMatchTeam,
+    UnderstatShot,
 )
 from unified_api_contracts.external.understat.normalize import (
     normalize_understat_fixture,
@@ -175,6 +176,82 @@ class UnderstatAdapter(BaseSportsReferenceAdapter):
         logger.info("get_odds not supported on Understat adapter")
         return []
 
+    async def get_match_ids_for_date(self, date: str) -> list[tuple[str, str]]:
+        """Return (understat_match_id, league_name) pairs for all matches on date.
+
+        Fetches each league's season data and extracts match IDs for matches
+        that fall on the target date. Used by ``_run_understat_shots_date`` to
+        enumerate which matches to fetch per-shot data for.
+        """
+        year_str = date[:4]
+        try:
+            season_year = int(year_str)
+        except ValueError:
+            season_year = 2025
+        month_str = date[5:7]
+        try:
+            month = int(month_str)
+        except ValueError:
+            month = 1
+        season = season_year if month >= 8 else season_year - 1
+
+        result: list[tuple[str, str]] = []
+        async with self._make_session() as session:
+            for league in _UNDERSTAT_LEAGUES:
+                url = f"{_BASE_URL}/getLeagueData/{league}/{season}"
+                headers = {**self._headers(), "Referer": f"{_BASE_URL}/league/{league}/{season}"}
+                try:
+                    raw = await self._get_with_retry(session, url, headers=headers)
+                    matches = _extract_dates_from_json(raw)
+                    for m in matches:
+                        if not isinstance(m, dict):
+                            continue
+                        if str(m.get("datetime", "")).startswith(date):
+                            mid = m.get("id")
+                            if mid is not None:
+                                result.append((str(mid), league))
+                except Exception as exc:
+                    error_code = self._classify_error(exc)
+                    self._emit_fetch_failed(error_code, exc)
+        logger.info("get_match_ids_for_date: found %d matches for date=%s", len(result), date)
+        return result
+
+    async def get_match_shots(self, match_id: str | int) -> list[UnderstatShot]:
+        """Fetch per-shot xG data for a completed match.
+
+        Calls ``GET /getMatch/{match_id}`` which returns JSON
+        ``{"h": [...shots], "a": [...shots]}`` where each shot has id,
+        minute, result, X, Y, xG, player, situation, h_a, player_id,
+        lastAction, type, period.
+        """
+        url = f"{_BASE_URL}/getMatch/{match_id}"
+        headers = {**self._headers(), "Referer": f"{_BASE_URL}/match/{match_id}"}
+        try:
+            async with self._make_session() as session:
+                raw = await self._get_with_retry(session, url, headers=headers)
+        except Exception as exc:
+            error_code = self._classify_error(exc)
+            self._emit_fetch_failed(error_code, exc)
+            return []
+
+        if not isinstance(raw, dict):
+            logger.warning("get_match_shots: unexpected response type for match_id=%s", match_id)
+            return []
+
+        shots: list[UnderstatShot] = []
+        for side in ("h", "a"):
+            side_data = raw.get(side)
+            if not isinstance(side_data, list):
+                continue
+            for item in side_data:
+                if not isinstance(item, dict):
+                    continue
+                shot = _parse_shot_from_raw(item, str(match_id), side)
+                if shot is not None:
+                    shots.append(shot)
+        logger.info("get_match_shots: %d shots for match_id=%s", len(shots), match_id)
+        return shots
+
 
 def _filter_and_normalize_matches(
     matches: list[dict[str, object]],
@@ -277,4 +354,32 @@ def _safe_float(val: object) -> float | None:
     try:
         return float(str(val))
     except (ValueError, TypeError):
+        return None
+
+
+def _parse_shot_from_raw(item: dict[str, object], match_id: str, h_a: str) -> UnderstatShot | None:
+    """Parse a raw shot dict from /getMatch endpoint into UnderstatShot.
+
+    API uses uppercase X/Y coords and camelCase lastAction/shotType — map these
+    to the snake_case UnderstatShot model fields.
+    """
+    try:
+        return UnderstatShot(
+            id=item.get("id"),
+            minute=_safe_int(item.get("minute")),
+            result=str(item["result"]) if item.get("result") is not None else None,
+            x=_safe_float(item.get("X")),
+            y=_safe_float(item.get("Y")),
+            xg=_safe_float(item.get("xG")),
+            player=str(item["player"]) if item.get("player") is not None else None,
+            situation=str(item["situation"]) if item.get("situation") is not None else None,
+            match_id=match_id,
+            h_a=h_a,
+            player_id=item.get("player_id"),
+            last_action=str(item["lastAction"]) if item.get("lastAction") is not None else None,
+            period=_safe_int(item.get("period")),
+            shot_type=str(item["type"]) if item.get("type") is not None else None,
+        )
+    except Exception as exc:
+        logger.warning("Failed to parse shot item: %s", exc)
         return None

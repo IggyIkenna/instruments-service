@@ -1239,6 +1239,8 @@ async def process_instruments(
                 result = await _fetch_weather_data(date=date, bucket=bucket, api_key=_keys.get("open_meteo"))
             elif sports_provider == "UNDERSTAT":
                 result = await _fetch_understat_xg(date=date, bucket=bucket, force=redo_all)
+                shots_result = await _run_understat_shots_date(date=date, bucket=bucket, force=redo_all)
+                result.update(shots_result)
             elif sports_provider == "FOOTYSTATS":
                 fs_key = _keys.get("footystats")
                 if not fs_key:
@@ -2628,6 +2630,19 @@ async def process_instruments(
                     exc,
                     service_name="instruments-service",
                     operation="understat_xg_fetch",
+                    shard=date,
+                )
+
+        if "UNDERSTAT" in _active_venues_set and _entity_wanted("XG_SHOTS"):
+            try:
+                xg_shots_counts = await _run_understat_shots_date(date=date, bucket=bucket, force=redo_all)
+                for k, v in xg_shots_counts.items():
+                    counts[k] = counts.get(k, 0) + v
+            except Exception as exc:
+                classify_and_emit_error(
+                    exc,
+                    service_name="instruments-service",
+                    operation="understat_xg_shots_fetch",
                     shard=date,
                 )
 
@@ -4482,9 +4497,7 @@ async def _fetch_sports_reference_data(
                         # C.6: available_at = date + 17h already set on df at line ~4444 (KO + 2h
                         # approximation). Preserve it; fillna wall-clock for any NaT rows (defensive).
                         _pf_copy = _pf_clean.copy()
-                        _pf_copy["available_at"] = _pf_copy["available_at"].fillna(
-                            pd.Timestamp(datetime.now(UTC))
-                        )
+                        _pf_copy["available_at"] = _pf_copy["available_at"].fillna(pd.Timestamp(datetime.now(UTC)))
                         _stamped_pf_df = _pf_copy
                         _gated_sink_write(
                             sink,
@@ -5804,6 +5817,144 @@ async def _fetch_understat_xg(
             )
         with contextlib.suppress(Exception):
             xg_manifest.write()
+
+    return counts
+
+
+async def _run_understat_shots_date(
+    date: str,
+    bucket: str,
+    *,
+    force: bool = False,
+) -> dict[str, int]:
+    """Fetch Understat per-shot xG data and write to GCS.
+
+    Calls ``GET /getMatch/{match_id}`` for each match on ``date`` identified
+    from the league-data feed. Normalises via
+    ``normalize_understat_shot`` and writes per-league partitioned parquets.
+
+    GCS path:
+        sports_reference/by_date/day={date}/entity=understat_xg_shots/
+            league={league}/understat_xg_shots.parquet
+
+    data_type key in manifest: ``XG_SHOTS``.
+    """
+    from unified_api_contracts.external.understat import UnderstatShot
+    from unified_api_contracts.external.understat.normalize import normalize_understat_shot
+    from unified_api_contracts.sports import get_expected_leagues_for_source
+
+    from instruments_service.reference_data.adapters.sports.adapters.understat import (
+        UnderstatAdapter,
+    )
+
+    adapter = UnderstatAdapter()
+    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    counts: dict[str, int] = {}
+
+    shots_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+    _expected_leagues = {
+        lg.league_id for lg in get_expected_leagues_for_source("understat", classifications=["Prediction"])
+    }
+
+    _all_per_league_captured = bool(_expected_leagues) and all(
+        _should_skip_shard(
+            shots_manifest,
+            row_key={"date": date, "data_type": "XG_SHOTS", "league_id": lid},
+            force=force,
+        )
+        for lid in _expected_leagues
+    )
+    if _all_per_league_captured:
+        logger.info(
+            "Understat XG_SHOTS: skipping date=%s — all %d expected leagues per-league captured",
+            date,
+            len(_expected_leagues),
+        )
+        return counts
+
+    attempt_ts = datetime.now(UTC)
+
+    try:
+        match_ids = await adapter.get_match_ids_for_date(date)
+
+        league_shots: dict[str, list[dict[str, object]]] = {}
+        for match_id, league_name in match_ids:
+            shots: list[UnderstatShot] = await adapter.get_match_shots(match_id)
+            normalized = [normalize_understat_shot(s) for s in shots]
+            canonical_lid = _canonical_league_id(league_name)
+            if canonical_lid not in league_shots:
+                league_shots[canonical_lid] = []
+            league_shots[canonical_lid].extend(normalized)
+
+        _captured_leagues: set[str] = set()
+
+        for lid, shot_rows in league_shots.items():
+            if not shot_rows:
+                continue
+            _captured_leagues.add(lid)
+            df = pd.DataFrame(shot_rows)
+            df["available_at"] = pd.Timestamp(datetime.now(UTC))
+            _gated_sink_write(
+                sink,
+                data=df,
+                partition={"day": date, "entity": "understat_xg_shots", "league": lid},
+                filename="understat_xg_shots.parquet",
+                venue="understat",
+                entity="understat_xg_shots",
+            )
+            shots_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
+                row_key={"date": date, "data_type": "XG_SHOTS", "league_id": lid},
+                df=df,
+                category="sports",
+                instrument_type="shot",
+                data_type="XG_SHOTS",
+                league_id=lid,
+                pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
+                service_emission_state=None,
+            )
+            counts[f"understat_xg_shots_{lid}"] = len(shot_rows)
+
+        for _exp_lid in sorted(_expected_leagues - _captured_leagues):
+            shots_manifest.record_empty(
+                row_key={"date": date, "data_type": "XG_SHOTS", "league_id": _exp_lid},
+                attempted_at=attempt_ts,
+                reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
+            )
+        shots_manifest.write()
+        logger.info(
+            "Understat XG_SHOTS: %d matches, %d total shot rows for date=%s",
+            len(match_ids),
+            sum(counts.values()),
+            date,
+        )
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="understat_xg_shots_fetch",
+            shard=date,
+        )
+        _err_code = _classify_adapter_failure(exc, "understat")
+        log_event(
+            "ADAPTER_FETCH_FAILED",
+            details={
+                "venue": "understat",
+                "endpoint": "get_match_shots",
+                "date": date,
+                "error": str(exc),
+                "error_code": _err_code,
+            },
+        )
+        for _exp_lid in sorted(_expected_leagues):
+            shots_manifest.record_failed(
+                row_key={"date": date, "data_type": "XG_SHOTS", "league_id": _exp_lid},
+                error=_err_code,
+                attempted_at=attempt_ts,
+                pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
+            )
+        with contextlib.suppress(Exception):
+            shots_manifest.write()
 
     return counts
 
