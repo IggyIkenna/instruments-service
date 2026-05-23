@@ -2,8 +2,8 @@
 
 Problem:
     The orchestrator's batched `_write_venue` path was passing the hyphenated
-    DeFi venue tag (``venue=AAVEV3-ETHEREUM``) to ``ManifestWriter.add`` and
-    leaving ``chain=''`` — instead of splitting into ``venue=AAVEV3``,
+    DeFi venue tag (``venue=AAVE_V3-ETHEREUM``) to ``ManifestWriter.add`` and
+    leaving ``chain=''`` — instead of splitting into ``venue=AAVE_V3``,
     ``chain=ETHEREUM``. Per the workspace shard-key matrix the DeFi axis is
     ``chain``, so coverage-summary's legacy-row filter (correctly) drops these
     rows from "latest day" calculations, hiding ~24 days of recent DeFi

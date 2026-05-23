@@ -121,7 +121,7 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         self._chain = chain.upper()
         self._date = date
         self._protocol_slug = protocol_slug or "uniswap_v3"
-        # Convert protocol slug (e.g. "pancakeswap_v3") to UAC venue prefix (e.g. "PANCAKESWAPV3")
+        # Convert protocol slug (e.g. "pancakeswap_v3") to UAC venue prefix (e.g. "PANCAKESWAP_V3")
         self._venue_prefix = self._protocol_slug.replace("_", "").upper()
 
     @property

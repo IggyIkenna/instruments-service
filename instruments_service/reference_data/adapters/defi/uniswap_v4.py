@@ -235,7 +235,7 @@ class UniswapV4ReferenceDataAdapter(BaseReferenceDataAdapter):
 
         fee_str = str(fee_tier) if fee_tier else "0"
         symbol = f"{base}-{quote}:{fee_str}"
-        venue_tag = f"UNISWAPV4-{self._chain}"
+        venue_tag = f"UNISWAP_V4-{self._chain}"
         instrument_key = f"{venue_tag}:POOL:{symbol}"
 
         available_since = parse_created_timestamp(pool.get("createdAtTimestamp"))

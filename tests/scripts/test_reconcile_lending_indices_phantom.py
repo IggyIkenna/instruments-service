@@ -98,7 +98,7 @@ def test_phantom_detection_dry_run_no_writes() -> None:
         [
             {
                 "date": "2026-05-07",
-                "venue": "AAVEV3",
+                "venue": "AAVE_V3",
                 "chain": "ETHEREUM",
                 "capture_status": "captured",
             }
@@ -124,7 +124,7 @@ def test_real_capture_left_alone() -> None:
         [
             {
                 "date": "2026-05-07",
-                "venue": "AAVEV3",
+                "venue": "AAVE_V3",
                 "chain": "ETHEREUM",
                 "capture_status": "captured",
             }
@@ -143,16 +143,16 @@ def test_real_capture_left_alone() -> None:
 
 
 def test_pre_genesis_classification_uses_protocol_launch_dates() -> None:
-    """Date before AAVEV3/ETHEREUM launch (2023-01-27) → EXPECTED_PRE_GENESIS_CHAIN."""
-    reason = _mod._classify_phantom("AAVEV3", "ETHEREUM", "2022-01-01")
+    """Date before AAVE_V3/ETHEREUM launch (2023-01-27) → EXPECTED_PRE_GENESIS_CHAIN."""
+    reason = _mod._classify_phantom("AAVE_V3", "ETHEREUM", "2022-01-01")
     assert reason == "EXPECTED_PRE_GENESIS_CHAIN", (
-        f"Expected EXPECTED_PRE_GENESIS_CHAIN for 2022-01-01 (AAVEV3 ETHEREUM launched 2023-01-27), got {reason!r}"
+        f"Expected EXPECTED_PRE_GENESIS_CHAIN for 2022-01-01 (AAVE_V3 ETHEREUM launched 2023-01-27), got {reason!r}"
     )
 
 
 def test_post_genesis_phantom_classified_as_source_returned_zero() -> None:
-    """Date after AAVEV3/ETHEREUM launch → SOURCE_RETURNED_ZERO."""
-    reason = _mod._classify_phantom("AAVEV3", "ETHEREUM", "2024-03-01")
+    """Date after AAVE_V3/ETHEREUM launch → SOURCE_RETURNED_ZERO."""
+    reason = _mod._classify_phantom("AAVE_V3", "ETHEREUM", "2024-03-01")
     assert reason == "SOURCE_RETURNED_ZERO", f"Expected SOURCE_RETURNED_ZERO for 2024-03-01, got {reason!r}"
 
 
@@ -162,7 +162,7 @@ def test_apply_flips_writes_typed_reason() -> None:
         [
             {
                 "date": "2026-05-07",
-                "venue": "AAVEV3",
+                "venue": "AAVE_V3",
                 "chain": "ETHEREUM",
                 "capture_status": "captured",
                 "error_reason": "",
@@ -191,7 +191,7 @@ def test_max_flips_cap_enforced() -> None:
     rows = [
         {
             "date": f"2026-05-{d:02d}",
-            "venue": "AAVEV3",
+            "venue": "AAVE_V3",
             "chain": "ETHEREUM",
             "capture_status": "captured",
             "data_type": "lending_indices",
@@ -255,7 +255,7 @@ def test_idempotent_rerun() -> None:
         [
             {
                 "date": "2026-05-07",
-                "venue": "AAVEV3",
+                "venue": "AAVE_V3",
                 "chain": "ETHEREUM",
                 "capture_status": "empty_confirmed",  # already flipped
                 "error_reason": "SOURCE_RETURNED_ZERO",
@@ -277,13 +277,13 @@ def test_protocols_filter_narrows_scan() -> None:
         [
             {
                 "date": "2026-05-07",
-                "venue": "AAVEV3",
+                "venue": "AAVE_V3",
                 "chain": "ETHEREUM",
                 "capture_status": "captured",
             },
             {
                 "date": "2026-05-07",
-                "venue": "COMPOUNDV3",
+                "venue": "COMPOUND_V3",
                 "chain": "ETHEREUM",
                 "capture_status": "captured",
             },
@@ -296,11 +296,11 @@ def test_protocols_filter_narrows_scan() -> None:
 
     filtered_idx = df[filtered_mask].index
     assert len(filtered_idx) == 1, "Expected only 1 row after protocol filter"
-    assert df.loc[filtered_idx[0], "venue"] == "AAVEV3"
+    assert df.loc[filtered_idx[0], "venue"] == "AAVE_V3"
 
-    # Confirm COMPOUNDV3 row is excluded.
+    # Confirm COMPOUND_V3 row is excluded.
     venues_in_scope = {df.loc[i, "venue"] for i in filtered_idx}
-    assert "COMPOUNDV3" not in venues_in_scope
+    assert "COMPOUND_V3" not in venues_in_scope
 
 
 def test_shard_prefix_format() -> None:
@@ -316,17 +316,17 @@ def test_classify_phantom_unknown_protocol_defaults_to_source_returned_zero() ->
 
 
 def test_audit_translates_uppercase_venue_to_lowercase_slug_for_gcs_prefix() -> None:
-    """Manifest venue=AAVEV3 (uppercase) → GCS prefix uses aave_v3 (lowercase slug).
+    """Manifest venue=AAVE_V3 (uppercase) → GCS prefix uses aave_v3 (lowercase slug).
 
     Regression for the 2026-05-16 bug where _audit_captured_rows passed the manifest
     venue directly into the path template, causing every captured row to false-positive
-    as phantom (path /AAVEV3/ has 0 parquets; actual path /aave_v3/ has the data).
+    as phantom (path /AAVE_V3/ has 0 parquets; actual path /aave_v3/ has the data).
     """
     df = _make_manifest(
         [
             {
                 "date": "2026-05-07",
-                "venue": "AAVEV3",  # uppercase manifest form
+                "venue": "AAVE_V3",  # uppercase manifest form
                 "chain": "ETHEREUM",
                 "capture_status": "captured",
             }
@@ -340,7 +340,7 @@ def test_audit_translates_uppercase_venue_to_lowercase_slug_for_gcs_prefix() -> 
 
     is_real, reason = audit[0]
     assert is_real, (
-        "Row with venue=AAVEV3 should resolve to slug aave_v3 + find parquet; "
+        "Row with venue=AAVE_V3 should resolve to slug aave_v3 + find parquet; "
         "if False, the venue→slug translation regressed"
     )
     assert reason == ""
@@ -356,14 +356,14 @@ def test_data_type_filter_accepts_both_kebab_and_snake_forms() -> None:
         [
             {
                 "date": "2026-05-07",
-                "venue": "AAVEV3",
+                "venue": "AAVE_V3",
                 "chain": "ETHEREUM",
                 "capture_status": "captured",
                 "data_type": "lending-indices",  # kebab legacy
             },
             {
                 "date": "2026-05-07",
-                "venue": "AAVEV3",
+                "venue": "AAVE_V3",
                 "chain": "ARBITRUM",
                 "capture_status": "captured",
                 "data_type": "lending_indices",  # snake canonical

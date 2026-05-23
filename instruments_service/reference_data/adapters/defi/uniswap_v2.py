@@ -206,7 +206,7 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
             base_token, quote_token = token1, token0
 
         symbol = f"{base}-{quote}"
-        venue_tag = f"UNISWAPV2-{self._chain}"
+        venue_tag = f"UNISWAP_V2-{self._chain}"
         instrument_key = f"{venue_tag}:POOL:{symbol}"
 
         available_since = parse_created_timestamp(pair.get("createdAtTimestamp"))

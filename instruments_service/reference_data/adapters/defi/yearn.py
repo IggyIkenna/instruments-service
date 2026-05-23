@@ -10,7 +10,7 @@ References:
 - https://yearn.fi/
 - Yearn V3 docs: https://docs.yearn.fi/developers/v3/overview
 - Launch date sourced from unified_api_contracts.registry.chain_env.PROTOCOL_LAUNCH_DATES
-  (("ETHEREUM", "YEARNV3") == 2024-03-20).
+  (("ETHEREUM", "YEARN_V3") == 2024-03-20).
 
 Note: Yearn V3 is a modular vault system where any strategist can deploy a strategy.
 This adapter covers the primary Yearn V3 vaults — high-TVL vaults for major assets
@@ -36,11 +36,11 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_CHAIN = "ETHEREUM"
 
-# Yearn V3 Ethereum mainnet GA (2024-03-20) — mirrors PROTOCOL_LAUNCH_DATES[("ETHEREUM", "YEARNV3")].
+# Yearn V3 Ethereum mainnet GA (2024-03-20) — mirrors PROTOCOL_LAUNCH_DATES[("ETHEREUM", "YEARN_V3")].
 _YEARN_ETH_DEPLOY_DATE = datetime(2024, 3, 20, tzinfo=UTC)
-# Yearn V3 Arbitrum GA (2023-11-15) — mirrors PROTOCOL_LAUNCH_DATES[("ARBITRUM", "YEARNV3")].
+# Yearn V3 Arbitrum GA (2023-11-15) — mirrors PROTOCOL_LAUNCH_DATES[("ARBITRUM", "YEARN_V3")].
 _YEARN_ARB_DEPLOY_DATE = datetime(2023, 11, 15, tzinfo=UTC)
-# Yearn V3 Optimism GA (2023-11-15) — mirrors PROTOCOL_LAUNCH_DATES[("OPTIMISM", "YEARNV3")].
+# Yearn V3 Optimism GA (2023-11-15) — mirrors PROTOCOL_LAUNCH_DATES[("OPTIMISM", "YEARN_V3")].
 _YEARN_OPT_DEPLOY_DATE = datetime(2023, 11, 15, tzinfo=UTC)
 
 # Primary Yearn V3 vault addresses per chain.
