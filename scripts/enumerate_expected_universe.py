@@ -522,8 +522,10 @@ def _enumerate_v2_defi(
     window_start_ts = pd.Timestamp(date_axis[0]) if date_axis else None
     window_end_ts = pd.Timestamp(date_axis[-1]) if date_axis else None
     for instr in catalog:
-        af_ts = pd.Timestamp(instr.available_from) if instr.available_from else None
-        at_ts = pd.Timestamp(instr.available_to) if instr.available_to else None
+        af_raw = pd.Timestamp(instr.available_from) if instr.available_from else None
+        at_raw = pd.Timestamp(instr.available_to) if instr.available_to else None
+        af_ts = af_raw.tz_localize(None) if (af_raw is not None and af_raw.tzinfo is not None) else af_raw
+        at_ts = at_raw.tz_localize(None) if (at_raw is not None and at_raw.tzinfo is not None) else at_raw
         if at_ts is not None and window_start_ts is not None and at_ts < window_start_ts:
             continue  # fully delisted before window started
         if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
