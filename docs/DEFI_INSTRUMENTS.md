@@ -10,18 +10,18 @@
 
 ## Overview
 
-DeFi instruments are fetched from **The Graph** (DEX pools via subgraph queries) and **direct on-chain APIs** (lending protocols, LSTs, yield). All adapters query Ethereum mainnet. Each venue is a `PROTOCOL-CHAIN` pair (e.g. `UNISWAPV3-ETHEREUM`).
+DeFi instruments are fetched from **The Graph** (DEX pools via subgraph queries) and **direct on-chain APIs** (lending protocols, LSTs, yield). All adapters query Ethereum mainnet. Each venue is a `PROTOCOL-CHAIN` pair (e.g. `UNISWAP_V3-ETHEREUM`).
 
 ## Venues (12 active)
 
 | Venue              | Source     | Instrument Type | What it represents                 |
 | ------------------ | ---------- | --------------- | ---------------------------------- |
-| UNISWAPV3-ETHEREUM | The Graph  | Pool            | Liquidity pools (concentrated)     |
-| UNISWAPV4-ETHEREUM | The Graph  | Pool            | Liquidity pools (hooks-enabled)    |
-| UNISWAPV2-ETHEREUM | The Graph  | Pool            | Liquidity pools (constant product) |
+| UNISWAP_V3-ETHEREUM | The Graph  | Pool            | Liquidity pools (concentrated)     |
+| UNISWAP_V4-ETHEREUM | The Graph  | Pool            | Liquidity pools (hooks-enabled)    |
+| UNISWAP_V2-ETHEREUM | The Graph  | Pool            | Liquidity pools (constant product) |
 | BALANCER-ETHEREUM  | The Graph  | Pool            | Weighted/stable pools              |
 | CURVE-ETHEREUM     | The Graph  | Pool            | Stableswap + tricrypto pools       |
-| AAVEV3-ETHEREUM    | The Graph  | Lending Market  | Supply/borrow markets              |
+| AAVE_V3-ETHEREUM    | The Graph  | Lending Market  | Supply/borrow markets              |
 | MORPHO-ETHEREUM    | The Graph  | Lending Market  | Morpho vaults (curated)            |
 | EULER-ETHEREUM     | Direct API | Lending Market  | Lending vaults                     |
 | FLUID-ETHEREUM     | Direct API | Lending Market  | Lending pairs                      |
