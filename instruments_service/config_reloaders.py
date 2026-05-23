@@ -52,7 +52,9 @@ class InstrumentsDomainConfigState:
         # SSOT for DeFi major assets is InstrumentDomainConfig.defi_major_assets (UCI).
         # Read the field default without instantiating the full config (avoids env var conflicts).
         _field = InstrumentDomainConfig.model_fields["defi_major_assets"]
-        self._defi_major_assets: frozenset[str] = _field.default_factory() if _field.default_factory else frozenset()
+        self._defi_major_assets: frozenset[str] = (
+            _field.default_factory() if _field.default_factory is not None else frozenset()
+        )
         self._reloader: DomainConfigReloader[InstrumentDomainConfig] | None = None
 
     def get_subscription_list(self) -> list[str]:

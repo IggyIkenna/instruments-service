@@ -90,6 +90,11 @@ from instruments_service.engine.orchestrator import (
 )
 from instruments_service.reference_data import create_sports_reference_adapter
 
+# Aliases for backward compatibility with tests that reference private functions in this module
+_canonical_league_id = canonical_league_id
+_flatten_canonical_fixture_for_disk = flatten_canonical_fixture_for_disk
+_write_fixtures_per_league = write_fixtures_per_league
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -98,7 +103,7 @@ logger = logging.getLogger(__name__)
 
 def get_instruments_bucket_for_asset_group(asset_group: str = "SPORTS") -> str:
     """Get the instruments bucket for the given asset group using public API."""
-    return resolve_bucket_name(f"instruments-store-{asset_group.lower()}")
+    return resolve_bucket_name(cloud="gcp", kind="instruments", asset_group=asset_group.lower())
 
 
 SPORTS_FIXTURES_DAILY_REPOLL_TRIGGER: str = "sports.fixtures.daily_repoll"
