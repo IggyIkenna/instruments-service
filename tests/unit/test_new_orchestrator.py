@@ -12,7 +12,7 @@ from unified_api_contracts.internal import InstrumentRecord
 from instruments_service.engine.urdi_reference_provider import VenueFetchResult
 
 
-def _make_record(venue: str = "AAVEV3-ETHEREUM", itype: str = "A_TOKEN") -> InstrumentRecord:
+def _make_record(venue: str = "AAVE_V3-ETHEREUM", itype: str = "A_TOKEN") -> InstrumentRecord:
     return InstrumentRecord(
         instrument_key=f"{venue}:{itype}:WETH",
         venue=venue,
@@ -48,9 +48,9 @@ def test_get_venues_for_asset_groups_defi():
     from instruments_service.engine.orchestrator import get_venues_for_asset_groups
 
     venues = get_venues_for_asset_groups(["DEFI"])
-    assert "UNISWAPV3-ETHEREUM" in venues
+    assert "UNISWAP_V3-ETHEREUM" in venues
     assert "MORPHO-ETHEREUM" in venues
-    assert "AAVEV3-ETHEREUM" in venues
+    assert "AAVE_V3-ETHEREUM" in venues
 
 
 def test_get_venues_for_asset_groups_all_includes_all_groups():
@@ -61,7 +61,7 @@ def test_get_venues_for_asset_groups_all_includes_all_groups():
     defi_v = get_venues_for_asset_groups(["DEFI"])
     tradfi_v = get_venues_for_asset_groups(["TRADFI"])
     assert len(all_v) > len(cefi_v)
-    assert "UNISWAPV3-ETHEREUM" in all_v
+    assert "UNISWAP_V3-ETHEREUM" in all_v
     assert "CME" in all_v
 
 
@@ -92,14 +92,14 @@ def test_get_venues_for_asset_groups_sports():
 def test_is_venue_available_before_launch():
     from instruments_service.engine.orchestrator import is_venue_available
 
-    # UNISWAPV4 launched January 2025 — not available in 2020
-    assert not is_venue_available("UNISWAPV4-ETHEREUM", "2020-01-01")
+    # UNISWAP_V4 launched January 2025 — not available in 2020
+    assert not is_venue_available("UNISWAP_V4-ETHEREUM", "2020-01-01")
 
 
 def test_is_venue_available_after_launch():
     from instruments_service.engine.orchestrator import is_venue_available
 
-    assert is_venue_available("UNISWAPV3-ETHEREUM", "2026-03-22")
+    assert is_venue_available("UNISWAP_V3-ETHEREUM", "2026-03-22")
     assert is_venue_available("MORPHO-ETHEREUM", "2025-01-01")
 
 
@@ -142,7 +142,7 @@ async def test_process_instruments_all_venues_skipped_before_launch():
         ),
         patch(
             "instruments_service.engine.orchestrator.check_shard_freshness",
-            return_value=(False, [], ["AAVEV3-ETHEREUM"]),
+            return_value=(False, [], ["AAVE_V3-ETHEREUM"]),
         ),
         patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
     ):
@@ -164,7 +164,7 @@ async def test_process_instruments_urdi_zero_records_raises():
         ),
         patch(
             "instruments_service.engine.orchestrator.check_shard_freshness",
-            return_value=(False, [], ["AAVEV3-ETHEREUM"]),
+            return_value=(False, [], ["AAVE_V3-ETHEREUM"]),
         ),
         patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
     ):
@@ -192,7 +192,7 @@ async def test_process_instruments_proceeds_to_write_stage():
         patch("instruments_service.engine.orchestrator.log_event"),
         patch(
             "instruments_service.engine.orchestrator.check_shard_freshness",
-            return_value=(False, [], ["AAVEV3-ETHEREUM"]),
+            return_value=(False, [], ["AAVE_V3-ETHEREUM"]),
         ),
         patch("instruments_service.engine.orchestrator._get_instruments_bucket", return_value="test-bucket"),
     ):
@@ -286,7 +286,7 @@ def test_urdi_supported_venues_uses_canonical_names():
     from instruments_service.engine.urdi_reference_provider import URDI_SUPPORTED_VENUES
 
     assert "BINANCE-SPOT" in URDI_SUPPORTED_VENUES or "BINANCE-FUTURES" in URDI_SUPPORTED_VENUES
-    assert "UNISWAPV3-ETHEREUM" in URDI_SUPPORTED_VENUES
+    assert "UNISWAP_V3-ETHEREUM" in URDI_SUPPORTED_VENUES
     assert "MORPHO-ETHEREUM" in URDI_SUPPORTED_VENUES
     assert "BETFAIR" in URDI_SUPPORTED_VENUES  # BETFAIR is in URDI for tick-data use cases
     assert len(URDI_SUPPORTED_VENUES) >= 20
@@ -324,7 +324,7 @@ async def test_fetch_instruments_for_all_venues_deduplicates_adapter():
         "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
         return_value=mock_adapter,
     ):
-        result = await fetch_instruments_for_all_venues(["AAVEV3-ETHEREUM"])
+        result = await fetch_instruments_for_all_venues(["AAVE_V3-ETHEREUM"])
 
     assert len(result.records) == 1
 
@@ -364,9 +364,9 @@ async def test_process_instruments_full_write_path():
     from instruments_service.engine.orchestrator import process_instruments
 
     records = [
-        _make_record("UNISWAPV3-ETHEREUM", "POOL"),
-        _make_record("UNISWAPV3-ETHEREUM", "POOL"),
-        _make_record("AAVEV3-ETHEREUM", "A_TOKEN"),
+        _make_record("UNISWAP_V3-ETHEREUM", "POOL"),
+        _make_record("UNISWAP_V3-ETHEREUM", "POOL"),
+        _make_record("AAVE_V3-ETHEREUM", "A_TOKEN"),
     ]
     mock_sink = MagicMock()
     mock_sink.write = MagicMock()
@@ -390,7 +390,7 @@ async def test_process_instruments_full_write_path():
         patch("instruments_service.engine.orchestrator._write_catalogue_record"),
         patch(
             "instruments_service.engine.orchestrator.check_shard_freshness",
-            return_value=(False, [], ["UNISWAPV3-ETHEREUM", "AAVEV3-ETHEREUM"]),
+            return_value=(False, [], ["UNISWAP_V3-ETHEREUM", "AAVE_V3-ETHEREUM"]),
         ),
     ):
         result = await process_instruments("2026-03-22", ["DEFI"])
@@ -404,7 +404,7 @@ async def test_process_instruments_csv_sampling_triggered():
     """When sampling is enabled, generate_csv_sample is called per venue."""
     from instruments_service.engine.orchestrator import process_instruments
 
-    records = [_make_record("AAVEV3-ETHEREUM")]
+    records = [_make_record("AAVE_V3-ETHEREUM")]
     mock_sink = MagicMock()
     mock_sampler = MagicMock()
     mock_sampler.enable_sampling = True
@@ -426,7 +426,7 @@ async def test_process_instruments_csv_sampling_triggered():
         patch("instruments_service.engine.orchestrator._write_catalogue_record"),
         patch(
             "instruments_service.engine.orchestrator.check_shard_freshness",
-            return_value=(False, [], ["AAVEV3-ETHEREUM"]),
+            return_value=(False, [], ["AAVE_V3-ETHEREUM"]),
         ),
     ):
         await process_instruments("2026-03-22", ["DEFI"])
@@ -439,7 +439,7 @@ async def test_process_instruments_write_error_logged_not_raised():
     """OSError in _write_venue is logged and swallowed — shard continues for other venues."""
     from instruments_service.engine.orchestrator import process_instruments
 
-    records = [_make_record("AAVEV3-ETHEREUM")]
+    records = [_make_record("AAVE_V3-ETHEREUM")]
     mock_sink = MagicMock()
     mock_sink.write.side_effect = OSError("disk full")
     mock_sampler = MagicMock()
@@ -462,13 +462,13 @@ async def test_process_instruments_write_error_logged_not_raised():
         patch("instruments_service.engine.orchestrator._write_catalogue_record"),
         patch(
             "instruments_service.engine.orchestrator.check_shard_freshness",
-            return_value=(False, [], ["AAVEV3-ETHEREUM"]),
+            return_value=(False, [], ["AAVE_V3-ETHEREUM"]),
         ),
     ):
         result = await process_instruments("2026-03-22", ["DEFI"])
 
     # Write failed so venue not counted
-    assert "AAVEV3-ETHEREUM" not in result
+    assert "AAVE_V3-ETHEREUM" not in result
 
 
 def test_write_venue_no_venue_column_uses_all():
@@ -568,7 +568,9 @@ def test_write_catalogue_record_swallows_exception(caplog):
             side_effect=RuntimeError("catalogue offline"),
         ),
     ):
-        _write_catalogue_record("bucket", "day=2026-03-22/venue=AAVEV3-ETHEREUM/instruments.parquet", "2026-03-22", 100)
+        _write_catalogue_record(
+            "bucket", "day=2026-03-22/venue=AAVE_V3-ETHEREUM/instruments.parquet", "2026-03-22", 100
+        )
 
     assert any("ManifestWriter" in r.message or "catalogue offline" in r.message for r in caplog.records)
 
@@ -717,7 +719,7 @@ async def test_fetch_instruments_passes_api_key_to_adapter_constructor():
         data_source = ADAPTER_DATA_SOURCES.get("aave_v3", "")
         api_keys = {data_source: "test-key"} if data_source else {}
         result = await fetch_instruments_for_all_venues(
-            ["AAVEV3-ETHEREUM"],
+            ["AAVE_V3-ETHEREUM"],
             api_keys=api_keys,
         )
 
@@ -944,7 +946,7 @@ async def test_process_instruments_uses_primary_category_for_bucket():
     """process_instruments passes the first category to _get_instruments_bucket."""
     from instruments_service.engine.orchestrator import process_instruments
 
-    records = [_make_record("AAVEV3-ETHEREUM", "A_TOKEN")]
+    records = [_make_record("AAVE_V3-ETHEREUM", "A_TOKEN")]
     mock_sink = MagicMock()
     mock_sampler = MagicMock()
     mock_sampler.enable_sampling = False
@@ -973,7 +975,7 @@ async def test_process_instruments_uses_primary_category_for_bucket():
         patch("instruments_service.engine.orchestrator._write_catalogue_record"),
         patch(
             "instruments_service.engine.orchestrator.check_shard_freshness",
-            return_value=(False, [], ["AAVEV3-ETHEREUM"]),
+            return_value=(False, [], ["AAVE_V3-ETHEREUM"]),
         ),
     ):
         await process_instruments("2026-03-22", ["DEFI", "CEFI"])
@@ -1021,7 +1023,7 @@ def test_defi_filter_keeps_major_dex_pair():
     """WETH/USDC is a major pair — both sides in whitelist."""
     from instruments_service.engine.orchestrator import filter_defi_instruments_by_relevance
 
-    r = _make_defi_record("UNISWAPV3-ETHEREUM", "WETH", "USDC")
+    r = _make_defi_record("UNISWAP_V3-ETHEREUM", "WETH", "USDC")
     assert len(filter_defi_instruments_by_relevance([r])) == 1
 
 
@@ -1029,7 +1031,7 @@ def test_defi_filter_keeps_wbtc_weth_pair():
     """WBTC/WETH is a major pair."""
     from instruments_service.engine.orchestrator import filter_defi_instruments_by_relevance
 
-    r = _make_defi_record("UNISWAPV3-ETHEREUM", "WBTC", "WETH")
+    r = _make_defi_record("UNISWAP_V3-ETHEREUM", "WBTC", "WETH")
     assert len(filter_defi_instruments_by_relevance([r])) == 1
 
 
@@ -1037,7 +1039,7 @@ def test_defi_filter_removes_pepe_weth():
     """PEPE/WETH — WETH is major but PEPE is not. DEX requires BOTH sides."""
     from instruments_service.engine.orchestrator import filter_defi_instruments_by_relevance
 
-    r = _make_defi_record("UNISWAPV3-ETHEREUM", "PEPE", "WETH")
+    r = _make_defi_record("UNISWAP_V3-ETHEREUM", "PEPE", "WETH")
     assert len(filter_defi_instruments_by_relevance([r])) == 0
 
 
@@ -1045,7 +1047,7 @@ def test_defi_filter_removes_completely_unknown():
     """FAITH/MILAREPA — neither side is major."""
     from instruments_service.engine.orchestrator import filter_defi_instruments_by_relevance
 
-    r = _make_defi_record("UNISWAPV2-ETHEREUM", "FAITH", "MILAREPA")
+    r = _make_defi_record("UNISWAP_V2-ETHEREUM", "FAITH", "MILAREPA")
     assert len(filter_defi_instruments_by_relevance([r])) == 0
 
 
@@ -1053,7 +1055,7 @@ def test_defi_filter_keeps_aave_weth_lending():
     """Aave aWETH — lending protocol, only base checked."""
     from instruments_service.engine.orchestrator import filter_defi_instruments_by_relevance
 
-    r = _make_defi_record("AAVEV3-ETHEREUM", "WETH", "", itype="A_TOKEN")
+    r = _make_defi_record("AAVE_V3-ETHEREUM", "WETH", "", itype="A_TOKEN")
     assert len(filter_defi_instruments_by_relevance([r])) == 1
 
 
@@ -1061,7 +1063,7 @@ def test_defi_filter_removes_aave_obscure_token():
     """Aave a1INCH — 1INCH IS in our whitelist so this passes (governance token)."""
     from instruments_service.engine.orchestrator import filter_defi_instruments_by_relevance
 
-    r = _make_defi_record("AAVEV3-ETHEREUM", "1INCH", "", itype="A_TOKEN")
+    r = _make_defi_record("AAVE_V3-ETHEREUM", "1INCH", "", itype="A_TOKEN")
     # 1INCH IS in whitelist
     assert len(filter_defi_instruments_by_relevance([r])) == 1
 
@@ -1070,7 +1072,7 @@ def test_defi_filter_removes_aave_unknown_shitcoin():
     """Aave lending of a completely unknown token is removed."""
     from instruments_service.engine.orchestrator import filter_defi_instruments_by_relevance
 
-    r = _make_defi_record("AAVEV3-ETHEREUM", "SHITCOIN", "", itype="A_TOKEN")
+    r = _make_defi_record("AAVE_V3-ETHEREUM", "SHITCOIN", "", itype="A_TOKEN")
     assert len(filter_defi_instruments_by_relevance([r])) == 0
 
 

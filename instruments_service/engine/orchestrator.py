@@ -437,21 +437,21 @@ _VENUE_MAPPING = VenueMapping()
 # Protocols with subgraph IDs are multi-chain — we discover all chains
 # from the UAC registry so new chain deployments are picked up automatically.
 _SUBGRAPH_PROTOCOL_TO_VENUE_PREFIX: dict[str, str] = {
-    "aave_v3": "AAVEV3",
-    "uniswap_v2": "UNISWAPV2",
-    "uniswap_v3": "UNISWAPV3",
-    "uniswap_v4": "UNISWAPV4",
+    "aave_v3": "AAVE_V3",
+    "uniswap_v2": "UNISWAP_V2",
+    "uniswap_v3": "UNISWAP_V3",
+    "uniswap_v4": "UNISWAP_V4",
     "balancer": "BALANCER",
     "morpho": "MORPHO",
     "curve": "CURVE",
-    "compound_v3": "COMPOUNDV3",
+    "compound_v3": "COMPOUND_V3",
     # euler_v2 removed from universe — not needed yet.
     "fluid": "FLUID",
     # DEX forks — each has own subgraph IDs in UAC, reuse UniV3 adapter
-    "pancakeswap_v3": "PANCAKESWAPV3",
-    "sushiswap_v3": "SUSHISWAPV3",
-    "aerodrome_v3": "AERODROMEV3",
-    "camelot_v3": "CAMELOTV3",
+    "pancakeswap_v3": "PANCAKESWAP_V3",
+    "sushiswap_v3": "SUSHISWAP_V3",
+    "aerodrome_v3": "AERODROME_V3",
+    "camelot_v3": "CAMELOT_V3",
     "velodrome_v2": "VELODROMEV2",
     "trader_joe_v2": "TRADER_JOEV2",
     "gmx": "GMX",
@@ -564,19 +564,19 @@ _VENUE_ADAPTER_EPOCH: dict[str, str] = {
     # post-fetch by filter_defi_instruments_by_relevance(). Manifest tracks
     # true pre-filter counts for monotonicity. Old filtered counts are lower
     # but new unfiltered counts are strictly >=, so no false regressions.
-    "AAVEV3": "2026-04-02",
-    "UNISWAPV2": "2026-04-02",
+    "AAVE_V3": "2026-04-02",
+    "UNISWAP_V2": "2026-04-02",
     # 2026-04-04: Uniswap V3/V4 and Balancer adapters had _FETCH_LIMIT=1000
     # with no pagination — actual pool counts exceed 1000. Pagination added
     # (skip-based, up to 6000 pools). Epoch bumped past all capped entries.
-    "UNISWAPV3": "2026-04-05",
-    "UNISWAPV4": "2026-04-05",
+    "UNISWAP_V3": "2026-04-05",
+    "UNISWAP_V4": "2026-04-05",
     "BALANCER": "2026-04-05",
     # 2026-04-04: Curve adapter was hardcoded to Ethereum API, ignoring chain
     # parameter — CURVE-AVALANCHE and CURVE-OPTIMISM had Ethereum pool counts.
     # Adapter fixed to use per-chain API URLs. Epoch bumped past today's bad entries.
     "CURVE": "2026-04-05",
-    "COMPOUNDV3": "2026-04-02",
+    "COMPOUND_V3": "2026-04-02",
     "MORPHO": "2026-04-02",
     "FLUID": "2026-04-02",
     # DEX perp venues (L2 + Solana) — epoch from when adapters were registered
@@ -599,7 +599,7 @@ _VENUE_ADAPTER_EPOCH: dict[str, str] = {
 def _get_venue_epoch(venue: str) -> str | None:
     """Return the adapter epoch date for a venue, or None if no epoch set.
 
-    Matches by venue prefix: 'AAVEV3-ETHEREUM' matches epoch key 'AAVEV3'.
+    Matches by venue prefix: 'AAVE_V3-ETHEREUM' matches epoch key 'AAVE_V3'.
     """
     for prefix, epoch in _VENUE_ADAPTER_EPOCH.items():
         if venue.startswith(prefix):
@@ -3115,12 +3115,12 @@ def _write_venue(
             else:
                 manifest_venue = venue_str
                 manifest_data_type = ""
-            # DeFi: split AAVEV3-ETHEREUM → venue=AAVEV3, chain=ETHEREUM per the
+            # DeFi: split AAVE_V3-ETHEREUM → venue=AAVE_V3, chain=ETHEREUM per the
             # canonical v5 shard-key matrix (DeFi axis is `chain`, not packed
             # into venue). The path-based legacy writer at the bottom of this
             # module already does this; the batched manifest writer used here
             # was missing the split, so DeFi rows from the orchestrator landed
-            # as `venue=AAVEV3-ETHEREUM, chain=''` and were filtered out by the
+            # as `venue=AAVE_V3-ETHEREUM, chain=''` and were filtered out by the
             # coverage-summary's legacy-row drop, hiding recent DeFi captures.
             manifest_chain = ""
             if not is_sports_ref and "-" in venue_str:
@@ -7203,7 +7203,7 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
                 else:
                     manifest_data_type = venue_str
             manifest_venue = ""
-        # DeFi: split AAVEV3-ETHEREUM → venue=AAVE_V3, chain=ETHEREUM
+        # DeFi: split AAVE_V3-ETHEREUM → venue=AAVE_V3, chain=ETHEREUM
         elif "-" in venue_str:
             try:
                 from unified_api_contracts.registry.capability_declarations._defi import (

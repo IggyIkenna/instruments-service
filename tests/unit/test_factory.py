@@ -40,7 +40,7 @@ class TestGetAdapterForCanonicalVenue:
         assert adapter.venue == "HYPERLIQUID"
 
     def test_defi_venue_with_chain(self) -> None:
-        adapter = get_adapter_for_canonical_venue("AAVEV3-ETHEREUM")
+        adapter = get_adapter_for_canonical_venue("AAVE_V3-ETHEREUM")
         assert adapter is not None
 
     def test_unsupported_venue_raises(self) -> None:
@@ -114,8 +114,8 @@ class TestCanonicalVenueToAdapter:
         assert "HYPERLIQUID" in CANONICAL_VENUE_TO_ADAPTER
 
     def test_defi_venues_present(self) -> None:
-        assert any("AAVEV3" in k for k in CANONICAL_VENUE_TO_ADAPTER)
-        assert any("UNISWAPV3" in k for k in CANONICAL_VENUE_TO_ADAPTER)
+        assert any("AAVE_V3" in k for k in CANONICAL_VENUE_TO_ADAPTER)
+        assert any("UNISWAP_V3" in k for k in CANONICAL_VENUE_TO_ADAPTER)
 
     def test_prediction_venues_present(self) -> None:
         assert "POLYMARKET" in CANONICAL_VENUE_TO_ADAPTER

@@ -68,7 +68,7 @@ def test_defi_instruments_e2e():
 
     # At least one major DeFi venue should be present
     defi_venues = {k for k in result if result[k] > 0}
-    known_defi = {"UNISWAPV3-ETHEREUM", "AAVEV3-ETHEREUM", "MORPHO-ETHEREUM", "CURVE-ETHEREUM"}
+    known_defi = {"UNISWAP_V3-ETHEREUM", "AAVE_V3-ETHEREUM", "MORPHO-ETHEREUM", "CURVE-ETHEREUM"}
     overlap = defi_venues & known_defi
     assert overlap, f"None of the expected DeFi venues in results: {defi_venues}"
 
