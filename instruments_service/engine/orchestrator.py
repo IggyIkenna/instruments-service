@@ -5700,7 +5700,12 @@ async def _fetch_understat_xg(
                 for _xg_lid, _xg_league_df in _with_league.groupby("league"):
                     _xg_lid_str = str(_xg_lid)
                     _captured_leagues.add(_xg_lid_str)
-                    _stamped_xg_df = stamp_available_at_explicit(_xg_league_df, when=datetime.now(UTC))
+                    # C.6: available_at = kickoff + 24h already set on df at line ~5688 (understat
+                    # data scraped the day after). Preserve it; fill NaT rows (missing kickoff_utc)
+                    # with wall-clock as fallback. Do NOT override with stamp_available_at_explicit.
+                    _xg_copy = _xg_league_df.copy()
+                    _xg_copy["available_at"] = _xg_copy["available_at"].fillna(pd.Timestamp(datetime.now(UTC)))
+                    _stamped_xg_df = _xg_copy
                     _gated_sink_write(
                         sink,
                         data=_stamped_xg_df,
