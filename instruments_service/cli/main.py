@@ -80,7 +80,8 @@ def _run_coverage_status(argv: list[str] | None = None) -> None:  # pragma: no c
         print(json.dumps({"bucket": bucket, "rows": []}))
         return
 
-    data_types: list[str] = sorted(str(v) for v in index["data_type"].dropna().unique())  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType, reportUnknownArgumentType]
+    unique_values: object = index["data_type"].dropna().unique()
+    data_types: list[str] = sorted(str(v) for v in unique_values if v is not None)  # pyright: ignore[reportArgumentType,reportUnknownVariableType]
     rows: list[dict[str, object]] = []
     for dt in data_types:
         counts, ratio = compute_coverage_for_bucket(bucket, asset_group=asset_group, data_type=dt)
