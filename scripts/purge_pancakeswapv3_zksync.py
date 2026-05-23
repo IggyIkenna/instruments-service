@@ -1,4 +1,4 @@
-"""One-shot purge of `PANCAKESWAPV3-ZKSYNC` rows from the DeFi manifest.
+"""One-shot purge of `PANCAKESWAP_V3-ZKSYNC` rows from the DeFi manifest.
 
 Why:
     These 446 rows were the only legacy DeFi rows the canonical
@@ -32,7 +32,7 @@ from unified_trading_library import get_storage_client
 logger = logging.getLogger(__name__)
 
 _MANIFEST_PATH = "_index/availability_index.parquet"
-_TARGET_VENUE = "PANCAKESWAPV3-ZKSYNC"
+_TARGET_VENUE = "PANCAKESWAP_V3-ZKSYNC"
 
 
 def _bucket_name(project_id: str) -> str:
@@ -40,7 +40,7 @@ def _bucket_name(project_id: str) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Purge PANCAKESWAPV3-ZKSYNC rows from DeFi manifest.")
+    parser = argparse.ArgumentParser(description="Purge PANCAKESWAP_V3-ZKSYNC rows from DeFi manifest.")
     parser.add_argument("--project", required=True)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()

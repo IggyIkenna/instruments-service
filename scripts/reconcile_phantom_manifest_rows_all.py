@@ -214,11 +214,11 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
 # Pre-canonicalisation DeFi writers spelled the protocol with an underscore
 # between the protocol name and the version: ``AAVE_V3``, ``UNISWAP_V3``,
 # ``COMPOUND_V3``. The post-2026-04 canonical form drops the underscore:
-# ``AAVEV3``, ``UNISWAPV3``, ``COMPOUNDV3``. The migrate_mtds_defi_legacy_*
+# ``AAVE_V3``, ``UNISWAP_V3``, ``COMPOUND_V3``. The migrate_mtds_defi_legacy_*
 # scripts left BOTH spellings on disk under different ``venue=`` segments;
 # the manifest carries only the canonical form. Without probing both
-# variants, the audit false-positives 100% of AAVEV3 / UNISWAPV3 etc.
-# rows as phantom (29,782 hits in the 2026-05-07 dry-run on AAVEV3 alone).
+# variants, the audit false-positives 100% of AAVE_V3 / UNISWAP_V3 etc.
+# rows as phantom (29,782 hits in the 2026-05-07 dry-run on AAVE_V3 alone).
 _PROTOCOL_VERSION_UNDERSCORE_RE = re.compile(r"^([A-Z]+?)(V\d+)(.*)$")
 
 # Axis-7 (Databento per-schema-bundle, 2026-05-13): TradFi Databento
@@ -245,15 +245,15 @@ def _defi_protocol_variants(venue: str) -> list[str]:
     """Return deduped list of venue spellings for DeFi.
 
     Both the underscored and concatenated forms of ``PROTOCOL[_]V<digits>``
-    are returned. Works for plain venue (``AAVEV3``) and combined-venue
-    (``AAVEV3-ETHEREUM`` — the protocol part before the first ``-``
+    are returned. Works for plain venue (``AAVE_V3``) and combined-venue
+    (``AAVE_V3-ETHEREUM`` — the protocol part before the first ``-``
     is transformed and the chain suffix preserved).
 
     Examples:
-        AAVEV3            -> [AAVEV3, AAVE_V3]
-        AAVE_V3           -> [AAVE_V3, AAVEV3]
-        AAVEV3-ARBITRUM   -> [AAVEV3-ARBITRUM, AAVE_V3-ARBITRUM]
-        UNISWAPV3         -> [UNISWAPV3, UNISWAP_V3]
+        AAVE_V3            -> [AAVE_V3, AAVE_V3]
+        AAVE_V3           -> [AAVE_V3, AAVE_V3]
+        AAVE_V3-ARBITRUM   -> [AAVE_V3-ARBITRUM, AAVE_V3-ARBITRUM]
+        UNISWAP_V3         -> [UNISWAP_V3, UNISWAP_V3]
         MORPHO            -> [MORPHO]                       (no version suffix)
         EIGENLAYER-ETHEREUM -> [EIGENLAYER-ETHEREUM]        (no version suffix)
     """
@@ -266,10 +266,10 @@ def _defi_protocol_variants(venue: str) -> list[str]:
         protocol = venue
         chain_suffix = ""
     variants = {venue}
-    # Try removing underscore: AAVE_V3 -> AAVEV3
+    # Try removing underscore: AAVE_V3 -> AAVE_V3
     if "_" in protocol:
         variants.add(protocol.replace("_", "") + chain_suffix)
-    # Try inserting underscore: AAVEV3 -> AAVE_V3
+    # Try inserting underscore: AAVE_V3 -> AAVE_V3
     m = _PROTOCOL_VERSION_UNDERSCORE_RE.match(protocol)
     if m:
         head, ver, tail = m.groups()
@@ -304,12 +304,12 @@ def _venue_level_prefixes(asset_group: str, row: pd.Series) -> list[str]:
        partitions on disk. The membership check accepts either form so
        OPTION/FUTURE manifest rows match their bundled disk locations.
     6. **DeFi protocol-name underscore drift** (2026-05-07) — manifest
-       holds ``venue=AAVEV3`` (canonical, no underscore) but pre-2026-04
+       holds ``venue=AAVE_V3`` (canonical, no underscore) but pre-2026-04
        writers used ``venue=AAVE_V3`` (underscored). Both spellings
        coexist on disk; we probe both via ``_defi_protocol_variants``.
-       Without this, AAVEV3 / UNISWAPV3 / COMPOUNDV3 rows whose data
+       Without this, AAVE_V3 / UNISWAP_V3 / COMPOUND_V3 rows whose data
        lives under the legacy underscored prefix false-positive 100%
-       as phantom (29,782 hits in the 2026-05-07 dry-run on AAVEV3 alone).
+       as phantom (29,782 hits in the 2026-05-07 dry-run on AAVE_V3 alone).
 
     Axes 7-10 are handled in ``_audit_generic`` / ``_audit_sports`` directly:
     7. **TradFi Databento per-schema-bundle** (2026-05-13) — ``trades`` and
@@ -557,12 +557,12 @@ def _audit_generic(
         # interposes ``data_source=`` between category and venue, so the
         # prefix can't pin venue).  Empty venue → no needle (skip check).
         # Axis-8: venue=UNKNOWN has no resolvable path — skip the check.
-        # DeFi-only: accept ANY protocol-name spelling variant (AAVEV3 vs
+        # DeFi-only: accept ANY protocol-name spelling variant (AAVE_V3 vs
         # AAVE_V3 etc.) as the venue match. Without this, manifest rows holding
         # the underscored spelling are flagged phantom even though their data
         # lives at the non-underscored disk path (and vice versa) — confirmed
         # 2026-05-17 on the lending-indices bucket (60 false phantoms reported
-        # for AAVEV3 + COMPOUNDV3 rows whose data lives at venue=AAVE_V3 /
+        # for AAVE_V3 + COMPOUND_V3 rows whose data lives at venue=AAVE_V3 /
         # venue=COMPOUND_V3). The PREFIX template already probes both via
         # ``_defi_protocol_variants`` (line 290) — the substring NEEDLE needs
         # the same treatment.

@@ -42,11 +42,11 @@ Usage
 -----
     # Dry-run for one venue (recommended first step)
     python3 scripts/migrations/backfill_defi_metadata_2026_04_29.py \
-        --venues UNISWAPV3-ETHEREUM --dry-run
+        --venues UNISWAP_V3-ETHEREUM --dry-run
 
     # Real run for one venue
     python3 scripts/migrations/backfill_defi_metadata_2026_04_29.py \
-        --venues UNISWAPV3-ETHEREUM
+        --venues UNISWAP_V3-ETHEREUM
 
     # All venues (after validation)
     python3 scripts/migrations/backfill_defi_metadata_2026_04_29.py
@@ -365,7 +365,7 @@ def _resolve_api_keys() -> dict[str, str]:
     """Load API keys from Secret Manager (service-account auth via ADC).
 
     ``validate_api_keys_for_venues`` expects venue identifiers (e.g.
-    ``UNISWAPV3-ETHEREUM``), not data-source names — it routes through
+    ``UNISWAP_V3-ETHEREUM``), not data-source names — it routes through
     UAC ``get_required_secrets()`` which only knows venue keys. We pass
     a representative DeFi venue per data-source to drive the SM lookup;
     the returned dict is keyed on data-source name (``thegraph`` /
@@ -376,8 +376,8 @@ def _resolve_api_keys() -> dict[str, str]:
 
     keys = validate_api_keys_for_venues(
         [
-            "UNISWAPV3-ETHEREUM",  # drives thegraph
-            "AAVEV3-ETHEREUM",  # also thegraph (idempotent)
+            "UNISWAP_V3-ETHEREUM",  # drives thegraph
+            "AAVE_V3-ETHEREUM",  # also thegraph (idempotent)
             "BALANCER-ETHEREUM",  # drives balancer_api_v3 if mapped
         ]
     )
@@ -449,7 +449,7 @@ def main() -> int:
     parser.add_argument(
         "--venues",
         default=None,
-        help="Comma-separated venue filter (e.g. UNISWAPV3-ETHEREUM,AAVEV3-ETHEREUM).",
+        help="Comma-separated venue filter (e.g. UNISWAP_V3-ETHEREUM,AAVE_V3-ETHEREUM).",
     )
     parser.add_argument(
         "--dry-run",

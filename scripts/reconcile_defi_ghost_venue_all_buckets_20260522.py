@@ -3,14 +3,14 @@
 """Suppress DeFi ghost venue rows in IS and MTDS DeFi manifests.
 
 Extends reconcile_defi_ghost_venue_to_canonical_20260522.py:
-  - Original: MTDS DeFi only, covered UNISWAPV3/V2/AAVEV3 (from source shard local-10889)
-  - This script: IS DeFi + MTDS residual (UNISWAPV4/SUSHISWAPV3/PANCAKESWAPV3)
+  - Original: MTDS DeFi only, covered UNISWAP_V3/V2/AAVE_V3 (from source shard local-10889)
+  - This script: IS DeFi + MTDS residual (UNISWAP_V4/SUSHISWAP_V3/PANCAKESWAP_V3)
     IS DeFi does not need canonical row restoration — the running instr-backfill-defi
     VM already wrote canonical rows (AAVE_V3, UNISWAP_V3, etc.).
 
 Ghost venues (from DEPRECATED_DEFI_GHOST_VENUE_NAMES — UAC@890ac815 expanded list):
-  UNISWAPV3, UNISWAPV2, AAVEV3, SUSHISWAPV3, PANCAKESWAPV3, UNISWAPV4
-  + legacy camelcase: CAMELOTV3, VELODROMEV2, YEARNV3, MORPHOVAULTS, COMPOUNDV3
+  UNISWAP_V3, UNISWAP_V2, AAVE_V3, SUSHISWAP_V3, PANCAKESWAP_V3, UNISWAP_V4
+  + legacy camelcase: CAMELOT_V3, VELODROMEV2, YEARN_V3, MORPHOVAULTS, COMPOUND_V3
   + AAVEV2
 
 For each ghost venue found in the consolidated manifest, the corrector shard:
@@ -31,7 +31,7 @@ Usage:
     .venv/bin/python scripts/reconcile_defi_ghost_venue_all_buckets_20260522.py \\
         --bucket instruments-store-defi-central-element-323112 --apply
 
-    # Scan MTDS DeFi (residual UNISWAPV4/SUSHISWAPV3/PANCAKESWAPV3)
+    # Scan MTDS DeFi (residual UNISWAP_V4/SUSHISWAP_V3/PANCAKESWAP_V3)
     .venv/bin/python scripts/reconcile_defi_ghost_venue_all_buckets_20260522.py \\
         --bucket market-data-tick-defi-central-element-323112
 
@@ -64,11 +64,11 @@ DEPRECATED_REASON = "EXPECTED_DEPRECATED_DATA_TYPE"
 EXTRA_GHOST_VENUES: frozenset[str] = frozenset(
     {
         # Era-2 camelcase names not in UAC list but found in manifests
-        "CAMELOTV3",
+        "CAMELOT_V3",
         "VELODROMEV2",
-        "YEARNV3",
+        "YEARN_V3",
         "MORPHOVAULTS",
-        "COMPOUNDV3",
+        "COMPOUND_V3",
         "AAVEV2",
     }
 )

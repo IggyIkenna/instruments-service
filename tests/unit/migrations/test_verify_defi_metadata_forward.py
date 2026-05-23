@@ -43,7 +43,7 @@ def test_verify_one_parquet_passes_when_pool_address_populated() -> None:
     payload = _make_parquet(
         [
             {
-                "instrument_key": "UNISWAPV3-ETHEREUM:POOL:USDC-WETH:30",
+                "instrument_key": "UNISWAP_V3-ETHEREUM:POOL:USDC-WETH:30",
                 "pool_address": "0xpool1",
                 "pool_fee_tier": 30,
                 "base_asset_contract_address": "0xusdc",
@@ -73,7 +73,7 @@ def test_verify_one_parquet_passes_with_atoken_only() -> None:
     payload = _make_parquet(
         [
             {
-                "instrument_key": "AAVEV3-ETHEREUM:A_TOKEN:AUSDC",
+                "instrument_key": "AAVE_V3-ETHEREUM:A_TOKEN:AUSDC",
                 "pool_address": None,
                 "pool_fee_tier": None,
                 "base_asset_contract_address": None,
@@ -102,7 +102,7 @@ def test_verify_one_parquet_fails_when_all_high_signal_columns_null() -> None:
     payload = _make_parquet(
         [
             {
-                "instrument_key": "UNISWAPV3-ETHEREUM:POOL:USDC-WETH:30",
+                "instrument_key": "UNISWAP_V3-ETHEREUM:POOL:USDC-WETH:30",
                 "pool_address": None,
                 "pool_fee_tier": None,
                 "base_asset_contract_address": None,
@@ -133,16 +133,16 @@ def test_list_dates_for_venue_extracts_and_sorts() -> None:
         MagicMock(name="b3"),
         MagicMock(name="b4"),
     ]
-    blobs[0].name = "instrument_availability/by_date/day=2024-02-01/venue=UNISWAPV3-ETHEREUM/instruments.parquet"
-    blobs[1].name = "instrument_availability/by_date/day=2024-01-15/venue=UNISWAPV3-ETHEREUM/instruments.parquet"
-    blobs[2].name = "instrument_availability/by_date/day=2024-03-01/venue=UNISWAPV3-ETHEREUM/instruments.parquet"
-    blobs[3].name = "instrument_availability/by_date/day=2024-02-01/venue=AAVEV3-ETHEREUM/instruments.parquet"
+    blobs[0].name = "instrument_availability/by_date/day=2024-02-01/venue=UNISWAP_V3-ETHEREUM/instruments.parquet"
+    blobs[1].name = "instrument_availability/by_date/day=2024-01-15/venue=UNISWAP_V3-ETHEREUM/instruments.parquet"
+    blobs[2].name = "instrument_availability/by_date/day=2024-03-01/venue=UNISWAP_V3-ETHEREUM/instruments.parquet"
+    blobs[3].name = "instrument_availability/by_date/day=2024-02-01/venue=AAVE_V3-ETHEREUM/instruments.parquet"
 
     bucket_handle = MagicMock()
     bucket_handle.list_blobs.return_value = blobs
     storage = MagicMock()
     storage.bucket.return_value = bucket_handle
 
-    dates = verify._list_dates_for_venue(storage, "instruments-store-defi-test", "UNISWAPV3-ETHEREUM")
+    dates = verify._list_dates_for_venue(storage, "instruments-store-defi-test", "UNISWAP_V3-ETHEREUM")
 
     assert dates == ["2024-01-15", "2024-02-01", "2024-03-01"]
