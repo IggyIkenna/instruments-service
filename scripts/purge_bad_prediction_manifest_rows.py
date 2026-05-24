@@ -170,10 +170,7 @@ def main() -> int:
     )
 
     # Step 3: Build new canonical manifest from good rows only
-    if good_dfs:
-        df_new = pd.concat(good_dfs, ignore_index=True).drop_duplicates()
-    else:
-        df_new = pd.DataFrame()
+    df_new = pd.concat(good_dfs, ignore_index=True).drop_duplicates() if good_dfs else pd.DataFrame()
 
     logger.info("New canonical manifest: %d good rows (was %d)", len(df_new), len(df_canonical))
 

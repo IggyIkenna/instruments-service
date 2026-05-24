@@ -50,8 +50,7 @@ import json
 import logging
 import sys
 import tempfile
-from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -114,9 +113,7 @@ def _in_date_range(day_str: str, from_date: date | None, to_date: date | None) -
         return False
     if from_date is not None and d < from_date:
         return False
-    if to_date is not None and d > to_date:
-        return False
-    return True
+    return not (to_date is not None and d > to_date)
 
 
 def _audit_blob(
@@ -286,11 +283,11 @@ def main() -> int:
     # --- Write JSON report ---
     output_dir = Path(args.output_dir) if args.output_dir else Path(tempfile.gettempdir())
     output_dir.mkdir(parents=True, exist_ok=True)
-    report_date = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    report_date = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
     output_path = output_dir / f"audit_defi_null_decimals_{report_date}.json"
 
     report: dict[str, object] = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "bucket": BUCKET_NAME,
         "from_date": str(from_date) if from_date else None,
         "to_date": str(to_date) if to_date else None,

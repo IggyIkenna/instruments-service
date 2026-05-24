@@ -335,11 +335,7 @@ def main() -> int:
 
     _ensure_triage_bucket_exists()
 
-    targets: tuple[str, ...]
-    if args.asset_group == "cross_asset_all":
-        targets = ASSET_GROUPS_ALL
-    else:
-        targets = (args.asset_group,)
+    targets = ASSET_GROUPS_ALL if args.asset_group == "cross_asset_all" else (args.asset_group,)
 
     tmp_root = Path(tempfile.gettempdir())
     triage_local = tmp_root / f"rescan-triage-{run_id}.jsonl"

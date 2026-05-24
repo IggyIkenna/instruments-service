@@ -95,7 +95,7 @@ async def _run_smoke(fixture_id: int, api_key: str) -> int:
         if len(lineups_rows) < 22:
             failures.append(f"fixture_lineups returned {len(lineups_rows)} rows; expected ≥22")
     else:
-        failures.append("fixture_lineups returned 0 rows; expected ≥22 (11 starters × 2 teams)")
+        failures.append("fixture_lineups returned 0 rows; expected >=22 (11 starters x 2 teams)")
 
     # Injuries are date-level; pick today's date best-effort.
     from datetime import UTC, datetime
