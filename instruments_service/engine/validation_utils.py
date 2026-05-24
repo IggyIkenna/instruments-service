@@ -7,7 +7,7 @@ These functions handle validation logic for dates, venues, and data quality.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ def should_skip_date_for_per_league(
         return True
 
     # Skip dates too far in the future (more than 1 year ahead)
-    if dt.year > datetime.now().year + 1:
+    if dt.year > datetime.now(UTC).year + 1:
         logger.debug("Skipping %s for league %s: too far in future", date, league_id)
         return True
 

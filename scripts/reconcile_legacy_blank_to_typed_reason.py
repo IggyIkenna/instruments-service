@@ -123,7 +123,7 @@ def _build_catalog_lookup_maps(
     Keys: plain instrument_key string; and "VENUE||symbol" compound strings.
     All dicts are empty when the catalog is unavailable.
     """
-    from unified_trading_library.instruments_catalog_reader import (
+    from unified_trading_library.instruments_catalog_reader import (  # noqa: qg-deep-import
         _get_catalog_df,  # type: ignore[attr-defined]  # internal cache accessor
     )
 

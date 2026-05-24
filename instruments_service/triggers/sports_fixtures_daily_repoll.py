@@ -75,8 +75,8 @@ from unified_trading_library import (
     ManifestWriter,
     classify_and_emit_error,
     get_data_sink,
+    resolve_bucket_name,
 )
-from unified_trading_library.cloud_interface.bucket_naming import resolve_bucket_name
 
 # Import private functions - these should be made public in future refactor
 from instruments_service.engine.orchestrator import (
@@ -90,7 +90,6 @@ from instruments_service.engine.orchestrator import (
 )
 from instruments_service.reference_data import create_sports_reference_adapter
 
-# Aliases for backward compatibility with tests that reference private functions in this module
 _canonical_league_id = canonical_league_id
 _flatten_canonical_fixture_for_disk = flatten_canonical_fixture_for_disk
 _write_fixtures_per_league = write_fixtures_per_league
