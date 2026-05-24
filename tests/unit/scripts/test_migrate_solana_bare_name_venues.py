@@ -107,7 +107,7 @@ class TestDryRun:
 
         with (
             patch.object(_mod, "get_storage_client", return_value=storage),
-            patch.object(_mod, "_resolve_bucket", return_value="market-data-tick-defi-prod-central-element-323112"),
+            patch.object(_mod, "_resolve_bucket", return_value="market-data-tick-defi-test-project"),
         ):
             result = _mod.main.__wrapped__() if hasattr(_mod.main, "__wrapped__") else None
             # Run via calling main with sys.argv patched
@@ -149,7 +149,7 @@ class TestCategoryAMigration:
         }
         with (
             patch.object(_mod, "get_storage_client", return_value=storage),
-            patch.object(_mod, "_resolve_bucket", return_value="market-data-tick-defi-prod-central-element-323112"),
+            patch.object(_mod, "_resolve_bucket", return_value="market-data-tick-defi-test-project"),
             patch.dict(os.environ, env),
             patch("sys.argv", ["script", "--apply", "--confirm"]),
         ):
@@ -241,7 +241,7 @@ class TestCategoryAMigration:
         env = {"MANIFEST_PER_VM_SHARDS": "true", "VM_NAME": "test-vm", "DEPLOYMENT_ENV": "prod"}
         with (
             patch.object(_mod, "get_storage_client", return_value=storage),
-            patch.object(_mod, "_resolve_bucket", return_value="market-data-tick-defi-prod-central-element-323112"),
+            patch.object(_mod, "_resolve_bucket", return_value="market-data-tick-defi-test-project"),
             patch.dict(os.environ, env),
             patch("sys.argv", ["script", "--apply", "--confirm"]),
         ):
@@ -276,7 +276,7 @@ class TestCategoryAMigration:
         env = {"MANIFEST_PER_VM_SHARDS": "true", "VM_NAME": "test-vm", "DEPLOYMENT_ENV": "prod"}
         with (
             patch.object(_mod, "get_storage_client", return_value=storage),
-            patch.object(_mod, "_resolve_bucket", return_value="market-data-tick-defi-prod-central-element-323112"),
+            patch.object(_mod, "_resolve_bucket", return_value="market-data-tick-defi-test-project"),
             patch.dict(os.environ, env),
             patch("sys.argv", ["script", "--apply", "--confirm"]),
         ):
@@ -330,7 +330,7 @@ class TestCategoryBPhantomMark:
         env = {"MANIFEST_PER_VM_SHARDS": "true", "VM_NAME": "test-vm", "DEPLOYMENT_ENV": "prod"}
         with (
             patch.object(_mod, "get_storage_client", return_value=storage),
-            patch.object(_mod, "_resolve_bucket", return_value="market-data-tick-defi-prod-central-element-323112"),
+            patch.object(_mod, "_resolve_bucket", return_value="market-data-tick-defi-test-project"),
             patch.dict(os.environ, env),
             patch("sys.argv", ["script", "--apply", "--confirm"]),
         ):

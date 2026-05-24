@@ -25,8 +25,8 @@ from unified_trading_library import (
     classify_and_emit_error,
     get_storage_client,
     publish_coordination_event,  # pyright: ignore[reportPrivateImportUsage]
+    resolve_bucket_name,
 )
-from unified_trading_library.cloud_interface.bucket_naming import resolve_bucket_name
 
 from instruments_service.engine import orchestrator as engine_orchestrator
 from instruments_service.engine.orchestrator import (
@@ -44,7 +44,6 @@ def _get_instruments_bucket_for_asset_group(asset_group: str) -> str:
     return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group=normalized_group)
 
 
-# Alias for backward compatibility with tests
 def _get_instruments_bucket(asset_group: str = "SPORTS") -> str:
     """Legacy alias for _get_instruments_bucket_for_asset_group."""
     return _get_instruments_bucket_for_asset_group(asset_group)
@@ -173,8 +172,8 @@ class InstrumentsHandler(UnifiedServiceHandler):
         allowlist, run normally."
         """
         try:
-            if path.startswith("gs://"):
-                without_scheme = path[len("gs://") :]
+            if path.startswith("gs://"):  # noqa: gs-uri
+                without_scheme = path[len("gs://") :]  # noqa: gs-uri
                 bucket, _, blob = without_scheme.partition("/")
                 if not bucket or not blob:
                     logger.error(
