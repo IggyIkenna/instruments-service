@@ -145,7 +145,7 @@ class TestCorrectorModuleConstants:
     def test_asset_group_buckets_has_cefi(self) -> None:
         mod = _load_corrector_module()
         assert "cefi" in mod.ASSET_GROUP_BUCKETS
-        assert "central-element-323112" in mod.ASSET_GROUP_BUCKETS["cefi"]
+        assert mod.ASSET_GROUP_BUCKETS["cefi"].startswith("market-data-tick-cefi-")
 
 
 # ---------------------------------------------------------------------------

@@ -155,7 +155,7 @@ class TestCorrectorModuleConstants:
     def test_asset_group_buckets_has_defi_only(self) -> None:
         mod = _load_corrector_module()
         assert "defi" in mod.ASSET_GROUP_BUCKETS
-        assert "central-element-323112" in mod.ASSET_GROUP_BUCKETS["defi"]
+        assert mod.ASSET_GROUP_BUCKETS["defi"].startswith("market-data-tick-defi-")
         assert "cefi" not in mod.ASSET_GROUP_BUCKETS
 
 
