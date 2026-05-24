@@ -92,8 +92,8 @@ def test_get_venues_for_asset_groups_sports():
 def test_is_venue_available_before_launch():
     from instruments_service.engine.orchestrator import is_venue_available
 
-    # UNISWAP_V4 launched January 2025 — not available in 2020
-    assert not is_venue_available("UNISWAP_V4-ETHEREUM", "2020-01-01")
+    # UNISWAP_V4 launched January 2025 — not available in 2020 (UAC canonical name UNISWAPV4)
+    assert not is_venue_available("UNISWAPV4-ETHEREUM", "2020-01-01")
 
 
 def test_is_venue_available_after_launch():
