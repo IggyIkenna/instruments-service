@@ -265,6 +265,7 @@ async def test_understat_xg_skips_when_already_captured(
             return []
 
     monkeypatch.setattr(orch, "create_sports_reference_adapter", lambda _name: _AdapterStub())
+    monkeypatch.setattr(orch, "get_data_sink", MagicMock())
 
     class _MWStub:
         def __init__(self, *_a: object, **_kw: object) -> None:
@@ -386,6 +387,7 @@ async def test_understat_xg_calls_record_failed_on_exception(
             raise RuntimeError("network exploded")
 
     monkeypatch.setattr(orch, "create_sports_reference_adapter", lambda _name: _AdapterStub())
+    monkeypatch.setattr(orch, "get_data_sink", MagicMock())
 
     # Must NOT raise out of the per-shard call (shard isolation).
     result = await orch._fetch_understat_xg(date="2026-04-19", bucket="test-bucket")

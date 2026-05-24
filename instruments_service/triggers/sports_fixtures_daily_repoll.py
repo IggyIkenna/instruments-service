@@ -329,7 +329,7 @@ async def run_sports_fixtures_daily_repoll(
 
         # Per-league split + write via the existing canonical sink helper.
         # Same path, same partition keys, same filename as batch.
-        write_fixtures_per_league(sink, df, day_str, source_label="trigger:daily_repoll")
+        _write_fixtures_per_league(sink, df, day_str, source_label="trigger:daily_repoll")
 
         # Per-league manifest rows — the writer dedupes by row_key, so a
         # subsequent fire on the same day overwrites cleanly with

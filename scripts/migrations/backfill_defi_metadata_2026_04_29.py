@@ -58,6 +58,7 @@ import argparse
 import asyncio
 import io
 import logging
+import re
 from typing import TYPE_CHECKING, cast
 
 import pandas as pd
@@ -358,7 +359,13 @@ def _format_summary(per_venue: dict[str, dict[str, int]]) -> str:
 def _parse_venues_filter(raw: str | None) -> set[str] | None:
     if raw is None or raw.strip() == "":
         return None
-    return {v.strip().upper() for v in raw.split(",") if v.strip()}
+    result = set()
+    for v in raw.split(","):
+        v = v.strip().upper()
+        if v:
+            v = re.sub(r"([A-Z])V([0-9])", r"\1_V\2", v)
+            result.add(v)
+    return result or None
 
 
 def _resolve_api_keys() -> dict[str, str]:

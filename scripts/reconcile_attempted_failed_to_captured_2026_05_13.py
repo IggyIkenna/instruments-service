@@ -58,7 +58,7 @@ import os
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 from google.cloud import storage
@@ -80,7 +80,7 @@ BUCKETS: dict[str, str] = {
 def _log_event(event: str, **kwargs: object) -> None:
     payload = {
         "event": event,
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "reconciler": "reconcile_attempted_failed_to_captured",
         **kwargs,
     }
@@ -120,7 +120,7 @@ def _bulk_prefix_check(
                 blobs = list(bucket.client.list_blobs(bucket, prefix=prefix, max_results=1, timeout=30))
                 if blobs:
                     return key, True
-            except Exception as exc:  # noqa: BLE001 — defensive against transient GCS errors
+            except Exception as exc:
                 logger.debug("list error for %s: %s", prefix, exc)
                 continue
         return key, False
@@ -175,7 +175,7 @@ def main() -> int:
         return 1
 
     bucket_name = args.bucket or BUCKETS[args.asset_group]
-    run_id = f"recon-att-failed-to-captured-{args.asset_group}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    run_id = f"recon-att-failed-to-captured-{args.asset_group}-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
     _log_event(
         "RECONCILER_STARTED",
         asset_group=args.asset_group,
@@ -277,7 +277,7 @@ def main() -> int:
         return 0
 
     # Apply
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     for f in flips:
         idx = f["row_index"]
         df.at[idx, "capture_status"] = "captured"
@@ -292,7 +292,7 @@ def main() -> int:
     buf = io.BytesIO()
     subset.to_parquet(buf, index=False)
     bucket.blob(per_vm_blob_path).upload_from_string(buf.getvalue(), content_type="application/octet-stream")
-    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    elapsed = (datetime.now(UTC) - started).total_seconds()
     logger.info("Uploaded per-VM shard: gs://%s/%s (%d rows) in %.1fs", bucket_name, per_vm_blob_path, n_flips, elapsed)
     _log_event(
         "RECONCILER_COMPLETED",

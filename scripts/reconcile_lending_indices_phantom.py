@@ -126,10 +126,7 @@ def _shard_prefix(protocol: str, chain: str, date_str: str) -> str:
 
 def _has_parquet(bucket: storage.Bucket, prefix: str) -> bool:
     """Return True if at least one ``.parquet`` blob exists under *prefix*."""
-    for blob in bucket.list_blobs(prefix=prefix, max_results=1):
-        if blob.name.endswith(".parquet"):
-            return True
-    return False
+    return any(blob.name.endswith(".parquet") for blob in bucket.list_blobs(prefix=prefix, max_results=1))
 
 
 def _classify_phantom(
@@ -159,7 +156,7 @@ def _classify_phantom(
 def _audit_captured_rows(
     bucket: storage.Bucket,
     df: pd.DataFrame,
-    captured_idx: "pd.Index[int]",
+    captured_idx: pd.Index[int],
     workers: int,
 ) -> dict[int, tuple[bool, str]]:
     """Return per-row audit results: ``{row_index: (is_real, reason)}``.
@@ -242,7 +239,7 @@ def _audit_captured_rows(
     return results
 
 
-def main() -> int:  # noqa: C901
+def main() -> int:
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,

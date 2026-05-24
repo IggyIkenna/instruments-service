@@ -43,7 +43,7 @@ import logging
 import os
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 from google.cloud import storage
@@ -74,7 +74,7 @@ def _log_event(event: str, **kwargs: object) -> None:
     """Emit a JSON-ish event line for observability."""
     payload = {
         "event": event,
-        "ts": datetime.now(timezone.utc).isoformat(),
+        "ts": datetime.now(UTC).isoformat(),
         "reconciler": "reconcile_correct_legacy_blank_misflips",
         **kwargs,
     }
@@ -133,7 +133,7 @@ def main() -> int:
         return 1
 
     bucket_name = args.bucket or BUCKETS[args.asset_group]
-    run_id = f"recon-correct-misflips-{args.asset_group}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    run_id = f"recon-correct-misflips-{args.asset_group}-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
     _log_event(
         "RECONCILER_STARTED",
         asset_group=args.asset_group,
@@ -290,7 +290,7 @@ def main() -> int:
         return 0
 
     # Apply corrections to the dataframe.
-    started = datetime.now(timezone.utc)
+    started = datetime.now(UTC)
     for c in corrections:
         idx = c["row_index"]
         df.at[idx, "capture_status"] = c["new_status"]
@@ -306,7 +306,7 @@ def main() -> int:
     buf = io.BytesIO()
     corrected_subset.to_parquet(buf, index=False)
     per_vm_blob.upload_from_string(buf.getvalue(), content_type="application/octet-stream")
-    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    elapsed = (datetime.now(UTC) - started).total_seconds()
     logger.info(
         "Uploaded per-VM shard to gs://%s/%s (%d corrected rows)",
         bucket_name,

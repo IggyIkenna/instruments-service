@@ -98,39 +98,7 @@ from unified_trading_library import unified_config as _uc
 
 from instruments_service.config import get_config
 from instruments_service.config_reloaders import get_defi_major_assets
-
-# Import extracted utilities to reduce file size
-from instruments_service.engine.data_utils import (
-    af_id_from_canonical as _af_id_from_canonical,
-)
-from instruments_service.engine.data_utils import (
-    canonical_league_id as _canonical_league_id,
-)
-from instruments_service.engine.data_utils import (
-    coerce_adapter_output as _coerce_adapter_output,
-)
-from instruments_service.engine.data_utils import (
-    count_per_venue as _count_per_venue,
-)
-from instruments_service.engine.data_utils import (
-    normalize_wrapped_token as _normalize_wrapped_token,
-)
-from instruments_service.engine.data_utils import (
-    pipeline_mode_for_sports_data_type as _pipeline_mode_for_sports_data_type,
-)
 from instruments_service.engine.urdi_reference_provider import fetch_instruments_for_all_venues
-from instruments_service.engine.validation_utils import (
-    classify_adapter_failure as _classify_adapter_failure,
-)
-from instruments_service.engine.validation_utils import (
-    get_venue_epoch as _get_venue_epoch,
-)
-from instruments_service.engine.validation_utils import (
-    should_skip_date_for_per_league as _should_skip_date_for_per_league,
-)
-from instruments_service.engine.validation_utils import (
-    should_skip_shard as _should_skip_shard,
-)
 from instruments_service.reference_data.adapters.defi._solana_utils import SolanaCacheSession, fill_solana_cache
 from instruments_service.reference_data.adapters.sports import create_sports_reference_adapter
 from instruments_service.reference_data.adapters.sports.adapters.api_football_reference import (

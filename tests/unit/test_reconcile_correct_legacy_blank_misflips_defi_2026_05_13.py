@@ -72,10 +72,14 @@ def _fixed_download(df: pd.DataFrame, manifest_path: str) -> Callable[[str, str]
 def _synthetic_defi_manifest() -> pd.DataFrame:
     """Manifest with two attempted_failed/LegacyBlankErrorReasonError rows.
 
-    Uses UNISWAP_V3-ETHEREUM which has no UAC launch date (None), so only
-    the catalog cross-ref fires for pre-listing dates (Priority 3 only).
+    Uses UNISWAP_V3-ETHEREUM (venue launch 2021-05-05 in UAC).  Row 0 uses a
+    date AFTER the venue launch so Priority-1 (EXPECTED_PRE_VENUE_LAUNCH) does
+    not fire; the catalog cross-ref (Priority 3) can then fire
+    EXPECTED_INSTRUMENT_NOT_LISTED when the catalog lists available_from after
+    this date.
 
-    Row 0 — UNISWAP_V3-ETHEREUM pool, date 2021-04-01 (before listing 2021-05-05).
+    Row 0 — UNISWAP_V3-ETHEREUM pool, date 2021-06-01 (after venue launch 2021-05-05,
+              before catalog listing 2021-08-01).
               Classifier with catalog cross-ref should fire EXPECTED_INSTRUMENT_NOT_LISTED.
     Row 1 — UNISWAP_V3-ETHEREUM pool, date 2023-06-01 (within active window).
               Classifier should return SOURCE_RETURNED_ZERO (no catalog override).
@@ -84,7 +88,7 @@ def _synthetic_defi_manifest() -> pd.DataFrame:
     return pd.DataFrame(
         {
             "venue": ["UNISWAP_V3-ETHEREUM", "UNISWAP_V3-ETHEREUM", "UNISWAP_V3-ETHEREUM"],
-            "date": ["2021-04-01", "2023-06-01", "2023-06-02"],
+            "date": ["2021-06-01", "2023-06-01", "2023-06-02"],
             "data_type": ["ohlcv_1m", "ohlcv_1m", "ohlcv_1m"],
             "instrument_id": [
                 "WETH-USDC-500",
@@ -202,11 +206,12 @@ class TestBuildCandidateMask:
 
 class TestDryRunSmoke:
     def test_dry_run_no_catalog_produces_no_corrections(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        """Without catalog, UNISWAP_V3-ETHEREUM rows always fall through to SOURCE_RETURNED_ZERO
-        (no venue launch date, ETHEREUM genesis 2015 so no PRE_GENESIS) → no corrections proposed."""
+        """Without catalog, UNISWAP_V3-ETHEREUM rows (date 2021-06-01, after venue launch 2021-05-05)
+        fall through to SOURCE_RETURNED_ZERO → no corrections proposed."""
         mod = _load_corrector_module()
         df = _synthetic_defi_manifest()
         monkeypatch.setattr(mod, "_download_manifest", _fixed_download(df, str(tmp_path / "manifest.parquet")))
+        monkeypatch.setattr(mod, "load_instrument_lifecycle", lambda *_a, **_kw: {})
         # Seed catalog cache with empty sentinel so no GCS download is attempted.
         import unified_trading_library.instruments_catalog_reader as icr
 
@@ -240,10 +245,12 @@ class TestDryRunSmoke:
         mod = _load_corrector_module()
         df = _synthetic_defi_manifest()
         monkeypatch.setattr(mod, "_download_manifest", _fixed_download(df, str(tmp_path / "manifest.parquet")))
+        monkeypatch.setattr(mod, "load_instrument_lifecycle", lambda *_a, **_kw: {})
 
         import unified_trading_library.instruments_catalog_reader as icr
 
-        # Seed catalog: WETH-USDC-500 pool listed from 2021-05-05 (so 2021-04-01 is pre-listing).
+        # Seed catalog: WETH-USDC-500 listed from 2021-08-01 (so 2021-06-01, after venue
+        # launch 2021-05-05, is still pre-instrument-listing → EXPECTED_INSTRUMENT_NOT_LISTED).
         icr.clear_catalog_cache()
         catalog_df = pd.DataFrame(
             {
@@ -251,7 +258,7 @@ class TestDryRunSmoke:
                 "venue": ["UNISWAP_V3-ETHEREUM"],
                 "raw_symbol": ["WETH-USDC-500"],
                 "base_asset": ["WETH"],
-                "available_from_datetime": [pd.Timestamp("2021-05-05")],
+                "available_from_datetime": [pd.Timestamp("2021-08-01")],
                 "available_to_datetime": [pd.NaT],
             }
         )
@@ -275,10 +282,10 @@ class TestDryRunSmoke:
         csvs = sorted(tmp_path.glob("defi-corrector-defi-*.csv"))
         assert len(csvs) == 1, f"expected one CSV report, got {csvs}"
         report = pd.read_csv(csvs[0])
-        # Only the pre-listing row (2021-04-01) should appear.
+        # Only the pre-listing row (2021-06-01) should appear.
         assert len(report) == 1
         row = report.iloc[0]
-        assert row["date"] == "2021-04-01"
+        assert row["date"] == "2021-06-01"
         assert row["new_reason"] == "EXPECTED_INSTRUMENT_NOT_LISTED"
         assert row["new_capture_status"] == "empty_confirmed"
         assert row["old_reason"] == "LegacyBlankErrorReasonError"
@@ -293,15 +300,17 @@ class TestApplyFlipsFixture:
     def test_apply_flips_corrects_pre_listing_row_only(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """--apply-flips uploads a per-VM shard with corrected rows only.
 
-        The pre-listing row (2021-09-01) should appear in the shard with
+        The pre-listing row (2021-06-01) should appear in the shard with
         empty_confirmed/EXPECTED_INSTRUMENT_NOT_LISTED.
         The active-window row (2023-06-01) should NOT appear (no correction).
         """
         mod = _load_corrector_module()
         df = _synthetic_defi_manifest()
         monkeypatch.setattr(mod, "_download_manifest", _fixed_download(df, str(tmp_path / "manifest.parquet")))
+        monkeypatch.setattr(mod, "load_instrument_lifecycle", lambda *_a, **_kw: {})
 
-        # Seed catalog: WETH-USDC-500 pool listed from 2021-05-05 (so 2021-04-01 is pre-listing).
+        # Seed catalog: WETH-USDC-500 listed from 2021-08-01 (so 2021-06-01, after venue
+        # launch 2021-05-05, is still pre-instrument-listing → EXPECTED_INSTRUMENT_NOT_LISTED).
         import time as _time
 
         import unified_trading_library.instruments_catalog_reader as icr
@@ -313,7 +322,7 @@ class TestApplyFlipsFixture:
                 "venue": ["UNISWAP_V3-ETHEREUM"],
                 "raw_symbol": ["WETH-USDC-500"],
                 "base_asset": ["WETH"],
-                "available_from_datetime": [pd.Timestamp("2021-05-05")],
+                "available_from_datetime": [pd.Timestamp("2021-08-01")],
                 "available_to_datetime": [pd.NaT],
             }
         )
@@ -358,7 +367,7 @@ class TestApplyFlipsFixture:
         # Only the pre-listing row should be in the shard.
         assert len(shard) == 1
         corrected_row = shard.iloc[0]
-        assert str(corrected_row["date"]) == "2021-04-01"
+        assert str(corrected_row["date"]) == "2021-06-01"
         assert corrected_row["capture_status"] == "empty_confirmed"
         assert corrected_row["error_reason"] == "EXPECTED_INSTRUMENT_NOT_LISTED"
 
