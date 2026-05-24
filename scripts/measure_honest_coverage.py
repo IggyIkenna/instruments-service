@@ -36,7 +36,7 @@ import json
 import logging
 import sys
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import cast
 
 import pandas as pd
@@ -164,7 +164,7 @@ def main() -> None:
 
     coverage = _compute_coverage(dfs)
 
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     payload: dict[str, object] = {
         "generated_at": now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "date": date.today().isoformat(),

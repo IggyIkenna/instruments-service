@@ -197,7 +197,7 @@ def test_cleanup_flushes_manifest_writers_and_emits_coordination_events(
         raise ValueError("batch mode — no-op")
 
     monkeypatch.setattr(
-        "instruments_service.cli.instruments_handler._get_instruments_bucket",
+        "instruments_service.cli.instruments_handler._get_instruments_bucket_for_asset_group",
         lambda cat: f"instruments-store-{cat.lower()}-test-project",
     )
     monkeypatch.setattr(

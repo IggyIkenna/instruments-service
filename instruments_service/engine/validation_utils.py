@@ -90,11 +90,9 @@ def should_skip_date_for_per_league(
         return True
 
     # Season-specific validation
-    if season_year is not None:
-        # Allow some flexibility around season boundaries
-        if not (season_year - 1 <= dt.year <= season_year + 1):
-            logger.debug("Skipping %s for league %s: outside season %d", date, league_id, season_year)
-            return True
+    if season_year is not None and not (season_year - 1 <= dt.year <= season_year + 1):
+        logger.debug("Skipping %s for league %s: outside season %d", date, league_id, season_year)
+        return True
 
     return False
 
