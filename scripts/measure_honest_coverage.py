@@ -47,14 +47,20 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ID = "central-element-323112"
 
-# Manifest bucket per asset_group (prod; scripts/ excluded from inline-URI QG ratchet).
-# Pattern: market-data-tick-{ag_short}-prd-{project_id}/_index/availability_index.parquet
-_MANIFEST_BUCKETS: dict[str, str] = {
-    "cefi": f"market-data-tick-cefi-prd-{PROJECT_ID}",
-    "defi": f"market-data-tick-defi-prd-{PROJECT_ID}",
-    "tradfi": f"market-data-tick-tradfi-prd-{PROJECT_ID}",
-    "sports": f"market-data-tick-sports-prd-{PROJECT_ID}",
-    "prediction": f"market-data-tick-pred-prd-{PROJECT_ID}",
+# Manifest bucket candidates per asset_group (scripts/ excluded from inline-URI QG ratchet).
+# During the bucket-SSOT env-tiering migration (bucket_name_ssot_canonicalisation Phase 2.6)
+# the LIVE bucket differs per asset_group: CeFi tick still writes the legacy FLAT bucket
+# (get_write_bucket_name → cloud_constants legacy prefixes), while DeFi on-chain handlers
+# already write the env-tiered `-prd` bucket (different write path). So we cannot assume a
+# single naming scheme. List both candidates and read whichever actually holds the data
+# (most manifest rows). Self-corrects after Phase 2.6 consolidates everything onto `-prd`.
+# See plans/active/issues/cefi_tick_bucket_ssot_divergence_2026_05_25.md.
+_MANIFEST_BUCKET_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "cefi": (f"market-data-tick-cefi-prd-{PROJECT_ID}", f"market-data-tick-cefi-{PROJECT_ID}"),
+    "defi": (f"market-data-tick-defi-prd-{PROJECT_ID}", f"market-data-tick-defi-{PROJECT_ID}"),
+    "tradfi": (f"market-data-tick-tradfi-prd-{PROJECT_ID}", f"market-data-tick-tradfi-{PROJECT_ID}"),
+    "sports": (f"market-data-tick-sports-prd-{PROJECT_ID}", f"market-data-tick-sports-{PROJECT_ID}"),
+    "prediction": (f"market-data-tick-pred-prd-{PROJECT_ID}", f"market-data-tick-prediction-{PROJECT_ID}"),
 }
 
 _OUTPUT_BUCKET = f"{PROJECT_ID}-honest-coverage"
@@ -63,16 +69,30 @@ _CAPTURE_STATUSES = ("captured", "empty_confirmed", "attempted_failed", "expecte
 
 
 def _read_manifest(asset_group: str) -> pd.DataFrame | None:
-    bucket_name = _MANIFEST_BUCKETS[asset_group]
-    uri = f"gs://{bucket_name}/_index/availability_index.parquet"
-    logger.info("Reading manifest for %s: %s", asset_group, uri)
-    try:
-        df = pd.read_parquet(uri)
-        logger.info("  %s manifest rows: %s", asset_group, f"{len(df):,}")
-        return df
-    except Exception as exc:
-        logger.warning("  SKIP %s — manifest not accessible: %s", asset_group, exc)
+    """Read the live availability manifest for an asset_group.
+
+    Tries each candidate bucket (env-tiered `-prd` + legacy flat) and returns
+    the one with the most rows — the bucket the writers are actively filling
+    under the in-flight env-tiering migration. Logs which candidate won so a
+    stale/empty `-prd` read can't silently under-count a flat-bucket backfill.
+    """
+    best_df: pd.DataFrame | None = None
+    best_uri: str | None = None
+    for bucket_name in _MANIFEST_BUCKET_CANDIDATES[asset_group]:
+        uri = f"gs://{bucket_name}/_index/availability_index.parquet"
+        try:
+            df = pd.read_parquet(uri)
+        except Exception as exc:
+            logger.info("  %s candidate not accessible (%s): %s", asset_group, uri, exc)
+            continue
+        logger.info("  %s candidate %s: %s rows", asset_group, uri, f"{len(df):,}")
+        if best_df is None or len(df) > len(best_df):
+            best_df, best_uri = df, uri
+    if best_df is None:
+        logger.warning("  SKIP %s — no candidate manifest accessible", asset_group)
         return None
+    logger.info("  %s manifest selected: %s (%s rows)", asset_group, best_uri, f"{len(best_df):,}")
+    return best_df
 
 
 def _count_statuses(df: pd.DataFrame) -> dict[str, int | float]:
