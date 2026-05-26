@@ -20,7 +20,7 @@ _SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
-from backfill_drift_funding_2026_05_13 import (  # noqa: E402
+from backfill_drift_funding_2026_05_13 import (
     _DRIFT_V2_LAUNCH_DATE,
     _build_s3_key,
     _date_range,
