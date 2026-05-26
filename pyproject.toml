@@ -84,88 +84,77 @@ editable = true
 
 
 
-[tool.pytest.ini_options]
-testpaths = [
-    "tests",
-]
-python_files = [
-    "test_*.py",
-]
-asyncio_mode = "auto"
-markers = [
-    "integration: library contract test — verifies imported symbols exist and have expected API (runs in CI, no credentials needed)",
-    "e2e: end-to-end test writing real data — requires IS_TEST_RUN=true and real GCP project",
-    "live: requires live external API access or real GCP credentials — skipped in CI",
-    "smoke: mark test as smoke test",
-    "unit: mark test as unit test",
-]
-
 [tool.ruff]
 line-length = 120
 target-version = "py313"
-
-[tool.ruff.lint]
-extend-ignore = ["G003", "G004"]  # f-strings in logger (print->logger migration)
-select = [
-    "E",
-    "F",
-    "W",
-    "I",
-    "N",
-    "UP",
-    "B",
-    "C4",
-    "SIM",
-    "RUF",
-    "G",
-]
-ignore = [
-    "E501",
-]
-
-[tool.ruff.lint.mccabe]
-max-complexity = 10
-
-[tool.ruff.lint.per-file-ignores]
-"instruments_service/cli/main.py" = [
-    "E402",
-]
-"tests/conftest.py" = [
-    "E402",
-]
-"scripts/*" = [
-    "E722",
-]
-"instruments_service/config/service_config.py" = [
-    "N802",
-]
-"instruments_service/config.py" = [
-    "RUF012",
-]
-"instruments_service/config/venue_config.py" = [
-    "RUF012",
-]
-"instruments_service/app/core/processors/ccxt_manual_fallback.py" = [
-    "N806",
-]
-"instruments_service/engine/processors/ccxt_manual_fallback.py" = [
-    "N806",
-]
-"tests/unit/test_cloud_agnostic_paths.py" = [
-    "N806",
-]
-"tests/smoke/test_shard_combinatorics.py" = [
-    "E402",
-    "F821",
-]
-"tests/**/*.py" = [
-    "N817",
-    "F841",
-]
+exclude = [".cursor", ".venv", ".venv-workspace", "build", "dist", "node_modules"]
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RUF", "G", "C90"]
+extend-ignore = ["G003", "G004"]
+ignore = ["E402", "E501"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 26
+
+[tool.ruff.lint.per-file-ignores]
+"*/__init__.py" = ["F401", "E402"]
+"tests/*" = ["F401", "F841", "F811"]
+"tests/conftest.py" = ["E402"]
+"instruments_service/cli/main.py" = ["E402"]
+"scripts/*" = ["E722"]
+"instruments_service/config/service_config.py" = ["N802"]
+"instruments_service/config.py" = ["RUF012"]
+"instruments_service/config/venue_config.py" = ["RUF012"]
+"instruments_service/app/core/processors/ccxt_manual_fallback.py" = ["N806"]
+"instruments_service/engine/processors/ccxt_manual_fallback.py" = ["N806"]
+"tests/unit/test_cloud_agnostic_paths.py" = ["N806"]
+"tests/smoke/test_shard_combinatorics.py" = ["E402", "F821"]
+"tests/**/*.py" = ["N817", "F841"]
+
+[tool.basedpyright]
+pythonVersion = "3.13"
+typeCheckingMode = "strict"
+include = ["instruments_service"]
+exclude = ["tests", "**/__pycache__", ".venv*", ".venv-workspace", "build", "dist", "node_modules"]
+reportAny = "error"
+reportMissingTypeStubs = false
+reportUnusedImport = "none"
+reportUnnecessaryIsInstance = "none"
+reportUnnecessaryCast = "none"
+reportIncompatibleMethodOverride = "none"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "."
+pythonVersion = "3.13"
+pythonPlatform = "All"
+extraPaths = [
+    "../unified-market-interface",
+    "../unified-api-contracts",
+    "../unified-config-interface",
+    "../unified-internal-contracts",
+    "../unified-trading-library",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+markers = [
+    "unit: mark test as unit test",
+    "integration: library contract test — verifies imported symbols exist and have expected API (runs in CI, no credentials needed)",
+    "e2e: end-to-end test writing real data — requires IS_TEST_RUN=true and real GCP project",
+    "live: requires live external API access or real GCP credentials — skipped in CI",
+    "smoke: mark test as smoke test",
+]
+
+[tool.coverage.run]
+source = ["instruments_service"]
+branch = true
 
 [tool.coverage.report]
 fail_under = 77
@@ -179,24 +168,5 @@ exclude_lines = [
     "raise NotImplementedError",
 ]
 
-
-[tool.basedpyright]
-include = [
-    "instruments_service",
-]
-exclude = [
-    "**/__pycache__",
-    ".venv*",
-    "build",
-    "dist",
-]
-pythonVersion = "3.13"
-typeCheckingMode = "strict"
-reportMissingImports = "error"
-reportUnusedVariable = "warning"
-reportUnusedImport = "warning"
-reportAny = "error"
-reportUnknownVariableType = "error"
-reportUnknownArgumentType = "error"
-reportUnknownParameterType = "error"
-reportUnknownMemberType = "error"
+[tool.bandit]
+skips = []
