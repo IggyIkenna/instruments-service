@@ -321,14 +321,18 @@ def test_module_level_convenience_functions():
 # ---------------------------------------------------------------------------
 
 
-def test_get_instruments_bucket_fallback():
-    """Falls back to gcp_project_id if get_bucket_name unavailable."""
+def test_get_instruments_bucket_resolves_via_resolve_bucket_name():
+    """_get_instruments_bucket delegates to resolve_bucket_name (bucket-name SSOT)."""
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
-    with patch("instruments_service.engine.orchestrator.get_write_bucket_name", side_effect=AttributeError):
-        bucket = _get_instruments_bucket()
+    with patch(
+        "instruments_service.engine.orchestrator.resolve_bucket_name",
+        return_value="instruments-store-cefi-prd-test-project",
+    ) as mock_resolve:
+        bucket = _get_instruments_bucket("cefi")
 
-    assert "test-project" in bucket or "instruments" in bucket.lower()
+    mock_resolve.assert_called_once()
+    assert "instruments" in bucket.lower()
 
 
 def test_write_catalogue_record_non_blocking_on_error():
