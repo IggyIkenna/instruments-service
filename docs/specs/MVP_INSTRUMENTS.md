@@ -134,10 +134,10 @@ To manage GCS and BigQuery storage costs during MVP development, we focus on a c
 
 #### DEX Swap Trading Pairs
 
-- `UNISWAPV3-ETH:SPOT_PAIR:ETH-USDT@ETHEREUM`
+- `UNISWAP_V3-ETH:SPOT_PAIR:ETH-USDT@ETHEREUM`
 - `CURVE-ETH:SPOT_PAIR:ETH-USDT@ETHEREUM`
 - `CURVE-ETH:SPOT_PAIR:ETH-WEETH@ETHEREUM`
-- `UNISWAPV3-ETH:SPOT_PAIR:ETH-WSTETH@ETHEREUM`
+- `UNISWAP_V3-ETH:SPOT_PAIR:ETH-WSTETH@ETHEREUM`
 
 **Total DeFi Instruments**: 16 position instruments + 4 trading instruments = 20 instruments
 
@@ -492,7 +492,7 @@ python -m instruments_service --mode instruments \
 # Query DeFi instruments
 python -m instruments_service --mode instruments \
     --start-date 2023-05-23 \
-    --venues AAVE_V3_ETH ETHERFI LIDO UNISWAPV3-ETH
+    --venues AAVE_V3_ETH ETHERFI LIDO UNISWAP_V3-ETH
 
 # Query CME crypto futures
 python -m instruments_service --mode instruments \
