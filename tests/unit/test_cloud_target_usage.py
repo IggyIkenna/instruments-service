@@ -4,11 +4,10 @@ IMPORTANT: These are UNIT TESTS ONLY (no real cloud APIs).
 unified-trading-services validates real API usage via its own integration tests.
 
 The canonical bucket helper is ``orchestrator._get_instruments_bucket(asset_group)``
-which delegates to UTL ``get_write_bucket_name`` and respects the ``IS_TEST_RUN``
-env-var gate. The retired ``config.get_bucket_for_category(...)`` helper is no
-longer present on InstrumentsServiceConfig (4-fields-only contract — see
-``config/service_config.py``).
+which delegates to UTL ``resolve_bucket_name`` (bucket-name SSOT).
 """
+
+from unittest.mock import patch
 
 import pytest
 from unified_trading_library.domain_client.cloud_target import CloudTarget  # noqa: qg-deep-import
@@ -24,14 +23,16 @@ class TestCloudTargetInstantiations:
         """All CloudTarget instantiations must include analytics_dataset."""
         config = instruments_config
 
-        # Pattern that all code should follow
-        target = CloudTarget(
-            project_id=config.gcp_project_id,
-            storage_bucket=_get_instruments_bucket("CEFI"),
-            analytics_dataset=config.bigquery_dataset,  # REQUIRED
-        )
+        with patch(
+            "instruments_service.engine.orchestrator.resolve_bucket_name",
+            return_value="instruments-store-cefi-prd-test-project",
+        ):
+            target = CloudTarget(
+                project_id=config.gcp_project_id,
+                storage_bucket=_get_instruments_bucket("CEFI"),
+                analytics_dataset=config.bigquery_dataset,  # REQUIRED
+            )
 
-        # Verify it works
         assert target.project_id
         assert target.storage_bucket
         assert target.analytics_dataset
@@ -40,7 +41,13 @@ class TestCloudTargetInstantiations:
         """CloudTarget should fail if analytics_dataset is missing."""
         config = instruments_config
 
-        with pytest.raises((TypeError, ValueError), match=r"analytics_dataset|required"):
+        with (
+            patch(
+                "instruments_service.engine.orchestrator.resolve_bucket_name",
+                return_value="instruments-store-cefi-prd-test-project",
+            ),
+            pytest.raises((TypeError, ValueError), match=r"analytics_dataset|required"),
+        ):
             CloudTarget(
                 project_id=config.gcp_project_id,
                 storage_bucket=_get_instruments_bucket("CEFI"),
@@ -51,7 +58,6 @@ class TestCloudTargetInstantiations:
         """Config should provide all required CloudTarget parameters."""
         config = instruments_config
 
-        # Verify config has all required attributes
         assert hasattr(config, "gcp_project_id")
         assert hasattr(config, "bigquery_dataset")
         assert config.gcp_project_id
