@@ -92,7 +92,7 @@ This document provides the complete specification for canonical instrument IDs u
 
 - `CEFI:BINANCE-SPOT:SPOT_PAIR:BTC-USDT` (trading route, never stored as position, with asset class prefix)
 - `BINANCE-SPOT:SPOT_PAIR:BTC-USDT` (backward compatible, no prefix)
-- `DEFI:UNISWAPV3-ETH:SPOT_PAIR:USDC-ETH@ETHEREUM` (DEX trading route, with asset class prefix)
+- `DEFI:UNISWAP_V3-ETH:SPOT_PAIR:USDC-ETH@ETHEREUM` (DEX trading route, with asset class prefix)
 
 **Key Principle**: SPOT_PAIR is routing-only, never stored as a position. Trades result in SPOT_ASSET deltas.
 
@@ -159,8 +159,8 @@ This document provides the complete specification for canonical instrument IDs u
 
 **Examples**:
 
-- `UNISWAPV3-ETH:POOL:ETH-USDT:3000@ETHEREUM` (Uniswap V3 pool, 0.3% fee)
-- `UNISWAPV3-ETH:POOL:ETH-USDT:500@ETHEREUM` (Uniswap V3 pool, 0.05% fee)
+- `UNISWAP_V3-ETH:POOL:ETH-USDT:3000@ETHEREUM` (Uniswap V3 pool, 0.3% fee)
+- `UNISWAP_V3-ETH:POOL:ETH-USDT:500@ETHEREUM` (Uniswap V3 pool, 0.05% fee)
 - `CURVE-ETH:POOL:ETH-USDT@ETHEREUM` (Curve pool)
 
 **Note**: Fee tier is specified after colon (`:`) in symbol, chain is specified after `@` symbol.
@@ -237,7 +237,7 @@ All instrument definitions include a `chain` attribute that clarifies which bloc
 
 For DeFi instruments on specific chains, the chain is included in the instrument key as a suffix:
 
-- **Ethereum-based**: `UNISWAPV3-ETH:POOL:ETH-USDT:3000@ETHEREUM`
+- **Ethereum-based**: `UNISWAP_V3-ETH:POOL:ETH-USDT:3000@ETHEREUM`
 - **Hyperliquid**: `HYPERLIQUID:PERPETUAL:BTC-USDC@LIN@HYPERLIQUID`
 - **Aster (Polkadot)**: `ASTER:PERPETUAL:BTC-USDT@LIN@POLKADOT`
 - **Plasma**: `EULER-PLASMA:A_TOKEN:AUSDT@PLASMA`
@@ -273,7 +273,7 @@ Venue names follow the pattern `VENUE` or `VENUE-CHAIN`:
 
 **DeFi Venues**:
 
-- `UNISWAPV2-ETH`, `UNISWAPV3-ETH`, `UNISWAPV4-ETH`
+- `UNISWAP_V2-ETH`, `UNISWAP_V3-ETH`, `UNISWAP_V4-ETH`
 - `CURVE-ETH`, `BALANCER-ETH`
 - `AAVE_V3_ETH`, `ETHERFI`, `LIDO`
 - `MORPHO-ETHEREUM`
@@ -383,8 +383,8 @@ Exchange API 'option' → Canonical 'OPTION'
 
 ### DeFi DEX Pools
 
-- `UNISWAPV3-ETH:POOL:ETH-USDT:3000@ETHEREUM` (Uniswap V3 pool, 0.3% fee)
-- `UNISWAPV3-ETH:POOL:ETH-USDT:500@ETHEREUM` (Uniswap V3 pool, 0.05% fee)
+- `UNISWAP_V3-ETH:POOL:ETH-USDT:3000@ETHEREUM` (Uniswap V3 pool, 0.3% fee)
+- `UNISWAP_V3-ETH:POOL:ETH-USDT:500@ETHEREUM` (Uniswap V3 pool, 0.05% fee)
 - `CURVE-ETH:POOL:ETH-USDT@ETHEREUM` (Curve pool)
 
 ## Expiry Handling
@@ -418,16 +418,16 @@ DeFi instruments need contract addresses and pool information for execution, but
 **Recommended Pattern**: Version + Fee in Venue Name
 
 ```
-UNISWAPV3-ETH:POOL:ETH-USDT:3000@ETHEREUM  # Uniswap V3, 0.3% fee
-UNISWAPV3-ETH:POOL:ETH-USDT:500@ETHEREUM   # Uniswap V3, 0.05% fee
-UNISWAPV2-ETH:POOL:ETH-USDT@ETHEREUM       # Uniswap V2 (0.3% fee implied)
+UNISWAP_V3-ETH:POOL:ETH-USDT:3000@ETHEREUM  # Uniswap V3, 0.3% fee
+UNISWAP_V3-ETH:POOL:ETH-USDT:500@ETHEREUM   # Uniswap V3, 0.05% fee
+UNISWAP_V2-ETH:POOL:ETH-USDT@ETHEREUM       # Uniswap V2 (0.3% fee implied)
 ```
 
 **Execution Attributes** (stored in instrument definition):
 
 ```python
 {
-    "instrument_key": "UNISWAPV3-ETH:POOL:ETH-USDT:3000@ETHEREUM",
+    "instrument_key": "UNISWAP_V3-ETH:POOL:ETH-USDT:3000@ETHEREUM",
     "base_asset_contract_address": "0xC02aaA39b223FE8D0A0e5c4F27eAD9083c756Cc2",  # WETH
     "quote_asset_contract_address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",  # USDT
     "pool_address": "0x...",  # Computed from factory + tokens + fee
@@ -466,7 +466,7 @@ A: Consistent formatting makes instrument IDs more readable and easier to parse 
 A: They refer to the same thing - the canonical instrument identifier. "Instrument ID" is preferred in documentation, while "instrument_key" is used in code field names.
 
 **Q: How are multiple pools for the same pair handled?**
-A: Each pool gets its own instrument definition with version + fee tier in the venue name (e.g., `UNISWAPV3-ETH:POOL:ETH-USDT:3000`, `UNISWAPV3-ETH:POOL:ETH-USDT:500`).
+A: Each pool gets its own instrument definition with version + fee tier in the venue name (e.g., `UNISWAP_V3-ETH:POOL:ETH-USDT:3000`, `UNISWAP_V3-ETH:POOL:ETH-USDT:500`).
 
 **Q: When should instruments be enriched with contract addresses?**
 A: Enrichment is done on-demand when needed for execution. Don't require enrichment at instrument definition time.
