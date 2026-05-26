@@ -63,7 +63,7 @@ permissions:
 jobs:
   quality-gates:
     name: Quality Gates (instruments-service)
-    uses: IggyIkenna/unified-trading-pm/.github/workflows/python-quality-gates.yml@66915834bcf90f5be4bee51bdf99480cc563b43b
+    uses: IggyIkenna/unified-trading-pm/.github/workflows/python-quality-gates.yml@live-defi-rollout
     with:
       dep_repos: "unified-api-contracts unified-trading-library"
     secrets: inherit
