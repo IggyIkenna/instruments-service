@@ -236,3 +236,216 @@ async def test_fetch_adapter_value_error_is_logged_not_raised(caplog):
 
     assert result.records == []
     assert any("ADAPTER_ERROR" in r.message for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_fetch_duplicate_venue_deduped():
+    """Same venue passed twice is only fetched once."""
+    record = _make_record()
+    mock_adapter = MagicMock()
+    mock_adapter.get_instruments_cached = AsyncMock(return_value=[record])
+
+    with patch(
+        "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
+        return_value=mock_adapter,
+    ):
+        result = await fetch_instruments_for_all_venues(["MORPHO-ETHEREUM", "MORPHO-ETHEREUM"])
+
+    # Only one fetch call despite two entries
+    assert mock_adapter.get_instruments_cached.call_count == 1
+    assert len(result.records) == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_timeout_error_retryable(caplog):
+    """TimeoutError → VenueError with retryable=True."""
+    mock_adapter = MagicMock()
+    mock_adapter.get_instruments_cached = AsyncMock(side_effect=TimeoutError("timed out"))
+
+    with (
+        patch(
+            "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
+            return_value=mock_adapter,
+        ),
+        caplog.at_level("WARNING"),
+    ):
+        result = await fetch_instruments_for_all_venues(["MORPHO-ETHEREUM"])
+
+    assert result.records == []
+    assert len(result.failed_venues) == 1
+    assert result.failed_venues[0].retryable is True
+    assert result.failed_venues[0].error_code == "TIMEOUT"
+
+
+@pytest.mark.asyncio
+async def test_fetch_os_error_retryable(caplog):
+    """OSError → VenueError with retryable=True."""
+    mock_adapter = MagicMock()
+    mock_adapter.get_instruments_cached = AsyncMock(side_effect=OSError("socket error"))
+
+    with (
+        patch(
+            "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
+            return_value=mock_adapter,
+        ),
+        caplog.at_level("WARNING"),
+    ):
+        result = await fetch_instruments_for_all_venues(["MORPHO-ETHEREUM"])
+
+    assert result.records == []
+    assert len(result.failed_venues) == 1
+    assert result.failed_venues[0].retryable is True
+    assert result.failed_venues[0].error_code == "NETWORK"
+
+
+@pytest.mark.asyncio
+async def test_fetch_runtime_error_429_rate_limit(caplog):
+    """RuntimeError with 429 → RATE_LIMIT error code."""
+    mock_adapter = MagicMock()
+    mock_adapter.get_instruments_cached = AsyncMock(side_effect=RuntimeError("429 too many requests"))
+
+    with (
+        patch(
+            "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
+            return_value=mock_adapter,
+        ),
+        caplog.at_level("WARNING"),
+    ):
+        result = await fetch_instruments_for_all_venues(["MORPHO-ETHEREUM"])
+
+    assert result.records == []
+    assert len(result.failed_venues) == 1
+    assert result.failed_venues[0].error_code == "RATE_LIMIT"
+    assert result.failed_venues[0].retryable is True
+
+
+@pytest.mark.asyncio
+async def test_fetch_runtime_error_503_server_error(caplog):
+    """RuntimeError with 503 → SERVER_ERROR code."""
+    mock_adapter = MagicMock()
+    mock_adapter.get_instruments_cached = AsyncMock(side_effect=RuntimeError("503 service unavailable"))
+
+    with (
+        patch(
+            "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
+            return_value=mock_adapter,
+        ),
+        caplog.at_level("WARNING"),
+    ):
+        result = await fetch_instruments_for_all_venues(["MORPHO-ETHEREUM"])
+
+    assert result.records == []
+    assert len(result.failed_venues) == 1
+    assert result.failed_venues[0].error_code == "SERVER_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_fetch_runtime_error_generic_retry_exhausted():
+    """RuntimeError without known status → RETRY_EXHAUSTED."""
+    mock_adapter = MagicMock()
+    mock_adapter.get_instruments_cached = AsyncMock(side_effect=RuntimeError("generic failure"))
+
+    with patch(
+        "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
+        return_value=mock_adapter,
+    ):
+        result = await fetch_instruments_for_all_venues(["MORPHO-ETHEREUM"])
+
+    assert result.failed_venues[0].error_code == "RETRY_EXHAUSTED"
+
+
+@pytest.mark.asyncio
+async def test_fetch_attribute_error_parse_error():
+    """AttributeError → PARSE_ERROR (permanent)."""
+    mock_adapter = MagicMock()
+    mock_adapter.get_instruments_cached = AsyncMock(side_effect=AttributeError("missing attr"))
+
+    with patch(
+        "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
+        return_value=mock_adapter,
+    ):
+        result = await fetch_instruments_for_all_venues(["MORPHO-ETHEREUM"])
+
+    assert result.failed_venues[0].error_code == "PARSE_ERROR"
+    assert result.failed_venues[0].retryable is False
+
+
+@pytest.mark.asyncio
+async def test_fetch_sibling_routed_instruments_skipped():
+    """Instruments tagged for a sibling venue in the batch are silently skipped."""
+    from unified_api_contracts.internal import InstrumentRecord
+
+    r_own = InstrumentRecord(
+        instrument_key="MORPHO-ETHEREUM:A_TOKEN:WETH",
+        venue="MORPHO-ETHEREUM",
+        instrument_type="A_TOKEN",
+        base_asset="WETH",
+        quote_asset="USDC",
+        base_asset_contract_address="0x" + "a" * 40,
+        base_asset_decimals=18,
+    )
+    r_sibling = InstrumentRecord(
+        instrument_key="AAVE_V3-ETHEREUM:A_TOKEN:WBTC",
+        venue="AAVE_V3-ETHEREUM",
+        instrument_type="A_TOKEN",
+        base_asset="WBTC",
+        quote_asset="USDC",
+        base_asset_contract_address="0x" + "b" * 40,
+        base_asset_decimals=8,
+    )
+
+    mock_adapter = MagicMock()
+    mock_adapter.get_instruments_cached = AsyncMock(return_value=[r_own, r_sibling])
+
+    with patch(
+        "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
+        return_value=mock_adapter,
+    ):
+        # Both venues in batch → sibling is silently routed
+        result = await fetch_instruments_for_all_venues(["MORPHO-ETHEREUM", "AAVE_V3-ETHEREUM"])
+
+    # Each venue's adapter returns both records, but each only claims its own
+    # MORPHO adapter: r_own matches, r_sibling goes to sibling
+    # AAVE adapter: r_sibling matches, r_own goes to sibling
+    # So total = r_own (from morpho adapter) + r_sibling (from aave adapter) = 2 records
+    assert len(result.records) == 2
+
+
+@pytest.mark.asyncio
+async def test_fetch_unknown_venue_tag_logs_warning(caplog):
+    """Instruments tagged for a venue NOT in the batch are warned."""
+    from unified_api_contracts.internal import InstrumentRecord
+
+    r_own = InstrumentRecord(
+        instrument_key="MORPHO-ETHEREUM:A_TOKEN:WETH",
+        venue="MORPHO-ETHEREUM",
+        instrument_type="A_TOKEN",
+        base_asset="WETH",
+        quote_asset="USDC",
+        base_asset_contract_address="0x" + "a" * 40,
+        base_asset_decimals=18,
+    )
+    r_unknown = InstrumentRecord(
+        instrument_key="UNKNOWN_VENUE:SPOT_PAIR:BTC",
+        venue="UNKNOWN_VENUE",
+        instrument_type="SPOT_PAIR",
+        base_asset="BTC",
+        quote_asset="USDC",
+        base_asset_contract_address="0x" + "c" * 40,
+        base_asset_decimals=8,
+    )
+
+    mock_adapter = MagicMock()
+    mock_adapter.get_instruments_cached = AsyncMock(return_value=[r_own, r_unknown])
+
+    with (
+        patch(
+            "instruments_service.engine.urdi_reference_provider.get_adapter_for_canonical_venue",
+            return_value=mock_adapter,
+        ),
+        caplog.at_level("WARNING"),
+    ):
+        result = await fetch_instruments_for_all_venues(["MORPHO-ETHEREUM"])
+
+    assert len(result.records) == 1
+    assert any("unknown" in r.message.lower() for r in caplog.records)
