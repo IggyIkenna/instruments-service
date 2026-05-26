@@ -1,4 +1,5 @@
 # workspace-qg.yml — UNIFIED quality-gates workflow template (replaces per-repo quality-gates.yml)
+# Refreshed 2026-05-26 to clear GitHub Actions workflow cache after startup_failure ghost run.
 #
 # DESIGN (opus-max-tier 2026-05-16; supersedes slot 8's first pass that omitted live-defi-rollout):
 #
