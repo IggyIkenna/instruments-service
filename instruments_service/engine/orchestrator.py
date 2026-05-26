@@ -88,10 +88,10 @@ from unified_trading_library import (
     create_sampling_service,
     get_data_sink,
     get_storage_client,
-    get_write_bucket_name,
     log_event,
     publish_with_policy,
     read_availability_index,
+    resolve_bucket_name,
     stamp_available_at_explicit,
 )
 from unified_trading_library import unified_config as _uc
@@ -7232,31 +7232,27 @@ async def fill_solana_creation_cache(
 def _get_instruments_bucket(asset_group: str | None = None) -> str:
     """Resolve the instruments write bucket for the given asset group.
 
-    Prod:  instruments-store-{asset_group.lower()}-{project_id}
-    Test:  instruments-store-{asset_group.lower()}-test-{project_id}
-
-    When ``IS_TEST_RUN=true``, writes route to the canonical ``-test-`` variant
-    (``-test-`` inserted between asset group and project_id — matches the 77
-    buckets provisioned by
-    ``deployment-service/scripts/provision-test-buckets.sh``). SSOT:
-    ``codex/02-data/per-category-bucket-layouts.md``.
-
-    Delegates to UTL ``get_write_bucket_name`` which already handles the
-    ``IS_TEST_RUN`` gate via env var.
+    Delegates to ``resolve_bucket_name`` (bucket-name SSOT) which returns
+    env-tiered buckets: instruments-store-{ag}-{DEPLOYMENT_ENV_SHORT}-{pid}.
+    DEPLOYMENT_ENV=prod → instruments-store-{ag}-prd-{pid}.
+    DEPLOYMENT_ENV=dev  → instruments-store-{ag}-dev-{pid}.
+    IS_TEST_RUN=true    → DEPLOYMENT_ENV=test → instruments-store-{ag}-test-{pid}.
     """
-    cfg = get_config()
-    project = cfg.gcp_project_id or "test-project"
+    import os
 
-    try:
-        return get_write_bucket_name("instruments", asset_group, project)
-    except (ImportError, AttributeError):
-        # Dev-environment fallback when UTL cloud_constants is unavailable.
-        cat_lower = asset_group.lower() if asset_group else None
-        prefix = cfg.instruments_bucket_prefix
-        prod_bucket = f"{prefix}-{cat_lower}-{project}" if cat_lower else f"{prefix}-{project}"
-        if not cfg.is_test_run:
-            return prod_bucket
-        return prod_bucket.replace(f"-{project}", f"-test-{project}", 1)
+    cfg = get_config()
+    ag: str | None = asset_group.upper() if asset_group else None
+    if cfg.is_test_run:
+        prev = os.environ.get("DEPLOYMENT_ENV")
+        os.environ["DEPLOYMENT_ENV"] = "test"
+        try:
+            return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group=ag)
+        finally:
+            if prev is None:
+                os.environ.pop("DEPLOYMENT_ENV", None)
+            else:
+                os.environ["DEPLOYMENT_ENV"] = prev
+    return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group=ag)
 
 
 def _check_emission_policy(

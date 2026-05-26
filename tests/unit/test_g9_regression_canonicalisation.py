@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import inspect
+import os
 from typing import cast
 from unittest.mock import patch
 
@@ -47,8 +48,11 @@ class TestInstrumentsBucketRoutingRegressionG9:
         fake_cfg = InstrumentsServiceConfig(
             is_test_run=True,
         )
-        # gcp_project_id is inherited from UnifiedCloudConfig — populate via
-        # env to keep the config construction cheap.
+
+        def _resolve(cloud, kind, asset_group=None):
+            tier = os.environ.get("DEPLOYMENT_ENV", "prod")
+            return f"instruments-store-{(asset_group or '').lower()}-{tier}-my-project"
+
         with (
             patch.dict(
                 "os.environ",
@@ -56,11 +60,12 @@ class TestInstrumentsBucketRoutingRegressionG9:
                 clear=False,
             ),
             patch.object(orch_mod, "get_config", return_value=fake_cfg),
+            patch.object(orch_mod, "resolve_bucket_name", side_effect=_resolve),
         ):
             fake_cfg.gcp_project_id = "my-project"
             fake_cfg.is_test_run = True
             out = orch_mod._get_instruments_bucket("cefi")
-        assert "-test-" in out, f"IS_TEST_RUN=true must return a -test-{{pid}}-suffixed bucket, got {out!r}"
+        assert "-test-" in out, f"IS_TEST_RUN=true must return a -test-tier bucket, got {out!r}"
 
     def test_non_test_run_returns_prod_bucket_name(self) -> None:
         from instruments_service.engine import orchestrator as orch_mod
@@ -68,6 +73,11 @@ class TestInstrumentsBucketRoutingRegressionG9:
         fake_cfg = InstrumentsServiceConfig(
             is_test_run=False,
         )
+
+        def _resolve(cloud, kind, asset_group=None):
+            tier = os.environ.get("DEPLOYMENT_ENV", "prod")
+            return f"instruments-store-{(asset_group or '').lower()}-{tier}-my-project"
+
         with (
             patch.dict(
                 "os.environ",
@@ -75,11 +85,12 @@ class TestInstrumentsBucketRoutingRegressionG9:
                 clear=False,
             ),
             patch.object(orch_mod, "get_config", return_value=fake_cfg),
+            patch.object(orch_mod, "resolve_bucket_name", side_effect=_resolve),
         ):
             fake_cfg.gcp_project_id = "my-project"
             fake_cfg.is_test_run = False
             out = orch_mod._get_instruments_bucket("cefi")
-        assert not out.endswith("-test"), f"IS_TEST_RUN=false must NOT return a -test bucket, got {out!r}"
+        assert "-test-" not in out, f"IS_TEST_RUN=false must NOT return a -test- bucket, got {out!r}"
 
 
 # ---------------------------------------------------------------------------

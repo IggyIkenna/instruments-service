@@ -493,63 +493,59 @@ def test_write_venue_no_venue_column_uses_all():
 
 
 def test_get_instruments_bucket_test_run_appends_test_suffix():
-    """IS_TEST_RUN=true appends -test to the prod bucket name.
-    Pattern: instruments-store-{category}-{project}-test (not a separate prefix).
-    """
+    """IS_TEST_RUN=true routes to the -test- tiered bucket via resolve_bucket_name."""
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
     with (
+        patch("instruments_service.engine.orchestrator.get_config") as mock_cfg,
         patch(
-            "instruments_service.engine.orchestrator.get_write_bucket_name",
+            "instruments_service.engine.orchestrator.resolve_bucket_name",
             return_value="instruments-store-defi-test-my-project",
         ),
-        patch("instruments_service.engine.orchestrator.get_config") as mock_cfg,
     ):
         mock_cfg.return_value.is_test_run = True
         mock_cfg.return_value.gcp_project_id = "my-project"
         bucket = _get_instruments_bucket("DEFI")
 
-    # Canonical convention: `-test-` INSERTED between category and project_id.
-    # SSOT: codex/02-data/per-category-bucket-layouts.md.
-    assert bucket == "instruments-store-defi-test-my-project"
+    assert "-test-" in bucket
 
 
 def test_get_instruments_bucket_normal_uses_utl():
-    """Without is_test_run, bucket comes from UTL get_write_bucket_name
-    (which delegates to get_bucket_name when IS_TEST_RUN is unset)."""
+    """Without is_test_run, bucket comes from resolve_bucket_name (prd tier)."""
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
     with (
         patch("instruments_service.engine.orchestrator.get_config") as mock_cfg,
         patch(
-            "instruments_service.engine.orchestrator.get_write_bucket_name",
-            return_value="instruments-store-prod",
+            "instruments_service.engine.orchestrator.resolve_bucket_name",
+            return_value="instruments-store-defi-prd-my-project",
         ),
     ):
         mock_cfg.return_value.is_test_run = False
         mock_cfg.return_value.gcp_project_id = "my-project"
-        bucket = _get_instruments_bucket()
+        bucket = _get_instruments_bucket("DEFI")
 
-    assert bucket == "instruments-store-prod"
+    assert "instruments-store" in bucket
+    assert "test" not in bucket
 
 
-def test_get_instruments_bucket_fallback_on_import_error():
-    """If get_bucket_name raises AttributeError, falls back to config-based name."""
+def test_get_instruments_bucket_resolve_called_with_asset_group():
+    """resolve_bucket_name is called with the uppercased asset_group."""
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
     with (
-        patch(
-            "instruments_service.engine.orchestrator.get_write_bucket_name",
-            side_effect=AttributeError("not found"),
-        ),
         patch("instruments_service.engine.orchestrator.get_config") as mock_cfg,
+        patch(
+            "instruments_service.engine.orchestrator.resolve_bucket_name",
+            return_value="instruments-store-defi-prd-fallback-project",
+        ) as mock_resolve,
     ):
         mock_cfg.return_value.is_test_run = False
         mock_cfg.return_value.gcp_project_id = "fallback-project"
-        mock_cfg.return_value.instruments_bucket_prefix = "instruments-store"
-        bucket = _get_instruments_bucket()
+        bucket = _get_instruments_bucket("defi")
 
-    assert "fallback-project" in bucket
+    mock_resolve.assert_called_once()
+    assert "instruments-store" in bucket
 
 
 # ---------------------------------------------------------------------------
@@ -846,18 +842,19 @@ def test_date_filter_on_exact_boundaries():
 
 
 def test_bucket_name_defi_uses_category_prefix():
-    """DEFI instruments write to instruments-store-defi-{project}, not flat bucket."""
+    """DEFI instruments write to instruments-store-defi-prd-{project}, not flat bucket."""
     from unittest.mock import patch
 
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
     with patch(
-        "instruments_service.engine.orchestrator.get_write_bucket_name",
-        return_value="instruments-store-defi-test-project",
-    ) as mock_gb:
+        "instruments_service.engine.orchestrator.resolve_bucket_name",
+        return_value="instruments-store-defi-prd-test-project",
+    ) as mock_resolve:
         bucket = _get_instruments_bucket("DEFI")
 
-    assert mock_gb.call_args.args[:2] == ("instruments", "DEFI")
+    call_kwargs = mock_resolve.call_args.kwargs
+    assert call_kwargs.get("asset_group") == "DEFI"
     assert "defi" in bucket.lower()
     assert "test-project" in bucket
 
@@ -868,39 +865,39 @@ def test_bucket_name_cefi_uses_category_prefix():
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
     with patch(
-        "instruments_service.engine.orchestrator.get_write_bucket_name",
-        return_value="instruments-store-cefi-test-project",
-    ) as mock_gb:
+        "instruments_service.engine.orchestrator.resolve_bucket_name",
+        return_value="instruments-store-cefi-prd-test-project",
+    ) as mock_resolve:
         _get_instruments_bucket("CEFI")
 
-    assert mock_gb.call_args.args[:2] == ("instruments", "CEFI")
+    call_kwargs = mock_resolve.call_args.kwargs
+    assert call_kwargs.get("asset_group") == "CEFI"
 
 
 def test_bucket_name_prediction_uses_category_prefix():
-    """Prediction market bucket must exist as category-specific, not a shared bucket."""
+    """Prediction market bucket must be asset-group-specific, not a shared bucket."""
     from unittest.mock import patch
 
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
     with patch(
-        "instruments_service.engine.orchestrator.get_write_bucket_name",
-        return_value="instruments-store-prediction-test-project",
-    ) as mock_gb:
+        "instruments_service.engine.orchestrator.resolve_bucket_name",
+        return_value="instruments-store-prediction-prd-test-project",
+    ) as mock_resolve:
         bucket = _get_instruments_bucket("PREDICTION")
 
-    assert mock_gb.call_args.args[:2] == ("instruments", "PREDICTION")
+    call_kwargs = mock_resolve.call_args.kwargs
+    assert call_kwargs.get("asset_group") == "PREDICTION"
     assert "prediction" in bucket.lower()
 
 
 def test_bucket_test_run_appends_test_suffix():
-    """IS_TEST_RUN=true appends -test to the prod bucket name.
-    instruments-store-defi-test-project → instruments-store-defi-test-project-test
-    """
+    """IS_TEST_RUN=true routes to the -test- tier bucket via resolve_bucket_name."""
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
     with (
         patch(
-            "instruments_service.engine.orchestrator.get_write_bucket_name",
+            "instruments_service.engine.orchestrator.resolve_bucket_name",
             return_value="instruments-store-defi-test-test-project",
         ),
         patch("instruments_service.engine.orchestrator.get_config") as mock_cfg,
@@ -909,27 +906,23 @@ def test_bucket_test_run_appends_test_suffix():
         mock_cfg.return_value.gcp_project_id = "test-project"
         bucket = _get_instruments_bucket("DEFI")
 
-    # Canonical convention: `-test-` INSERTED between category and project_id.
-    assert bucket == "instruments-store-defi-test-test-project"
+    assert "-test-" in bucket
 
 
 def test_bucket_no_category_uses_flat_bucket():
-    """Without a category, falls back to flat instruments-store-{project}.
-
-    After the 2026-04-20 test-bucket-naming fix, bucket resolution delegates
-    to UTL ``get_write_bucket_name`` which honours ``IS_TEST_RUN`` internally.
-    """
+    """Without a category, resolve_bucket_name is called with asset_group=None."""
     from unittest.mock import patch
 
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
     with patch(
-        "instruments_service.engine.orchestrator.get_write_bucket_name",
-        return_value="instruments-store-test-project",
-    ) as mock_gb:
+        "instruments_service.engine.orchestrator.resolve_bucket_name",
+        return_value="instruments-store-prd-test-project",
+    ) as mock_resolve:
         bucket = _get_instruments_bucket(None)
 
-    mock_gb.assert_called_once_with("instruments", None, mock_gb.call_args.args[2])
+    call_kwargs = mock_resolve.call_args.kwargs
+    assert call_kwargs.get("asset_group") is None
     assert "instruments-store" in bucket
 
 

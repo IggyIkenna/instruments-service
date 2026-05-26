@@ -281,14 +281,20 @@ class TestBuildDefiVenues:
 class TestGetInstrumentsBucket:
     def test_bucket_with_category(self) -> None:
         with patch(
-            "instruments_service.engine.orchestrator.get_write_bucket_name", return_value="instruments-store-defi-test"
+            "instruments_service.engine.orchestrator.resolve_bucket_name",
+            return_value="instruments-store-defi-prd-test-project",
         ):
             bucket = _get_instruments_bucket("DEFI")
         assert "instruments" in bucket.lower()
 
-    def test_bucket_fallback(self) -> None:
-        with patch("instruments_service.engine.orchestrator.get_write_bucket_name", side_effect=AttributeError):
+    def test_bucket_resolve_called_with_asset_group(self) -> None:
+        with patch(
+            "instruments_service.engine.orchestrator.resolve_bucket_name",
+            return_value="instruments-store-cefi-prd-test-project",
+        ) as mock_resolve:
             bucket = _get_instruments_bucket("CEFI")
+        call_kwargs = mock_resolve.call_args.kwargs
+        assert call_kwargs.get("asset_group") == "CEFI"
         assert "instruments" in bucket.lower()
 
     def test_bucket_test_mode(self) -> None:
@@ -303,11 +309,11 @@ class TestGetInstrumentsBucket:
                 cfg.is_test_run = True
                 sc._config = cfg
                 with patch(
-                    "instruments_service.engine.orchestrator.get_write_bucket_name",
-                    return_value="instruments-store-defi-test",
+                    "instruments_service.engine.orchestrator.resolve_bucket_name",
+                    return_value="instruments-store-defi-test-test-project",
                 ):
                     bucket = _get_instruments_bucket("DEFI")
-                assert bucket.endswith("-test")
+                assert "-test-" in bucket
         finally:
             sc._config = old
 
