@@ -3060,6 +3060,29 @@ def _write_venue(
     """
     import time as _time
 
+    # Canonicalize the combined DeFi venue partition BEFORE any write so the parquet
+    # path (venue=...) matches the canonical manifest venue. Previously the parquet was
+    # written under the raw glued caller form (e.g. AAVEV3-ARBITRUM) while the manifest
+    # recorded the canonical form (AAVE_V3-ARBITRUM), so deployment-ui pool-breakdown
+    # (which resolves the canonical manifest venue to a GCS path) could not find the
+    # parquet → "No pool data". ``canonicalize_defi_venue_combined`` inserts the missing
+    # underscore using the authoritative PROTOCOL_CAPABILITIES venue_prefix set, mapping
+    # AAVEV3-ARBITRUM → AAVE_V3-ARBITRUM, UNISWAPV3-ETHEREUM → UNISWAP_V3-ETHEREUM, etc.
+    # It is a no-op for already-canonical venues, venues whose canonical prefix is itself
+    # glued (VELODROMEV2/TRADER_JOEV2), unknown protocols, and non-DeFi venues (no known
+    # chain suffix). Sports-reference venues (API_FOOTBALL etc.) are guarded explicitly so
+    # their data_type-bearing names are never touched. SSOT:
+    # plans/active/issues/defi_coverage_capability_alignment_2026_05_22.md Bug 5.1.
+    _sports_ref_prefixes = ("API_FOOTBALL", "TRANSFERMARKT", "FOOTYSTATS", "SFI", "UNDERSTAT", "WEATHER")
+    if not venue_str.startswith(_sports_ref_prefixes):
+        from unified_api_contracts.registry.capability_declarations._defi import (
+            canonicalize_defi_venue_combined,
+        )
+
+        _canonical_venue = canonicalize_defi_venue_combined(venue_str)
+        if _canonical_venue != venue_str:
+            venue_str = _canonical_venue
+
     max_attempts = 3
     # Stamp available_at before any write so the parquet carries the column.
     _stamped_df = stamp_available_at_explicit(df, when=datetime.now(UTC))
