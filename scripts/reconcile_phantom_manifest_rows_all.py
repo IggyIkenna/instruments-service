@@ -53,19 +53,15 @@ import logging
 import os
 import re
 import sys
-import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 
 import pandas as pd
-from google.cloud import storage
-from requests.adapters import HTTPAdapter
+from unified_trading_library import StorageClient, get_storage_client, resolve_bucket_name
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
-
-PROJECT_ID = "central-element-323112"
 
 # Asset-group → (canonical bucket, manifest blob, day-list prefix templates).
 #
@@ -78,9 +74,19 @@ PROJECT_ID = "central-element-323112"
 # The 2026-05-01 incident (181k false phantoms on CeFi) was caused by
 # probing only the new key.  We now list under each candidate prefix and
 # treat the row as real if ANY prefix has at least one parquet.
+# Maps asset_group → (bucket-kind, asset_group arg for resolve_bucket_name).
+# The kind must match keys in deployment-service/configs/cloud-providers.yaml.
+# Sports uses 'instruments-store'; prediction uses a flat kind (no per-AG key).
+_BUCKET_KIND_MAP: dict[str, tuple[str, str | None]] = {
+    "cefi": ("market-data", "cefi"),
+    "defi": ("market-data", "defi"),
+    "tradfi": ("market-data", "tradfi"),
+    "sports": ("instruments-store", "sports"),
+    "prediction": ("market-data-tick-prediction", None),
+}
+
 ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
     "cefi": {
-        "bucket": f"market-data-tick-cefi-{PROJECT_ID}",
         "index": "_index/availability_index.parquet",
         # 4 path shapes coexist on disk; ALL must be probed:
         #   (a) raw_tick_data/by_date prefix + asset_group= hive (canonical)
@@ -108,7 +114,6 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
         ],
     },
     "defi": {
-        "bucket": f"market-data-tick-defi-{PROJECT_ID}",
         "index": "_index/availability_index.parquet",
         # DeFi layout has venue + chain (no instrument_type segment in older
         # paths). Probe new + legacy hive keys + no-asset-group + top-level
@@ -156,14 +161,12 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
         ],
     },
     "sports": {
-        "bucket": f"instruments-store-sports-{PROJECT_ID}",
         "index": "_index/availability_index.parquet",
         # Sports has its own SSOT (per-league + bare paths) — handled
         # separately via the unified UAC dispatcher below.
         "prefix_tpls": [""],
     },
     "tradfi": {
-        "bucket": f"market-data-tick-tradfi-{PROJECT_ID}",
         "index": "_index/availability_index.parquet",
         # Axis-10 (2026-05-19): Phase-3 migration prepended pipeline_mode=
         # before asset_group=; TradFi data source is Databento exclusively.
@@ -183,7 +186,6 @@ ASSET_GROUP_CONFIG: dict[str, dict[str, list[str] | str]] = {
         ],
     },
     "prediction": {
-        "bucket": f"market-data-tick-prediction-{PROJECT_ID}",
         "index": "_index/availability_index.parquet",
         # Polymarket parquets live under a 9-segment hive layout that puts
         # ``data_source=POLYMARKET_CLOB`` BETWEEN ``category=prediction``
@@ -353,7 +355,8 @@ def _venue_level_prefixes(asset_group: str, row: pd.Series) -> list[str]:
 
 
 def _audit_sports(
-    bucket: storage.Bucket,
+    client: StorageClient,
+    bucket_name: str,
     df: pd.DataFrame,
     captured_idx: pd.Index,
     workers: int,
@@ -382,7 +385,7 @@ def _audit_sports(
 
     def _list_day(day: str) -> tuple[str, set[str]]:
         prefix = f"sports_reference/by_date/day={day}/"
-        return day, {b.name for b in bucket.list_blobs(prefix=prefix) if b.name.endswith(".parquet")}
+        return day, {m.name for m in client.list_blobs(bucket_name, prefix=prefix) if m.name.endswith(".parquet")}
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         for fut in as_completed([ex.submit(_list_day, d) for d in days]):
@@ -397,7 +400,7 @@ def _audit_sports(
     def _singleton_real(path: str) -> bool:
         if path not in singleton_exists:
             try:
-                singleton_exists[path] = bucket.blob(path).exists()
+                singleton_exists[path] = client.blob_exists(bucket_name, path)
             except Exception:  # broad-except-ok: per-row failure isolation
                 singleton_exists[path] = False
         return singleton_exists[path]
@@ -453,7 +456,8 @@ def _audit_sports(
 
 def _audit_generic(
     asset_group: str,
-    bucket: storage.Bucket,
+    client: StorageClient,
+    bucket_name: str,
     df: pd.DataFrame,
     captured_idx: pd.Index,
     workers: int,
@@ -485,7 +489,7 @@ def _audit_generic(
 
     def _list(prefix: str) -> tuple[str, set[str]]:
         try:
-            keys = {b.name for b in bucket.list_blobs(prefix=prefix) if b.name.endswith(".parquet")}
+            keys = {m.name for m in client.list_blobs(bucket_name, prefix=prefix) if m.name.endswith(".parquet")}
             return prefix, keys
         except Exception as exc:
             logger.warning("list error for %s: %s", prefix, exc)
@@ -681,25 +685,25 @@ def _build_triage_records(
 
 
 def _write_triage_jsonl_gcs(
-    client: storage.Client,
+    storage_client: StorageClient,
     gcs_uri: str,
     records: list[dict],
 ) -> None:
-    """Write triage records as JSONL to GCS."""
-    if not gcs_uri.startswith("gs://"):
-        raise ValueError(f"--triage-output-gcs must start with gs://, got: {gcs_uri!r}")
-    path = gcs_uri[5:]
+    """Write triage records as JSONL to cloud storage (GCS or S3)."""
+    for prefix in ("gs://", "s3://"):
+        if gcs_uri.startswith(prefix):
+            path = gcs_uri[len(prefix) :]
+            break
+    else:
+        raise ValueError(f"--triage-output-gcs must start with gs:// or s3://, got: {gcs_uri!r}")
     slash_idx = path.index("/")
-    bucket_name = path[:slash_idx]
+    triage_bucket = path[:slash_idx]
     blob_path = path[slash_idx + 1 :]
     lines = "\n".join(json.dumps(r, default=str) for r in records) + "\n"
-    triage_bucket = client.bucket(bucket_name)
-    triage_blob = triage_bucket.blob(blob_path)
-    triage_blob.upload_from_string(lines, content_type="application/x-ndjson")
+    storage_client.upload_from_file_obj(triage_bucket, blob_path, io.BytesIO(lines.encode()))
     logger.info(
-        "Triage JSONL written: gs://%s/%s (%d records)",
-        bucket_name,
-        blob_path,
+        "Triage JSONL written: %s (%d records)",
+        gcs_uri,
         len(records),
     )
 
@@ -781,50 +785,51 @@ def main() -> int:
             "Used as manifest_capture_time fallback in triage records."
         ),
     )
+    p.add_argument(
+        "--cloud",
+        choices=["gcp", "aws"],
+        default="gcp",
+        help="Cloud provider for storage backend (default: gcp).",
+    )
     args = p.parse_args()
 
+    os.environ.setdefault("CLOUD_PROVIDER", args.cloud)
     cfg = dict(ASSET_GROUP_CONFIG[args.asset_group])
-    # Per-data-type bucket overrides: rewire cfg in-place so all downstream
-    # logic (manifest read + prefix-path probing + write-back) hits the
-    # override bucket. The prefix templates remain the asset_group-level set —
-    # the per-data-type buckets in DeFi all share the same path layout as
-    # the central bucket (raw_tick_data/by_date/day=*/asset_group=defi/...).
+    # Resolve bucket via UTL SSOT; --manifest-bucket overrides for per-data-type buckets
+    # (e.g. DeFi lending-indices, lst-rates, oracle-prices).
     if args.manifest_bucket:
-        cfg["bucket"] = args.manifest_bucket
+        bucket_name = args.manifest_bucket
         logger.info("Manifest bucket override: %s", args.manifest_bucket)
+    else:
+        kind, ag_arg = _BUCKET_KIND_MAP[args.asset_group]
+        bucket_name = resolve_bucket_name(cloud=args.cloud, kind=kind, asset_group=ag_arg)
     if args.manifest_index:
         cfg["index"] = args.manifest_index
         logger.info("Manifest blob override: %s", args.manifest_index)
-    # Bump GCS HTTP connection pool to match worker count; the default of 10
-    # silently truncates list_blobs() results under high concurrency. The
-    # 2026-05-04 CeFi audit produced 12k false-positive phantoms from this —
-    # connections were "discarded" mid-listing and partial results bubbled
-    # back as missing-key. Pattern from migrate_polymarket_canonical.py.
-    pool_size = max(args.workers * 2, 64)
-    client = storage.Client(project=PROJECT_ID)
-    try:
-        adapter = HTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size, max_retries=3)
-        client._http.mount("https://", adapter)
-        client._http.mount("http://", adapter)
-        logger.info("GCS HTTP pool tuned: pool_size=%d (workers=%d)", pool_size, args.workers)
-    except (AttributeError, TypeError):
-        logger.warning("Could not tune GCS HTTP pool — falling back to default 10")
-    bucket = client.bucket(cfg["bucket"])
-    blob = bucket.blob(cfg["index"])
 
-    logger.info("Loading manifest from gs://%s/%s", cfg["bucket"], cfg["index"])
-    # Per-invocation temp file so concurrent runs (one per asset_group) don't
-    # clobber each other's downloads. Bandit B108: use tempfile, not /tmp.
-    with tempfile.NamedTemporaryFile(prefix=f"recon-{args.asset_group}-", suffix=".parquet", delete=False) as _tf:
-        manifest_path = _tf.name
-    try:
-        blob.download_to_filename(manifest_path)
-        df = pd.read_parquet(manifest_path)
-    finally:
-        import contextlib
+    storage_client = get_storage_client(provider=args.cloud)
+    # GCS HTTP pool tuning (GCP only — boto3 manages its own pool automatically).
+    # Bump connection pool to match worker count; the default of 10 silently
+    # truncates list_blobs() under high concurrency (2026-05-04 CeFi: 12k
+    # false-positive phantoms). Pattern from migrate_polymarket_canonical.py.
+    if args.cloud == "gcp":
+        from requests.adapters import HTTPAdapter
 
-        with contextlib.suppress(OSError):
-            os.unlink(manifest_path)
+        pool_size = max(args.workers * 2, 64)
+        try:
+            _gcs_native = getattr(storage_client, "_client", None)
+            _http = getattr(_gcs_native, "_http", None) if _gcs_native is not None else None
+            if _http is not None:
+                _adapter = HTTPAdapter(pool_connections=pool_size, pool_maxsize=pool_size, max_retries=3)
+                _http.mount("https://", _adapter)
+                _http.mount("http://", _adapter)
+                logger.info("GCS HTTP pool tuned: pool_size=%d (workers=%d)", pool_size, args.workers)
+        except (AttributeError, TypeError):
+            logger.warning("Could not tune GCS HTTP pool — falling back to default 10")
+
+    logger.info("Loading manifest from %s://%s/%s", args.cloud, bucket_name, cfg["index"])
+    raw_bytes = storage_client.download_bytes(bucket_name, cfg["index"])
+    df = pd.read_parquet(io.BytesIO(raw_bytes))
     logger.info("Manifest rows: %d", len(df))
 
     captured_mask = df["capture_status"].fillna("") == "captured"
@@ -870,9 +875,11 @@ def main() -> int:
     real_or_phantom: dict[int, bool] = {}
     if len(captured_idx) > 0:
         if args.asset_group == "sports":
-            real_or_phantom = _audit_sports(bucket, df, captured_idx, args.workers)
+            real_or_phantom = _audit_sports(storage_client, bucket_name, df, captured_idx, args.workers)
         else:
-            real_or_phantom = _audit_generic(args.asset_group, bucket, df, captured_idx, args.workers)
+            real_or_phantom = _audit_generic(
+                args.asset_group, storage_client, bucket_name, df, captured_idx, args.workers
+            )
 
     phantom_idx = [i for i, real in real_or_phantom.items() if not real]
     real_count = sum(1 for r in real_or_phantom.values() if r)
@@ -902,9 +909,11 @@ def main() -> int:
         logger.info("Unphantom: re-validating %d previously phantom-flagged rows", len(phantom_flagged_idx))
         if len(phantom_flagged_idx) > 0:
             if args.asset_group == "sports":
-                rev = _audit_sports(bucket, df, phantom_flagged_idx, args.workers)
+                rev = _audit_sports(storage_client, bucket_name, df, phantom_flagged_idx, args.workers)
             else:
-                rev = _audit_generic(args.asset_group, bucket, df, phantom_flagged_idx, args.workers)
+                rev = _audit_generic(
+                    args.asset_group, storage_client, bucket_name, df, phantom_flagged_idx, args.workers
+                )
             unphantom_idx = [i for i, real in rev.items() if real]
             logger.info(
                 "  Still phantom: %d  (parquet missing — leave as attempted_failed)",
@@ -938,7 +947,7 @@ def main() -> int:
                 triage_gcs = f"gs://central-element-323112-phantom-triage/triage_{args.asset_group}_{ts}.jsonl"
             snapshot_time = args.manifest_snapshot_time or datetime.now(UTC).isoformat()
             triage_records = _build_triage_records(args.asset_group, df.loc[phantom_idx], snapshot_time)
-            _write_triage_jsonl_gcs(client, triage_gcs, triage_records)
+            _write_triage_jsonl_gcs(storage_client, triage_gcs, triage_records)
         logger.info("DRY RUN — manifest not modified.")
         return 0
 
@@ -967,7 +976,7 @@ def main() -> int:
         len(phantom_idx),
         len(unphantom_idx),
     )
-    blob.upload_from_file(out, content_type="application/octet-stream")
+    storage_client.upload_from_file_obj(bucket_name, cfg["index"], out)
     logger.info("Done.")
     return 0
 
