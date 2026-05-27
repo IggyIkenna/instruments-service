@@ -45,7 +45,7 @@ name: workspace-qg
 
 on:
   push:
-    branches: [main, staging, live-defi-rollout]
+    branches: [main, staging]
   pull_request:
     branches: [main, staging]
   workflow_dispatch:
@@ -63,7 +63,7 @@ permissions:
 jobs:
   quality-gates:
     name: Quality Gates (instruments-service)
-    uses: IggyIkenna/unified-trading-pm/.github/workflows/python-quality-gates.yml@1f5f94b66db2c22a6e7518804e982d023a48e794
+    uses: IggyIkenna/unified-trading-pm/.github/workflows/python-quality-gates.yml@live-defi-rollout
     with:
       dep_repos: "unified-api-contracts unified-trading-library"
     secrets: inherit
@@ -72,6 +72,27 @@ jobs:
     # and the conventional `<repo>_<underscored>` source-dir layout per workspace SSOT.
     # See `.github/workflows/python-quality-gates.yml` in unified-trading-pm.
 
-  # dispatch-cloud-build removed 2026-05-26: was causing startup_failure on workflow_dispatch
-  # (needs: quality-gates referencing private reusable workflow + secrets.GH_PAT in env combo
-  # triggers GitHub startup validation failure). Cloud-build dispatch is handled separately.
+  # Dispatch qg-passed to PM cloud-build-router on staging merge so Cloud Build runs the image build.
+  # cloud-build-router.yml in PM listens for this event and triggers the GCP Cloud Build pipeline.
+  dispatch-cloud-build:
+    name: Dispatch cloud-build trigger (staging only)
+    needs: quality-gates
+    if: github.event_name == 'push' && github.ref == 'refs/heads/staging'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch qg-passed → cloud-build-router
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_ORG: ${{ github.repository_owner }}
+          REPO: ${{ github.event.repository.name }}
+          BRANCH: ${{ github.ref_name }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Trigger cloud-build-router.yml in unified-trading-pm via repository_dispatch qg-passed
+          curl -s -X POST \
+            -H "Authorization: token ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${GH_ORG}/unified-trading-pm/dispatches" \
+            -d "{\"event_type\": \"qg-passed\", \"client_payload\": {\"repo\": \"${REPO}\", \"branch\": \"${BRANCH}\", \"commit_sha\": \"${COMMIT_SHA}\", \"repo_type\": \"service\"}}"
+          echo "Dispatched qg-passed for ${REPO}@${COMMIT_SHA} on ${BRANCH}"

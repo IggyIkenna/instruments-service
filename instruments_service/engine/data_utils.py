@@ -10,24 +10,11 @@ import logging
 from typing import TYPE_CHECKING
 
 import pandas as pd
-from unified_api_contracts import PipelineMode
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
 logger = logging.getLogger(__name__)
-
-
-def pipeline_mode_for_sports_data_type(data_type: str) -> PipelineMode:
-    """Return pipeline mode for a given sports data type."""
-    # Sports fixtures are batch-only by design (7-day announcement window)
-    if data_type.upper() == "FIXTURES":
-        return PipelineMode.BATCH
-    # Live stats (scores, match events) are live-only by design
-    if data_type.upper() in ("LIVE_STATS", "MATCH_EVENTS"):
-        return PipelineMode.LIVE
-    # Everything else defaults to batch
-    return PipelineMode.BATCH
 
 
 def canonical_league_id(lid_raw: object) -> str:

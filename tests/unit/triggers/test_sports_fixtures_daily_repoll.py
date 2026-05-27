@@ -415,3 +415,194 @@ def test_trigger_name_constant() -> None:
     )
 
     assert SPORTS_FIXTURES_DAILY_REPOLL_TRIGGER == "sports.fixtures.daily_repoll"
+
+
+@pytest.mark.unit
+def test_resolve_today_none_returns_utc_date() -> None:
+    """_resolve_today(None) returns today from UTC clock."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import (
+        _resolve_today,
+    )
+
+    result = _resolve_today(None)
+    assert result is not None
+    assert result.year >= 2026
+
+
+@pytest.mark.unit
+def test_resolve_today_string() -> None:
+    """_resolve_today accepts ISO date strings."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import (
+        _resolve_today,
+    )
+
+    result = _resolve_today("2026-05-15")
+    assert result.year == 2026
+    assert result.month == 5
+    assert result.day == 15
+
+
+@pytest.mark.unit
+def test_date_window_correct() -> None:
+    """_date_window returns inclusive [today, today+N] list."""
+    from datetime import date
+
+    from instruments_service.triggers.sports_fixtures_daily_repoll import (
+        _date_window,
+    )
+
+    window = _date_window(date(2026, 5, 9), 2)
+    assert len(window) == 3
+    assert window[0] == date(2026, 5, 9)
+    assert window[-1] == date(2026, 5, 11)
+
+
+@pytest.mark.unit
+def test_get_instruments_bucket_for_asset_group() -> None:
+    """get_instruments_bucket_for_asset_group normalizes the asset group name."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import (
+        get_instruments_bucket_for_asset_group,
+    )
+
+    with patch(
+        "instruments_service.triggers.sports_fixtures_daily_repoll.resolve_bucket_name",
+        return_value="test-bucket",
+    ) as mock_resolve:
+        result = get_instruments_bucket_for_asset_group("SPORTS")
+    mock_resolve.assert_called_once_with(cloud="gcp", kind="instruments-store", asset_group="sports")
+    assert result == "test-bucket"
+
+
+@pytest.mark.unit
+def test_league_ids_for_repoll_with_numeric_filter() -> None:
+    """Numeric string league IDs are passed through directly."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import (
+        _league_ids_for_repoll,
+    )
+
+    result = _league_ids_for_repoll(["39", "140"])
+    assert 39 in result
+    assert 140 in result
+
+
+@pytest.mark.unit
+def test_league_ids_for_repoll_with_integer_filter() -> None:
+    """Integer league IDs are passed through directly."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import (
+        _league_ids_for_repoll,
+    )
+
+    result = _league_ids_for_repoll([39, 140])
+    assert 39 in result
+    assert 140 in result
+
+
+@pytest.mark.unit
+def test_league_ids_for_repoll_with_canonical_name_not_found() -> None:
+    """Canonical league name not found → skipped."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import (
+        _league_ids_for_repoll,
+    )
+
+    with patch("unified_api_contracts.sports.get_league", return_value=None):
+        result = _league_ids_for_repoll(["NONEXISTENT"])
+    assert result == []
+
+
+@pytest.mark.unit
+def test_league_ids_for_repoll_with_canonical_name_found() -> None:
+    """Canonical league name resolves to AF ID when found."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import (
+        _league_ids_for_repoll,
+    )
+
+    mock_league = MagicMock()
+    mock_league.api_football_id = 39
+    with patch("unified_api_contracts.sports.get_league", return_value=mock_league):
+        result = _league_ids_for_repoll(["EPL"])
+    assert 39 in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_sports_fixtures_daily_repoll_no_bucket_raises() -> None:
+    """Empty bucket after resolution raises ValueError."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import (
+        run_sports_fixtures_daily_repoll,
+    )
+
+    with (
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.get_instruments_bucket_for_asset_group",
+            return_value="",
+        ),
+        pytest.raises(ValueError, match="bucket"),
+    ):
+        await run_sports_fixtures_daily_repoll(
+            today="2026-05-09",
+            api_key="test-key",
+            bucket=None,
+            league_filter=["39"],
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_sports_fixtures_daily_repoll_string_today(
+    mock_adapter: MagicMock,
+    patch_factory: MagicMock,
+) -> None:
+    """today= accepts ISO date strings."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import (
+        run_sports_fixtures_daily_repoll,
+    )
+
+    with (
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.get_data_sink") as _sink,
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.ManifestWriter") as _mw,
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"),
+    ):
+        _sink.return_value = MagicMock()
+        _mw.return_value = MagicMock()
+        result = await run_sports_fixtures_daily_repoll(
+            today="2026-05-09",
+            api_key="test-key",
+            bucket="test-bucket",
+            league_filter=["EPL"],
+            lookahead_days=0,
+        )
+    assert len(result) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_sports_fixtures_daily_repoll_record_captured_exception(
+    mock_adapter: MagicMock,
+    patch_factory: MagicMock,
+) -> None:
+    """record_captured exception is caught and doesn't halt execution."""
+    from instruments_service.triggers.sports_fixtures_daily_repoll import (
+        run_sports_fixtures_daily_repoll,
+    )
+
+    manifest_mock = MagicMock()
+    manifest_mock.record_captured.side_effect = RuntimeError("manifest error")
+
+    with (
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.get_data_sink", return_value=MagicMock()),
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.ManifestWriter",
+            return_value=manifest_mock,
+        ),
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"),
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.classify_and_emit_error"),
+    ):
+        result = await run_sports_fixtures_daily_repoll(
+            today="2026-05-09",
+            api_key="test-key",
+            bucket="test-bucket",
+            league_filter=["EPL"],
+            lookahead_days=0,
+        )
+    # record_captured failed so count is NOT added to result
+    assert result == {}
