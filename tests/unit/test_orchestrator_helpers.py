@@ -12,6 +12,7 @@ from instruments_service.engine.orchestrator import (
     _get_instruments_bucket,
     _write_catalogue_record,
     _write_fixture_mapping,
+    _write_venue,
     filter_defi_instruments_by_relevance,
     filter_instruments_by_date,
     get_venues_for_asset_groups,
@@ -521,3 +522,53 @@ class TestRecoveryFixtureIdsBypassBug:
             "Pattern 'list(recovery_fixture_ids) if recovery_fixture_ids else []' missing — "
             "restores Bug 3 bypass (recovery IDs ignored on zero-fixture dates)."
         )
+
+
+class TestWriteVenueCanonicalPartition:
+    """Bug 5: the parquet ``venue=`` partition must be the canonical DeFi venue
+    (``AAVE_V3-ARBITRUM``), not the glued caller form (``AAVEV3-ARBITRUM``), so it
+    matches the canonical manifest venue and deployment-ui pool-breakdown can
+    resolve the parquet. SSOT:
+    plans/active/issues/defi_coverage_capability_alignment_2026_05_22.md Bug 5.
+    """
+
+    def _run(self, venue_in: str) -> dict[str, object]:
+        import pandas as pd
+
+        captured: dict[str, object] = {}
+
+        def _capture(sink, data, partition, filename, venue, entity):
+            captured["partition"] = partition
+            captured["venue"] = venue
+
+        sampler = MagicMock()
+        sampler.enable_sampling = False
+        df = pd.DataFrame([{"instrument_id": "x", "venue": venue_in}])
+        with (
+            patch("instruments_service.engine.orchestrator._gated_sink_write", side_effect=_capture),
+            patch("instruments_service.engine.orchestrator._write_catalogue_record"),
+            patch(
+                "instruments_service.engine.orchestrator.stamp_available_at_explicit",
+                side_effect=lambda d, when: d,
+            ),
+        ):
+            _write_venue(venue_in, df, "2026-05-03", "bkt", MagicMock(), {}, sampler, manifest=None)
+        return captured
+
+    def test_glued_defi_venue_partition_canonicalized(self) -> None:
+        captured = self._run("AAVEV3-ARBITRUM")
+        assert captured["partition"]["venue"] == "AAVE_V3-ARBITRUM"  # type: ignore[index]
+        assert captured["venue"] == "AAVE_V3-ARBITRUM"
+
+    def test_already_canonical_defi_venue_unchanged(self) -> None:
+        captured = self._run("AAVE_V3-ARBITRUM")
+        assert captured["partition"]["venue"] == "AAVE_V3-ARBITRUM"  # type: ignore[index]
+
+    def test_glued_uniswap_v3_canonicalized(self) -> None:
+        captured = self._run("UNISWAPV3-ETHEREUM")
+        assert captured["partition"]["venue"] == "UNISWAP_V3-ETHEREUM"  # type: ignore[index]
+
+    def test_non_defi_venue_passes_through(self) -> None:
+        # CeFi venue (no DeFi chain) must NOT be rewritten.
+        captured = self._run("BINANCE")
+        assert captured["partition"]["venue"] == "BINANCE"  # type: ignore[index]

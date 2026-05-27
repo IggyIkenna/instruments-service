@@ -75,6 +75,7 @@ from unified_api_contracts.registry.venue_trading_calendar import (
     is_non_trading_day,
     non_trading_day_reason,
 )
+from unified_trading_library import MANIFEST_SCHEMA_VERSION
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1285,6 +1286,8 @@ def _write_absent_rows(
             "capture_status": r.capture_status,
             "error_reason": r.reason if r.capture_status == "empty_confirmed" else "",
             "attempted_at": attempted_at_iso,
+            "written_at": attempted_at_iso,
+            "schema_version": MANIFEST_SCHEMA_VERSION,
             "row_count": 0,
             "service_name": "instruments-service",
             "enumerator_run_id": run_id,
