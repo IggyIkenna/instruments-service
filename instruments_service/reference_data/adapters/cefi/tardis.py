@@ -259,6 +259,26 @@ def _parse_yymmdd_symbol_expiry(raw_id: str) -> datetime | None:
     return None
 
 
+def _parse_underscore_yymmdd_symbol_expiry(raw_id: str) -> datetime | None:
+    """Parse expiry from Kraken-Futures-style symbol: FI_XBTUSD_240329.
+
+    The last segment (underscore-separated) is a 6-digit YYMMDD date string.
+    Perpetuals (e.g. ``PF_XBTUSD_PERP``) return None — non-digit suffix.
+    """
+    parts = raw_id.split("_")
+    for idx in (-1, -2):
+        if abs(idx) > len(parts):
+            continue
+        seg = parts[idx]
+        if len(seg) == 6 and seg.isdigit():
+            try:
+                yy, mm, dd = int(seg[:2]), int(seg[2:4]), int(seg[4:6])
+                return datetime(2000 + yy, mm, dd, tzinfo=UTC)
+            except ValueError:
+                continue
+    return None
+
+
 def _resolve_base_quote(item: TardisInstrumentDetail, raw_id: str, exchange: str) -> tuple[str, str]:
     """Parse base/quote from Tardis metadata or fall back to symbol splitting.
 
@@ -1004,6 +1024,9 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         # OKX symbol format: BTC-USD-260626 → parse YYMMDD from last segment
         if expiry is None and "-" in raw_id:
             expiry = _parse_yymmdd_symbol_expiry(raw_id)
+        # Kraken Futures symbol format: FI_XBTUSD_240329 → parse YYMMDD from last underscore segment
+        if expiry is None and "_" in raw_id:
+            expiry = _parse_underscore_yymmdd_symbol_expiry(raw_id)
 
         strike, opt_type = _resolve_option_fields(item, instrument_type, raw_id)
 
