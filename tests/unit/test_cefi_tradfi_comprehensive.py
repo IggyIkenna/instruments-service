@@ -43,6 +43,7 @@ from instruments_service.reference_data.adapters.cefi.tardis import (
     _parse_deribit_combo_legs,
     _parse_deribit_symbol_expiry,
     _parse_expiry,
+    _parse_underscore_yymmdd_symbol_expiry,
     _parse_yymmdd_symbol_expiry,
     _passes_asset_filter,
     _resolve_base_quote,
@@ -262,6 +263,33 @@ class TestTardisHelperFunctions:
     def test_parse_yymmdd_invalid_date(self) -> None:
         # 13th month should fail
         assert _parse_yymmdd_symbol_expiry("BTC-USD-261332") is None
+
+    # ── _parse_underscore_yymmdd_symbol_expiry ────────────────────────────
+
+    def test_parse_underscore_yymmdd_kraken_future(self) -> None:
+        result = _parse_underscore_yymmdd_symbol_expiry("FI_XBTUSD_240329")
+        assert result is not None
+        assert result.year == 2024
+        assert result.month == 3
+        assert result.day == 29
+
+    def test_parse_underscore_yymmdd_kraken_pf_style(self) -> None:
+        result = _parse_underscore_yymmdd_symbol_expiry("PF_XBTUSD_241227")
+        assert result is not None
+        assert result.year == 2024
+        assert result.month == 12
+        assert result.day == 27
+
+    def test_parse_underscore_yymmdd_kraken_perp_returns_none(self) -> None:
+        # Perpetuals use PERP suffix — not a date
+        assert _parse_underscore_yymmdd_symbol_expiry("PF_XBTUSD_PERP") is None
+
+    def test_parse_underscore_yymmdd_no_underscore(self) -> None:
+        assert _parse_underscore_yymmdd_symbol_expiry("BTCUSDT") is None
+
+    def test_parse_underscore_yymmdd_invalid_date(self) -> None:
+        # 13th month should fail
+        assert _parse_underscore_yymmdd_symbol_expiry("FI_XBTUSD_261332") is None
 
     # ── _resolve_base_quote ───────────────────────────────────────────────
 
