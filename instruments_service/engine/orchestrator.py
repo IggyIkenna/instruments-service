@@ -5763,18 +5763,36 @@ async def _fetch_understat_xg(
             xg_manifest.write()
             logger.info("Understat xG: %d rows written for date=%s", len(df), date)
         else:
-            logger.info("Understat xG: no fixtures for date=%s", date)
-            # Honest-coverage: record an attempt that legitimately produced zero
-            # rows (Understat covers 5 leagues, off-season days are empty).
-            # Emit per-league record_empty ONLY — the date-aggregate row was
-            # deleted in Phase 2 of sports_manifest_shard_migration_cleanup.
-            for _exp_lid in sorted(_expected_understat_leagues):
-                xg_manifest.record_empty(
-                    row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
-                    attempted_at=attempt_ts,
-                    reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
-                    pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
+            # Honest-coverage: distinguish genuine off-season/no-fixture empty
+            # from fetch errors (e.g. HTTP 404 when the season is not yet indexed
+            # in Understat — observed for 2019 backfills). adapter._fetch_error_count
+            # is set by _fetch_league_fixtures on each per-league error.
+            _xg_fetch_errors: int = getattr(adapter, "_fetch_error_count", 0)
+            if _xg_fetch_errors > 0:
+                logger.info(
+                    "Understat xG: no fixtures for date=%s — %d league fetch(es) errored"
+                    " (not honest-absence); recording attempted_failed",
+                    date,
+                    _xg_fetch_errors,
                 )
+                for _exp_lid in sorted(_expected_understat_leagues):
+                    xg_manifest.record_failed(
+                        row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
+                        error="HTTP_NOT_FOUND",
+                        attempted_at=attempt_ts,
+                        pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
+                    )
+            else:
+                logger.info("Understat xG: no fixtures for date=%s", date)
+                # Emit per-league record_empty ONLY — the date-aggregate row was
+                # deleted in Phase 2 of sports_manifest_shard_migration_cleanup.
+                for _exp_lid in sorted(_expected_understat_leagues):
+                    xg_manifest.record_empty(
+                        row_key={"date": date, "data_type": "XG", "league_id": _exp_lid},
+                        attempted_at=attempt_ts,
+                        reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                        pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
+                    )
             xg_manifest.write()
     except Exception as exc:
         classify_and_emit_error(
@@ -5905,13 +5923,25 @@ async def _run_understat_shots_date(
             )
             counts[f"understat_xg_shots_{lid}"] = len(shot_rows)
 
+        # Honest-coverage: use record_failed for leagues with no captured shots when
+        # any fetch error occurred (getLeagueData 404 or getMatch 404). adapter._fetch_error_count
+        # accumulates across get_match_ids_for_date() and get_match_shots() calls.
+        _had_errors = adapter._fetch_error_count > 0
         for _exp_lid in sorted(_expected_leagues - _captured_leagues):
-            shots_manifest.record_empty(
-                row_key={"date": date, "data_type": "XG_SHOTS", "league_id": _exp_lid},
-                attempted_at=attempt_ts,
-                reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
-                pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
-            )
+            if _had_errors:
+                shots_manifest.record_failed(
+                    row_key={"date": date, "data_type": "XG_SHOTS", "league_id": _exp_lid},
+                    error="HTTP_NOT_FOUND",
+                    attempted_at=attempt_ts,
+                    pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
+                )
+            else:
+                shots_manifest.record_empty(
+                    row_key={"date": date, "data_type": "XG_SHOTS", "league_id": _exp_lid},
+                    attempted_at=attempt_ts,
+                    reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                    pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
+                )
         shots_manifest.write()
         logger.info(
             "Understat XG_SHOTS: %d matches, %d total shot rows for date=%s",
