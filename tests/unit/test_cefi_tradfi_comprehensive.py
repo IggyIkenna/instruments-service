@@ -819,6 +819,51 @@ class TestTardisAdapter:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_parse_tardis_instrument_deribit_none_type_returns_none(self) -> None:
+        """Deribit is derivatives-only; instruments with type=None must be skipped, not defaulted to SPOT_PAIR."""
+        from unified_api_contracts import TardisInstrumentDetail
+
+        adapter = TardisReferenceDataAdapter()
+        item = TardisInstrumentDetail(
+            id="BTC",
+            type=None,
+            baseCurrency="BTC",
+        )
+        result = adapter._parse_tardis_instrument(item, "deribit")
+        assert result is None, "type=None on deribit must return None, not a SPOT_PAIR record"
+
+    @pytest.mark.asyncio
+    async def test_parse_tardis_instrument_deribit_spot_type_returns_none(self) -> None:
+        """An explicit type='spot' on deribit must also be rejected (deribit has no spot trading)."""
+        from unified_api_contracts import TardisInstrumentDetail
+
+        adapter = TardisReferenceDataAdapter()
+        item = TardisInstrumentDetail(
+            id="BTC-USD",
+            type="spot",
+            baseCurrency="BTC",
+            quoteCurrency="USD",
+        )
+        result = adapter._parse_tardis_instrument(item, "deribit")
+        assert result is None, "type='spot' on deribit must return None"
+
+    @pytest.mark.asyncio
+    async def test_parse_tardis_instrument_non_derivatives_only_spot_allowed(self) -> None:
+        """Spot instruments on non-derivatives-only venues (binance) are still accepted."""
+        from unified_api_contracts import TardisInstrumentDetail
+
+        adapter = TardisReferenceDataAdapter()
+        item = TardisInstrumentDetail(
+            id="BTCUSDT",
+            type=None,
+            baseCurrency="BTC",
+            quoteCurrency="USDT",
+        )
+        result = adapter._parse_tardis_instrument(item, "binance")
+        assert result is not None, "type=None on binance should default to SPOT_PAIR, not be skipped"
+        assert result.instrument_type == InstrumentType.SPOT_PAIR
+
+    @pytest.mark.asyncio
     async def test_parse_tardis_instrument_with_spec_fields(self) -> None:
         from unified_api_contracts import TardisInstrumentDetail
 
