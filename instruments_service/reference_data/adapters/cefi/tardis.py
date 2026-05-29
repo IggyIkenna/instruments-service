@@ -89,6 +89,12 @@ _TYPE_MAP: dict[str, InstrumentType] = {
     "combo": InstrumentType.COMBO,
 }
 
+# Exchanges that are derivatives-only (no spot trading).
+# Instruments from these venues with unknown/None type must NOT default to
+# SPOT_PAIR — that causes HTTP 400s when MTDS requests spot symbols from a
+# venue that carries only futures/options/perps. Skip unknowns instead.
+_DERIVATIVES_ONLY_EXCHANGES: frozenset[str] = frozenset({"deribit"})
+
 # Quote currencies for symbol splitting (longest first for correct prefix matching)
 # Extended from instruments-service/engine/processors/symbol_parser.py _ALL_QUOTE_SUFFIXES
 _QUOTE_CURRENCIES: list[str] = [
@@ -990,8 +996,18 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         raw_id = item.id
         if not raw_id:
             return None
-        tardis_type = item.type or "spot"
+        tardis_type = item.type
+        if tardis_type is None:
+            if exchange in _DERIVATIVES_ONLY_EXCHANGES:
+                # deribit has no spot instruments; skip instruments with unknown
+                # type rather than defaulting to SPOT_PAIR (which causes HTTP 400
+                # from MTDS when it requests spot symbols from a derivatives-only venue).
+                return None
+            tardis_type = "spot"
         instrument_type: InstrumentType = _TYPE_MAP.get(tardis_type, InstrumentType.SPOT_PAIR)
+        if instrument_type == InstrumentType.SPOT_PAIR and exchange in _DERIVATIVES_ONLY_EXCHANGES:
+            # Guard: recognised-as-spot on a derivatives-only venue is also invalid.
+            return None
 
         # Resolve canonical venue name from UAC VenueMapping (e.g. "binance" → "BINANCE-SPOT")
         canonical_venue = _VENUE_MAPPING.tardis_to_venue.get(exchange, exchange.upper())
