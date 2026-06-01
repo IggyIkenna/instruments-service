@@ -544,7 +544,7 @@ If you see "Failed to retrieve API key from Secret Manager":
 
 If adapters fail to import:
 
-1. Install dependencies: `pip install databento`
+1. Install dependencies: `uv pip install databento`
 2. Check Python path includes `instruments_service`
 3. Verify `unified-trading-services` is installed
 

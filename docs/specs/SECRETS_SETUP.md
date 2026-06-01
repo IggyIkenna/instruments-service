@@ -105,11 +105,11 @@ These secrets have defaults built into the workflow:
 - `GCP_PROJECT_ID` (default: `{project_id}` - replace with actual project ID)
 - `GCS_REGION` (default: `asia-northeast1-c`)
 - `GCS_LOCATION` (default: `asia-northeast1`)
-- `INSTRUMENTS_GCS_BUCKET` (default: `instruments-store-{project_id}`)
-- `INSTRUMENTS_GCS_BUCKET_TEST` (default: `instruments-store-test-{project_id}`)
-- `INSTRUMENTS_GCS_BUCKET_CEFI` (default: `instruments-store-cefi-{project_id}`)
-- `INSTRUMENTS_GCS_BUCKET_TRADFI` (default: `instruments-store-tradfi-{project_id}`)
-- `INSTRUMENTS_GCS_BUCKET_DEFI` (default: `instruments-store-defi-{project_id}`)
+- `INSTRUMENTS_GCS_BUCKET` (default: `instruments-store-{env}-{project_id}`)
+- `INSTRUMENTS_GCS_BUCKET_TEST` (default: `instruments-store-test-{env}-{project_id}`)
+- `INSTRUMENTS_GCS_BUCKET_CEFI` (default: `instruments-store-cefi-{env}-{project_id}`)
+- `INSTRUMENTS_GCS_BUCKET_TRADFI` (default: `instruments-store-tradfi-{env}-{project_id}`)
+- `INSTRUMENTS_GCS_BUCKET_DEFI` (default: `instruments-store-defi-{env}-{project_id}`)
 - `INSTRUMENTS_BIGQUERY_DATASET` (default: `instruments`)
 - `BIGQUERY_LOCATION` (default: `asia-northeast1`)
 
@@ -330,10 +330,10 @@ git push origin v1.0.0
 
 ```bash
 # Install directly from GitHub repo
-pip install git+https://x-access-token:$GH_PAT@github.com/IggyIkenna/instruments-service.git
+uv pip install git+https://x-access-token:$GH_PAT@github.com/IggyIkenna/instruments-service.git
 
 # Or with SSH
-pip install git+ssh://git@github.com/IggyIkenna/instruments-service.git
+uv pip install git+ssh://git@github.com/IggyIkenna/instruments-service.git
 ```
 
 **Note:** GitHub Packages doesn't support Python/PyPI packages directly. Use the git install method above.

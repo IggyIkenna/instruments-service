@@ -141,7 +141,7 @@ time_bucket, timestamp_utc, kickoff_utc, bm_time, m_time, source, date
 ## GCS Bucket Layout
 
 ```
-gs://instruments-store-sports-{project}/
+gs://instruments-store-sports-{env}-{project}/
   sports_reference/
     by_date/day={YYYY-MM-DD}/entity={type}/{type}.parquet    (instruments-service live output)
     fixtures/day={YYYY-MM-DD}/fixtures.parquet                (backfill)
