@@ -2395,13 +2395,17 @@ class TestLidoAdapter:
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_get_instrument_not_found_raises_attribute_error(self) -> None:
-        """Lido get_instrument references inst.symbol which does not exist on InstrumentRecord."""
+    async def test_get_instrument_not_found_returns_none(self) -> None:
+        """A non-matching symbol walks every record and returns None without raising.
+
+        Regression guard for the ``inst.symbol == symbol`` bug: ``InstrumentRecord``
+        has no ``symbol`` attribute, so the pre-fix lookup raised ``AttributeError``
+        on any miss. Canonical form matches ``instrument_key.endswith(f":{symbol}")``.
+        """
         from instruments_service.reference_data.adapters.defi.lido import LidoReferenceDataAdapter
 
         adapter = LidoReferenceDataAdapter()
-        with pytest.raises(AttributeError):
-            await adapter.get_instrument("nonexistent")
+        assert await adapter.get_instrument("nonexistent") is None
 
 
 # ── EtherFiReferenceDataAdapter ───────────────────────────────────────────────
@@ -2450,13 +2454,17 @@ class TestEtherFiAdapter:
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_get_instrument_not_found_raises_attribute_error(self) -> None:
-        """EtherFi get_instrument references inst.symbol which does not exist on InstrumentRecord."""
+    async def test_get_instrument_not_found_returns_none(self) -> None:
+        """A non-matching symbol walks every record and returns None without raising.
+
+        Regression guard for the ``inst.symbol == symbol`` bug: ``InstrumentRecord``
+        has no ``symbol`` attribute, so the pre-fix lookup raised ``AttributeError``
+        on any miss. Canonical form matches ``instrument_key.endswith(f":{symbol}")``.
+        """
         from instruments_service.reference_data.adapters.defi.etherfi import EtherFiReferenceDataAdapter
 
         adapter = EtherFiReferenceDataAdapter()
-        with pytest.raises(AttributeError):
-            await adapter.get_instrument("nonexistent")
+        assert await adapter.get_instrument("nonexistent") is None
 
 
 # ── EthFiGovernanceReferenceDataAdapter ───────────────────────────────────────
@@ -2566,13 +2574,17 @@ class TestEthenaAdapter:
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_get_instrument_not_found_raises_attribute_error(self) -> None:
-        """Ethena get_instrument references inst.symbol which does not exist on InstrumentRecord."""
+    async def test_get_instrument_not_found_returns_none(self) -> None:
+        """A non-matching symbol walks every record and returns None without raising.
+
+        Regression guard for the ``inst.symbol == symbol`` bug: ``InstrumentRecord``
+        has no ``symbol`` attribute, so the pre-fix lookup raised ``AttributeError``
+        on any miss. Canonical form matches ``instrument_key.endswith(f":{symbol}")``.
+        """
         from instruments_service.reference_data.adapters.defi.ethena import EthenaReferenceDataAdapter
 
         adapter = EthenaReferenceDataAdapter()
-        with pytest.raises(AttributeError):
-            await adapter.get_instrument("nonexistent")
+        assert await adapter.get_instrument("nonexistent") is None
 
 
 # ── Error classifier functions ────────────────────────────────────────────────
