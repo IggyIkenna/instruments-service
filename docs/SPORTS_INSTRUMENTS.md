@@ -154,7 +154,7 @@ gs://instruments-store-sports-{env}-{project}/
     mappings/team_mapping.parquet                              (session 2)
   instrument_availability/by_date/day={date}/venue={venue}/instruments.parquet
 
-gs://market-data-tick-sports-{project}/
+gs://market-data-tick-sports-{env}-{project}/
   raw_tick_data/by_date/day={YYYY-MM-DD}/venue=ODDS_API/ticks.parquet
 
 gs://features-sports-{project}/
