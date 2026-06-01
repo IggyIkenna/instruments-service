@@ -12,6 +12,7 @@ from instruments_service.reference_data.adapters.tradfi.ibkr import IBKRReferenc
 from instruments_service.reference_data.adapters.tradfi.polygon import PolygonReferenceDataAdapter
 from instruments_service.reference_data.router import (
     ReferenceDataSourceConfig,
+    _resolve_tardis_exchanges,
     create_reference_data_adapter_for_source,
 )
 
@@ -76,6 +77,19 @@ class TestRouter:
         config = ReferenceDataSourceConfig(venue="unknownvenue", data_source="tardis")
         adapter = create_reference_data_adapter_for_source(config)
         assert isinstance(adapter, TardisReferenceDataAdapter)
+
+    def test_resolve_tardis_exchanges_okx_three_distinct(self) -> None:
+        """OKX is 3 distinct Tardis exchanges — each suffixed venue resolves to its OWN
+        exchange (regression for the OKX-FUTURES HTTP-400 symbol bug: the lookup used to
+        fall through to the adapter default 'okex' spot → BTC-USDT instead of native
+        okex-futures dated ids like BTC-USD-260626)."""
+        assert _resolve_tardis_exchanges("okx-spot", None) == ["okex"]
+        assert _resolve_tardis_exchanges("okx-swap", None) == ["okex-swap"]
+        assert _resolve_tardis_exchanges("okx-futures", None) == ["okex-futures"]
+        # OKX-FUTURES must NOT fall through to the spot 'okex' default.
+        assert _resolve_tardis_exchanges("okx-futures", None) != []
+        # Explicit override still wins.
+        assert _resolve_tardis_exchanges("okx-futures", "okex-swap") == ["okex-swap"]
 
     def test_route_ccxt_with_exchange_override(self) -> None:
         config = ReferenceDataSourceConfig(venue="binance", data_source="ccxt", exchange="binanceus")
