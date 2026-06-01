@@ -30,16 +30,16 @@ Complete setup and installation guide for instruments-service.
 git clone <instruments-service-repo-url> instruments-service
 git clone <unified-trading-services-repo-url> unified-trading-services
 
-# 2. Create virtual environment
+# 2. Set up environment (canonical: bash scripts/setup.sh)
 cd instruments-service
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+bash scripts/setup.sh
+# Manual alternative: uv venv + uv pip install
 
 # 3. Install unified-trading-services first (required)
-pip install -e ../unified-trading-services
+uv pip install -e ../unified-trading-services
 
 # 4. Install instruments-service
-pip install -e .
+uv pip install -e .
 ```
 
 ### Credentials Setup
@@ -112,12 +112,16 @@ git clone <instruments-service-repo-url> instruments-service
 git clone <unified-trading-services-repo-url> unified-trading-services
 ```
 
-### Step 2: Create Virtual Environment
+### Step 2: Set Up Environment
+
+**Canonical**: `bash scripts/setup.sh` (idempotent, uses uv).
+
+Manual alternative:
 
 ```bash
 cd instruments-service
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+uv venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 ```
 
 ### Step 3: Install unified-trading-services (Required First)
@@ -126,7 +130,7 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 ```bash
 # Install unified-trading-services with all dependencies
-pip install -e ../unified-trading-services
+uv pip install -e ../unified-trading-services
 ```
 
 **Important**: Do NOT use `--no-deps` flag. The package requires dependencies like `pydantic-settings`, `google-cloud-storage`, etc. to function properly.
@@ -134,13 +138,13 @@ pip install -e ../unified-trading-services
 **Note**: If you already have `unified-trading-services` installed, reinstall it to ensure all dependencies are up to date:
 
 ```bash
-pip install -e ../unified-trading-services --force-reinstall
+uv pip install -e ../unified-trading-services --force-reinstall
 ```
 
 ### Step 4: Install instruments-service
 
 ```bash
-pip install -e .
+uv pip install -e .
 ```
 
 This will automatically install all dependencies from `requirements.txt` and `setup.py`.
@@ -159,8 +163,8 @@ GOOGLE_APPLICATION_CREDENTIALS=../{project_id}-e35fb0ddafe2.json  # Replace {pro
 GCP_PROJECT_ID={project_id}  # Replace with actual project ID
 
 # Instruments Service Configuration
-INSTRUMENTS_GCS_BUCKET=instruments-store-{project_id}
-INSTRUMENTS_GCS_BUCKET_TEST=instruments-store-test-{project_id}
+INSTRUMENTS_GCS_BUCKET=instruments-store-{env}-{project_id}
+INSTRUMENTS_GCS_BUCKET_TEST=instruments-store-test-{env}-{project_id}
 INSTRUMENTS_BIGQUERY_DATASET=instruments
 BIGQUERY_LOCATION=asia-northeast1
 
