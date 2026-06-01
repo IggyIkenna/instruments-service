@@ -376,6 +376,10 @@ async def run_sports_fixtures_daily_repoll(
                     data_type="FIXTURES",
                     league_id=canonical_lid,
                     pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
+                    # FIXTURES is multi-source (api_football + footystats) →
+                    # explicit source required (data_source_provenance Phase 4).
+                    # This repoll path uses the api_football reference adapter.
+                    source="api_football",
                 )
                 counts[f"{day_str}/{canonical_lid}"] = row_count
             except Exception as exc:
