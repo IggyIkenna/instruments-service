@@ -45,6 +45,7 @@ from unified_api_contracts import (
     EPL_TEAM_ALIASES,
     EmptyConfirmedReason,
     PipelineMode,
+    RecordFailedReason,
     VenueMapping,
     classify_venue_error,
     get_prediction_leagues,
@@ -2935,6 +2936,26 @@ async def process_instruments(
             len(written_venues),
             len(expected_venues),
             date,
+        )
+
+    # Honest-coverage: venues still missing after all retries are permanently-failed
+    # shards.  Write attempted_failed rows so the manifest gap is explicit rather
+    # than silently absent.  Shard isolation preserved — no raise, just records.
+    if missing_shards:
+        _failed_attempt_ts = datetime.now(UTC)
+        _failed_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
+        for _failed_venue in sorted(missing_shards):
+            _failed_manifest.record_failed(
+                row_key={"date": date, "venue": _failed_venue},
+                error=RecordFailedReason.UNCLASSIFIED_ADAPTER_ERROR,
+                attempted_at=_failed_attempt_ts,
+                pipeline_mode=PipelineMode.BATCH_INSTRUMENTS_SERVICE,
+            )
+        _failed_manifest.close()
+        logger.info(
+            "Honest-coverage: wrote attempted_failed manifest rows for %d permanently-missing venues: %s",
+            len(missing_shards),
+            sorted(missing_shards),
         )
 
     # Emission policy check — PARTIAL_OK: emits PUBLISHED_DEGRADED when completeness < 1.0
@@ -6237,11 +6258,18 @@ async def _fetch_transfermarkt_data(
                 pipeline_mode=PipelineMode.BATCH_TRANSFERMARKT,
                 service_emission_state=None,
             )
-        for _emp_lid in sorted(_empty_leagues | _unmapped_leagues):
+        for _emp_lid in sorted(_empty_leagues):
             manifest.record_empty(
                 row_key={"date": date, "data_type": "PLAYER_VALUES", "league_id": _emp_lid},
                 attempted_at=attempt_ts,
                 reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                pipeline_mode=PipelineMode.BATCH_TRANSFERMARKT,
+            )
+        for _unm_lid in sorted(_unmapped_leagues):
+            manifest.record_empty(
+                row_key={"date": date, "data_type": "PLAYER_VALUES", "league_id": _unm_lid},
+                attempted_at=attempt_ts,
+                reason=EmptyConfirmedReason.EXPECTED_NO_MAPPING,
                 pipeline_mode=PipelineMode.BATCH_TRANSFERMARKT,
             )
         for _f_lid, _f_err in sorted(_failed_leagues.items()):
@@ -6628,11 +6656,13 @@ async def _fetch_sfi_data(
                     logger.info("SFI progressive stats: %d rows written", len(df))
                 else:
                     # Match IDs present but all per-match fetches produced zero
-                    # rows (legitimate empty — matches not yet complete).
+                    # rows — games exist but stats not yet published (data
+                    # latency).  This is SOURCE_RETURNED_ZERO, not
+                    # EXPECTED_NO_FIXTURE (which would mean no games scheduled).
                     manifest.record_empty(
                         row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
                         attempted_at=attempt_ts,
-                        reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                        reason=EmptyConfirmedReason.SOURCE_RETURNED_ZERO,
                         pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                     )
                     for _exp_lid in sorted(_expected_sfi_league_ids):
@@ -6643,7 +6673,7 @@ async def _fetch_sfi_data(
                                 "league_id": _exp_lid,
                             },
                             attempted_at=attempt_ts,
-                            reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE,
+                            reason=EmptyConfirmedReason.SOURCE_RETURNED_ZERO,
                             pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                         )
             else:
@@ -6828,16 +6858,15 @@ async def _fetch_weather_data(
         lg.league_id for lg in get_expected_leagues_for_source("open_meteo", classifications=["Prediction"])
     }
 
-    def _record_weather_empty(reason: str = "") -> None:
+    def _record_weather_empty(reason: EmptyConfirmedReason) -> None:
         """Helper — emit per-league record_empty for WEATHER shard.
 
         Args:
-            reason: Optional ``EmptyConfirmedReason`` string. Pass
-                ``"EXPECTED_NO_FIXTURE"`` on the no-fixtures branch so the
-                classifier doesn't have to second-guess the no-fixture case
-                (per ``sports_classifier_weather_no_fixture_2026_05_13.md``
-                write-side prevention). Empty default keeps prior behaviour
-                for any future branch where the reason is genuinely unknown.
+            reason: Typed ``EmptyConfirmedReason`` — required so the caller
+                must always articulate WHY the shard is empty.  Passing a
+                blank string previously raised ``LegacyBlankErrorReasonError``
+                at runtime; making the parameter required turns that into a
+                static error at call time.
 
         Historic versions also emitted a date-aggregate row (no ``league_id``)
         alongside the per-league rows; the aggregator ignores it
@@ -6918,7 +6947,7 @@ async def _fetch_weather_data(
         # prevention). Was previously falling through to SOURCE_RETURNED_ZERO
         # at classifier-side; emitting the typed reason here saves the
         # classifier round-trip.
-        _record_weather_empty(reason="EXPECTED_NO_FIXTURE")
+        _record_weather_empty(reason=EmptyConfirmedReason.EXPECTED_NO_FIXTURE)
         manifest.write()
         return counts
 
@@ -7029,9 +7058,9 @@ async def _fetch_weather_data(
             manifest.write()
             return counts
         logger.info("Weather: no fixture venues with coordinates for date=%s — skipping", date)
-        # Honest-coverage: fixtures existed but none mapped to coordinates —
-        # legitimate empty (not a failure).
-        _record_weather_empty()
+        # Honest-coverage: fixtures existed but none had a UAC coordinate
+        # mapping — no mapping exists, not a source failure.
+        _record_weather_empty(reason=EmptyConfirmedReason.EXPECTED_NO_MAPPING)
         manifest.write()
         return counts
 
@@ -7225,7 +7254,7 @@ async def _fetch_weather_data(
         # No rows AND no errors — means venues existed but all were already
         # covered earlier in this run (incremental dedup skipped them) or
         # adapter returned empty dicts.  Treat as empty_confirmed.
-        _record_weather_empty()
+        _record_weather_empty(reason=EmptyConfirmedReason.SOURCE_RETURNED_ZERO)
 
     manifest.write()
 

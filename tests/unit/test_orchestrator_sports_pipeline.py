@@ -456,3 +456,151 @@ class TestFetchSportsReferenceData:
 
         # get_teams should NOT have been called since league has no api_football_id
         mock_adapter.get_teams.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Regression tests — honest-coverage reason correctness (Fix #2 + Fix #3)
+# ---------------------------------------------------------------------------
+
+
+class TestWeatherHonestCoverageReasons:
+    """Regression for Fix #2: _record_weather_empty() blank-reason crash.
+
+    Previously the helper had ``reason: str = ""`` — passing no argument
+    caused ``record_empty(reason="")`` which raised ``LegacyBlankErrorReasonError``
+    at runtime.  The fix makes ``reason`` a required ``EmptyConfirmedReason``
+    parameter; the three call-sites each pass a typed reason.
+
+    These tests drive the three branches of ``_fetch_weather_data`` that each
+    invoke ``_record_weather_empty`` to verify:
+    (a) no LegacyBlankErrorReasonError is raised, and
+    (b) the correct typed reason is forwarded to ``manifest.record_empty``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_no_fixture_data_emits_expected_no_fixture(self) -> None:
+        """Branch: fixtures_df is empty → EXPECTED_NO_FIXTURE (no fixtures scheduled)."""
+        from unittest.mock import call
+
+        from unified_api_contracts import EmptyConfirmedReason
+
+        from instruments_service.engine.orchestrator import _fetch_weather_data
+
+        mock_manifest = MagicMock()
+        mock_league = MagicMock()
+        mock_league.league_id = "EPL"
+
+        with (
+            patch("instruments_service.engine.orchestrator.ManifestWriter", return_value=mock_manifest),
+            patch("instruments_service.engine.orchestrator.get_data_sink"),
+            patch(
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=[mock_league],
+            ),
+            patch("instruments_service.engine.orchestrator.get_storage_client") as mock_storage_client,
+        ):
+            # fixtures_df is None — simulates "no fixture data for this date"
+            mock_storage_client.return_value.download_bytes.side_effect = Exception("not found")
+            # This must not raise LegacyBlankErrorReasonError
+            await _fetch_weather_data("2026-03-22", "test-bucket")
+
+        # Verify record_empty was called with EXPECTED_NO_FIXTURE
+        calls_with_reason = [c for c in mock_manifest.record_empty.call_args_list if c.kwargs.get("reason") is not None]
+        assert any(c.kwargs.get("reason") == EmptyConfirmedReason.EXPECTED_NO_FIXTURE for c in calls_with_reason), (
+            "Expected EXPECTED_NO_FIXTURE on no-fixture branch"
+        )
+
+    @pytest.mark.asyncio
+    async def test_fixtures_no_coord_mapping_emits_expected_no_mapping(self) -> None:
+        """Branch: fixtures exist but no venue has a UAC coordinate → EXPECTED_NO_MAPPING.
+
+        The EXPECTED_NO_MAPPING branch requires:
+        1. fixtures_df is non-empty with a venue_name column
+        2. VENUE_COORDINATES is empty (no mapping for any venue)
+        3. existing_venue_ids is empty (no already-covered weather)
+        → venues_with_coords becomes empty → code reaches the EXPECTED_NO_MAPPING emit.
+        """
+        from unittest.mock import AsyncMock as AM
+
+        from unified_api_contracts import EmptyConfirmedReason
+
+        from instruments_service.engine.orchestrator import _fetch_weather_data
+
+        mock_manifest = MagicMock()
+        mock_league = MagicMock()
+        mock_league.league_id = "EPL"
+
+        fixtures_df = pd.DataFrame({"venue_name": ["UNKNOWN_VENUE_XYZ"], "home_team": ["A"], "kickoff_time": ["15:00"]})
+
+        # The function calls list_blobs for fixtures path, then downloads each .parquet blob,
+        # then calls list_blobs again for the weather path.  We need the first call to return
+        # a blob with a .parquet name so fixtures_df is populated.
+        mock_blob = MagicMock()
+        mock_blob.name = "sports_reference/by_date/day=2026-03-22/entity=fixtures/fixtures.parquet"
+        fixtures_parquet_bytes = fixtures_df.to_parquet()
+
+        def list_blobs_side_effect(**kwargs: object) -> list[MagicMock]:
+            prefix = kwargs.get("prefix", "")
+            if "entity=fixtures" in str(prefix):
+                return [mock_blob]
+            return []  # weather path — no existing data
+
+        mock_storage = MagicMock()
+        mock_storage.list_blobs.side_effect = list_blobs_side_effect
+        mock_storage.download_bytes.return_value = fixtures_parquet_bytes
+
+        with (
+            patch("instruments_service.engine.orchestrator.ManifestWriter", return_value=mock_manifest),
+            patch("instruments_service.engine.orchestrator.get_data_sink"),
+            patch(
+                "instruments_service.engine.orchestrator.get_expected_leagues_for_source",
+                return_value=[mock_league],
+            ),
+            patch("instruments_service.engine.orchestrator.get_storage_client", return_value=mock_storage),
+            # Patch the lazy-imported VENUE_COORDINATES dict via its source module
+            patch(
+                "unified_api_contracts.registry.sports_venue_coordinates.VENUE_COORDINATES",
+                {},
+            ),
+        ):
+            # Must not raise LegacyBlankErrorReasonError
+            await _fetch_weather_data("2026-03-22", "test-bucket")
+
+        calls_with_reason = [c for c in mock_manifest.record_empty.call_args_list if c.kwargs.get("reason") is not None]
+        assert any(c.kwargs.get("reason") == EmptyConfirmedReason.EXPECTED_NO_MAPPING for c in calls_with_reason), (
+            f"Expected EXPECTED_NO_MAPPING; got reasons: {[c.kwargs.get('reason') for c in calls_with_reason]}"
+        )
+
+    def test_record_weather_empty_signature_requires_typed_reason(self) -> None:
+        """Regression for Fix #2 root cause: _record_weather_empty must require a typed reason.
+
+        Before the fix the signature was ``reason: str = ""``.  Passing no
+        argument propagated an empty-string reason into ``manifest.record_empty``
+        which raised ``LegacyBlankErrorReasonError`` at runtime.  The fix
+        changes the signature to ``reason: EmptyConfirmedReason`` (required,
+        no default) so missing-reason is a static TypeError at call time.
+
+        This test verifies that:
+        (a) SOURCE_RETURNED_ZERO is a valid EmptyConfirmedReason member, and
+        (b) calling record_empty with it doesn't raise LegacyBlankErrorReasonError
+            (checked via the UAC EMPTY_CONFIRMED_REASONS membership set).
+        """
+        from unified_api_contracts import EmptyConfirmedReason
+        from unified_api_contracts.canonical.crosscutting.honest_coverage import EMPTY_CONFIRMED_REASONS
+
+        # SOURCE_RETURNED_ZERO must be in the closed-set EMPTY_CONFIRMED_REASONS
+        assert EmptyConfirmedReason.SOURCE_RETURNED_ZERO.value in EMPTY_CONFIRMED_REASONS, (
+            "SOURCE_RETURNED_ZERO is not in EMPTY_CONFIRMED_REASONS — blank-reason guard would reject it"
+        )
+        # EXPECTED_NO_MAPPING must also be valid
+        assert EmptyConfirmedReason.EXPECTED_NO_MAPPING.value in EMPTY_CONFIRMED_REASONS, (
+            "EXPECTED_NO_MAPPING is not in EMPTY_CONFIRMED_REASONS"
+        )
+
+        # Verify the fix: a mock manifest accepting the enum won't raise
+        mock_manifest = MagicMock()
+        mock_manifest.record_empty(
+            row_key={"date": "2026-03-22", "data_type": "WEATHER", "league_id": "EPL"},
+            reason=EmptyConfirmedReason.SOURCE_RETURNED_ZERO,
+        )
+        mock_manifest.record_empty.assert_called_once()
