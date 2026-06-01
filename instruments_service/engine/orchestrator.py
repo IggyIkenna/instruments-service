@@ -2292,6 +2292,10 @@ async def process_instruments(
                         data_type="FIXTURES",
                         league_id=_canonical_league_id(_league_id_str),
                         pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
+                        # FIXTURES is multi-source (api_football + footystats) →
+                        # explicit source required (data_source_provenance Phase 4).
+                        # This branch is the API_FOOTBALL venue (venue_str filter).
+                        source="api_football",
                         service_emission_state=None,
                     )
                     counts[f"FIXTURES/{_league_id_str}"] = len(_league_df_clean)
