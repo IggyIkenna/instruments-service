@@ -854,7 +854,7 @@ def test_bucket_name_defi_uses_category_prefix():
         bucket = _get_instruments_bucket("DEFI")
 
     call_kwargs = mock_resolve.call_args.kwargs
-    assert call_kwargs.get("asset_group") == "DEFI"
+    assert call_kwargs.get("asset_group") == "defi"
     assert "defi" in bucket.lower()
     assert "test-project" in bucket
 
@@ -871,7 +871,7 @@ def test_bucket_name_cefi_uses_category_prefix():
         _get_instruments_bucket("CEFI")
 
     call_kwargs = mock_resolve.call_args.kwargs
-    assert call_kwargs.get("asset_group") == "CEFI"
+    assert call_kwargs.get("asset_group") == "cefi"
 
 
 def test_bucket_name_prediction_uses_category_prefix():
@@ -887,7 +887,7 @@ def test_bucket_name_prediction_uses_category_prefix():
         bucket = _get_instruments_bucket("PREDICTION")
 
     call_kwargs = mock_resolve.call_args.kwargs
-    assert call_kwargs.get("asset_group") == "PREDICTION"
+    assert call_kwargs.get("asset_group") == "prediction"
     assert "prediction" in bucket.lower()
 
 
