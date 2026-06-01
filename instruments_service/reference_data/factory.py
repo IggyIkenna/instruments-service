@@ -212,8 +212,12 @@ _SUBGRAPH_VENUE_PREFIX_TO_PROTOCOL: dict[str, str] = {
     "SUSHISWAP_V3": "sushiswap_v3",
     "AERODROME_V3": "aerodrome_v3",
     "CAMELOT_V3": "camelot_v3",
-    # Messari-schema DEXes — use UniV3 adapter (Messari fallback query)
+    # Messari-schema DEXes — use UniV3 adapter (Messari fallback query).
+    # Canonical underscore form (2026-06-01) + legacy glued forms (back-compat
+    # during the venue-canonicalisation migration window).
+    "VELODROME_V2": "velodrome_v2",
     "VELODROMEV2": "velodrome_v2",
+    "TRADER_JOE_V2": "trader_joe_v2",
     "TRADER_JOEV2": "trader_joe_v2",
     "GMX": "gmx",
     # Messari lending (Spark = Aave V3 fork, same schema)
