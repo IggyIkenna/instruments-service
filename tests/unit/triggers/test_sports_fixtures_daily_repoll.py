@@ -280,16 +280,34 @@ async def test_run_sports_fixtures_daily_repoll_idempotent(
 
 @pytest.mark.asyncio
 @pytest.mark.unit
-async def test_run_sports_fixtures_daily_repoll_empty_records_typed_reason(
+async def test_run_sports_fixtures_daily_repoll_empty_records_per_league_typed_reason(
     patch_factory: Any,
 ) -> None:
-    """Adapter returns 0 fixtures for the day → manifest record_empty with
-    typed ``SOURCE_RETURNED_ZERO`` reason; no parquet write.
+    """Adapter returns 0 fixtures for the day → manifest record_empty per league with
+    oracle-derived typed reason (CF-5 write-path fix).
+
+    When api-football returns 0 fixtures the trigger no longer emits a single
+    day-grain SOURCE_RETURNED_ZERO.  Instead it resolves the oracle reason per
+    league:
+    - oracle says (False, reason) → that EXPECTED_* reason
+    - oracle says (True, None) AND no fixture on calendar → EXPECTED_NO_FIXTURE
+    - oracle says (True, None) AND calendar has a fixture → SOURCE_RETURNED_ZERO
+
+    This test drives the EXPECTED_NO_FIXTURE branch (typical mid-week day with
+    no fixture scheduled).
     """
+    from unittest.mock import call as _call
+
+    from unified_api_contracts import EmptyConfirmedReason
+
     empty_adapter = MagicMock()
     empty_adapter.get_fixtures = AsyncMock(return_value=[])
     manifest_mock = MagicMock()
     write_fn = MagicMock()
+
+    # Mock league definition returned by get_league_by_api_football_id
+    mock_league_def = MagicMock()
+    mock_league_def.league_id = "EPL"
 
     from instruments_service.triggers.sports_fixtures_daily_repoll import (
         run_sports_fixtures_daily_repoll,
@@ -312,6 +330,21 @@ async def test_run_sports_fixtures_daily_repoll_empty_records_typed_reason(
             "instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league",
             side_effect=write_fn,
         ),
+        # Patch oracle: EPL is expected (True, None)
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.is_expected_for_source",
+            return_value=(True, None),
+        ),
+        # Patch get_league_by_api_football_id: returns EPL league def
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.get_league_by_api_football_id",
+            return_value=mock_league_def,
+        ),
+        # Patch get_league_fixture_calendar: no fixture on this day → EXPECTED_NO_FIXTURE
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.get_league_fixture_calendar",
+            return_value=[],  # empty = no fixture scheduled
+        ),
     ):
         result = await run_sports_fixtures_daily_repoll(
             today=date(2026, 5, 9),
@@ -323,10 +356,126 @@ async def test_run_sports_fixtures_daily_repoll_empty_records_typed_reason(
 
     assert result == {}
     write_fn.assert_not_called()
+    # One per-league record_empty call (EPL)
     assert manifest_mock.record_empty.call_count == 1
     call = manifest_mock.record_empty.call_args
-    assert call.kwargs["row_key"] == {"date": "2026-05-09", "data_type": "FIXTURES"}
-    assert call.kwargs["reason"] == "SOURCE_RETURNED_ZERO"
+    assert call.kwargs["row_key"] == {"date": "2026-05-09", "data_type": "FIXTURES", "league_id": "EPL"}
+    assert call.kwargs["reason"] == EmptyConfirmedReason.EXPECTED_NO_FIXTURE
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_sports_fixtures_daily_repoll_empty_pre_coverage_start_reason(
+    patch_factory: Any,
+) -> None:
+    """Oracle says (False, EXPECTED_PRE_SOURCE_COVERAGE_START) → that typed reason emitted per league."""
+    from unified_api_contracts import EmptyConfirmedReason
+
+    empty_adapter = MagicMock()
+    empty_adapter.get_fixtures = AsyncMock(return_value=[])
+    manifest_mock = MagicMock()
+
+    mock_league_def = MagicMock()
+    mock_league_def.league_id = "EPL"
+
+    from instruments_service.triggers.sports_fixtures_daily_repoll import (
+        run_sports_fixtures_daily_repoll,
+    )
+
+    with (
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.create_sports_reference_adapter",
+            return_value=empty_adapter,
+        ),
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.get_data_sink", return_value=MagicMock()),
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.ManifestWriter",
+            return_value=manifest_mock,
+        ),
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"),
+        # Oracle: date is before coverage start → not expected
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.is_expected_for_source",
+            return_value=(False, "EXPECTED_PRE_SOURCE_COVERAGE_START"),
+        ),
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.get_league_by_api_football_id",
+            return_value=mock_league_def,
+        ),
+    ):
+        result = await run_sports_fixtures_daily_repoll(
+            today=date(2026, 5, 9),
+            api_key="test-key",
+            bucket="test-sports-bucket",
+            league_filter=["EPL"],
+            lookahead_days=0,
+        )
+
+    assert result == {}
+    assert manifest_mock.record_empty.call_count == 1
+    call = manifest_mock.record_empty.call_args
+    assert call.kwargs["row_key"]["league_id"] == "EPL"
+    assert call.kwargs["reason"] == EmptyConfirmedReason.EXPECTED_PRE_SOURCE_COVERAGE_START
+
+
+@pytest.mark.asyncio
+@pytest.mark.unit
+async def test_run_sports_fixtures_daily_repoll_empty_source_returned_zero_when_fixture_scheduled(
+    patch_factory: Any,
+) -> None:
+    """Oracle says (True, None) AND fixture on calendar → SOURCE_RETURNED_ZERO (real gap)."""
+    from unified_api_contracts import EmptyConfirmedReason
+
+    empty_adapter = MagicMock()
+    empty_adapter.get_fixtures = AsyncMock(return_value=[])
+    manifest_mock = MagicMock()
+
+    mock_league_def = MagicMock()
+    mock_league_def.league_id = "EPL"
+
+    from instruments_service.triggers.sports_fixtures_daily_repoll import (
+        run_sports_fixtures_daily_repoll,
+    )
+
+    with (
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.create_sports_reference_adapter",
+            return_value=empty_adapter,
+        ),
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll.get_data_sink", return_value=MagicMock()),
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.ManifestWriter",
+            return_value=manifest_mock,
+        ),
+        patch("instruments_service.triggers.sports_fixtures_daily_repoll._write_fixtures_per_league"),
+        # Oracle: shard IS expected
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.is_expected_for_source",
+            return_value=(True, None),
+        ),
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.get_league_by_api_football_id",
+            return_value=mock_league_def,
+        ),
+        # Calendar HAS a fixture → source really returned zero (unexpected gap)
+        patch(
+            "instruments_service.triggers.sports_fixtures_daily_repoll.get_league_fixture_calendar",
+            return_value=["fixture1"],
+        ),
+    ):
+        result = await run_sports_fixtures_daily_repoll(
+            today=date(2026, 5, 9),
+            api_key="test-key",
+            bucket="test-sports-bucket",
+            league_filter=["EPL"],
+            lookahead_days=0,
+        )
+
+    assert result == {}
+    assert manifest_mock.record_empty.call_count == 1
+    call = manifest_mock.record_empty.call_args
+    assert call.kwargs["row_key"]["league_id"] == "EPL"
+    assert call.kwargs["reason"] == EmptyConfirmedReason.SOURCE_RETURNED_ZERO
 
 
 @pytest.mark.asyncio
