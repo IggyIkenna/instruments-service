@@ -7294,7 +7294,12 @@ def _get_instruments_bucket(asset_group: str | None = None) -> str:
     import os
 
     cfg = get_config()
-    ag: str | None = asset_group.upper() if asset_group else None
+    # resolve_bucket_name is strict-lowercase (canonical asset_group keys: cefi/defi/
+    # prediction/sports/tradfi) since the Option B bucket-SSOT migration (library@6c8a1175,
+    # 2026-05-30). Must lowercase here — uppercasing raised BucketNamingError("Unknown
+    # asset_group 'SPORTS'") on every sports/footystats short-circuit run. Matches the
+    # handler's _get_instruments_bucket_for_asset_group which already lowercases.
+    ag: str | None = asset_group.lower() if asset_group else None
     if cfg.is_test_run:
         prev = os.environ.get("DEPLOYMENT_ENV")
         os.environ["DEPLOYMENT_ENV"] = "test"
