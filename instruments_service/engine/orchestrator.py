@@ -4570,12 +4570,23 @@ async def _fetch_sports_reference_data(
                 logger.info("Sports reference: %d %s rows written", len(df), entity_name)
             else:
                 # Honest-coverage: entity produced zero rows.  Distinguish
-                # "all fixtures failed" (record_failed) from "legit empty"
-                # (record_empty).  No rows when we did fetch fixtures means
-                # the API was called but nothing came back.
+                # fetch failure (record_failed → attempted_failed) from legit
+                # empty (record_empty → empty_confirmed).
+                #
+                # CF-11 fix (2026-06-02): the original guard only routed to
+                # record_failed when EVERY fixture call raised
+                # (_fail_count == len(fixture_ids)).  A partial failure
+                # (_fail_count > 0 but < len(fixture_ids)) fell through to
+                # _af_emit_empty_gaps_for_entity → empty_confirmed(EXPECTED_NO_FIXTURE),
+                # falsely claiming "we know there's nothing" and freezing the
+                # gap forever.  Correct rule: ANY failure → record_failed so
+                # the shard is flagged for backfill, not silently confirmed-empty.
                 _fail_count, _err_code = entity_failures.get(entity_name, (0, ""))
-                if _fail_count == len(fixture_ids) and _err_code:
-                    # Every fixture call raised → treat the entity as failed.
+                if _fail_count > 0 and _err_code:
+                    # At least one fixture call raised → treat the entity as
+                    # attempted_failed so it is backfilled.  The error code
+                    # from the first failure is representative; per-fixture
+                    # errors are already emitted individually by _fetch_one.
                     if manifest is not None:
                         manifest.record_failed(
                             row_key={"date": date, "data_type": _af_entity_dt},
@@ -4584,7 +4595,7 @@ async def _fetch_sports_reference_data(
                             pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
                         )
                 else:
-                    # Some / all calls succeeded but returned zero rows
+                    # All calls succeeded but returned zero rows
                     # (e.g. post-match stats not yet published, lineups not
                     # disclosed for low-profile fixture) — legitimate empty.
                     _af_emit_empty_gaps_for_entity(_af_entity_dt, set())
