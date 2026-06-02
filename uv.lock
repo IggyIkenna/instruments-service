@@ -1449,7 +1449,7 @@ requires-dist = [
     { name = "ruff", specifier = "==0.15.0" },
     { name = "unified-api-contracts", editable = "../unified-api-contracts" },
     { name = "unified-trading-library", editable = "../unified-trading-library" },
-    { name = "web3", specifier = ">=6.20.0,<7.0.0" },
+    { name = "web3", specifier = ">=6.20.0,<8.0.0" },
     { name = "yfinance", specifier = ">=0.2.66,<1.0.0" },
 ]
 
@@ -3217,7 +3217,7 @@ requires-dist = [
     { name = "unified-api-contracts", editable = "../unified-api-contracts" },
     { name = "urllib3", specifier = ">=2.7.0,<3.0.0" },
     { name = "vulture", specifier = ">=2.0,<3.0.0" },
-    { name = "web3", specifier = ">=6.20.0,<7.0.0" },
+    { name = "web3", specifier = ">=6.20.0,<8.0.0" },
 ]
 
 [[package]]
