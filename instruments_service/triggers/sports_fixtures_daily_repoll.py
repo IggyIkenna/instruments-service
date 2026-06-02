@@ -396,7 +396,7 @@ async def run_sports_fixtures_daily_repoll(
                         "league_id": canonical_lid,
                     },
                     df=league_df_clean,
-                    category="sports",
+                    asset_group="sports",
                     instrument_type="football",
                     data_type="FIXTURES",
                     league_id=canonical_lid,
