@@ -24,8 +24,9 @@ SSOT: ``unified-trading-pm/codex/02-data/sports-adapter-dependency-order.md``
 from __future__ import annotations
 
 import logging
+import os
 
-from unified_trading_library import DependencyError, get_storage_client, get_write_bucket_name
+from unified_trading_library import DependencyError, get_storage_client, resolve_bucket_name
 
 from instruments_service.config import get_config
 
@@ -51,25 +52,29 @@ _CANONICAL_FIXTURES_PATH_TEMPLATE: str = "sports_reference/by_date/day={date}/en
 
 
 def _resolve_sports_bucket() -> str:
-    """Resolve the sports-reference bucket honouring ``IS_TEST_RUN``.
+    """Resolve the sports instruments-store bucket honouring ``IS_TEST_RUN``.
 
     Mirrors ``instruments_service.engine.orchestrator._get_instruments_bucket``
-    for the SPORTS category so the pre-flight check reads from the same bucket
-    the orchestrator writes to. TEST-mode uses the canonical ``-test-`` in
-    middle (inserted between category and project_id) — SSOT:
-    ``codex/02-data/per-category-bucket-layouts.md``. Delegates to UTL
-    ``get_write_bucket_name``.
+    exactly so the pre-flight check reads from the same env-tiered bucket the
+    orchestrator WRITES to. Delegates to UTL ``resolve_bucket_name`` backed by
+    ``deployment-service/configs/cloud-providers.yaml`` — the canonical SSOT.
+
+    - DEPLOYMENT_ENV=prod  → ``instruments-store-sports-prd-{pid}``
+    - DEPLOYMENT_ENV=dev   → ``instruments-store-sports-dev-{pid}``
+    - IS_TEST_RUN=true     → DEPLOYMENT_ENV=test → ``instruments-store-sports-test-{pid}``
     """
     cfg = get_config()
-    project = cfg.gcp_project_id or "test-project"
-    try:
-        return get_write_bucket_name("instruments", "SPORTS", project)
-    except (ImportError, AttributeError):
-        prefix = cfg.instruments_bucket_prefix
-        prod_bucket = f"{prefix}-sports-{project}"
-        if not cfg.is_test_run:
-            return prod_bucket
-        return prod_bucket.replace(f"-{project}", f"-test-{project}", 1)
+    if cfg.is_test_run:
+        prev = os.environ.get("DEPLOYMENT_ENV")
+        os.environ["DEPLOYMENT_ENV"] = "test"
+        try:
+            return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
+        finally:
+            if prev is None:
+                os.environ.pop("DEPLOYMENT_ENV", None)
+            else:
+                os.environ["DEPLOYMENT_ENV"] = prev
+    return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
 
 
 def _blob_exists(bucket: str, path: str) -> bool:
