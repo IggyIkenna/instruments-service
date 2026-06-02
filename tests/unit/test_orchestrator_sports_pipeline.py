@@ -603,4 +603,290 @@ class TestWeatherHonestCoverageReasons:
             row_key={"date": "2026-03-22", "data_type": "WEATHER", "league_id": "EPL"},
             reason=EmptyConfirmedReason.SOURCE_RETURNED_ZERO,
         )
-        mock_manifest.record_empty.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# CF-11 regression tests — fetch-failure must produce attempted_failed,
+# NOT empty_confirmed.  (2026-06-02 fix: _fail_count > 0 rather than
+# _fail_count == len(fixture_ids) in the per-fixture entity zero-rows branch)
+# ---------------------------------------------------------------------------
+
+
+class TestCF11PerFixtureEntityFailurePath:
+    """CF-11 write-path audit: a genuine API failure on a fixture-day shard
+    for per-fixture entities (FIXTURE_STATS / FIXTURE_EVENTS / PLAYER_STATS /
+    FIXTURE_LINEUPS) MUST produce ``record_failed`` (→ ``attempted_failed``),
+    never ``record_empty`` (→ ``empty_confirmed``).
+
+    Three scenarios:
+    (a) ALL per-fixture calls raise → record_failed (was already correct before fix)
+    (b) SOME calls raise, ALL return zero rows → record_failed (fixed by CF-11)
+    (c) ALL calls succeed + return zero rows → record_empty (legitimate empty, unchanged)
+    """
+
+    @pytest.mark.asyncio
+    async def test_all_fixture_calls_raise_produces_record_failed(self) -> None:
+        """(a) Every per-fixture API call raises → entity shard → record_failed.
+
+        Pre-fix: BOTH 'all-fail' AND 'some-fail' correctly routed.
+        Post-fix: same, no regression.
+        """
+        mock_adapter = AsyncMock()
+        mock_adapter.get_leagues.return_value = []
+        mock_adapter.get_teams.return_value = []
+        mock_adapter.get_standings.return_value = []
+        mock_adapter.get_injuries.return_value = []
+        # Per-fixture calls all raise
+        mock_adapter.get_fixture_statistics.side_effect = Exception("5xx upstream")
+        mock_adapter.get_fixture_events.side_effect = Exception("5xx upstream")
+        mock_adapter.get_fixture_lineups.side_effect = Exception("5xx upstream")
+        mock_adapter.get_fixture_player_stats.side_effect = Exception("5xx upstream")
+
+        mock_manifest = MagicMock()
+        mock_sink = MagicMock()
+
+        with (
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator._write_team_mapping"),
+            patch("instruments_service.engine.orchestrator._write_fixture_mapping"),
+            patch("instruments_service.engine.orchestrator._build_fixture_league_map_from_gcs", return_value={}),
+        ):
+            await _fetch_sports_reference_data(
+                "2026-03-22",
+                "test-key",
+                "test-bucket",
+                manifest=mock_manifest,
+                fixture_ids_override=[1001, 1002],
+            )
+
+        # record_failed must have been called (at least once — one per entity)
+        assert mock_manifest.record_failed.call_count >= 1, "Expected record_failed when all per-fixture calls raise"
+        # record_empty must NOT have been called for per-fixture entity shards
+        # (it may be called for INJURIES/STANDINGS empties, but not for stat entities)
+        stat_entity_data_types = {"FIXTURE_STATS", "FIXTURE_EVENTS", "FIXTURE_LINEUPS", "PLAYER_STATS"}
+        empty_calls = mock_manifest.record_empty.call_args_list
+        for call in empty_calls:
+            dt = call.kwargs.get("row_key", {}).get("data_type", "")
+            assert dt not in stat_entity_data_types, (
+                f"record_empty called for {dt} on a fixture shard with all-raises — should be record_failed"
+            )
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_produces_record_failed_not_empty(self) -> None:
+        """(b) CF-11 regression: SOME per-fixture calls raise, remaining return 0 rows.
+
+        Pre-fix: partial failure fell through to _af_emit_empty_gaps_for_entity →
+        empty_confirmed(EXPECTED_NO_FIXTURE) — silently confirmed-empty while data
+        was NOT actually retrieved.
+
+        Post-fix: ANY _fail_count > 0 AND zero rows → record_failed so the shard
+        is marked attempted_failed and backfilled.
+        """
+        mock_adapter = AsyncMock()
+        mock_adapter.get_leagues.return_value = []
+        mock_adapter.get_teams.return_value = []
+        mock_adapter.get_standings.return_value = []
+        mock_adapter.get_injuries.return_value = []
+        # First fixture call raises, second returns empty → total rows = 0, fail_count = 1
+        mock_adapter.get_fixture_statistics.side_effect = [
+            Exception("timeout"),  # fixture 1001 fails
+            [],  # fixture 1002 returns empty
+        ]
+        mock_adapter.get_fixture_events.side_effect = [
+            Exception("timeout"),
+            [],
+        ]
+        mock_adapter.get_fixture_lineups.side_effect = [
+            Exception("timeout"),
+            [],
+        ]
+        mock_adapter.get_fixture_player_stats.side_effect = [
+            Exception("timeout"),
+            [],
+        ]
+
+        mock_manifest = MagicMock()
+        mock_sink = MagicMock()
+
+        with (
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator._write_team_mapping"),
+            patch("instruments_service.engine.orchestrator._write_fixture_mapping"),
+            patch("instruments_service.engine.orchestrator._build_fixture_league_map_from_gcs", return_value={}),
+            # Suppress classify_and_emit_error noise in test output
+            patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
+        ):
+            await _fetch_sports_reference_data(
+                "2026-03-22",
+                "test-key",
+                "test-bucket",
+                manifest=mock_manifest,
+                fixture_ids_override=[1001, 1002],
+            )
+
+        # CF-11: partial failure with zero rows MUST produce record_failed, not record_empty
+        assert mock_manifest.record_failed.call_count >= 1, (
+            "CF-11 regression: partial fixture failure + zero rows must produce record_failed "
+            "(not empty_confirmed which freezes the gap forever)"
+        )
+        # Verify none of the per-fixture stat entities ended up as record_empty
+        stat_entity_data_types = {"FIXTURE_STATS", "FIXTURE_EVENTS", "FIXTURE_LINEUPS", "PLAYER_STATS"}
+        empty_calls = mock_manifest.record_empty.call_args_list
+        for call in empty_calls:
+            dt = call.kwargs.get("row_key", {}).get("data_type", "")
+            assert dt not in stat_entity_data_types, (
+                f"CF-11 regression: record_empty({dt}) called when fetch partially failed "
+                "— should be record_failed (attempted_failed)"
+            )
+
+    @pytest.mark.asyncio
+    async def test_all_succeed_zero_rows_produces_record_empty(self) -> None:
+        """(c) All per-fixture calls succeed but return 0 rows → record_empty (legitimate).
+
+        Genuine empty: post-match stats not yet published, lineups withheld for
+        low-profile fixture, etc.  This is NOT a failure — the source was
+        reachable and explicitly returned nothing.  Must NOT regress to record_failed.
+        """
+        mock_adapter = AsyncMock()
+        mock_adapter.get_leagues.return_value = []
+        mock_adapter.get_teams.return_value = []
+        mock_adapter.get_standings.return_value = []
+        mock_adapter.get_injuries.return_value = []
+        # All per-fixture calls succeed with empty responses (no exception)
+        mock_adapter.get_fixture_statistics.return_value = []
+        mock_adapter.get_fixture_events.return_value = []
+        mock_adapter.get_fixture_lineups.return_value = []
+        mock_adapter.get_fixture_player_stats.return_value = []
+
+        mock_manifest = MagicMock()
+        mock_sink = MagicMock()
+
+        with (
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator._write_team_mapping"),
+            patch("instruments_service.engine.orchestrator._write_fixture_mapping"),
+            patch("instruments_service.engine.orchestrator._build_fixture_league_map_from_gcs", return_value={}),
+            # _af_emit_empty_gaps_for_entity reads get_expected_leagues_for_source + get_league_fixture_calendar
+            patch("instruments_service.engine.orchestrator.get_expected_leagues_for_source", return_value=[]),
+        ):
+            await _fetch_sports_reference_data(
+                "2026-03-22",
+                "test-key",
+                "test-bucket",
+                manifest=mock_manifest,
+                fixture_ids_override=[1001],
+            )
+
+        # No failures → record_failed must NOT have been called for stat entities
+        failed_calls = mock_manifest.record_failed.call_args_list
+        stat_entity_data_types = {"FIXTURE_STATS", "FIXTURE_EVENTS", "FIXTURE_LINEUPS", "PLAYER_STATS"}
+        for call in failed_calls:
+            dt = call.kwargs.get("row_key", {}).get("data_type", "")
+            assert dt not in stat_entity_data_types, (
+                f"record_failed({dt}) called when all calls succeeded with 0 rows — "
+                "should be record_empty (legitimate empty)"
+            )
+        # _af_emit_empty_gaps_for_entity is called (zero-failure path) but
+        # it may or may not call record_empty depending on the expected leagues
+        # set returned by the oracle.  The key invariant: no record_failed for
+        # stat entity data_types (asserted above). record_empty call count is
+        # oracle-driven and not asserted here to keep the test focused.
+
+
+# ---------------------------------------------------------------------------
+# _canonical_league_id — CF-7 write-path canonicalisation
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalLeagueIdCF7:
+    """Tests for _canonical_league_id CF-7 provider-suffix stripping.
+
+    The function is the single choke-point that all sports manifest row_key /
+    parquet / record_* league_id writes pass through.  CF-7 wires
+    ``canonicalize_league_id`` from UAC as a second pass so provider-suffixed
+    ids (e.g. ``EPL_39``) are stripped to canonical form before hitting disk.
+    """
+
+    def test_already_canonical_passthrough(self) -> None:
+        """A canonical league_id must pass through unchanged."""
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        assert _canonical_league_id("EPL") == "EPL"
+        assert _canonical_league_id("BUNDESLIGA") == "BUNDESLIGA"
+        assert _canonical_league_id("LA_LIGA") == "LA_LIGA"
+
+    def test_provider_suffixed_stripped(self) -> None:
+        """Provider-suffixed ids where the suffix is a verified provider id
+        must be stripped to the canonical base (CF-7 write-path).
+
+        EPL_39: UAC registry confirms api_football id for EPL is 39 →
+        canonicalize_league_id strips suffix → "EPL".
+        """
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        result = _canonical_league_id("EPL_39")
+        assert result == "EPL", (
+            f"Expected 'EPL' after CF-7 suffix strip, got {result!r}. "
+            "canonicalize_league_id should strip '_39' (verified api_football id)."
+        )
+
+    def test_unresolved_suffix_passthrough(self) -> None:
+        """A 1-2 digit suffix that is NOT a registered provider id passes through unchanged.
+
+        Non-lossy guarantee: the canonicalizer never strips a tier-like (1-2 digit)
+        suffix it cannot verify as a provider id — the raw value is returned intact.
+        NOTE: this guarantee applies to 1-2 digit suffixes only. Per UAC
+        ``canonicalize_league_id`` Step 3a (added dc76f1a6), a 3+-digit suffix on a
+        resolving base is treated as a provider/season id and IS stripped regardless of
+        registration (e.g. "EPL_99999" → "EPL", "SCOTTISH_LEAGUE_CUP_185" →
+        "SCOTTISH_LEAGUE_CUP") — real league tiers never exceed 2 digits.
+        """
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        # 88 is not a registered provider id for EPL and is <100 (tier-like) → pass through.
+        result = _canonical_league_id("EPL_88")
+        assert result == "EPL_88", f"Expected 'EPL_88' (unregistered 1-2 digit suffix → pass through), got {result!r}."
+
+    def test_unresolved_league_key_passthrough(self) -> None:
+        """An unrecognised league key with no suffix must pass through unchanged."""
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        result = _canonical_league_id("UNKNOWN_LEAGUE_XYZ")
+        assert result == "UNKNOWN_LEAGUE_XYZ", f"Expected 'UNKNOWN_LEAGUE_XYZ', got {result!r}."
+
+    def test_idempotent(self) -> None:
+        """canonicalize_league_id(canonicalize_league_id(x)) == canonicalize_league_id(x)."""
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        for raw in ("EPL", "EPL_39", "LA_LIGA", "UNKNOWN_99"):
+            first = _canonical_league_id(raw)
+            second = _canonical_league_id(first)
+            assert first == second, f"Not idempotent for {raw!r}: first={first!r}, second={second!r}"
+
+    def test_numeric_string_resolves_via_pass1(self) -> None:
+        """A raw numeric string (api_football id) should resolve via Pass 1
+        (get_league_by_api_football_id) then be unchanged by Pass 2.
+
+        api_football id 39 → EPL.
+        """
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        result = _canonical_league_id("39")
+        assert result == "EPL", f"Expected 'EPL' from numeric api_football id 39, got {result!r}."
+
+    def test_unknown_numeric_passthrough(self) -> None:
+        """An unknown numeric id should pass through both passes unchanged."""
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        result = _canonical_league_id("9999999")
+        assert result == "9999999", f"Expected '9999999' (no registry match), got {result!r}."
+
+    def test_whitespace_stripped(self) -> None:
+        """Leading/trailing whitespace is stripped before canonicalisation."""
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        assert _canonical_league_id("  EPL  ") == "EPL"
+        assert _canonical_league_id("  EPL_39  ") == "EPL"

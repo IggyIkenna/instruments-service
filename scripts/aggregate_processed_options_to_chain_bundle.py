@@ -304,7 +304,7 @@ def _process_day_timeframe_dt(
         writer.record_captured(
             row_key={"date": day, "venue": venue},
             df=pd.DataFrame(),
-            category=asset_group,
+            asset_group=asset_group,
             instrument_type="options_chain",
             data_type=data_type,
             timeframe=timeframe,

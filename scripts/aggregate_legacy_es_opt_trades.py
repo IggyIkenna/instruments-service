@@ -226,7 +226,7 @@ def _process_day(
         writer.record_captured(
             row_key={"date": day, "venue": "CME"},
             df=merged_df,
-            category="tradfi",
+            asset_group="tradfi",
             instrument_type="options_chain",
             data_type=data_type,
             underlying=root,

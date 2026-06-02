@@ -74,6 +74,9 @@ from unified_api_contracts.sports import (
     is_any_league_refresh_date,
     is_in_known_gap,
 )
+from unified_api_contracts.sports import (
+    canonicalize_league_id as _uac_canonicalize_league_id,
+)
 from unified_trading_library import (
     CaptureStatus,
     DataSink,
@@ -200,21 +203,32 @@ def _pipeline_mode_for_sports_data_type(data_type: str) -> PipelineMode:
 def _canonical_league_id(lid_raw: object) -> str:
     """Normalize a league_id at write time to canonical form.
 
-    Used at every per-league GCS partition write so legacy numeric
-    af_league_ids (39, 78, 140, ...) get rewritten to canonical strings
-    (EPL, BUNDESLIGA, LA_LIGA, ...) before they hit disk. Without this
-    normalization, mixed numeric/canonical paths accumulate and per-league
-    downstream readers (FSS, ML feature joins) miss data.
+    Used at every per-league GCS partition write so future rows are born
+    with canonical league_ids (CF-7 write-path). Two passes:
 
-    - all-digits string → look up via UAC ``get_league_by_api_football_id``
-    - already-canonical → pass through unchanged
-    - unknown numeric → leave as-is (operator can debug)
+    Pass 1 — numeric resolution: all-digits string → look up via UAC
+    ``get_league_by_api_football_id`` (e.g. "39" → "EPL"). Unknown
+    numerics fall through unchanged.
+
+    Pass 2 — provider-suffix strip: delegate to UAC
+    ``canonicalize_league_id`` which conservatively strips a trailing
+    ``_<digits>`` segment *only* when the suffix is provably a registered
+    provider ID for the base key (e.g. "EPL_39" → "EPL",
+    "SCOTTISH_LEAGUE_CUP_185" → "SCOTTISH_LEAGUE_CUP"). Unresolved keys
+    pass through unchanged — non-lossy by design (CF-7 spec).
+
+    - already-canonical (e.g. "EPL") → pass through both passes unchanged
+    - provider-suffixed (e.g. "EPL_39") → Pass 2 strips suffix → "EPL"
+    - numeric (e.g. "39") → Pass 1 resolves → "EPL" → Pass 2 no-op
+    - unknown numeric (e.g. "9999") → Pass 1 no-op → Pass 2 no-op → "9999"
     """
     s = str(lid_raw).strip()
-    if not s or not s.isdigit():
-        return s
-    league = get_league_by_api_football_id(int(s))
-    return league.league_id if league is not None else s
+    # Pass 1: numeric → canonical via api_football id lookup
+    if s and s.isdigit():
+        league = get_league_by_api_football_id(int(s))
+        s = league.league_id if league is not None else s
+    # Pass 2: strip provider-id suffix via UAC canonicalizer (CF-7 write-path)
+    return _uac_canonicalize_league_id(s)
 
 
 def _coerce_adapter_output(item: object) -> dict[str, object]:
@@ -2287,7 +2301,7 @@ async def process_instruments(
                             "league_id": _canonical_league_id(_league_id_str),
                         },
                         df=_stamped_fixture_df,
-                        category="sports",
+                        asset_group="sports",
                         instrument_type="",
                         data_type="FIXTURES",
                         league_id=_canonical_league_id(_league_id_str),
@@ -2385,7 +2399,7 @@ async def process_instruments(
                             "underlying": _group_str,
                         },
                         df=_stamped_group_df,
-                        category="prediction",
+                        asset_group="prediction",
                         instrument_type="",
                         data_type="prediction_canonical_question_group",
                         venue=_manifest_venue,
@@ -3177,7 +3191,7 @@ def _write_venue(
                     manifest.record_captured(  # QG-allow: emission-policy-not-applicable
                         row_key={"date": date, "data_type": manifest_data_type},
                         df=_stamped_venue_df,
-                        category="sports",
+                        asset_group="sports",
                         instrument_type="",
                         data_type=manifest_data_type,
                         pipeline_mode=_venue_pm,
@@ -3191,7 +3205,7 @@ def _write_venue(
                     manifest.record_captured(  # QG-allow: emission-policy-not-applicable
                         row_key=_rk,
                         df=_stamped_venue_df,
-                        category=_cat,
+                        asset_group=_cat,
                         instrument_type="",
                         data_type="",
                         venue=manifest_venue,
@@ -3523,6 +3537,8 @@ def _write_fixtures_per_league(
     date: str,
     *,
     source_label: str,
+    bucket: str | None = None,
+    skip_if_unchanged: bool = False,
 ) -> None:
     """Write canonical fixtures parquet per league (single-SSOT, no bare fallback).
 
@@ -3590,6 +3606,24 @@ def _write_fixtures_per_league(
         _ldf_clean = stamp_available_at_explicit(
             _ldf.drop(columns=["_canonical_league_id"], errors="ignore"), when=datetime.now(UTC)
         )
+        # Write-skip guard (opt-in, e.g. the daily re-poll): if the on-disk per-league
+        # parquet already holds identical fixture data (ignoring the re-stamped
+        # available_at), skip the re-write. Avoids churning a fresh object version each
+        # run and preserves the earliest available_at. Bias is to write on any doubt.
+        if (
+            skip_if_unchanged
+            and bucket
+            and _per_league_fixtures_data_unchanged(
+                bucket, date, "fixtures", _canonical_league_id(_lid_str), _ldf_clean
+            )
+        ):
+            logger.debug(
+                "FIXTURES skip-if-unchanged: day=%s league=%s (source=%s) unchanged — skipping re-write",
+                date,
+                _canonical_league_id(_lid_str),
+                source_label,
+            )
+            continue
         _gated_sink_write(
             sink,
             data=_ldf_clean,
@@ -3649,6 +3683,66 @@ def _read_existing_per_league_fixture_ids(
         return frozenset()
     fids = pd.to_numeric(existing[fid_col], errors="coerce").dropna().astype(int)
     return frozenset(int(x) for x in fids.tolist())
+
+
+def _per_league_fixtures_data_unchanged(
+    bucket: str,
+    date: str,
+    entity_name: str,
+    canonical_league_id: str,
+    new_df: pd.DataFrame,
+) -> bool:
+    """Return True iff the existing per-league parquet holds identical DATA to ``new_df``.
+
+    Compares the new frame against the on-disk parquet **excluding ``available_at``**
+    (which the writer re-stamps to ``now()`` on every write, so it always differs and
+    is provenance, not fixture data). Used as a write-skip guard for the daily fixtures
+    re-poll: when a (date, league) cell's fixtures are unchanged, re-writing only churns
+    a fresh GCS object version (and would wrongly bump ``available_at`` to a later time).
+    Skipping preserves the original — earliest — ``available_at``.
+
+    **Safety bias:** any uncertainty (missing object, read failure, column/length/dtype
+    mismatch) returns ``False`` → the caller writes. This guard NEVER skips a real change;
+    worst case it fails to skip an unchanged write (no correctness impact, just no saving).
+    Both frames are normalised through an in-memory parquet round-trip so dtypes match the
+    read-back form.
+    """
+    blob_path = (
+        f"sports_reference/by_date/day={date}/entity={entity_name}/league={canonical_league_id}/{entity_name}.parquet"
+    )
+    try:
+        storage_client = get_storage_client()
+        blob = storage_client.bucket(bucket).blob(blob_path)
+        if not blob.exists():
+            return False
+        existing = pd.read_parquet(io.BytesIO(storage_client.download_bytes(bucket=bucket, blob_path=blob_path)))
+        # Round-trip the new frame so its dtypes match the parquet read-back form.
+        new_norm = pd.read_parquet(io.BytesIO(new_df.to_parquet(index=False)))
+    except Exception as exc:
+        logger.debug(
+            "skip-if-unchanged read/normalise failed for gs://%s/%s — will write: %s",
+            bucket,
+            blob_path,
+            exc,
+        )
+        return False
+
+    def _norm(frame: pd.DataFrame) -> pd.DataFrame:
+        out = frame.drop(columns=["available_at"], errors="ignore")
+        _key = (
+            "af_fixture_id"
+            if "af_fixture_id" in out.columns
+            else ("fixture_id" if "fixture_id" in out.columns else None)
+        )
+        if _key is not None:
+            out = out.sort_values(_key, kind="stable")
+        return out.reindex(sorted(out.columns), axis=1).reset_index(drop=True)
+
+    left = _norm(existing)
+    right = _norm(new_norm)
+    if list(left.columns) != list(right.columns) or len(left) != len(right):
+        return False
+    return bool(left.equals(right))
 
 
 def _merge_with_existing_per_league_parquet(
@@ -4024,7 +4118,7 @@ async def _fetch_sports_reference_data(
                                 "league_id": _canonical_league_id(_s_lid_str),
                             },
                             df=_stamped_std_df,
-                            category="sports",
+                            asset_group="sports",
                             instrument_type="",
                             data_type="STANDINGS",
                             league_id=_canonical_league_id(_s_lid_str),
@@ -4092,7 +4186,7 @@ async def _fetch_sports_reference_data(
                                     "league_id": _canonical_league_id(_inj_lid_str),
                                 },
                                 df=_stamped_inj_df,
-                                category="sports",
+                                asset_group="sports",
                                 instrument_type="",
                                 data_type="INJURIES",
                                 league_id=_canonical_league_id(_inj_lid_str),
@@ -4531,7 +4625,7 @@ async def _fetch_sports_reference_data(
                                     "league_id": _canonical_league_id(_pf_lid_str),
                                 },
                                 df=_stamped_pf_df,
-                                category="sports",
+                                asset_group="sports",
                                 instrument_type="",
                                 data_type=_af_entity_dt,
                                 league_id=_canonical_league_id(_pf_lid_str),
@@ -4570,12 +4664,23 @@ async def _fetch_sports_reference_data(
                 logger.info("Sports reference: %d %s rows written", len(df), entity_name)
             else:
                 # Honest-coverage: entity produced zero rows.  Distinguish
-                # "all fixtures failed" (record_failed) from "legit empty"
-                # (record_empty).  No rows when we did fetch fixtures means
-                # the API was called but nothing came back.
+                # fetch failure (record_failed → attempted_failed) from legit
+                # empty (record_empty → empty_confirmed).
+                #
+                # CF-11 fix (2026-06-02): the original guard only routed to
+                # record_failed when EVERY fixture call raised
+                # (_fail_count == len(fixture_ids)).  A partial failure
+                # (_fail_count > 0 but < len(fixture_ids)) fell through to
+                # _af_emit_empty_gaps_for_entity → empty_confirmed(EXPECTED_NO_FIXTURE),
+                # falsely claiming "we know there's nothing" and freezing the
+                # gap forever.  Correct rule: ANY failure → record_failed so
+                # the shard is flagged for backfill, not silently confirmed-empty.
                 _fail_count, _err_code = entity_failures.get(entity_name, (0, ""))
-                if _fail_count == len(fixture_ids) and _err_code:
-                    # Every fixture call raised → treat the entity as failed.
+                if _fail_count > 0 and _err_code:
+                    # At least one fixture call raised → treat the entity as
+                    # attempted_failed so it is backfilled.  The error code
+                    # from the first failure is representative; per-fixture
+                    # errors are already emitted individually by _fetch_one.
                     if manifest is not None:
                         manifest.record_failed(
                             row_key={"date": date, "data_type": _af_entity_dt},
@@ -4584,7 +4689,7 @@ async def _fetch_sports_reference_data(
                             pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
                         )
                 else:
-                    # Some / all calls succeeded but returned zero rows
+                    # All calls succeeded but returned zero rows
                     # (e.g. post-match stats not yet published, lineups not
                     # disclosed for low-profile fixture) — legitimate empty.
                     _af_emit_empty_gaps_for_entity(_af_entity_dt, set())
@@ -5049,7 +5154,7 @@ async def _fetch_footystats_predictions(
                             "league_id": _canonical_league_id(_pred_lid_str),
                         },
                         df=_stamped_pred_clean,
-                        category="sports",
+                        asset_group="sports",
                         instrument_type="",
                         data_type="PREDICTIONS",
                         league_id=_canonical_league_id(_pred_lid_str),
@@ -5075,7 +5180,7 @@ async def _fetch_footystats_predictions(
                     pred_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
                         row_key={"date": date, "data_type": "PREDICTIONS"},
                         df=_stamped_pred_unmapped,
-                        category="sports",
+                        asset_group="sports",
                         instrument_type="",
                         data_type="PREDICTIONS",
                         pipeline_mode=PipelineMode.BATCH_FOOTYSTATS,
@@ -5098,7 +5203,7 @@ async def _fetch_footystats_predictions(
                 pred_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
                     row_key={"date": date, "data_type": "PREDICTIONS"},
                     df=_stamped_pred_df,
-                    category="sports",
+                    asset_group="sports",
                     instrument_type="",
                     data_type="PREDICTIONS",
                     pipeline_mode=PipelineMode.BATCH_FOOTYSTATS,
@@ -5330,7 +5435,7 @@ async def _fetch_footystats_matches(
                     _ft_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
                         row_key={"date": date, "data_type": "MATCHES", "league_id": _ft_canonical},
                         df=_stamped_ft_df,
-                        category="sports",
+                        asset_group="sports",
                         instrument_type="",
                         data_type="MATCHES",
                         league_id=_ft_canonical,
@@ -5531,7 +5636,7 @@ async def _fetch_footystats_odds(
                     odds_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
                         row_key={"date": date, "data_type": "ODDS", "league_id": _canonical_league_id(_odds_lid_str)},
                         df=_stamped_odds_clean,
-                        category="sports",
+                        asset_group="sports",
                         instrument_type="",
                         data_type="ODDS",
                         league_id=_canonical_league_id(_odds_lid_str),
@@ -5557,7 +5662,7 @@ async def _fetch_footystats_odds(
                     odds_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
                         row_key={"date": date, "data_type": "ODDS"},
                         df=_stamped_odds_unmapped,
-                        category="sports",
+                        asset_group="sports",
                         instrument_type="",
                         data_type="ODDS",
                         pipeline_mode=PipelineMode.BATCH_ODDS_API,
@@ -5580,7 +5685,7 @@ async def _fetch_footystats_odds(
                 odds_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
                     row_key={"date": date, "data_type": "ODDS"},
                     df=_stamped_odds_df,
-                    category="sports",
+                    asset_group="sports",
                     instrument_type="",
                     data_type="ODDS",
                     pipeline_mode=PipelineMode.BATCH_ODDS_API,
@@ -5752,7 +5857,7 @@ async def _fetch_understat_xg(
                     xg_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
                         row_key={"date": date, "data_type": "XG", "league_id": _canonical_league_id(_xg_lid_str)},
                         df=_stamped_xg_df,
-                        category="sports",
+                        asset_group="sports",
                         instrument_type="",
                         data_type="XG",
                         league_id=_canonical_league_id(_xg_lid_str),
@@ -5939,7 +6044,7 @@ async def _run_understat_shots_date(
             shots_manifest.record_captured(  # QG-allow: emission-policy-not-applicable
                 row_key={"date": date, "data_type": "XG_SHOTS", "league_id": lid},
                 df=df,
-                category="sports",
+                asset_group="sports",
                 instrument_type="shot",
                 data_type="XG_SHOTS",
                 league_id=lid,
@@ -6618,7 +6723,7 @@ async def _fetch_sfi_data(
                                     "league_id": _canonical_league_id(_pp_lid_str),
                                 },
                                 df=_stamped_pp_df,
-                                category="sports",
+                                asset_group="sports",
                                 instrument_type="",
                                 data_type="SFI_PROGRESSIVE_STATS",
                                 league_id=_canonical_league_id(_pp_lid_str),
