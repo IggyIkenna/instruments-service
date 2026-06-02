@@ -102,6 +102,57 @@ def assert_subgraph_payload(data: object, *, venue: str, chain: str) -> dict[str
     return cast("dict[str, object]", inner)
 
 
+def extract_rest_list_or_raise(
+    data: object,
+    *,
+    venue: str,
+    keys: tuple[str, ...],
+) -> list[dict[str, object]]:
+    """Extract the instrument list from a REST JSON response, or RAISE on a malformed body.
+
+    Shared by the Solana / REST reference-data adapters (drift, flash_trade, lifinity, mango,
+    meteora, phoenix, zeta) whose HTTP endpoints return EITHER a bare JSON array OR an envelope
+    dict carrying the list under one of a small set of known keys (e.g. ``markets`` / ``data`` /
+    ``pools``).
+
+    Raises ``ConnectionError`` (the IS discovery caller ``urdi_reference_provider`` classifies it
+    as a retryable NETWORK failure → records the venue/day ``attempted_failed``) when the HTTP
+    fetch SUCCEEDED (HTTP 200) but the decoded body is a TRANSIENT FETCH FAILURE rather than a
+    legitimate empty universe:
+
+    * the body is neither a JSON array nor a JSON object, OR
+    * the body is an object but carries NONE of the expected ``keys`` (a missing top-level key
+      signals an error envelope / schema drift, not a real zero-instrument response).
+
+    A legitimately-empty universe is returned as-is:
+
+    * a bare ``[]`` array → ``[]`` (legit empty), OR
+    * ``{"<key>": []}`` where ``<key>`` is one of ``keys`` → ``[]`` (key present, empty list).
+
+    DeFi-plan A8b / operator directive 2026-05-07: a 200-with-error-envelope must NOT be silently
+    ``return []`` — that masks the failure as an empty instrument universe, so those
+    instrument-days drop out of the expected-coverage denominator (false-complete coverage)
+    instead of being honestly ``attempted_failed``.
+    """
+    if isinstance(data, list):
+        return cast("list[dict[str, object]]", data)
+    if not isinstance(data, dict):
+        raise ConnectionError(
+            f"{venue}: non-list/non-dict REST response ({type(data).__name__}) — transient fetch failure"
+        )
+    payload: dict[str, object] = cast("dict[str, object]", data)
+    for key in keys:
+        if key in payload:
+            value: object = payload[key]
+            if isinstance(value, list):
+                return cast("list[dict[str, object]]", value)
+            # Expected key is present but is not a list (e.g. an error string / null) — malformed.
+            raise ConnectionError(
+                f"{venue}: REST response key '{key}' is not a list ({type(value).__name__}) — transient fetch failure"
+            )
+    raise ConnectionError(f"{venue}: REST response missing all expected keys {keys!r} — transient fetch failure")
+
+
 def order_base_quote(sym0: str, sym1: str) -> tuple[str, str]:
     """Order two token symbols into (base, quote) using quote-token preference.
 

@@ -28,6 +28,7 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ...utils.defi_utils import extract_rest_list_or_raise
 from ._solana_utils import get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
@@ -132,14 +133,7 @@ class MeteoraReferenceDataAdapter(BaseReferenceDataAdapter):
             logger.error("Meteora pools request failed after retries: %s", exc)
             raise
 
-        if isinstance(data, list):
-            return data
-        raw: dict[str, object] = data if isinstance(data, dict) else {}
-        # Meteora API may return {"pools": [...]} or a flat list
-        pools = raw.get("pools") or raw.get("data") or raw.get("groups")
-        if isinstance(pools, list):
-            return pools
-        return []
+        return extract_rest_list_or_raise(data, venue=self.venue, keys=("pools", "data", "groups"))
 
     def _build_pool_record(
         self,
