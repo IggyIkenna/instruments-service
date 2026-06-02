@@ -25,7 +25,7 @@ from ...schemas import (
     OHLCVRef,
 )
 from ...utils import date_to_block
-from ...utils.defi_utils import classify_graph_error
+from ...utils.defi_utils import assert_subgraph_payload, classify_graph_error
 from ...utils.evm_creation_resolver import (
     batch_resolve_evm_creation_timestamps,
     get_protocol_floor_date,
@@ -135,21 +135,11 @@ class AaveV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             self._log_fetch_error(exc)
             raise ConnectionError(str(exc)) from exc
 
-        # Defensive: subgraph occasionally returns ``{"errors": [...]}`` (no
-        # "data" key) on rate-limit / transient indexing issues. Handle the
-        # None case rather than crashing the migration / collector. Also
-        # covers Spark (MakerDAO fork using same schema) which has been the
-        # main offender — sustained errors there should not take down the
-        # whole adapter run.
-        data_field = data.get("data") if isinstance(data, dict) else None
-        if not isinstance(data_field, dict):
-            logger.warning(
-                "%s: subgraph response missing 'data' field for chain=%s; treating as empty (response: %s)",
-                self._venue_prefix,
-                self._chain,
-                str(data)[:200],
-            )
-            return []
+        # A 200-with-``{"errors":[...]}`` / missing-``data`` response is a TRANSIENT FETCH FAILURE, not an
+        # empty universe — raise so the discovery caller records it ``attempted_failed`` (honest gap) rather
+        # than silently masking it as zero reserves (DeFi-plan A8 / operator 2026-05-07). ConnectionError is
+        # caught per-venue in urdi_reference_provider → classified NETWORK/retryable.
+        data_field = assert_subgraph_payload(data, venue=self._venue_prefix, chain=self._chain)
         reserves: list[dict[str, object]] = data_field.get("reserves", [])
         venue_tag = f"{self._venue_prefix}-{self._chain}"
 
