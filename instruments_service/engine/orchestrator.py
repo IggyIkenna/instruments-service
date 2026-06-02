@@ -3537,6 +3537,8 @@ def _write_fixtures_per_league(
     date: str,
     *,
     source_label: str,
+    bucket: str | None = None,
+    skip_if_unchanged: bool = False,
 ) -> None:
     """Write canonical fixtures parquet per league (single-SSOT, no bare fallback).
 
@@ -3604,6 +3606,24 @@ def _write_fixtures_per_league(
         _ldf_clean = stamp_available_at_explicit(
             _ldf.drop(columns=["_canonical_league_id"], errors="ignore"), when=datetime.now(UTC)
         )
+        # Write-skip guard (opt-in, e.g. the daily re-poll): if the on-disk per-league
+        # parquet already holds identical fixture data (ignoring the re-stamped
+        # available_at), skip the re-write. Avoids churning a fresh object version each
+        # run and preserves the earliest available_at. Bias is to write on any doubt.
+        if (
+            skip_if_unchanged
+            and bucket
+            and _per_league_fixtures_data_unchanged(
+                bucket, date, "fixtures", _canonical_league_id(_lid_str), _ldf_clean
+            )
+        ):
+            logger.debug(
+                "FIXTURES skip-if-unchanged: day=%s league=%s (source=%s) unchanged — skipping re-write",
+                date,
+                _canonical_league_id(_lid_str),
+                source_label,
+            )
+            continue
         _gated_sink_write(
             sink,
             data=_ldf_clean,
@@ -3663,6 +3683,66 @@ def _read_existing_per_league_fixture_ids(
         return frozenset()
     fids = pd.to_numeric(existing[fid_col], errors="coerce").dropna().astype(int)
     return frozenset(int(x) for x in fids.tolist())
+
+
+def _per_league_fixtures_data_unchanged(
+    bucket: str,
+    date: str,
+    entity_name: str,
+    canonical_league_id: str,
+    new_df: pd.DataFrame,
+) -> bool:
+    """Return True iff the existing per-league parquet holds identical DATA to ``new_df``.
+
+    Compares the new frame against the on-disk parquet **excluding ``available_at``**
+    (which the writer re-stamps to ``now()`` on every write, so it always differs and
+    is provenance, not fixture data). Used as a write-skip guard for the daily fixtures
+    re-poll: when a (date, league) cell's fixtures are unchanged, re-writing only churns
+    a fresh GCS object version (and would wrongly bump ``available_at`` to a later time).
+    Skipping preserves the original — earliest — ``available_at``.
+
+    **Safety bias:** any uncertainty (missing object, read failure, column/length/dtype
+    mismatch) returns ``False`` → the caller writes. This guard NEVER skips a real change;
+    worst case it fails to skip an unchanged write (no correctness impact, just no saving).
+    Both frames are normalised through an in-memory parquet round-trip so dtypes match the
+    read-back form.
+    """
+    blob_path = (
+        f"sports_reference/by_date/day={date}/entity={entity_name}/league={canonical_league_id}/{entity_name}.parquet"
+    )
+    try:
+        storage_client = get_storage_client()
+        blob = storage_client.bucket(bucket).blob(blob_path)
+        if not blob.exists():
+            return False
+        existing = pd.read_parquet(io.BytesIO(storage_client.download_bytes(bucket=bucket, blob_path=blob_path)))
+        # Round-trip the new frame so its dtypes match the parquet read-back form.
+        new_norm = pd.read_parquet(io.BytesIO(new_df.to_parquet(index=False)))
+    except Exception as exc:
+        logger.debug(
+            "skip-if-unchanged read/normalise failed for gs://%s/%s — will write: %s",
+            bucket,
+            blob_path,
+            exc,
+        )
+        return False
+
+    def _norm(frame: pd.DataFrame) -> pd.DataFrame:
+        out = frame.drop(columns=["available_at"], errors="ignore")
+        _key = (
+            "af_fixture_id"
+            if "af_fixture_id" in out.columns
+            else ("fixture_id" if "fixture_id" in out.columns else None)
+        )
+        if _key is not None:
+            out = out.sort_values(_key, kind="stable")
+        return out.reindex(sorted(out.columns), axis=1).reset_index(drop=True)
+
+    left = _norm(existing)
+    right = _norm(new_norm)
+    if list(left.columns) != list(right.columns) or len(left) != len(right):
+        return False
+    return bool(left.equals(right))
 
 
 def _merge_with_existing_per_league_parquet(
