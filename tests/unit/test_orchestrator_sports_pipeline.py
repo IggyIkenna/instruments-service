@@ -794,3 +794,94 @@ class TestCF11PerFixtureEntityFailurePath:
         # set returned by the oracle.  The key invariant: no record_failed for
         # stat entity data_types (asserted above). record_empty call count is
         # oracle-driven and not asserted here to keep the test focused.
+
+
+# ---------------------------------------------------------------------------
+# _canonical_league_id — CF-7 write-path canonicalisation
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalLeagueIdCF7:
+    """Tests for _canonical_league_id CF-7 provider-suffix stripping.
+
+    The function is the single choke-point that all sports manifest row_key /
+    parquet / record_* league_id writes pass through.  CF-7 wires
+    ``canonicalize_league_id`` from UAC as a second pass so provider-suffixed
+    ids (e.g. ``EPL_39``) are stripped to canonical form before hitting disk.
+    """
+
+    def test_already_canonical_passthrough(self) -> None:
+        """A canonical league_id must pass through unchanged."""
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        assert _canonical_league_id("EPL") == "EPL"
+        assert _canonical_league_id("BUNDESLIGA") == "BUNDESLIGA"
+        assert _canonical_league_id("LA_LIGA") == "LA_LIGA"
+
+    def test_provider_suffixed_stripped(self) -> None:
+        """Provider-suffixed ids where the suffix is a verified provider id
+        must be stripped to the canonical base (CF-7 write-path).
+
+        EPL_39: UAC registry confirms api_football id for EPL is 39 →
+        canonicalize_league_id strips suffix → "EPL".
+        """
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        result = _canonical_league_id("EPL_39")
+        assert result == "EPL", (
+            f"Expected 'EPL' after CF-7 suffix strip, got {result!r}. "
+            "canonicalize_league_id should strip '_39' (verified api_football id)."
+        )
+
+    def test_unresolved_suffix_passthrough(self) -> None:
+        """A suffix that is NOT a registered provider id must pass through unchanged.
+
+        This tests the non-lossy guarantee: the canonicalizer never strips a
+        suffix it cannot verify — the raw value is returned intact.
+        """
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        # 99999 is not a registered api_football id for EPL
+        result = _canonical_league_id("EPL_99999")
+        assert result == "EPL_99999", f"Expected 'EPL_99999' (unresolved suffix → pass through), got {result!r}."
+
+    def test_unresolved_league_key_passthrough(self) -> None:
+        """An unrecognised league key with no suffix must pass through unchanged."""
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        result = _canonical_league_id("UNKNOWN_LEAGUE_XYZ")
+        assert result == "UNKNOWN_LEAGUE_XYZ", f"Expected 'UNKNOWN_LEAGUE_XYZ', got {result!r}."
+
+    def test_idempotent(self) -> None:
+        """canonicalize_league_id(canonicalize_league_id(x)) == canonicalize_league_id(x)."""
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        for raw in ("EPL", "EPL_39", "LA_LIGA", "UNKNOWN_99"):
+            first = _canonical_league_id(raw)
+            second = _canonical_league_id(first)
+            assert first == second, f"Not idempotent for {raw!r}: first={first!r}, second={second!r}"
+
+    def test_numeric_string_resolves_via_pass1(self) -> None:
+        """A raw numeric string (api_football id) should resolve via Pass 1
+        (get_league_by_api_football_id) then be unchanged by Pass 2.
+
+        api_football id 39 → EPL.
+        """
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        result = _canonical_league_id("39")
+        assert result == "EPL", f"Expected 'EPL' from numeric api_football id 39, got {result!r}."
+
+    def test_unknown_numeric_passthrough(self) -> None:
+        """An unknown numeric id should pass through both passes unchanged."""
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        result = _canonical_league_id("9999999")
+        assert result == "9999999", f"Expected '9999999' (no registry match), got {result!r}."
+
+    def test_whitespace_stripped(self) -> None:
+        """Leading/trailing whitespace is stripped before canonicalisation."""
+        from instruments_service.engine.orchestrator import _canonical_league_id
+
+        assert _canonical_league_id("  EPL  ") == "EPL"
+        assert _canonical_league_id("  EPL_39  ") == "EPL"
