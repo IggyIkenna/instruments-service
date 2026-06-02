@@ -1794,26 +1794,36 @@ class TestMorphoAdapter:
             await adapter.get_instruments()
 
     @pytest.mark.asyncio
-    async def test_get_instruments_no_markets_data(self) -> None:
+    async def test_get_instruments_no_markets_data_raises(self) -> None:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
         adapter = MorphoReferenceDataAdapter()
-        with patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post({"data": {}})):
-            results = await adapter.get_instruments()
-        assert results == []
+        # A clean ``data`` payload that is missing the ``markets`` key is a malformed/transient fetch
+        # failure, not an empty universe — it must RAISE so discovery records ``attempted_failed``
+        # (DeFi-plan A8), NOT silently return [].
+        with (
+            patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post({"data": {}})),
+            pytest.raises(ConnectionError),
+        ):
+            await adapter.get_instruments()
 
     @pytest.mark.asyncio
-    async def test_get_instruments_graphql_errors(self) -> None:
+    async def test_get_instruments_graphql_errors_raises(self) -> None:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
         adapter = MorphoReferenceDataAdapter()
+        # A 200 response carrying a top-level ``errors`` array signals an incomplete/failed query (even with
+        # partial ``data``) — the universe cannot be trusted as complete, so it must RAISE (honest
+        # attempted_failed) rather than be silently treated as an empty universe (DeFi-plan A8).
         data_with_errors = {
             "errors": [{"message": "some warning"}],
             "data": {"markets": {"items": []}},
         }
-        with patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(data_with_errors)):
-            results = await adapter.get_instruments()
-        assert results == []
+        with (
+            patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(data_with_errors)),
+            pytest.raises(ConnectionError),
+        ):
+            await adapter.get_instruments()
 
     def test_market_to_record_valid(self) -> None:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
