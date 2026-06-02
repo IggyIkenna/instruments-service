@@ -152,7 +152,7 @@ async def test_run_sports_fixtures_daily_repoll_stamps_available_at(
     """Each row carries `available_at = announced_at = kickoff_utc - 7d`."""
     captured_dfs: list[Any] = []
 
-    def _capture_write(sink, df, day, *, source_label) -> None:
+    def _capture_write(sink, df, day, *, source_label, bucket=None, skip_if_unchanged=False) -> None:
         captured_dfs.append(df.copy())
 
     from instruments_service.triggers.sports_fixtures_daily_repoll import (
