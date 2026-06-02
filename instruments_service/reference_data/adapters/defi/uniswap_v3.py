@@ -123,6 +123,9 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         self._protocol_slug = protocol_slug or "uniswap_v3"
         # Convert protocol slug (e.g. "pancakeswap_v3") to UAC venue prefix (e.g. "PANCAKESWAP_V3")
         self._venue_prefix = self._protocol_slug.replace("_", "").upper()
+        # Set per get_instruments() call: True if any cascade leg (primary or fallback) genuinely
+        # errored (transient/malformed) — drives the all-fallbacks-failed raise (DeFi-plan A8b).
+        self._cascade_errored: bool = False
 
     @property
     def venue(self) -> str:
@@ -133,13 +136,28 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         self,
         instrument_type: str | None = None,
     ) -> list[InstrumentRecord]:
-        """Fetch active Uniswap V3 pools as instruments."""
+        """Fetch active Uniswap V3 pools as instruments.
+
+        Cascade-aware honest absence (DeFi-plan A8b): this adapter tries a chain of subgraph
+        schemas (primary pools → Algebra fork → SushiSwap pairs → Messari). Each fallback's
+        ``200-with-errors`` / missing-``data`` is "try the next schema" control-flow — a TRANSIENT
+        failure on one fallback is NOT fatal while another fallback may still return real data. But
+        if EVERY fallback was exhausted, NONE returned a pool, AND at least one genuinely errored
+        (HTTP error / GraphQL-errors / missing ``data`` payload), the universe cannot be trusted as
+        empty — RAISE ``ConnectionError`` so the discovery caller records ``attempted_failed``
+        instead of silently treating a total fetch failure as an empty instrument universe.
+        Mirrors the MTDS ``dex_swaps_handler`` cascade pattern.
+        """
         if instrument_type not in (None, InstrumentType.POOL):
             return []
 
         url = self._resolve_api_url()
         if not url:
             return []
+
+        # Tracks whether ANY cascade leg (primary or fallback) genuinely errored (transient /
+        # malformed) vs returned a legitimate-but-empty result. Drives the all-fallbacks-failed raise.
+        self._cascade_errored = False
 
         block_num = await self._resolve_block_num()
         block_clause = f", block: {{number: {block_num}}}" if block_num else ""
@@ -149,6 +167,7 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         all_pools: list[dict[str, object]] = []
         skip = 0
         schema_error = False
+        indexers_unavailable = False
         async with self._make_session() as session:
             while skip <= _MAX_SKIP:
                 variables = {"first": _FETCH_LIMIT, "skip": skip}
@@ -161,6 +180,8 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
                         resp.raise_for_status()
                         data = await resp.json()
                 except aiohttp.ClientError as exc:
+                    # Transport error on the PRIMARY query is fatal for the whole discovery — no
+                    # fallback can succeed once the session/gateway is down. Raise immediately.
                     self._log_fetch_error(exc)
                     raise ConnectionError(str(exc)) from exc
 
@@ -171,16 +192,25 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
                     if "has no field" in msg or "no field" in msg:
                         schema_error = True
                     if "bad indexers" in msg or "unavailable" in msg or "too far behind" in msg:
-                        logger.warning(
-                            "%s: subgraph indexers unavailable on %s — infrastructure issue, skipping",
-                            self._protocol_slug,
-                            self._chain,
-                        )
-                        return []
+                        indexers_unavailable = True
+                if resp_errors:
+                    # 200-with-errors on the primary query — a transient/schema fetch failure on
+                    # this leg. Record it; the fallbacks below may still recover real data.
+                    self._cascade_errored = True
+                if indexers_unavailable:
+                    logger.warning(
+                        "%s: subgraph indexers unavailable on %s — infrastructure issue",
+                        self._protocol_slug,
+                        self._chain,
+                    )
+                    break
 
                 if not isinstance(data, dict) or not data.get("data"):
                     if skip == 0 and not schema_error:
-                        logger.warning("UniswapV3: empty response from %s subgraph", self._chain)
+                        logger.warning("UniswapV3: empty/absent 'data' from %s subgraph", self._chain)
+                        # Primary returned 200 but no usable ``data`` payload — transient failure on
+                        # this leg (mirror assert_subgraph_payload semantics). Let fallbacks try.
+                        self._cascade_errored = True
                     break
 
                 raw_data = data.get("data") or {}
@@ -207,6 +237,17 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         if not all_pools:
             all_pools = await self._fetch_messari_pools(url)
 
+        # All cascade legs exhausted with zero pools. If ANY leg genuinely errored (transient /
+        # malformed / GraphQL-errors), the empty universe is NOT trustworthy — raise so discovery
+        # records attempted_failed (DeFi-plan A8b). If every leg cleanly returned an empty result,
+        # this is a legitimate empty universe → return [].
+        if not all_pools and self._cascade_errored:
+            self._log_fetch_error(aiohttp.ClientError("all subgraph schemas failed/errored"))
+            raise ConnectionError(
+                f"{self._protocol_slug}-{self._chain}: all subgraph cascade schemas "
+                "(primary/algebra/sushiswap/messari) failed or returned errors — transient fetch failure"
+            )
+
         results: list[InstrumentRecord] = []
 
         for pool in all_pools:
@@ -218,7 +259,12 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
         return results
 
     async def _fetch_messari_pools(self, url: str) -> list[dict[str, object]]:
-        """Fetch pools from Messari-schema subgraph and normalise to official format."""
+        """Fetch pools from Messari-schema subgraph and normalise to official format.
+
+        Returns ``[]`` on transient/malformed failure (so the caller's cascade can continue) but
+        records ``self._cascade_errored`` so ``get_instruments`` can raise if EVERY leg failed
+        (DeFi-plan A8b).
+        """
         try:
             async with (
                 self._make_session() as session,
@@ -232,12 +278,17 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
                 data = await resp.json()
         except aiohttp.ClientError as exc:
             logger.warning("UniswapV3 Messari fallback failed on %s: %s", self._chain, exc)
+            self._cascade_errored = True
             return []
 
-        if not isinstance(data, dict) or "data" not in data:
+        if not isinstance(data, dict) or not data.get("data"):
+            # missing OR null `data` (e.g. {"data": None} on indexer-unavailable) → cascade error, not a
+            # real empty. `not data.get("data")` catches the None case the bare `"data" not in data` missed
+            # (matches _fetch_algebra_pools / _fetch_sushiswap_pairs).
+            self._cascade_errored = True
             return []
 
-        raw_pools = data.get("data", {}).get("liquidityPools", [])
+        raw_pools = (data.get("data") or {}).get("liquidityPools", [])
         normalised: list[dict[str, object]] = []
         for lp in raw_pools:
             tokens = lp.get("inputTokens", [])
@@ -278,6 +329,10 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
                         data = await resp.json()
 
                     if not isinstance(data, dict) or "data" not in data:
+                        # Missing 'data' on the first page is a transient/malformed leg failure;
+                        # on a later page it just terminates pagination of an already-fetched page.
+                        if not all_pools:
+                            self._cascade_errored = True
                         break
 
                     page: list[dict[str, object]] = (data.get("data") or {}).get("pools") or []
@@ -296,6 +351,7 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
                     skip += _FETCH_LIMIT
         except aiohttp.ClientError as exc:
             logger.warning("%s Algebra fallback failed on %s: %s", self._protocol_slug, self._chain, exc)
+            self._cascade_errored = True
             return []
 
         if all_pools:
@@ -317,9 +373,11 @@ class UniswapV3ReferenceDataAdapter(BaseReferenceDataAdapter):
                 data = await resp.json()
         except aiohttp.ClientError as exc:
             logger.warning("%s SushiSwap pairs fallback failed on %s: %s", self._protocol_slug, self._chain, exc)
+            self._cascade_errored = True
             return []
 
         if not isinstance(data, dict) or "data" not in data:
+            self._cascade_errored = True
             return []
 
         raw_pairs: list[dict[str, object]] = (data.get("data") or {}).get("pairs") or []
