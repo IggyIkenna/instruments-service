@@ -5,6 +5,7 @@ to eliminate copy-paste duplication across 7 adapters.
 """
 
 from datetime import UTC, datetime
+from typing import cast
 
 #: Tokens that act as quote/price denominators in DeFi pool pairs.
 DEFI_QUOTE_TOKENS: frozenset[str] = frozenset({"USDC", "USDT", "DAI", "WETH", "ETH", "WBTC", "USDE"})
@@ -68,6 +69,37 @@ def classify_graph_error(exc: Exception, status: int | None = None) -> str:
     if "503" in msg or "unavailable" in msg:
         return "503"
     return "UNKNOWN"
+
+
+def assert_subgraph_payload(data: object, *, venue: str, chain: str) -> dict[str, object]:
+    """Validate a GraphQL subgraph JSON response; return its inner ``data`` dict, or RAISE.
+
+    Raises ``ConnectionError`` (the IS discovery caller ``urdi_reference_provider`` classifies it as a
+    retryable NETWORK failure → records the venue/day ``attempted_failed``) when the response signals a
+    TRANSIENT FETCH FAILURE rather than a legitimate empty universe:
+
+    * HTTP 200 with a top-level ``errors`` array (GraphQL error / rate-limit / indexing lag), OR
+    * a missing / non-dict ``data`` payload.
+
+    A present ``data`` dict (even with empty collections inside) is a legitimate response and is returned.
+
+    DeFi-plan A8 / operator directive 2026-05-07: a soft ``200-with-errors`` must NOT be silently
+    ``return []`` — that masks the failure as an empty instrument universe, so those instrument-days drop
+    out of the expected coverage denominator entirely (false-complete coverage) instead of being honestly
+    ``attempted_failed``.
+    """
+    if not isinstance(data, dict):
+        raise ConnectionError(f"{venue}-{chain}: non-dict subgraph response — transient fetch failure")
+    payload: dict[str, object] = cast("dict[str, object]", data)
+    errors: object = payload.get("errors")
+    if errors:
+        raise ConnectionError(
+            f"{venue}-{chain}: subgraph returned GraphQL errors — transient fetch failure: {str(errors)[:200]}"
+        )
+    inner: object = payload.get("data")
+    if not isinstance(inner, dict):
+        raise ConnectionError(f"{venue}-{chain}: subgraph response missing 'data' payload — transient fetch failure")
+    return cast("dict[str, object]", inner)
 
 
 def order_base_quote(sym0: str, sym1: str) -> tuple[str, str]:
