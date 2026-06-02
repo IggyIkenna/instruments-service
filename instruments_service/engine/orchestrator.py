@@ -74,6 +74,9 @@ from unified_api_contracts.sports import (
     is_any_league_refresh_date,
     is_in_known_gap,
 )
+from unified_api_contracts.sports import (
+    canonicalize_league_id as _uac_canonicalize_league_id,
+)
 from unified_trading_library import (
     CaptureStatus,
     DataSink,
@@ -200,21 +203,32 @@ def _pipeline_mode_for_sports_data_type(data_type: str) -> PipelineMode:
 def _canonical_league_id(lid_raw: object) -> str:
     """Normalize a league_id at write time to canonical form.
 
-    Used at every per-league GCS partition write so legacy numeric
-    af_league_ids (39, 78, 140, ...) get rewritten to canonical strings
-    (EPL, BUNDESLIGA, LA_LIGA, ...) before they hit disk. Without this
-    normalization, mixed numeric/canonical paths accumulate and per-league
-    downstream readers (FSS, ML feature joins) miss data.
+    Used at every per-league GCS partition write so future rows are born
+    with canonical league_ids (CF-7 write-path). Two passes:
 
-    - all-digits string → look up via UAC ``get_league_by_api_football_id``
-    - already-canonical → pass through unchanged
-    - unknown numeric → leave as-is (operator can debug)
+    Pass 1 — numeric resolution: all-digits string → look up via UAC
+    ``get_league_by_api_football_id`` (e.g. "39" → "EPL"). Unknown
+    numerics fall through unchanged.
+
+    Pass 2 — provider-suffix strip: delegate to UAC
+    ``canonicalize_league_id`` which conservatively strips a trailing
+    ``_<digits>`` segment *only* when the suffix is provably a registered
+    provider ID for the base key (e.g. "EPL_39" → "EPL",
+    "SCOTTISH_LEAGUE_CUP_185" → "SCOTTISH_LEAGUE_CUP"). Unresolved keys
+    pass through unchanged — non-lossy by design (CF-7 spec).
+
+    - already-canonical (e.g. "EPL") → pass through both passes unchanged
+    - provider-suffixed (e.g. "EPL_39") → Pass 2 strips suffix → "EPL"
+    - numeric (e.g. "39") → Pass 1 resolves → "EPL" → Pass 2 no-op
+    - unknown numeric (e.g. "9999") → Pass 1 no-op → Pass 2 no-op → "9999"
     """
     s = str(lid_raw).strip()
-    if not s or not s.isdigit():
-        return s
-    league = get_league_by_api_football_id(int(s))
-    return league.league_id if league is not None else s
+    # Pass 1: numeric → canonical via api_football id lookup
+    if s and s.isdigit():
+        league = get_league_by_api_football_id(int(s))
+        s = league.league_id if league is not None else s
+    # Pass 2: strip provider-id suffix via UAC canonicalizer (CF-7 write-path)
+    return _uac_canonicalize_league_id(s)
 
 
 def _coerce_adapter_output(item: object) -> dict[str, object]:
