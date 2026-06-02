@@ -18,14 +18,26 @@ whole point is to fail loud before any shard starts processing. Shard-level
 failure isolation (see ``codex/04-architecture/shard-level-failure-isolation.md``)
 applies to in-loop adapter calls, not to pre-flight dependency gates.
 
+Also provides :func:`check_sports_manifest_v9_columns` — a gated regression
+guard that verifies the upstream sports manifest ``_index`` carries the
+canonical v9 schema columns (``asset_group``, ``source``, ``pipeline_mode``,
+``available_at``). This guard is safe to land pre-migration because it is
+only enforced when ``SPORTS_V9_ENFORCED=true`` (via
+:class:`~instruments_service.config.InstrumentsServiceConfig`) OR when the
+manifest's own ``schema_version`` column reads 9. Pre-cutover (v8 data, flag
+off) it logs a one-line WARNING and passes.
+
 SSOT: ``unified-trading-pm/codex/02-data/sports-adapter-dependency-order.md``
+       ``unified-trading-pm/plans/active/sports_manifest_canonicalisation_2026_06_01.md`` §P2
 """
 
 from __future__ import annotations
 
 import logging
 import os
+from typing import cast
 
+import pandas as pd
 from unified_trading_library import DependencyError, get_storage_client, resolve_bucket_name
 
 from instruments_service.config import get_config
@@ -158,3 +170,74 @@ def check_api_football_dependency(date: str, bucket: str | None = None) -> None:
 def venue_requires_api_football(venue: str) -> bool:
     """Return True if the given sports venue depends on api-football reference data."""
     return venue.lower() in _API_FOOTBALL_DEPENDENT_VENUES
+
+
+# ---------------------------------------------------------------------------
+# v9 schema-column regression guard (Task 2 — sports_manifest_canonicalisation
+# §P2, 2026-06-02).  Gated so it is safe to land pre-migration.
+# ---------------------------------------------------------------------------
+
+_V9_REQUIRED_COLUMNS: frozenset[str] = frozenset({"asset_group", "source", "pipeline_mode", "available_at"})
+
+
+def check_sports_manifest_v9_columns(manifest_df: pd.DataFrame) -> None:
+    """Assert that the upstream sports manifest ``_index`` carries v9 columns.
+
+    This is a **gated regression guard** — safe to land before the
+    single-walk canonicalisation walk completes.  Enforcement logic:
+
+    1. If ``SPORTS_V9_ENFORCED=true`` (via ``InstrumentsServiceConfig``),
+       OR the manifest's ``schema_version`` column is present and equals 9,
+       RAISE ``DependencyError`` when any of
+       (``asset_group``, ``source``, ``pipeline_mode``, ``available_at``)
+       are missing from the DataFrame columns.
+
+    2. Otherwise (default — pre-migration, v8 data, flag off):
+       LOG a one-line WARNING and PASS.  This keeps the write-path healthy
+       until the walk promotes all rows to v9.
+
+    Args:
+        manifest_df: The sports ``_index`` DataFrame read at preflight.
+            Must be a pandas DataFrame (empty is fine — column set is what
+            matters, not row count).
+
+    Raises:
+        DependencyError: Only when enforcement is active (see above) and
+            one or more required v9 columns are absent.
+    """
+    present_cols = set(manifest_df.columns)
+    missing = _V9_REQUIRED_COLUMNS - present_cols
+
+    if not missing:
+        # All v9 columns present — always pass.
+        return
+
+    cfg = get_config()
+
+    # Determine whether to enforce.  Two activation paths:
+    # (a) explicit env flag  SPORTS_V9_ENFORCED=true
+    # (b) the manifest itself already claims schema_version=9 but is missing cols
+    #     (should never happen after a correct walk — defensive guard).
+    schema_version_is_9 = False
+    if "schema_version" in present_cols and not manifest_df.empty:
+        try:
+            sv_raw: object = cast(object, manifest_df["schema_version"].dropna().iloc[0])
+            schema_version_is_9 = int(str(sv_raw)) == 9
+        except (IndexError, TypeError, ValueError):
+            pass
+
+    enforce = cfg.sports_v9_enforced or schema_version_is_9
+
+    if enforce:
+        raise DependencyError(
+            f"Sports manifest _index is missing v9 schema columns: {sorted(missing)}. "
+            "Run the sports canonicalisation walk "
+            "(sports_manifest_canonicalisation_2026_06_01.md §E1-E8) before enabling SPORTS_V9_ENFORCED."
+        )
+
+    logger.warning(
+        "sports v9-column preflight: upstream manifest missing %s "
+        "— enforcement off (SPORTS_V9_ENFORCED=false, schema_version≠9); "
+        "set SPORTS_V9_ENFORCED=true post-canonicalisation walk to enforce.",
+        sorted(missing),
+    )
