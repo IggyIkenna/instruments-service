@@ -126,6 +126,59 @@ class TestDefiUtilsAdditional:
         assert base == "CRV"
         assert quote == "USDE"
 
+    # ── extract_rest_list_or_raise (DeFi-plan A8b honest absence) ──────────────
+
+    def test_extract_rest_list_bare_list_returned(self) -> None:
+        from instruments_service.reference_data.utils.defi_utils import extract_rest_list_or_raise
+
+        rows = [{"a": 1}, {"b": 2}]
+        assert extract_rest_list_or_raise(rows, venue="X", keys=("markets",)) == rows
+
+    def test_extract_rest_list_empty_bare_list_is_legit_empty(self) -> None:
+        from instruments_service.reference_data.utils.defi_utils import extract_rest_list_or_raise
+
+        # A bare [] is a legitimately-empty universe — return [], do NOT raise.
+        assert extract_rest_list_or_raise([], venue="X", keys=("markets",)) == []
+
+    def test_extract_rest_list_key_present_with_rows(self) -> None:
+        from instruments_service.reference_data.utils.defi_utils import extract_rest_list_or_raise
+
+        rows = [{"a": 1}]
+        assert extract_rest_list_or_raise({"markets": rows}, venue="X", keys=("markets", "data")) == rows
+
+    def test_extract_rest_list_key_present_empty_is_legit_empty(self) -> None:
+        from instruments_service.reference_data.utils.defi_utils import extract_rest_list_or_raise
+
+        # {"markets": []} is a legit empty universe (source returned zero) — return [], do NOT raise.
+        assert extract_rest_list_or_raise({"markets": []}, venue="X", keys=("markets",)) == []
+
+    def test_extract_rest_list_second_key_used(self) -> None:
+        from instruments_service.reference_data.utils.defi_utils import extract_rest_list_or_raise
+
+        rows = [{"a": 1}]
+        assert extract_rest_list_or_raise({"data": rows}, venue="X", keys=("markets", "data")) == rows
+
+    def test_extract_rest_list_missing_all_keys_raises(self) -> None:
+        from instruments_service.reference_data.utils.defi_utils import extract_rest_list_or_raise
+
+        # A dict missing EVERY expected key is an error envelope / schema drift, not an empty
+        # universe — must RAISE so discovery records attempted_failed (DeFi-plan A8b).
+        with pytest.raises(ConnectionError):
+            extract_rest_list_or_raise({"error": "rate limited"}, venue="X", keys=("markets", "data"))
+
+    def test_extract_rest_list_key_present_non_list_raises(self) -> None:
+        from instruments_service.reference_data.utils.defi_utils import extract_rest_list_or_raise
+
+        # Expected key present but its value is not a list (e.g. an error string) — malformed → raise.
+        with pytest.raises(ConnectionError):
+            extract_rest_list_or_raise({"markets": "boom"}, venue="X", keys=("markets",))
+
+    def test_extract_rest_list_non_dict_non_list_raises(self) -> None:
+        from instruments_service.reference_data.utils.defi_utils import extract_rest_list_or_raise
+
+        with pytest.raises(ConnectionError):
+            extract_rest_list_or_raise("not json", venue="X", keys=("markets",))
+
 
 # ── UniswapV3ReferenceDataAdapter ─────────────────────────────────────────────
 
@@ -565,7 +618,11 @@ class TestUniswapV3Adapter:
         assert results[0].base_asset == "UNI"
 
     @pytest.mark.asyncio
-    async def test_get_instruments_indexer_unavailable_returns_empty(self) -> None:
+    async def test_get_instruments_indexer_unavailable_raises(self) -> None:
+        # A8b: ALL cascade fallbacks erroring (indexer unavailable — GraphQL errors / data=None on every
+        # query) is a TRANSIENT FETCH FAILURE, not an empty universe. uniswap_v3 is cascade-aware: it tries
+        # each fallback, and when all errored with zero pools it RAISES (→ caller records attempted_failed)
+        # rather than masking the total failure as an empty instrument universe.
         from instruments_service.reference_data.adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
 
         adapter = UniswapV3ReferenceDataAdapter(api_key="test-key", chain="ETHEREUM")
@@ -579,9 +636,9 @@ class TestUniswapV3Adapter:
                 {"uniswap_v3": {"ETHEREUM": "test-subgraph-id"}},
             ),
             patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(unavailable_data)),
+            pytest.raises(ConnectionError),
         ):
-            results = await adapter.get_instruments()
-        assert results == []
+            await adapter.get_instruments()
 
 
 # ── RaydiumReferenceDataAdapter ───────────────────────────────────────────────
@@ -1429,13 +1486,18 @@ class TestDriftAdapter:
         assert markets == []
 
     @pytest.mark.asyncio
-    async def test_fetch_all_markets_no_markets_key(self) -> None:
+    async def test_fetch_all_markets_no_markets_key_raises(self) -> None:
         from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
 
+        # A 200 response whose body is a dict missing the expected ``markets`` key is a malformed /
+        # error envelope — a TRANSIENT fetch failure, not an empty universe. It must RAISE so the
+        # discovery caller records ``attempted_failed`` instead of silently returning [] (DeFi-plan A8b).
         adapter = DriftReferenceDataAdapter()
-        with patch.object(adapter, "_get_with_retry", return_value={"other": "data"}):
-            markets = await adapter._fetch_all_markets()
-        assert markets == []
+        with (
+            patch.object(adapter, "_get_with_retry", return_value={"other": "data"}),
+            pytest.raises(ConnectionError),
+        ):
+            await adapter._fetch_all_markets()
 
     def test_build_perp_record_empty_symbol(self) -> None:
         from instruments_service.reference_data.adapters.defi.drift import DriftReferenceDataAdapter
@@ -1794,26 +1856,36 @@ class TestMorphoAdapter:
             await adapter.get_instruments()
 
     @pytest.mark.asyncio
-    async def test_get_instruments_no_markets_data(self) -> None:
+    async def test_get_instruments_no_markets_data_raises(self) -> None:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
         adapter = MorphoReferenceDataAdapter()
-        with patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post({"data": {}})):
-            results = await adapter.get_instruments()
-        assert results == []
+        # A clean ``data`` payload that is missing the ``markets`` key is a malformed/transient fetch
+        # failure, not an empty universe — it must RAISE so discovery records ``attempted_failed``
+        # (DeFi-plan A8), NOT silently return [].
+        with (
+            patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post({"data": {}})),
+            pytest.raises(ConnectionError),
+        ):
+            await adapter.get_instruments()
 
     @pytest.mark.asyncio
-    async def test_get_instruments_graphql_errors(self) -> None:
+    async def test_get_instruments_graphql_errors_raises(self) -> None:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
 
         adapter = MorphoReferenceDataAdapter()
+        # A 200 response carrying a top-level ``errors`` array signals an incomplete/failed query (even with
+        # partial ``data``) — the universe cannot be trusted as complete, so it must RAISE (honest
+        # attempted_failed) rather than be silently treated as an empty universe (DeFi-plan A8).
         data_with_errors = {
             "errors": [{"message": "some warning"}],
             "data": {"markets": {"items": []}},
         }
-        with patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(data_with_errors)):
-            results = await adapter.get_instruments()
-        assert results == []
+        with (
+            patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(data_with_errors)),
+            pytest.raises(ConnectionError),
+        ):
+            await adapter.get_instruments()
 
     def test_market_to_record_valid(self) -> None:
         from instruments_service.reference_data.adapters.defi.morpho import MorphoReferenceDataAdapter
@@ -2395,13 +2467,17 @@ class TestLidoAdapter:
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_get_instrument_not_found_raises_attribute_error(self) -> None:
-        """Lido get_instrument references inst.symbol which does not exist on InstrumentRecord."""
+    async def test_get_instrument_not_found_returns_none(self) -> None:
+        """A non-matching symbol walks every record and returns None without raising.
+
+        Regression guard for the ``inst.symbol == symbol`` bug: ``InstrumentRecord``
+        has no ``symbol`` attribute, so the pre-fix lookup raised ``AttributeError``
+        on any miss. Canonical form matches ``instrument_key.endswith(f":{symbol}")``.
+        """
         from instruments_service.reference_data.adapters.defi.lido import LidoReferenceDataAdapter
 
         adapter = LidoReferenceDataAdapter()
-        with pytest.raises(AttributeError):
-            await adapter.get_instrument("nonexistent")
+        assert await adapter.get_instrument("nonexistent") is None
 
 
 # ── EtherFiReferenceDataAdapter ───────────────────────────────────────────────
@@ -2450,13 +2526,17 @@ class TestEtherFiAdapter:
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_get_instrument_not_found_raises_attribute_error(self) -> None:
-        """EtherFi get_instrument references inst.symbol which does not exist on InstrumentRecord."""
+    async def test_get_instrument_not_found_returns_none(self) -> None:
+        """A non-matching symbol walks every record and returns None without raising.
+
+        Regression guard for the ``inst.symbol == symbol`` bug: ``InstrumentRecord``
+        has no ``symbol`` attribute, so the pre-fix lookup raised ``AttributeError``
+        on any miss. Canonical form matches ``instrument_key.endswith(f":{symbol}")``.
+        """
         from instruments_service.reference_data.adapters.defi.etherfi import EtherFiReferenceDataAdapter
 
         adapter = EtherFiReferenceDataAdapter()
-        with pytest.raises(AttributeError):
-            await adapter.get_instrument("nonexistent")
+        assert await adapter.get_instrument("nonexistent") is None
 
 
 # ── EthFiGovernanceReferenceDataAdapter ───────────────────────────────────────
@@ -2566,13 +2646,17 @@ class TestEthenaAdapter:
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_get_instrument_not_found_raises_attribute_error(self) -> None:
-        """Ethena get_instrument references inst.symbol which does not exist on InstrumentRecord."""
+    async def test_get_instrument_not_found_returns_none(self) -> None:
+        """A non-matching symbol walks every record and returns None without raising.
+
+        Regression guard for the ``inst.symbol == symbol`` bug: ``InstrumentRecord``
+        has no ``symbol`` attribute, so the pre-fix lookup raised ``AttributeError``
+        on any miss. Canonical form matches ``instrument_key.endswith(f":{symbol}")``.
+        """
         from instruments_service.reference_data.adapters.defi.ethena import EthenaReferenceDataAdapter
 
         adapter = EthenaReferenceDataAdapter()
-        with pytest.raises(AttributeError):
-            await adapter.get_instrument("nonexistent")
+        assert await adapter.get_instrument("nonexistent") is None
 
 
 # ── Error classifier functions ────────────────────────────────────────────────
@@ -2777,3 +2861,155 @@ class TestTimestampResolution:
             results = await adapter.get_instruments()
         assert len(results) == 1
         assert results[0].available_from_datetime == resolved_ts
+
+
+# ── A8b: REST/Solana adapter honest-absence on malformed body ─────────────────
+
+
+class TestRestAdapterHonestAbsenceA8b:
+    """DeFi-plan A8b: REST/Solana reference adapters must RAISE (→ attempted_failed) on a
+    200-with-error-envelope (dict missing the expected list key), and return [] only for a
+    legitimately-empty response (bare [] OR {"<key>": []})."""
+
+    @pytest.mark.asyncio
+    async def test_flash_trade_missing_key_raises(self) -> None:
+        from instruments_service.reference_data.adapters.defi.flash_trade import FlashTradeReferenceDataAdapter
+
+        adapter = FlashTradeReferenceDataAdapter()
+        with (
+            patch.object(adapter, "_get_with_retry", return_value={"error": "boom"}),
+            pytest.raises(ConnectionError),
+        ):
+            await adapter._fetch_perp_markets()
+
+    @pytest.mark.asyncio
+    async def test_flash_trade_empty_list_is_legit_empty(self) -> None:
+        from instruments_service.reference_data.adapters.defi.flash_trade import FlashTradeReferenceDataAdapter
+
+        adapter = FlashTradeReferenceDataAdapter()
+        with patch.object(adapter, "_get_with_retry", return_value=[]):
+            assert await adapter._fetch_perp_markets() == []
+
+    @pytest.mark.asyncio
+    async def test_lifinity_missing_key_raises(self) -> None:
+        from instruments_service.reference_data.adapters.defi.lifinity import LifinityReferenceDataAdapter
+
+        adapter = LifinityReferenceDataAdapter()
+        with (
+            patch.object(adapter, "_get_with_retry", return_value={"error": "boom"}),
+            pytest.raises(ConnectionError),
+        ):
+            await adapter._fetch_pools()
+
+    @pytest.mark.asyncio
+    async def test_lifinity_empty_pools_key_is_legit_empty(self) -> None:
+        from instruments_service.reference_data.adapters.defi.lifinity import LifinityReferenceDataAdapter
+
+        adapter = LifinityReferenceDataAdapter()
+        with patch.object(adapter, "_get_with_retry", return_value={"pools": []}):
+            assert await adapter._fetch_pools() == []
+
+    @pytest.mark.asyncio
+    async def test_mango_missing_key_raises(self) -> None:
+        from instruments_service.reference_data.adapters.defi.mango import MangoReferenceDataAdapter
+
+        adapter = MangoReferenceDataAdapter()
+        with (
+            patch.object(adapter, "_get_with_retry", return_value={"other": "data"}),
+            pytest.raises(ConnectionError),
+        ):
+            await adapter._fetch_perp_markets()
+
+    @pytest.mark.asyncio
+    async def test_meteora_missing_key_raises(self) -> None:
+        from instruments_service.reference_data.adapters.defi.meteora import MeteoraReferenceDataAdapter
+
+        adapter = MeteoraReferenceDataAdapter()
+        with (
+            patch.object(adapter, "_get_with_retry", return_value={"error": "boom"}),
+            pytest.raises(ConnectionError),
+        ):
+            await adapter._fetch_pools()
+
+    @pytest.mark.asyncio
+    async def test_phoenix_missing_key_raises(self) -> None:
+        from instruments_service.reference_data.adapters.defi.phoenix import PhoenixReferenceDataAdapter
+
+        adapter = PhoenixReferenceDataAdapter()
+        with (
+            patch.object(adapter, "_get_with_retry", return_value={"error": "boom"}),
+            pytest.raises(ConnectionError),
+        ):
+            await adapter._fetch_markets()
+
+    @pytest.mark.asyncio
+    async def test_zeta_missing_key_raises(self) -> None:
+        from instruments_service.reference_data.adapters.defi.zeta import ZetaReferenceDataAdapter
+
+        adapter = ZetaReferenceDataAdapter()
+        with (
+            patch.object(adapter, "_get_with_retry", return_value={"other": "data"}),
+            pytest.raises(ConnectionError),
+        ):
+            await adapter._fetch_perp_markets()
+
+    @pytest.mark.asyncio
+    async def test_zeta_empty_markets_key_is_legit_empty(self) -> None:
+        from instruments_service.reference_data.adapters.defi.zeta import ZetaReferenceDataAdapter
+
+        adapter = ZetaReferenceDataAdapter()
+        with patch.object(adapter, "_get_with_retry", return_value={"markets": []}):
+            assert await adapter._fetch_perp_markets() == []
+
+
+# ── A8b: Uniswap V3 cascade-aware honest absence ──────────────────────────────
+
+
+class TestUniswapV3CascadeHonestAbsenceA8b:
+    """DeFi-plan A8b: a TRANSIENT failure on one cascade leg may try the next, but if EVERY leg
+    failed/errored (none returned real pools), get_instruments must RAISE (→ attempted_failed)
+    instead of silently returning an empty universe. A clean empty cascade returns []."""
+
+    @pytest.mark.asyncio
+    async def test_all_fallbacks_error_raises(self) -> None:
+        from instruments_service.reference_data.adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
+
+        adapter = UniswapV3ReferenceDataAdapter(api_key="test-key", chain="ETHEREUM")
+        # Primary returns a 200 with a top-level errors array (no usable data) → cascade_errored;
+        # every fallback then also errors (missing 'data'). All legs fail → RAISE.
+        primary = {"errors": [{"message": "indexing error"}], "data": None}
+
+        async def _fake_fetch(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+            # algebra / sushiswap / messari fallbacks all record cascade_errored and return []
+            adapter._cascade_errored = True
+            return []
+
+        with (
+            patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(primary)),
+            patch.object(adapter, "_fetch_algebra_pools", side_effect=_fake_fetch),
+            patch.object(adapter, "_fetch_sushiswap_pairs", side_effect=_fake_fetch),
+            patch.object(adapter, "_fetch_messari_pools", side_effect=_fake_fetch),
+            patch("instruments_service.reference_data.adapters.defi.uniswap_v3.log_event"),
+            pytest.raises(ConnectionError),
+        ):
+            await adapter.get_instruments()
+
+    @pytest.mark.asyncio
+    async def test_clean_empty_cascade_returns_empty(self) -> None:
+        from instruments_service.reference_data.adapters.defi.uniswap_v3 import UniswapV3ReferenceDataAdapter
+
+        adapter = UniswapV3ReferenceDataAdapter(api_key="test-key", chain="ETHEREUM")
+        # Primary returns a clean, well-formed empty page (data present, pools empty) → NOT an error.
+        primary = {"data": {"pools": []}}
+
+        async def _clean_empty(*_args: object, **_kwargs: object) -> list[dict[str, object]]:
+            return []  # fallback cleanly empty, no cascade_errored set
+
+        with (
+            patch("aiohttp.ClientSession", return_value=_mock_aiohttp_session_post(primary)),
+            patch.object(adapter, "_fetch_algebra_pools", side_effect=_clean_empty),
+            patch.object(adapter, "_fetch_sushiswap_pairs", side_effect=_clean_empty),
+            patch.object(adapter, "_fetch_messari_pools", side_effect=_clean_empty),
+        ):
+            results = await adapter.get_instruments()
+        assert results == []

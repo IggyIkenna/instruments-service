@@ -196,7 +196,7 @@ class CurveReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch a single instrument by identifier."""
         instruments = await self.get_instruments()
         for inst in instruments:
-            if inst.raw_symbol == symbol or inst.symbol == symbol:
+            if inst.raw_symbol == symbol or inst.instrument_key.endswith(f":{symbol}"):
                 return inst
         return None
 
