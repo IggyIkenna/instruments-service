@@ -834,16 +834,21 @@ class TestCanonicalLeagueIdCF7:
         )
 
     def test_unresolved_suffix_passthrough(self) -> None:
-        """A suffix that is NOT a registered provider id must pass through unchanged.
+        """A 1-2 digit suffix that is NOT a registered provider id passes through unchanged.
 
-        This tests the non-lossy guarantee: the canonicalizer never strips a
-        suffix it cannot verify — the raw value is returned intact.
+        Non-lossy guarantee: the canonicalizer never strips a tier-like (1-2 digit)
+        suffix it cannot verify as a provider id — the raw value is returned intact.
+        NOTE: this guarantee applies to 1-2 digit suffixes only. Per UAC
+        ``canonicalize_league_id`` Step 3a (added dc76f1a6), a 3+-digit suffix on a
+        resolving base is treated as a provider/season id and IS stripped regardless of
+        registration (e.g. "EPL_99999" → "EPL", "SCOTTISH_LEAGUE_CUP_185" →
+        "SCOTTISH_LEAGUE_CUP") — real league tiers never exceed 2 digits.
         """
         from instruments_service.engine.orchestrator import _canonical_league_id
 
-        # 99999 is not a registered api_football id for EPL
-        result = _canonical_league_id("EPL_99999")
-        assert result == "EPL_99999", f"Expected 'EPL_99999' (unresolved suffix → pass through), got {result!r}."
+        # 88 is not a registered provider id for EPL and is <100 (tier-like) → pass through.
+        result = _canonical_league_id("EPL_88")
+        assert result == "EPL_88", f"Expected 'EPL_88' (unregistered 1-2 digit suffix → pass through), got {result!r}."
 
     def test_unresolved_league_key_passthrough(self) -> None:
         """An unrecognised league key with no suffix must pass through unchanged."""

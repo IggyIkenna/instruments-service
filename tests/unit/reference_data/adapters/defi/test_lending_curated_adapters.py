@@ -72,8 +72,10 @@ async def test_venus_get_instruments_emits_lending_records() -> None:
         assert rec.status == InstrumentStatus.ACTIVE
         assert rec.quote_asset == "USDC"
         assert rec.tick_size == Decimal("0.000001")
-        # resolver returned {} → record falls back to the protocol floor date.
-        assert rec.available_from_datetime == datetime.fromisoformat("2020-09-22T00:00:00+00:00")
+        # resolver returned {} → record falls back to the protocol floor date, which is the
+        # canonical UAC PROTOCOL_LAUNCH_DATES[("BSC","VENUS")] = 2020-10-08 (vBNB BSC deploy;
+        # UAC is the SSOT, consulted before the local LENDING_PROTOCOL_DEPLOY_DATES fallback).
+        assert rec.available_from_datetime == datetime.fromisoformat("2020-10-08T00:00:00+00:00")
 
 
 @pytest.mark.asyncio
