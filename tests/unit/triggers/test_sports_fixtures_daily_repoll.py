@@ -226,7 +226,7 @@ async def test_run_sports_fixtures_daily_repoll_record_captured_shape(
         "data_type": "FIXTURES",
         "league_id": "EPL",
     }
-    assert call.kwargs["category"] == "sports"
+    assert call.kwargs["asset_group"] == "sports"
     assert call.kwargs["instrument_type"] == "football"
     assert call.kwargs["data_type"] == "FIXTURES"
     assert call.kwargs["league_id"] == "EPL"
