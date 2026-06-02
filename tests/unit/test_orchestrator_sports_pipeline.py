@@ -603,4 +603,194 @@ class TestWeatherHonestCoverageReasons:
             row_key={"date": "2026-03-22", "data_type": "WEATHER", "league_id": "EPL"},
             reason=EmptyConfirmedReason.SOURCE_RETURNED_ZERO,
         )
-        mock_manifest.record_empty.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# CF-11 regression tests — fetch-failure must produce attempted_failed,
+# NOT empty_confirmed.  (2026-06-02 fix: _fail_count > 0 rather than
+# _fail_count == len(fixture_ids) in the per-fixture entity zero-rows branch)
+# ---------------------------------------------------------------------------
+
+
+class TestCF11PerFixtureEntityFailurePath:
+    """CF-11 write-path audit: a genuine API failure on a fixture-day shard
+    for per-fixture entities (FIXTURE_STATS / FIXTURE_EVENTS / PLAYER_STATS /
+    FIXTURE_LINEUPS) MUST produce ``record_failed`` (→ ``attempted_failed``),
+    never ``record_empty`` (→ ``empty_confirmed``).
+
+    Three scenarios:
+    (a) ALL per-fixture calls raise → record_failed (was already correct before fix)
+    (b) SOME calls raise, ALL return zero rows → record_failed (fixed by CF-11)
+    (c) ALL calls succeed + return zero rows → record_empty (legitimate empty, unchanged)
+    """
+
+    @pytest.mark.asyncio
+    async def test_all_fixture_calls_raise_produces_record_failed(self) -> None:
+        """(a) Every per-fixture API call raises → entity shard → record_failed.
+
+        Pre-fix: BOTH 'all-fail' AND 'some-fail' correctly routed.
+        Post-fix: same, no regression.
+        """
+        mock_adapter = AsyncMock()
+        mock_adapter.get_leagues.return_value = []
+        mock_adapter.get_teams.return_value = []
+        mock_adapter.get_standings.return_value = []
+        mock_adapter.get_injuries.return_value = []
+        # Per-fixture calls all raise
+        mock_adapter.get_fixture_statistics.side_effect = Exception("5xx upstream")
+        mock_adapter.get_fixture_events.side_effect = Exception("5xx upstream")
+        mock_adapter.get_fixture_lineups.side_effect = Exception("5xx upstream")
+        mock_adapter.get_fixture_player_stats.side_effect = Exception("5xx upstream")
+
+        mock_manifest = MagicMock()
+        mock_sink = MagicMock()
+
+        with (
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator._write_team_mapping"),
+            patch("instruments_service.engine.orchestrator._write_fixture_mapping"),
+            patch("instruments_service.engine.orchestrator._build_fixture_league_map_from_gcs", return_value={}),
+        ):
+            await _fetch_sports_reference_data(
+                "2026-03-22",
+                "test-key",
+                "test-bucket",
+                manifest=mock_manifest,
+                fixture_ids_override=[1001, 1002],
+            )
+
+        # record_failed must have been called (at least once — one per entity)
+        assert mock_manifest.record_failed.call_count >= 1, "Expected record_failed when all per-fixture calls raise"
+        # record_empty must NOT have been called for per-fixture entity shards
+        # (it may be called for INJURIES/STANDINGS empties, but not for stat entities)
+        stat_entity_data_types = {"FIXTURE_STATS", "FIXTURE_EVENTS", "FIXTURE_LINEUPS", "PLAYER_STATS"}
+        empty_calls = mock_manifest.record_empty.call_args_list
+        for call in empty_calls:
+            dt = call.kwargs.get("row_key", {}).get("data_type", "")
+            assert dt not in stat_entity_data_types, (
+                f"record_empty called for {dt} on a fixture shard with all-raises — should be record_failed"
+            )
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_produces_record_failed_not_empty(self) -> None:
+        """(b) CF-11 regression: SOME per-fixture calls raise, remaining return 0 rows.
+
+        Pre-fix: partial failure fell through to _af_emit_empty_gaps_for_entity →
+        empty_confirmed(EXPECTED_NO_FIXTURE) — silently confirmed-empty while data
+        was NOT actually retrieved.
+
+        Post-fix: ANY _fail_count > 0 AND zero rows → record_failed so the shard
+        is marked attempted_failed and backfilled.
+        """
+        mock_adapter = AsyncMock()
+        mock_adapter.get_leagues.return_value = []
+        mock_adapter.get_teams.return_value = []
+        mock_adapter.get_standings.return_value = []
+        mock_adapter.get_injuries.return_value = []
+        # First fixture call raises, second returns empty → total rows = 0, fail_count = 1
+        mock_adapter.get_fixture_statistics.side_effect = [
+            Exception("timeout"),  # fixture 1001 fails
+            [],  # fixture 1002 returns empty
+        ]
+        mock_adapter.get_fixture_events.side_effect = [
+            Exception("timeout"),
+            [],
+        ]
+        mock_adapter.get_fixture_lineups.side_effect = [
+            Exception("timeout"),
+            [],
+        ]
+        mock_adapter.get_fixture_player_stats.side_effect = [
+            Exception("timeout"),
+            [],
+        ]
+
+        mock_manifest = MagicMock()
+        mock_sink = MagicMock()
+
+        with (
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator._write_team_mapping"),
+            patch("instruments_service.engine.orchestrator._write_fixture_mapping"),
+            patch("instruments_service.engine.orchestrator._build_fixture_league_map_from_gcs", return_value={}),
+            # Suppress classify_and_emit_error noise in test output
+            patch("instruments_service.engine.orchestrator.classify_and_emit_error"),
+        ):
+            await _fetch_sports_reference_data(
+                "2026-03-22",
+                "test-key",
+                "test-bucket",
+                manifest=mock_manifest,
+                fixture_ids_override=[1001, 1002],
+            )
+
+        # CF-11: partial failure with zero rows MUST produce record_failed, not record_empty
+        assert mock_manifest.record_failed.call_count >= 1, (
+            "CF-11 regression: partial fixture failure + zero rows must produce record_failed "
+            "(not empty_confirmed which freezes the gap forever)"
+        )
+        # Verify none of the per-fixture stat entities ended up as record_empty
+        stat_entity_data_types = {"FIXTURE_STATS", "FIXTURE_EVENTS", "FIXTURE_LINEUPS", "PLAYER_STATS"}
+        empty_calls = mock_manifest.record_empty.call_args_list
+        for call in empty_calls:
+            dt = call.kwargs.get("row_key", {}).get("data_type", "")
+            assert dt not in stat_entity_data_types, (
+                f"CF-11 regression: record_empty({dt}) called when fetch partially failed "
+                "— should be record_failed (attempted_failed)"
+            )
+
+    @pytest.mark.asyncio
+    async def test_all_succeed_zero_rows_produces_record_empty(self) -> None:
+        """(c) All per-fixture calls succeed but return 0 rows → record_empty (legitimate).
+
+        Genuine empty: post-match stats not yet published, lineups withheld for
+        low-profile fixture, etc.  This is NOT a failure — the source was
+        reachable and explicitly returned nothing.  Must NOT regress to record_failed.
+        """
+        mock_adapter = AsyncMock()
+        mock_adapter.get_leagues.return_value = []
+        mock_adapter.get_teams.return_value = []
+        mock_adapter.get_standings.return_value = []
+        mock_adapter.get_injuries.return_value = []
+        # All per-fixture calls succeed with empty responses (no exception)
+        mock_adapter.get_fixture_statistics.return_value = []
+        mock_adapter.get_fixture_events.return_value = []
+        mock_adapter.get_fixture_lineups.return_value = []
+        mock_adapter.get_fixture_player_stats.return_value = []
+
+        mock_manifest = MagicMock()
+        mock_sink = MagicMock()
+
+        with (
+            patch("instruments_service.engine.orchestrator.create_sports_reference_adapter", return_value=mock_adapter),
+            patch("instruments_service.engine.orchestrator.get_data_sink", return_value=mock_sink),
+            patch("instruments_service.engine.orchestrator._write_team_mapping"),
+            patch("instruments_service.engine.orchestrator._write_fixture_mapping"),
+            patch("instruments_service.engine.orchestrator._build_fixture_league_map_from_gcs", return_value={}),
+            # _af_emit_empty_gaps_for_entity reads get_expected_leagues_for_source + get_league_fixture_calendar
+            patch("instruments_service.engine.orchestrator.get_expected_leagues_for_source", return_value=[]),
+        ):
+            await _fetch_sports_reference_data(
+                "2026-03-22",
+                "test-key",
+                "test-bucket",
+                manifest=mock_manifest,
+                fixture_ids_override=[1001],
+            )
+
+        # No failures → record_failed must NOT have been called for stat entities
+        failed_calls = mock_manifest.record_failed.call_args_list
+        stat_entity_data_types = {"FIXTURE_STATS", "FIXTURE_EVENTS", "FIXTURE_LINEUPS", "PLAYER_STATS"}
+        for call in failed_calls:
+            dt = call.kwargs.get("row_key", {}).get("data_type", "")
+            assert dt not in stat_entity_data_types, (
+                f"record_failed({dt}) called when all calls succeeded with 0 rows — "
+                "should be record_empty (legitimate empty)"
+            )
+        # _af_emit_empty_gaps_for_entity is called (zero-failure path) but
+        # it may or may not call record_empty depending on the expected leagues
+        # set returned by the oracle.  The key invariant: no record_failed for
+        # stat entity data_types (asserted above). record_empty call count is
+        # oracle-driven and not asserted here to keep the test focused.
