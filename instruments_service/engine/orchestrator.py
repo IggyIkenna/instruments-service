@@ -4972,6 +4972,166 @@ def _read_sfi_league_mapping(bucket: str) -> pd.DataFrame | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Transfermarkt master/ + snapshots/ write-path helpers (ITEM 6a + 6b)
+#
+# ML training needs point-in-time squad values to avoid lookahead bias:
+#   - ``master/entity={entity}/master.parquet`` — accumulating append-only union
+#     (teams, team_mapping, player_values); each run merges new rows then deduplicates
+#     on the natural key before writing back — semantics: monotonically-growing truth.
+#   - ``snapshots/entity=player_values/season={Y}/trigger={T}/player_values.parquet``
+#     — point-in-time snapshot keyed by (season, trigger date) so feature pipelines
+#     can reconstruct the exact roster visible on a given trigger date without risk
+#     of lookahead bias.
+#
+# Both use the cloud-agnostic ``get_storage_client()`` (upload_bytes / download_bytes)
+# and ``resolve_bucket_name`` — never inline gs:// URIs (QG STEP 5.69).
+# ---------------------------------------------------------------------------
+
+
+def _master_blob_path(entity: str) -> str:
+    """Return the GCS blob path for the accumulating master parquet.
+
+    Path shape: ``sports_reference/master/entity={entity}/master.parquet``
+    """
+    return f"sports_reference/master/entity={entity}/master.parquet"
+
+
+def _snapshot_blob_path_player_values(season: int, trigger_date: str) -> str:
+    """Return the GCS blob path for a point-in-time player_values snapshot.
+
+    Path shape:
+        ``sports_reference/snapshots/entity=player_values/season={Y}/trigger={T}/player_values.parquet``
+
+    Args:
+        season: Season year (e.g. 2024).
+        trigger_date: UTC trigger date as ISO string ``YYYY-MM-DD``.
+    """
+    return (
+        f"sports_reference/snapshots/entity=player_values/season={season}/trigger={trigger_date}/player_values.parquet"
+    )
+
+
+def _write_master_append(
+    bucket: str,
+    entity: str,
+    new_df: pd.DataFrame,
+    dedup_key: list[str],
+) -> None:
+    """Append new rows into the accumulating master parquet, dedup on *dedup_key*.
+
+    Semantics (ITEM 6b):
+      1. Read existing master parquet (if present).
+      2. Concat existing + new_df.
+      3. Deduplicate: for duplicate *dedup_key* rows keep the newest row
+         (i.e. the one from new_df — achieved by dropping duplicates while
+         keeping the **last** occurrence after concat).
+      4. Write back as a single parquet.
+
+    Errors are non-blocking: classify + emit and return so a master-write
+    failure never kills the main by_date/ write.
+
+    Args:
+        bucket: GCS bucket name (already resolved via resolve_bucket_name).
+        entity: Entity label used in the path (``teams``, ``team_mapping``,
+            ``player_values``).
+        new_df: DataFrame of new rows to merge in.
+        dedup_key: Column(s) forming the natural dedup key.
+    """
+    if new_df.empty:
+        return
+    blob_path = _master_blob_path(entity)
+    try:
+        storage = get_storage_client()
+        existing_df: pd.DataFrame | None = None
+        try:
+            raw = storage.download_bytes(bucket, blob_path)
+            if raw is not None:
+                existing_df = pd.read_parquet(io.BytesIO(raw))
+        except Exception as read_exc:
+            logger.debug(
+                "master/%s: no existing parquet (will create fresh): %s",
+                entity,
+                read_exc,
+            )
+
+        if existing_df is not None and not existing_df.empty:
+            # Align columns: only keep columns present in both to avoid dtype
+            # explosions when new_df introduces new columns mid-season.
+            combined = pd.concat([existing_df, new_df], ignore_index=True, sort=False)
+        else:
+            combined = new_df.copy()
+
+        # Dedup: keep last (new_df wins) for duplicate natural-key combos.
+        valid_dedup_key = [k for k in dedup_key if k in combined.columns]
+        if valid_dedup_key:
+            combined = combined.drop_duplicates(subset=valid_dedup_key, keep="last")
+
+        combined["last_updated_at"] = datetime.now(UTC).isoformat()
+
+        buf = io.BytesIO()
+        combined.to_parquet(buf, index=False)
+        storage.upload_bytes(bucket, blob_path, buf.getvalue())
+        logger.info(
+            "Transfermarkt master/%s: %d rows written (dedup_key=%s)",
+            entity,
+            len(combined),
+            valid_dedup_key,
+        )
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation=f"transfermarkt_master_{entity}_write",
+        )
+
+
+def _write_snapshot_player_values(
+    bucket: str,
+    season: int,
+    trigger_date: str,
+    df: pd.DataFrame,
+) -> None:
+    """Write a point-in-time snapshot of player_values for (season, trigger_date).
+
+    Path: ``sports_reference/snapshots/entity=player_values/season={Y}/trigger={T}/player_values.parquet``
+
+    Idempotent — overwrites if the same (season, trigger_date) key is re-run.
+    Errors are non-blocking.
+
+    Args:
+        bucket: GCS bucket name (already resolved).
+        season: Season year (e.g. 2024).
+        trigger_date: UTC trigger date ISO string ``YYYY-MM-DD``.
+        df: Full player_values DataFrame for this trigger date.
+    """
+    if df.empty:
+        return
+    blob_path = _snapshot_blob_path_player_values(season, trigger_date)
+    try:
+        storage = get_storage_client()
+        snapshot_df = df.copy()
+        snapshot_df["snapshot_season"] = season
+        snapshot_df["snapshot_trigger_date"] = trigger_date
+        snapshot_df["snapshot_written_at"] = datetime.now(UTC).isoformat()
+
+        buf = io.BytesIO()
+        snapshot_df.to_parquet(buf, index=False)
+        storage.upload_bytes(bucket, blob_path, buf.getvalue())
+        logger.info(
+            "Transfermarkt snapshot player_values: %d rows → season=%d trigger=%s",
+            len(snapshot_df),
+            season,
+            trigger_date,
+        )
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="transfermarkt_snapshot_player_values_write",
+        )
+
+
 def _maybe_emit_drift_anomaly(
     *,
     venue: str,
@@ -6351,6 +6511,42 @@ async def _fetch_transfermarkt_data(
                     for _r in all_teams
                 ]
                 _write_transfermarkt_team_mapping(bucket, _cache_rows, effective_season)
+
+                # --- ITEM 6a: master/ + snapshots/ write-path ---
+                # master/entity=player_values/ — accumulating append-only union.
+                # master/entity=teams/ — team metadata accumulation.
+                # master/entity=team_mapping/ — league→team mapping accumulation.
+                # snapshots/entity=player_values/ — point-in-time snapshot keyed
+                # by (season, trigger date) for lookahead-safe ML training.
+                #
+                # Natural dedup keys (ITEM 6b):
+                #   player_values → (canonical_league, team_id, season)
+                #   teams         → (team_id, season)
+                #   team_mapping  → (canonical_league, team_id)
+                _write_master_append(
+                    bucket,
+                    entity="player_values",
+                    new_df=df,
+                    dedup_key=["canonical_league", "team_id", "season"],
+                )
+                _write_master_append(
+                    bucket,
+                    entity="teams",
+                    new_df=pd.DataFrame(_cache_rows).assign(season=effective_season),
+                    dedup_key=["team_id", "season"],
+                )
+                _write_master_append(
+                    bucket,
+                    entity="team_mapping",
+                    new_df=pd.DataFrame(_cache_rows),
+                    dedup_key=["canonical_league", "team_id"],
+                )
+                _write_snapshot_player_values(
+                    bucket,
+                    season=effective_season,
+                    trigger_date=date,
+                    df=df,
+                )
 
         # Per-league honest-coverage manifest rows — identical between the
         # cache-hit and live-fetch branches.  ``cached=True`` is passed as a
