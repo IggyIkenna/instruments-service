@@ -7813,6 +7813,25 @@ async def fill_solana_creation_cache(
     return {"cached": cached_count, "new": cached_count, "unresolved": unresolved}
 
 
+def resolve_instruments_store_kind(asset_group: str | None) -> tuple[str, str | None]:
+    """Map an asset_group to the ``(kind, asset_group)`` pair for ``resolve_bucket_name``.
+
+    The bucket-name SSOT (``cloud-providers.yaml``) models the prediction
+    instruments store as a **dedicated flat kind** ``instruments-store-prediction``
+    (→ ``instruments-store-pred-{env}-{pid}``), NOT as a ``PREDICTION`` entry in the
+    per-asset_group ``instruments-store`` dict. So ``resolve_bucket_name(kind=
+    "instruments-store", asset_group="prediction")`` raises ``BucketNamingError``
+    ("no entry for asset_group='prediction'"). Every other consumer of the prediction
+    store — the MTDS reader ``_load_market_lifecycle_for_date`` and all the prediction
+    scripts — already resolves the flat kind, so the orchestrator MUST too or its
+    prediction writes (instruments.parquet + market_lifecycle.parquet) crash at bucket
+    resolution and emit ZERO objects. Flat kinds ignore the ``asset_group`` argument.
+    """
+    if asset_group == "prediction":
+        return "instruments-store-prediction", None
+    return "instruments-store", asset_group
+
+
 def _get_instruments_bucket(asset_group: str | None = None) -> str:
     """Resolve the instruments write bucket for the given asset group.
 
@@ -7821,6 +7840,9 @@ def _get_instruments_bucket(asset_group: str | None = None) -> str:
     DEPLOYMENT_ENV=prod → instruments-store-{ag}-prd-{pid}.
     DEPLOYMENT_ENV=dev  → instruments-store-{ag}-dev-{pid}.
     IS_TEST_RUN=true    → DEPLOYMENT_ENV=test → instruments-store-{ag}-test-{pid}.
+
+    Prediction resolves via the dedicated flat kind ``instruments-store-prediction``
+    (→ instruments-store-pred-{env}-{pid}) — see :func:`_resolve_instruments_store_kind`.
     """
     import os
 
@@ -7831,17 +7853,18 @@ def _get_instruments_bucket(asset_group: str | None = None) -> str:
     # asset_group 'SPORTS'") on every sports/footystats short-circuit run. Matches the
     # handler's _get_instruments_bucket_for_asset_group which already lowercases.
     ag: str | None = asset_group.lower() if asset_group else None
+    kind, kind_ag = resolve_instruments_store_kind(ag)
     if cfg.is_test_run:
         prev = os.environ.get("DEPLOYMENT_ENV")
         os.environ["DEPLOYMENT_ENV"] = "test"
         try:
-            return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group=ag)
+            return resolve_bucket_name(cloud="gcp", kind=kind, asset_group=kind_ag)
         finally:
             if prev is None:
                 os.environ.pop("DEPLOYMENT_ENV", None)
             else:
                 os.environ["DEPLOYMENT_ENV"] = prev
-    return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group=ag)
+    return resolve_bucket_name(cloud="gcp", kind=kind, asset_group=kind_ag)
 
 
 def _check_emission_policy(

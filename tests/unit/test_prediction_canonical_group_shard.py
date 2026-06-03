@@ -33,12 +33,15 @@ from unittest.mock import MagicMock
 import pandas as pd
 from unified_api_contracts import PipelineMode
 from unified_api_contracts.predictions import CANONICAL_GROUP_METADATA, CanonicalQuestionGroup
+from unified_trading_library import resolve_bucket_name
 
 from instruments_service.engine.orchestrator import (
     _build_market_lifecycle_df,
     _compute_prediction_shards,
     _extract_prediction_canonical_group,
+    _get_instruments_bucket,
     _write_market_lifecycle,
+    resolve_instruments_store_kind,
 )
 
 
@@ -618,3 +621,67 @@ class TestWriteMarketLifecycle:
         written_df = sink.writes[0]["data"]
         assert len(written_df) == n
         assert set(written_df["market_id"].tolist()) == set(market_ids)
+
+
+# ---------------------------------------------------------------------------
+# Bucket resolution — prediction routes to the dedicated flat kind so the IS
+# write lands in the SAME bucket the MTDS lifecycle reader reads from.
+# Root-cause regression guard for predictions item 552: the orchestrator used
+# resolve_bucket_name(kind="instruments-store", asset_group="prediction"),
+# which raises BucketNamingError (the instruments-store dict has no PREDICTION
+# entry — prediction is a dedicated flat kind per cloud-providers.yaml), so the
+# whole prediction write (instruments.parquet + market_lifecycle.parquet) crashed
+# at bucket resolution and emitted ZERO objects.
+# ---------------------------------------------------------------------------
+
+
+class TestPredictionInstrumentsStoreBucket:
+    """Verify prediction resolves the flat ``instruments-store-prediction`` kind."""
+
+    # The kind the MTDS reader (_load_market_lifecycle_for_date) resolves.
+    _MTDS_READER_KIND = "instruments-store-prediction"
+
+    def test_resolve_kind_routes_prediction_to_flat_kind(self) -> None:
+        """``prediction`` -> the dedicated flat kind (asset_group dropped, since
+        flat kinds ignore it). The flat kind is what the MTDS reader + the
+        prediction scripts use."""
+        kind, kind_ag = resolve_instruments_store_kind("prediction")
+        assert kind == self._MTDS_READER_KIND
+        assert kind_ag is None
+
+    def test_resolve_kind_leaves_other_asset_groups_on_dict_form(self) -> None:
+        """Non-prediction asset_groups keep the per-asset_group ``instruments-store``
+        dict form (kind unchanged, asset_group preserved)."""
+        for ag in ("cefi", "defi", "tradfi", "sports"):
+            kind, kind_ag = resolve_instruments_store_kind(ag)
+            assert kind == "instruments-store"
+            assert kind_ag == ag
+
+    def test_resolve_kind_passes_through_none(self) -> None:
+        """A None asset_group stays on the dict form (handled by resolve_bucket_name)."""
+        kind, kind_ag = resolve_instruments_store_kind(None)
+        assert kind == "instruments-store"
+        assert kind_ag is None
+
+    def test_get_instruments_bucket_prediction_does_not_raise(self) -> None:
+        """The orchestrator's bucket resolver must NOT raise for prediction.
+
+        Pre-fix this raised ``BucketNamingError("...no entry for
+        asset_group='prediction'")``, aborting the whole prediction write.
+        """
+        bucket = _get_instruments_bucket("prediction")
+        assert bucket  # non-empty
+        assert "pred" in bucket
+
+    def test_get_instruments_bucket_matches_mtds_reader_bucket(self) -> None:
+        """The IS write bucket for prediction MUST equal the bucket the MTDS
+        lifecycle reader reads from — else lifecycle parquets land where the
+        reader never looks (silent 0-object miss)."""
+        is_write_bucket = _get_instruments_bucket("prediction")
+        mtds_read_bucket = resolve_bucket_name(cloud="gcp", kind=self._MTDS_READER_KIND)
+        assert is_write_bucket == mtds_read_bucket
+
+    def test_get_instruments_bucket_case_insensitive_prediction(self) -> None:
+        """``PREDICTION`` (uppercase, as asset_groups[0] may arrive) lowercases
+        and still routes to the flat kind."""
+        assert _get_instruments_bucket("PREDICTION") == _get_instruments_bucket("prediction")
