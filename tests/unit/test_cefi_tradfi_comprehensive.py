@@ -2933,21 +2933,27 @@ class TestDeribitComboAdapter:
         assert "FUTURE" in exc_info.value.capability
 
     @pytest.mark.asyncio
-    async def test_get_instruments_http_error_returns_partial(self) -> None:
-        """HTTP error for one currency is isolated — other currencies succeed (shard isolation)."""
+    async def test_get_instruments_http_error_all_currencies_raises(self) -> None:
+        """CF-11: when EVERY currency HTTP-fails, get_instruments MUST raise RuntimeError
+        (→ attempted_failed via _fetch_one), NOT ``return []``. A clean empty would land
+        DERIBIT in _non_error_venues and silently vanish from coverage. Per-currency shard
+        isolation (partial success) is covered by
+        test_deribit_combo_adapter.py::test_get_instruments_partial_success_does_not_raise.
+        Completes the cross-AG CF-11 sweep (slot-6 e2e008f0 fixed aster/hyperliquid/tardis
+        but missed the DeribitCombo adapter).
+        """
         from instruments_service.reference_data.adapters.cefi.deribit_combo_adapter import (
             DeribitComboReferenceDataAdapter,
         )
 
         adapter = DeribitComboReferenceDataAdapter()
-        # Simulate HTTP 500 from Deribit
+        # Simulate HTTP 500 from Deribit for every currency.
         mock_session = _make_aiohttp_session_mock(resp_status=500)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            # Should NOT raise — shard-level failure isolation absorbs per-currency errors
-            results = await adapter.get_instruments(instrument_type=InstrumentType.COMBO)
-        assert isinstance(results, list)
-        # All currencies failed → empty result, but no exception raised
-        assert results == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            pytest.raises(RuntimeError, match="no instruments fetched"),
+        ):
+            await adapter.get_instruments(instrument_type=InstrumentType.COMBO)
 
     @pytest.mark.asyncio
     async def test_get_instruments_empty_result_list(self) -> None:
