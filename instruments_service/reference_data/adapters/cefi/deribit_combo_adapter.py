@@ -177,6 +177,7 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
 
         results: list[InstrumentRecord] = []
         now = datetime.now(UTC)
+        failures: list[str] = []
 
         for currency in _DERIBIT_COMBO_UNDERLYINGS:
             # Shard-level failure isolation: a failed currency MUST NOT kill other currencies.
@@ -185,7 +186,17 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
                 results.extend(instruments)
             except UnsupportedCapabilityError:
                 raise  # Re-raise guard errors — they are programming errors, not shard failures.
+            except RuntimeError as exc:
+                # Genuine HTTP/network fetch-failure — already classified + emitted
+                # ADAPTER_FETCH_FAILED in the helper. Track + isolate (re-raised below if
+                # EVERY currency failed); do NOT re-emit.
+                failures.append(currency)
+                logger.error("Deribit combo currency=%s fetch failed: %s", currency, exc)
+                # Continue to next currency — shard-level failure isolation.
             except Exception as exc:
+                # Parse/validation error for this currency — isolate + track (re-raised below
+                # if EVERY currency failed). Shard-level failure isolation.
+                failures.append(currency)
                 error_code = _classify_deribit_error(exc)
                 classification = classify_venue_error("deribit", error_code)
                 action = classification.action.value if classification else "fail"
@@ -212,6 +223,17 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
                     },
                 )
                 # Continue to next currency — shard-level failure isolation.
+
+        # CF-11: if the universe is empty BECAUSE every attempted currency failed (not because
+        # the currencies legitimately have zero active combos), re-raise so
+        # urdi_reference_provider._fetch_one routes DERIBIT into failed[] (→ attempted_failed),
+        # never a clean empty that vanishes into _non_error_venues. A partial result (≥1 currency
+        # returned) is trustworthy → return it.
+        if not results and failures:
+            raise RuntimeError(
+                f"Deribit combo get_instruments: all {len(failures)} attempted currenc(ies) failed "
+                f"({failures}); no instruments fetched"
+            )
 
         logger.info(
             "DeribitComboAdapter: fetched %d COMBO instruments across %d currencies",
@@ -268,7 +290,14 @@ class DeribitComboReferenceDataAdapter(BaseReferenceDataAdapter):
                     "retry_safe": retry_safe,
                 },
             )
-            return []
+            # CF-11: raise (NOT ``return []``) so get_instruments can distinguish a genuine
+            # fetch-failure from a legitimately-empty currency. An all-currency failure must
+            # surface as attempted_failed via urdi_reference_provider._fetch_one, never a
+            # clean empty that lands DERIBIT in _non_error_venues (silent universe shrink).
+            raise RuntimeError(
+                f"Deribit combo fetch failed for currency={currency} "
+                f"(error_code={error_code}, retry_safe={retry_safe}): {exc}"
+            ) from exc
 
         # Deribit wraps responses in {"result": [...], "id": ...}
         if not isinstance(payload, dict):
