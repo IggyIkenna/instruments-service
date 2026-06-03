@@ -113,7 +113,8 @@ class TestLighterAdapter:
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_get_instruments_client_error_returns_empty(self) -> None:
+    async def test_get_instruments_client_error_raises(self) -> None:
+        """ClientError from _get_with_retry must raise, not return [] (CF-11 regression)."""
         from instruments_service.reference_data.adapters.defi.lighter import LighterReferenceDataAdapter
 
         adapter = LighterReferenceDataAdapter()
@@ -121,21 +122,22 @@ class TestLighterAdapter:
             patch.object(adapter, "_make_session", return_value=_make_session_cm()),
             patch.object(adapter, "_get_with_retry", AsyncMock(side_effect=aiohttp.ClientError("failed"))),
             patch("instruments_service.reference_data.adapters.defi.lighter.log_event"),
+            pytest.raises((RuntimeError, aiohttp.ClientError)),
         ):
-            results = await adapter.get_instruments()
-        assert results == []
+            await adapter.get_instruments()
 
     @pytest.mark.asyncio
-    async def test_get_instruments_runtime_error_returns_empty(self) -> None:
+    async def test_get_instruments_runtime_error_raises(self) -> None:
+        """RuntimeError from _get_with_retry must raise, not return [] (CF-11 regression)."""
         from instruments_service.reference_data.adapters.defi.lighter import LighterReferenceDataAdapter
 
         adapter = LighterReferenceDataAdapter()
         with (
             patch.object(adapter, "_make_session", return_value=_make_session_cm()),
             patch.object(adapter, "_get_with_retry", AsyncMock(side_effect=RuntimeError("timeout"))),
+            pytest.raises((RuntimeError, aiohttp.ClientError)),
         ):
-            results = await adapter.get_instruments()
-        assert results == []
+            await adapter.get_instruments()
 
     @pytest.mark.asyncio
     async def test_get_instrument_found(self) -> None:
