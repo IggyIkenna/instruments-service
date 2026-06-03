@@ -292,6 +292,48 @@ class TestPolymarketAdapterExtended:
         assert results == []
 
     @pytest.mark.asyncio
+    async def test_clob_scan_midscan_failure_raises_not_truncates(self) -> None:
+        """A mid-scan CLOB page failure must RAISE (→ attempted_failed) + emit
+        ADAPTER_FETCH_FAILED, NOT silently return the partial universe accumulated
+        so far. Returning partial would be cached 24 h and read as a complete (but
+        smaller) universe → false-complete coverage. Regression for
+        prediction_manifest_canonicalisation_2026_06_01 § CF-11 IS-side write-path.
+        """
+        import aiohttp as _aiohttp
+
+        adapter = PolymarketReferenceDataAdapter()
+
+        # Page 0 succeeds with a non-terminal cursor → the scan continues to page 1.
+        ok_resp = AsyncMock()
+        ok_resp.raise_for_status = MagicMock()
+        ok_resp.json = AsyncMock(return_value={"data": [{"conditionId": "0xabc"}], "next_cursor": "MTAwMA=="})
+        ok_cm = MagicMock()
+        ok_cm.__aenter__ = AsyncMock(return_value=ok_resp)
+        ok_cm.__aexit__ = AsyncMock(return_value=None)
+        # Page 1 fails mid-scan.
+        fail_cm = MagicMock()
+        fail_cm.__aenter__ = AsyncMock(side_effect=_aiohttp.ClientError("page 1 down"))
+        fail_cm.__aexit__ = AsyncMock(return_value=None)
+
+        mock_session_obj = MagicMock()
+        mock_session_obj.get = MagicMock(side_effect=[ok_cm, fail_cm])
+        mock_session_cm = MagicMock()
+        mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
+        mock_session_cm.__aexit__ = AsyncMock(return_value=None)
+
+        events: list[str] = []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session_cm),
+            patch(
+                "instruments_service.reference_data.adapters.prediction.polymarket.log_event",
+                side_effect=lambda name, **_kw: events.append(name),
+            ),
+            pytest.raises(_aiohttp.ClientError),
+        ):
+            await adapter.get_instruments(date="2025-03-14")
+        assert "ADAPTER_FETCH_FAILED" in events
+
+    @pytest.mark.asyncio
     async def test_get_instrument_found(self) -> None:
         """get_instrument returns matching record by condition_id."""
         adapter = PolymarketReferenceDataAdapter()
