@@ -37,6 +37,9 @@ from typing import Protocol, cast
 
 import pandas as pd
 from unified_api_contracts import (
+    _SPORTS_ENTITY_TO_PIPELINE_MODE as _ENTITY_NAME_TO_PIPELINE_MODE,  # noqa: F401 — re-exported for test closed-set parity assertions
+)
+from unified_api_contracts import (
     BUNDESLIGA_TEAM_ALIASES,
     CANONICAL_TO_ODDS_API_BUNDESLIGA,
     CANONICAL_TO_ODDS_API_EPL,
@@ -49,6 +52,7 @@ from unified_api_contracts import (
     VenueMapping,
     classify_venue_error,
     get_prediction_leagues,
+    pipeline_mode_for_sports_entity,
 )
 from unified_api_contracts.internal import InstrumentRecord, validate_instrument_records
 from unified_api_contracts.predictions import (
@@ -3519,49 +3523,18 @@ def _write_venues_from_teams(teams_df: pd.DataFrame, bucket: str) -> None:
 # ---------------------------------------------------------------------------
 
 # Entity-name → PipelineMode for every entity written under sports_reference/by_date.
-# Extends the data_type→PM table above to cover the entity_name strings used in
-# partition dicts (which may differ from the manifest data_type key).
-_ENTITY_NAME_TO_PIPELINE_MODE: dict[str, PipelineMode] = {
-    # API Football entities
-    "fixtures": PipelineMode.BATCH_API_FOOTBALL,
-    "injuries": PipelineMode.BATCH_API_FOOTBALL,
-    "fixture_stats": PipelineMode.BATCH_API_FOOTBALL,
-    "fixture_events": PipelineMode.BATCH_API_FOOTBALL,
-    "fixture_lineups": PipelineMode.BATCH_API_FOOTBALL,
-    "player_stats": PipelineMode.BATCH_API_FOOTBALL,
-    "teams": PipelineMode.BATCH_API_FOOTBALL,
-    "standings": PipelineMode.BATCH_API_FOOTBALL,
-    # FootyStats entities
-    "footystats_predictions": PipelineMode.BATCH_FOOTYSTATS,
-    "footystats_matches": PipelineMode.BATCH_FOOTYSTATS,
-    "footystats_odds": PipelineMode.BATCH_ODDS_API,
-    # Understat entities
-    "understat_xg": PipelineMode.BATCH_UNDERSTAT,
-    "understat_xg_shots": PipelineMode.BATCH_UNDERSTAT,
-    # Transfermarkt entities
-    "player_values": PipelineMode.BATCH_TRANSFERMARKT,
-    # SFI entities
-    "progressive_stats": PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
-    # Open Meteo entities
-    "weather": PipelineMode.BATCH_OPEN_METEO,
-}
+# SSOT is UAC ``pipeline_mode_for_sports_entity`` (imported above).
+# ``_ENTITY_NAME_TO_PIPELINE_MODE`` is aliased from UAC at the top of this module so the
+# IS test suite can import it directly for closed-set parity assertions.
 
 
 def _sports_ref_pm(entity_name: str) -> str:
     """Return the pipeline_mode value string for a sports_reference entity name.
 
-    Uses ``_ENTITY_NAME_TO_PIPELINE_MODE`` (entity partition key → PipelineMode).
+    Delegates to the UAC SSOT ``pipeline_mode_for_sports_entity``.
     Falls back to ``BATCH_INSTRUMENTS_SERVICE`` for unknown entities.
     """
-    pm = _ENTITY_NAME_TO_PIPELINE_MODE.get(entity_name.lower())
-    if pm is None:
-        logger.warning(
-            "No PipelineMode for sports_reference entity %r — using BATCH_INSTRUMENTS_SERVICE as fallback. "
-            "Add the entity to _ENTITY_NAME_TO_PIPELINE_MODE.",
-            entity_name,
-        )
-        return PipelineMode.BATCH_INSTRUMENTS_SERVICE.value
-    return pm.value
+    return pipeline_mode_for_sports_entity(entity_name).value
 
 
 def _sports_ref_source(entity_name: str) -> str:
