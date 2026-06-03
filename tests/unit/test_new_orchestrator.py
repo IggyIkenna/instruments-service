@@ -874,21 +874,30 @@ def test_bucket_name_cefi_uses_category_prefix():
     assert call_kwargs.get("asset_group") == "cefi"
 
 
-def test_bucket_name_prediction_uses_category_prefix():
-    """Prediction market bucket must be asset-group-specific, not a shared bucket."""
+def test_bucket_name_prediction_uses_flat_kind():
+    """Prediction must resolve via the dedicated flat kind ``instruments-store-prediction``.
+
+    The bucket-name SSOT (``cloud-providers.yaml``) models prediction as a flat kind, NOT
+    a ``PREDICTION`` entry in the per-asset_group ``instruments-store`` dict — so calling
+    ``resolve_bucket_name(kind="instruments-store", asset_group="prediction")`` raises
+    ``BucketNamingError`` and aborts the whole prediction write (0 objects). The orchestrator
+    MUST pass ``kind="instruments-store-prediction"`` (asset_group dropped — flat kinds ignore
+    it), which is the SAME kind the MTDS lifecycle reader resolves. Predictions item 552.
+    """
     from unittest.mock import patch
 
     from instruments_service.engine.orchestrator import _get_instruments_bucket
 
     with patch(
         "instruments_service.engine.orchestrator.resolve_bucket_name",
-        return_value="instruments-store-prediction-prd-test-project",
+        return_value="instruments-store-pred-prd-test-project",
     ) as mock_resolve:
         bucket = _get_instruments_bucket("PREDICTION")
 
     call_kwargs = mock_resolve.call_args.kwargs
-    assert call_kwargs.get("asset_group") == "prediction"
-    assert "prediction" in bucket.lower()
+    assert call_kwargs.get("kind") == "instruments-store-prediction"
+    assert call_kwargs.get("asset_group") is None
+    assert "pred" in bucket.lower()
 
 
 def test_bucket_test_run_appends_test_suffix():
