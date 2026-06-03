@@ -182,7 +182,14 @@ class BetfairReferenceDataAdapter(BaseReferenceDataAdapter):
                         "retry_safe": retry_safe,
                     },
                 )
-                return []
+                # CF-11: re-raise so the venue threads STATE to _fetch_one's
+                # failed[] (→ attempted_failed) instead of returning [] (clean
+                # empty → silent universe shrink / A8 false-complete). Single
+                # listMarketCatalogue call = the whole BETFAIR universe for this
+                # fetch. Mirrors the tradfi databento fix.
+                raise RuntimeError(
+                    f"Betfair listMarketCatalogue fetch failed (error_code={error_code}, retry_safe={retry_safe}): {exc}"
+                ) from exc
         raw_dict = cast(dict[str, object], raw_json)
         result_raw = raw_dict.get("result")
         return cast(list[object], result_raw) if result_raw is not None else []

@@ -1350,11 +1350,14 @@ class TestAsterAdapterComprehensive:
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:
+        """HTTP 500 must raise, not return [] (CF-11 regression)."""
         adapter = AsterReferenceDataAdapter()
         mock_session = _make_aiohttp_session_mock(resp_status=500)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            results = await adapter.get_instruments()
-        assert results == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            pytest.raises((RuntimeError, aiohttp.ClientError)),
+        ):
+            await adapter.get_instruments()
 
     @pytest.mark.asyncio
     async def test_get_instruments_skips_non_dict_symbols(self) -> None:
@@ -1548,11 +1551,14 @@ class TestHyperliquidAdapterComprehensive:
 
     @pytest.mark.asyncio
     async def test_get_instruments_http_error(self) -> None:
+        """HTTP 500 must raise, not return [] (CF-11 regression)."""
         adapter = HyperliquidReferenceDataAdapter()
         mock_session = _make_aiohttp_session_mock(resp_status=500)
-        with patch("aiohttp.ClientSession", return_value=mock_session):
-            results = await adapter.get_instruments()
-        assert results == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session),
+            pytest.raises((RuntimeError, aiohttp.ClientError)),
+        ):
+            await adapter.get_instruments()
 
     @pytest.mark.asyncio
     async def test_get_instrument_found(self) -> None:
