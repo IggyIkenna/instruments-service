@@ -601,8 +601,46 @@ class PolymarketReferenceDataAdapter(BaseReferenceDataAdapter):
                         resp.raise_for_status()
                         data = cast(dict[str, object], await resp.json())
                 except aiohttp.ClientError as exc:
-                    logger.warning("CLOB markets page %d failed: %s", page, exc)
-                    break
+                    # A mid-scan page failure must NOT silently truncate the CLOB
+                    # universe. Breaking here would return the PARTIAL ``all_markets``
+                    # accumulated so far — which is cached for 24 h
+                    # (``_get_raw_clob_markets_cached``) and read by every per-date
+                    # filter as a COMPLETE (but smaller) universe → false-complete
+                    # coverage (CF-11 / A8: a transient failure masquerading as a
+                    # genuine smaller universe, with ZERO failure signal). Classify +
+                    # emit ``ADAPTER_FETCH_FAILED`` (mirrors ``_fetch_clob_history`` /
+                    # ``_fetch_page``) then RAISE so the per-venue handler records the
+                    # cell ``attempted_failed`` rather than caching a truncated
+                    # universe. This is a single-venue pagination loop (NOT a
+                    # per-venue/per-shard loop), so raising does not violate
+                    # shard-level failure isolation.
+                    error_code = _classify_polymarket_error(exc)
+                    classification = classify_venue_error("POLYMARKET", error_code)
+                    action = classification.action.value if classification else "fail"
+                    retry_safe = classification.retry_safe if classification else False
+                    logger.error(
+                        "Polymarket CLOB markets scan failed at page %d (%d markets so far): %s "
+                        "(classified: %s, action: %s) — raising to avoid a truncated universe",
+                        page,
+                        len(all_markets),
+                        exc,
+                        error_code,
+                        action,
+                    )
+                    log_event(
+                        "ADAPTER_FETCH_FAILED",
+                        details={
+                            "venue": "POLYMARKET",
+                            "endpoint": "clob/markets",
+                            "page": page,
+                            "markets_so_far": len(all_markets),
+                            "error": str(exc),
+                            "error_code": error_code,
+                            "action": action,
+                            "retry_safe": retry_safe,
+                        },
+                    )
+                    raise
 
                 raw_markets = data.get("data")
                 if not isinstance(raw_markets, list) or not raw_markets:
