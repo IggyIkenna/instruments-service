@@ -1199,8 +1199,8 @@ class TestBetfairFetchMarketsRaw:
         assert result == []
 
     @pytest.mark.asyncio
-    async def test_client_error_returns_empty(self) -> None:
-        """ClientError returns empty list with event emission."""
+    async def test_client_error_raises(self) -> None:
+        """ClientError must raise, not return [] (CF-11 regression)."""
         adapter = BetfairReferenceDataAdapter()
         mock_cm = MagicMock()
         mock_cm.__aenter__ = AsyncMock(side_effect=aiohttp.ClientError("network error"))
@@ -1210,9 +1210,11 @@ class TestBetfairFetchMarketsRaw:
         mock_session_cm = MagicMock()
         mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
         mock_session_cm.__aexit__ = AsyncMock(return_value=None)
-        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            result = await adapter._fetch_markets_raw("tok", "key")
-        assert result == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session_cm),
+            pytest.raises((RuntimeError, aiohttp.ClientError)),
+        ):
+            await adapter._fetch_markets_raw("tok", "key")
 
 
 class TestBetfairGetInstrumentsFullFlow:

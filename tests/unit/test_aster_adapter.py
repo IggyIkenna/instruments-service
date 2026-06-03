@@ -121,8 +121,8 @@ class TestAsterAdapter:
         assert len(results) == 0
 
     @pytest.mark.asyncio
-    async def test_get_instruments_returns_empty_on_network_error(self) -> None:
-        """Network error must return [] not raise."""
+    async def test_get_instruments_raises_on_network_error(self) -> None:
+        """Network error must raise, not return [] (CF-11 regression)."""
         import aiohttp
 
         adapter = AsterReferenceDataAdapter()
@@ -134,9 +134,11 @@ class TestAsterAdapter:
         mock_session_cm = MagicMock()
         mock_session_cm.__aenter__ = AsyncMock(return_value=mock_session_obj)
         mock_session_cm.__aexit__ = AsyncMock(return_value=None)
-        with patch("aiohttp.ClientSession", return_value=mock_session_cm):
-            results = await adapter.get_instruments()
-        assert results == []
+        with (
+            patch("aiohttp.ClientSession", return_value=mock_session_cm),
+            pytest.raises((RuntimeError, aiohttp.ClientError)),
+        ):
+            await adapter.get_instruments()
 
     @pytest.mark.asyncio
     async def test_get_instrument_not_found(self) -> None:
