@@ -822,7 +822,37 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
         try:
             df = data.to_df()
         except Exception as _exc:
-            logger.warning("Failed to parse Databento DBN data for %s: %s", dataset, _exc)
+            # Parse failure: the fetch SUCCEEDED but the DBN payload could not be
+            # decoded. Mirror the BentoError branch (classify + emit
+            # ADAPTER_FETCH_FAILED) so the failure produces a real signal — a bare
+            # ``logger.warning`` + ``return []`` silently truncates the discovered
+            # universe (A8-class false-complete coverage; CF-11 IS-side gap,
+            # tradfi_manifest_canonicalisation_2026_06_01.md). VALIDATION_ERROR is the
+            # closest UAC code (a fetched-but-undecodable response).
+            error_code = "VALIDATION_ERROR"
+            classification = classify_venue_error("DATABENTO", error_code)
+            action = classification.action.value if classification else "fail"
+            retry_safe = classification.retry_safe if classification else False
+            logger.error(
+                "Failed to parse Databento DBN data for %s symbols=%d: %s (classified: %s, action: %s)",
+                dataset,
+                len(symbols),
+                _exc,
+                error_code,
+                action,
+            )
+            log_event(
+                "ADAPTER_FETCH_FAILED",
+                details={
+                    "venue": "DATABENTO",
+                    "dataset": dataset,
+                    "symbol_count": len(symbols),
+                    "error": str(_exc),
+                    "error_code": error_code,
+                    "action": action,
+                    "retry_safe": retry_safe,
+                },
+            )
             return []
 
         if df.empty:
