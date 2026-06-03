@@ -169,7 +169,8 @@ class TestBetfairAdapter:
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_get_instruments_network_error_returns_empty(self) -> None:
+    async def test_get_instruments_raises_on_network_error(self) -> None:
+        """Network error must raise, not return [] (CF-11 regression)."""
         import aiohttp as _aiohttp
 
         adapter = BetfairReferenceDataAdapter()
@@ -184,9 +185,9 @@ class TestBetfairAdapter:
         with (
             patch("aiohttp.ClientSession", return_value=mock_session_cm),
             patch.object(adapter, "_get_credentials", return_value=("tok", "key")),
+            pytest.raises((RuntimeError, _aiohttp.ClientError)),
         ):
-            results = await adapter.get_instruments()
-        assert results == []
+            await adapter.get_instruments()
 
 
 # ---------------------------------------------------------------------------
