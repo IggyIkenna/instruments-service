@@ -86,9 +86,14 @@ class LighterReferenceDataAdapter(BaseReferenceDataAdapter):
                             "action": action,
                         },
                     )
-                    return []
+                    # CF-11: re-raise so lighter threads STATE to _fetch_one's
+                    # failed[] (→ attempted_failed) instead of return [] (clean
+                    # empty → silent universe shrink / A8 false-complete). Single
+                    # orderBookDetails call = the whole Lighter universe. Mirrors
+                    # the tradfi databento fix.
+                    raise RuntimeError(f"Lighter orderBookDetails fetch failed (action={action}): {exc}") from exc
                 logger.error("Lighter /orderBookDetails failed after retries: %s", exc)
-                return []
+                raise
 
         details: dict[str, object] = raw if isinstance(raw, dict) else {}
         markets_raw = cast("list[dict[str, object]]", details.get("order_book_details") or [])
