@@ -26,15 +26,19 @@ These tests pin down:
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from unittest.mock import MagicMock
 
 import pandas as pd
+from unified_api_contracts import PipelineMode
 from unified_api_contracts.predictions import CANONICAL_GROUP_METADATA, CanonicalQuestionGroup
 
 from instruments_service.engine.orchestrator import (
     _build_market_lifecycle_df,
     _compute_prediction_shards,
     _extract_prediction_canonical_group,
+    _write_market_lifecycle,
 )
 
 
@@ -415,3 +419,202 @@ class TestPredictionWriterManifestContract:
         other_val = CanonicalQuestionGroup.OTHER.value
         assert shards.get(f"POLYMARKET/{other_val}") == 1
         assert shards.get(f"KALSHI/{other_val}") == 1
+
+
+# ---------------------------------------------------------------------------
+# _write_market_lifecycle — GCS path + columns + MTDS round-trip contract
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeSink:
+    """Minimal DataSink stand-in that captures write calls."""
+
+    writes: list[dict[str, object]] = field(default_factory=list)
+
+    def write(
+        self,
+        *,
+        data: pd.DataFrame,
+        partition: dict[str, str],
+        format: str,
+        filename: str,
+    ) -> None:
+        self.writes.append(
+            {
+                "data": data.copy(),
+                "partition": dict(partition),
+                "format": format,
+                "filename": filename,
+            }
+        )
+
+
+def _make_group_df(
+    market_ids: list[str],
+    from_dts: list[datetime],
+    to_dts: list[datetime],
+) -> pd.DataFrame:
+    """Build a minimal prediction InstrumentRecord DataFrame with lifecycle fields."""
+    return pd.DataFrame(
+        {
+            "instrument_key": market_ids,
+            "available_from_datetime": from_dts,
+            "available_to_datetime": to_dts,
+        }
+    )
+
+
+class TestWriteMarketLifecycle:
+    """Verify _write_market_lifecycle GCS path, output columns, and MTDS round-trip schema.
+
+    The MTDS reader ``_load_market_lifecycle_for_date`` (base_prediction_adapter.py)
+    expects:
+      - bucket kind: ``instruments-store-prediction``
+      - prefix: ``market_lifecycle/by_canonical_group/``
+      - path shape: ``market_lifecycle/by_canonical_group/group={g}/day={d}/market_lifecycle.parquet``
+      - columns consumed: ``market_id``, ``market_created_at``, ``settlement_time``
+
+    IS writer ``_write_market_lifecycle`` uses:
+      - sink prefix: ``market_lifecycle/by_canonical_group`` (via ``lifecycle_sink``)
+      - partition: ``{"group": canonical_group_str, "day": date}``
+      - filename: ``market_lifecycle.parquet``
+      - output columns: ``market_id``, ``canonical_question_group``, ``market_created_at``,
+                          ``resolution_time``, ``settlement_time``, ``status``, ``available_at``
+
+    This test pins the schema contract so any drift between writer and reader is caught
+    at CI rather than at runtime.
+    """
+
+    _GROUP = CanonicalQuestionGroup.BTC_UP_DOWN_DAILY.value
+    _DATE = "2026-03-26"
+    _VENUE = "POLYMARKET"
+
+    def _run_write(
+        self,
+        market_ids: list[str],
+        from_dts: list[datetime],
+        to_dts: list[datetime],
+    ) -> tuple[_FakeSink, MagicMock]:
+        sink = _FakeSink()
+        manifest = MagicMock()
+        group_df = _make_group_df(market_ids, from_dts, to_dts)
+        _write_market_lifecycle(
+            sink=sink,  # type: ignore[arg-type]
+            group_df=group_df,
+            canonical_group_str=self._GROUP,
+            date=self._DATE,
+            manifest_venue=self._VENUE,
+            manifest=manifest,
+            pipeline_mode=PipelineMode.BATCH_POLYMARKET_GAMMA_API,
+        )
+        return sink, manifest
+
+    def test_gcs_path_matches_mtds_reader_expectation(self) -> None:
+        """Partition key + filename together construct the path
+        ``market_lifecycle/by_canonical_group/group={g}/day={d}/market_lifecycle.parquet``
+        that ``_load_market_lifecycle_for_date`` searches for.
+
+        The sink prefix ``market_lifecycle/by_canonical_group`` is set in the orchestrator's
+        ``lifecycle_sink = get_data_sink(..., prefix="market_lifecycle/by_canonical_group")``.
+        Here we verify the partition dict and filename that compose the full object key.
+        """
+        created = datetime(2026, 3, 25, 9, 0, 0, tzinfo=UTC)
+        settlement = datetime(2026, 3, 26, 13, 0, 0, tzinfo=UTC)
+        sink, _ = self._run_write(["0xabc"], [created], [settlement])
+
+        assert len(sink.writes) == 1
+        write = sink.writes[0]
+        # Partition produces path segments group={g}/day={d}
+        assert write["partition"] == {"group": self._GROUP, "day": self._DATE}
+        assert write["filename"] == "market_lifecycle.parquet"
+
+    def test_output_columns_superset_of_mtds_reader_required_cols(self) -> None:
+        """MTDS reader reads ``market_id``, ``market_created_at``, ``settlement_time``.
+        Writer output must contain all three (plus additional cols are fine).
+        """
+        mtds_required = {"market_id", "market_created_at", "settlement_time"}
+
+        created = datetime(2026, 3, 25, 9, 0, 0, tzinfo=UTC)
+        settlement = datetime(2026, 3, 26, 13, 0, 0, tzinfo=UTC)
+        sink, _ = self._run_write(["0xbtc1", "0xbtc2"], [created, created], [settlement, settlement])
+
+        assert len(sink.writes) == 1
+        written_df = sink.writes[0]["data"]
+        assert isinstance(written_df, pd.DataFrame)
+        missing = mtds_required - set(written_df.columns)
+        assert not missing, f"MTDS-required columns missing from writer output: {missing}"
+
+    def test_market_id_equals_instrument_key(self) -> None:
+        """market_id must be the condition_id / instrument_key so the MTDS
+        lookup ``result[market_id]`` resolves correctly.
+        """
+        created = datetime(2026, 3, 25, 9, 0, 0, tzinfo=UTC)
+        settlement = datetime(2026, 3, 26, 13, 0, 0, tzinfo=UTC)
+        sink, _ = self._run_write(["0xtest123"], [created], [settlement])
+
+        written_df = sink.writes[0]["data"]
+        assert written_df["market_id"].tolist() == ["0xtest123"]
+
+    def test_datetimes_are_utc_aware(self) -> None:
+        """Both ``market_created_at`` and ``settlement_time`` must be UTC-aware
+        so the MTDS reader's ``_coerce_lifecycle_dt`` does not attach a
+        spurious timezone (it would pass through naive datetimes unchecked).
+        """
+        created = datetime(2026, 3, 25, 9, 0, 0, tzinfo=UTC)
+        settlement = datetime(2026, 3, 26, 13, 0, 0, tzinfo=UTC)
+        sink, _ = self._run_write(["0xtz"], [created], [settlement])
+
+        written_df = sink.writes[0]["data"]
+        mc_col = written_df["market_created_at"]
+        st_col = written_df["settlement_time"]
+        # pd.Timestamp with tz set → tz attribute is non-None
+        assert mc_col.dtype.tz is not None, "market_created_at must be UTC-aware"
+        assert st_col.dtype.tz is not None, "settlement_time must be UTC-aware"
+
+    def test_available_at_column_present(self) -> None:
+        """``available_at`` is stamped by ``stamp_available_at_explicit`` so UTL
+        manifest assertions don't raise ``MissingAvailableAtError``.
+        """
+        created = datetime(2026, 3, 25, 9, 0, 0, tzinfo=UTC)
+        settlement = datetime(2026, 3, 26, 13, 0, 0, tzinfo=UTC)
+        sink, _ = self._run_write(["0xavail"], [created], [settlement])
+
+        written_df = sink.writes[0]["data"]
+        assert "available_at" in written_df.columns
+
+    def test_no_write_when_all_rows_missing_lifecycle_fields(self) -> None:
+        """When every row has null available_from or available_to, nothing is written
+        (matches ``_build_market_lifecycle_df`` contract).
+        """
+        none_dt: list[datetime] = [None]  # type: ignore[list-item]
+        sink, _ = self._run_write(["0xnull"], none_dt, none_dt)
+
+        assert len(sink.writes) == 0, "Expected no write when lifecycle fields are all null"
+
+    def test_manifest_record_captured_called_on_success(self) -> None:
+        """manifest.record_captured_from_counts must be called with the correct
+        data_type so the prediction manifest row lands with
+        ``data_type=prediction_market_lifecycle``.
+        """
+        created = datetime(2026, 3, 25, 9, 0, 0, tzinfo=UTC)
+        settlement = datetime(2026, 3, 26, 13, 0, 0, tzinfo=UTC)
+        _, manifest = self._run_write(["0xmanifest"], [created], [settlement])
+
+        manifest.record_captured_from_counts.assert_called_once()
+        call_kwargs = manifest.record_captured_from_counts.call_args.kwargs
+        assert call_kwargs["row_key"]["data_type"] == "prediction_market_lifecycle"
+        assert call_kwargs["row_key"]["underlying"] == self._GROUP
+
+    def test_multiple_markets_all_written(self) -> None:
+        """All markets in the group end up in the single parquet file (bundled shard)."""
+        n = 5
+        created = datetime(2026, 3, 25, 9, 0, 0, tzinfo=UTC)
+        settlement = datetime(2026, 3, 26, 13, 0, 0, tzinfo=UTC)
+        market_ids = [f"0xmkt{i}" for i in range(n)]
+        sink, _ = self._run_write(market_ids, [created] * n, [settlement] * n)
+
+        assert len(sink.writes) == 1
+        written_df = sink.writes[0]["data"]
+        assert len(written_df) == n
+        assert set(written_df["market_id"].tolist()) == set(market_ids)
