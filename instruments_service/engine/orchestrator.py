@@ -54,7 +54,7 @@ from unified_api_contracts import (
     get_prediction_leagues,
     pipeline_mode_for_sports_entity,
 )
-from unified_api_contracts.internal import InstrumentRecord, validate_instrument_records
+from unified_api_contracts.internal import InstrumentRecord, PreflightSkipReason, validate_instrument_records
 from unified_api_contracts.predictions import (
     CANONICAL_GROUP_METADATA,
     CanonicalQuestionGroup,
@@ -94,6 +94,7 @@ from unified_trading_library import (
     check_shard_freshness,
     classify_and_emit_error,
     create_sampling_service,
+    emit_preflight_skip,
     get_data_sink,
     get_storage_client,
     log_event,
@@ -668,6 +669,17 @@ def _should_skip_date_for_per_league(
         ):
             continue
         return False
+    # All expected canonical leagues are already captured/empty_confirmed for this date — the
+    # per-league preflight short-circuits. Emit PREFLIGHT_SKIPPED (STEP 5.64 observability parity):
+    # without it a silent skip is indistinguishable from a silent success in the event stream.
+    emit_preflight_skip(
+        PreflightSkipReason.SHARD_ALREADY_FRESH,
+        asset_group="sports",
+        feature_group=data_type,
+        date=date,
+        shard="all_expected_canonical_leagues",
+        message=f"per-league preflight: all {len(expected_canonical_leagues)} expected leagues already captured",
+    )
     return True
 
 
