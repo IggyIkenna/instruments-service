@@ -25,7 +25,12 @@ from ...schemas import (
     OHLCVRef,
 )
 from ...utils import date_to_block
-from ...utils.defi_utils import classify_graph_error, order_base_quote, parse_created_timestamp
+from ...utils.defi_utils import (
+    assert_subgraph_payload,
+    classify_graph_error,
+    order_base_quote,
+    parse_created_timestamp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +125,10 @@ class UniswapV2ReferenceDataAdapter(BaseReferenceDataAdapter):
             self._log_fetch_error(exc)
             raise ConnectionError(str(exc)) from exc
 
-        pairs: list[dict[str, object]] = (data.get("data") or {}).get("pairs") or []
+        # DeFi-plan A8 / operator 2026-05-07: raise on a soft 200-with-`errors` / missing-`data` body
+        # (transient subgraph failure) instead of silently returning an empty pair universe.
+        data_field = assert_subgraph_payload(data, venue="UNISWAP_V2", chain=self._chain)
+        pairs: list[dict[str, object]] = data_field.get("pairs") or []
 
         results: list[InstrumentRecord] = []
 
