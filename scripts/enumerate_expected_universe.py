@@ -75,7 +75,7 @@ from unified_api_contracts.registry.venue_trading_calendar import (
     is_non_trading_day,
     non_trading_day_reason,
 )
-from unified_trading_library import MANIFEST_SCHEMA_VERSION
+from unified_trading_library import MANIFEST_SCHEMA_VERSION, resolve_bucket_name
 
 logging.basicConfig(
     level=logging.INFO,
@@ -85,13 +85,43 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ID = "central-element-323112"
 
-ASSET_GROUP_BUCKETS: dict[str, str] = {
-    "cefi": f"market-data-tick-cefi-{PROJECT_ID}",
-    "defi": f"market-data-tick-defi-{PROJECT_ID}",
-    "tradfi": f"market-data-tick-tradfi-{PROJECT_ID}",
-    "sports": f"instruments-store-sports-{PROJECT_ID}",
-    "prediction": f"market-data-tick-prediction-{PROJECT_ID}",
-}
+# Asset groups this enumerator supports. The canonical MANIFEST bucket per group is
+# resolved at run-time via ``resolve_bucket_name`` (the bucket-name SSOT,
+# deployment-service/configs/cloud-providers.yaml) — see ``_default_bucket_for``.
+SUPPORTED_ASSET_GROUPS: tuple[str, ...] = ("cefi", "defi", "tradfi", "sports", "prediction")
+
+
+def _default_bucket_for(asset_group: str) -> str:
+    """Resolve the canonical manifest bucket for ``asset_group`` via the bucket-name SSOT.
+
+    Replaces the prior hardcoded ``market-data-tick-{ag}-{PROJECT_ID}`` literals which were
+    ALL missing the ``-{DEPLOYMENT_ENV_SHORT}-`` env tier (e.g. ``market-data-tick-cefi-{pid}``
+    instead of the canonical ``market-data-tick-cefi-prd-{pid}``; prediction was the legacy
+    long-form ``market-data-tick-prediction-{pid}`` slated for L6 delete instead of
+    ``market-data-tick-pred-prd-{pid}``) — so a no-``--bucket`` run targeted a NON-EXISTENT
+    bucket for EVERY asset_group → an empty manifest read → wrong/no expected_unattempted seed.
+
+    Routing mirrors the MTDS reader / MDPS consolidator gate:
+    - sports' manifest lives in the ``instruments-store`` bucket;
+    - prediction uses the dedicated flat kind ``market-data-tick-prediction`` (→ ``*-pred-prd-``);
+    - cefi/defi/tradfi use the per-asset_group ``market-data`` kind.
+    """
+    # ``resolve_bucket_name``'s ``asset_group`` is a Literal["cefi","defi","tradfi",
+    # "sports","prediction"] — pass the explicit literal (equality-narrowed) so the call
+    # is type-clean (the param is NOT the UAC AssetGroup enum).
+    if asset_group == "sports":
+        return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
+    if asset_group == "prediction":
+        return resolve_bucket_name(cloud="gcp", kind="market-data-tick-prediction")
+    if asset_group == "cefi":
+        return resolve_bucket_name(cloud="gcp", kind="market-data", asset_group="cefi")
+    if asset_group == "defi":
+        return resolve_bucket_name(cloud="gcp", kind="market-data", asset_group="defi")
+    if asset_group == "tradfi":
+        return resolve_bucket_name(cloud="gcp", kind="market-data", asset_group="tradfi")
+    raise ValueError(f"_default_bucket_for: unsupported asset_group={asset_group!r}")
+
+
 MANIFEST_BLOB = "_index/availability_index.parquet"
 DEFAULT_START_DATE = "2018-01-01"
 
@@ -1063,7 +1093,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--asset-group",
         required=True,
-        choices=sorted(ASSET_GROUP_BUCKETS.keys()),
+        choices=sorted(SUPPORTED_ASSET_GROUPS),
         help="Asset group manifest to enumerate.",
     )
     p.add_argument(
@@ -1376,7 +1406,7 @@ def _write_absent_rows(
 def main() -> int:
     args = _parse_args()
     asset_group: str = args.asset_group
-    bucket_name: str = args.bucket or ASSET_GROUP_BUCKETS[asset_group]
+    bucket_name: str = args.bucket or _default_bucket_for(asset_group)
     run_ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     run_id = f"enum-universe-{asset_group}-{run_ts}"
 
