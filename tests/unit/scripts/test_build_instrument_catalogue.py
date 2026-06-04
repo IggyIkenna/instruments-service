@@ -54,6 +54,35 @@ def _snapshot(rows: list[dict[str, object]]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _parquet_bytes(rows: list[dict[str, object]]) -> bytes:
+    import io
+
+    buf = io.BytesIO()
+    pd.DataFrame(rows).to_parquet(buf, index=False)
+    return buf.getvalue()
+
+
+class _Blob:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class _FakeStorage:
+    """Minimal duck-typed StorageClient for the by_date walk + dry-run promote path."""
+
+    def __init__(self, blobs: dict[str, bytes]) -> None:
+        self._blobs = blobs
+
+    def list_blobs(self, bucket: str, prefix: str = "", **_: object) -> list[_Blob]:
+        return [_Blob(name) for name in self._blobs if name.startswith(prefix)]
+
+    def download_bytes(self, bucket: str, blob_path: str) -> bytes:
+        return self._blobs[blob_path]
+
+    def blob_exists(self, bucket: str, blob_path: str) -> bool:
+        return blob_path in self._blobs
+
+
 # ---------------------------------------------------------------------------
 # build_catalogue_dataframe — lifecycle math
 # ---------------------------------------------------------------------------
@@ -222,3 +251,56 @@ def test_completeness_empty_index(audit: ModuleType) -> None:
     report = audit.summarise_completeness(pd.DataFrame(), "cefi")
     assert report.total_rows == 0
     assert report.is_complete  # vacuously — no failed cells (provisional)
+
+
+# ---------------------------------------------------------------------------
+# _iter_by_date_snapshots — concurrent walk + day parsing + max_blobs cap
+# ---------------------------------------------------------------------------
+
+
+def test_iter_by_date_walk_parses_day_and_reads_frames(rollup: ModuleType) -> None:
+    blobs = {
+        "instrument_availability/by_date/day=2024-01-01/venue=BINANCE/instruments.parquet": _parquet_bytes(
+            [{"instrument_key": "BTC-USDT", "venue": "BINANCE"}]
+        ),
+        "instrument_availability/by_date/day=2024-01-02/venue=OKX/instruments.parquet": _parquet_bytes(
+            [{"instrument_key": "ETH-USDT", "venue": "OKX"}]
+        ),
+        "instrument_availability/by_date/day=2024-01-02/venue=OKX/_SUCCESS": b"not-parquet",
+    }
+    out = list(rollup._iter_by_date_snapshots(_FakeStorage(blobs), "bkt", "instrument_availability/by_date"))
+    days = sorted(str(d) for d, _ in out)
+    assert days == ["2024-01-01", "2024-01-02"]  # non-parquet skipped
+    assert all(not f.empty for _, f in out)
+
+
+def test_iter_by_date_max_blobs_truncates(rollup: ModuleType) -> None:
+    blobs = {
+        f"instrument_availability/by_date/day=2024-01-0{i}/venue=V/instruments.parquet": _parquet_bytes(
+            [{"instrument_key": f"I{i}", "venue": "V"}]
+        )
+        for i in range(1, 6)
+    }
+    out = list(
+        rollup._iter_by_date_snapshots(_FakeStorage(blobs), "bkt", "instrument_availability/by_date", max_blobs=2)
+    )
+    assert len(out) == 2  # truncated (path-sorted → earliest two days)
+
+
+def test_run_rollup_max_blobs_forces_dry_run(rollup: ModuleType) -> None:
+    """--max-blobs must force dry-run (a truncated walk is never promotable)."""
+    blobs = {
+        "instrument_availability/by_date/day=2024-01-01/venue=V/instruments.parquet": _parquet_bytes(
+            [{"instrument_key": "A", "venue": "V"}]
+        ),
+    }
+    code = rollup.run_rollup(
+        "cefi",
+        allow_shrink=False,
+        dry_run=False,  # caller asked to write...
+        max_blobs=1,  # ...but the cap forces dry-run
+        storage=_FakeStorage(blobs),
+    )
+    assert code == 0
+    # No catalog object was written (fake has only the input blob).
+    assert "prod/catalog.parquet" not in _FakeStorage(blobs)._blobs
