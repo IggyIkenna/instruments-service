@@ -2426,6 +2426,11 @@ async def process_instruments(
                             "date": date,
                             "data_type": "prediction_canonical_question_group",
                             "venue": _manifest_venue,
+                            # Canonical v9 bundled-atom identity: the cqg lives in `instrument_id`
+                            # (matches the MTDS record_captured_from_counts row_key + what
+                            # deployment-api `_prediction_venue_detail` reads first). `underlying`
+                            # is kept as the migration-window fallback deployment-api still reads.
+                            "instrument_id": _group_str,
                             "underlying": _group_str,
                         },
                         df=_stamped_group_df,
@@ -2433,6 +2438,7 @@ async def process_instruments(
                         instrument_type="",
                         data_type="prediction_canonical_question_group",
                         venue=_manifest_venue,
+                        instrument_id=_group_str,
                         underlying=_group_str,
                         # SP-10: prediction canonical-question-group IS a genuine per-market
                         # bundle, and UAC expected_market_ids_for_canonical_group(group, day,
