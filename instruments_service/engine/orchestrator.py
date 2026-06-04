@@ -1605,6 +1605,10 @@ async def process_instruments(
                         sports_manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable
                             row_key={"date": date, "data_type": entity_name.upper()},
                             total_rows=row_count,
+                            # SP-10: single-entity sports-reference shard (one (date, data_type)
+                            # row per core entity) — no per-root-cluster contract exists for this
+                            # data_type, so the cluster gate is intentionally a no-op here. Adding
+                            # an expectation with no authoritative source would false-fail real data.
                             expected_root_clusters={},
                             observed_clusters={"": row_count},
                             available_at_envelope=pd.Timestamp(datetime.now(UTC)),
@@ -1787,6 +1791,11 @@ async def process_instruments(
             pf_manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable
                 row_key={"date": date, "data_type": entity_name.upper()},
                 total_rows=row_count,
+                # SP-10: single-entity per-fixture sports shard (one (date, data_type) row per
+                # entity count) — no per-root-cluster contract exists for this data_type, so the
+                # cluster gate is intentionally a no-op. The genuinely-bundled per-fixture entities
+                # (FIXTURE_STATS/EVENTS/LINEUPS/PLAYER_STATS) write per-league via record_captured,
+                # not this counts path. Inventing an expectation here would false-fail real data.
                 expected_root_clusters={},
                 observed_clusters={"": row_count},
                 available_at_envelope=pd.Timestamp(datetime.now(UTC)),
@@ -1946,6 +1955,11 @@ async def process_instruments(
                                     sports_manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable
                                         row_key={"date": date, "data_type": entity_name.upper()},
                                         total_rows=row_count,
+                                        # SP-10: single-entity sports-reference shard (one
+                                        # (date, data_type) row per core entity) — no
+                                        # per-root-cluster contract for this data_type, so the
+                                        # cluster gate is a deliberate no-op; an unfounded
+                                        # expectation would false-fail genuinely-captured data.
                                         expected_root_clusters={},
                                         observed_clusters={"": row_count},
                                         available_at_envelope=pd.Timestamp(datetime.now(UTC)),
@@ -2420,6 +2434,13 @@ async def process_instruments(
                         data_type="prediction_canonical_question_group",
                         venue=_manifest_venue,
                         underlying=_group_str,
+                        # SP-10: prediction canonical-question-group IS a genuine per-market
+                        # bundle, and UAC expected_market_ids_for_canonical_group(group, day,
+                        # lifecycles) is the authoritative expected-cluster source. Wiring it
+                        # here requires threading the MARKET_LIFECYCLE rows for this
+                        # (group, day) cell to the callsite (not currently loaded here), and
+                        # this is the `prediction` asset_group — outside the SP-10 sports scope.
+                        # Left {} for now; tracked as a P2 follow-up (see predictions_master.md).
                         expected_root_clusters={},
                         cluster_extractor=lambda s: s,
                         pipeline_mode=_pred_pm,
@@ -2541,6 +2562,10 @@ async def process_instruments(
                     sports_manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable
                         row_key={"date": date, "data_type": entity_name.upper()},
                         total_rows=row_count,
+                        # SP-10: single-entity sports-reference shard (one (date, data_type) row
+                        # per core entity) — no per-root-cluster contract for this data_type, so
+                        # the cluster gate is a deliberate no-op; an unfounded expectation would
+                        # false-fail genuinely-captured data.
                         expected_root_clusters={},
                         observed_clusters={"": row_count},
                         available_at_envelope=pd.Timestamp(datetime.now(UTC)),
@@ -3428,6 +3453,9 @@ def _write_market_lifecycle(
                 "underlying": canonical_group_str,
             },
             total_rows=len(out_df),
+            # SP-10: prediction_market_lifecycle is the lifecycle table itself for a single
+            # (group, day) cell — it is the SOURCE of the expected-market-id set, not a bundle
+            # validated against one, so there is no upstream cluster contract to assert here.
             expected_root_clusters={},
             observed_clusters={"": len(out_df)},
             available_at_envelope=pd.Timestamp(now),
@@ -6734,6 +6762,10 @@ async def _fetch_transfermarkt_data(
             manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable
                 row_key={"date": date, "data_type": "PLAYER_VALUES", "league_id": _canonical_league_id(_cap_lid)},
                 total_rows=_cap_count,
+                # SP-10: per-league PLAYER_VALUES shard — the shard atom is (date, data_type,
+                # league_id), so a "league" is already the row key, not a sub-cluster within the
+                # row. No finer per-root-cluster contract exists, so the gate is a deliberate
+                # no-op; an unfounded expectation would false-fail genuinely-captured data.
                 expected_root_clusters={},
                 observed_clusters={"": _cap_count},
                 available_at_envelope=pd.Timestamp(datetime.now(UTC)),
@@ -7522,6 +7554,10 @@ async def _fetch_weather_data(
                     manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable
                         row_key={"date": date, "data_type": "WEATHER", "league_id": _canonical_league_id(_lid_str)},
                         total_rows=1,
+                        # SP-10: per-league WEATHER shard — shard atom is (date, data_type,
+                        # league_id); a league is the row key, not a sub-cluster within the row.
+                        # No per-root-cluster contract exists, so the gate is a deliberate no-op;
+                        # an unfounded expectation would false-fail genuinely-captured data.
                         expected_root_clusters={},
                         observed_clusters={"": 1},
                         available_at_envelope=pd.Timestamp(datetime.now(UTC)),
@@ -7711,6 +7747,10 @@ async def _fetch_weather_data(
             manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable
                 row_key={"date": date, "data_type": "WEATHER", "league_id": _canonical_league_id(_lid)},
                 total_rows=_count,
+                # SP-10: per-league WEATHER shard — shard atom is (date, data_type, league_id);
+                # a league is the row key, not a sub-cluster within the row. No per-root-cluster
+                # contract exists, so the gate is a deliberate no-op; an unfounded expectation
+                # would false-fail genuinely-captured data.
                 expected_root_clusters={},
                 observed_clusters={"": _count},
                 available_at_envelope=pd.Timestamp(datetime.now(UTC)),
@@ -7953,6 +7993,10 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
                 "league_id": manifest_league_id,
             },
             total_rows=record_count,
+            # SP-10: generic parquet-path recovery writer — the manifest row is derived from a
+            # single parquet path's (date, data_type, venue, chain, league_id) and an aggregate
+            # record_count. There is no per-root-cluster decomposition available from a path, so
+            # the gate is a deliberate no-op; an unfounded expectation would false-fail real data.
             expected_root_clusters={},
             observed_clusters={"": record_count},
             available_at_envelope=pd.Timestamp(datetime.now(UTC)),
