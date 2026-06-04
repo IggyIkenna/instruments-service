@@ -27,7 +27,7 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
-from ...utils.defi_utils import classify_graph_error
+from ...utils.defi_utils import assert_subgraph_payload, classify_graph_error
 from ...utils.evm_creation_resolver import block_to_timestamp, get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
@@ -131,7 +131,9 @@ class CompoundV3ReferenceDataAdapter(BaseReferenceDataAdapter):
             self._log_fetch_error(exc)
             raise ConnectionError(str(exc)) from exc
 
-        raw_data = data.get("data") or {}
+        # DeFi-plan A8 / operator 2026-05-07: raise on a soft 200-with-`errors` body (transient subgraph
+        # error / rate-limit / indexing lag) instead of silently returning an empty market universe.
+        raw_data = assert_subgraph_payload(data, venue="COMPOUND_V3", chain=self._chain)
         markets: list[dict[str, object]] = raw_data.get("markets") or []
         results: list[InstrumentRecord] = []
         venue_tag = f"COMPOUND_V3-{self._chain}"
