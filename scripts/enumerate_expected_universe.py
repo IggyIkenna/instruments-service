@@ -423,6 +423,16 @@ class InstrumentCatalogEntry(NamedTuple):
       ``None`` = still active → no upper bound (emit rows to end).
     - ``market_created_at``: Prediction market creation ISO date (prediction only).
     - ``settlement_time``: Prediction market settlement ISO date (prediction only).
+    - ``data_type``: OPTIONAL grain-binding for multi-grain asset groups
+      (prediction). When set, the v2 enumerator emits ``expected_unattempted``
+      rows for THIS data_type ONLY (at this row's ``instrument_id`` grain),
+      instead of cross-producting the row against the full ``data_types`` list.
+      ``None`` (the default, all other AGs + legacy prediction catalogues) →
+      legacy behaviour (iterate every passed data_type). This is how a single
+      prediction catalogue can carry both the per-cqg bundle row
+      (``data_type=prediction_canonical_question_group``, ``instrument_id=cqg``)
+      and per-conditionId rows (``data_type=trades`` / ``market_lifecycle``)
+      without inflating the denominator by the cqg→conditionId fan-out.
     """
 
     instrument_id: str
@@ -434,6 +444,7 @@ class InstrumentCatalogEntry(NamedTuple):
     available_to: str | None
     market_created_at: str | None
     settlement_time: str | None
+    data_type: str | None = None
 
 
 def _enumerate_v2_cefi(
@@ -818,6 +829,11 @@ def _enumerate_v2_prediction(
             continue  # fully settled before window started
         if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
             continue  # not yet created when window ended
+        # Grain-binding: a catalogue row may declare its OWN data_type (the
+        # prediction multi-grain catalogue — cqg bundle vs per-conditionId
+        # trades). When set, emit for THAT data_type only at this row's grain;
+        # otherwise fall back to the full passed list (legacy / other AGs).
+        row_dts: list[str] = [instr.data_type] if instr.data_type else data_types
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -828,7 +844,7 @@ def _enumerate_v2_prediction(
             else:
                 if present_set is None:
                     continue  # legacy mode: alive on this day — skip
-                for dt in data_types:
+                for dt in row_dts:
                     row_key = tuple(
                         {
                             "venue": instr.venue,
@@ -855,7 +871,7 @@ def _enumerate_v2_prediction(
                             capture_status="expected_unattempted",
                         )
                 continue
-            for dt in data_types:
+            for dt in row_dts:
                 yield ExpectedRow(
                     asset_group="prediction",
                     venue=instr.venue,
@@ -987,7 +1003,7 @@ def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
 
     entries: list[InstrumentCatalogEntry] = []
     for row in df.itertuples(index=False, name=None):
-        row_dict = dict(zip(df.columns, row, strict=True))
+        row_dict: dict[str, object] = dict(zip(df.columns, row, strict=True))
         # Support both canonical column names and instruments-service catalog aliases.
         # instruments-service catalog uses:
         #   instrument_key (not instrument_id)
@@ -1007,6 +1023,7 @@ def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
                 available_to=available_to,
                 market_created_at=_opt_date(row_dict.get("market_created_at")),
                 settlement_time=_opt_date(row_dict.get("settlement_time")),
+                data_type=(_safe_str(row_dict.get("data_type", "")) or None),
             )
         )
     return entries

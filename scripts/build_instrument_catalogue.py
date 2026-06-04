@@ -82,6 +82,8 @@ CATALOG_FILENAME = "catalog.parquet"
 
 #: Columns the enumerator's ``_catalog_from_dataframe`` consumes. ``instrument_id``
 #: is written as the canonical column (the helper also accepts ``instrument_key``).
+#: ``data_type`` is the OPTIONAL grain-binding (prediction multi-grain catalogue) —
+#: empty/None for the single-grain AGs (the enumerator then iterates all data_types).
 CATALOG_COLUMNS: tuple[str, ...] = (
     "instrument_id",
     "instrument_type",
@@ -92,6 +94,7 @@ CATALOG_COLUMNS: tuple[str, ...] = (
     "available_to",
     "market_created_at",
     "settlement_time",
+    "data_type",
 )
 
 #: Per-date parquet columns holding the instrument identifier (first match wins).
@@ -102,6 +105,19 @@ MAX_DOWNLOAD_WORKERS = 16
 
 #: Extract the ISO ``day=`` partition from a ``by_date`` blob path.
 _DAY_RE = re.compile(r"(?:^|/)day=(\d{4}-\d{2}-\d{2})(?:/|$)")
+
+#: Extract the ``venue=`` / ``canonical_question_group=`` partitions (prediction).
+#: The prediction writer (instruments-service ``orchestrator.py``) partitions
+#: ``instrument_availability/by_date/day=/venue=/canonical_question_group=/instruments.parquet``
+#: and DROPS the ``_canonical_group`` column before writing — so the cqg lives in
+#: the PATH, not a column. The prediction roll-up parses it from the path.
+_VENUE_RE = re.compile(r"(?:^|/)venue=([^/]+)(?:/|$)")
+_CQG_RE = re.compile(r"(?:^|/)canonical_question_group=([^/]+)(?:/|$)")
+
+#: Prediction data_types whose captured manifest atom is per-conditionId grain.
+_PREDICTION_CID_DATA_TYPES: tuple[str, ...] = ("trades", "market_lifecycle")
+#: Prediction bundle data_type whose captured atom is per-canonical_question_group grain.
+_PREDICTION_CQG_DATA_TYPE = "prediction_canonical_question_group"
 
 
 def _emit_event(event: str, /, **details: object) -> None:
@@ -227,6 +243,9 @@ def build_catalogue_dataframe(snapshots: Iterable[tuple[date, pd.DataFrame]]) ->
                 "available_to": available_to,
                 "market_created_at": agg.meta["market_created_at"],
                 "settlement_time": agg.meta["settlement_time"],
+                # Single-grain AGs leave data_type empty → the enumerator iterates
+                # the full DATA_TYPES_BY_ASSET_GROUP list (legacy behaviour).
+                "data_type": None,
             }
         )
 
@@ -243,6 +262,155 @@ def _extract_meta(row: dict[str, object]) -> dict[str, str | None]:
         "market_created_at": _opt_field(row, "market_created_at"),
         "settlement_time": _opt_field(row, "settlement_time"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Prediction MULTI-GRAIN roll-up (cqg bundle + per-conditionId)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _PredLifecycle:
+    """Lifecycle accumulator for one prediction entity (a cqg OR a conditionId)."""
+
+    first_day: date
+    last_day: date
+    venue: str
+    instrument_type: str
+    #: min ``start_date`` / max ``end_date_iso`` across the per-date rows, when the
+    #: prediction instruments.parquet carries them (more precise than day-presence).
+    created: str | None = None
+    settled: str | None = None
+
+
+def _merge_lifecycle(
+    acc: dict[tuple[str, str], _PredLifecycle],
+    key: tuple[str, str],
+    day: date,
+    venue: str,
+    instrument_type: str,
+    created: str | None,
+    settled: str | None,
+) -> None:
+    """Fold one (entity, day) observation into the lifecycle accumulator."""
+    cur = acc.get(key)
+    if cur is None:
+        acc[key] = _PredLifecycle(
+            first_day=day,
+            last_day=day,
+            venue=venue,
+            instrument_type=instrument_type,
+            created=created,
+            settled=settled,
+        )
+        return
+    if day < cur.first_day:
+        cur.first_day = day
+    if day > cur.last_day:
+        cur.last_day = day
+        # Metadata (instrument_type) follows the most-recent observation.
+        if instrument_type:
+            cur.instrument_type = instrument_type
+    if created and (cur.created is None or created < cur.created):
+        cur.created = created
+    if settled and (cur.settled is None or settled > cur.settled):
+        cur.settled = settled
+
+
+def build_prediction_catalogue_dataframe(
+    snapshots: Iterable[tuple[date, str, str, pd.DataFrame]],
+) -> pd.DataFrame:
+    """Roll the prediction per-date definitions up into a MULTI-GRAIN catalogue.
+
+    Prediction has two captured grains (``DATA_TYPES_BY_ASSET_GROUP["prediction"]``
+    is mixed-grain): the ``prediction_canonical_question_group`` bundle is per
+    canonical-question-group, while ``trades`` / ``market_lifecycle`` are per
+    conditionId. A single-grain roll-up (the generic ``build_catalogue_dataframe``,
+    one row per ``instrument_key`` = conditionId) would seed the cqg denominator
+    at conditionId grain → inflated by the cqg→conditionId fan-out. So this
+    producer emits ONE catalogue row per grain, each carrying its own
+    ``data_type`` (the v2 enumerator then seeds each at the right grain — see
+    ``enumerate_expected_universe.InstrumentCatalogEntry.data_type``).
+
+    Args:
+        snapshots: iterable of ``(day, venue, cqg, frame)`` — one per
+            ``instrument_availability/by_date/day=/venue=/canonical_question_group=/instruments.parquet``
+            blob. ``venue`` + ``cqg`` come from the PATH (the writer drops the
+            ``_canonical_group`` column); ``frame`` holds that day's per-market
+            InstrumentRecords (``instrument_key`` = conditionId).
+
+    Returns:
+        A DataFrame with :data:`CATALOG_COLUMNS`:
+          * one row per ``(venue, cqg)`` with ``data_type=prediction_canonical_question_group``,
+            ``instrument_id=cqg``;
+          * one row per ``(venue, conditionId)`` for EACH of
+            :data:`_PREDICTION_CID_DATA_TYPES`, ``instrument_id=conditionId``.
+        ``available_from`` = first day present; ``available_to`` = last day present
+        or ``None`` when present on the latest snapshot day (still active).
+    """
+    cqg_acc: dict[tuple[str, str], _PredLifecycle] = {}
+    cid_acc: dict[tuple[str, str], _PredLifecycle] = {}
+    all_days: set[date] = set()
+
+    for day, venue, cqg, frame in snapshots:
+        all_days.add(day)
+        venue_str = venue.strip()
+        cqg_str = cqg.strip()
+        if frame.empty or not cqg_str:
+            continue
+        records: list[dict[str, object]] = frame.to_dict("records")  # pyright: ignore[reportAssignmentType]
+        # cqg-grain lifecycle: the cqg is present on this day if ANY member is.
+        cqg_itype = ""
+        cqg_created: str | None = None
+        cqg_settled: str | None = None
+        saw_member = False
+        for row in records:
+            cid = _row_id(row)
+            if cid is None:
+                continue
+            saw_member = True
+            itype = _str_field(row, "instrument_type")
+            created = _opt_field(row, "start_date") or _opt_field(row, "market_created_at")
+            settled = _opt_field(row, "end_date_iso") or _opt_field(row, "settlement_time")
+            cqg_itype = cqg_itype or itype
+            if created and (cqg_created is None or created < cqg_created):
+                cqg_created = created
+            if settled and (cqg_settled is None or settled > cqg_settled):
+                cqg_settled = settled
+            _merge_lifecycle(cid_acc, (venue_str, cid), day, venue_str, itype, created, settled)
+        if saw_member:
+            _merge_lifecycle(cqg_acc, (venue_str, cqg_str), day, venue_str, cqg_itype, cqg_created, cqg_settled)
+
+    if not all_days:
+        return pd.DataFrame(columns=list(CATALOG_COLUMNS))
+    latest_day = max(all_days)
+
+    rows: list[dict[str, str | None]] = []
+
+    def _emit(entity_id: str, data_type: str, lc: _PredLifecycle) -> None:
+        available_to = None if lc.last_day >= latest_day else lc.last_day.isoformat()
+        rows.append(
+            {
+                "instrument_id": entity_id,
+                "instrument_type": lc.instrument_type or "",
+                "venue": lc.venue,
+                "chain": "",
+                "league_id": "",
+                "available_from": lc.first_day.isoformat(),
+                "available_to": available_to,
+                "market_created_at": lc.created,
+                "settlement_time": lc.settled,
+                "data_type": data_type,
+            }
+        )
+
+    for _venue, cqg_id in sorted(cqg_acc):
+        _emit(cqg_id, _PREDICTION_CQG_DATA_TYPE, cqg_acc[(_venue, cqg_id)])
+    for _venue, cid in sorted(cid_acc):
+        for dt in _PREDICTION_CID_DATA_TYPES:
+            _emit(cid, dt, cid_acc[(_venue, cid)])
+
+    return pd.DataFrame(rows, columns=list(CATALOG_COLUMNS))
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +504,58 @@ def _iter_by_date_snapshots(
         day, name = item
         payload = storage.download_bytes(bucket, name)
         return day, pd.read_parquet(io.BytesIO(payload))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        # pool.map preserves order and re-raises the first worker exception.
+        yield from pool.map(_load, targets)
+
+
+def _iter_prediction_by_date_snapshots(
+    storage: StorageClient,
+    bucket: str,
+    prefix: str,
+    *,
+    max_blobs: int | None = None,
+    max_workers: int = MAX_DOWNLOAD_WORKERS,
+) -> Iterator[tuple[date, str, str, pd.DataFrame]]:
+    """Yield ``(day, venue, cqg, frame)`` for every prediction ``by_date`` blob.
+
+    The prediction writer partitions by ``canonical_question_group=`` in the
+    path (the ``_canonical_group`` column is dropped at write), so the cqg is
+    parsed from the blob name. Blobs with no ``canonical_question_group=``
+    segment (e.g. a non-prediction venue mixed into the bucket) are skipped with
+    a warning rather than silently mis-rolled at the wrong grain.
+
+    Downloads run concurrently (``max_workers`` threads), mirroring
+    :func:`_iter_by_date_snapshots` — the prediction ``by_date`` history is also
+    thousands of parquets. ``max_blobs`` truncates the path-sorted walk for a
+    DIAGNOSTIC smoke-test (forces dry-run upstream — a truncated walk is never
+    promotable).
+    """
+    walk_prefix = prefix.rstrip("/") + "/"
+    targets: list[tuple[date, str, str, str]] = []
+    for blob in storage.list_blobs(bucket, prefix=walk_prefix):
+        name = blob.name
+        if not name.endswith(".parquet"):
+            continue
+        day_m = _DAY_RE.search(name)
+        cqg_m = _CQG_RE.search(name)
+        if day_m is None or cqg_m is None:
+            logger.warning("Skipping prediction blob missing day=/canonical_question_group=: %s", name)
+            continue
+        venue_m = _VENUE_RE.search(name)
+        venue = venue_m.group(1) if venue_m else ""
+        targets.append((date.fromisoformat(day_m.group(1)), venue, cqg_m.group(1), name))
+
+    targets.sort(key=lambda item: item[3])
+    if max_blobs is not None:
+        targets = targets[:max_blobs]
+    logger.info("Found %d prediction by_date parquet(s) to roll up (workers=%d)", len(targets), max_workers)
+
+    def _load(item: tuple[date, str, str, str]) -> tuple[date, str, str, pd.DataFrame]:
+        day, venue, cqg, name = item
+        payload = storage.download_bytes(bucket, name)
+        return day, venue, cqg, pd.read_parquet(io.BytesIO(payload))
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         # pool.map preserves order and re-raises the first worker exception.
@@ -473,8 +693,15 @@ def run_rollup(
         env,
     )
 
-    df = build_catalogue_dataframe(_iter_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs))
-    logger.info("Rolled up %d distinct instruments", len(df))
+    if asset_group == "prediction":
+        # Multi-grain roll-up: the cqg bundle is per-canonical_question_group while
+        # trades/market_lifecycle are per-conditionId. Parse the cqg from the path.
+        df = build_prediction_catalogue_dataframe(
+            _iter_prediction_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs)
+        )
+    else:
+        df = build_catalogue_dataframe(_iter_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs))
+    logger.info("Rolled up %d catalogue rows", len(df))
 
     code = promote_catalogue(
         storage,
