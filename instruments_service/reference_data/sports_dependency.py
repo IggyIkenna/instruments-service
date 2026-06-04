@@ -61,6 +61,16 @@ _API_FOOTBALL_DEPENDENT_VENUES: frozenset[str] = frozenset(
 
 _FIXTURES_PATH_TEMPLATE: str = "sports_reference/by_date/day={date}/entity=api_football/api_football.parquet"
 _CANONICAL_FIXTURES_PATH_TEMPLATE: str = "sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
+# The IS writer + the v9 migration write FIXTURES per-league under a pipeline_mode= hive segment:
+#   canonical (post-migration): sports_reference/by_date/day={date}/pipeline_mode=batch_api_football/entity=fixtures/league={L}/fixtures.parquet
+#   legacy   (pre-migration):   sports_reference/by_date/day={date}/entity=fixtures/league={L}/fixtures.parquet
+# fixtures source = api_football → pipeline_mode_for_sports_entity("fixtures") = batch_api_football.
+# A bare-blob exact probe at entity=fixtures/fixtures.parquet matches NEITHER per-league layout, so
+# the dependency check must list these PREFIXES (any object present = fixtures captured for the day).
+_CANONICAL_FIXTURES_PREFIX_TEMPLATE: str = (
+    "sports_reference/by_date/day={date}/pipeline_mode=batch_api_football/entity=fixtures/"
+)
+_LEGACY_FIXTURES_PREFIX_TEMPLATE: str = "sports_reference/by_date/day={date}/entity=fixtures/"
 
 
 def _resolve_sports_bucket() -> str:
@@ -111,6 +121,29 @@ def _blob_exists(bucket: str, path: str) -> bool:
         return False
 
 
+def _prefix_has_object(bucket: str, prefix: str) -> bool:
+    """Return True if at least one object exists under the given GCS prefix.
+
+    FIXTURES are written per-league (``…/entity=fixtures/league={L}/fixtures.parquet``) under a
+    canonical ``pipeline_mode=`` hive segment, so a single exact-blob probe cannot detect them —
+    we list the prefix and short-circuit on the first object. Returns False on any client error
+    (the caller surfaces a clear ``DependencyError`` rather than leaking the underlying exception).
+    """
+    try:
+        client = get_storage_client()
+        for _blob in client.list_blobs(bucket, prefix=prefix):
+            return True
+        return False
+    except Exception as exc:
+        logger.warning(
+            "sports dep-check: prefix probe failed bucket=%s prefix=%s: %s",
+            bucket,
+            prefix,
+            exc,
+        )
+        return False
+
+
 def _build_remediation_message(date: str, bucket: str, path: str) -> str:
     """Build the actionable error message shown to operators."""
     return (
@@ -147,7 +180,26 @@ def check_api_football_dependency(date: str, bucket: str | None = None) -> None:
 
     canonical_path = _CANONICAL_FIXTURES_PATH_TEMPLATE.format(date=date)
     raw_path = _FIXTURES_PATH_TEMPLATE.format(date=date)
+    canonical_prefix = _CANONICAL_FIXTURES_PREFIX_TEMPLATE.format(date=date)
+    legacy_prefix = _LEGACY_FIXTURES_PREFIX_TEMPLATE.format(date=date)
 
+    # Per-league fixtures under the canonical pipeline_mode= prefix (post-migration), then the
+    # legacy per-league prefix (pre-migration). Either present = fixtures captured for the day.
+    if _prefix_has_object(resolved_bucket, canonical_prefix):
+        logger.debug(
+            "sports dep-check OK: canonical per-league fixtures present under gs://%s/%s",
+            resolved_bucket,
+            canonical_prefix,
+        )
+        return
+    if _prefix_has_object(resolved_bucket, legacy_prefix):
+        logger.debug(
+            "sports dep-check OK: legacy per-league fixtures present under gs://%s/%s",
+            resolved_bucket,
+            legacy_prefix,
+        )
+        return
+    # Bare date-aggregate fixtures.parquet (oldest layout) — exact blob.
     if _blob_exists(resolved_bucket, canonical_path):
         logger.debug(
             "sports dep-check OK: canonical fixtures present at gs://%s/%s",
