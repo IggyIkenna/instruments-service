@@ -175,6 +175,103 @@ def test_rollup_output_consumable_by_enumerator(rollup: ModuleType) -> None:
     assert entry.venue == "BINANCE"
     assert entry.available_from == "2024-01-01"
     assert entry.available_to is None  # active on the latest day
+    assert entry.data_type is None  # single-grain AG → no grain-binding (legacy iterate)
+
+
+# ---------------------------------------------------------------------------
+# build_prediction_catalogue_dataframe — multi-grain roll-up (cqg + conditionId)
+# ---------------------------------------------------------------------------
+
+
+def _pred_snap(rows: list[dict[str, object]]) -> pd.DataFrame:
+    return pd.DataFrame(rows)
+
+
+def test_prediction_rollup_emits_cqg_bundle_and_per_cid_grains(rollup: ModuleType) -> None:
+    """One cqg row (bundle grain) + per-conditionId rows for trades AND market_lifecycle."""
+    d1 = date(2025, 3, 14)
+    snapshots = [
+        (
+            d1,
+            "POLYMARKET",
+            "BTC_UP_DOWN_DAILY",
+            _pred_snap(
+                [
+                    {"instrument_key": "0xaaa", "venue": "POLYMARKET", "instrument_type": "prediction_market"},
+                    {"instrument_key": "0xbbb", "venue": "POLYMARKET", "instrument_type": "prediction_market"},
+                ]
+            ),
+        ),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    recs = df.to_dict("records")
+    # cqg bundle: exactly one row, instrument_id=cqg, data_type=prediction_canonical_question_group.
+    cqg_rows = [r for r in recs if r["data_type"] == "prediction_canonical_question_group"]
+    assert len(cqg_rows) == 1
+    assert cqg_rows[0]["instrument_id"] == "BTC_UP_DOWN_DAILY"
+    # per-conditionId: each of the 2 cids appears under BOTH trades and market_lifecycle.
+    trades = {r["instrument_id"] for r in recs if r["data_type"] == "trades"}
+    lifecycle = {r["instrument_id"] for r in recs if r["data_type"] == "market_lifecycle"}
+    assert trades == {"0xaaa", "0xbbb"}
+    assert lifecycle == {"0xaaa", "0xbbb"}
+    # No condition_id leaks into the cqg bundle (the inflation bug this guards).
+    assert "0xaaa" not in {r["instrument_id"] for r in cqg_rows}
+
+
+def test_prediction_rollup_cqg_lifecycle_spans_member_window(rollup: ModuleType) -> None:
+    """The cqg available_from/to span the union of its member conditionIds' presence."""
+    d1, d2, d3 = date(2025, 3, 14), date(2025, 3, 15), date(2025, 3, 16)
+    snapshots = [
+        (d1, "POLYMARKET", "G", _pred_snap([{"instrument_key": "c1", "venue": "POLYMARKET"}])),
+        (d2, "POLYMARKET", "G", _pred_snap([{"instrument_key": "c2", "venue": "POLYMARKET"}])),
+        # d3 has a DIFFERENT cqg present → G's last day is d2 (delisted before latest).
+        (d3, "POLYMARKET", "H", _pred_snap([{"instrument_key": "c3", "venue": "POLYMARKET"}])),
+    ]
+    df = rollup.build_prediction_catalogue_dataframe(snapshots)
+    cqg = {
+        r["instrument_id"]: r for r in df.to_dict("records") if r["data_type"] == "prediction_canonical_question_group"
+    }
+    assert cqg["G"]["available_from"] == "2025-03-14"
+    assert cqg["G"]["available_to"] == "2025-03-15"  # delisted before the latest day (d3)
+    assert cqg["H"]["available_from"] == "2025-03-16"
+    assert cqg["H"]["available_to"] is None  # present on the latest day → active
+
+
+def test_prediction_rollup_skips_blank_cqg(rollup: ModuleType) -> None:
+    """A blank cqg path segment yields no bundle row (honest skip, no empty-string bundle)."""
+    d1 = date(2025, 3, 14)
+    df = rollup.build_prediction_catalogue_dataframe(
+        [(d1, "POLYMARKET", "", _pred_snap([{"instrument_key": "c1", "venue": "POLYMARKET"}]))]
+    )
+    assert not [r for r in df.to_dict("records") if r["data_type"] == "prediction_canonical_question_group"]
+
+
+def test_prediction_rollup_consumable_by_enumerator_grain_bound(rollup: ModuleType) -> None:
+    """The cqg row round-trips through _catalog_from_dataframe carrying its data_type binding,
+    and the v2 prediction enumerator seeds ONLY that data_type at the cqg grain."""
+    enumerator = _load_script_module("enumerate_expected_universe.py", "_enumerate_for_pred_catalogue_test")
+    d1 = date(2025, 3, 14)
+    df = rollup.build_prediction_catalogue_dataframe(
+        [(d1, "POLYMARKET", "BTC_UP_DOWN_DAILY", _pred_snap([{"instrument_key": "0xaaa", "venue": "POLYMARKET"}]))]
+    )
+    entries = enumerator._catalog_from_dataframe(df)
+    cqg_entry = next(e for e in entries if e.instrument_id == "BTC_UP_DOWN_DAILY")
+    assert cqg_entry.data_type == "prediction_canonical_question_group"
+    # Enumerate over a date the cqg is alive, with an EMPTY present_set → expect a single
+    # expected_unattempted row for the bundle data_type ONLY (NOT crossed with trades/lifecycle).
+    rows = list(
+        enumerator._enumerate_v2_prediction(
+            [cqg_entry],
+            [d1],
+            ["trades", "prediction_canonical_question_group", "market_lifecycle"],
+            present_set=set(),
+            present_cols=["venue", "chain", "data_type", "instrument_type", "instrument_id", "league_id", "date"],
+        )
+    )
+    assert len(rows) == 1
+    assert rows[0].data_type == "prediction_canonical_question_group"
+    assert rows[0].instrument_id == "BTC_UP_DOWN_DAILY"
+    assert rows[0].capture_status == "expected_unattempted"
 
 
 # ---------------------------------------------------------------------------
