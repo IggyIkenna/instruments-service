@@ -49,6 +49,7 @@ import logging
 import re
 import sys
 from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
@@ -95,6 +96,9 @@ CATALOG_COLUMNS: tuple[str, ...] = (
 
 #: Per-date parquet columns holding the instrument identifier (first match wins).
 _ID_COLUMNS: tuple[str, ...] = ("instrument_key", "instrument_id")
+
+#: Concurrency for the by_date download (I/O-bound — MAX_WORKERS=16 per the coding standards).
+MAX_DOWNLOAD_WORKERS = 16
 
 #: Extract the ISO ``day=`` partition from a ``by_date`` blob path.
 _DAY_RE = re.compile(r"(?:^|/)day=(\d{4}-\d{2}-\d{2})(?:/|$)")
@@ -294,9 +298,25 @@ def _iter_by_date_snapshots(
     storage: StorageClient,
     bucket: str,
     prefix: str,
+    *,
+    max_blobs: int | None = None,
+    max_workers: int = MAX_DOWNLOAD_WORKERS,
 ) -> Iterator[tuple[date, pd.DataFrame]]:
-    """Yield ``(day, frame)`` for every ``by_date`` instruments parquet under ``prefix``."""
+    """Yield ``(day, frame)`` for every ``by_date`` instruments parquet under ``prefix``.
+
+    Downloads run concurrently (I/O-bound, ``max_workers`` threads) — the full
+    ``by_date`` history is thousands of parquets and single-threaded download does
+    not complete in a reasonable window. A per-blob download/read error propagates
+    (the run fails loud rather than silently producing an under-counted catalogue
+    the monotonic guard would then reject anyway).
+
+    ``max_blobs`` truncates the walk to the first N parquets (path-sorted, for
+    determinism) — DIAGNOSTIC ONLY: a truncated walk yields an INCOMPLETE catalogue
+    with wrong ``available_from`` / ``available_to``, so the caller forces dry-run
+    when it is set (never promotable).
+    """
     walk_prefix = prefix.rstrip("/") + "/"
+    targets: list[tuple[date, str]] = []
     for blob in storage.list_blobs(bucket, prefix=walk_prefix):
         name = blob.name
         if not name.endswith(".parquet"):
@@ -305,10 +325,21 @@ def _iter_by_date_snapshots(
         if match is None:
             logger.warning("Skipping blob with no day= partition: %s", name)
             continue
-        day = date.fromisoformat(match.group(1))
+        targets.append((date.fromisoformat(match.group(1)), name))
+
+    targets.sort(key=lambda item: item[1])
+    if max_blobs is not None:
+        targets = targets[:max_blobs]
+    logger.info("Found %d by_date parquet(s) to roll up (workers=%d)", len(targets), max_workers)
+
+    def _load(item: tuple[date, str]) -> tuple[date, pd.DataFrame]:
+        day, name = item
         payload = storage.download_bytes(bucket, name)
-        frame = pd.read_parquet(io.BytesIO(payload))
-        yield day, frame
+        return day, pd.read_parquet(io.BytesIO(payload))
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        # pool.map preserves order and re-raises the first worker exception.
+        yield from pool.map(_load, targets)
 
 
 def _read_current_row_count(storage: StorageClient, bucket: str, blob_path: str) -> int | None:
@@ -413,6 +444,7 @@ def run_rollup(
     allow_shrink: bool,
     dry_run: bool,
     by_date_prefix: str = DEFAULT_BY_DATE_PREFIX,
+    max_blobs: int | None = None,
     storage: StorageClient | None = None,
 ) -> int:
     """Roll up the per-date definitions for ``asset_group`` and promote the catalogue."""
@@ -420,6 +452,11 @@ def run_rollup(
     storage = storage or get_storage_client()
     bucket = get_write_bucket_name("instruments", asset_group)
     env = get_config("DEPLOYMENT_ENV", "prod")
+
+    if max_blobs is not None and not dry_run:
+        # A truncated walk yields an incomplete catalogue → never promotable.
+        logger.warning("--max-blobs is diagnostic-only — forcing --dry-run (truncated walk is not promotable)")
+        dry_run = True
     _emit_event(
         "CATALOGUE_ROLLUP_STARTED",
         run_id=run_id,
@@ -436,7 +473,7 @@ def run_rollup(
         env,
     )
 
-    df = build_catalogue_dataframe(_iter_by_date_snapshots(storage, bucket, by_date_prefix))
+    df = build_catalogue_dataframe(_iter_by_date_snapshots(storage, bucket, by_date_prefix, max_blobs=max_blobs))
     logger.info("Rolled up %d distinct instruments", len(df))
 
     code = promote_catalogue(
@@ -485,6 +522,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Roll up + evaluate the guard, but do NOT write the catalogue.",
     )
+    parser.add_argument(
+        "--max-blobs",
+        type=int,
+        default=None,
+        help=(
+            "DIAGNOSTIC ONLY — truncate the by_date walk to the first N parquets (path-sorted). "
+            "Produces an INCOMPLETE catalogue (wrong lifecycle windows), so it forces --dry-run. "
+            "Use to smoke-test the walk without reading the full history."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -495,11 +542,13 @@ def main(argv: list[str] | None = None) -> int:
     allow_shrink: bool = args.allow_catalogue_shrink
     dry_run: bool = args.dry_run
     by_date_prefix: str = args.by_date_prefix
+    max_blobs: int | None = args.max_blobs
     return run_rollup(
         asset_group,
         allow_shrink=allow_shrink,
         dry_run=dry_run,
         by_date_prefix=by_date_prefix,
+        max_blobs=max_blobs,
     )
 
 
