@@ -35,9 +35,10 @@ from instruments_service.cli.main import _add_instruments_extra_args
 
 # Canonical trigger-name examples per asset_group. The closed-set lives in UAC
 # (Phase A.6 todo); these are the operator-direction names per the master plan.
+# NOTE: defi.token_lists.refresh removed — DeFi live-mode uses --mode live (no
+# trigger); DeFi on-chain instrument triggers are in defi_master, not here.
 _CANONICAL_TRIGGER_NAMES: tuple[str, ...] = (
     "cefi.instruments.daily_refresh",
-    "defi.token_lists.refresh",
     "sports.fixtures.daily_repoll",
     "sports.lineups.pre_kickoff",
     "prediction.markets.discover",
