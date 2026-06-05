@@ -184,6 +184,8 @@ class BaseSportsReferenceAdapter(ABC):
             return "TIMEOUT_ERROR"
         if status == 403 or "403" in msg or "forbidden" in msg:
             return "FORBIDDEN"
+        if status == 404 or "404" in msg:
+            return "HTTP_NOT_FOUND"
         return "UNKNOWN"
 
     def _emit_fetch_failed(self, error_code: str, exc: Exception) -> None:

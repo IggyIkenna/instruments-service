@@ -28,6 +28,7 @@ from ...schemas import (
     FundingRateRef,
     OHLCVRef,
 )
+from ...utils.defi_utils import extract_rest_list_or_raise
 from ._solana_utils import get_protocol_floor_date
 
 logger = logging.getLogger(__name__)
@@ -141,14 +142,7 @@ class PhoenixReferenceDataAdapter(BaseReferenceDataAdapter):
             logger.error("Phoenix markets request failed after retries: %s", exc)
             raise
 
-        if isinstance(data, list):
-            return data
-        raw: dict[str, object] = data if isinstance(data, dict) else {}
-        # Phoenix API may return {"markets": [...]} or {"data": [...]}
-        markets = raw.get("markets") or raw.get("data")
-        if isinstance(markets, list):
-            return markets
-        return []
+        return extract_rest_list_or_raise(data, venue=self.venue, keys=("markets", "data"))
 
     def _build_market_record(
         self,

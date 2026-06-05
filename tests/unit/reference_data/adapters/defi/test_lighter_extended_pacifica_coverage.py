@@ -492,16 +492,20 @@ class TestFlashTradeHttpPaths:
         assert markets == inner
 
     @pytest.mark.asyncio
-    async def test_fetch_perp_markets_empty_dict(self) -> None:
+    async def test_fetch_perp_markets_empty_dict_raises(self) -> None:
         from instruments_service.reference_data.adapters.defi.flash_trade import FlashTradeReferenceDataAdapter
 
+        # A 200 response that is an empty/keyless dict ({}) carries NONE of the expected list keys —
+        # it is a malformed/error envelope, NOT an empty universe. It must RAISE so discovery records
+        # attempted_failed rather than silently returning [] (DeFi-plan A8b). A genuinely-empty
+        # response arrives as a bare [] or {"markets": []}, both of which still return [].
         adapter = FlashTradeReferenceDataAdapter()
         with (
             patch.object(adapter, "_make_session", return_value=_make_session_cm()),
             patch.object(adapter, "_get_with_retry", AsyncMock(return_value={})),
+            pytest.raises(ConnectionError),
         ):
-            markets = await adapter._fetch_perp_markets()
-        assert markets == []
+            await adapter._fetch_perp_markets()
 
     @pytest.mark.asyncio
     async def test_fetch_perp_markets_client_error_raises(self) -> None:

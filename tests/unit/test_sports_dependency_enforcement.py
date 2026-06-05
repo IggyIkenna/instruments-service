@@ -6,6 +6,10 @@ fail loud with an actionable ``DependencyError`` if api-football canonical
 fixtures have not been fetched yet for the target date. Today the dep is
 silent and downstream adapters read empty results with no clear signal.
 
+Also covers :func:`check_sports_manifest_v9_columns` — the gated v9
+schema-column regression guard added 2026-06-02 (Task 2 of
+sports_manifest_canonicalisation_2026_06_01.md §P2).
+
 SSOT: ``unified-trading-pm/codex/02-data/sports-adapter-dependency-order.md``.
 """
 
@@ -13,6 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pandas as pd
 import pytest
 
 from instruments_service.reference_data import sports_dependency
@@ -23,6 +28,8 @@ from instruments_service.reference_data.adapters.sports import (
 )
 from instruments_service.reference_data.sports_dependency import (
     _API_FOOTBALL_DEPENDENT_VENUES,
+    _V9_REQUIRED_COLUMNS,
+    check_sports_manifest_v9_columns,
 )
 
 
@@ -267,3 +274,118 @@ class TestFactoryDependencyWiring:
         monkeypatch.setattr(sports_dependency, "get_storage_client", _marker)
         with pytest.raises(ValueError, match="Unsupported"):
             create_sports_reference_adapter("nonexistent_provider", date="2026-04-14")
+
+
+# ---------------------------------------------------------------------------
+# Task 2 — v9 schema-column regression guard (gated)
+# sports_manifest_canonicalisation_2026_06_01.md §P2  (2026-06-02)
+# ---------------------------------------------------------------------------
+
+
+def _v8_df() -> pd.DataFrame:
+    """Simulate a pre-migration v8 manifest _index — no v9 columns."""
+    return pd.DataFrame(
+        {
+            "date": ["2026-01-01"],
+            "data_type": ["FIXTURES"],
+            "capture_status": ["captured"],
+            "schema_version": [8],
+            # v9 columns absent: asset_group, source, pipeline_mode, available_at
+        }
+    )
+
+
+def _v9_df() -> pd.DataFrame:
+    """Simulate a post-walk v9 manifest _index — all v9 columns present."""
+    return pd.DataFrame(
+        {
+            "date": ["2026-01-01"],
+            "data_type": ["FIXTURES"],
+            "capture_status": ["captured"],
+            "schema_version": [9],
+            "asset_group": ["sports"],
+            "source": ["api_football"],
+            "pipeline_mode": ["batch_api_football"],
+            "available_at": ["2026-01-01T00:00:00Z"],
+        }
+    )
+
+
+class TestCheckSportsManifestV9Columns:
+    """check_sports_manifest_v9_columns is a gated regression guard.
+
+    Default (flag off, v8 data) → WARNING + pass.
+    SPORTS_V9_ENFORCED=true or schema_version=9 but missing cols → DependencyError.
+    All v9 columns present → always pass regardless of flag.
+    """
+
+    def test_v8_data_flag_off_passes_with_warning(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Pre-migration v8 index + flag off → pass (just warn)."""
+        import logging
+
+        monkeypatch.setattr(
+            sports_dependency,
+            "get_config",
+            lambda: _FakeConfig(sports_v9_enforced=False),
+        )
+        with caplog.at_level(logging.WARNING, logger="instruments_service.reference_data.sports_dependency"):
+            check_sports_manifest_v9_columns(_v8_df())
+        assert any("v9-column" in r.message for r in caplog.records)
+
+    def test_v9_data_all_cols_present_always_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Full v9 index → passes even when flag is True."""
+        monkeypatch.setattr(
+            sports_dependency,
+            "get_config",
+            lambda: _FakeConfig(sports_v9_enforced=True),
+        )
+        check_sports_manifest_v9_columns(_v9_df())  # must not raise
+
+    def test_flag_on_v8_data_missing_cols_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SPORTS_V9_ENFORCED=true + v8 data (missing cols) → DependencyError."""
+        from unified_trading_library import DependencyError as UTLDependencyError
+
+        monkeypatch.setattr(
+            sports_dependency,
+            "get_config",
+            lambda: _FakeConfig(sports_v9_enforced=True),
+        )
+        with pytest.raises(UTLDependencyError, match="missing v9 schema columns"):
+            check_sports_manifest_v9_columns(_v8_df())
+
+    def test_schema_version_9_triggers_enforcement_even_flag_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """schema_version=9 in data activates enforcement even if flag is False
+        — a post-walk regression (v9 claimed but columns missing) must fail loud.
+        """
+        from unified_trading_library import DependencyError as UTLDependencyError
+
+        # DataFrame claims v9 but is missing the v9 columns.
+        broken_v9_df = pd.DataFrame(
+            {
+                "date": ["2026-01-01"],
+                "schema_version": [9],
+                "capture_status": ["captured"],
+                # missing: asset_group, source, pipeline_mode, available_at
+            }
+        )
+        monkeypatch.setattr(
+            sports_dependency,
+            "get_config",
+            lambda: _FakeConfig(sports_v9_enforced=False),
+        )
+        with pytest.raises(UTLDependencyError, match="missing v9 schema columns"):
+            check_sports_manifest_v9_columns(broken_v9_df)
+
+    def test_required_columns_constant(self) -> None:
+        """The required column set is the canonical v9 column quartet."""
+        assert {"asset_group", "source", "pipeline_mode", "available_at"} == _V9_REQUIRED_COLUMNS
+
+
+class _FakeConfig:
+    """Minimal stub for InstrumentsServiceConfig used in v9 guard tests."""
+
+    def __init__(self, *, sports_v9_enforced: bool) -> None:
+        self.sports_v9_enforced = sports_v9_enforced
+        self.is_test_run = False
