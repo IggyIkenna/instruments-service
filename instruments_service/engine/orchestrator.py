@@ -104,6 +104,7 @@ from unified_trading_library import (
     stamp_available_at_explicit,
 )
 from unified_trading_library import unified_config as _uc
+from unified_trading_library.fixtures import extract_match_lifecycle
 
 from instruments_service.config import get_config
 from instruments_service.config_reloaders import get_defi_major_assets
@@ -305,13 +306,116 @@ def _af_id_from_canonical(obj: object) -> int | None:
     return None
 
 
-def _flatten_canonical_fixture_for_disk(fx: object, day: str) -> dict[str, object]:
+# Q5/Q6 lifecycle column names (fixture-schedule-split Phase 3). Defined once so
+# the flatten output ALWAYS carries them (default None) — a stable column set is
+# required by the SPORTS_FIXTURES contract + the homogeneous-DataFrame assembly.
+_Q5_SCHEDULE_COLUMNS: tuple[str, ...] = (
+    "halftime_start_time",
+    "halftime_end_time",
+    "extra_time_first_half_start_time",
+    "extra_time_first_half_end_time",
+    "extra_time_second_half_start_time",
+    "extra_time_second_half_end_time",
+    "penalty_shootout_start_time",
+    "penalty_shootout_end_time",
+    "whistle_full_time_at",
+)
+_Q6_OUTCOME_COLUMNS: tuple[str, ...] = (
+    "home_score_regulation",
+    "away_score_regulation",
+    "home_score_after_extra_time",
+    "away_score_after_extra_time",
+    "home_score_after_penalty_shootout",
+    "away_score_after_penalty_shootout",
+    "home_penalty_shootout_score",
+    "away_penalty_shootout_score",
+    "went_to_extra_time",
+    "went_to_penalties",
+    "match_result",
+)
+
+
+def _empty_lifecycle_columns() -> dict[str, object]:
+    """Return the Q5/Q6 columns all defaulted — used when no af_response given.
+
+    ``went_to_*`` default False (not None) to match the
+    ``CanonicalFixtureOutcomes`` defaults + the contract (a regulation match
+    definitively did NOT go to ET/pens). Every other Q5/Q6 column defaults None.
+    """
+    cols: dict[str, object] = dict.fromkeys(_Q5_SCHEDULE_COLUMNS)
+    cols.update(dict.fromkeys(_Q6_OUTCOME_COLUMNS))
+    cols["went_to_extra_time"] = False
+    cols["went_to_penalties"] = False
+    return cols
+
+
+def _lifecycle_columns_from_af_response(af_response: dict[str, object]) -> dict[str, object]:
+    """Build the Q5/Q6 columns from a raw api-football fixture response dict.
+
+    Delegates ALL parsing to the UTL SSOT
+    ``unified_trading_library.fixtures.extract_match_lifecycle`` (no re-derivation
+    here) and maps the typed ``MatchLifecycle`` onto the flat SPORTS_FIXTURES
+    column names. Regulation matches yield ET/PEN columns = None; ET/PEN matches
+    populate the score-distinction + ``went_to_*`` columns (ET/PEN *timestamps*
+    stay None — the AF fixtures endpoint does not emit them).
+
+    Defensive: a malformed af_response (missing fixture id / kickoff) raises
+    inside ``extract_match_lifecycle``; the caller (flatten) swallows it back to
+    the empty defaults so one bad fixture never fails the whole shard.
+    """
+    lifecycle = extract_match_lifecycle(af_response)
+    schedule = lifecycle.schedule
+    outcomes = lifecycle.outcomes
+    return {
+        # Q5 — phase timestamps.
+        "halftime_start_time": schedule.halftime_start_time,
+        "halftime_end_time": schedule.halftime_end_time,
+        "extra_time_first_half_start_time": schedule.extra_time_first_half_start_time,
+        "extra_time_first_half_end_time": schedule.extra_time_first_half_end_time,
+        "extra_time_second_half_start_time": schedule.extra_time_second_half_start_time,
+        "extra_time_second_half_end_time": schedule.extra_time_second_half_end_time,
+        "penalty_shootout_start_time": schedule.penalty_shootout_start_time,
+        "penalty_shootout_end_time": schedule.penalty_shootout_end_time,
+        "whistle_full_time_at": schedule.whistle_full_time_at,
+        # Q6 — score distinction.
+        "home_score_regulation": outcomes.home_score_regulation,
+        "away_score_regulation": outcomes.away_score_regulation,
+        "home_score_after_extra_time": outcomes.home_score_after_extra_time,
+        "away_score_after_extra_time": outcomes.away_score_after_extra_time,
+        "home_score_after_penalty_shootout": outcomes.home_score_after_penalty_shootout,
+        "away_score_after_penalty_shootout": outcomes.away_score_after_penalty_shootout,
+        "home_penalty_shootout_score": outcomes.home_penalty_shootout_score,
+        "away_penalty_shootout_score": outcomes.away_penalty_shootout_score,
+        "went_to_extra_time": outcomes.went_to_extra_time,
+        "went_to_penalties": outcomes.went_to_penalties,
+        # ``match_result`` is a closed-set StrEnum — persist its string value
+        # (or None when not yet decided / not finished).
+        "match_result": outcomes.match_result.value if outcomes.match_result is not None else None,
+    }
+
+
+def _flatten_canonical_fixture_for_disk(
+    fx: object,
+    day: str,
+    af_response: dict[str, object] | None = None,
+) -> dict[str, object]:
     """Flatten a CanonicalFixture into a dict matching SPORTS_FIXTURES SchemaContract.
 
-    Returns 32 columns (matching the new flat schema). Defaults required-non-null
+    Returns the full flat schema (43 columns). Defaults required-non-null
     columns the canonical model doesn't carry (``round``, ``status_long``).
-    Sets all extratime / penalty / period fields to None — those are populated
-    by sibling writers (entity=fixture_stats / fixture_events).
+
+    Q5/Q6 lifecycle columns (HT/ET/PEN phase timestamps + score distinction +
+    ``went_to_*`` + ``match_result``) are populated from ``af_response`` when the
+    raw api-football fixture dict is supplied (the writer threads it through from
+    the adapter), via the UTL ``extract_match_lifecycle`` SSOT. When
+    ``af_response`` is None (legacy callers / no raw available) those columns take
+    their honest defaults — None for every score / timestamp and False for
+    ``went_to_extra_time`` / ``went_to_penalties``. This is purely ADDITIVE: the
+    legacy ``home_score_extratime`` / ``home_score_penalty`` / ``periods_*``
+    columns are unchanged (still None unless a sibling writer fills them).
+
+    A malformed ``af_response`` (e.g. missing fixture id) does NOT fail the shard
+    — the overlay falls back to the empty defaults and logs a warning.
     """
     home_team = getattr(fx, "home_team", None)
     away_team = getattr(fx, "away_team", None)
@@ -339,7 +443,25 @@ def _flatten_canonical_fixture_for_disk(fx: object, day: str) -> dict[str, objec
     except (TypeError, ValueError):
         season_int = None
 
-    return {
+    # Q5/Q6 lifecycle overlay — populated from the raw api-football response when
+    # available, else honest defaults. An empty dict (the base adapter's default
+    # for non-api-football sources) is treated as "no raw" → silent defaults.
+    # Wrapped so one malformed fixture can never fail the shard (CLAUDE.md
+    # shard-level failure isolation).
+    if af_response:
+        try:
+            lifecycle_cols = _lifecycle_columns_from_af_response(af_response)
+        except Exception as _lc_exc:
+            logger.warning(
+                "extract_match_lifecycle overlay failed for fixture %s — defaulting Q5/Q6 columns: %s",
+                af_fixture_id,
+                _lc_exc,
+            )
+            lifecycle_cols = _empty_lifecycle_columns()
+    else:
+        lifecycle_cols = _empty_lifecycle_columns()
+
+    row: dict[str, object] = {
         "af_fixture_id": af_fixture_id,
         "referee_name": getattr(referee, "name", None) if referee is not None else None,
         "date": kickoff.date().isoformat() if kickoff is not None else day,
@@ -376,6 +498,8 @@ def _flatten_canonical_fixture_for_disk(fx: object, day: str) -> dict[str, objec
         "announced_at": getattr(fx, "announced_at", None),
         "report_time": getattr(fx, "report_time", None),
     }
+    row.update(lifecycle_cols)
+    return row
 
 
 def _gated_sink_write(
@@ -4478,11 +4602,14 @@ async def _fetch_sports_reference_data(
                         len(_old_df),
                     )
                 else:
-                    # No old path — fetch from API Football (costs 33 API calls)
+                    # No old path — fetch from API Football (costs 33 API calls).
+                    # Paired with raw so Q5/Q6 lifecycle columns populate (live=batch).
                     _adapter = create_sports_reference_adapter("api_football", api_key=api_key)
-                    _fx_list = await _adapter.get_fixtures(date)
-                    if _fx_list:
-                        _fx_dicts = [_flatten_canonical_fixture_for_disk(fx, date) for fx in _fx_list]
+                    _fx_pairs = await _adapter.get_fixtures_with_raw(date)
+                    if _fx_pairs:
+                        _fx_dicts = [
+                            _flatten_canonical_fixture_for_disk(fx, date, af_response=raw) for fx, raw in _fx_pairs
+                        ]
                         _fx_df = pd.DataFrame(_fx_dicts)
                         # PIT safety: scheduled fixtures published ~1 week before kickoff
                         if "timestamp" in _fx_df.columns:
@@ -4521,7 +4648,10 @@ async def _fetch_sports_reference_data(
                     fallback_league_ids.append(league_def.api_football_id)
                     _af_id_to_canonical_league[league_def.api_football_id] = league_def.league_id
         try:
-            fixtures = await adapter.get_fixtures(date, league_ids=fallback_league_ids)
+            # Paired fetch so the flatten below can populate Q5/Q6 lifecycle
+            # columns from the raw api-football response (live=batch parity).
+            _fixture_pairs = await adapter.get_fixtures_with_raw(date, league_ids=fallback_league_ids)
+            fixtures = [_fx for _fx, _raw in _fixture_pairs]
             for fx in fixtures:
                 if fx.status in completed_statuses:
                     raw_id = fx.source_fixture_id or fx.fixture_id
@@ -4554,7 +4684,9 @@ async def _fetch_sports_reference_data(
             # so features-sports-service and trigger scheduler can read them.
             if fixtures:
                 try:
-                    fixture_dicts = [_flatten_canonical_fixture_for_disk(fx, date) for fx in fixtures]
+                    fixture_dicts = [
+                        _flatten_canonical_fixture_for_disk(fx, date, af_response=raw) for fx, raw in _fixture_pairs
+                    ]
                     fixture_df = pd.DataFrame(fixture_dicts)
                     # PIT safety: scheduled fixtures published ~1 week before kickoff
                     if "timestamp" in fixture_df.columns:
