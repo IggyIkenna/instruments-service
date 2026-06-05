@@ -104,7 +104,7 @@ from unified_trading_library import (
     stamp_available_at_explicit,
 )
 from unified_trading_library import unified_config as _uc
-from unified_trading_library.fixtures import extract_match_lifecycle
+from unified_trading_library.fixtures import extract_match_lifecycle  # noqa: qg-deep-import — not on UTL root facade
 
 from instruments_service.config import get_config
 from instruments_service.config_reloaders import get_defi_major_assets
