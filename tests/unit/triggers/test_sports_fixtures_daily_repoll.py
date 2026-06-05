@@ -76,20 +76,29 @@ def _make_fixture(
 
 @pytest.fixture
 def mock_adapter() -> MagicMock:
-    """Mock ApiFootballAdapter with a default ``get_fixtures`` returning 1 EPL fixture."""
+    """Mock ApiFootballAdapter with a default ``get_fixtures`` returning 1 EPL fixture.
+
+    The trigger now calls ``get_fixtures_with_raw`` (fixture-schedule-split Phase
+    3) to thread the raw api-football response into the Q5/Q6 lifecycle overlay.
+    We configure it to pair each fixture with an EMPTY raw dict (the base
+    adapter's default for sources that don't surface the AF response) so the
+    flatten falls back to honest Q5/Q6 defaults — these tests assert the trigger
+    plumbing, not the lifecycle columns (covered in
+    ``test_fixture_lifecycle_columns.py``).
+    """
     adapter = MagicMock()
     kickoff = datetime(2026, 5, 9, 15, 0, tzinfo=UTC)
-    adapter.get_fixtures = AsyncMock(
-        return_value=[
-            _make_fixture(
-                fixture_id="1234567",
-                af_id=1234567,
-                league_canonical="EPL",
-                af_league_id=39,
-                kickoff=kickoff,
-            )
-        ]
-    )
+    _fixtures = [
+        _make_fixture(
+            fixture_id="1234567",
+            af_id=1234567,
+            league_canonical="EPL",
+            af_league_id=39,
+            kickoff=kickoff,
+        )
+    ]
+    adapter.get_fixtures = AsyncMock(return_value=_fixtures)
+    adapter.get_fixtures_with_raw = AsyncMock(return_value=[(fx, {}) for fx in _fixtures])
     return adapter
 
 
@@ -132,8 +141,9 @@ async def test_run_sports_fixtures_daily_repoll_iterates_window(
             bucket="test-sports-bucket",
             league_filter=["EPL"],
         )
-    # 9 days x 1 league = 9 calls
-    assert mock_adapter.get_fixtures.call_count == 9
+    # 9 days x 1 league = 9 calls. The trigger fetches via get_fixtures_with_raw
+    # (paired raw response) for the Q5/Q6 lifecycle overlay.
+    assert mock_adapter.get_fixtures_with_raw.call_count == 9
     # 9 (day, league) shards written, 1 fixture each
     assert len(result) == 9
     assert all(v == 1 for v in result.values())
@@ -302,6 +312,7 @@ async def test_run_sports_fixtures_daily_repoll_empty_records_per_league_typed_r
 
     empty_adapter = MagicMock()
     empty_adapter.get_fixtures = AsyncMock(return_value=[])
+    empty_adapter.get_fixtures_with_raw = AsyncMock(return_value=[])
     manifest_mock = MagicMock()
     write_fn = MagicMock()
 
@@ -373,6 +384,7 @@ async def test_run_sports_fixtures_daily_repoll_empty_pre_coverage_start_reason(
 
     empty_adapter = MagicMock()
     empty_adapter.get_fixtures = AsyncMock(return_value=[])
+    empty_adapter.get_fixtures_with_raw = AsyncMock(return_value=[])
     manifest_mock = MagicMock()
 
     mock_league_def = MagicMock()
@@ -428,6 +440,7 @@ async def test_run_sports_fixtures_daily_repoll_empty_source_returned_zero_when_
 
     empty_adapter = MagicMock()
     empty_adapter.get_fixtures = AsyncMock(return_value=[])
+    empty_adapter.get_fixtures_with_raw = AsyncMock(return_value=[])
     manifest_mock = MagicMock()
 
     mock_league_def = MagicMock()
@@ -496,6 +509,10 @@ async def test_run_sports_fixtures_daily_repoll_per_day_isolation_on_fetch_error
         )
     ]
     erratic_adapter.get_fixtures = AsyncMock(side_effect=[RuntimeError("boom")] + [good_fixture] * 8)
+    # Trigger calls get_fixtures_with_raw — mirror the per-day error isolation:
+    # day 1 raises, days 2..9 return the good fixture paired with an empty raw dict.
+    _good_pairs = [(fx, {}) for fx in good_fixture]
+    erratic_adapter.get_fixtures_with_raw = AsyncMock(side_effect=[RuntimeError("boom")] + [_good_pairs] * 8)
     manifest_mock = MagicMock()
 
     from instruments_service.triggers.sports_fixtures_daily_repoll import (
