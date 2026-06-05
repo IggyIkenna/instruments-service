@@ -2099,7 +2099,7 @@ async def process_instruments(
                                             "data_type": entity_name.upper(),
                                         },
                                         attempted_at=datetime.now(UTC),
-                                        reason=EmptyConfirmedReason.SOURCE_RETURNED_ZERO,
+                                        reason=EmptyConfirmedReason.SOURCE_RETURNED_ZERO,  # QG-allow: sports-entity-no-fixture-oracle; oracle=sports-fixture-lookup not available per entity_name grain; A10c-fleet followup required
                                         pipeline_mode=_pipeline_mode_for_sports_data_type(entity_name.upper()),
                                     )
                         # Per-fixture entities on zero-fixture dates: nothing
@@ -7314,7 +7314,7 @@ async def _fetch_sfi_data(
                     manifest.record_empty(
                         row_key={"date": date, "data_type": "SFI_PROGRESSIVE_STATS"},
                         attempted_at=attempt_ts,
-                        reason=EmptyConfirmedReason.SOURCE_RETURNED_ZERO,
+                        reason=EmptyConfirmedReason.SOURCE_RETURNED_ZERO,  # QG-allow: sports-sfi-stats-latency; SFI external fetch returned 0 rows despite match IDs present; sports fixture oracle not wired at this grain
                         pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                     )
                     for _exp_lid in sorted(_expected_sfi_league_ids):
@@ -7325,7 +7325,7 @@ async def _fetch_sfi_data(
                                 "league_id": _exp_lid,
                             },
                             attempted_at=attempt_ts,
-                            reason=EmptyConfirmedReason.SOURCE_RETURNED_ZERO,
+                            reason=EmptyConfirmedReason.SOURCE_RETURNED_ZERO,  # QG-allow: sports-sfi-stats-latency; per-league mirror of date-level row above; A10c-fleet followup
                             pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
                         )
             else:
@@ -7919,7 +7919,9 @@ async def _fetch_weather_data(
         # No rows AND no errors — means venues existed but all were already
         # covered earlier in this run (incremental dedup skipped them) or
         # adapter returned empty dicts.  Treat as empty_confirmed.
-        _record_weather_empty(reason=EmptyConfirmedReason.SOURCE_RETURNED_ZERO)
+        _record_weather_empty(
+            reason=EmptyConfirmedReason.SOURCE_RETURNED_ZERO
+        )  # QG-allow: weather-incremental-dedup; may be incremental-dedup skip not an external fetch failure; sports oracle not applicable — A10c-fleet followup
 
     manifest.write()
 
