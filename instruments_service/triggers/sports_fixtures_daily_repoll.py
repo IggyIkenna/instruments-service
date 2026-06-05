@@ -269,7 +269,12 @@ async def run_sports_fixtures_daily_repoll(
         # leagues = ~200-300 calls; well within the 900 req/min mega-tier
         # quota the adapter throttles to. No fan-out needed here.
         try:
-            fixtures = await adapter.get_fixtures(day_str, league_ids=af_league_ids)
+            # Fetch fixtures PAIRED with the raw api-football response item so
+            # the flatten can populate the Q5/Q6 HT/ET/PEN + score-distinction
+            # columns via extract_match_lifecycle (the canonical model drops
+            # periods / score.extratime / score.penalty).
+            fixtures_with_raw = await adapter.get_fixtures_with_raw(day_str, league_ids=af_league_ids)
+            fixtures = [_fx for _fx, _raw in fixtures_with_raw]
         except Exception as exc:
             classify_and_emit_error(
                 exc,
@@ -337,8 +342,8 @@ async def run_sports_fixtures_daily_repoll(
         # bypass the af_league_id reverse lookup at the per-league split step
         # below + carry the canonical id through to the manifest row_key.
         rows: list[dict[str, object]] = []
-        for fx in fixtures:
-            row = flatten_canonical_fixture_for_disk(fx, day_str)
+        for fx, af_raw in fixtures_with_raw:
+            row = flatten_canonical_fixture_for_disk(fx, day_str, af_response=af_raw)
             league = getattr(fx, "league", None)
             if league is not None:
                 row["league_id"] = getattr(league, "league_id", "") or ""

@@ -471,12 +471,26 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch all instruments from the venue."""
         api_key = self._optional_api_key()
         results: list[InstrumentRecord] = []
+        failures: list[str] = []
         async with self._make_session() as session:
             for exchange in self._exchanges:
-                batch = await self._fetch_exchange_instruments(session, api_key, exchange)
+                try:
+                    batch = await self._fetch_exchange_instruments(session, api_key, exchange)
+                except RuntimeError as exc:
+                    # CF-11: isolate a per-exchange failure (don't abort sibling
+                    # exchanges) but TRACK it. A genuine fetch failure must not be
+                    # silently dropped — if the venue ends up empty BECAUSE of
+                    # failures, re-raise below so urdi_reference_provider._fetch_one
+                    # routes tardis into failed[] (→ attempted_failed) instead of a
+                    # clean-empty silent universe shrink (A8 false-complete).
+                    logger.error("Tardis exchange %r failed: %s", exchange, exc)
+                    failures.append(exchange)
+                    continue
                 if instrument_type is not None:
                     batch = [r for r in batch if r.instrument_type == instrument_type]
                 results.extend(batch)
+        if not results and failures:
+            raise RuntimeError(f"Tardis: all requested exchange(s) failed ({failures}); no instruments fetched")
         return results
 
     async def get_instruments_cached(
@@ -956,7 +970,13 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                             "retry_safe": retry_safe,
                         },
                     )
-                    return []
+                    # CF-11: re-raise so get_instruments tracks this exchange as
+                    # failed (→ venue failed[] if it leaves the universe empty),
+                    # not a silent clean-empty. Mirrors the tradfi databento fix.
+                    raise RuntimeError(
+                        f"Tardis {exchange!r}: all {_TARDIS_RETRY_ATTEMPTS} attempts failed "
+                        f"(error_code={error_code}): {exc}"
+                    ) from exc
 
         if instruments_list is None:
             logger.error(
@@ -965,7 +985,11 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
                 _TARDIS_RETRY_ATTEMPTS,
                 last_exc,
             )
-            return []
+            # CF-11: no parseable response after both API paths is a genuine
+            # fetch failure — raise (not return []) so the venue threads state.
+            raise RuntimeError(
+                f"Tardis {exchange!r}: no instruments after {_TARDIS_RETRY_ATTEMPTS} attempts (last={last_exc})"
+            )
 
         # Parse instruments with diagnostic logging
         api_count = len(instruments_list)

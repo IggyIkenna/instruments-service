@@ -33,15 +33,22 @@ from instruments_service.engine.orchestrator import (
     clear_defi_universe_cache,
     earliest_venue_date,
     get_venues_for_asset_groups,
+    resolve_instruments_store_kind,
 )
 
 logger = logging.getLogger(__name__)
 
 
 def _get_instruments_bucket_for_asset_group(asset_group: str) -> str:
-    """Get the instruments bucket for the given asset group using public API."""
+    """Get the instruments bucket for the given asset group using public API.
+
+    Prediction resolves via the dedicated flat kind ``instruments-store-prediction``
+    (the bucket-name SSOT omits a ``PREDICTION`` entry from the per-asset_group
+    ``instruments-store`` dict — see :func:`resolve_instruments_store_kind`).
+    """
     normalized_group = asset_group.lower()
-    return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group=normalized_group)
+    kind, kind_ag = resolve_instruments_store_kind(normalized_group)
+    return resolve_bucket_name(cloud="gcp", kind=kind, asset_group=kind_ag)
 
 
 def _get_instruments_bucket(asset_group: str = "SPORTS") -> str:

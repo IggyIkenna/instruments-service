@@ -75,7 +75,7 @@ from unified_api_contracts.registry.venue_trading_calendar import (
     is_non_trading_day,
     non_trading_day_reason,
 )
-from unified_trading_library import MANIFEST_SCHEMA_VERSION
+from unified_trading_library import MANIFEST_SCHEMA_VERSION, resolve_bucket_name
 
 logging.basicConfig(
     level=logging.INFO,
@@ -85,13 +85,43 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ID = "central-element-323112"
 
-ASSET_GROUP_BUCKETS: dict[str, str] = {
-    "cefi": f"market-data-tick-cefi-{PROJECT_ID}",
-    "defi": f"market-data-tick-defi-{PROJECT_ID}",
-    "tradfi": f"market-data-tick-tradfi-{PROJECT_ID}",
-    "sports": f"instruments-store-sports-{PROJECT_ID}",
-    "prediction": f"market-data-tick-prediction-{PROJECT_ID}",
-}
+# Asset groups this enumerator supports. The canonical MANIFEST bucket per group is
+# resolved at run-time via ``resolve_bucket_name`` (the bucket-name SSOT,
+# deployment-service/configs/cloud-providers.yaml) — see ``_default_bucket_for``.
+SUPPORTED_ASSET_GROUPS: tuple[str, ...] = ("cefi", "defi", "tradfi", "sports", "prediction")
+
+
+def _default_bucket_for(asset_group: str) -> str:
+    """Resolve the canonical manifest bucket for ``asset_group`` via the bucket-name SSOT.
+
+    Replaces the prior hardcoded ``market-data-tick-{ag}-{PROJECT_ID}`` literals which were
+    ALL missing the ``-{DEPLOYMENT_ENV_SHORT}-`` env tier (e.g. ``market-data-tick-cefi-{pid}``
+    instead of the canonical ``market-data-tick-cefi-prd-{pid}``; prediction was the legacy
+    long-form ``market-data-tick-prediction-{pid}`` slated for L6 delete instead of
+    ``market-data-tick-pred-prd-{pid}``) — so a no-``--bucket`` run targeted a NON-EXISTENT
+    bucket for EVERY asset_group → an empty manifest read → wrong/no expected_unattempted seed.
+
+    Routing mirrors the MTDS reader / MDPS consolidator gate:
+    - sports' manifest lives in the ``instruments-store`` bucket;
+    - prediction uses the dedicated flat kind ``market-data-tick-prediction`` (→ ``*-pred-prd-``);
+    - cefi/defi/tradfi use the per-asset_group ``market-data`` kind.
+    """
+    # ``resolve_bucket_name``'s ``asset_group`` is a Literal["cefi","defi","tradfi",
+    # "sports","prediction"] — pass the explicit literal (equality-narrowed) so the call
+    # is type-clean (the param is NOT the UAC AssetGroup enum).
+    if asset_group == "sports":
+        return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group="sports")
+    if asset_group == "prediction":
+        return resolve_bucket_name(cloud="gcp", kind="market-data-tick-prediction")
+    if asset_group == "cefi":
+        return resolve_bucket_name(cloud="gcp", kind="market-data", asset_group="cefi")
+    if asset_group == "defi":
+        return resolve_bucket_name(cloud="gcp", kind="market-data", asset_group="defi")
+    if asset_group == "tradfi":
+        return resolve_bucket_name(cloud="gcp", kind="market-data", asset_group="tradfi")
+    raise ValueError(f"_default_bucket_for: unsupported asset_group={asset_group!r}")
+
+
 MANIFEST_BLOB = "_index/availability_index.parquet"
 DEFAULT_START_DATE = "2018-01-01"
 
@@ -393,6 +423,16 @@ class InstrumentCatalogEntry(NamedTuple):
       ``None`` = still active → no upper bound (emit rows to end).
     - ``market_created_at``: Prediction market creation ISO date (prediction only).
     - ``settlement_time``: Prediction market settlement ISO date (prediction only).
+    - ``data_type``: OPTIONAL grain-binding for multi-grain asset groups
+      (prediction). When set, the v2 enumerator emits ``expected_unattempted``
+      rows for THIS data_type ONLY (at this row's ``instrument_id`` grain),
+      instead of cross-producting the row against the full ``data_types`` list.
+      ``None`` (the default, all other AGs + legacy prediction catalogues) →
+      legacy behaviour (iterate every passed data_type). This is how a single
+      prediction catalogue can carry both the per-cqg bundle row
+      (``data_type=prediction_canonical_question_group``, ``instrument_id=cqg``)
+      and per-conditionId rows (``data_type=trades`` / ``market_lifecycle``)
+      without inflating the denominator by the cqg→conditionId fan-out.
     """
 
     instrument_id: str
@@ -404,6 +444,7 @@ class InstrumentCatalogEntry(NamedTuple):
     available_to: str | None
     market_created_at: str | None
     settlement_time: str | None
+    data_type: str | None = None
 
 
 def _enumerate_v2_cefi(
@@ -788,6 +829,11 @@ def _enumerate_v2_prediction(
             continue  # fully settled before window started
         if af_ts is not None and window_end_ts is not None and af_ts > window_end_ts:
             continue  # not yet created when window ended
+        # Grain-binding: a catalogue row may declare its OWN data_type (the
+        # prediction multi-grain catalogue — cqg bundle vs per-conditionId
+        # trades). When set, emit for THAT data_type only at this row's grain;
+        # otherwise fall back to the full passed list (legacy / other AGs).
+        row_dts: list[str] = [instr.data_type] if instr.data_type else data_types
         for d in date_axis:
             d_ts = pd.Timestamp(d)
             iso = d.isoformat()
@@ -798,7 +844,7 @@ def _enumerate_v2_prediction(
             else:
                 if present_set is None:
                     continue  # legacy mode: alive on this day — skip
-                for dt in data_types:
+                for dt in row_dts:
                     row_key = tuple(
                         {
                             "venue": instr.venue,
@@ -825,7 +871,7 @@ def _enumerate_v2_prediction(
                             capture_status="expected_unattempted",
                         )
                 continue
-            for dt in data_types:
+            for dt in row_dts:
                 yield ExpectedRow(
                     asset_group="prediction",
                     venue=instr.venue,
@@ -957,7 +1003,7 @@ def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
 
     entries: list[InstrumentCatalogEntry] = []
     for row in df.itertuples(index=False, name=None):
-        row_dict = dict(zip(df.columns, row, strict=True))
+        row_dict: dict[str, object] = dict(zip(df.columns, row, strict=True))
         # Support both canonical column names and instruments-service catalog aliases.
         # instruments-service catalog uses:
         #   instrument_key (not instrument_id)
@@ -977,6 +1023,7 @@ def _catalog_from_dataframe(df: pd.DataFrame) -> list[InstrumentCatalogEntry]:
                 available_to=available_to,
                 market_created_at=_opt_date(row_dict.get("market_created_at")),
                 settlement_time=_opt_date(row_dict.get("settlement_time")),
+                data_type=(_safe_str(row_dict.get("data_type", "")) or None),
             )
         )
     return entries
@@ -1063,7 +1110,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--asset-group",
         required=True,
-        choices=sorted(ASSET_GROUP_BUCKETS.keys()),
+        choices=sorted(SUPPORTED_ASSET_GROUPS),
         help="Asset group manifest to enumerate.",
     )
     p.add_argument(
@@ -1376,7 +1423,7 @@ def _write_absent_rows(
 def main() -> int:
     args = _parse_args()
     asset_group: str = args.asset_group
-    bucket_name: str = args.bucket or ASSET_GROUP_BUCKETS[asset_group]
+    bucket_name: str = args.bucket or _default_bucket_for(asset_group)
     run_ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     run_id = f"enum-universe-{asset_group}-{run_ts}"
 

@@ -37,6 +37,9 @@ from typing import Protocol, cast
 
 import pandas as pd
 from unified_api_contracts import (
+    _SPORTS_ENTITY_TO_PIPELINE_MODE as _ENTITY_NAME_TO_PIPELINE_MODE,  # noqa: F401 — re-exported for test closed-set parity assertions
+)
+from unified_api_contracts import (
     BUNDESLIGA_TEAM_ALIASES,
     CANONICAL_TO_ODDS_API_BUNDESLIGA,
     CANONICAL_TO_ODDS_API_EPL,
@@ -49,8 +52,9 @@ from unified_api_contracts import (
     VenueMapping,
     classify_venue_error,
     get_prediction_leagues,
+    pipeline_mode_for_sports_entity,
 )
-from unified_api_contracts.internal import InstrumentRecord, validate_instrument_records
+from unified_api_contracts.internal import InstrumentRecord, PreflightSkipReason, validate_instrument_records
 from unified_api_contracts.predictions import (
     CANONICAL_GROUP_METADATA,
     CanonicalQuestionGroup,
@@ -90,6 +94,7 @@ from unified_trading_library import (
     check_shard_freshness,
     classify_and_emit_error,
     create_sampling_service,
+    emit_preflight_skip,
     get_data_sink,
     get_storage_client,
     log_event,
@@ -99,6 +104,7 @@ from unified_trading_library import (
     stamp_available_at_explicit,
 )
 from unified_trading_library import unified_config as _uc
+from unified_trading_library.fixtures import extract_match_lifecycle  # noqa: qg-deep-import — not on UTL root facade
 
 from instruments_service.config import get_config
 from instruments_service.config_reloaders import get_defi_major_assets
@@ -300,13 +306,116 @@ def _af_id_from_canonical(obj: object) -> int | None:
     return None
 
 
-def _flatten_canonical_fixture_for_disk(fx: object, day: str) -> dict[str, object]:
+# Q5/Q6 lifecycle column names (fixture-schedule-split Phase 3). Defined once so
+# the flatten output ALWAYS carries them (default None) — a stable column set is
+# required by the SPORTS_FIXTURES contract + the homogeneous-DataFrame assembly.
+_Q5_SCHEDULE_COLUMNS: tuple[str, ...] = (
+    "halftime_start_time",
+    "halftime_end_time",
+    "extra_time_first_half_start_time",
+    "extra_time_first_half_end_time",
+    "extra_time_second_half_start_time",
+    "extra_time_second_half_end_time",
+    "penalty_shootout_start_time",
+    "penalty_shootout_end_time",
+    "whistle_full_time_at",
+)
+_Q6_OUTCOME_COLUMNS: tuple[str, ...] = (
+    "home_score_regulation",
+    "away_score_regulation",
+    "home_score_after_extra_time",
+    "away_score_after_extra_time",
+    "home_score_after_penalty_shootout",
+    "away_score_after_penalty_shootout",
+    "home_penalty_shootout_score",
+    "away_penalty_shootout_score",
+    "went_to_extra_time",
+    "went_to_penalties",
+    "match_result",
+)
+
+
+def _empty_lifecycle_columns() -> dict[str, object]:
+    """Return the Q5/Q6 columns all defaulted — used when no af_response given.
+
+    ``went_to_*`` default False (not None) to match the
+    ``CanonicalFixtureOutcomes`` defaults + the contract (a regulation match
+    definitively did NOT go to ET/pens). Every other Q5/Q6 column defaults None.
+    """
+    cols: dict[str, object] = dict.fromkeys(_Q5_SCHEDULE_COLUMNS)
+    cols.update(dict.fromkeys(_Q6_OUTCOME_COLUMNS))
+    cols["went_to_extra_time"] = False
+    cols["went_to_penalties"] = False
+    return cols
+
+
+def _lifecycle_columns_from_af_response(af_response: dict[str, object]) -> dict[str, object]:
+    """Build the Q5/Q6 columns from a raw api-football fixture response dict.
+
+    Delegates ALL parsing to the UTL SSOT
+    ``unified_trading_library.fixtures.extract_match_lifecycle`` (no re-derivation
+    here) and maps the typed ``MatchLifecycle`` onto the flat SPORTS_FIXTURES
+    column names. Regulation matches yield ET/PEN columns = None; ET/PEN matches
+    populate the score-distinction + ``went_to_*`` columns (ET/PEN *timestamps*
+    stay None — the AF fixtures endpoint does not emit them).
+
+    Defensive: a malformed af_response (missing fixture id / kickoff) raises
+    inside ``extract_match_lifecycle``; the caller (flatten) swallows it back to
+    the empty defaults so one bad fixture never fails the whole shard.
+    """
+    lifecycle = extract_match_lifecycle(af_response)
+    schedule = lifecycle.schedule
+    outcomes = lifecycle.outcomes
+    return {
+        # Q5 — phase timestamps.
+        "halftime_start_time": schedule.halftime_start_time,
+        "halftime_end_time": schedule.halftime_end_time,
+        "extra_time_first_half_start_time": schedule.extra_time_first_half_start_time,
+        "extra_time_first_half_end_time": schedule.extra_time_first_half_end_time,
+        "extra_time_second_half_start_time": schedule.extra_time_second_half_start_time,
+        "extra_time_second_half_end_time": schedule.extra_time_second_half_end_time,
+        "penalty_shootout_start_time": schedule.penalty_shootout_start_time,
+        "penalty_shootout_end_time": schedule.penalty_shootout_end_time,
+        "whistle_full_time_at": schedule.whistle_full_time_at,
+        # Q6 — score distinction.
+        "home_score_regulation": outcomes.home_score_regulation,
+        "away_score_regulation": outcomes.away_score_regulation,
+        "home_score_after_extra_time": outcomes.home_score_after_extra_time,
+        "away_score_after_extra_time": outcomes.away_score_after_extra_time,
+        "home_score_after_penalty_shootout": outcomes.home_score_after_penalty_shootout,
+        "away_score_after_penalty_shootout": outcomes.away_score_after_penalty_shootout,
+        "home_penalty_shootout_score": outcomes.home_penalty_shootout_score,
+        "away_penalty_shootout_score": outcomes.away_penalty_shootout_score,
+        "went_to_extra_time": outcomes.went_to_extra_time,
+        "went_to_penalties": outcomes.went_to_penalties,
+        # ``match_result`` is a closed-set StrEnum — persist its string value
+        # (or None when not yet decided / not finished).
+        "match_result": outcomes.match_result.value if outcomes.match_result is not None else None,
+    }
+
+
+def _flatten_canonical_fixture_for_disk(
+    fx: object,
+    day: str,
+    af_response: dict[str, object] | None = None,
+) -> dict[str, object]:
     """Flatten a CanonicalFixture into a dict matching SPORTS_FIXTURES SchemaContract.
 
-    Returns 32 columns (matching the new flat schema). Defaults required-non-null
+    Returns the full flat schema (43 columns). Defaults required-non-null
     columns the canonical model doesn't carry (``round``, ``status_long``).
-    Sets all extratime / penalty / period fields to None — those are populated
-    by sibling writers (entity=fixture_stats / fixture_events).
+
+    Q5/Q6 lifecycle columns (HT/ET/PEN phase timestamps + score distinction +
+    ``went_to_*`` + ``match_result``) are populated from ``af_response`` when the
+    raw api-football fixture dict is supplied (the writer threads it through from
+    the adapter), via the UTL ``extract_match_lifecycle`` SSOT. When
+    ``af_response`` is None (legacy callers / no raw available) those columns take
+    their honest defaults — None for every score / timestamp and False for
+    ``went_to_extra_time`` / ``went_to_penalties``. This is purely ADDITIVE: the
+    legacy ``home_score_extratime`` / ``home_score_penalty`` / ``periods_*``
+    columns are unchanged (still None unless a sibling writer fills them).
+
+    A malformed ``af_response`` (e.g. missing fixture id) does NOT fail the shard
+    — the overlay falls back to the empty defaults and logs a warning.
     """
     home_team = getattr(fx, "home_team", None)
     away_team = getattr(fx, "away_team", None)
@@ -334,7 +443,25 @@ def _flatten_canonical_fixture_for_disk(fx: object, day: str) -> dict[str, objec
     except (TypeError, ValueError):
         season_int = None
 
-    return {
+    # Q5/Q6 lifecycle overlay — populated from the raw api-football response when
+    # available, else honest defaults. An empty dict (the base adapter's default
+    # for non-api-football sources) is treated as "no raw" → silent defaults.
+    # Wrapped so one malformed fixture can never fail the shard (CLAUDE.md
+    # shard-level failure isolation).
+    if af_response:
+        try:
+            lifecycle_cols = _lifecycle_columns_from_af_response(af_response)
+        except Exception as _lc_exc:
+            logger.warning(
+                "extract_match_lifecycle overlay failed for fixture %s — defaulting Q5/Q6 columns: %s",
+                af_fixture_id,
+                _lc_exc,
+            )
+            lifecycle_cols = _empty_lifecycle_columns()
+    else:
+        lifecycle_cols = _empty_lifecycle_columns()
+
+    row: dict[str, object] = {
         "af_fixture_id": af_fixture_id,
         "referee_name": getattr(referee, "name", None) if referee is not None else None,
         "date": kickoff.date().isoformat() if kickoff is not None else day,
@@ -371,6 +498,8 @@ def _flatten_canonical_fixture_for_disk(fx: object, day: str) -> dict[str, objec
         "announced_at": getattr(fx, "announced_at", None),
         "report_time": getattr(fx, "report_time", None),
     }
+    row.update(lifecycle_cols)
+    return row
 
 
 def _gated_sink_write(
@@ -664,6 +793,17 @@ def _should_skip_date_for_per_league(
         ):
             continue
         return False
+    # All expected canonical leagues are already captured/empty_confirmed for this date — the
+    # per-league preflight short-circuits. Emit PREFLIGHT_SKIPPED (STEP 5.64 observability parity):
+    # without it a silent skip is indistinguishable from a silent success in the event stream.
+    emit_preflight_skip(
+        PreflightSkipReason.SHARD_ALREADY_FRESH,
+        asset_group="sports",
+        feature_group=data_type,
+        date=date,
+        shard="all_expected_canonical_leagues",
+        message=f"per-league preflight: all {len(expected_canonical_leagues)} expected leagues already captured",
+    )
     return True
 
 
@@ -1589,6 +1729,10 @@ async def process_instruments(
                         sports_manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable
                             row_key={"date": date, "data_type": entity_name.upper()},
                             total_rows=row_count,
+                            # SP-10: single-entity sports-reference shard (one (date, data_type)
+                            # row per core entity) — no per-root-cluster contract exists for this
+                            # data_type, so the cluster gate is intentionally a no-op here. Adding
+                            # an expectation with no authoritative source would false-fail real data.
                             expected_root_clusters={},
                             observed_clusters={"": row_count},
                             available_at_envelope=pd.Timestamp(datetime.now(UTC)),
@@ -1771,6 +1915,11 @@ async def process_instruments(
             pf_manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable
                 row_key={"date": date, "data_type": entity_name.upper()},
                 total_rows=row_count,
+                # SP-10: single-entity per-fixture sports shard (one (date, data_type) row per
+                # entity count) — no per-root-cluster contract exists for this data_type, so the
+                # cluster gate is intentionally a no-op. The genuinely-bundled per-fixture entities
+                # (FIXTURE_STATS/EVENTS/LINEUPS/PLAYER_STATS) write per-league via record_captured,
+                # not this counts path. Inventing an expectation here would false-fail real data.
                 expected_root_clusters={},
                 observed_clusters={"": row_count},
                 available_at_envelope=pd.Timestamp(datetime.now(UTC)),
@@ -1930,6 +2079,11 @@ async def process_instruments(
                                     sports_manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable
                                         row_key={"date": date, "data_type": entity_name.upper()},
                                         total_rows=row_count,
+                                        # SP-10: single-entity sports-reference shard (one
+                                        # (date, data_type) row per core entity) — no
+                                        # per-root-cluster contract for this data_type, so the
+                                        # cluster gate is a deliberate no-op; an unfounded
+                                        # expectation would false-fail genuinely-captured data.
                                         expected_root_clusters={},
                                         observed_clusters={"": row_count},
                                         available_at_envelope=pd.Timestamp(datetime.now(UTC)),
@@ -2396,6 +2550,11 @@ async def process_instruments(
                             "date": date,
                             "data_type": "prediction_canonical_question_group",
                             "venue": _manifest_venue,
+                            # Canonical v9 bundled-atom identity: the cqg lives in `instrument_id`
+                            # (matches the MTDS record_captured_from_counts row_key + what
+                            # deployment-api `_prediction_venue_detail` reads first). `underlying`
+                            # is kept as the migration-window fallback deployment-api still reads.
+                            "instrument_id": _group_str,
                             "underlying": _group_str,
                         },
                         df=_stamped_group_df,
@@ -2403,7 +2562,15 @@ async def process_instruments(
                         instrument_type="",
                         data_type="prediction_canonical_question_group",
                         venue=_manifest_venue,
+                        instrument_id=_group_str,
                         underlying=_group_str,
+                        # SP-10: prediction canonical-question-group IS a genuine per-market
+                        # bundle, and UAC expected_market_ids_for_canonical_group(group, day,
+                        # lifecycles) is the authoritative expected-cluster source. Wiring it
+                        # here requires threading the MARKET_LIFECYCLE rows for this
+                        # (group, day) cell to the callsite (not currently loaded here), and
+                        # this is the `prediction` asset_group — outside the SP-10 sports scope.
+                        # Left {} for now; tracked as a P2 follow-up (see predictions_master.md).
                         expected_root_clusters={},
                         cluster_extractor=lambda s: s,
                         pipeline_mode=_pred_pm,
@@ -2525,6 +2692,10 @@ async def process_instruments(
                     sports_manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable
                         row_key={"date": date, "data_type": entity_name.upper()},
                         total_rows=row_count,
+                        # SP-10: single-entity sports-reference shard (one (date, data_type) row
+                        # per core entity) — no per-root-cluster contract for this data_type, so
+                        # the cluster gate is a deliberate no-op; an unfounded expectation would
+                        # false-fail genuinely-captured data.
                         expected_root_clusters={},
                         observed_clusters={"": row_count},
                         available_at_envelope=pd.Timestamp(datetime.now(UTC)),
@@ -3412,6 +3583,9 @@ def _write_market_lifecycle(
                 "underlying": canonical_group_str,
             },
             total_rows=len(out_df),
+            # SP-10: prediction_market_lifecycle is the lifecycle table itself for a single
+            # (group, day) cell — it is the SOURCE of the expected-market-id set, not a bundle
+            # validated against one, so there is no upstream cluster contract to assert here.
             expected_root_clusters={},
             observed_clusters={"": len(out_df)},
             available_at_envelope=pd.Timestamp(now),
@@ -3502,15 +3676,132 @@ def _write_venues_from_teams(teams_df: pd.DataFrame, bucket: str) -> None:
     )
 
 
+# ---------------------------------------------------------------------------
+# sports_reference path helpers — v9 canonical layout
+#
+# Canonical target (sports_manifest_canonicalisation_2026_06_01.md §C E2):
+#   sports_reference/by_date/day={D}/pipeline_mode={PM}/entity={E}/[league={L}/]{fname}
+#
+# The DataSink._build_partition_path sorts partition keys alphabetically, so
+# ``pipeline_mode`` (p) would sort AFTER ``entity`` (e) and ``league`` (l) if
+# included in the partition dict — producing the wrong path order.  The correct
+# approach: embed ``day=`` and ``pipeline_mode=`` in the sink prefix; only put
+# ``entity=`` and ``league=`` in the partition dict (they sort correctly: e < l).
+#
+# Read helpers probe canonical first, then fall back to the legacy path (no
+# pipeline_mode= segment) until Phase E8 removes pre-migration objects.
+# ---------------------------------------------------------------------------
+
+# Entity-name → PipelineMode for every entity written under sports_reference/by_date.
+# SSOT is UAC ``pipeline_mode_for_sports_entity`` (imported above).
+# ``_ENTITY_NAME_TO_PIPELINE_MODE`` is aliased from UAC at the top of this module so the
+# IS test suite can import it directly for closed-set parity assertions.
+
+
+def _sports_ref_pm(entity_name: str) -> str:
+    """Return the pipeline_mode value string for a sports_reference entity name.
+
+    Delegates to the UAC SSOT ``pipeline_mode_for_sports_entity``.
+    Falls back to ``BATCH_INSTRUMENTS_SERVICE`` for unknown entities.
+    """
+    return pipeline_mode_for_sports_entity(entity_name).value
+
+
+def _sports_ref_source(entity_name: str) -> str:
+    """Return the lower-case source key for a sports_reference entity name.
+
+    Strips the ``batch_`` prefix from the pipeline_mode value so the source
+    string matches what the manifest rebuild's ``_source_from_row`` derives.
+    """
+    pm_val = _sports_ref_pm(entity_name)
+    if pm_val.startswith("batch_"):
+        return pm_val[len("batch_") :]
+    return pm_val
+
+
+def _sports_ref_sink_for(bucket: str, date: str, entity_name: str) -> DataSink:
+    """Return a DataSink for sports_reference writes with canonical pipeline_mode= in prefix.
+
+    Prefix: ``sports_reference/by_date/day={date}/pipeline_mode={pm}``
+
+    Callers pass ``partition={"entity": entity_name, "league": L}`` (or other keys
+    WITHOUT ``day``/``pipeline_mode`` — those are already in the prefix).  Since
+    DataSink sorts partition keys alphabetically, ``entity`` (e) comes before
+    ``league`` (l) — producing the correct canonical segment order.
+    """
+    pm = _sports_ref_pm(entity_name)
+    return get_data_sink(
+        bucket=bucket,
+        prefix=f"sports_reference/by_date/day={date}/pipeline_mode={pm}",
+    )
+
+
+def _sports_ref_canonical_blob_path(
+    date: str,
+    entity: str,
+    *,
+    league: str | None = None,
+    filename: str | None = None,
+) -> str:
+    """Return the canonical GCS blob path (with pipeline_mode=) for a sports_reference object."""
+    pm = _sports_ref_pm(entity)
+    fname = filename or f"{entity}.parquet"
+    if league:
+        return f"sports_reference/by_date/day={date}/pipeline_mode={pm}/entity={entity}/league={league}/{fname}"
+    return f"sports_reference/by_date/day={date}/pipeline_mode={pm}/entity={entity}/{fname}"
+
+
+def _sports_ref_legacy_blob_path(
+    date: str,
+    entity: str,
+    *,
+    league: str | None = None,
+    filename: str | None = None,
+) -> str:
+    """Return the legacy GCS blob path (no pipeline_mode=) for a sports_reference object."""
+    fname = filename or f"{entity}.parquet"
+    if league:
+        return f"sports_reference/by_date/day={date}/entity={entity}/league={league}/{fname}"
+    return f"sports_reference/by_date/day={date}/entity={entity}/{fname}"
+
+
+def _resolve_sports_ref_blob(
+    storage_client: object,
+    bucket: str,
+    canonical: str,
+    legacy: str,
+) -> str:
+    """Return the canonical blob path if it exists, else the legacy path.
+
+    Used by read helpers to probe the new canonical path first (post-migration)
+    and fall back to the legacy path for pre-migration objects, until Phase E8
+    deletes stale objects.
+    """
+    try:
+        canon_blob = storage_client.bucket(bucket).blob(canonical)  # type: ignore[union-attr]
+        if canon_blob.exists():
+            return canonical
+    except Exception:
+        pass
+    return legacy
+
+
+# ---------------------------------------------------------------------------
+# END sports_reference path helpers
+# ---------------------------------------------------------------------------
+
+
 def _read_fixture_ids_from_gcs(bucket: str, date: str) -> list[int]:
     """Read completed fixture IDs from existing GCS fixtures parquet.
 
     Returns fixture IDs with status FT/AET/PEN. Falls back to empty list
     if no fixtures parquet exists for the date (zero-fixture day).
     """
-    prefix = f"sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
+    _canon_prefix = _sports_ref_canonical_blob_path(date, "fixtures", filename="fixtures.parquet")
+    _legacy_prefix = _sports_ref_legacy_blob_path(date, "fixtures", filename="fixtures.parquet")
     try:
         storage_client = get_storage_client()
+        prefix = _resolve_sports_ref_blob(storage_client, bucket, _canon_prefix, _legacy_prefix)
         blob = storage_client.bucket(bucket).blob(prefix)
         if not blob.exists():
             logger.debug("No fixtures parquet at gs://%s/%s", bucket, prefix)
@@ -3624,10 +3915,14 @@ def _write_fixtures_per_league(
                 source_label,
             )
             continue
+        # v9 canonical write: use entity-specific sink so pipeline_mode= lands
+        # in the prefix (DataSink sorts partition keys alphabetically — p > l > e,
+        # so pipeline_mode cannot go in the partition dict without breaking order).
+        _fix_canonical_sink = _sports_ref_sink_for(bucket, date, "fixtures") if bucket else sink
         _gated_sink_write(
-            sink,
+            _fix_canonical_sink,
             data=_ldf_clean,
-            partition={"day": date, "entity": "fixtures", "league": _canonical_league_id(_lid_str)},
+            partition={"entity": "fixtures", "league": _canonical_league_id(_lid_str)},
             filename="fixtures.parquet",
             venue="api_football",
             entity="fixtures",
@@ -3660,11 +3955,15 @@ def _read_existing_per_league_fixture_ids(
     as "no captured fixtures known, fetch everything in scope"). Logs at debug
     level so operators can confirm the skip path engaged.
     """
-    blob_path = (
-        f"sports_reference/by_date/day={date}/entity={entity_name}/league={canonical_league_id}/{entity_name}.parquet"
+    _canon_path = _sports_ref_canonical_blob_path(
+        date, entity_name, league=canonical_league_id, filename=f"{entity_name}.parquet"
+    )
+    _legacy_path = _sports_ref_legacy_blob_path(
+        date, entity_name, league=canonical_league_id, filename=f"{entity_name}.parquet"
     )
     try:
         storage_client = get_storage_client()
+        blob_path = _resolve_sports_ref_blob(storage_client, bucket, _canon_path, _legacy_path)
         blob = storage_client.bucket(bucket).blob(blob_path)
         if not blob.exists():
             return frozenset()
@@ -3672,9 +3971,8 @@ def _read_existing_per_league_fixture_ids(
         existing = pd.read_parquet(io.BytesIO(existing_bytes))
     except Exception as exc:
         logger.debug(
-            "Pre-fetch skip read failed for gs://%s/%s — proceeding without skip: %s",
+            "Pre-fetch skip read failed for gs://%s — proceeding without skip: %s",
             bucket,
-            blob_path,
             exc,
         )
         return frozenset()
@@ -3707,11 +4005,15 @@ def _per_league_fixtures_data_unchanged(
     Both frames are normalised through an in-memory parquet round-trip so dtypes match the
     read-back form.
     """
-    blob_path = (
-        f"sports_reference/by_date/day={date}/entity={entity_name}/league={canonical_league_id}/{entity_name}.parquet"
+    _canon_path = _sports_ref_canonical_blob_path(
+        date, entity_name, league=canonical_league_id, filename=f"{entity_name}.parquet"
+    )
+    _legacy_path = _sports_ref_legacy_blob_path(
+        date, entity_name, league=canonical_league_id, filename=f"{entity_name}.parquet"
     )
     try:
         storage_client = get_storage_client()
+        blob_path = _resolve_sports_ref_blob(storage_client, bucket, _canon_path, _legacy_path)
         blob = storage_client.bucket(bucket).blob(blob_path)
         if not blob.exists():
             return False
@@ -3720,9 +4022,8 @@ def _per_league_fixtures_data_unchanged(
         new_norm = pd.read_parquet(io.BytesIO(new_df.to_parquet(index=False)))
     except Exception as exc:
         logger.debug(
-            "skip-if-unchanged read/normalise failed for gs://%s/%s — will write: %s",
+            "skip-if-unchanged read/normalise failed for gs://%s — will write: %s",
             bucket,
-            blob_path,
             exc,
         )
         return False
@@ -3770,11 +4071,15 @@ def _merge_with_existing_per_league_parquet(
 
     Returns the merged DataFrame ready for the standard sink write.
     """
-    blob_path = (
-        f"sports_reference/by_date/day={date}/entity={entity_name}/league={canonical_league_id}/{entity_name}.parquet"
+    _canon_path = _sports_ref_canonical_blob_path(
+        date, entity_name, league=canonical_league_id, filename=f"{entity_name}.parquet"
+    )
+    _legacy_path = _sports_ref_legacy_blob_path(
+        date, entity_name, league=canonical_league_id, filename=f"{entity_name}.parquet"
     )
     try:
         storage_client = get_storage_client()
+        blob_path = _resolve_sports_ref_blob(storage_client, bucket, _canon_path, _legacy_path)
         blob = storage_client.bucket(bucket).blob(blob_path)
         if not blob.exists():
             return new_rows
@@ -3782,10 +4087,9 @@ def _merge_with_existing_per_league_parquet(
         existing = pd.read_parquet(io.BytesIO(existing_bytes))
     except Exception as exc:
         logger.warning(
-            "Recovery-mode merge: could not read existing parquet at gs://%s/%s — "
+            "Recovery-mode merge: could not read existing parquet at gs://%s — "
             "proceeding with overwrite (existing fixture rows for this cell will be lost): %s",
             bucket,
-            blob_path,
             exc,
         )
         return new_rows
@@ -3794,10 +4098,9 @@ def _merge_with_existing_per_league_parquet(
         # Schema drift — existing parquet lacks the fixture_id column we'd dedup on.
         # Safer to overwrite + log than to concat-with-mismatched-schema.
         logger.warning(
-            "Recovery-mode merge: existing parquet at gs://%s/%s missing %r column "
+            "Recovery-mode merge: existing parquet at gs://%s (canonical/legacy) missing %r column "
             "(found: %s) — overwriting rather than risk schema mismatch",
             bucket,
-            blob_path,
             fid_col,
             list(existing.columns),
         )
@@ -3835,9 +4138,11 @@ def _build_fixture_league_map_from_gcs(bucket: str, date: str) -> dict[str, str]
         if league_def.api_football_id is not None:
             _af_league_to_canonical[league_def.api_football_id] = league_def.league_id
 
-    prefix = f"sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
+    _canon_pfx = _sports_ref_canonical_blob_path(date, "fixtures", filename="fixtures.parquet")
+    _legacy_pfx = _sports_ref_legacy_blob_path(date, "fixtures", filename="fixtures.parquet")
     try:
         storage_client = get_storage_client()
+        prefix = _resolve_sports_ref_blob(storage_client, bucket, _canon_pfx, _legacy_pfx)
         blob = storage_client.bucket(bucket).blob(prefix)
         if not blob.exists():
             logger.debug("No fixtures parquet at gs://%s/%s for league mapping", bucket, prefix)
@@ -3918,7 +4223,9 @@ async def _fetch_sports_reference_data(
         if not (_fetch_set & core_shorts):
             enrichment_only = True
     adapter = create_sports_reference_adapter("api_football", api_key=api_key)
-    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    # v9 canonical: entity-specific sinks embed pipeline_mode= in prefix.
+    # _sports_ref_sink_for() creates the right sink per entity_name so
+    # DataSink's alphabetic partition sort produces the correct path order.
     counts: dict[str, int] = {}
 
     # Honest-coverage helper: only record when an external manifest is wired
@@ -4047,9 +4354,9 @@ async def _fetch_sports_reference_data(
                     _t_lid_str = str(_t_lid)
                     _t_stamped = stamp_available_at_explicit(_t_league_df, when=datetime.now(UTC))
                     _gated_sink_write(
-                        sink,
+                        _sports_ref_sink_for(bucket, date, "teams"),
                         data=_t_stamped,
-                        partition={"day": date, "entity": "teams", "league": _canonical_league_id(_t_lid_str)},
+                        partition={"entity": "teams", "league": _canonical_league_id(_t_lid_str)},
                         filename="teams.parquet",
                         venue="api_football",
                         entity="teams",
@@ -4103,9 +4410,9 @@ async def _fetch_sports_reference_data(
                     _std_captured.add(_s_lid_str)
                     _stamped_std_df = stamp_available_at_explicit(_s_league_df, when=datetime.now(UTC))
                     _gated_sink_write(
-                        sink,
+                        _sports_ref_sink_for(bucket, date, "standings"),
                         data=_stamped_std_df,
-                        partition={"day": date, "entity": "standings", "league": _canonical_league_id(_s_lid_str)},
+                        partition={"entity": "standings", "league": _canonical_league_id(_s_lid_str)},
                         filename="standings.parquet",
                         venue="api_football",
                         entity="standings",
@@ -4123,6 +4430,7 @@ async def _fetch_sports_reference_data(
                             data_type="STANDINGS",
                             league_id=_canonical_league_id(_s_lid_str),
                             pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
+                            source=_sports_ref_source("standings"),
                             service_emission_state=None,
                         )
                 if manifest is not None:
@@ -4171,9 +4479,9 @@ async def _fetch_sports_reference_data(
                         _inj_clean = _inj_league_df.drop(columns=["_inj_league"], errors="ignore")
                         _stamped_inj_df = stamp_available_at_explicit(_inj_clean, when=datetime.now(UTC))
                         _gated_sink_write(
-                            sink,
+                            _sports_ref_sink_for(bucket, date, "injuries"),
                             data=_stamped_inj_df,
-                            partition={"day": date, "entity": "injuries", "league": _canonical_league_id(_inj_lid_str)},
+                            partition={"entity": "injuries", "league": _canonical_league_id(_inj_lid_str)},
                             filename="injuries.parquet",
                             venue="api_football",
                             entity="injuries",
@@ -4191,6 +4499,7 @@ async def _fetch_sports_reference_data(
                                 data_type="INJURIES",
                                 league_id=_canonical_league_id(_inj_lid_str),
                                 pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
+                                source=_sports_ref_source("injuries"),
                                 service_emission_state=None,
                             )
 
@@ -4255,11 +4564,16 @@ async def _fetch_sports_reference_data(
         # The URDI phase writes instrument records, but features-sports needs the
         # canonical fixture format (af_fixture_id, timestamp, home/away names, etc.).
         # Read from the old path (sports_reference/fixtures/day=) or fetch from API.
-        _new_fixtures_path = f"sports_reference/by_date/day={date}/entity=fixtures/fixtures.parquet"
+        # v9: probe canonical path (pipeline_mode= in prefix) first, then legacy.
+        _new_fixtures_canonical = _sports_ref_canonical_blob_path(date, "fixtures", filename="fixtures.parquet")
+        _new_fixtures_legacy = _sports_ref_legacy_blob_path(date, "fixtures", filename="fixtures.parquet")
         try:
             _storage = get_storage_client()
+            _new_fixtures_path = _resolve_sports_ref_blob(
+                _storage, bucket, _new_fixtures_canonical, _new_fixtures_legacy
+            )
             _new_blob = _storage.bucket(bucket).blob(_new_fixtures_path)
-            # Check if new path already has canonical data (not instrument records)
+            # Check if path already has canonical data (not instrument records)
             _needs_write = True
             if _new_blob.exists():
                 _existing = pd.read_parquet(
@@ -4275,26 +4589,40 @@ async def _fetch_sports_reference_data(
                 if _old_blob.exists():
                     _old_data = _storage.download_bytes(bucket=bucket, blob_path=_old_path)
                     _old_df = pd.read_parquet(io.BytesIO(_old_data))
-                    _ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
-                    _write_fixtures_per_league(_ref_sink, _old_df, date, source_label="old-path-copy")
+                    # v9: _write_fixtures_per_league creates entity-specific sink internally
+                    _write_fixtures_per_league(
+                        _sports_ref_sink_for(bucket, date, "fixtures"),
+                        _old_df,
+                        date,
+                        source_label="old-path-copy",
+                        bucket=bucket,
+                    )
                     logger.info(
                         "Canonical fixtures copied from old path to entity=fixtures/ (%d rows)",
                         len(_old_df),
                     )
                 else:
-                    # No old path — fetch from API Football (costs 33 API calls)
+                    # No old path — fetch from API Football (costs 33 API calls).
+                    # Paired with raw so Q5/Q6 lifecycle columns populate (live=batch).
                     _adapter = create_sports_reference_adapter("api_football", api_key=api_key)
-                    _fx_list = await _adapter.get_fixtures(date)
-                    if _fx_list:
-                        _fx_dicts = [_flatten_canonical_fixture_for_disk(fx, date) for fx in _fx_list]
+                    _fx_pairs = await _adapter.get_fixtures_with_raw(date)
+                    if _fx_pairs:
+                        _fx_dicts = [
+                            _flatten_canonical_fixture_for_disk(fx, date, af_response=raw) for fx, raw in _fx_pairs
+                        ]
                         _fx_df = pd.DataFrame(_fx_dicts)
                         # PIT safety: scheduled fixtures published ~1 week before kickoff
                         if "timestamp" in _fx_df.columns:
                             _fx_df["available_at"] = pd.to_datetime(
                                 _fx_df["timestamp"], utc=True, errors="coerce"
                             ) - pd.Timedelta(days=7)
-                        _ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
-                        _write_fixtures_per_league(_ref_sink, _fx_df, date, source_label="api-fetch-override")
+                        _write_fixtures_per_league(
+                            _sports_ref_sink_for(bucket, date, "fixtures"),
+                            _fx_df,
+                            date,
+                            source_label="api-fetch-override",
+                            bucket=bucket,
+                        )
                         logger.info(
                             "Canonical fixtures fetched from API and written to entity=fixtures/ (%d fixtures)",
                             len(_fx_df),
@@ -4320,7 +4648,10 @@ async def _fetch_sports_reference_data(
                     fallback_league_ids.append(league_def.api_football_id)
                     _af_id_to_canonical_league[league_def.api_football_id] = league_def.league_id
         try:
-            fixtures = await adapter.get_fixtures(date, league_ids=fallback_league_ids)
+            # Paired fetch so the flatten below can populate Q5/Q6 lifecycle
+            # columns from the raw api-football response (live=batch parity).
+            _fixture_pairs = await adapter.get_fixtures_with_raw(date, league_ids=fallback_league_ids)
+            fixtures = [_fx for _fx, _raw in _fixture_pairs]
             for fx in fixtures:
                 if fx.status in completed_statuses:
                     raw_id = fx.source_fixture_id or fx.fixture_id
@@ -4353,15 +4684,22 @@ async def _fetch_sports_reference_data(
             # so features-sports-service and trigger scheduler can read them.
             if fixtures:
                 try:
-                    fixture_dicts = [_flatten_canonical_fixture_for_disk(fx, date) for fx in fixtures]
+                    fixture_dicts = [
+                        _flatten_canonical_fixture_for_disk(fx, date, af_response=raw) for fx, raw in _fixture_pairs
+                    ]
                     fixture_df = pd.DataFrame(fixture_dicts)
                     # PIT safety: scheduled fixtures published ~1 week before kickoff
                     if "timestamp" in fixture_df.columns:
                         fixture_df["available_at"] = pd.to_datetime(
                             fixture_df["timestamp"], utc=True, errors="coerce"
                         ) - pd.Timedelta(days=7)
-                    _fix_ref_sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
-                    _write_fixtures_per_league(_fix_ref_sink, fixture_df, date, source_label="api-fetch-fallback")
+                    _write_fixtures_per_league(
+                        _sports_ref_sink_for(bucket, date, "fixtures"),
+                        fixture_df,
+                        date,
+                        source_label="api-fetch-fallback",
+                        bucket=bucket,
+                    )
                     logger.info(
                         "Canonical fixtures written to sports_reference/by_date/entity=fixtures/ (%d fixtures)",
                         len(fixture_df),
@@ -4610,9 +4948,9 @@ async def _fetch_sports_reference_data(
                         _pf_copy["available_at"] = _pf_copy["available_at"].fillna(pd.Timestamp(datetime.now(UTC)))
                         _stamped_pf_df = _pf_copy
                         _gated_sink_write(
-                            sink,
+                            _sports_ref_sink_for(bucket, date, entity_name),
                             data=_stamped_pf_df,
-                            partition={"day": date, "entity": entity_name, "league": _canonical_league_id(_pf_lid_str)},
+                            partition={"entity": entity_name, "league": _canonical_league_id(_pf_lid_str)},
                             filename=f"{entity_name}.parquet",
                             venue="api_football",
                             entity=entity_name,
@@ -4630,6 +4968,7 @@ async def _fetch_sports_reference_data(
                                 data_type=_af_entity_dt,
                                 league_id=_canonical_league_id(_pf_lid_str),
                                 pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
+                                source=_sports_ref_source(entity_name),
                                 service_emission_state=None,
                             )
 
@@ -4972,6 +5311,166 @@ def _read_sfi_league_mapping(bucket: str) -> pd.DataFrame | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Transfermarkt master/ + snapshots/ write-path helpers (ITEM 6a + 6b)
+#
+# ML training needs point-in-time squad values to avoid lookahead bias:
+#   - ``master/entity={entity}/master.parquet`` — accumulating append-only union
+#     (teams, team_mapping, player_values); each run merges new rows then deduplicates
+#     on the natural key before writing back — semantics: monotonically-growing truth.
+#   - ``snapshots/entity=player_values/season={Y}/trigger={T}/player_values.parquet``
+#     — point-in-time snapshot keyed by (season, trigger date) so feature pipelines
+#     can reconstruct the exact roster visible on a given trigger date without risk
+#     of lookahead bias.
+#
+# Both use the cloud-agnostic ``get_storage_client()`` (upload_bytes / download_bytes)
+# and ``resolve_bucket_name`` — never inline gs:// URIs (QG STEP 5.69).
+# ---------------------------------------------------------------------------
+
+
+def _master_blob_path(entity: str) -> str:
+    """Return the GCS blob path for the accumulating master parquet.
+
+    Path shape: ``sports_reference/master/entity={entity}/master.parquet``
+    """
+    return f"sports_reference/master/entity={entity}/master.parquet"
+
+
+def _snapshot_blob_path_player_values(season: int, trigger_date: str) -> str:
+    """Return the GCS blob path for a point-in-time player_values snapshot.
+
+    Path shape:
+        ``sports_reference/snapshots/entity=player_values/season={Y}/trigger={T}/player_values.parquet``
+
+    Args:
+        season: Season year (e.g. 2024).
+        trigger_date: UTC trigger date as ISO string ``YYYY-MM-DD``.
+    """
+    return (
+        f"sports_reference/snapshots/entity=player_values/season={season}/trigger={trigger_date}/player_values.parquet"
+    )
+
+
+def _write_master_append(
+    bucket: str,
+    entity: str,
+    new_df: pd.DataFrame,
+    dedup_key: list[str],
+) -> None:
+    """Append new rows into the accumulating master parquet, dedup on *dedup_key*.
+
+    Semantics (ITEM 6b):
+      1. Read existing master parquet (if present).
+      2. Concat existing + new_df.
+      3. Deduplicate: for duplicate *dedup_key* rows keep the newest row
+         (i.e. the one from new_df — achieved by dropping duplicates while
+         keeping the **last** occurrence after concat).
+      4. Write back as a single parquet.
+
+    Errors are non-blocking: classify + emit and return so a master-write
+    failure never kills the main by_date/ write.
+
+    Args:
+        bucket: GCS bucket name (already resolved via resolve_bucket_name).
+        entity: Entity label used in the path (``teams``, ``team_mapping``,
+            ``player_values``).
+        new_df: DataFrame of new rows to merge in.
+        dedup_key: Column(s) forming the natural dedup key.
+    """
+    if new_df.empty:
+        return
+    blob_path = _master_blob_path(entity)
+    try:
+        storage = get_storage_client()
+        existing_df: pd.DataFrame | None = None
+        try:
+            raw = storage.download_bytes(bucket, blob_path)
+            if raw is not None:
+                existing_df = pd.read_parquet(io.BytesIO(raw))
+        except Exception as read_exc:
+            logger.debug(
+                "master/%s: no existing parquet (will create fresh): %s",
+                entity,
+                read_exc,
+            )
+
+        if existing_df is not None and not existing_df.empty:
+            # Align columns: only keep columns present in both to avoid dtype
+            # explosions when new_df introduces new columns mid-season.
+            combined = pd.concat([existing_df, new_df], ignore_index=True, sort=False)
+        else:
+            combined = new_df.copy()
+
+        # Dedup: keep last (new_df wins) for duplicate natural-key combos.
+        valid_dedup_key = [k for k in dedup_key if k in combined.columns]
+        if valid_dedup_key:
+            combined = combined.drop_duplicates(subset=valid_dedup_key, keep="last")
+
+        combined["last_updated_at"] = datetime.now(UTC).isoformat()
+
+        buf = io.BytesIO()
+        combined.to_parquet(buf, index=False)
+        storage.upload_bytes(bucket, blob_path, buf.getvalue())
+        logger.info(
+            "Transfermarkt master/%s: %d rows written (dedup_key=%s)",
+            entity,
+            len(combined),
+            valid_dedup_key,
+        )
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation=f"transfermarkt_master_{entity}_write",
+        )
+
+
+def _write_snapshot_player_values(
+    bucket: str,
+    season: int,
+    trigger_date: str,
+    df: pd.DataFrame,
+) -> None:
+    """Write a point-in-time snapshot of player_values for (season, trigger_date).
+
+    Path: ``sports_reference/snapshots/entity=player_values/season={Y}/trigger={T}/player_values.parquet``
+
+    Idempotent — overwrites if the same (season, trigger_date) key is re-run.
+    Errors are non-blocking.
+
+    Args:
+        bucket: GCS bucket name (already resolved).
+        season: Season year (e.g. 2024).
+        trigger_date: UTC trigger date ISO string ``YYYY-MM-DD``.
+        df: Full player_values DataFrame for this trigger date.
+    """
+    if df.empty:
+        return
+    blob_path = _snapshot_blob_path_player_values(season, trigger_date)
+    try:
+        storage = get_storage_client()
+        snapshot_df = df.copy()
+        snapshot_df["snapshot_season"] = season
+        snapshot_df["snapshot_trigger_date"] = trigger_date
+        snapshot_df["snapshot_written_at"] = datetime.now(UTC).isoformat()
+
+        buf = io.BytesIO()
+        snapshot_df.to_parquet(buf, index=False)
+        storage.upload_bytes(bucket, blob_path, buf.getvalue())
+        logger.info(
+            "Transfermarkt snapshot player_values: %d rows → season=%d trigger=%s",
+            len(snapshot_df),
+            season,
+            trigger_date,
+        )
+    except Exception as exc:
+        classify_and_emit_error(
+            exc,
+            service_name="instruments-service",
+            operation="transfermarkt_snapshot_player_values_write",
+        )
+
+
 def _maybe_emit_drift_anomaly(
     *,
     venue: str,
@@ -5045,7 +5544,8 @@ async def _fetch_footystats_predictions(
         fetched_at_hour={YYYY-MM-DDTHH}/league={league_id}/footystats_predictions.parquet
     """
     adapter = create_sports_reference_adapter("footystats", api_key=api_key)
-    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    # v9: entity-specific sink so pipeline_mode= lands in the GCS path prefix.
+    sink = _sports_ref_sink_for(bucket, date, "footystats_predictions")
     counts: dict[str, int] = {}
     fetched_at_ts = pd.Timestamp.now(tz="UTC")
     fetched_at_hour = fetched_at_ts.strftime("%Y-%m-%dT%H")
@@ -5138,7 +5638,6 @@ async def _fetch_footystats_predictions(
                         sink,
                         data=_stamped_pred_clean,
                         partition={
-                            "day": date,
                             "entity": "footystats_predictions",
                             "fetched_at_hour": fetched_at_hour,
                             "league": _pred_lid_str,
@@ -5159,6 +5658,7 @@ async def _fetch_footystats_predictions(
                         data_type="PREDICTIONS",
                         league_id=_canonical_league_id(_pred_lid_str),
                         pipeline_mode=PipelineMode.BATCH_FOOTYSTATS,
+                        source=_sports_ref_source("footystats_predictions"),
                         service_emission_state=None,
                     )
 
@@ -5169,7 +5669,6 @@ async def _fetch_footystats_predictions(
                         sink,
                         data=_stamped_pred_unmapped,
                         partition={
-                            "day": date,
                             "entity": "footystats_predictions",
                             "fetched_at_hour": fetched_at_hour,
                         },
@@ -5184,6 +5683,7 @@ async def _fetch_footystats_predictions(
                         instrument_type="",
                         data_type="PREDICTIONS",
                         pipeline_mode=PipelineMode.BATCH_FOOTYSTATS,
+                        source=_sports_ref_source("footystats_predictions"),
                         service_emission_state=None,
                     )
             else:
@@ -5192,7 +5692,6 @@ async def _fetch_footystats_predictions(
                     sink,
                     data=_stamped_pred_df,
                     partition={
-                        "day": date,
                         "entity": "footystats_predictions",
                         "fetched_at_hour": fetched_at_hour,
                     },
@@ -5207,6 +5706,7 @@ async def _fetch_footystats_predictions(
                     instrument_type="",
                     data_type="PREDICTIONS",
                     pipeline_mode=PipelineMode.BATCH_FOOTYSTATS,
+                    source=_sports_ref_source("footystats_predictions"),
                     service_emission_state=None,
                 )
             pred_manifest.write()
@@ -5328,7 +5828,7 @@ async def _fetch_footystats_matches(
               footystats_matches.parquet
     """
     adapter = create_sports_reference_adapter("footystats", api_key=api_key)
-    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    sink = _sports_ref_sink_for(bucket, date, "footystats_matches")
     counts: dict[str, int] = {}
 
     # Honest-coverage pre-flight + attempt-stamp.
@@ -5424,7 +5924,6 @@ async def _fetch_footystats_matches(
                         sink,
                         data=_stamped_ft_df,
                         partition={
-                            "day": date,
                             "entity": "footystats_matches",
                             "league": _ft_canonical,
                         },
@@ -5440,6 +5939,7 @@ async def _fetch_footystats_matches(
                         data_type="MATCHES",
                         league_id=_ft_canonical,
                         pipeline_mode=PipelineMode.BATCH_FOOTYSTATS,
+                        source=_sports_ref_source("footystats_matches"),
                         service_emission_state=None,
                     )
                     _captured_leagues.add(_ft_canonical)
@@ -5544,7 +6044,7 @@ async def _fetch_footystats_odds(
     of the same future date accumulate snapshots instead of overwriting.
     """
     adapter = create_sports_reference_adapter("footystats", api_key=api_key)
-    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    sink = _sports_ref_sink_for(bucket, date, "footystats_odds")
     counts: dict[str, int] = {}
     fetched_at_ts = pd.Timestamp.now(tz="UTC")
     fetched_at_hour = fetched_at_ts.strftime("%Y-%m-%dT%H")
@@ -5624,7 +6124,6 @@ async def _fetch_footystats_odds(
                         sink,
                         data=_stamped_odds_clean,
                         partition={
-                            "day": date,
                             "entity": "footystats_odds",
                             "fetched_at_hour": fetched_at_hour,
                             "league": _odds_lid_str,
@@ -5641,6 +6140,7 @@ async def _fetch_footystats_odds(
                         data_type="ODDS",
                         league_id=_canonical_league_id(_odds_lid_str),
                         pipeline_mode=PipelineMode.BATCH_ODDS_API,
+                        source=_sports_ref_source("footystats_odds"),
                         service_emission_state=None,
                     )
 
@@ -5651,7 +6151,6 @@ async def _fetch_footystats_odds(
                         sink,
                         data=_stamped_odds_unmapped,
                         partition={
-                            "day": date,
                             "entity": "footystats_odds",
                             "fetched_at_hour": fetched_at_hour,
                         },
@@ -5666,6 +6165,7 @@ async def _fetch_footystats_odds(
                         instrument_type="",
                         data_type="ODDS",
                         pipeline_mode=PipelineMode.BATCH_ODDS_API,
+                        source=_sports_ref_source("footystats_odds"),
                         service_emission_state=None,
                     )
             else:
@@ -5674,7 +6174,6 @@ async def _fetch_footystats_odds(
                     sink,
                     data=_stamped_odds_df,
                     partition={
-                        "day": date,
                         "entity": "footystats_odds",
                         "fetched_at_hour": fetched_at_hour,
                     },
@@ -5689,6 +6188,7 @@ async def _fetch_footystats_odds(
                     instrument_type="",
                     data_type="ODDS",
                     pipeline_mode=PipelineMode.BATCH_ODDS_API,
+                    source=_sports_ref_source("footystats_odds"),
                     service_emission_state=None,
                 )
             odds_manifest.write()
@@ -5752,7 +6252,7 @@ async def _fetch_understat_xg(
               understat_xg.parquet
     """
     adapter = create_sports_reference_adapter("understat")
-    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    sink = _sports_ref_sink_for(bucket, date, "understat_xg")
     counts: dict[str, int] = {}
 
     # Expected-league denominator (Understat covers 5 PREDICTION leagues: EPL,
@@ -5849,7 +6349,7 @@ async def _fetch_understat_xg(
                     _gated_sink_write(
                         sink,
                         data=_stamped_xg_df,
-                        partition={"day": date, "entity": "understat_xg", "league": _canonical_league_id(_xg_lid_str)},
+                        partition={"entity": "understat_xg", "league": _canonical_league_id(_xg_lid_str)},
                         filename="understat_xg.parquet",
                         venue="understat",
                         entity="understat_xg",
@@ -5862,6 +6362,7 @@ async def _fetch_understat_xg(
                         data_type="XG",
                         league_id=_canonical_league_id(_xg_lid_str),
                         pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
+                        source=_sports_ref_source("understat_xg"),
                         service_emission_state=None,
                     )
 
@@ -5987,7 +6488,7 @@ async def _run_understat_shots_date(
     )
 
     adapter = UnderstatAdapter()
-    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    sink = _sports_ref_sink_for(bucket, date, "understat_xg_shots")
     counts: dict[str, int] = {}
 
     shots_manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
@@ -6036,7 +6537,7 @@ async def _run_understat_shots_date(
             _gated_sink_write(
                 sink,
                 data=df,
-                partition={"day": date, "entity": "understat_xg_shots", "league": lid},
+                partition={"entity": "understat_xg_shots", "league": lid},
                 filename="understat_xg_shots.parquet",
                 venue="understat",
                 entity="understat_xg_shots",
@@ -6049,6 +6550,7 @@ async def _run_understat_shots_date(
                 data_type="XG_SHOTS",
                 league_id=lid,
                 pipeline_mode=PipelineMode.BATCH_UNDERSTAT,
+                source=_sports_ref_source("understat_xg_shots"),
                 service_emission_state=None,
             )
             counts[f"understat_xg_shots_{lid}"] = len(shot_rows)
@@ -6144,7 +6646,7 @@ async def _fetch_transfermarkt_data(
     )
 
     adapter = create_sports_reference_adapter("transfermarkt", api_key=api_key)
-    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    sink = _sports_ref_sink_for(bucket, date, "player_values")
     counts: dict[str, int] = {}
 
     # TRANSFERMARKT_LEAGUES retired 2026-05-05 — was a static provider-catalog
@@ -6320,8 +6822,9 @@ async def _fetch_transfermarkt_data(
                 # Add season column for provenance
                 df["season"] = effective_season
                 # Write as player_values entity — partition by season when
-                # doing historical backfill so seasons don't overwrite each other
-                pv_partition: dict[str, str] = {"day": date, "entity": "player_values"}
+                # doing historical backfill so seasons don't overwrite each other.
+                # v9: day= is embedded in the sink prefix; don't include in partition.
+                pv_partition: dict[str, str] = {"entity": "player_values"}
                 if season is not None:
                     pv_partition["season"] = str(season)
                 _gated_sink_write(
@@ -6352,6 +6855,42 @@ async def _fetch_transfermarkt_data(
                 ]
                 _write_transfermarkt_team_mapping(bucket, _cache_rows, effective_season)
 
+                # --- ITEM 6a: master/ + snapshots/ write-path ---
+                # master/entity=player_values/ — accumulating append-only union.
+                # master/entity=teams/ — team metadata accumulation.
+                # master/entity=team_mapping/ — league→team mapping accumulation.
+                # snapshots/entity=player_values/ — point-in-time snapshot keyed
+                # by (season, trigger date) for lookahead-safe ML training.
+                #
+                # Natural dedup keys (ITEM 6b):
+                #   player_values → (canonical_league, team_id, season)
+                #   teams         → (team_id, season)
+                #   team_mapping  → (canonical_league, team_id)
+                _write_master_append(
+                    bucket,
+                    entity="player_values",
+                    new_df=df,
+                    dedup_key=["canonical_league", "team_id", "season"],
+                )
+                _write_master_append(
+                    bucket,
+                    entity="teams",
+                    new_df=pd.DataFrame(_cache_rows).assign(season=effective_season),
+                    dedup_key=["team_id", "season"],
+                )
+                _write_master_append(
+                    bucket,
+                    entity="team_mapping",
+                    new_df=pd.DataFrame(_cache_rows),
+                    dedup_key=["canonical_league", "team_id"],
+                )
+                _write_snapshot_player_values(
+                    bucket,
+                    season=effective_season,
+                    trigger_date=date,
+                    df=df,
+                )
+
         # Per-league honest-coverage manifest rows — identical between the
         # cache-hit and live-fetch branches.  ``cached=True`` is passed as a
         # kwarg for future schema evolution (ManifestWriter v8 tolerates extra
@@ -6361,6 +6900,10 @@ async def _fetch_transfermarkt_data(
             manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable
                 row_key={"date": date, "data_type": "PLAYER_VALUES", "league_id": _canonical_league_id(_cap_lid)},
                 total_rows=_cap_count,
+                # SP-10: per-league PLAYER_VALUES shard — the shard atom is (date, data_type,
+                # league_id), so a "league" is already the row key, not a sub-cluster within the
+                # row. No finer per-root-cluster contract exists, so the gate is a deliberate
+                # no-op; an unfounded expectation would false-fail genuinely-captured data.
                 expected_root_clusters={},
                 observed_clusters={"": _cap_count},
                 available_at_envelope=pd.Timestamp(datetime.now(UTC)),
@@ -6425,7 +6968,7 @@ async def _fetch_sfi_data(
     )
 
     adapter = create_sports_reference_adapter("soccer_football_info", api_key=api_key)
-    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    sink = _sports_ref_sink_for(bucket, date, "progressive_stats")
     counts: dict[str, int] = {}
 
     # SFI_LEAGUES retired 2026-05-05 — provider catalog mapping in UAC.
@@ -6708,7 +7251,6 @@ async def _fetch_sfi_data(
                                 sink,
                                 data=_stamped_pp_df,
                                 partition={
-                                    "day": date,
                                     "entity": "progressive_stats",
                                     "league": _pp_lid_str,
                                 },
@@ -6728,6 +7270,7 @@ async def _fetch_sfi_data(
                                 data_type="SFI_PROGRESSIVE_STATS",
                                 league_id=_canonical_league_id(_pp_lid_str),
                                 pipeline_mode=PipelineMode.BATCH_SOCCER_FOOTBALL_INFO,
+                                source=_sports_ref_source("progressive_stats"),
                                 service_emission_state=None,
                             )
 
@@ -6958,7 +7501,7 @@ async def _fetch_weather_data(
     from instruments_service.reference_data.adapters.sports.adapters.open_meteo import OpenMeteoAdapter
 
     adapter = OpenMeteoAdapter(api_key=api_key) if api_key else OpenMeteoAdapter()
-    sink = get_data_sink(bucket=bucket, prefix="sports_reference/by_date")
+    sink = _sports_ref_sink_for(bucket, date, "weather")
     counts: dict[str, int] = {}
 
     manifest = ManifestWriter(service_name="instruments-service", catalogue_bucket=bucket)
@@ -7104,7 +7647,12 @@ async def _fetch_weather_data(
     # Enables incremental runs: add more venue coords → re-run → only new venues fetched.
     existing_venue_ids: set[str] = set()
     try:
-        weather_prefix = f"sports_reference/by_date/day={date}/entity=weather/"
+        # v9: probe canonical path (pipeline_mode= in prefix) first, then legacy.
+        _w_pm = _sports_ref_pm("weather")
+        _canon_weather_prefix = f"sports_reference/by_date/day={date}/pipeline_mode={_w_pm}/entity=weather/"
+        _legacy_weather_prefix = f"sports_reference/by_date/day={date}/entity=weather/"
+        _canon_blobs = list(storage_client.list_blobs(bucket=bucket, prefix=_canon_weather_prefix, max_results=1))
+        weather_prefix = _canon_weather_prefix if _canon_blobs else _legacy_weather_prefix
         weather_blobs = list(storage_client.list_blobs(bucket=bucket, prefix=weather_prefix, max_results=10))
         for wb in weather_blobs:
             if wb.name.endswith(".parquet"):
@@ -7144,6 +7692,10 @@ async def _fetch_weather_data(
                     manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable
                         row_key={"date": date, "data_type": "WEATHER", "league_id": _canonical_league_id(_lid_str)},
                         total_rows=1,
+                        # SP-10: per-league WEATHER shard — shard atom is (date, data_type,
+                        # league_id); a league is the row key, not a sub-cluster within the row.
+                        # No per-root-cluster contract exists, so the gate is a deliberate no-op;
+                        # an unfounded expectation would false-fail genuinely-captured data.
                         expected_root_clusters={},
                         observed_clusters={"": 1},
                         available_at_envelope=pd.Timestamp(datetime.now(UTC)),
@@ -7292,7 +7844,7 @@ async def _fetch_weather_data(
                 _gated_sink_write(
                     sink,
                     data=stamp_available_at_explicit(_w_lid_df, when=datetime.now(UTC)),
-                    partition={"day": date, "entity": "weather", "league": _canonical_league_id(_lid_v)},
+                    partition={"entity": "weather", "league": _canonical_league_id(_lid_v)},
                     filename="weather.parquet",
                     venue="open_meteo",
                     entity="weather",
@@ -7333,6 +7885,10 @@ async def _fetch_weather_data(
             manifest.record_captured_from_counts(  # QG-allow: emission-policy-not-applicable
                 row_key={"date": date, "data_type": "WEATHER", "league_id": _canonical_league_id(_lid)},
                 total_rows=_count,
+                # SP-10: per-league WEATHER shard — shard atom is (date, data_type, league_id);
+                # a league is the row key, not a sub-cluster within the row. No per-root-cluster
+                # contract exists, so the gate is a deliberate no-op; an unfounded expectation
+                # would false-fail genuinely-captured data.
                 expected_root_clusters={},
                 observed_clusters={"": _count},
                 available_at_envelope=pd.Timestamp(datetime.now(UTC)),
@@ -7420,6 +7976,25 @@ async def fill_solana_creation_cache(
     return {"cached": cached_count, "new": cached_count, "unresolved": unresolved}
 
 
+def resolve_instruments_store_kind(asset_group: str | None) -> tuple[str, str | None]:
+    """Map an asset_group to the ``(kind, asset_group)`` pair for ``resolve_bucket_name``.
+
+    The bucket-name SSOT (``cloud-providers.yaml``) models the prediction
+    instruments store as a **dedicated flat kind** ``instruments-store-prediction``
+    (→ ``instruments-store-pred-{env}-{pid}``), NOT as a ``PREDICTION`` entry in the
+    per-asset_group ``instruments-store`` dict. So ``resolve_bucket_name(kind=
+    "instruments-store", asset_group="prediction")`` raises ``BucketNamingError``
+    ("no entry for asset_group='prediction'"). Every other consumer of the prediction
+    store — the MTDS reader ``_load_market_lifecycle_for_date`` and all the prediction
+    scripts — already resolves the flat kind, so the orchestrator MUST too or its
+    prediction writes (instruments.parquet + market_lifecycle.parquet) crash at bucket
+    resolution and emit ZERO objects. Flat kinds ignore the ``asset_group`` argument.
+    """
+    if asset_group == "prediction":
+        return "instruments-store-prediction", None
+    return "instruments-store", asset_group
+
+
 def _get_instruments_bucket(asset_group: str | None = None) -> str:
     """Resolve the instruments write bucket for the given asset group.
 
@@ -7428,6 +8003,9 @@ def _get_instruments_bucket(asset_group: str | None = None) -> str:
     DEPLOYMENT_ENV=prod → instruments-store-{ag}-prd-{pid}.
     DEPLOYMENT_ENV=dev  → instruments-store-{ag}-dev-{pid}.
     IS_TEST_RUN=true    → DEPLOYMENT_ENV=test → instruments-store-{ag}-test-{pid}.
+
+    Prediction resolves via the dedicated flat kind ``instruments-store-prediction``
+    (→ instruments-store-pred-{env}-{pid}) — see :func:`_resolve_instruments_store_kind`.
     """
     import os
 
@@ -7438,17 +8016,18 @@ def _get_instruments_bucket(asset_group: str | None = None) -> str:
     # asset_group 'SPORTS'") on every sports/footystats short-circuit run. Matches the
     # handler's _get_instruments_bucket_for_asset_group which already lowercases.
     ag: str | None = asset_group.lower() if asset_group else None
+    kind, kind_ag = resolve_instruments_store_kind(ag)
     if cfg.is_test_run:
         prev = os.environ.get("DEPLOYMENT_ENV")
         os.environ["DEPLOYMENT_ENV"] = "test"
         try:
-            return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group=ag)
+            return resolve_bucket_name(cloud="gcp", kind=kind, asset_group=kind_ag)
         finally:
             if prev is None:
                 os.environ.pop("DEPLOYMENT_ENV", None)
             else:
                 os.environ["DEPLOYMENT_ENV"] = prev
-    return resolve_bucket_name(cloud="gcp", kind="instruments-store", asset_group=ag)
+    return resolve_bucket_name(cloud="gcp", kind=kind, asset_group=kind_ag)
 
 
 def _check_emission_policy(
@@ -7552,6 +8131,10 @@ def _write_catalogue_record(bucket: str, path: str, date: str, record_count: int
                 "league_id": manifest_league_id,
             },
             total_rows=record_count,
+            # SP-10: generic parquet-path recovery writer — the manifest row is derived from a
+            # single parquet path's (date, data_type, venue, chain, league_id) and an aggregate
+            # record_count. There is no per-root-cluster decomposition available from a path, so
+            # the gate is a deliberate no-op; an unfounded expectation would false-fail real data.
             expected_root_clusters={},
             observed_clusters={"": record_count},
             available_at_envelope=pd.Timestamp(datetime.now(UTC)),

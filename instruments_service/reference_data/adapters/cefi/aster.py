@@ -145,7 +145,13 @@ class AsterReferenceDataAdapter(BaseReferenceDataAdapter):
                     "retry_safe": retry_safe,
                 },
             )
-            return []
+            # CF-11: re-raise so the venue threads STATE to _fetch_one's failed[]
+            # (→ attempted_failed) instead of returning [] (clean empty → silent
+            # universe shrink / A8 false-complete). Single-call adapter: this error
+            # means the WHOLE Aster universe is unavailable. Mirrors the tradfi fix.
+            raise RuntimeError(
+                f"Aster exchangeInfo fetch failed (error_code={error_code}, retry_safe={retry_safe}): {exc}"
+            ) from exc
 
         data = AsterExchangeInfo.model_validate(raw)
         symbols: list[object] = data.symbols or []
