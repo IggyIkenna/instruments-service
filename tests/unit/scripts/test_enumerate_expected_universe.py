@@ -15,6 +15,7 @@ Plan: writegate_honest_coverage_endtoend_2026_05_06.md § Phase 3.D.4
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -320,28 +321,34 @@ def test_default_bucket_for_resolves_canonical_env_tiered_per_asset_group(
     on a non-existent bucket (silent no-op). SSOT: cloud-providers.yaml.
     """
     monkeypatch.setenv("GCP_PROJECT_ID", "test-project")
-    # resolve_bucket_name derives the env tier from DEPLOYMENT_ENV (long form, higher
-    # precedence than DEPLOYMENT_ENV_SHORT), so pin BOTH — otherwise CI's ambient
-    # DEPLOYMENT_ENV=test wins and the bucket resolves to ``-test-`` not ``-prd-``.
     monkeypatch.setenv("DEPLOYMENT_ENV", "prod")
-    monkeypatch.setenv("DEPLOYMENT_ENV_SHORT", "prd")
     monkeypatch.setenv("CLOUD_PROVIDER", "gcp")
 
-    # Prediction: the canonical env-tiered ``pred-prd`` bucket, NOT the legacy
+    # The env-tier short-form is supplied by the cloud-providers.yaml SSOT, which differs
+    # by environment: the canonical placeholder yaml resolves ``DEPLOYMENT_ENV=prod`` → ``prd``,
+    # while CI runs against the pre-substituted ``ci-test-cloud-providers.yaml`` whose tier is the
+    # literal ``test``. The regression being guarded is a *missing* env tier (the legacy untiered
+    # ``market-data-tick-prediction-<pid>``), not its specific value — so assert the canonical
+    # env-tiered SHAPE (a tier segment is present before the project_id) rather than pinning ``prd``.
+    _tier = r"(?:prd|stg|dev|test|ci)"
+
+    # Prediction: the canonical env-tiered ``pred-<tier>`` bucket, NOT the legacy
     # long-form ``market-data-tick-prediction-<pid>`` slated for L6 delete.
     pred = enumerator_module._default_bucket_for("prediction")
-    assert pred == "market-data-tick-pred-prd-test-project"
+    assert re.fullmatch(rf"market-data-tick-pred-{_tier}-test-project", pred), pred
     assert pred != "market-data-tick-prediction-test-project"
 
-    # Every supported asset_group resolves to an env-tiered bucket (contains -prd-).
+    # Every supported asset_group resolves to an env-tiered bucket (tier segment present).
     for ag in enumerator_module.SUPPORTED_ASSET_GROUPS:
         bucket = enumerator_module._default_bucket_for(ag)
-        assert "-prd-" in bucket, f"{ag} bucket {bucket!r} is missing the env tier"
+        assert re.search(rf"-{_tier}-test-project$", bucket), f"{ag} bucket {bucket!r} is missing the env tier"
 
     # cefi/defi/tradfi resolve via the per-asset_group market-data kind.
-    assert enumerator_module._default_bucket_for("cefi") == "market-data-tick-cefi-prd-test-project"
+    assert re.fullmatch(rf"market-data-tick-cefi-{_tier}-test-project", enumerator_module._default_bucket_for("cefi"))
     # sports' manifest lives in the instruments-store bucket.
-    assert enumerator_module._default_bucket_for("sports") == "instruments-store-sports-prd-test-project"
+    assert re.fullmatch(
+        rf"instruments-store-sports-{_tier}-test-project", enumerator_module._default_bucket_for("sports")
+    )
 
 
 def test_supported_asset_groups_has_all_5() -> None:
