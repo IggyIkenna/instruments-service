@@ -817,13 +817,36 @@ class DatabentoReferenceDataAdapter(BaseReferenceDataAdapter):
                     "retry_safe": retry_safe,
                 },
             )
-            return []
+            # Re-raise as RuntimeError so urdi_reference_provider._fetch_one's
+            # RuntimeError handler catches it and records the venue in failed[],
+            # ensuring the manifest layer sees attempted_failed (not clean empty).
+            # Shard isolation is preserved: the raise is caught by _fetch_one's
+            # per-venue except ladder — sibling venues are unaffected.
+            raise RuntimeError(
+                f"Databento fetch failed for dataset={dataset} "
+                f"(error_code={error_code}, retry_safe={retry_safe}): {exc}"
+            ) from exc
 
         try:
             df = data.to_df()
         except Exception as _exc:
             logger.warning("Failed to parse Databento DBN data for %s: %s", dataset, _exc)
-            return []
+            log_event(
+                "ADAPTER_FETCH_FAILED",
+                details={
+                    "venue": "DATABENTO",
+                    "dataset": dataset,
+                    "symbol_count": len(symbols),
+                    "error": str(_exc),
+                    "error_code": "PARSE_ERROR",
+                    "action": "fail",
+                    "retry_safe": False,
+                },
+            )
+            # Re-raise so urdi_reference_provider._fetch_one records this venue
+            # in failed[] (→ attempted_failed in manifest).  A parse failure is
+            # NOT a genuine empty — we cannot determine the actual symbol list.
+            raise RuntimeError(f"Databento DBN parse failure for dataset={dataset}: {_exc}") from _exc
 
         if df.empty:
             logger.info(

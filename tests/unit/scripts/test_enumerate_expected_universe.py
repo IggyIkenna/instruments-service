@@ -302,3 +302,54 @@ def test_all_5_asset_groups_in_enumerator_dispatch() -> None:
         "sports",
         "prediction",
     }
+
+
+# --- Canonical bucket resolution (⑦ coverage-denominator readiness) ----------
+
+
+def test_default_bucket_for_resolves_canonical_env_tiered_per_asset_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_default_bucket_for`` must resolve the CANONICAL env-tiered manifest bucket
+    via the bucket-name SSOT for every asset_group — NOT the prior hardcoded
+    literals that were all missing the ``-{DEPLOYMENT_ENV_SHORT}-`` env tier.
+
+    Regression for the ⑦ coverage-denominator gap: a no-``--bucket`` enumerator run
+    must read/write the SAME canonical manifest bucket the MTDS reader + MDPS
+    consolidator gate use, else the could-exist ``expected_unattempted`` seed lands
+    on a non-existent bucket (silent no-op). SSOT: cloud-providers.yaml.
+    """
+    monkeypatch.setenv("GCP_PROJECT_ID", "test-project")
+    # resolve_bucket_name derives the env tier from DEPLOYMENT_ENV (long form, higher
+    # precedence than DEPLOYMENT_ENV_SHORT), so pin BOTH — otherwise CI's ambient
+    # DEPLOYMENT_ENV=test wins and the bucket resolves to ``-test-`` not ``-prd-``.
+    monkeypatch.setenv("DEPLOYMENT_ENV", "prod")
+    monkeypatch.setenv("DEPLOYMENT_ENV_SHORT", "prd")
+    monkeypatch.setenv("CLOUD_PROVIDER", "gcp")
+
+    # Prediction: the canonical env-tiered ``pred-prd`` bucket, NOT the legacy
+    # long-form ``market-data-tick-prediction-<pid>`` slated for L6 delete.
+    pred = enumerator_module._default_bucket_for("prediction")
+    assert pred == "market-data-tick-pred-prd-test-project"
+    assert pred != "market-data-tick-prediction-test-project"
+
+    # Every supported asset_group resolves to an env-tiered bucket (contains -prd-).
+    for ag in enumerator_module.SUPPORTED_ASSET_GROUPS:
+        bucket = enumerator_module._default_bucket_for(ag)
+        assert "-prd-" in bucket, f"{ag} bucket {bucket!r} is missing the env tier"
+
+    # cefi/defi/tradfi resolve via the per-asset_group market-data kind.
+    assert enumerator_module._default_bucket_for("cefi") == "market-data-tick-cefi-prd-test-project"
+    # sports' manifest lives in the instruments-store bucket.
+    assert enumerator_module._default_bucket_for("sports") == "instruments-store-sports-prd-test-project"
+
+
+def test_supported_asset_groups_has_all_5() -> None:
+    """SUPPORTED_ASSET_GROUPS (the --asset-group choices) covers all 5 groups."""
+    assert set(enumerator_module.SUPPORTED_ASSET_GROUPS) == {
+        "cefi",
+        "defi",
+        "tradfi",
+        "sports",
+        "prediction",
+    }
