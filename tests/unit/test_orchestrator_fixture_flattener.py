@@ -108,6 +108,29 @@ _EXPECTED_COLUMNS = {
     "match_end_time",
     "announced_at",
     "report_time",
+    # Q5 phase timestamps (fixture-schedule-split Phase 3 — populated from
+    # af_response via extract_match_lifecycle; default None without it).
+    "halftime_start_time",
+    "halftime_end_time",
+    "extra_time_first_half_start_time",
+    "extra_time_first_half_end_time",
+    "extra_time_second_half_start_time",
+    "extra_time_second_half_end_time",
+    "penalty_shootout_start_time",
+    "penalty_shootout_end_time",
+    "whistle_full_time_at",
+    # Q6 score-distinction columns.
+    "home_score_regulation",
+    "away_score_regulation",
+    "home_score_after_extra_time",
+    "away_score_after_extra_time",
+    "home_score_after_penalty_shootout",
+    "away_score_after_penalty_shootout",
+    "home_penalty_shootout_score",
+    "away_penalty_shootout_score",
+    "went_to_extra_time",
+    "went_to_penalties",
+    "match_result",
 }
 
 

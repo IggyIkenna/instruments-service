@@ -81,6 +81,28 @@ class BaseSportsReferenceAdapter(ABC):
         """
         ...
 
+    async def get_fixtures_with_raw(
+        self,
+        date: str,
+        league_ids: list[int] | None = None,
+    ) -> list[tuple[CanonicalFixture, dict[str, object]]]:
+        """Fetch fixtures paired with their RAW provider response item.
+
+        The raw dict is what
+        ``unified_trading_library.fixtures.extract_match_lifecycle`` consumes to
+        populate the Q5/Q6 HT/ET/PEN phase-timestamp + score-distinction columns
+        at FIXTURES write-time. Only the api-football adapter carries the raw
+        api-football response shape ``extract_match_lifecycle`` expects, so it
+        OVERRIDES this method. The base default pairs each canonical fixture with
+        an EMPTY dict — a source that does not surface the api-football response
+        shape contributes no lifecycle data (those columns take their honest
+        defaults), but the writer interface stays uniform across adapters.
+
+        Returns:
+            ``[(canonical_fixture, raw_item_or_empty), …]``.
+        """
+        return [(fx, {}) for fx in await self.get_fixtures(date, league_ids=league_ids)]
+
     @abstractmethod
     async def get_leagues(self) -> list[CanonicalLeague]:
         """Fetch all available leagues.
