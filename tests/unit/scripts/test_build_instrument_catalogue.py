@@ -401,3 +401,51 @@ def test_run_rollup_max_blobs_forces_dry_run(rollup: ModuleType) -> None:
     assert code == 0
     # No catalog object was written (fake has only the input blob).
     assert "prod/catalog.parquet" not in _FakeStorage(blobs)._blobs
+
+
+# ---------------------------------------------------------------------------
+# Phase-3 cefi verification — the v2 cefi enumerator reads the rolled-up
+# catalogue and emits NOT_LISTED / DELISTED / expected_unattempted correctly.
+# ---------------------------------------------------------------------------
+
+
+def test_cefi_enumerator_reads_rollup_catalogue_and_emits_expected_unattempted(rollup: ModuleType) -> None:
+    enumerator = _load_script_module("enumerate_expected_universe.py", "_enumerate_v2_cefi_verify")
+    d1, d2, d3, d4 = date(2024, 6, 1), date(2024, 6, 2), date(2024, 6, 3), date(2024, 6, 4)
+
+    # Producer roll-up: OLDCOIN only on d1 (delisted, latest=d3); BTC on d2,d3 (active).
+    catalogue_df = rollup.build_catalogue_dataframe(
+        [
+            (d1, _snapshot([{"instrument_key": "OLDCOIN", "venue": "TESTVENUE", "instrument_type": "SPOT_PAIR"}])),
+            (d2, _snapshot([{"instrument_key": "BTC", "venue": "TESTVENUE", "instrument_type": "SPOT_PAIR"}])),
+            (d3, _snapshot([{"instrument_key": "BTC", "venue": "TESTVENUE", "instrument_type": "SPOT_PAIR"}])),
+        ]
+    )
+    catalog = enumerator._catalog_from_dataframe(catalogue_df)
+
+    # Manifest says BTC was captured on d3 only.
+    # present_cols default: venue, chain, data_type, instrument_type, instrument_id, league_id, date
+    present_set = {("TESTVENUE", "", "INSTRUMENTS", "SPOT_PAIR", "BTC", "", "2024-06-03")}
+
+    rows = list(
+        enumerator.enumerate_v2(
+            asset_group="cefi",
+            catalog=catalog,
+            date_axis=[d1, d2, d3, d4],
+            data_types=["INSTRUMENTS"],
+            present_set=present_set,
+        )
+    )
+    by_key = {(r.instrument_id, r.date): r for r in rows}
+
+    # BTC before available_from (d2) → NOT_LISTED (honest empty_confirmed)
+    assert by_key[("BTC", "2024-06-01")].reason == "EXPECTED_INSTRUMENT_NOT_LISTED"
+    assert by_key[("BTC", "2024-06-01")].capture_status == "empty_confirmed"
+    # BTC alive on d2, no manifest row → expected_unattempted
+    assert by_key[("BTC", "2024-06-02")].capture_status == "expected_unattempted"
+    # BTC alive on d3 AND captured (present_set) → NOT emitted
+    assert ("BTC", "2024-06-03") not in by_key
+    # BTC alive on d4 (available_to=None), no manifest row → expected_unattempted
+    assert by_key[("BTC", "2024-06-04")].capture_status == "expected_unattempted"
+    # OLDCOIN after available_to (d1) → DELISTED
+    assert by_key[("OLDCOIN", "2024-06-02")].reason == "EXPECTED_INSTRUMENT_DELISTED"
