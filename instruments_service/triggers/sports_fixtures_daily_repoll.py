@@ -70,7 +70,12 @@ from datetime import date as _date
 from typing import TYPE_CHECKING
 
 import pandas as pd
-from unified_api_contracts import PipelineMode
+from unified_api_contracts import EmptyConfirmedReason, PipelineMode
+from unified_api_contracts.registry.sports_per_source_rules import is_expected_for_source
+from unified_api_contracts.sports import (
+    get_league_by_api_football_id,
+    get_league_fixture_calendar,
+)
 from unified_trading_library import (
     ManifestWriter,
     classify_and_emit_error,
@@ -283,19 +288,43 @@ async def run_sports_fixtures_daily_repoll(
             continue
 
         if not fixtures:
-            # Honest empty: api-football returned 0 fixtures for the day in
-            # our league set. CLAUDE.md "asset-group-specific empty_confirmed
-            # legitimacy rule" — sports CAN have empty_confirmed at the
-            # day grain. Reason taxonomy: ``SOURCE_RETURNED_ZERO``.
-            manifest.record_empty(
-                row_key={"date": day_str, "data_type": "FIXTURES"},
-                reason="SOURCE_RETURNED_ZERO",
-                attempted_at=datetime.now(UTC),
-                pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
-            )
+            # Honest empty: api-football returned 0 fixtures for the day across
+            # the queried league set.  Emit per-league typed reasons via the UAC
+            # coverage oracle (``is_expected_for_source``) so manifest consumers
+            # see schedule-driven absences labelled correctly rather than a
+            # blanket day-grain SOURCE_RETURNED_ZERO.
+            #
+            # Decision tree per league:
+            #   oracle says (False, reason) → that typed EXPECTED_* reason
+            #   oracle says (True, None) AND no fixture on calendar → EXPECTED_NO_FIXTURE
+            #   oracle says (True, None) AND calendar has a fixture today → SOURCE_RETURNED_ZERO
+            _attempt_ts = datetime.now(UTC)
+            for _af_id in af_league_ids:
+                _ld = get_league_by_api_football_id(_af_id)
+                if _ld is None:
+                    continue
+                _lid = _ld.league_id
+                _is_expected, _oracle_reason = is_expected_for_source("api_football", _lid, day)
+                if not _is_expected and _oracle_reason is not None:
+                    # Pre-coverage or other schedule-driven gap per oracle
+                    _reason: EmptyConfirmedReason = EmptyConfirmedReason(_oracle_reason)
+                elif not get_league_fixture_calendar(_lid, day, day):
+                    # Oracle says the shard is expected but the fixture calendar
+                    # has no entry for this day → genuinely no fixture scheduled.
+                    _reason = EmptyConfirmedReason.EXPECTED_NO_FIXTURE
+                else:
+                    # Calendar has a fixture but source returned 0 → real gap.
+                    _reason = EmptyConfirmedReason.SOURCE_RETURNED_ZERO
+                manifest.record_empty(
+                    row_key={"date": day_str, "data_type": "FIXTURES", "league_id": _lid},
+                    reason=_reason,
+                    attempted_at=_attempt_ts,
+                    pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
+                )
             logger.info(
-                "sports.fixtures.daily_repoll: empty fixture set for day=%s — recorded SOURCE_RETURNED_ZERO",
+                "sports.fixtures.daily_repoll: empty fixture set for day=%s — recorded per-league typed reasons (%d leagues)",
                 day_str,
+                len(af_league_ids),
             )
             continue
 
@@ -328,7 +357,14 @@ async def run_sports_fixtures_daily_repoll(
 
         # Per-league split + write via the existing canonical sink helper.
         # Same path, same partition keys, same filename as batch.
-        _write_fixtures_per_league(sink, df, day_str, source_label="trigger:daily_repoll")
+        _write_fixtures_per_league(
+            sink,
+            df,
+            day_str,
+            source_label="trigger:daily_repoll",
+            bucket=sports_bucket,
+            skip_if_unchanged=True,
+        )
 
         # Per-league manifest rows — the writer dedupes by row_key, so a
         # subsequent fire on the same day overwrites cleanly with
@@ -339,10 +375,6 @@ async def run_sports_fixtures_daily_repoll(
         if "league_id" not in df_with_league.columns or df_with_league["league_id"].isna().all():
             # Fall back to af_league_id mapping (same logic as
             # _write_fixtures_per_league).
-            from unified_api_contracts.sports import (
-                get_league_by_api_football_id,
-            )
-
             af_int = pd.to_numeric(df_with_league.get("af_league_id"), errors="coerce").astype("Int64")
 
             def _resolve(v: object) -> str:
@@ -371,11 +403,15 @@ async def run_sports_fixtures_daily_repoll(
                         "league_id": canonical_lid,
                     },
                     df=league_df_clean,
-                    category="sports",
+                    asset_group="sports",
                     instrument_type="football",
                     data_type="FIXTURES",
                     league_id=canonical_lid,
                     pipeline_mode=PipelineMode.BATCH_API_FOOTBALL,
+                    # FIXTURES is multi-source (api_football + footystats) →
+                    # explicit source required (data_source_provenance Phase 4).
+                    # This repoll path uses the api_football reference adapter.
+                    source="api_football",
                 )
                 counts[f"{day_str}/{canonical_lid}"] = row_count
             except Exception as exc:

@@ -89,6 +89,12 @@ _TYPE_MAP: dict[str, InstrumentType] = {
     "combo": InstrumentType.COMBO,
 }
 
+# Exchanges that are derivatives-only (no spot trading).
+# Instruments from these venues with unknown/None type must NOT default to
+# SPOT_PAIR — that causes HTTP 400s when MTDS requests spot symbols from a
+# venue that carries only futures/options/perps. Skip unknowns instead.
+_DERIVATIVES_ONLY_EXCHANGES: frozenset[str] = frozenset({"deribit"})
+
 # Quote currencies for symbol splitting (longest first for correct prefix matching)
 # Extended from instruments-service/engine/processors/symbol_parser.py _ALL_QUOTE_SUFFIXES
 _QUOTE_CURRENCIES: list[str] = [
@@ -246,6 +252,26 @@ def _parse_yymmdd_symbol_expiry(raw_id: str) -> datetime | None:
     """
     parts = raw_id.split("-")
     # Try last segment first (covers both BASE-QUOTE-YYMMDD and BASE-YYMMDD)
+    for idx in (-1, -2):
+        if abs(idx) > len(parts):
+            continue
+        seg = parts[idx]
+        if len(seg) == 6 and seg.isdigit():
+            try:
+                yy, mm, dd = int(seg[:2]), int(seg[2:4]), int(seg[4:6])
+                return datetime(2000 + yy, mm, dd, tzinfo=UTC)
+            except ValueError:
+                continue
+    return None
+
+
+def _parse_underscore_yymmdd_symbol_expiry(raw_id: str) -> datetime | None:
+    """Parse expiry from Kraken-Futures-style symbol: FI_XBTUSD_240329.
+
+    The last segment (underscore-separated) is a 6-digit YYMMDD date string.
+    Perpetuals (e.g. ``PF_XBTUSD_PERP``) return None — non-digit suffix.
+    """
+    parts = raw_id.split("_")
     for idx in (-1, -2):
         if abs(idx) > len(parts):
             continue
@@ -970,8 +996,18 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         raw_id = item.id
         if not raw_id:
             return None
-        tardis_type = item.type or "spot"
+        tardis_type = item.type
+        if tardis_type is None:
+            if exchange in _DERIVATIVES_ONLY_EXCHANGES:
+                # deribit has no spot instruments; skip instruments with unknown
+                # type rather than defaulting to SPOT_PAIR (which causes HTTP 400
+                # from MTDS when it requests spot symbols from a derivatives-only venue).
+                return None
+            tardis_type = "spot"
         instrument_type: InstrumentType = _TYPE_MAP.get(tardis_type, InstrumentType.SPOT_PAIR)
+        if instrument_type == InstrumentType.SPOT_PAIR and exchange in _DERIVATIVES_ONLY_EXCHANGES:
+            # Guard: recognised-as-spot on a derivatives-only venue is also invalid.
+            return None
 
         # Resolve canonical venue name from UAC VenueMapping (e.g. "binance" → "BINANCE-SPOT")
         canonical_venue = _VENUE_MAPPING.tardis_to_venue.get(exchange, exchange.upper())
@@ -1004,6 +1040,9 @@ class TardisReferenceDataAdapter(BaseReferenceDataAdapter):
         # OKX symbol format: BTC-USD-260626 → parse YYMMDD from last segment
         if expiry is None and "-" in raw_id:
             expiry = _parse_yymmdd_symbol_expiry(raw_id)
+        # Kraken Futures symbol format: FI_XBTUSD_240329 → parse YYMMDD from last underscore segment
+        if expiry is None and "_" in raw_id:
+            expiry = _parse_underscore_yymmdd_symbol_expiry(raw_id)
 
         strike, opt_type = _resolve_option_fields(item, instrument_type, raw_id)
 

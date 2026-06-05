@@ -51,7 +51,7 @@ from ...schemas import (
     OHLCVRef,
 )
 from ...utils import date_to_block
-from ...utils.defi_utils import classify_graph_error
+from ...utils.defi_utils import assert_subgraph_payload, classify_graph_error
 from ...utils.evm_creation_resolver import (
     batch_resolve_evm_creation_timestamps,
     get_protocol_floor_date,
@@ -159,18 +159,10 @@ class SparkReferenceDataAdapter(BaseReferenceDataAdapter):
             self._log_fetch_error(exc)
             raise ConnectionError(str(exc)) from exc
 
-        # Defensive: subgraph may return ``{"errors": [...]}`` (no ``data``
-        # key) on transient indexing issues. Treat as empty rather than
-        # crashing the migration / collector.
-        data_field = data.get("data") if isinstance(data, dict) else None
-        if not isinstance(data_field, dict):
-            logger.warning(
-                "%s: subgraph response missing 'data' field for chain=%s; treating as empty (response: %s)",
-                _VENUE_PREFIX,
-                self._chain,
-                str(data)[:200],
-            )
-            return []
+        # A 200-with-``{"errors":[...]}`` / missing-``data`` response is a TRANSIENT FETCH FAILURE, not an
+        # empty universe — raise so discovery records it ``attempted_failed`` rather than masking it as zero
+        # markets (DeFi-plan A8 / operator 2026-05-07). ConnectionError → per-venue NETWORK/retryable.
+        data_field = assert_subgraph_payload(data, venue=_VENUE_PREFIX, chain=self._chain)
         markets: list[dict[str, object]] = data_field.get("markets", [])
         venue_tag = f"{_VENUE_PREFIX}-{self._chain}"
 
@@ -342,7 +334,7 @@ class SparkReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch a single instrument by identifier."""
         instruments = await self.get_instruments()
         for inst in instruments:
-            if inst.raw_symbol == symbol or inst.symbol == symbol:
+            if inst.raw_symbol == symbol or inst.instrument_key.endswith(f":{symbol}"):
                 return inst
         return None
 

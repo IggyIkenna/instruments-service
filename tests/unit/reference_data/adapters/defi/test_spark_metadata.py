@@ -431,9 +431,11 @@ class TestSparkGetInstrumentsAsync:
         a_record = next(r for r in results if "A_TOKEN" in r.instrument_key)
         assert a_record.available_from_datetime == custom_ts
 
-    async def test_get_instruments_missing_data_field_returns_empty(self) -> None:
+    async def test_get_instruments_graphql_errors_raises(self) -> None:
         adapter = SparkReferenceDataAdapter(api_key="k", chain="ETHEREUM")
-        # Subgraph "errors" response — no `data` key.
+        # A 200-with-``errors`` body (no ``data`` key) is a TRANSIENT FETCH FAILURE, not an empty universe —
+        # it must RAISE so discovery records the venue ``attempted_failed`` (DeFi-plan A8 / operator 2026-05-07),
+        # NOT silently return [] (which would mask the failure as a complete-empty universe).
         with (
             patch(
                 "instruments_service.reference_data.adapters.defi.spark.batch_resolve_evm_creation_timestamps",
@@ -443,13 +445,13 @@ class TestSparkGetInstrumentsAsync:
                 "aiohttp.ClientSession",
                 return_value=_mock_aiohttp_session_post({"errors": [{"message": "indexing"}]}),
             ),
+            pytest.raises(ConnectionError),
         ):
-            results = await adapter.get_instruments()
-        assert results == []
+            await adapter.get_instruments()
 
-    async def test_get_instruments_non_dict_response_returns_empty(self) -> None:
+    async def test_get_instruments_non_dict_response_raises(self) -> None:
         adapter = SparkReferenceDataAdapter(api_key="k", chain="ETHEREUM")
-        # Defensive: subgraph returned a list / string.
+        # A non-dict subgraph response is a transient fetch failure, not an empty universe → must RAISE.
         with (
             patch(
                 "instruments_service.reference_data.adapters.defi.spark.batch_resolve_evm_creation_timestamps",
@@ -459,9 +461,9 @@ class TestSparkGetInstrumentsAsync:
                 "aiohttp.ClientSession",
                 return_value=_mock_aiohttp_session_post(["unexpected"]),
             ),
+            pytest.raises(ConnectionError),
         ):
-            results = await adapter.get_instruments()
-        assert results == []
+            await adapter.get_instruments()
 
     async def test_get_instruments_client_error_raises_connection_error(self) -> None:
         adapter = SparkReferenceDataAdapter(api_key="k", chain="ETHEREUM")

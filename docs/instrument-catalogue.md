@@ -78,7 +78,7 @@ Each category lands in its own instruments bucket, resolved through UTL's
 `is_test_run`):
 
 ```
-gs://instruments-store-{category}-{project}/reference_data/instruments/
+gs://instruments-store-{ag}-{env}-{project}/reference_data/instruments/
     category={category}/
     written_at={YYYY-MM-DDTHH:MM:SSZ}/
         all.parquet

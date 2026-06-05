@@ -57,6 +57,18 @@ class InstrumentsServiceConfig(UnifiedCloudConfig):
         description="Route writes to test bucket instead of prod (E2E test mode)",
     )
 
+    sports_v9_enforced: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("SPORTS_V9_ENFORCED"),
+        description=(
+            "Enforce v9 schema-column presence (asset_group, source, pipeline_mode, available_at) "
+            "on the upstream sports manifest _index at preflight. "
+            "Default=False so this guard is safe to land pre-migration; "
+            "flip to True at cutover after the single-walk canonicalisation completes. "
+            "SSOT: plans/active/sports_manifest_canonicalisation_2026_06_01.md §P2."
+        ),
+    )
+
 
 _config: InstrumentsServiceConfig | None = None
 

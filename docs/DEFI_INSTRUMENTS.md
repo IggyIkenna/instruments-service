@@ -14,20 +14,20 @@ DeFi instruments are fetched from **The Graph** (DEX pools via subgraph queries)
 
 ## Venues (12 active)
 
-| Venue              | Source     | Instrument Type | What it represents                 |
-| ------------------ | ---------- | --------------- | ---------------------------------- |
+| Venue               | Source     | Instrument Type | What it represents                 |
+| ------------------- | ---------- | --------------- | ---------------------------------- |
 | UNISWAP_V3-ETHEREUM | The Graph  | Pool            | Liquidity pools (concentrated)     |
 | UNISWAP_V4-ETHEREUM | The Graph  | Pool            | Liquidity pools (hooks-enabled)    |
 | UNISWAP_V2-ETHEREUM | The Graph  | Pool            | Liquidity pools (constant product) |
-| BALANCER-ETHEREUM  | The Graph  | Pool            | Weighted/stable pools              |
-| CURVE-ETHEREUM     | The Graph  | Pool            | Stableswap + tricrypto pools       |
+| BALANCER-ETHEREUM   | The Graph  | Pool            | Weighted/stable pools              |
+| CURVE-ETHEREUM      | The Graph  | Pool            | Stableswap + tricrypto pools       |
 | AAVE_V3-ETHEREUM    | The Graph  | Lending Market  | Supply/borrow markets              |
-| MORPHO-ETHEREUM    | The Graph  | Lending Market  | Morpho vaults (curated)            |
-| EULER-ETHEREUM     | Direct API | Lending Market  | Lending vaults                     |
-| FLUID-ETHEREUM     | Direct API | Lending Market  | Lending pairs                      |
-| LIDO-ETHEREUM      | Direct API | LST             | stETH/wstETH staking               |
-| ETHERFI-ETHEREUM   | Direct API | LST             | eETH staking                       |
-| ETHENA-ETHEREUM    | Direct API | Yield           | USDe/sUSDe yield                   |
+| MORPHO-ETHEREUM     | The Graph  | Lending Market  | Morpho vaults (curated)            |
+| EULER-ETHEREUM      | Direct API | Lending Market  | Lending vaults                     |
+| FLUID-ETHEREUM      | Direct API | Lending Market  | Lending pairs                      |
+| LIDO-ETHEREUM       | Direct API | LST             | stETH/wstETH staking               |
+| ETHERFI-ETHEREUM    | Direct API | LST             | eETH staking                       |
+| ETHENA-ETHEREUM     | Direct API | Yield           | USDe/sUSDe yield                   |
 
 ## Filtering
 
