@@ -320,6 +320,10 @@ def test_default_bucket_for_resolves_canonical_env_tiered_per_asset_group(
     on a non-existent bucket (silent no-op). SSOT: cloud-providers.yaml.
     """
     monkeypatch.setenv("GCP_PROJECT_ID", "test-project")
+    # resolve_bucket_name derives the env tier from DEPLOYMENT_ENV (long form, higher
+    # precedence than DEPLOYMENT_ENV_SHORT), so pin BOTH — otherwise CI's ambient
+    # DEPLOYMENT_ENV=test wins and the bucket resolves to ``-test-`` not ``-prd-``.
+    monkeypatch.setenv("DEPLOYMENT_ENV", "prod")
     monkeypatch.setenv("DEPLOYMENT_ENV_SHORT", "prd")
     monkeypatch.setenv("CLOUD_PROVIDER", "gcp")
 
