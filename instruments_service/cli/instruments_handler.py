@@ -92,6 +92,8 @@ class InstrumentsHandler(UnifiedServiceHandler):
         # at handler-construction time so process() can route on it once the Phase
         # B/C/D/E triggers wire in. None ⇒ batch-mode invocation OR live-mode call
         # without an explicit trigger (legacy sports forward-poll launchers).
+        # NOTE: DeFi live-mode uses --mode live (no trigger); DeFi on-chain
+        # instrument triggers are owned by defi_master, not this service.
         self._trigger_name: str | None = None
 
     async def preflight(self) -> None:
