@@ -295,7 +295,7 @@ class TestGetInstrumentsBucket:
         ) as mock_resolve:
             bucket = _get_instruments_bucket("CEFI")
         call_kwargs = mock_resolve.call_args.kwargs
-        assert call_kwargs.get("asset_group") == "CEFI"
+        assert call_kwargs.get("asset_group") == "cefi"
         assert "instruments" in bucket.lower()
 
     def test_bucket_test_mode(self) -> None:

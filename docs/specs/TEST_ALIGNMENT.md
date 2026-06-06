@@ -36,10 +36,10 @@ All environments set:
 
 All environments install dependencies in this order:
 
-1. `python -m pip install --upgrade pip setuptools wheel`
-2. `pip install -e deps/unified-trading-services` (or `/workspace/unified-trading-services` in Cloud Build)
-3. `pip install -e deps/unified-trading-deployment-v2` (optional)
-4. `pip install -e . --no-deps` (instruments-service)
+1. `uv pip install --upgrade pip setuptools wheel`
+2. `uv pip install -e deps/unified-trading-services` (or `/workspace/unified-trading-services` in Cloud Build)
+3. `uv pip install -e deps/unified-trading-deployment-v2` (optional)
+4. `uv pip install -e . --no-deps` (instruments-service)
 5. Core dependencies (pydantic, pandas, etc.)
 6. Test dependencies (pytest, ruff, etc.)
 

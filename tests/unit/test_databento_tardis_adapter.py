@@ -237,6 +237,140 @@ class TestDatabentoEventContractClassification:
 
 
 # ---------------------------------------------------------------------------
+# CF-11 silent-shrink fix: fetch-failure must thread STATE (not just emit event)
+# ---------------------------------------------------------------------------
+
+
+class TestDatabentoFetchFailureStateThreading:
+    """Verify that BentoError + parse-failure raise RuntimeError (not return []).
+
+    The re-raise is the mechanism that gets the venue into urdi_reference_provider
+    _fetch_one's failed[] list → orchestrator records attempted_failed, not clean empty.
+    """
+
+    def _make_adapter(self) -> DatabentoReferenceDataAdapter:
+        from datetime import date
+
+        adapter = DatabentoReferenceDataAdapter(api_key="test-key")
+        adapter._target_date = date(2026, 1, 15)
+        return adapter
+
+    @pytest.mark.asyncio
+    async def test_bento_error_raises_runtime_error_not_returns_empty(self) -> None:
+        """BentoError in _fetch_symbols must propagate as RuntimeError, not swallow → [].
+
+        This is the primary CF-11 gap: the old code returned [] which was cached as a
+        legit result, causing the venue to appear in _non_error_venues (never attempted_failed).
+        """
+        import databento as db
+
+        adapter = self._make_adapter()
+        bento_exc = db.common.error.BentoError("429 rate limit exceeded")
+
+        with (
+            patch("databento.Historical") as mock_hist_cls,
+            patch.object(adapter, "_get_equity_symbols", return_value=[]),
+            patch.object(adapter, "_create_fx_spot_records", return_value=[]),
+            patch.object(adapter, "_create_yahoo_index_records", return_value=[]),
+            patch.object(adapter, "_enrich_session_metadata"),
+        ):
+            mock_hist = MagicMock()
+            mock_hist_cls.return_value = mock_hist
+            mock_hist.timeseries.get_range.side_effect = bento_exc
+
+            with pytest.raises(RuntimeError, match="Databento fetch failed"):
+                await adapter.get_instruments()
+
+    @pytest.mark.asyncio
+    async def test_parse_failure_raises_runtime_error_not_returns_empty(self) -> None:
+        """data.to_df() parse failure must propagate as RuntimeError, not swallow → [].
+
+        Slot-5 confirmed this branch had no ADAPTER_FETCH_FAILED event and silently
+        returned [], causing universe truncation with zero failure signal.
+        """
+        adapter = self._make_adapter()
+        parse_exc = ValueError("DBN deserialization failed")
+
+        mock_data = MagicMock()
+        mock_data.to_df.side_effect = parse_exc
+
+        with (
+            patch("databento.Historical") as mock_hist_cls,
+            patch.object(adapter, "_get_equity_symbols", return_value=[]),
+            patch.object(adapter, "_create_fx_spot_records", return_value=[]),
+            patch.object(adapter, "_create_yahoo_index_records", return_value=[]),
+            patch.object(adapter, "_enrich_session_metadata"),
+        ):
+            mock_hist = MagicMock()
+            mock_hist_cls.return_value = mock_hist
+            mock_hist.timeseries.get_range.return_value = mock_data
+
+            with pytest.raises(RuntimeError, match="Databento DBN parse failure"):
+                await adapter.get_instruments()
+
+    @pytest.mark.asyncio
+    async def test_genuine_empty_response_still_returns_empty_list(self) -> None:
+        """A legitimate empty df (no instruments on the date) must NOT raise.
+
+        Genuine empty = the API succeeded but returned 0 rows (e.g. weekend, no listings).
+        This path must continue returning [] cleanly — it is NOT a fetch failure.
+        """
+        import pandas as pd
+
+        adapter = self._make_adapter()
+
+        mock_data = MagicMock()
+        mock_data.to_df.return_value = pd.DataFrame()  # genuinely empty
+
+        with (
+            patch("databento.Historical") as mock_hist_cls,
+            patch.object(adapter, "_get_equity_symbols", return_value=[]),
+            patch.object(adapter, "_create_fx_spot_records", return_value=[]),
+            patch.object(adapter, "_create_yahoo_index_records", return_value=[]),
+            patch.object(adapter, "_enrich_session_metadata"),
+        ):
+            mock_hist = MagicMock()
+            mock_hist_cls.return_value = mock_hist
+            mock_hist.timeseries.get_range.return_value = mock_data
+
+            results = await adapter.get_instruments()
+
+        assert results == [], f"Expected [] for genuine empty, got {results}"
+
+    @pytest.mark.asyncio
+    async def test_cache_does_not_memoize_failed_fetch(self) -> None:
+        """A failed fetch (RuntimeError) must not be stored in the adapter cache.
+
+        base_adapter.get_instruments_cached() only writes the cache AFTER get_instruments()
+        returns; if it raises, the write never happens — subsequent calls retry the fetch.
+        """
+        import databento as db
+
+        adapter = self._make_adapter()
+        bento_exc = db.common.error.BentoError("500 internal server error")
+
+        with (
+            patch("databento.Historical") as mock_hist_cls,
+            patch.object(adapter, "_get_equity_symbols", return_value=[]),
+            patch.object(adapter, "_create_fx_spot_records", return_value=[]),
+            patch.object(adapter, "_create_yahoo_index_records", return_value=[]),
+            patch.object(adapter, "_enrich_session_metadata"),
+        ):
+            mock_hist = MagicMock()
+            mock_hist_cls.return_value = mock_hist
+            mock_hist.timeseries.get_range.side_effect = bento_exc
+
+            # First call: should raise
+            with pytest.raises(RuntimeError):
+                await adapter.get_instruments_cached()
+
+            # Cache must be empty — the exception prevented the cache write
+            assert adapter._instruments_cache == {}, (
+                "Failed fetch must not be memoised; cache was written despite exception"
+            )
+
+
+# ---------------------------------------------------------------------------
 # Tardis adapter mocked tests
 # ---------------------------------------------------------------------------
 

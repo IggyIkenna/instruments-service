@@ -450,7 +450,7 @@ class CloudInstrumentStorage:
         if cloud_target is None:
             cloud_target = CloudTarget(
                 project_id=get_config("GCP_PROJECT_ID", "{project_id}"),  # Replace {project_id} with actual project ID
-                gcs_bucket=get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store"),
+                gcs_bucket=get_config("INSTRUMENTS_GCS_BUCKET", "instruments-store-{ag}-{env}-{project_id}"),
                 bigquery_dataset=get_config("INSTRUMENTS_BIGQUERY_DATASET", "instruments"),
                 bigquery_location=get_config("BIGQUERY_LOCATION", "asia-northeast1"),
             )

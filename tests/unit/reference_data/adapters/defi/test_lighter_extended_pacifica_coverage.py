@@ -113,7 +113,8 @@ class TestLighterAdapter:
         assert results == []
 
     @pytest.mark.asyncio
-    async def test_get_instruments_client_error_returns_empty(self) -> None:
+    async def test_get_instruments_client_error_raises(self) -> None:
+        """ClientError from _get_with_retry must raise, not return [] (CF-11 regression)."""
         from instruments_service.reference_data.adapters.defi.lighter import LighterReferenceDataAdapter
 
         adapter = LighterReferenceDataAdapter()
@@ -121,21 +122,22 @@ class TestLighterAdapter:
             patch.object(adapter, "_make_session", return_value=_make_session_cm()),
             patch.object(adapter, "_get_with_retry", AsyncMock(side_effect=aiohttp.ClientError("failed"))),
             patch("instruments_service.reference_data.adapters.defi.lighter.log_event"),
+            pytest.raises((RuntimeError, aiohttp.ClientError)),
         ):
-            results = await adapter.get_instruments()
-        assert results == []
+            await adapter.get_instruments()
 
     @pytest.mark.asyncio
-    async def test_get_instruments_runtime_error_returns_empty(self) -> None:
+    async def test_get_instruments_runtime_error_raises(self) -> None:
+        """RuntimeError from _get_with_retry must raise, not return [] (CF-11 regression)."""
         from instruments_service.reference_data.adapters.defi.lighter import LighterReferenceDataAdapter
 
         adapter = LighterReferenceDataAdapter()
         with (
             patch.object(adapter, "_make_session", return_value=_make_session_cm()),
             patch.object(adapter, "_get_with_retry", AsyncMock(side_effect=RuntimeError("timeout"))),
+            pytest.raises((RuntimeError, aiohttp.ClientError)),
         ):
-            results = await adapter.get_instruments()
-        assert results == []
+            await adapter.get_instruments()
 
     @pytest.mark.asyncio
     async def test_get_instrument_found(self) -> None:
@@ -492,16 +494,20 @@ class TestFlashTradeHttpPaths:
         assert markets == inner
 
     @pytest.mark.asyncio
-    async def test_fetch_perp_markets_empty_dict(self) -> None:
+    async def test_fetch_perp_markets_empty_dict_raises(self) -> None:
         from instruments_service.reference_data.adapters.defi.flash_trade import FlashTradeReferenceDataAdapter
 
+        # A 200 response that is an empty/keyless dict ({}) carries NONE of the expected list keys —
+        # it is a malformed/error envelope, NOT an empty universe. It must RAISE so discovery records
+        # attempted_failed rather than silently returning [] (DeFi-plan A8b). A genuinely-empty
+        # response arrives as a bare [] or {"markets": []}, both of which still return [].
         adapter = FlashTradeReferenceDataAdapter()
         with (
             patch.object(adapter, "_make_session", return_value=_make_session_cm()),
             patch.object(adapter, "_get_with_retry", AsyncMock(return_value={})),
+            pytest.raises(ConnectionError),
         ):
-            markets = await adapter._fetch_perp_markets()
-        assert markets == []
+            await adapter._fetch_perp_markets()
 
     @pytest.mark.asyncio
     async def test_fetch_perp_markets_client_error_raises(self) -> None:

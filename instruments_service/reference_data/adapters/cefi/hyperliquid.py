@@ -106,7 +106,15 @@ class HyperliquidReferenceDataAdapter(BaseReferenceDataAdapter):
                     "retry_safe": retry_safe,
                 },
             )
-            return []
+            # CF-11: a genuine fetch error must thread STATE so the venue lands in
+            # urdi_reference_provider._fetch_one's failed[] (→ attempted_failed),
+            # NOT return [] (read as a clean empty → silent universe shrink /
+            # A8 false-complete). Single-call adapter: this error means the WHOLE
+            # Hyperliquid universe is unavailable. Re-raise after classify+emit
+            # (mirrors the tradfi databento fix).
+            raise RuntimeError(
+                f"Hyperliquid meta fetch failed (error_code={error_code}, retry_safe={retry_safe}): {exc}"
+            ) from exc
         universe: list[HyperliquidAssetInfo] = data.universe or []
         results: list[InstrumentRecord] = []
         for asset in universe:

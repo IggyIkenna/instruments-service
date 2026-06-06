@@ -186,9 +186,14 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
             raise
 
         # Raydium API returns { "id": "...", "success": true, "data": { "data": [...], "count": N, ... } }
-        raw_data: dict[str, object] = data if isinstance(data, dict) else {}
-        data_wrapper = raw_data.get("data") or {}
-        pools: list[dict[str, object]] = (data_wrapper.get("data") if isinstance(data_wrapper, dict) else []) or []
+        # DeFi-plan A8 / operator 2026-05-07: a soft 200 with success=false / a missing-`data` body is a
+        # TRANSIENT FETCH FAILURE, not an empty pool universe — raise so discovery records it
+        # attempted_failed. A legit empty universe is {"data": {"data": []}} → returns [].
+        if not isinstance(data, dict) or data.get("success") is False or not isinstance(data.get("data"), dict):
+            raise ConnectionError("RAYDIUM-SOLANA: malformed pools/info/list response — transient fetch failure")
+        data_wrapper: dict[str, object] = data["data"]
+        pools_val: object = data_wrapper.get("data", [])
+        pools: list[dict[str, object]] = pools_val if isinstance(pools_val, list) else []
 
         results: list[InstrumentRecord] = []
 
@@ -408,7 +413,7 @@ class RaydiumReferenceDataAdapter(BaseReferenceDataAdapter):
         """Fetch a single instrument by identifier."""
         instruments = await self.get_instruments()
         for inst in instruments:
-            if inst.raw_symbol == symbol or inst.symbol == symbol:
+            if inst.raw_symbol == symbol or inst.instrument_key.endswith(f":{symbol}"):
                 return inst
         return None
 

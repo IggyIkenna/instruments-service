@@ -62,3 +62,25 @@ class TestCloudTargetInstantiations:
         assert hasattr(config, "bigquery_dataset")
         assert config.gcp_project_id
         assert config.bigquery_dataset
+
+
+class TestInstrumentsBucketAssetGroupCasing:
+    """Regression: `_get_instruments_bucket` must lowercase the asset_group before
+    handing it to `resolve_bucket_name`, which is strict-lowercase since the Option B
+    bucket-SSOT migration (library@6c8a1175). Uppercase raised
+    `BucketNamingError: Unknown asset_group 'SPORTS'` on every sports/footystats
+    short-circuit run (footystats-fwd exit=1 hourly, 2026-06-01).
+    """
+
+    @pytest.mark.parametrize("supplied", ["SPORTS", "Sports", "sports", "CEFI", "DeFi"])
+    def test_asset_group_passed_lowercase_to_resolver(self, supplied: str):
+        """Whatever case the caller supplies, the resolver receives lowercase."""
+        with patch(
+            "instruments_service.engine.orchestrator.resolve_bucket_name",
+            return_value="instruments-store-x-prd-test-project",
+        ) as mock_resolve:
+            _get_instruments_bucket(supplied)
+
+        assert mock_resolve.call_count == 1
+        passed = mock_resolve.call_args.kwargs["asset_group"]
+        assert passed == supplied.lower(), f"resolver got {passed!r}, expected lowercase"
